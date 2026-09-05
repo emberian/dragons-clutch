@@ -20,6 +20,7 @@ INSTRUMENTS = {
     "witness": "gates.witness",
     "budgets": "gates.budgets",
     "commands": "gates.commands",
+    "citations": "gates.citations",
     "lane": "gates.lane",
     "archive": "gates.archive",
     "selftest": "gates.selftest",
@@ -47,7 +48,7 @@ def list_tiers() -> None:
     print("--commit REV   measure a clean export of REV instead of the working tree (any number you QUOTE)")
     print("--require      a missing prerequisite is a failure (the cut)")
     print("--dry-run      print each gate's commands instead of running them")
-    print("CARGO_BUILD_JOBS=4  DCLUTCH_GATE_SUITES=\"core custody\"  DCLUTCH_GATE_TIME_SLACK=4  DCLUTCH_GATE_BUILD_ROOT=<dir>")
+    print("CARGO_BUILD_JOBS=4  DCLUTCH_GATE_SUITES=\"core custody\"  DCLUTCH_GATE_SUITE_DRAWS=3  DCLUTCH_GATE_TIME_SLACK=4  DCLUTCH_GATE_BUILD_ROOT=<dir>")
 
 
 def run_tiers(names: list[str], ctx: Context) -> int:

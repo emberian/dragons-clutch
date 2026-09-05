@@ -33,7 +33,9 @@ transaction), **344 refusal codes**.
 If you'd rather start with prose, the [guides](../guides/README.md)
 explain the protocol in plain terms and link back into these tables.
 
-The seven dClutch programs are deployed on Solana devnet, where one market is
-now open for trading. These tables describe the checked-in protocol and its
-devnet and local tooling; they are not a mainnet release manifest, and that
-market's collateral is a devnet test token, so there is no value at risk.
+7 of the 8 programs have at least one route corroborated by a finalized
+transaction on Solana devnet; `accelerator` has no devnet witness at all. A
+witness says a transaction ran, not that the program that ran it is the one
+this tree builds today. These tables describe the checked-in protocol and
+its devnet and local tooling; they are not a mainnet release manifest, and
+devnet collateral is a test token, so there is no value at risk.

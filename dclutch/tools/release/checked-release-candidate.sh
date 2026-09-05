@@ -712,22 +712,30 @@ FRESHNESS_RESULT="$("$FRESHNESS_CHECKER" \
 printf '%s\n' "$FRESHNESS_RESULT"
 printf '%s\n' "$FRESHNESS_RESULT" >> "$BUILD_LOG"
 # The authority for this set is SHIPPED_LINKS in
-# tools/local-validator/bootstrap/successor/src/upgrade.rs, and the count is
-# stated HERE as well, which is the whole defect: e6b7bf1a deleted
-# dclutch-dealer-sbf and took SHIPPED_LINKS from 13 to 12, aa7f8892 swept the
-# two Rust readers, and this third reader kept refusing every candidate at HEAD
-# because nothing makes the two agree. Found on 2026-09-02 by the POPULATION
-# lane, whose candidate run died here with all twelve links built and clean.
-#
-# DEBT, named rather than hidden: the honest repair is for the successor
-# binary to PRINT its shipped set and for this script to compare content
-# instead of counting; then the number lives in one place and a role appearing
-# or disappearing is caught by name rather than by arithmetic. That needs a new
-# subcommand on the release side, so it is not done here.
-SHIPPED_LINK_COUNT=12
+# tools/local-validator/bootstrap/successor/src/upgrade.rs. It is READ from the
+# archived source here, by NAME, and restated nowhere: a count typed into this
+# file was a second author for the shipped set and it refused every candidate
+# at HEAD twice -- e6b7bf1a took SHIPPED_LINKS 13 -> 12 and left the literal at
+# 13 (POPULATION lane, 2026-09-02), 5b4fe2313's fold took it 12 -> 8 and left
+# the literal at 12 (COHORT-16, 2026-09-05). Comparing label and package pairs
+# also catches a role appearing, disappearing or being renamed, which counting
+# cannot: the fold renamed dclutch-general-accelerator-sbf to
+# dclutch-accelerator-sbf and arithmetic would have called that no change.
+SHIPPED_LINKS_AUTHORITY="$SOURCE/tools/local-validator/bootstrap/successor/src/upgrade.rs"
+[ -f "$SHIPPED_LINKS_AUTHORITY" ] \
+    || { echo "refusing: no SHIPPED_LINKS authority at $SHIPPED_LINKS_AUTHORITY" >&2; exit 1; }
+SHIPPED_LINK_SET="$(sed -n '/^const SHIPPED_LINKS/,/^];/p' "$SHIPPED_LINKS_AUTHORITY" |
+    sed -n 's/^ *("\([a-z0-9][a-z0-9_-]*\)", *"\([a-z0-9][a-z0-9_-]*\)", *\(true\|false\)),$/\1\t\2/p' |
+    LC_ALL=C sort)"
+[ -n "$SHIPPED_LINK_SET" ] \
+    || { echo "refusing: SHIPPED_LINKS in $SHIPPED_LINKS_AUTHORITY enumerated nothing" >&2; exit 1; }
+SHIPPED_LINK_COUNT="$(printf '%s\n' "$SHIPPED_LINK_SET" | wc -l | tr -d ' ')"
 BUILD_LINK_COUNT="$(wc -l < "$BUILD_LINKS" | tr -d ' ')"
-if [ "$BUILD_LINK_COUNT" != "$SHIPPED_LINK_COUNT" ]; then
-    echo "refusing: checked Upgrade admission requires the exact $SHIPPED_LINK_COUNT-link shipped set; enumerated $BUILD_LINK_COUNT (authority: SHIPPED_LINKS in tools/local-validator/bootstrap/successor/src/upgrade.rs)" >&2
+if [ "$SHIPPED_LINK_SET" != "$(LC_ALL=C sort "$BUILD_LINKS")" ]; then
+    echo "refusing: checked Upgrade admission requires the exact shipped link set; SHIPPED_LINKS names $SHIPPED_LINK_COUNT link(s) and this build enumerated $BUILD_LINK_COUNT (authority: SHIPPED_LINKS in tools/local-validator/bootstrap/successor/src/upgrade.rs). Differences, shipped-only first:" >&2
+    printf '%s\n' "$SHIPPED_LINK_SET" > "$WORK/shipped-links.tsv"
+    LC_ALL=C sort "$BUILD_LINKS" > "$WORK/built-links.tsv"
+    LC_ALL=C comm -3 "$WORK/shipped-links.tsv" "$WORK/built-links.tsv" >&2
     exit 1
 fi
 

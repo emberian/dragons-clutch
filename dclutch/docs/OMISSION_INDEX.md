@@ -10,10 +10,18 @@ conservative executable choice with a named lifting path), a **likely scar**
 **open research** (a generalization whose authority is not yet sound).
 
 What completion still owes is not here: that is `docs/MASTER_COMPLETION_CONTRACT.md`
-rows C-00..C-16. An `unfinished` capability is never an omission, and the
+rows C-00..C-17. An `unfinished` capability is never an omission, and the
 former `U-` rows of this file (fifteen `unfinished` capabilities, never once
 moved in four days) were retired on 2026-09-04 — their subjects are the
-contract's rows, which carry the evidence.
+contract's rows, which carry the evidence. **Fourteen of the fifteen were, and
+`U-014` was not** (*"interpreted and stateless-AOT execution of one semantic
+descriptor"*): no contract row named its subject, so for four days that one
+ambition was neither implemented nor ruled out nor tracked — the third state
+the contract forbids, reached by retiring the register rather than the row. It
+was rehomed on 2026-09-05 as **C-17**, and the surviving statements of the
+ambition here are the lifting paths of `O-003` and `O-004`. A retirement that
+cites a destination is only sound if the destination exists; this one was
+checked row by row after the fact.
 
 ## Rejected designs and invariants
 

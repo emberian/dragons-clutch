@@ -29,15 +29,14 @@ read it yet; it is in force, and ember may reverse it at the cost the
 record's last section states. **CONFIRMED** means ember has read the ruling
 and accepted it in conversation without amending it — it was not re-argued,
 so nothing in the record moved, and it stays reversible on request at that
-same cost. **OPEN** means nobody has ruled. On 2026-09-04 at 15:50 EDT ember
-read the docket and the mechanism cohort page and found the takes *"overall
-reasonable"*, which moved the eleven docket and mechanism records 0024-0034
-to CONFIRMED in one act (0030 from RULED, 0028 from a ruling made at 14:10
-that day, the rest from PROVISIONAL). The five pre-docket rulings
-(0019-0023) were not part of that reading and stay PROVISIONAL. Counted from
-the records below rather than kept by hand:
-**16 CONFIRMED, 0 PROVISIONAL, 0 OPEN**;
-every other record is accepted, adopted, ratified or ruled.
+same cost. **OPEN** means nobody has ruled.
+
+On 2026-09-04 at 15:50 EDT ember read the docket and the mechanism cohort
+page and found the takes *"overall reasonable"*. **16 records name that one
+reading as their confirming act** -- 0019-0034 -- and each states in its own
+Status paragraph what it was before it. Counted from the records below
+rather than kept by hand: **16 CONFIRMED, 0 PROVISIONAL, 0 OPEN**; every
+other record is accepted, adopted, ratified or ruled.
 
 The one thing still waiting on ember is not a record but an item inside one:
 decision 0029's tenth item, the conditional layer's flagship child market —

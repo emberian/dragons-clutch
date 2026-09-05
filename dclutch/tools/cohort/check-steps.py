@@ -76,7 +76,7 @@ PLACEHOLDER = re.compile(r"\{([a-z0-9_]+(?:[.-][a-z0-9_-]+)*)\}")
 # The placeholders the GENERATOR resolves, per market or per loop, and so are
 # not the manifest's to answer. Their shape is checked here; their value is not.
 EMIT_TIME = re.compile(
-    r"\{(?:market\.[a-z0-9_.]+|role|role_flag|participant|item|prior\.[a-z0-9_]+"
+    r"\{(?:market\.[a-z0-9_.]+|role|role_flag|participant|item|prior\.[a-z0-9_.]+"
     r"|pubkey:[^{}]+|execute(?::[^{}]*)?|mode|attempt|stage:[a-z0-9-]+)\}")
 INLINE_LOOP = re.compile(r"@(?:roles|owned_roles|list:[a-z0-9_.]+)\{")
 ACT = re.compile(r"^\*(?:\[[^\]]*\])?\s*")

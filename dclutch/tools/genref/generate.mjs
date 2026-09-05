@@ -100,6 +100,26 @@ function num(n) {
   return n.toLocaleString("en-US");
 }
 
+// Connective prose that interpolates a derived count changes width when the
+// count does. Wrapping it here is what lets the sentence be DERIVED rather than
+// hand-written to fit the column: greedy, deterministic, no reflow of anything
+// already broken by the author.
+function wrap(text, width = 76) {
+  const out = [];
+  for (const paragraph of text.trim().split("\n\n")) {
+    let line = "";
+    for (const word of paragraph.split(/\s+/)) {
+      if (line && line.length + 1 + word.length > width) {
+        out.push(line);
+        line = word;
+      } else line = line ? `${line} ${word}` : word;
+    }
+    if (line) out.push(line);
+    out.push("");
+  }
+  return out.slice(0, -1).join("\n");
+}
+
 function generatedHeader(sources) {
   return [
     "<!--",
@@ -624,6 +644,18 @@ const pages = new Map(); // relpath -> content
   // `routeEvidence` here is what made this line say 111 while the witness page
   // said 113 about the same routes.
   const witnessed = tally.witnessed;
+  // A hand-written sentence about the chain is a fact with two authors under a
+  // "DO NOT EDIT" header, and `--check --converge` reaches a fixpoint on it
+  // forever. This one said "the seven dClutch programs are deployed on Solana
+  // devnet" five lines under a derived "8 programs" and was never re-derived.
+  // Derive what the register can actually see: which programs a finalized
+  // devnet transaction has corroborated a route of.
+  const onDevnet = programs.filter((p) =>
+    p.routes.some((r) => (devnetWitness.get(r.id) ?? []).length > 0),
+  );
+  const offDevnet = programs.filter((p) => !onDevnet.includes(p));
+  const labelList = (ps) =>
+    ps.map((p) => `\`${p.label}\``).join(", ").replace(/, ([^,]*)$/, ps.length > 2 ? ", and $1" : " and $1");
 
   pages.set(
     "README.md",
@@ -665,10 +697,15 @@ transaction), **${totalRefusals} refusal codes**.
 If you'd rather start with prose, the [guides](../guides/README.md)
 explain the protocol in plain terms and link back into these tables.
 
-The seven dClutch programs are deployed on Solana devnet, where one market is
-now open for trading. These tables describe the checked-in protocol and its
-devnet and local tooling; they are not a mainnet release manifest, and that
-market's collateral is a devnet test token, so there is no value at risk.
+${wrap(
+        `${num(onDevnet.length)} of the ${programs.length} programs have at least one route corroborated by a finalized transaction on Solana devnet${
+          offDevnet.length === 0
+            ? ""
+            : `; ${labelList(offDevnet)} ${
+                offDevnet.length === 1 ? "has" : "have"
+              } no devnet witness at all`
+        }. A witness says a transaction ran, not that the program that ran it is the one this tree builds today. These tables describe the checked-in protocol and its devnet and local tooling; they are not a mainnet release manifest, and devnet collateral is a test token, so there is no value at risk.`,
+      )}
 `,
   );
 }
@@ -1250,8 +1287,9 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | **blocked** | ${num(counts.blocked)} | no campaign and no devnet witness; \`tools/gauntlet/blocked.json\` records a reason, a class and an owner |
 | **unrecorded** | ${num(counts["never-executed"])} | no campaign, no devnet witness, and no reason recorded |
 
-Those five classes partition the 163, and the last one is NOT the count of
-routes nothing has ever run:
+${wrap(
+        `Those five classes partition the ${num(rows.length)}, and the last one is NOT the count of routes nothing has ever run:`,
+      )}
 
 ${NEVER_EXECUTED_FORMULAS}
 
@@ -1611,6 +1649,28 @@ ${provenance}
   const openCount = rows.filter(([, s]) => marker(s) === "OPEN").length;
   const confirmedCount = rows.filter(([, s]) => marker(s) === "CONFIRMED")
     .length;
+  // Which records name the 15:50 reading as their confirming act is a fact the
+  // records carry; it was hand-written here as "0024-0034 ... the five
+  // pre-docket rulings (0019-0023) ... stay PROVISIONAL" and went on being
+  // printed two lines above a derived "0 PROVISIONAL". Derive it.
+  const CONFIRMING_ACT = "2026-09-04 15:50 EDT";
+  const confirmedByAct = rows
+    .filter(([, s]) => marker(s) === "CONFIRMED" && s.includes(CONFIRMING_ACT))
+    .map(([t]) => Number((t.match(/\.\.\/decisions\/(\d+)-/) ?? [])[1]))
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b);
+  // Contiguous runs render as a range; anything else lists every record, so a
+  // record joining or leaving the act cannot hide inside a span.
+  const spans = [];
+  for (const n of confirmedByAct) {
+    const last = spans[spans.length - 1];
+    if (last && n === last[1] + 1) last[1] = n;
+    else spans.push([n, n]);
+  }
+  const pad = (n) => String(n).padStart(4, "0");
+  const actList = spans
+    .map(([a, b]) => (a === b ? pad(a) : `${pad(a)}-${pad(b)}`))
+    .join(", ");
   pages.set(
     "decisions.md",
     generatedHeader(["docs/decisions/*.md"]) +
@@ -1639,15 +1699,11 @@ read it yet; it is in force, and ember may reverse it at the cost the
 record's last section states. **CONFIRMED** means ember has read the ruling
 and accepted it in conversation without amending it — it was not re-argued,
 so nothing in the record moved, and it stays reversible on request at that
-same cost. **OPEN** means nobody has ruled. On 2026-09-04 at 15:50 EDT ember
-read the docket and the mechanism cohort page and found the takes *"overall
-reasonable"*, which moved the eleven docket and mechanism records 0024-0034
-to CONFIRMED in one act (0030 from RULED, 0028 from a ruling made at 14:10
-that day, the rest from PROVISIONAL). The five pre-docket rulings
-(0019-0023) were not part of that reading and stay PROVISIONAL. Counted from
-the records below rather than kept by hand:
-**${confirmedCount} CONFIRMED, ${provisionalCount} PROVISIONAL, ${openCount} OPEN**;
-every other record is accepted, adopted, ratified or ruled.
+same cost. **OPEN** means nobody has ruled.
+
+${wrap(
+        `On 2026-09-04 at 15:50 EDT ember read the docket and the mechanism cohort page and found the takes *"overall reasonable"*. **${num(confirmedByAct.length)} records name that one reading as their confirming act** -- ${actList} -- and each states in its own Status paragraph what it was before it. Counted from the records below rather than kept by hand: **${confirmedCount} CONFIRMED, ${provisionalCount} PROVISIONAL, ${openCount} OPEN**; every other record is accepted, adopted, ratified or ruled.`,
+      )}
 
 The one thing still waiting on ember is not a record but an item inside one:
 decision 0029's tenth item, the conditional layer's flagship child market —

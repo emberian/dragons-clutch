@@ -76,8 +76,12 @@ and `docs/reference/route-witnesses.md` are generated from the campaign
 bindings and the devnet witnesses, and a route that is structurally undrivable
 belongs in `tools/gauntlet/blocked.json` with a reason and an owner. An
 unwitnessed route is a statement about coverage, not about correctness. The
-hostile walks of this matrix are `docs/evidence/C16_REHEARSAL_2026_09_03.md`
-and `docs/evidence/C16_REHEARSAL_2026_09_04.md`.
+hostile walks of this matrix are `docs/evidence/C16_REHEARSAL_2026_09_03.md`,
+`docs/evidence/C16_REHEARSAL_2026_09_04.md` and
+`docs/evidence/C16_REHEARSAL_2026_09_05.md`, each a delta on the one before it.
+Rows are ordered scope closure, the capabilities, then the audit that closes
+over them; an identifier is allocated when a row is written and never renumbered,
+so `C-17` sits with the capabilities it belongs to rather than at the end.
 
 | ID | Capability that must be finished | Terminal evidence |
 | --- | --- | --- |
@@ -97,6 +101,7 @@ and `docs/evidence/C16_REHEARSAL_2026_09_04.md`.
 | C-13 | Operator and cold-machine operation | A cold machine can build checked releases, bootstrap, create representative markets, drive every lifecycle, recover interruptions and inspect/export/sign/submit only the intended acts. Runbooks contain only commands actually replayed by their campaigns. |
 | C-14 | Reproducible release readiness | Pinned toolchains, deterministic artifacts, SBOM/licences, source digests, migrations, compute/frame/packet ceilings and checked release manifests reproduce on supported builders. Devnet may be deployed and mutated freely for this work. Mainnet deployment remains a separately authorized external act until Ember rules its place in completion. |
 | C-15 | Privacy/FHE/MPC horizon disposition | The specialized batch relation and the original privacy/energy ambition are implemented in the accepted project or explicitly ruled out by Ember; an old horizon decision is not silently treated as permanent completion scope. |
+| C-17 | Alternative execution strategies for one semantic descriptor | Interpreted execution and translation-validated stateless AOT run the SAME authored descriptor as the compiled path, with exact equivalence to Direct under a checked certificate, a Registry-bound artifact and toolchain identity, refusal equivalence conjunct for conjunct, rollback, and a CU/packet/rent comparison against the compiled route — or Ember rules the strategies out. **This row is the rehomed `U-014`.** `docs/OMISSION_INDEX.md` retired its fifteen `U-` rows on 2026-09-04 on the ground that their subjects are this matrix's rows; fourteen were, and this one was not, so the retirement created for one subject the third state the scope section forbids. **What survives at HEAD**: `crates/dclutch-direct-aot-contract` and `tools/direct-translation-validator` (the Lean-emitted corpus, the executable validator and its Kani proofs). **What does not**: `dclutch-direct-aot-sbf`, deleted 2026-09-04, `false` in `SHIPPED_LINKS`, in no cohort, its band 10 RETIRED by the refusal registry — so no interpreted or AOT descriptor has ever executed on any chain, and the accepted ambition is stated only as the lifting path of `O-003` and `O-004`. |
 | C-16 | Assurance-entry audit | Independent hostile reviewers walk this matrix against current source and artifacts. No known material gap, unexplained authority, stale claim, unowned economic flow, never-executed intended route, or user-inaccessible capability remains. Only then may the project say it is ready to begin assurance. |
 
 ## Representative end-to-end campaigns
@@ -127,7 +132,7 @@ ends with all temporary protocol state either deliberately live or closed.
 ## Swarm operating structure
 
 The root maintains this contract and converges the shared tree. Persistent
-capability crews own C-01..C-15 and their campaign slices; they do not return an
+capability crews own the capability rows -- C-01..C-15 and C-17 -- and their campaign slices; they do not return an
 inventory as their deliverable. A crew that finds an in-scope seam owns it to
 physical closure unless it requires an Ember ruling or conflicts with another
 crew's active shared entrypoint.

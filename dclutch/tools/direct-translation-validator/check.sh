@@ -80,7 +80,12 @@ if [ -n "$evidence_dir" ]; then
   cp "$validator_result" "$evidence_dir/validator_result.bin"
   cp "$rustc_verbose" "$evidence_dir/rustc_verbose.bin"
   cp "$lake_version" "$evidence_dir/lake_version.bin"
-  cp "$validator_dir/Cargo.lock" "$evidence_dir/validator_cargo_lock.bin"
+  # The lock this package resolves under is the ROOT lock: the one-workspace
+  # merge (2026-09-05) deleted the per-package one, and this line then copied
+  # a file that did not exist. The evidence-pack FIELD NAME is fixed -- it is
+  # input 20 of crates/dclutch-release-tool/src/translation.rs -- so the name
+  # stays and the path moves.
+  cp "$repository_dir/Cargo.lock" "$evidence_dir/validator_cargo_lock.bin"
   printf 'evidence_dir=%s\n' "$evidence_dir"
 fi
 
@@ -117,4 +122,4 @@ printf 'rust_validator_sha256=%s\n' \
   "$(sha256_file "$validator_dir/src/main.rs")"
 printf 'program_include_sha256=%s\n' \
   "$(sha256_file "$validator_dir/src/generated_direct_program.rs")"
-printf 'validator_cargo_lock_sha256=%s\n' "$(sha256_file "$validator_dir/Cargo.lock")"
+printf 'validator_cargo_lock_sha256=%s\n' "$(sha256_file "$repository_dir/Cargo.lock")"

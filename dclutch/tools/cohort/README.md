@@ -114,6 +114,20 @@ Close the previous cohort's programs and reclaim their rent, ids **derived from
 that cohort's own keypair files, never transcribed**. The accounts stay on
 chain; only the ProgramData holding the code goes away.
 
+### close-prior-accelerator
+
+The seven roles are not the whole of a cohort's footprint. From cohort 16 the
+accelerator is a link this cohort BUILDS and DEPLOYS, so the one the previous
+cohort pinned is superseded the moment the new one lands, and its ProgramData
+rent -- 1.91 SOL for cohort-15's `8pgnyNvg...` -- is the cohort's own money.
+Its id is read from the previous cohort's manifest, never transcribed, for the
+same reason `close-prior` derives the seven from that cohort's keypair files.
+
+Closing it is also the fail-closed half. A Program account survives its
+ProgramData, so a market founded against the superseded accelerator meets an
+account that is not executable rather than an accelerator that quietly answers
+with pre-fold semantics.
+
 ### deploy
 
 *Retired after cohort-14; see `redeploy`.* The checked release candidate at the
@@ -146,6 +160,30 @@ of the same commit differs in nine of ten roles and cannot be made to agree; the
 measurement and its two causes are `docs/runbooks/COLD_MACHINE_2026_09_03.md`
 §10, and `tools/release/README.md` under "One builder artifact" is the standing
 statement.
+
+### deploy-accelerator
+
+**The eighth link, and until cohort 16 nothing deployed it.** `prepare` has
+always OBSERVED an accelerator and published its `ArtifactRelease`; through
+cohort-15 that accelerator was deployed by a separate one-off job and the
+runbook carried no row for it, which was invisible while the accelerator was
+`dclutch-general-accelerator-sbf` and unchanged for three cohorts. The fold made
+it `dclutch-accelerator-sbf` -- General, Dealer and series-shadow in one program
+-- so the cohort that first ships the fold must also be the cohort that deploys
+it, and a runbook with no row for that is a runbook with a step nobody owns.
+
+It is its own row rather than an eighth `roles` entry because the deployment-set
+journal owns exactly the seven checked roles and names no accelerator: the
+successor's `prepare` says so in its own usage, and the `--general-accelerator-*`
+group is legal beside the journal precisely because the journal can neither
+supply that publication nor contradict it. Putting the accelerator in `roles`
+would emit `--accelerator-program-id` into a command that has no such flag.
+
+Same discipline as `deploy-roles`: dump the live image back immediately and
+compare it to the candidate ELF over the ELF's whole length, before anything
+observes it. What this row produces that nothing else can is the accelerator's
+deployment slot, which `prepare` observes, the founding pins and the Registry's
+own observation fixture transcribes.
 
 ### record-core-digest
 

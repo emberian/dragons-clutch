@@ -72,11 +72,15 @@ ROLE_PACKAGES = {
     "registry": "dclutch-registry-sbf",
     "rent": "dclutch-rent-sbf",
 }
+# The canonical shipped order is `programs/*/Cargo.toml` enumeration order --
+# package directory name ascending -- because that is the order the candidate
+# writes its build-links manifest in and this module compares the two by
+# position. Keep it sorted by package.
 SHIPPED_LINKS = (
+    ("accelerator", "dclutch-accelerator-sbf", True),
     ("claims", "dclutch-claims-sbf", True),
     ("core", "dclutch-core-sbf", True),
     ("custody", "dclutch-custody-sbf", True),
-    ("accelerator", "dclutch-accelerator-sbf", True),
     ("registry", "dclutch-registry-sbf", True),
     ("rent", "dclutch-rent-sbf", True),
     ("resolution", "dclutch-resolution-proof-sbf", True),

@@ -277,11 +277,19 @@ pub(crate) fn journal_targets(journal: &UpgradeSetJournalV1) -> Result<DevnetUpg
         )
     }))
 }
+/// The canonical shipped order is the order `programs/*/Cargo.toml` enumerates,
+/// which is the package DIRECTORY name ascending -- that is the order the
+/// candidate's own build-links manifest is written in, and the gate compares
+/// the two positionally. The fold that renamed `dclutch-general-accelerator-sbf`
+/// to `dclutch-accelerator-sbf` moved the package to the front of that
+/// enumeration and left this list's entry where the deleted
+/// `dclutch-dealer-accelerator-sbf` had been, so a link count agreed and the
+/// order did not. Sort by the second element when this list changes.
 const SHIPPED_LINKS: &[(&str, &str, bool)] = &[
+    ("accelerator", "dclutch-accelerator-sbf", true),
     ("claims", "dclutch-claims-sbf", true),
     ("core", "dclutch-core-sbf", true),
     ("custody", "dclutch-custody-sbf", true),
-    ("accelerator", "dclutch-accelerator-sbf", true),
     ("registry", "dclutch-registry-sbf", true),
     ("rent", "dclutch-rent-sbf", true),
     ("resolution", "dclutch-resolution-proof-sbf", true),

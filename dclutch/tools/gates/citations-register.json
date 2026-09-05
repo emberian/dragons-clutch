@@ -1,0 +1,547 @@
+{
+  "_": [
+    "tools/gate citations -- every commit-shaped token this register does not adjudicate must resolve.",
+    "A row is an ADJUDICATION, not a suppression: it says what the token is instead of a commit of this tree,",
+    "and the gate refuses if the token starts resolving, or if no document cites it any more."
+  ],
+  "classes": {
+    "compost-commit": "a commit of ~/dev/dragons-clutch -- the compost and publication repository -- and never of this tree; `tools/cut.sh` cut shas and pre-successor history both land here",
+    "harness-session": "a Claude Code session id, not a commit; the founding sessions predate this repository and are in no git object database",
+    "release-set-id": "a TRUNCATED release-set identity, and the document that cites it exists to record that the truncation is unrecoverable",
+    "schema-digest": "a per-action record digest in decision 0010's width table, hex by construction and never a commit",
+    "artifact-digest": "a SHA-1/SHA-256 digest or its prefix -- an ELF, a git tree, a seed, a record body -- named as an artifact identity, not a commit",
+    "magnitude": "a decimal amount, slot, unix time, run id or address that is hex-shaped by accident",
+    "wire-bytes": "a literal byte string quoted from a wire or account body, hex by definition"
+  },
+  "adjudicated": {
+    "01a00a3d": {
+      "class": "harness-session",
+      "cited_by": [
+        "docs/decisions/0014-the-fee-rate.md",
+        "docs/evidence/ASPIRATION_LEDGER_2026_08_27.md",
+        "docs/evidence/C16_REHEARSAL_2026_09_05.md"
+      ]
+    },
+    "01a02ad0": {
+      "class": "harness-session",
+      "cited_by": [
+        "docs/evidence/ASPIRATION_LEDGER_2026_08_27.md"
+      ]
+    },
+    "01a0363b": {
+      "class": "harness-session",
+      "cited_by": [
+        "docs/evidence/ASPIRATION_LEDGER_2026_08_27.md"
+      ]
+    },
+    "0207000000": {
+      "class": "wire-bytes",
+      "cited_by": [
+        "docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md"
+      ]
+    },
+    "023394d50391": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/SIMULATOR_MARKET_LIFE_2026_08_30.md"
+      ]
+    },
+    "03842494": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEPLOY_1.md"
+      ]
+    },
+    "03d12bcc7b67e28c": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "04c098fa": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
+      ]
+    },
+    "100000000": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/SIMULATOR_POPULATION_ANCHORED_2026_08_31.md"
+      ]
+    },
+    "11111111111111111111111111111111": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md"
+      ]
+    },
+    "1257c853920da3d9": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "1788508895": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/COHORT15_DEPLOYED_SEALED_FOUNDED_CAPTURED_2026_09_04.md"
+      ]
+    },
+    "18446744073709551615": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md"
+      ]
+    },
+    "2356bc6865ed36a454d2a7285bd3989518ddd31f": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/LEAN_CLAIM_EXECUTOR_2026_08_25.md",
+        "docs/evidence/LEAN_EFFECT_PROOF_TARGET_2026_08_25.md",
+        "docs/evidence/LEAN_EFFECT_SBF_EXPERIMENT_2026_08_25.md",
+        "docs/evidence/qedsvm-claims-proof/README.md",
+        "docs/evidence/qedsvm-effect-proof/README.md"
+      ]
+    },
+    "23b1cbb6": {
+      "class": "harness-session",
+      "cited_by": [
+        "docs/evidence/ASPIRATION_LEDGER_2026_08_27.md"
+      ]
+    },
+    "293898740": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/PYTH_CREDENTIAL_FREE_DEVNET_2026_08_29.md"
+      ]
+    },
+    "2f0ba765": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
+      ]
+    },
+    "33143867158": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/DEVNET_ITERATION_2.md"
+      ]
+    },
+    "35af6dc8": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/SEAM_AUDIT_2026_08_29.md"
+      ]
+    },
+    "3b857b22": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEPLOY_1.md"
+      ]
+    },
+    "3cfd404e": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
+      ]
+    },
+    "445988f2b": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "45868be8c": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "465e8dcb5592c57b4909a6cb933d58d6d6b50a43": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/PYTH_CREDENTIAL_FREE_DEVNET_2026_08_29.md"
+      ]
+    },
+    "487855452": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/PYTH_CREDENTIAL_FREE_DEVNET_2026_08_29.md"
+      ]
+    },
+    "490330281": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/decisions/0015-markets-that-can-never-resolve.md"
+      ]
+    },
+    "4c6dbd36": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
+      ]
+    },
+    "500000000": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/FRONTEND_LIVE_OPEN_MARKET_2026_08_27.md"
+      ]
+    },
+    "500000009955591100": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/LOCAL_CAMPAIGN_SERIES_2026_08_30.md"
+      ]
+    },
+    "500000009955591120": {
+      "class": "magnitude",
+      "cited_by": [
+        "docs/evidence/LOCAL_CAMPAIGN_SERIES_2026_08_30.md"
+      ]
+    },
+    "50f2c4ddf517": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/SIMULATOR_POPULATION_ANCHORED_2026_08_31.md"
+      ]
+    },
+    "5174e29b146e": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/SIMULATOR_POPULATION_DRIVEN_2026_08_30.md"
+      ]
+    },
+    "51967830": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEPLOY_1.md"
+      ]
+    },
+    "591d92991a695552dd4dc37681d88b9ad9d05efa": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DCLTGMF3_CALLER_BUMPS_2026_08_29.md"
+      ]
+    },
+    "5c478de1": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
+      ]
+    },
+    "6157b87e8": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "654eae25b": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "659615527": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "6b56a4b86e04a70c": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "6fdb746f3de3bcf5": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "73b87027": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/ASPIRATION_ARCHAEOLOGY_2026_08_30.md"
+      ]
+    },
+    "7cc4afd1ad994078": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "7e093ae93987": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/SIMULATOR_MARKET_LIFE_2026_08_30.md"
+      ]
+    },
+    "7facb8e5": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEPLOY_1.md"
+      ]
+    },
+    "82c44de78": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "8519f4993121c31a": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "969e7736cc455f0e": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "96e8e094": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
+      ]
+    },
+    "97d49888": {
+      "class": "release-set-id",
+      "cited_by": [
+        "docs/evidence/RELEASE_SET_COHORT_LINEAGE_2026_08_31.md"
+      ]
+    },
+    "99bd5ede85374adc7fc5c835c2432ecf4e123fd1": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/qedsvm-direct-v12/README.md"
+      ]
+    },
+    "9b0caae01efacc82": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md"
+      ]
+    },
+    "9b965990": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/DEVNET_ITERATION_2.md"
+      ]
+    },
+    "9cd699d3847e5708": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "9db09ecbf": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "9dba79f6": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/ASPIRATION_ARCHAEOLOGY_2026_08_30.md"
+      ]
+    },
+    "9f48f148": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md"
+      ]
+    },
+    "a35ec85e4d0b7eac": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "a3b08cfcdfbc2226": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "a662e592c02c": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/SIMULATOR_POPULATION_ANCHORED_2026_08_31.md"
+      ]
+    },
+    "aaced5ebcc7c313f": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "ace5d24e9": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/C16_REHEARSAL_2026_09_05.md"
+      ]
+    },
+    "b00c2a6e4ee22a5b": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "b31b35a21": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/C16_REHEARSAL_2026_09_05.md"
+      ]
+    },
+    "b80ece53": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEVNET_SMOKE_0.md"
+      ]
+    },
+    "ba533ddb3": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "c0802e81246782cc320104fd2a3598316ea493c2": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/PYTH_CREDENTIAL_FREE_DEVNET_2026_08_29.md"
+      ]
+    },
+    "c0a11c66": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
+      ]
+    },
+    "c34f03e168a816b0c32fb9f7a7f947ae5c65cabb": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/RESOLUTION_RUNTIME_SYSCALL_AUDIT_2026_08_29.md"
+      ]
+    },
+    "c37f7ac1": {
+      "class": "harness-session",
+      "cited_by": [
+        "docs/evidence/ASPIRATION_LEDGER_2026_08_27.md"
+      ]
+    },
+    "cab90b3f": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEVNET_SMOKE_0.md"
+      ]
+    },
+    "d171cf74": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEPLOY_1.md"
+      ]
+    },
+    "d202e1f4": {
+      "class": "release-set-id",
+      "cited_by": [
+        "docs/evidence/RELEASE_SET_COHORT_LINEAGE_2026_08_31.md"
+      ]
+    },
+    "d862d3fd": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md",
+        "docs/evidence/DEVNET_SMOKE_0.md"
+      ]
+    },
+    "da31941a": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
+      ]
+    },
+    "dfb260231c761be7d9c8b63728e770a102b86495": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/PHYSICAL_DIRECT_COMPOSITION_2026_08_25.md"
+      ]
+    },
+    "e0786c79": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEVNET_SMOKE_0.md"
+      ]
+    },
+    "e0cc7109": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEPLOY_1.md"
+      ]
+    },
+    "e1f4a20f": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEPLOY_1.md"
+      ]
+    },
+    "e63e6e80": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEVNET_SMOKE_0.md"
+      ]
+    },
+    "e7076e4e": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEVNET_SMOKE_0.md"
+      ]
+    },
+    "e7f49c02": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/DEVNET_ITERATION_2.md"
+      ]
+    },
+    "e7f49c022e5913dbbc62005c3781e58752c1de34": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/DEVNET_ITERATION_2.md"
+      ]
+    },
+    "ef3f165761fb20269e96bad9d8df7c851a463dcc": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/LEAN_EFFECT_SBF_EXPERIMENT_2026_08_25.md"
+      ]
+    },
+    "f50a3faf9fc5a223a22889799b2f778900f186b3": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md"
+      ]
+    },
+    "f6b83291ad445732": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    },
+    "fa1873ce": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/DEVNET_SMOKE_0.md"
+      ]
+    },
+    "fca257e4caa37ff6": {
+      "class": "schema-digest",
+      "cited_by": [
+        "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
+      ]
+    }
+  }
+}

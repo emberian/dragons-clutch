@@ -24,7 +24,7 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | **blocked** | 36 | no campaign and no devnet witness; `tools/gauntlet/blocked.json` records a reason, a class and an owner |
 | **unrecorded** | 2 | no campaign, no devnet witness, and no reason recorded |
 
-Those five classes partition the 163, and the last one is NOT the count of
+Those five classes partition the 148, and the last one is NOT the count of
 routes nothing has ever run:
 
 - **unrecorded: 2 of 148** -- no campaign

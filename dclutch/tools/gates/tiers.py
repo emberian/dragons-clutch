@@ -82,6 +82,17 @@ def tier_commands(ctx: Context):
     return code, {EXIT_PREREQ: "a published command was not probed", EXIT_FAIL: "a runbook publishes a command a reader cannot run"}.get(code, "")
 
 
+def tier_citations(ctx: Context):
+    from . import citations
+    if ctx.dry_run:
+        note("$ tools/gate citations --check")
+        return EXIT_PASS, ""
+    try:
+        return citations.check(REPO)
+    except Prereq as error:
+        return EXIT_PREREQ, str(error)
+
+
 def tier_budgets(ctx: Context):
     from . import budgets
     return budgets.check(dry_run=ctx.dry_run)
@@ -858,14 +869,43 @@ SUITE_RUNNERS = (
 )
 
 
+# A SUITE ROW IS A DISTRIBUTION, NOT A COIN TOSS. `claims-lifecycle` passed
+# about half its draws from 2026-08-27 to 2026-09-05 -- one binary, one ELF --
+# and this tier ran it ONCE, so for nine days the row's verdict here was decided
+# by a wall-clock race and reported as fact. One draw cannot tell a green row
+# from a flaky one, and a flaky row reported green is worse than a red: it is a
+# false statement about the protocol that nothing will contradict.
+#
+# So each row is drawn N times and a row is green only if EVERY draw is. A row
+# whose draws disagree is NONDETERMINISTIC -- named as that, never folded into
+# green and never into red, because "it fails" and "it fails half the time" are
+# different findings and only the second one names a defect in the measurement.
+SUITE_DRAWS_DEFAULT = 3
+
+
+def _suite_draws() -> int:
+    raw = os.environ.get("DCLUTCH_GATE_SUITE_DRAWS", "").strip()
+    if not raw:
+        return SUITE_DRAWS_DEFAULT
+    try:
+        draws = int(raw)
+    except ValueError:
+        raise Prereq(f"DCLUTCH_GATE_SUITE_DRAWS={raw!r} is not a number")
+    if draws < 1:
+        raise Prereq(f"DCLUTCH_GATE_SUITE_DRAWS={draws} would measure nothing")
+    return draws
+
+
 def tier_suites(ctx: Context):
     if not have("cargo-build-sbf"):
         raise Prereq("cargo-build-sbf is not on PATH")
     if ctx.commit:
         note("--commit does not reach this tier: these runners build the working tree and take no revision")
+    draws = _suite_draws()
     wanted = os.environ.get("DCLUTCH_GATE_SUITES", "").split()
-    present = failed = 0
-    absent, unrun = [], []
+    present = 0
+    absent, unrun, failed, flaky = [], [], [], []
+    note(f"{draws} draws per row; a row is green only if every draw is (DCLUTCH_GATE_SUITE_DRAWS)")
     for name, script, what in SUITE_RUNNERS:
         if wanted and name not in wanted:
             continue
@@ -875,20 +915,36 @@ def tier_suites(ctx: Context):
             continue
         present += 1
         note(f"{name} -- {what}")
-        code = _run(ctx, [path], cwd=REPO, env=_env(CARGO_BUILD_JOBS=ctx.jobs)).returncode
-        if code == EXIT_PREREQ:
+        codes = []
+        for draw in range(1, draws + 1):
+            code = _run(ctx, [path], cwd=REPO, env=_env(CARGO_BUILD_JOBS=ctx.jobs)).returncode
+            codes.append(code)
+            if ctx.dry_run:
+                break
+            note(f"{name}: draw {draw} of {draws} -> {'pass' if code == 0 else 'FAIL' if code != EXIT_PREREQ else 'did not run'}")
+        if EXIT_PREREQ in codes:
             unrun.append(name)
-        elif code:
-            failed += 1
-            note(f"{name}: FAILED")
+        elif all(code == 0 for code in codes):
+            continue
+        elif all(code != 0 for code in codes):
+            failed.append(name)
+            note(f"{name}: FAILED, every one of {len(codes)} draws")
+        else:
+            greens = sum(1 for code in codes if code == 0)
+            flaky.append(f"{name}({greens}/{len(codes)})")
+            note(f"{name}: NONDETERMINISTIC -- {greens} of {len(codes)} draws passed. This row states nothing about the protocol until the variable is found; it is neither a pass nor a red.")
     if absent:
         note("runners not in this tree: " + " ".join(absent))
     if unrun:
         note("rows that DID NOT RUN (missing prerequisite): " + " ".join(unrun))
     if present == 0:
         return EXIT_PREREQ, "no suite runner is present"
+    if flaky and failed:
+        return EXIT_FAIL, f"{len(failed)} of {present} suites failed ({' '.join(failed)}); {len(flaky)} NONDETERMINISTIC ({' '.join(flaky)})"
+    if flaky:
+        return EXIT_FAIL, f"{len(flaky)} of {present} suites are NONDETERMINISTIC across {draws} draws: {' '.join(flaky)}"
     if failed:
-        return EXIT_FAIL, f"{failed} of {present} suites failed"
+        return EXIT_FAIL, f"{len(failed)} of {present} suites failed: {' '.join(failed)}"
     if unrun:
         return EXIT_PREREQ, "rows did not run: " + " ".join(unrun)
     return EXIT_PASS, ""
@@ -924,6 +980,7 @@ TIERS: tuple[Tier, ...] = (
     Tier("selftest", "~25s (2026-09-04)", "python3, bash", "the gates' own refusal tests: frames, reference, commands, lane, seam-audit, the gauntlet CLI", tier_selftest),
     Tier("census", "~25s warm, ~50s cold (2026-09-04)", "cargo", "routes, refusal codes, magics and schema identities enumerated from the AST; a code outside its band, a duplicated magic, an identity that is not its label's digest", tier_census),
     Tier("emission", "~2s (2026-09-04)", "python3, rustfmt", "a generated file with no byte-identity guard, or one rustfmt would move out from under a raw-comparing guard; a two-sided wire vector whose reviewed digest moved", tier_emission),
+    Tier("citations", "<1s (2026-09-05)", "python3, git", "a commit cited by a decision record or an evidence document that does not exist and is not adjudicated by name; a register row that went false, dead or wrong", tier_citations),
     Tier("budgets", "<1s (2026-09-04)", "python3", "a CU budget that is not measured+tolerance, above the 1,400,000 ceiling, or naming a campaign no register knows", tier_budgets),
     Tier("fmt", "~10s (2026-09-03)", "cargo, rustfmt", "rustfmt disagreeing with a file outside fmt-baseline.txt, or a baseline line no longer true (every package: one workspace since 2026-09-05)", tier_fmt),
     Tier("locks", "~30s (2026-09-02)", "cargo", "a tracked Cargo.lock that no longer resolves under --locked --offline", tier_locks),
@@ -946,6 +1003,6 @@ TIERS: tuple[Tier, ...] = (
     Tier("workspaces", "slow (2026-09-03)", "cargo", "any tracked Cargo workspace failing to check from an archived revision (the cut tier)", tier_workspaces),
 )
 
-CHEAP = ("selftest", "census", "emission", "budgets", "fmt", "locks", "seam", "commands", "release")
+CHEAP = ("selftest", "census", "emission", "citations", "budgets", "fmt", "locks", "seam", "commands", "release")
 ALL = CHEAP + ("reference", "clippy", "sbom", "sbfcontracts", "web", "abi", "guards", "frames",
                "journey", "root-targets", "programs", "suites", "witness")

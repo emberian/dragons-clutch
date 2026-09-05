@@ -84,7 +84,7 @@ must not carry a layout change under it.
 | 5 | the founder bond | `docs/design/MECHANISM_FOUNDER_BOND_2026_09_04.md` | `.../FounderBondV1.lean`, 34 theorems, zero sorry | `86d38a203`, `9365be226` | 4,031,465 lamports on cohort-15's numbers — 0.004 SOL, 1.75% of a market lane, returned in full on an honest terminal |
 | 6 | conditional markets | `docs/design/MECHANISM_CONDITIONAL_MARKETS_2026_09_04.md` | `.../ConditionalMarketV1.lean`, 50 theorems, zero sorry | `4b15cf69a` | K ≤ 60 (7×8 fits, 8×8 refused), heap ≈ 30 |
 
-Five new Lean modules, all imported by the root (`b31b35a21`), with four stated
+Five new Lean modules, all imported by the root (`7f382cdd5`), with four stated
 `sorry` in `ScoringRuleV1` and none anywhere else. The batch spine is the one
 direction with no new module by construction: it is a migration of
 `GeneralClearing` and its siblings, and the note says which ones move
@@ -131,7 +131,7 @@ the addendum to decision 0029, and it waits on ember.
 **A design-first agenda has one characteristic failure — a note nobody can
 falsify — and the guards against it are structural.**
 
-- **The Lean modules are imported by the root** (`b31b35a21`, 145 jobs green), so
+- **The Lean modules are imported by the root** (`7f382cdd5`, 145 jobs green), so
   a mechanism module that stops building is a red tree rather than an island. This
   is exactly the failure mode decision 0029 item 1 names for `crate::series`: a
   thing with no non-test consumer is invisible to every gate.
@@ -252,4 +252,4 @@ Dealer's dependency on the clearing rule's order record is real.
 `docs/decisions/0024-sustainable-economics-and-a-governable-parameter-surface.md`,
 `0025`, `0027`, `0029` items 1 and 7;
 commits `2fbd73474`, `554a29119`, `3bf1905a7`, `a16c06d33`, `ff4f3b142`,
-`86d38a203`, `9365be226`, `4b15cf69a`, `b31b35a21`.
+`86d38a203`, `9365be226`, `4b15cf69a`, `7f382cdd5`.

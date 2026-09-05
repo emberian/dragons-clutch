@@ -72,6 +72,16 @@ flags its own `--help` does not name, or which omits an argument its usage line
 marks required. Runs `--help` and nothing else, only on programs whose source
 handles it; an unprobed command is 2, never a pass.
 
+**citations** — a commit cited in backticks by `docs/decisions` or
+`docs/evidence` that `git cat-file -e` cannot resolve and that
+`citations-register.json` does not adjudicate by name. The register says what a
+non-commit token is INSTEAD — a compost-repository commit, a harness session id,
+an artifact digest, a truncated release-set id, a magnitude, wire bytes — and is
+gated in both directions: a row whose token starts resolving, a row nothing
+cites, or a row naming the wrong documents is a refusal too. It proves a cited
+token names *a* commit, never the right one: eight hex characters can collide
+with this tree by accident, and the module's own docstring says so.
+
 **selftest** — the gates' own refusal tests (this directory's `tests/`,
 `tools/lane/test.sh`, `tools/gauntlet/test-run-cli.sh`,
 `tools/seam-audit/test-seam-audit.py`), so a gate that cannot fail is found

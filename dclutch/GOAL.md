@@ -14,7 +14,7 @@ questions — where a price will be at a stated time, split into cells, every
 claim backed by collateral locked before it exists. `README.md` says it for a
 stranger; `docs/INTENT.md` says why, in ember's own words with provenance.
 Completion is defined by `docs/MASTER_COMPLETION_CONTRACT.md` (rows
-C-00..C-16); what is deliberately not built is `docs/OMISSION_INDEX.md`.
+C-00..C-17); what is deliberately not built is `docs/OMISSION_INDEX.md`.
 
 ## The standing goal — ember, 2026-09-01
 

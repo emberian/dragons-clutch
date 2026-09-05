@@ -226,8 +226,9 @@ else
 fi
 
 if grep -Fq 'CHECKED_UPGRADE_GATE.json' "$RUNNER" \
-    && grep -Fq 'checked Upgrade admission requires the exact $SHIPPED_LINK_COUNT-link shipped set' "$RUNNER" \
-    && grep -Fq 'SHIPPED_LINK_COUNT=' "$RUNNER" \
+    && grep -Fq 'checked Upgrade admission requires the exact shipped link set' "$RUNNER" \
+    && grep -Fq 'SHIPPED_LINKS_AUTHORITY="$SOURCE/tools/local-validator/bootstrap/successor/src/upgrade.rs"' "$RUNNER" \
+    && ! grep -Eq '^SHIPPED_LINK_COUNT=[0-9]' "$RUNNER" \
     && grep -Fq 'RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link"' "$RUNNER" \
     && grep -Fq 'frames_at_or_over_bound=0' "$RUNNER" \
     && grep -Fq 'checked_upgrade_gate_sha256=' "$RUNNER"; then

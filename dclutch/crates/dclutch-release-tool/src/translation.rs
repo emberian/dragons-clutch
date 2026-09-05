@@ -66,7 +66,9 @@ pub struct TranslationValidationEvidenceV1<'a> {
     pub rustc_verbose: &'a [u8],
     /// Exact `lake --version` output.
     pub lake_version: &'a [u8],
-    /// Standalone validator Cargo lockfile.
+    /// The Cargo lockfile the validator resolves under: the ROOT workspace lock
+    /// since the one-workspace merge (2026-09-05) deleted the per-package one. The
+    /// field name is fixed by the evidence pack's input order and does not follow it.
     pub validator_cargo_lock: &'a [u8],
 }
 

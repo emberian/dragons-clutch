@@ -191,7 +191,8 @@ this ruling found it.
 
 `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4460-4476`, `:4505-4519`, `:4541`, `:4600-4612`, `:4645-4649`;
 commits `c0a1586b1`, `4137ec0d3`, `8a0d3f893`, `315c1df2e`, `afab02c25`,
-`ec373d90d`, `890b58886`, `1fd3e3c3f`, `ace5d24e9`;
+`ec373d90d`, `890b58886`, `1fd3e3c3f`, `e73aca142`, `1973f4bd1`,
+`61105d8c2`;
 `formal/dclutch-semantics/DClutchSemantics/CapabilityManifestV1Abi.lean:326`,
 `:333`, `:351`, `:654`;
 `programs/dclutch-core-sbf/src/lib.rs:244`;
