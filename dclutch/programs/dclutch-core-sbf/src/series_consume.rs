@@ -856,26 +856,37 @@ fn authenticate_found_coordinates(
         || request.capability_rent() != occurrence.funds().capability_native()
         || request.work() != occurrence.funds().founding_work()
         || request.hoard_principal() != occurrence.funds().hoard_principal()
-        // A FLOOR, NOT AN EQUALITY, and here the equality was worse than the
-        // one census row R13 names. R13's victim declared a snapshot a slot
-        // early; this victim cannot choose a different account at all, because
-        // `:825-829` above pins `request.market()` to `occurrence.market()` --
-        // the address is PUBLISHED ON CHAIN IN THE OCCURRENCE RECORD before the
-        // founding transaction exists. Anyone could read a scheduled
-        // occurrence, send its market PDA one lamport, and strand that
-        // occurrence's prepaid ticket permanently, for about one lamport.
-        //
-        // Nothing is loosened. `market_rent` is not caller-chosen either: `:846`
-        // pins it to `occurrence.funds().market_rent()`, so the floor reads
-        // `live >= the rent the occurrence itself budgeted`. Underfunding still
-        // refuses. And `market_rent` appears at exactly two lines in this file,
-        // that pin and this comparison, so no arithmetic anywhere depends on the
-        // difference between an exact balance and a donated one.
-        || frame.found.market.lamports() < request.market_rent()
-        || frame.found.market.owner != &system_program::ID
-        || frame.found.market.data_len() != 0
     {
         return Err(CoreSbfError::Reference);
+    }
+    // A FLOOR, NOT AN EQUALITY, and here the equality was worse than the one
+    // census row R13 names. R13's victim declared a snapshot a slot early; this
+    // victim cannot choose a different account at all, because `:825-829` above
+    // pins `request.market()` to `occurrence.market()` -- the address is
+    // PUBLISHED ON CHAIN IN THE OCCURRENCE RECORD before the founding
+    // transaction exists. Anyone could read a scheduled occurrence, send its
+    // market PDA one lamport, and strand that occurrence's prepaid ticket
+    // permanently, for about one lamport.
+    //
+    // Nothing is loosened. `market_rent` is not caller-chosen either: `:846`
+    // pins it to `occurrence.funds().market_rent()`, so the floor reads `live >=
+    // the rent the occurrence itself budgeted`. Underfunding still refuses. And
+    // `market_rent` appears at exactly two lines in this file, that pin and this
+    // comparison, so no arithmetic anywhere depends on the difference between an
+    // exact balance and a donated one.
+    //
+    // AND IT REFUSES BY ITS OWN NAME. This was the last three disjuncts of the
+    // eighteen-way conjunction above, all answering `Reference` -- the identity
+    // linkage -- though nothing here is an identity: the account is pinned, and
+    // what is read is its balance and its vacancy.
+    // `a_market_short_of_its_occurrences_budgeted_rent_still_refuses` is the
+    // negative control for this floor and would have answered green from any of
+    // the other fifteen disjuncts, which its fixture never touches.
+    if frame.found.market.lamports() < request.market_rent() {
+        return Err(CoreSbfError::SeriesMarketRent);
+    }
+    if frame.found.market.owner != &system_program::ID || frame.found.market.data_len() != 0 {
+        return Err(CoreSbfError::SeriesMarketVacancy);
     }
     if prepared.realm_id != admitted.occurrence.template().realm().to_bytes()
         || prepared.resolution_policy_id != occurrence.resolution_policy().to_bytes()

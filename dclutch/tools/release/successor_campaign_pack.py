@@ -860,10 +860,15 @@ def spline_product_handoff_value(
             "cli_lock": evidence(
                 root, "source/packages/dclutch-cli/package-lock.json", "CLI package lock"
             ),
+            # ONE WORKSPACE, ONE Cargo.lock (AGENTS.md, 2026-09-05). The
+            # successor stopped being its own workspace root in the fold, so
+            # the lock that resolves its dependencies IS the root lock; naming
+            # the deleted per-package path here refused every candidate at HEAD
+            # after every gate had passed.
             "successor_lock": evidence(
                 root,
-                "source/tools/local-validator/bootstrap/successor/Cargo.lock",
-                "spline Product producer lock",
+                "source/Cargo.lock",
+                "spline Product producer lock (the workspace lock)",
             ),
         },
         "build": {
@@ -1179,8 +1184,8 @@ def emit(arguments: argparse.Namespace) -> None:
             ),
             "successor_lock": evidence(
                 root,
-                "source/tools/local-validator/bootstrap/successor/Cargo.lock",
-                "successor campaign lock",
+                "source/Cargo.lock",
+                "successor campaign lock (the workspace lock)",
             ),
             "resolution_release_authority": evidence(
                 root,

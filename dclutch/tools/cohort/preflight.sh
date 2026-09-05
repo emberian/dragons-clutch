@@ -146,8 +146,19 @@ accelerator_program="$(field general_accelerator.program_id)"
 accelerator_slot="$(field general_accelerator.deployment_slot)"
 pin_source="$(field general_accelerator.registry_pin_source)"
 pin_text="$(field general_accelerator.registry_pin_text)"
+# A COHORT THAT DEPLOYS ITS OWN ACCELERATOR CANNOT BE GREEN HERE BEFORE IT HAS.
+# From cohort 16 the accelerator is a link the cohort builds and deploys
+# (`deploy-accelerator`), so its slot, its ELF digest and its liveness are
+# POST-DEPLOY facts and the manifest carries them empty until that row runs.
+# The verdict stays RED -- founding against an unpinned accelerator founds a
+# different market, so this must never soften -- and it names the row that
+# produces the fact, because "run it again after step N" is the difference
+# between a gate and a puzzle.
+accelerator_pending="; cohort-$cohort_number deploys its own accelerator, so this is RED until \`deploy-accelerator\` has run and its facts are recorded in $manifest_path. Deploying the seven roles and the accelerator is admitted with this RED; FOUNDING is not"
 if [ -n "$pin_text" ] && grep -q "$pin_text" "$pin_source"; then
     pass "slot pinned by the Registry's own partition" "$accelerator_slot"
+elif [ -z "$pin_text" ] || [ -z "$accelerator_slot" ]; then
+    fail "slot" "the manifest records no accelerator deployment slot$accelerator_pending"
 else
     fail "slot" "$pin_source no longer pins $accelerator_slot"
 fi
@@ -158,7 +169,7 @@ if [ -n "$rpc_url" ]; then
     case "$live" in
         *'"executable":true'*) pass "accelerator is live and executable" "$accelerator_program" ;;
         "")                    fail "accelerator" "the endpoint did not answer; NOT CHECKED is not a pass" ;;
-        *)                     fail "accelerator" "$accelerator_program is not an executable program at finalized" ;;
+        *)                     fail "accelerator" "$accelerator_program is not an executable program at finalized$accelerator_pending" ;;
     esac
 else
     say "accelerator liveness" "not checked (pass --rpc-url to make one read)"

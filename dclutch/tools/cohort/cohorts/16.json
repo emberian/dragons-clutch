@@ -3,7 +3,7 @@
   "cohort": 16,
   "prior_cohort": 15,
   "job_dir": "/Users/ember/jobs/dclutch-cohort16-20260905",
-  "deploy_commit": "745920a15f2f5178e2d932d3e5730cc650f7f485",
+  "deploy_commit": "f2ae6bf75deb1f71465e1ff06a05abe80d4d22a4",
   "roles": [
     "registry",
     "rent",
@@ -171,11 +171,11 @@
   ],
   "general_accelerator": {
     "program_id": "6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y",
-    "deployment_slot": "",
-    "elf_sha256": "",
-    "semantic_release_id": "",
+    "deployment_slot": "493639473",
+    "elf_sha256": "587181d9536d19f4ed40ddebb01ebac1d3e3544d28110c3d7e1ca04b4e4c87ab",
+    "semantic_release_id": "7c0a3cee0f643595da5970de505199e5cb4c4be313cecc25f096e3753e5b2fe6",
     "registry_pin_source": "programs/dclutch-registry-sbf/src/record_v1.rs",
-    "registry_pin_text": "",
+    "registry_pin_text": "DEPLOYMENT_SLOT: u64 = 493_639_473",
     "elf": "candidate/elf/accelerator.so",
     "keypair": "keys/program-accelerator.json"
   },

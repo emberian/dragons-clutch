@@ -63,8 +63,9 @@ use dclutch_product::payoff::{
     price_gate_v1::verify_price_gate_v1,
     registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::{
-        BasisInputV3, BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-        basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
+        BasisInputV3, BasisKindV3, CATEGORICAL_REFUND_MINIMUM_WIDTH_V3, ProductBasisV3,
+        SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3, compile_basis_v3,
+        semantic_basis_preimage_v3,
     },
 };
 use dclutch_product::{
@@ -2456,10 +2457,26 @@ pub(crate) fn semantic_basis_identity_v3(bytes: &[u8]) -> Result<[u8; 32]> {
 /// Compile the exact categorical liability basis one Product outcome vector
 /// determines.
 ///
-/// `CategoricalQ1` is the only shape a categorical Product admits: unit payout
-/// scale, no knots, no graded terms, and one basis claim per outcome. Nothing
-/// here is a free parameter except the two acyclic links, and both are checked
-/// against the compiled Product graph before publication.
+/// `CategoricalQ1` is the only shape a categorical Product admits: no knots, no
+/// graded terms, and one basis claim per outcome. Nothing here is a free
+/// parameter except the two acyclic links, and both are checked against the
+/// compiled Product graph before publication.
+///
+/// THE PAYOUT SCALE IS DERIVED, NOT TYPED, and since cohort 16 it is the
+/// ordinary-region count. Decision 0025 -- an oracle outage refunds the holders,
+/// it does not pay the founder -- makes the disclosure a property of the record:
+/// at `basis_width - 1` the honest walk pays the winner its ordinary-region
+/// count per claim and an outage instead pays one atom to EVERY ordinary claim,
+/// both vectors summing to the same scale, so the arm that already existed
+/// admits both. At the legacy `1` an outage pays the whole failure column to
+/// whoever holds it, which on cohort-13 was the founder alone.
+/// `categorical_refunds_on_failure_v3` is the sole author of the rule and this
+/// is the founding side of it: the record is what changes, not the program
+/// (`docs/decisions/0025-...`, and the runbook row `refund-scale`, since 16).
+///
+/// Below `CATEGORICAL_REFUND_MINIMUM_WIDTH_V3` the two scales are the same
+/// number, so the record could not say which shape it carries and the legacy
+/// spelling is kept rather than claiming a disclosure the width cannot hold.
 pub(crate) fn compile_linked_basis_v3(
     product_id: [u8; 32],
     result_domain_id: [u8; 32],
@@ -2472,6 +2489,11 @@ pub(crate) fn compile_linked_basis_v3(
         u32::try_from(outcome_count).map_err(|_| Error::new("Product outcome width overflow"))?;
     let width = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, outcome_count, 0, 0)
         .map_err(|error| Error::new(format!("ProductBasisV3 width: {error:?}")))?;
+    let payout_scale = if basis_width >= CATEGORICAL_REFUND_MINIMUM_WIDTH_V3 {
+        u64::from(basis_width - 1)
+    } else {
+        1
+    };
     let mut bytes = vec![0_u8; width];
     compile_basis_v3(
         BasisInputV3 {
@@ -2482,7 +2504,7 @@ pub(crate) fn compile_linked_basis_v3(
             result_unit_id,
             evaluator_release_id,
             basis_width,
-            payout_scale: 1,
+            payout_scale,
             knot_denominator: 1,
             knots: &[],
             terms: &[],
@@ -13751,8 +13773,9 @@ pub(crate) struct RelativeRecoveryRungV1 {
 /// exposing them is a lab fixture growing a parameter list, not new protocol.
 ///
 /// NOT HERE, and deliberately: the claim unit. It is not a `MarketRunInput`
-/// field at all -- `compile_linked_basis_v3` hard-wires `payout_scale: 1`
-/// alongside the categorical basis kind, so varying it is the same edit as
+/// field at all -- `compile_linked_basis_v3` DERIVES `payout_scale` from the
+/// width (`basis_width - 1` since cohort 16, decision 0025) alongside the
+/// categorical basis kind, so varying it independently is the same edit as
 /// emitting a graded basis and belongs to whoever does that one.
 #[derive(Clone, Debug)]
 pub(crate) struct LocalMarketShapeV1 {
@@ -14913,7 +14936,16 @@ mod tests {
             decode_hex(&input.linked_basis_hex).expect("basis")
         );
         assert_eq!(compiled.price_gate, None);
-        assert_eq!(compiled.basis_scale, 1);
+        // THE SCALE IS DERIVED FROM THE WIDTH, and asserting the literal `1`
+        // here was a second author for decision 0025's rule. The demo market is
+        // four outcomes wide -- three ordinary regions and the explicit failure
+        // coordinate -- so a refunding record carries 3 and the record itself
+        // says an outage refunds the holders rather than paying the founder.
+        let basis = ProductBasisV3::decode(&compiled.basis).expect("basis decodes");
+        assert_eq!(basis.basis_width(), 4);
+        assert_eq!(compiled.basis_scale, u64::from(basis.basis_width() - 1));
+        assert_eq!(basis.payout_scale(), compiled.basis_scale);
+        assert!(basis.refunds_on_failure());
     }
 
     /// One local market compiler shared by the ladder tests below.

@@ -56,7 +56,9 @@ SOURCE_FILES = {
         "direct_hot_route_manifest.rs"
     ),
     "rust_manifest": "source/tools/local-validator/bootstrap/successor/Cargo.toml",
-    "rust_lock": "source/tools/local-validator/bootstrap/successor/Cargo.lock",
+    # One workspace, one Cargo.lock: the successor stopped being its own
+    # workspace root in the fold, so the root lock is what pins this producer.
+    "rust_lock": "source/Cargo.lock",
 }
 PRODUCER_JOURNAL_FIELDS = {
     "schema",

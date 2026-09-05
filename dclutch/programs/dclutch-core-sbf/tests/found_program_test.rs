@@ -3967,6 +3967,11 @@ async fn a_strangers_lamport_cannot_strand_a_scheduled_series_occurrence() {
 ///
 /// This is the entire safety content of the comparison that was relaxed. If it
 /// ever passes, the floor became no check at all.
+///
+/// AND IT NAMES THE FLOOR. Until 2026-09-05 it expected `Reference`, which
+/// `series_consume` returned from eighteen disjuncts of one conjunction, so any
+/// of the fifteen this fixture never touches would have answered it green. The
+/// floor is `SeriesMarketRent` now and this test can only be satisfied by it.
 #[tokio::test]
 async fn a_market_short_of_its_occurrences_budgeted_rent_still_refuses() {
     let fixture = series_fixture(SeriesFault::UnderfundedMarket);
@@ -3978,7 +3983,7 @@ async fn a_market_short_of_its_occurrences_budgeted_rent_still_refuses() {
     let failure = failure.expect("an underfunded Market must refuse");
     assert_refused_with(
         &failure,
-        dclutch_core_sbf::CoreSbfError::Reference as u32,
+        dclutch_core_sbf::CoreSbfError::SeriesMarketRent as u32,
         "underfunded Series Market rent",
     );
     // Seal the lie: prove the genesis really was short, and that the refusal

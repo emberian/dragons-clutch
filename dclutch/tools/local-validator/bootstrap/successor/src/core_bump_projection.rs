@@ -85,7 +85,15 @@ const UNRECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 1] = [
 /// ordering is the point: the refusal this list answers arrives at the FIRST
 /// founding, after the redeploy has spent, so a cohort whose row is written
 /// afterwards has already bought the discovery it was meant to avoid.
-const RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 1] = [
+const RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 2] = [
+    // cohort-16, 1,186,440 bytes, deployed to devnet as
+    // 4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe. The deploy commit is
+    // f2ae6bf75deb1f71465e1ff06a05abe80d4d22a4 and the bytes are the NAMED
+    // RELEASE BUILDER's -- platform-tools v1.53 on Linux/x86_64, built on hbox
+    // through swarm-build -- which is why this digest is not the one a macOS
+    // build of the same commit produces. `git merge-base --is-ancestor
+    // b312ce3c4 f2ae6bf75` is TRUE, so this Core fills all eight nibbles.
+    "f637e5df9ef9a16521d58aee080b951f6950f2661abbf2ff573cf7bc98d5665e",
     // cohort-15, 1,193,400 bytes, deployed to devnet as
     // 7hGerMC6Wj742FVTyiF9PhRnGSBzbee7TMZ6sUytsmFr. The deploy commit is
     // 1cae26fd61defbefd20bcd52acc449b6e94e64ed; these exact bytes also build at

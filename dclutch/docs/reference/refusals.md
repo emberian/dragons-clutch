@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **344** codes, with meanings taken
+The tables below carry all **350** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**70 of 344** codes have been observed refusing a real
+**70 of 350** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,7 +54,7 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-344 codes belonging to the programs the route census enumerates.
+350 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -208,9 +208,13 @@ The 22 campaigns contributing:
 | `0x5213` | `RationalLifecycleSbfErrorV2::Descriptor` | Finalized descriptor or a derived resource identity refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:192` |
 | `0x5214` | `RationalLifecycleSbfErrorV2::Market` | Core Market or canonical Claims aggregate refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:194` |
 | `0x5215` | `RationalLifecycleSbfErrorV2::Rent` | Prepaid or reclaimed native rent accounting refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:196` |
-| `0x5216` | `RationalLifecycleSbfErrorV2::Token` | Token-2022 resource state or effect refused. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:198` |
-| `0x5217` | `RationalLifecycleSbfErrorV2::Position` | Canonical protocol Position lifecycle refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:200` |
-| `0x5218` | `RationalLifecycleSbfErrorV2::Receipt` | Final resource observation or typed receipt refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:202` |
+| `0x5216` | `RationalLifecycleSbfErrorV2::Token` | Token-2022 refused an effect this route asked for, or the instruction that would ask it could not be built. The cause is Token-2022's own and is in the transaction log, on its own `Program ... failed` line. | claims-rational-lifecycle-programtest | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:200` |
+| `0x5217` | `RationalLifecycleSbfErrorV2::Position` | Canonical protocol Position lifecycle refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:202` |
+| `0x5218` | `RationalLifecycleSbfErrorV2::Receipt` | Final resource observation or typed receipt refused. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:204` |
+| `0x5219` | `RationalLifecycleSbfErrorV2::MintProfile` | The lifecycle Mint this route holds is not the closeable profile the family requires: program owner, mint/close/burn authority, decimals, extension set, or the SUPPLY the action declared. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:208` |
+| `0x521A` | `RationalLifecycleSbfErrorV2::CustodyLayout` | The structured custody account's bytes are not a Token-2022 account. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:210` |
+| `0x521B` | `RationalLifecycleSbfErrorV2::CustodyState` | The structured custody account parses and is not the one this route requires: program owner, mint, owner, amount, initialization state, delegate, delegated amount, native reserve or close authority. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:214` |
+| `0x521C` | `RationalLifecycleSbfErrorV2::Allocation` | A resource this program allocates for itself was refused by the System program, or came back with the wrong owner or width. | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:217` |
 | `0x5260` | `SparseNativeTransferSbfErrorV1::Instruction` | Request bytes refused the canonical fixed codec. | claims-family-programtest | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:80` |
 | `0x5261` | `SparseNativeTransferSbfErrorV1::Accounts` | Account count, privilege, owner, or alias refused. | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:82` |
 | `0x5262` | `SparseNativeTransferSbfErrorV1::Release` | Registry current-role or caller authority refused. | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:84` |
@@ -317,6 +321,8 @@ The 22 campaigns contributing:
 | `0x301B` | `CoreSbfError::InfrastructureAlreadySucceeded` | The V2 profile PDA is already occupied: the succession happened. | -- | `programs/dclutch-core-sbf/src/lib.rs:215` |
 | `0x301C` | `CoreSbfError::UnsupportedAction` | A wire action this program decodes and no longer composes. | -- | `programs/dclutch-core-sbf/src/lib.rs:231` |
 | `0x301D` | `CoreSbfError::FundedRent` | The rent a funding ledger was FUNDED at did not price its balance. | -- | `programs/dclutch-core-sbf/src/lib.rs:240` |
+| `0x301E` | `CoreSbfError::SeriesMarketRent` | The Market slot a scheduled occurrence names holds less than the rent that occurrence itself budgeted. | -- | `programs/dclutch-core-sbf/src/lib.rs:258` |
+| `0x301F` | `CoreSbfError::SeriesMarketVacancy` | The Market slot a scheduled occurrence names is not the vacant system-owned account a founding may create into. | -- | `programs/dclutch-core-sbf/src/lib.rs:266` |
 
 ## custody
 

@@ -28,7 +28,7 @@ these pages always match the source they describe. Regenerate with
 
 Current totals: **8 programs**, **148 routes**
 (110 with a witness -- a campaign binding or a corroborated devnet
-transaction), **344 refusal codes**.
+transaction), **350 refusal codes**.
 
 If you'd rather start with prose, the [guides](../guides/README.md)
 explain the protocol in plain terms and link back into these tables.

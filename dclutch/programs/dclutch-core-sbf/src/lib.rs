@@ -238,6 +238,32 @@ pub enum CoreSbfError {
     /// here and nowhere else, and this code says so instead of naming the
     /// whole of funding.
     FundedRent = 0x301D,
+    /// The Market slot a scheduled occurrence names holds less than the rent
+    /// that occurrence itself budgeted.
+    ///
+    /// Split from `Reference` on 2026-09-05, in the shape `FundedRent` was
+    /// split from `Funding` the day before. `Reference` is the
+    /// Realm/Product/result-domain/Market IDENTITY linkage, and this is not an
+    /// identity at all: `request.market()` is pinned to `occurrence.market()`
+    /// a dozen lines above, so the account is not caller-chosen and there is
+    /// nothing here to mislink. What is read is its BALANCE against
+    /// `occurrence.funds().market_rent()` -- a floor and not an equality, so a
+    /// stranger's donated lamport cannot strand a prepaid ticket.
+    ///
+    /// `a_market_short_of_its_occurrences_budgeted_rent_still_refuses` is the
+    /// negative control for exactly that floor, and it expected `Reference` --
+    /// one code over eighteen disjuncts of one conjunction, so it would have
+    /// answered green from any of them, including the fifteen its fixture
+    /// never touches. It names this.
+    SeriesMarketRent = 0x301E,
+    /// The Market slot a scheduled occurrence names is not the vacant
+    /// system-owned account a founding may create into.
+    ///
+    /// Split from `Reference` with `SeriesMarketRent`, and kept apart from it:
+    /// "someone already occupies this address" and "this address is short of
+    /// its budgeted rent" are different accusations with different remedies,
+    /// and only the second one can be cured by sending lamports.
+    SeriesMarketVacancy = 0x301F,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -273,7 +299,9 @@ dclutch_refusal_registry::pin_refusal_band!(
         InfrastructureConsentMissing,
         InfrastructureAlreadySucceeded,
         UnsupportedAction,
-        FundedRent
+        FundedRent,
+        SeriesMarketRent,
+        SeriesMarketVacancy
     ]
 );
 

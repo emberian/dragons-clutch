@@ -130,6 +130,18 @@ sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 # A ProgramData account is a 45-byte Loader header then the ELF; the ELF digest
 # is what the release gate and the chain both name.
 elfsha() { tail -c +46 "$1" | shasum -a 256 | awk '{print $1}'; }
+# A role's semantic release id, from the operator's own derivation beside us.
+# The runbook's semantic-release-ids.py writes that file from the SHIPPED
+# ARTIFACTS in this directory; nothing here types a hex string, and
+# `validate_prepare` re-derives every artifact-derived id from the artifact it
+# was supplied beside and refuses a mismatch by name.
+semantic() {
+    [ -f "$HERE/semantic-release-ids.txt" ] \
+        || { echo "$STAGE: no semantic-release-ids.txt; the cohort runbook's semantic-release-ids.py writes it from this directory's own candidate artifacts" >&2; exit 2; }
+    value="$(awk -v role="$1" '$1 == role { print $2 }' "$HERE/semantic-release-ids.txt")"
+    [ -n "$value" ] || { echo "$STAGE: semantic-release-ids.txt names no role $1" >&2; exit 2; }
+    printf '%%s' "$value"
+}
 %(helpers)s
 """
 
@@ -153,7 +165,57 @@ SOLANA_CLI = """\
 : "${%(cli_env)s:?absolute path to the solana CLI required}"
 CLI="${%(cli_env)s}"
 "$CLI" --version >/dev/null || { echo "$STAGE: the named solana CLI does not run" >&2; exit 2; }
-programdata() { "$CLI" program show --url "$DCLUTCH_RPC_URL" "$1" | sed -n 's/^ProgramData Address: //p'; }
+# THE PROGRAM ACCOUNT NAMES ITS OWN ProgramData AT OFFSET 4, and reading it
+# there needs no key. `solana program show` is the same fact behind a CLI that
+# demands a default signer for a pure read -- it exits "No default signer found"
+# in a job directory that deliberately holds no key, and inside a command
+# substitution that empties the address instead of stopping the stage, so the
+# next command fails naming a MISSING ARGUMENT rather than a missing signer. A
+# Loader-v3 Program account is four bytes of enum and thirty-two of address,
+# which is cohort-14's own verifier text: "each Program account still names its
+# ProgramData at offset 4". The request is built in python from the
+# environment, never interpolated into a shell-quoted JSON literal.
+programdata() {
+    DCLUTCH_PROGRAM_ACCOUNT="$1" python3 - <<'PROGRAMDATA_V1'
+import base64, json, os, sys, urllib.request
+
+address = os.environ["DCLUTCH_PROGRAM_ACCOUNT"]
+if not address:
+    sys.exit("programdata: no program address was given")
+request = urllib.request.Request(
+    os.environ["DCLUTCH_RPC_URL"],
+    data=json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getAccountInfo",
+        "params": [address, {
+            "encoding": "base64",
+            "commitment": "finalized",
+            "dataSlice": {"offset": 4, "length": 32},
+        }],
+    }).encode(),
+    headers={"content-type": "application/json"},
+)
+with urllib.request.urlopen(request, timeout=30) as answer:
+    value = json.load(answer).get("result", {}).get("value")
+if not value:
+    sys.exit("programdata: no finalized account at " + address)
+raw = base64.b64decode(value["data"][0])
+if len(raw) != 32:
+    sys.exit("programdata: " + address + " is not a 36-byte Loader-v3 Program account")
+alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+number = int.from_bytes(raw, "big")
+out = ""
+while number:
+    number, remainder = divmod(number, 58)
+    out = alphabet[remainder] + out
+for byte in raw:
+    if byte:
+        break
+    out = "1" + out
+print(out)
+PROGRAMDATA_V1
+}
 """
 
 DRIVER_BOOTSTRAP = """\

@@ -922,6 +922,11 @@ def tier_suites(ctx: Context):
             if ctx.dry_run:
                 break
             note(f"{name}: draw {draw} of {draws} -> {'pass' if code == 0 else 'FAIL' if code != EXIT_PREREQ else 'did not run'}")
+            if code == EXIT_PREREQ:
+                # A missing prerequisite is not a draw. Drawing it again asks
+                # the same absent fixture the same question and costs the row's
+                # whole build each time.
+                break
         if EXIT_PREREQ in codes:
             unrun.append(name)
         elif all(code == 0 for code in codes):
@@ -998,7 +1003,7 @@ TIERS: tuple[Tier, ...] = (
     Tier("journey", "minutes (2026-09-03)", "cargo", "the journey campaign or any tools/ workspace failing to compile (the #[path] tripwire)", tier_journey),
     Tier("root-targets", "~4 min (2026-09-03)", "cargo", "a cheap root-workspace integration test that fails, a quarantined one that passes, or a new one with no row", tier_root_targets),
     Tier("programs", "minutes (2026-09-03)", "cargo-build-sbf", "an SBF program that does not build, a frame-overwrite diagnostic, or the public Direct route losing compute margin", tier_programs),
-    Tier("suites", "~25 min (2026-09-03)", "cargo-build-sbf", "any other SBF program-test suite failing, each run through the runner its owner maintains", tier_suites),
+    Tier("suites", "15 min at 3 draws, warm (2026-09-05)", "cargo-build-sbf", "any other SBF program-test suite failing a draw, or DISAGREEING across its draws; each row drawn N times through the runner its owner maintains", tier_suites),
     Tier("witness", "~20s, devnet RPC (2026-09-04)", "python3, ~/.helius-key", "a devnet route witness the chain does not corroborate", tier_witness),
     Tier("workspaces", "slow (2026-09-03)", "cargo", "any tracked Cargo workspace failing to check from an archived revision (the cut tier)", tier_workspaces),
 )

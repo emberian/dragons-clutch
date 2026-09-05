@@ -406,3 +406,48 @@ Each item names its column. Nothing here is hidden behind a green.
 - **Rent into Core**, the Series flatten, the Dealer `release` merge, the
   successor as a caller of the operator, the wire-literal census, the 45-clause
   refusal split — each maker's report names its own; none started here.
+
+---
+
+## ADDENDUM, 2026-09-05, lane SUITES-2: §7.3's "11 of 15" was fifteen coin tosses
+
+§7.3's suites row reads `11 of 15 green` and §8 hangs four reds off it. **That
+row is not a measurement of fifteen suites. It is one draw of each**, and
+`tools/gate suites` at the time ran each row exactly once, so every verdict in
+it — green and red alike — was a single toss of whatever distribution that row
+has.
+
+For at least one row the distribution was near-even. `claims-lifecycle`'s
+`real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every_late_failure`
+passed about half its draws from `d6c4dea63` (2026-08-27) onward, against one
+binary and one ELF: the honest `RetireCoordinate` is byte-identical to the
+nonzero-supply hostile that precedes it, so on the same recent blockhash it
+signed to the same signature and the bank refused it as `AlreadyProcessed`
+without running the program, and `ProgramTest` registers blockhashes on a
+wall-clock timer. Which side of that race the row landed on decided this table's
+cell. `docs/evidence/CLAIMS_LIFECYCLE_LAYOUT_WALL_2026_09_05.md`, second
+addendum, carries the draws.
+
+So: **the count stands as a count of one draw each, and stands for nothing
+more.** No cell of it distinguishes "green" from "green about half the time",
+and §8's four reds were each also one toss — three of them were nonetheless
+convicted at their authors by fb36992d7 with controls at two commits, so those
+survive; the `claims-lifecycle` cell does not.
+
+The instrument is fixed rather than the number restated. `tools/gate suites`
+now draws each row `DCLUTCH_GATE_SUITE_DRAWS` times (3 by default), calls a row
+green only if every draw is, and reports a row whose draws disagree as
+**NONDETERMINISTIC by name** — never folded into green, never into red.
+
+Re-measured on the same host, three draws per row: **15 of 15 green, 45 runs,
+every one of them a pass** — 16m59s for the thirteen rows that need no extra
+fixture, plus 72s for `claims-position` and `claims-fractional` with
+`TOKEN_2022_SO` supplied. Nothing is NONDETERMINISTIC and nothing is red.
+
+The measured tree is a `git archive` export of `9fe4506f2` carrying this lane's
+own changes and nothing else — `5c534b016`, `b03b1c26e` and `cda85ef47`'s files
+copied in — not a clean export of `cda85ef47`, whose ancestry includes three
+other lanes' commits from the same afternoon. It is exactly the tree the row
+under repair was measured on before and after, and no file another lane
+committed that day is on any of these fifteen runners' paths; a clean export of
+`cda85ef47` is what a cut would measure, and this is not that.

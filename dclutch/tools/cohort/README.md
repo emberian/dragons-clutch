@@ -16,6 +16,11 @@ check-steps.py       the gate. --cohort N selects; --delta shows what this
 preflight.sh         everything checkable before a lamport moves, for any cohort
 generate-stage-scripts.py   the job directory's stage scripts, one family, from
                      the shape and args columns — no hand-written script
+semantic-release-ids.py     the cohort's eight semantic release ids, derived
+                     from the SHIPPED ARTIFACTS into <job>/semantic-release-ids.txt,
+                     which every emitted `prepare` reads through its own
+                     `semantic` helper; `validate_prepare` re-derives each one
+                     from the artifact beside it and refuses a mismatch
 frozen/              the exact tables cohort-14 and cohort-15 ran from, as
                      fixtures; --prove-frozen proves this file still reproduces
                      them
@@ -184,6 +189,15 @@ compare it to the candidate ELF over the ELF's whole length, before anything
 observes it. What this row produces that nothing else can is the accelerator's
 deployment slot, which `prepare` observes, the founding pins and the Registry's
 own observation fixture transcribes.
+
+**So `preflight.sh` is run TWICE for such a cohort, and its first pass is RED
+on purpose.** The accelerator's slot, ELF digest and liveness are outputs of
+this row, so the manifest carries them empty until it has run and §3 of the
+preflight cannot be green before it. That RED admits the deploy and forbids the
+founding, which is the honest reading and is why it is not softened; the
+message names this row so the second pass is a step and not a puzzle. Record
+the slot, the digest and the Registry pin text in `cohorts/<n>.json`, run the
+preflight again, and found only from a fully green one.
 
 ### record-core-digest
 
