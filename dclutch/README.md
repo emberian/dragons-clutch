@@ -170,7 +170,7 @@ from, that's a bug in the console — this table is the answer key.
 
 ```sh
 # build the programs and enumerate every route they accept (no chain):
-tools/gauntlet/run.sh --mode census
+tools/gate census
 
 # found a market on a throwaway local validator and join it as a
 # participant. It builds its own chain and tears it down afterwards, and it
@@ -195,9 +195,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
 # the clippy line above, as a gate rather than a habit -- it judges every
-# workspace member against tools/ci/clippy-debt.tsv and says how many it
+# workspace member against tools/gates/clippy-debt.tsv and says how many it
 # never reached:
-tools/ci/run.sh clippy
+tools/gate clippy
 ```
 
 After anything under `packages/dclutch-sdk` moves — the deployment manifest

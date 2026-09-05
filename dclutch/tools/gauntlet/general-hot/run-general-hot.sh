@@ -14,7 +14,7 @@
 # `programs/dclutch-trading-sbf/src/hot_v3.rs` and `src/lib.rs` belonging to three
 # other lanes. Every CU figure the campaign has ever published was therefore one
 # ELF SET's reading and not a commit's, and no two of them are comparable. The
-# frameguard runner learned this first (`tools/frameguard/run.sh --at`, *"a
+# frameguard runner learned this first (`tools/gate frames --at`, *"a
 # capture names its commit"*); this is the same rule for the same reason, and the
 # table this prints names the sha it was measured at.
 #

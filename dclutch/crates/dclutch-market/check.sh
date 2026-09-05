@@ -28,7 +28,7 @@ trap 'rm -f "$generated" "$generated_physical" "$generated_retirement" "$generat
 # ran `tools/lane.sh fmt` on a `do not edit` file -- which a direct rustfmt will
 # do, because the `#[rustfmt::skip]`/`include!` that stops `cargo fmt` lives in
 # `src/lib.rs` and never enters the picture. Three of these four moved under
-# rustfmt and sat in `tools/emission-guard/fixpoint-debt.tsv`; the fourth
+# rustfmt and sat in `tools/gates/fixpoint-debt.tsv`; the fourth
 # (`generated_found_frame_v3.rs`) was already a fixpoint, and running rustfmt
 # over it as well is what makes this guard's promise true of every emitter it
 # re-runs rather than of three of them.

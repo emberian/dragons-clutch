@@ -48,12 +48,11 @@
 //! wrong digest is a hostile, which is the opposite of a defect, and this gate
 //! must not make writing one impossible.
 
-use std::{collections::BTreeMap, fs, path::Path};
+use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 use syn::{Attribute, Expr, Item, Lit, Meta};
 
-use crate::enumerate::rust_sources;
 
 /// One `const NAME: &[u8] = b"...";` whose identifier names it a preimage.
 #[derive(Clone, Debug)]
@@ -265,12 +264,18 @@ fn referenced_names(doc: &str) -> Vec<String> {
 /// Split out of [`sweep`] so the rule can be exercised on a source string: the
 /// pairing is the part that could be wrong, and it should not need a checkout
 /// to test.
+#[cfg(test)]
 fn scan_source(text: &str, relative: &str) -> (Vec<DeclaredPair>, Vec<String>) {
+    match syn::parse_file(text) {
+        Ok(parsed) => scan_parsed(&parsed, text, relative),
+        Err(_) => (Vec::new(), Vec::new()),
+    }
+}
+
+/// [`scan_source`] over an already-parsed file.
+fn scan_parsed(parsed: &syn::File, text: &str, relative: &str) -> (Vec<DeclaredPair>, Vec<String>) {
     let mut pairs = Vec::new();
     let mut unpaired = Vec::new();
-    let Ok(parsed) = syn::parse_file(text) else {
-        return (pairs, unpaired);
-    };
     let mut labels = BTreeMap::new();
     let mut identities = Vec::new();
     collect(&parsed.items, relative, text, &mut labels, &mut identities);
@@ -309,41 +314,22 @@ fn scan_source(text: &str, relative: &str) -> (Vec<DeclaredPair>, Vec<String>) {
 /// Returns the claimed pairs, and the labels that claim nothing rendered as
 /// `LABEL (path:line)` -- a reported value, never a failing one, so it takes
 /// the same shape `MagicSummary::mirrored` uses for the same reason.
-pub fn sweep(root: &Path) -> Result<(Vec<DeclaredPair>, Vec<String>), String> {
-    let owners = super::bands::package_directories(root)?;
+pub fn sweep(sources: &crate::sources::Sources) -> (Vec<DeclaredPair>, Vec<String>) {
     let mut pairs = Vec::new();
     let mut unpaired = Vec::new();
-    for (package, directory) in &owners {
-        for path in rust_sources(directory)? {
-            // Innermost-first, exactly as `magics::sweep` does it: the first
-            // package whose directory contains the file is the one that
-            // compiles it, so a nested program-test is not counted twice.
-            let real = owners
-                .iter()
-                .find(|(_, candidate)| path.starts_with(candidate))
-                .map(|(name, _)| name.as_str());
-            if real != Some(package.as_str()) {
+    for (package, directory) in &sources.packages {
+        for source in sources.owned_by(package, directory) {
+            if !source.text.contains("PREIMAGE") {
                 continue;
             }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            if !text.contains("PREIMAGE") {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .into_owned();
-            let (found, missing) = scan_source(&text, &relative);
+            let (found, missing) = scan_parsed(&source.file, &source.text, &source.relative);
             pairs.extend(found);
             unpaired.extend(missing);
         }
     }
     pairs.sort_by(|left, right| left.label.cmp(&right.label));
     unpaired.sort();
-    Ok((pairs, unpaired))
+    (pairs, unpaired)
 }
 
 pub struct PreimageSummary {

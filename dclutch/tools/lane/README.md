@@ -3,7 +3,7 @@
 WAVE.md's "closing pattern language" (2026-08-27), pattern 7:
 
 > LANE WRAPPER: tools/lane.sh — enforced --only, pinned rustfmt, board
-> helper; retires four recurring accident classes.
+> helper; retires three recurring accident classes.
 
 The raw git/rustfmt/board commands documented in `WAVE.md` and
 `tools/gauntlet/{TIERS,README}.md` remain valid on their own — this wrapper
@@ -108,7 +108,7 @@ lanes are pushing through, and a session id still discriminates two lanes that
 both forgot.
 
 Read it back with `git log --format='%(trailers:key=Lane,valueonly)'`.
-`tools/frameguard/frameguard.py owed` prints it beside every debtor it names,
+`tools/gate frames owed` prints it beside every debtor it names,
 and a commit made without this wrapper is printed as *unattributed* rather than
 guessed at.
 
@@ -123,23 +123,6 @@ git's own parser instead of a second regex over subject lines, and a trailer
 written by the wrapper cannot be eaten by the backtick command-substitution
 that takes code spans out of shell-quoted `-m` messages (the hazard `AGENTS.md`
 records for both commit messages and board posts).
-
-### `lane.sh guard-script <script> -- <cmd...>`
-
-Snapshots `<script>`'s inode + sha256, runs `<cmd...>` to completion
-(its exit status becomes this wrapper's exit status), then warns loudly on
-stderr if `<script>` changed mid-run. It cannot make a mid-run edit safe —
-nothing can — it only guarantees you find out.
-
-Incident: `tools/gauntlet/TIERS.md` / `README.md` — "never edit run.sh
-while a run is in flight. Bash reads a script incrementally by byte offset,
-so an edit mid-run shifts what it reads next and it will re-execute or skip
-a block" (the README calls this "a corollary that cost this lane an hour").
-`tools/gauntlet/direct/` lives in its own directory rather than as a
-`run.sh` stage for the same reason, compounded by a second, independent
-incident the same day: "three lanes claimed the same two [tier] numbers
-inside twenty minutes" while a `--mode full` run was already in flight and
-editing `run.sh` mid-run was unsafe.
 
 ## Self-test
 

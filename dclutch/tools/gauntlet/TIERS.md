@@ -271,7 +271,7 @@ A family lane owns a `run-<family>.sh` that builds its ELFs, runs its campaigns,
 folds the evidence, checks its witnesses and calls `census observe` itself. It
 does NOT add a stage to `run.sh`: `run.sh` owns the census/report, and a shared
 script every family edits is the numbered-directory race one level down. Render
-the report afterwards with `run.sh --mode census`, which is cheap and reads the
+the report afterwards with `tools/gate census`, which is cheap and reads the
 accumulated ledger.
 
 A family lane may carry more than one census campaign, and has to when its
@@ -316,7 +316,7 @@ is how a real refusal launders itself out of the taxonomy.
 
 ## Adding a family tier
 
-1. **Check the census first.** `run.sh --mode census` takes seconds and prints
+1. **Check the census first.** `tools/gate census` takes seconds and prints
    the routes your family exposes and which of them have never executed. That
    list is your tier's target set.
 2. **Write the tier's `blocked.json` entries before you write the tier.** Any
@@ -401,14 +401,14 @@ that in the tier rather than letting the field's name imply otherwise.
 
 ```sh
 # seconds, no chain: the static census and the report
-tools/gauntlet/run.sh --mode census
+tools/gate census
 
 # 25-31 minutes: seven ELFs, a localhost validator, the tier-1 campaign, the
 # fold. Unparked 2026-09-03 (`c9eac1738`); measured on an M-series laptop.
 tools/gauntlet/run.sh --mode full --rpc-port auto
 ```
 
-`--mode census` needs no port and may run concurrently; so does `--mode full`
+`tools/gate census` needs no port and may run concurrently; so does `--mode full`
 with `--rpc-port auto`, which takes a free 42-port block instead of the fixed
 default. Run a supported family campaign through its named runner; on hbox its
 runner must use `swarm-build` and respect co-tenant workloads.

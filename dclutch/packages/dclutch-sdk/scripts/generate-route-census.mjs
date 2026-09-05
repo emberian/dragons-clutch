@@ -68,61 +68,15 @@ if (inventory.schema !== 'dclutch-gauntlet-route-inventory-v1') {
 }
 
 /**
- * The band table's file, read rather than the inventory: the inventory carries
- * bands only as a uniqueness check input, and the registry is where the
- * allocation and its prose live.
- *
- * It moved out of the crate's `lib.rs` and into `generated_bands.rs` on
- * 2026-09-02 (`1d8b999a`, "decision 0007's band allocation gets an author"),
- * which made `DClutchSemantics.RefusalBandsV1` its authority. This reader was
- * not swept with it, so `abi:route-census` threw `BANDS table not found` from
- * that commit until it was noticed: a browser surface with no authority behind
- * it, which is the exact failure `AGENTS.md` names when a Rust fact moves and
- * its non-Rust consumers are left pointing at the old address.
+ * The band table, from the inventory. The census reads the registry crate's
+ * generated table (`generated_bands.rs`) and carries it, so this generator and
+ * the reference read one author rather than each regexing the Rust source.
  */
-const bandAllocationPath = join(
-  repoRoot,
-  'crates',
-  'dclutch-refusal-registry',
-  'src',
-  'generated_bands.rs',
-);
-
-/**
- * The band table, read from the registry crate rather than the inventory.
- */
-function readBands() {
-  const source = readFileSync(bandAllocationPath, 'utf8');
-  const table = source.match(/pub const BANDS: &\[RefusalBand\] = &\[([\s\S]*?)\n\];/);
-  if (!table) throw new Error('refusal registry: BANDS table not found');
-  const entries = [...table[1].matchAll(/RefusalBand \{([\s\S]*?)\}/g)].map((entry) => entry[1]);
-  const bases = new Map(
-    [...source.matchAll(/pub const ([A-Z0-9_]+): u32 = (0x[0-9A-Fa-f_]+);/g)].map((match) => [
-      match[1],
-      Number(match[2].replaceAll('_', '')),
-    ]),
-  );
-  const span = bases.get('BAND_SPAN') ?? Number(source.match(/pub const BAND_SPAN: u32 = (0x[0-9A-Fa-f]+);/)?.[1]);
-  if (!Number.isSafeInteger(span)) throw new Error('refusal registry: BAND_SPAN not resolved');
-  return entries.map((entry) => {
-    const field = (name) => entry.match(new RegExp(`${name}:\\s*([^,\\n]+)`))?.[1]?.trim();
-    const label = field('label')?.replace(/^"|"$/g, '');
-    const pkg = field('package')?.replace(/^"|"$/g, '');
-    const baseName = field('base');
-    const base = bases.get(baseName);
-    const spanExpr = field('span');
-    const tier = field('tier') === 'BandTier::Program' ? 'program' : 'test-caller';
-    if (label === undefined || pkg === undefined || base === undefined) {
-      throw new Error(`refusal registry: unresolved band entry ${entry}`);
-    }
-    if (spanExpr !== 'BAND_SPAN') throw new Error(`refusal registry: band ${label} has a non-BAND_SPAN span`);
-    return { label, package: pkg, base, span, tier };
-  });
+const bands = inventory.bands;
+if (!Array.isArray(bands) || bands.length === 0) {
+  throw new Error('census inventory carries no bands: rebuild it with tools/gate census');
 }
-
-const bands = readBands();
-const bandShift = Number(readFileSync(bandAllocationPath, 'utf8')
-  .match(/pub const BAND_SHIFT: u32 = (\d+);/)?.[1]);
+const bandShift = Math.log2(bands[0].span);
 if (!Number.isSafeInteger(bandShift)) throw new Error('refusal registry: BAND_SHIFT not resolved');
 
 const programs = [...inventory.programs].sort((left, right) => left.label.localeCompare(right.label));

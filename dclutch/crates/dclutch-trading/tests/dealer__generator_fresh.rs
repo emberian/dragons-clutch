@@ -14,7 +14,7 @@ use std::process::Command;
 /// lives in `src/lib.rs`, which is exactly how
 /// `generated_transition_programs_v3.rs` went red at `ea4c46e02`. Two of this
 /// crate's five emissions moved under rustfmt and sat in
-/// `tools/emission-guard/fixpoint-debt.tsv`; the other three did not, and are
+/// `tools/gates/fixpoint-debt.tsv`; the other three did not, and are
 /// normalised here as well, so this guard's promise is true of every emitter it
 /// re-runs rather than of two of them -- the census reads `normalises` per
 /// GUARD and exempts every emitter the guard covers.

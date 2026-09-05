@@ -34,7 +34,7 @@ dclutch-custody = { path = "../../../../crates/dclutch-custody" }
 # The fix is a `[workspace.lints]` table in the program-test workspace root, and
 # whoever adds it must first measure `dclutch-direct-hot-program-test-support`
 # under the deny table -- currently impossible, because it sits behind
-# dealer-codec and trading-sbf in tools/ci/clippy-debt.tsv.
+# dealer-codec and trading-sbf in tools/gates/clippy-debt.tsv.
 [lints.rust]
 unsafe_code = "forbid"
 

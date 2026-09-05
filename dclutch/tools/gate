@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""tools/gate -- the one entry point to every instrument that decides what is true here.
+
+    tools/gate --list                      every gate, with its measured cost
+    tools/gate cheap                       the push tiers, ~2 minutes
+    tools/gate all --require               the cut: an unrun gate is a failed one
+    tools/gate <gate>... [--commit REV]    named gates; --commit measures a clean export
+    tools/gate <instrument> <options>      one instrument on its own terms
+    tools/gate <instrument> --help
+
+Exit 0 passed, 1 a gate failed, 2 a prerequisite was missing and nothing was proven, 64 usage.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from gates.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    # The help arm, declared here so the `commands` gate can replay runbooks that name this file.
+    if sys.argv[1:] and sys.argv[1] in ("-h", "--help"):
+        sys.exit(main(["--help"]))
+    sys.exit(main(sys.argv[1:]))

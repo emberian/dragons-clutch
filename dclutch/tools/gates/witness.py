@@ -29,9 +29,9 @@ reauthentication that the devnet cohort does not perform.  A checker that
 credited it would have been a mirror.
 
 usage:
-  corroborate.py --check              verify every docs/evidence/witnesses/*.json
-  corroborate.py --write FILE         refresh one document's chain-derived fields
-  corroborate.py --discover ...       build a document from a cohort's signatures
+  tools/gate witness --check              verify every docs/evidence/witnesses/*.json
+  tools/gate witness --write FILE         refresh one document's chain-derived fields
+  tools/gate witness --discover ...       build a document from a cohort's signatures
 
 `--discover` is how a cohort is meant to reach the register, and it exists so
 that nobody authors a route claim. It harvests the base58 signatures out of a
@@ -102,7 +102,7 @@ import urllib.request
 
 SCHEMA = "dclutch-devnet-route-witness-v1"
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-REPO = pathlib.Path(__file__).resolve().parents[3]
+REPO = pathlib.Path(__file__).resolve().parents[2]
 WITNESS_DIR = REPO / "docs" / "evidence" / "witnesses"
 
 
@@ -811,7 +811,7 @@ def discover(arguments) -> int:
         "cohort": arguments.cohort,
         "cluster": "devnet",
         "note": (
-            "Built by tools/gauntlet/devnet-witness/corroborate.py --discover from the signatures "
+            "Built by tools/gauntlet/devnet-witness/tools/gate witness --discover from the signatures "
             f"in {', '.join(source.name for source in sources)}, then corroborated against devnet. "
             "No route claim in this file was "
             "authored: each comes from the eight bytes the chain shows the transaction sent, "
@@ -848,8 +848,8 @@ def discover(arguments) -> int:
     return 1 if problems else 0
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="tools/gate witness", description=__doc__)
     parser.add_argument("--check", action="store_true", help="verify every witness document")
     parser.add_argument("--write", metavar="FILE", help="refresh one document's chain-derived fields")
     parser.add_argument("--discover", action="store_true", help="build a document from a cohort")
@@ -863,7 +863,7 @@ def main() -> int:
     parser.add_argument("--programs", metavar="FILE", help="--discover: label -> program address map")
     parser.add_argument("--cohort", metavar="N", help="--discover: the cohort's name")
     parser.add_argument("--out", metavar="FILE", help="--discover: the document to write")
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     modes = [arguments.check, bool(arguments.write), arguments.discover]
     if sum(1 for mode in modes if mode) != 1:
         parser.error("pass exactly one of --check, --write or --discover")
@@ -896,4 +896,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

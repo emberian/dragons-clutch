@@ -31,7 +31,7 @@
 //! the file and then fails, because a test cannot review its own regeneration
 //! and the variable would otherwise be enough to green a moved wire on both
 //! sides at once. Finish the move with
-//! `python3 tools/ci/wire-vector-pins.py --update` and commit the fixture and
+//! `python3 tools/gate emission --pins --update` and commit the fixture and
 //! its pin together.
 
 #![allow(clippy::panic)]
@@ -149,14 +149,14 @@ fn browser_wire_vector_matches_the_live_encoders() {
         // on BOTH sides at once: regenerate, and the encoder, the fixture and
         // the browser mirror agree again about bytes nobody read. The test
         // cannot verify its own regeneration, so it refuses instead, and the
-        // pin in tools/ci/wire-vector-pins.tsv -- which no test can write -- is
+        // pin in tools/gates/wire-vector-pins.tsv -- which no test can write -- is
         // what a human moves in the same commit.
         panic!(
             "DCLUTCH_WRITE_WIRE_VECTOR=1 wrote the regenerated vector. This is a \
              REFUSAL, not a failure of the encoder.\n\
              The checked-in bytes have changed and nothing has reviewed them yet. \
              Run\n\
-             \n    python3 tools/ci/wire-vector-pins.py --update\n\n\
+             \n    python3 tools/gate emission --pins --update\n\n\
              and commit the regenerated fixture AND the moved pin together, with \
              the digests\n\
              in the message. Separately, each half reads as an accident to \

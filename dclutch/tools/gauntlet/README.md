@@ -1,10 +1,10 @@
 # tools/gauntlet — the standing outside-in functional suite
 
 ```sh
-tools/gauntlet/run.sh --mode census      # seconds: static route census + report
+tools/gate census                        # seconds: static route census + report
 tools/gauntlet/run.sh --mode full        # ~25 min: build, launch, tier-1 campaign, census
 tools/gauntlet/hot-cu/run-hot-cu.sh      # the Hot tail's compute, swept over 20 seeds
-tools/gauntlet/devnet-witness/corroborate.py --check   # every devnet witness, re-read from devnet
+tools/gate witness --check              # every devnet witness, re-read from devnet
 ```
 
 **The census report is not in the tree and the register no longer says it is.**
@@ -14,7 +14,7 @@ the ledger it renders is empty until a campaign folds into it. That artifact was
 named in `docs/reference/routes.md` for months as "the evidence"; what is
 actually checkable from a checkout is `docs/reference/route-witnesses.md`, which
 is generated, tracked, and carries the artifact and digest behind every row.
-`devnet-witness/` is the only channel through which a public-chain transaction
+`tools/gate witness` is the only channel through which a public-chain transaction
 reaches it.
 
 **Start with `DESIGN.md`.** It states why this exists and what makes an
@@ -50,7 +50,7 @@ said "this has never been submitted".
 
 ## Outputs
 
-`run.sh --mode census` writes the first three outputs below under `--work`
+`tools/gate census` writes the first three outputs below under `--work`
 (default `/private/tmp/dclutch-gauntlet`). Named family campaigns document
 their own run, ledger, and ELF paths. The shared checkout's `target/` is never
 used, because parallel lanes share this working tree.
@@ -67,8 +67,8 @@ used, because parallel lanes share this working tree.
 
 ## Supported top-level mode
 
-`run.sh --mode census` is supported. It needs no chain or port and may run
-concurrently.
+`tools/gate census` (which `run.sh --mode census` delegates to) needs no chain or
+port and may run concurrently.
 
 `run.sh --mode full` is a campaign again as of `c9eac1738` (2026-09-03). It was
 parked from 2026-08-31 because tier 1's only localhost Market producer was
@@ -82,14 +82,11 @@ plan it builds.
 It costs 25-31 minutes: seven SBF links, a localhost validator, 195
 transactions, and the fold. Pass `--rpc-port auto` to run it beside another
 campaign. Use the family runners under `tools/gauntlet/` for their named
-campaigns; use `run.sh --mode census` to render the accumulated report in
+campaigns; use `tools/gate census` to render the accumulated report in
 seconds.
 
-`tools/gauntlet/test-run-cli.sh` is the runner's adversarial CLI check. Until
-2026-09-03 every assertion in it was about the park's pre-build refusal, so it
-was red from the moment the park was lifted -- and nothing noticed, because
-nothing runs it. It now checks the argument boundary, which is what survived
-the unpark. **An executor for it is still owed.**
+`tools/gauntlet/test-run-cli.sh` is the runner's adversarial CLI check;
+`tools/gate selftest` runs it.
 
 ## Ownership
 

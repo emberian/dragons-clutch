@@ -45,16 +45,16 @@ stands:
 
 ## Two never-executed numbers, and neither one is the other
 
-Currently **2** of **165** routes are in
+Currently **3** of **165** routes are in
 that last group. That is not the number of routes nothing has ever run, and a
 reader who takes it for one will conclude the register's work queue is empty.
 Both figures are derived here, from the same classification:
 
-- **unrecorded: 2 of 165** -- no campaign
+- **unrecorded: 3 of 165** -- no campaign
   binding, no devnet witness, and no entry in `tools/gauntlet/blocked.json`.
   Nobody has written anything at all about this route. This is the number the
   register has always printed under the name NEVER-EXECUTED.
-- **undriven: 34 of 165** -- unrecorded, PLUS every
+- **undriven: 35 of 165** -- unrecorded, PLUS every
   blocked route whose entry is classed `status-report` ("no campaign or tier
   drives it yet", with nothing structural in the way), PLUS every blocked route
   whose entry is classed `unwired` (it admits the route is driven today and
@@ -279,7 +279,7 @@ instead:
 | `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | entry | predicate ``; length `PRE_MARKET_FUNDING_REQUEST_BYTES_V2`; magic `DCLRPFQ2` | no phase gate | executed (resolution-pre-market-funding-programtest); executed (tier1); refused (resolution-pre-market-funding-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:389` |
 | `resolution/process_abandon#magic` | action | tag ``; magic `DCLTPAB3` | `source: Resolved, Exhausted, FailureCommitted, Retired` | executed (resolution-core-v3-programtest); refused (resolution-core-v3-programtest) | `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:99` |
 | `resolution/process_admit#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | `market: Open+Consumed` | blocked by rule `resolution/process_admit#AdmitTerminal` (status-report): The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1507` |
-| `resolution/process_advance_recovery#AdvanceRecovery` | action | variant `RelayInstructionV1::AdvanceRecovery` | `funding-ledger: Active`; `market: Open+Consumed` | executed (ladder) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:191` |
+| `resolution/process_advance_recovery#AdvanceRecovery` | action | variant `RelayInstructionV1::AdvanceRecovery` | `funding-ledger: Active`; `market: Open+Consumed` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:191` |
 | `resolution/process_append#AppendObservation` | action | variant `RelayInstructionV1::AppendObservation` | no phase gate | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:178` |
 | `resolution/process_capture#Capture` | action | variant `SponsoredPushActionV1::Capture` | `market: Open+Consumed`; `source: Primary` | executed (resolution-sponsored-programtest); refused (resolution-sponsored-programtest) | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:80` |
 | `resolution/process_close#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | `market: Retiring+Consumed` | blocked by rule `resolution/process_close#CloseFund` (structural): STRUCTURALLY UNDRIVABLE IN THE RELEASE SET, and this entry's previous reason is superseded. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1516` |

@@ -21,6 +21,7 @@ usage: tools/gauntlet/run.sh [options]
   --commit REV     source revision to archive and build (default: HEAD)
   --mode MODE      census | full   (default: full)
                      census  static enumeration + report only, seconds, no chain
+                             (delegates to `tools/gate census`)
                      full    build seven ELFs, launch a localhost validator, run
                              the tier-1 campaign, fold it into the census.
                              MEASURED 2026-09-03 on an M-series laptop: 18m01s of
@@ -29,8 +30,8 @@ usage: tools/gauntlet/run.sh [options]
                              --work adds ~6m of SBF builds. Budget 25-31 minutes,
                              and read TIERS.md before treating a run as evidence:
                              the campaign does not currently complete.
-  --from STAGE     force a restart at a stage: archive|elf|tool|inventory|
-                   campaign|census  (later stages always re-run)
+  --from STAGE     force a restart at a stage: archive|elf|tool|campaign|census
+                   (later stages always re-run)
   --keep-runs      keep every campaign run directory (default: newest three)
   --rpc-port PORT|auto
                    validator RPC base; `auto` takes a free 42-port block.
@@ -119,7 +120,7 @@ case "$RECORD_PUBLICATION" in genesis|transaction) ;; *) echo "--record-publicat
 # before anything is created, because `--from` is an argument like `--mode`:
 # refusing it after `mkdir -p "$WORK"` has built a scratch tree is refusing it
 # too late, and it exited 1 where every sibling exits 2.
-STAGE_ORDER="archive elf tool inventory campaign census"
+STAGE_ORDER="archive elf tool campaign census"
 FORCED=""
 stage_index() {
     local wanted=$1 index=0 stage
@@ -160,6 +161,9 @@ if [ "$RPC_PORT" != "auto" ]; then
 fi
 
 GAUNTLET="$REPO/tools/gauntlet"
+if [ "$MODE" = "census" ]; then
+    exec "$REPO/tools/gate" census --work "$WORK" --commit "$COMMIT"
+fi
 SOURCE="$WORK/source"
 ELF_DIR="$WORK/elf"
 BUILD_TARGET="$WORK/build-target"
@@ -435,46 +439,22 @@ if [ "$MODE" = "full" ]; then
 fi
 
 # ------------------------------------------------------------- 3. host tools
-CENSUS_DIGEST="$(cat "$GAUNTLET/census/Cargo.toml" "$GAUNTLET"/census/src/*.rs | sha256_stdin)"
-if stage_needed tool "$CENSUS_DIGEST-$SOURCE_DIGEST"; then
-    say "stage tool"
-    ( cd "$GAUNTLET/census" && CARGO_TARGET_DIR="$CENSUS_TARGET" \
-        run_build cargo build --release ) > "$LOGS/build-census.log" 2>&1 \
-        || { tail -n 40 "$LOGS/build-census.log" >&2; die "census tool build failed"; }
-    # The census's own adversarial tests. They are the thing standing between
-    # this suite and being a mirror one level up: each one fails against a
-    # deliberately weakened fold.
-    ( cd "$GAUNTLET/census" && CARGO_TARGET_DIR="$CENSUS_TARGET" \
-        run_build cargo test --release ) > "$LOGS/test-census.log" 2>&1 \
-        || { tail -n 40 "$LOGS/test-census.log" >&2; die "census tool tests failed"; }
-    if [ "$MODE" = "full" ]; then
-        ( cd "$SOURCE/tools/local-validator/bootstrap/successor" \
-            && CARGO_TARGET_DIR="$HOST_TARGET" run_build cargo build --release ) \
-            > "$LOGS/build-bootstrap.log" 2>&1 \
-            || { tail -n 40 "$LOGS/build-bootstrap.log" >&2; die "bootstrap build failed"; }
-    fi
-    stage_done tool "$CENSUS_DIGEST-$SOURCE_DIGEST"
-else
-    echo "stage tool: up to date"
-fi
+# The census -- its build, its own adversarial tests, the --check-unique
+# inventory of $SOURCE and the report -- is `tools/gate census`, the same
+# instrument every other reader of the census uses. It runs every time: the
+# build is cargo-incremental and the inventory is seconds.
+say "stage tool"
+"$REPO/tools/gate" census --source "$SOURCE" --work "$WORK" --revision "$SOURCE_REVISION" \
+    || die "the census refused (tools/gate census)"
 [ -x "$CENSUS_BIN" ] || die "census binary missing: $CENSUS_BIN"
-
-# --------------------------------------------------------------- 4. inventory
-if stage_needed inventory "$CENSUS_DIGEST-$SOURCE_DIGEST"; then
-    say "stage inventory"
-    # --check-unique runs the refusal-code gate BEFORE the inventory is
-    # written: no two programs may claim one custom error code, and no code may
-    # fall outside the band its package owns (decision 0007). It sweeps wider
-    # than the route inventory does -- test-program crates included -- because
-    # that is where the collisions the census had been annotating around lived.
-    "$CENSUS_BIN" inventory \
-        --root "$SOURCE" \
-        --out "$INVENTORY" \
-        --revision "$SOURCE_REVISION" \
-        --check-unique
-    stage_done inventory "$CENSUS_DIGEST-$SOURCE_DIGEST"
+if stage_needed tool "$SOURCE_DIGEST"; then
+    ( cd "$SOURCE/tools/local-validator/bootstrap/successor" \
+        && CARGO_TARGET_DIR="$HOST_TARGET" run_build cargo build --release ) \
+        > "$LOGS/build-bootstrap.log" 2>&1 \
+        || { tail -n 40 "$LOGS/build-bootstrap.log" >&2; die "bootstrap build failed"; }
+    stage_done tool "$SOURCE_DIGEST"
 else
-    echo "stage inventory: up to date"
+    echo "stage tool: bootstrap up to date"
 fi
 
 # ---------------------------------------------------------------- 5. campaign
@@ -778,7 +758,7 @@ fi
 # ------------------------------------------------------------------ 6. census
 say "stage census"
 CENSUS_PROBLEMS=0
-if [ "$MODE" = "full" ]; then
+if true; then
     RUN="$(cat "$WORK/last-run")"
     EVIDENCE="$RUN/evidence.json"
     [ -f "$EVIDENCE" ] || die "campaign evidence missing: $EVIDENCE"
@@ -815,14 +795,8 @@ if [ "$MODE" = "full" ]; then
     fi
 fi
 
-[ -f "$BLOCKED" ] || die "blocked-route register missing: $BLOCKED"
-ledger_lock "$LEDGER"
-"$CENSUS_BIN" report \
-    --inventory "$INVENTORY" \
-    --ledger "$LEDGER" \
-    --blocked "$BLOCKED" \
-    --out "$REPORT"
-ledger_unlock
+"$REPO/tools/gate" census --source "$SOURCE" --work "$WORK" --revision "$SOURCE_REVISION" --no-tests \
+    || CENSUS_PROBLEMS=1
 
 say "done"
 echo "inventory: $INVENTORY"

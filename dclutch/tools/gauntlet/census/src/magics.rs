@@ -52,7 +52,6 @@ use std::{
 use serde::Deserialize;
 use syn::{Expr, Item, UnOp};
 
-use crate::enumerate::rust_sources;
 
 /// Repo-relative path of the adjudicated-collision register.
 pub const EXEMPTIONS_PATH: &str = "tools/gauntlet/magic-collisions.json";
@@ -246,32 +245,11 @@ fn collect(
 /// Scoped to the two protocol directories on purpose: `tools/` carries
 /// deliberate operator-side copies of protocol constants, which are a
 /// convergence question owned elsewhere, not a dispatch-safety one.
-pub fn sweep(root: &Path) -> Result<Vec<DeclaredMagic>, String> {
-    let owners = super::bands::package_directories(root)?;
+pub fn sweep(sources: &crate::sources::Sources) -> Vec<DeclaredMagic> {
     let mut found = Vec::new();
-    for (package, directory) in &owners {
-        for path in rust_sources(directory)? {
-            // Innermost-first: the first package whose directory contains this
-            // file is the one that compiles it.
-            let real = owners
-                .iter()
-                .find(|(_, candidate)| path.starts_with(candidate))
-                .map(|(name, _)| name.as_str());
-            if real != Some(package.as_str()) {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(parsed) = syn::parse_file(&text) else {
-                continue;
-            };
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .into_owned();
-            collect(&parsed.items, package, &relative, &text, &mut found);
+    for (package, directory) in &sources.packages {
+        for source in sources.owned_by(package, directory) {
+            collect(&source.file.items, package, &source.relative, &source.text, &mut found);
         }
     }
     found.sort_by(|left, right| {
@@ -283,7 +261,7 @@ pub fn sweep(root: &Path) -> Result<Vec<DeclaredMagic>, String> {
     found.dedup_by(|left, right| {
         left.value == right.value && left.name == right.name && left.provenance == right.provenance
     });
-    Ok(found)
+    found
 }
 
 /// How many magics were declared, and how many are same-name mirrors.

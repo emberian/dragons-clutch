@@ -25,6 +25,7 @@ mod model;
 mod phases;
 mod preimages;
 mod report;
+mod sources;
 
 use std::{collections::BTreeMap, fs, path::Path, process::ExitCode};
 
@@ -187,18 +188,24 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         ));
     }
 
+    // One walk, one parse, every scanner.
+    eprintln!("census: parsing every first-party source under {}", root_path.display());
+    let sources = sources::Sources::load(&root_path)?;
+    // The band allocation rides in the inventory so its readers (the reference,
+    // the client mirrors) read one author instead of re-parsing the registry.
+    let allocation = bands::read(&root_path)?;
+
     // The uniqueness gate runs BEFORE the inventory is written: a tree whose
     // refusal codes collide should not leave a fresh inventory on disk
     // implying it was accepted.
     if options.contains_key("check-unique") {
-        let allocation = bands::read(&root_path)?;
-        let declared = bands::sweep(&root_path)?;
+        let declared = bands::sweep(&sources);
         let mut present: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for entry in &declared {
             present.insert(entry.package.clone());
         }
-        for (package, _) in bands::package_directories(&root_path)? {
-            present.insert(package);
+        for (package, _) in &sources.packages {
+            present.insert(package.clone());
         }
         let mut problems = bands::check(&allocation, &declared);
         problems.extend(bands::check_bands_are_live(&allocation, &present));
@@ -213,7 +220,7 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         // a wire discriminant a program dispatches on. Only one of them had a
         // uniqueness rule until now. See `magics.rs` for why a same-name
         // mirror is counted separately instead of failing here.
-        let declared_magics = magics::sweep(&root_path)?;
+        let declared_magics = magics::sweep(&sources);
         let magic_exemptions = magics::read_exemptions(&root_path)?;
         let (magic_problems, magic_summary) = magics::check(&declared_magics, &magic_exemptions);
         eprintln!(
@@ -246,7 +253,7 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         // Third wire object, same shape of question: an identity constant the
         // tree documents as the SHA-256 of a label it also ships. Nothing
         // recomputed one until this ran. See `preimages.rs`.
-        let (pairs, unpaired) = preimages::sweep(&root_path)?;
+        let (pairs, unpaired) = preimages::sweep(&sources);
         let (preimage_problems, preimage_summary) = preimages::check(&pairs, &unpaired);
         eprintln!(
             "census: {} documented schema identities, {} recomputed from their label, {} labels \
@@ -273,8 +280,8 @@ fn command_inventory(options: &Options) -> Result<(), String> {
     }
 
     eprintln!("census: indexing constants under {}", root_path.display());
-    let constants = enumerate::index_constants(&root_path)?;
-    let admissions = phases::index_admissions(&root_path)?;
+    let constants = enumerate::index_constants(&sources);
+    let admissions = phases::index_admissions(&sources);
     eprintln!(
         "census: {} admissible-prestate constants, {} unreadable",
         admissions.len(),
@@ -289,13 +296,15 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         })
         .collect();
     eprintln!("census: enumerating {} programs", targets.len());
-    let inventory = enumerate::enumerate(
+    let mut inventory = enumerate::enumerate(
         &root_path,
+        &sources,
         &targets,
         &constants,
         &admissions,
         options.get("revision").cloned(),
     )?;
+    inventory.bands = allocation.bands.clone();
 
     let routes: usize = inventory
         .programs

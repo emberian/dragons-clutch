@@ -26,7 +26,7 @@ What it rewrites, and nothing else:
 * Every `Cargo.toml` in the tree: path dependencies on a constituent become one
   dependency on the target (features unioned, `svm` added for SVM-gated
   modules), with the relative path recomputed from the manifest's location.
-* Root workspace members, `tools/ci/root-targets.tsv`, and path strings under
+* Root workspace members, `tools/gates/root-targets.tsv`, and path strings under
   `tools/`, `.github/` and the client script directories.
 """
 
@@ -594,7 +594,7 @@ class Merge:
 
     # ---- tsv and path strings ------------------------------------------
     def rewrite_root_targets(self) -> None:
-        tsv = ROOT / "tools/ci/root-targets.tsv"
+        tsv = ROOT / "tools/gates/root-targets.tsv"
         lines = tsv.read_text().split("\n")
         out = []
         for line in lines:

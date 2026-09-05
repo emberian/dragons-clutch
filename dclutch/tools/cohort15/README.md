@@ -140,8 +140,8 @@ transaction could arrive through. It has one now, and this row is what fills
 it.
 
 ```
-tools/gauntlet/run.sh --mode census                 # produces the inventory, seconds, no chain
-python3 tools/gauntlet/devnet-witness/corroborate.py --discover \
+tools/gate census                 # produces the inventory, seconds, no chain
+tools/gate witness --discover \
   --source docs/evidence/COHORT15_*.md \
   --inventory /private/tmp/dclutch-gauntlet/out/inventory.json \
   --programs <this cohort's label -> program address map> \

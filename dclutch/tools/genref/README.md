@@ -6,19 +6,20 @@ prose exists only as the connective narrative inside `generate.mjs`'s
 templates.
 
 ```sh
-tools/genref/generate.sh            # regenerate docs/reference/
-tools/genref/generate.sh --check    # byte-compare, write nothing, exit 1 on drift
-tools/genref/generate.sh --converge # regenerate the reference AND the client mirrors
-                                    #   that read it, to a fixpoint. THE ONE TO USE.
-tools/genref/generate.sh --converge --check
-                                    # is the COMMITTED tree already that fixpoint?
-tools/genref/test.sh                # self-test the gates, seconds, no build
-tools/ci/run.sh genref              # the tier: the self-test, then --converge --check
+tools/gate reference                 # regenerate docs/reference/
+tools/gate reference --check         # byte-compare, write nothing, exit 1 on drift
+tools/gate reference --converge      # regenerate the reference AND the client mirrors
+                                     #   that read it, to a fixpoint. THE ONE TO USE.
+tools/gate reference --check --converge
+                                     # is the COMMITTED revision already that fixpoint?
+tools/gate selftest                  # the loop's own refusal tests, seconds, no build
 ```
 
+`tools/genref/generate.sh` is a shim to `tools/gate reference` (the generated
+banners and `tools/release/final-generated-convergence.py` spell it).
+
 It refuses a dirty tree. `--allow-dirty` and `GENREF_ALLOW_DIRTY=1` are the same
-escape spelled two ways, `generate.sh` is its only author, and neither spelling
-reaches `generate.mjs` -- which is what `test.sh` pins.
+escape spelled two ways; the driver consumes both and `generate.mjs` sees neither.
 
 ## Sources
 
@@ -27,7 +28,7 @@ reaches `generate.mjs` -- which is what `test.sh` pins.
 | `programs.md`, `routes.md`, `refusals.md` (code tables) | `dclutch-route-census inventory` (tools/gauntlet/census), run fresh from the tree with `--check-unique` |
 | `routes.md` (execution status) | `tools/gauntlet/*/bindings.json` (+ `*-bindings.json`) and `tools/gauntlet/blocked.json` |
 | `route-witnesses.md` | the same bindings, plus `tools/gauntlet/substrates.json` (which substrate each campaign ran on, CHECKED here against its runner) and `docs/evidence/witnesses/*.json` (devnet transactions, whose chain-derived fields are written by `tools/gauntlet/devnet-witness/corroborate.py`) |
-| `refusals.md` (band allocation) | `crates/dclutch-refusal-registry/src/lib.rs` |
+| `refusals.md` (band allocation) | the census inventory's `bands`, read from `crates/dclutch-refusal-registry/src/generated_bands.rs` |
 | `budgets.md` | `tools/gauntlet/CU_BUDGETS.json` |
 | `decisions.md` | `docs/decisions/*.md` |
 | `abi/*.md` | `apps/dclutch-web/lib/generated/*.ts` — themselves emitted, each byte-gated by its own `abi:*:verify` |
@@ -64,7 +65,7 @@ passes and one that proves the fixpoint. A third pass that still moves a file is
 | 3 | the working tree is dirty (as for every other mode) |
 | 4 | no fixpoint within three passes -- refused, moving files named |
 
-The list of reference-coupled emitters is **declared** in `generate.sh` and then
+The list of reference-coupled emitters is **declared** in `tools/gates/reference.py` and then
 **checked against discovery** on every run: a script under
 `apps/dclutch-web/scripts` or `packages/dclutch-sdk/scripts` that reads
 `docs/reference` and is not in the list fails the run by name. A hardcoded list
@@ -74,7 +75,7 @@ removes.
 `--converge --check` answers the same question about a **committed** revision:
 it archives it (`git archive`, so it touches no repository state and cannot
 contend on `.git` locks) and settles it there, writing nothing into this
-checkout. That is the form `tools/ci/run.sh genref` runs, because convergence is
+checkout. That is the form the `reference` tier runs, because convergence is
 a property of what a commit holds and this checkout is a dozen lanes'
 half-written files.
 

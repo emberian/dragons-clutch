@@ -401,45 +401,6 @@ else
   bad "board: entry contains the lane name and the text"
 fi
 
-echo "=== lane.sh guard-script ==="
-
-SCRIPT="$WORK/watched.sh"
-cat >"$SCRIPT" <<'EOF'
-#!/usr/bin/env bash
-echo "ran"
-EOF
-chmod +x "$SCRIPT"
-
-expect_refusal "guard-script: missing --" "$LANE_SH" guard-script "$SCRIPT" true
-expect_refusal "guard-script: empty command" "$LANE_SH" guard-script "$SCRIPT" --
-
-RC=0
-OUT="$("$LANE_SH" guard-script "$SCRIPT" -- true 2>&1)" || RC=$?
-if [[ $RC -eq 0 && -z "$OUT" ]]; then
-  ok "guard-script: unchanged script is silent and exits 0"
-else
-  bad "guard-script: unchanged script is silent and exits 0 (rc=$RC out=$OUT)"
-fi
-
-# A command that edits the watched script mid-run must trigger the loud
-# warning, and the wrapper must still surface the wrapped command's own
-# (nonzero) exit status. The inner script is single-quoted deliberately: its
-# "$1" must expand in the spawned bash -c's own scope, not this one.
-# shellcheck disable=SC2016
-EDITOR_CMD=(bash -c 'echo "echo mutated" >> "$1"; exit 7' _ "$SCRIPT")
-RC=0
-OUT="$("$LANE_SH" guard-script "$SCRIPT" -- "${EDITOR_CMD[@]}" 2>&1)" || RC=$?
-if [[ $RC -eq 7 ]]; then
-  ok "guard-script: preserves the wrapped command's exit status"
-else
-  bad "guard-script: preserves the wrapped command's exit status (got $RC)"
-fi
-if echo "$OUT" | grep -q "CHANGED WHILE"; then
-  ok "guard-script: warns loudly when the script changes mid-run"
-else
-  bad "guard-script: warns loudly when the script changes mid-run"
-fi
-
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 if [[ $FAIL -gt 0 ]]; then

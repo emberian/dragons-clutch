@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/lane.sh -- the lane wrapper retiring four recurring accident classes.
+# tools/lane.sh -- the lane wrapper retiring three recurring accident classes.
 #
 # WAVE.md's "closing pattern language" (2026-08-27), pattern 7:
 #   "LANE WRAPPER: tools/lane.sh -- enforced --only, pinned rustfmt, board
@@ -16,7 +16,6 @@
 #   commit-patch <msg> <patch-file>     HEAD plus your hunk, for shared files
 #   fmt [--allow-root] <file.rs>...     pinned rustfmt, named files only
 #   board <text...>                     attributed, timestamped board entry
-#   guard-script <script> -- <cmd...>   inode/hash-guarded script execution
 
 lane_die() {
   printf 'lane: %s\n' "$1" >&2
@@ -29,8 +28,8 @@ lane_die() {
 # Every lane in this tree commits as the same git author, so `git log` can name
 # a commit and no instrument can name the lane that wrote it. On 2026-09-02
 # three lanes mis-attributed each other's commits in one afternoon, and
-# `frameguard.py owed` -- whose whole output is a ledger of WHO owes frame rows
-# -- could only ever print "ember arlynx" beside every debtor.
+# `tools/gate frames owed` -- whose whole output is a ledger of WHO owes frame
+# rows -- could only ever print "ember arlynx" beside every debtor.
 #
 # A TRAILER, never message prose: a trailer is a parsed field
 # (`%(trailers:key=Lane)`), so a reader gets it without regexing a subject
@@ -64,7 +63,6 @@ subcommands:
   commit-patch <msg> <patch-file>     HEAD plus your hunk, for shared files
   fmt [--allow-root] <file.rs>...     pinned rustfmt, named files only
   board <text...>                     attributed, timestamped board entry
-  guard-script <script> -- <cmd...>   inode/hash-guarded script execution
 
 Run `lane.sh <subcommand> --help` for the specific incident each one exists
 to close. See also tools/lane/README.md.
@@ -103,8 +101,8 @@ Refuses:
 Every commit carries a `Lane:` trailer naming who made it. Every lane in this
 tree commits as the SAME git author, so before this a reader could name a
 commit and never its lane -- three lanes mis-attributed each other's commits
-in one afternoon, and `frameguard.py owed`, whose entire output is a ledger of
-who owes frame rows, printed the same name beside every debtor. Set
+in one afternoon, and `tools/gate frames owed`, whose entire output is a ledger
+of who owes frame rows, printed the same name beside every debtor. Set
 `DCLUTCH_LANE` to your lane's name; unset, it falls back to the session id,
 and then to `unknown`. It is a trailer and not message prose so that
 `git log --format=%(trailers:key=Lane,valueonly)` reads it without parsing a
@@ -579,98 +577,6 @@ lane_cmd_board() {
 }
 
 # ---------------------------------------------------------------------------
-# guard-script
-# ---------------------------------------------------------------------------
-
-lane_guard_script_help() {
-  cat <<'EOF'
-usage: lane.sh guard-script <script> -- <cmd...>
-
-Snapshots <script>'s inode + sha256 before running <cmd...>, runs it to
-completion (its exit status is this wrapper's exit status), then
-re-snapshots and warns LOUDLY on stderr if <script> changed mid-run.
-
-Incident this prevents: tools/gauntlet/TIERS.md / README.md -- "never edit
-run.sh while a run is in flight. Bash reads a script incrementally by byte
-offset, so an edit mid-run shifts what it reads next and it will re-execute
-or skip a block" (the README calls this "a corollary that cost this lane an
-hour"). The same hazard is why tools/gauntlet/direct/ lives in its own
-directory rather than as a run.sh stage: a --mode full run was already in
-flight, editing run.sh mid-run was unsafe, and separately "three lanes
-claimed the same two [tier] numbers inside twenty minutes" the day that
-landed -- two independent incidents from the one root cause of scripts being
-mutated out from under a running interpreter.
-
-This wrapper cannot make a mid-run edit safe -- nothing can, short of not
-doing it. It only guarantees you find out.
-EOF
-}
-
-lane_stat_inode() {
-  stat -f '%i' "$1" 2>/dev/null || stat -c '%i' "$1" 2>/dev/null
-}
-
-lane_hash_file() {
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
-  else
-    sha256sum "$1" | awk '{print $1}'
-  fi
-}
-
-lane_cmd_guard_script() {
-  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    lane_guard_script_help
-    return 0
-  fi
-  if [[ $# -lt 1 ]]; then
-    lane_guard_script_help >&2
-    lane_die "guard-script: missing <script> (usage: lane.sh guard-script <script> -- <cmd...>)" 2
-  fi
-  local script="$1"
-  shift
-  if [[ "${1:-}" != "--" ]]; then
-    lane_guard_script_help >&2
-    lane_die "guard-script: expected '--' before the command, got '${1:-<nothing>}'" 2
-  fi
-  shift
-  if [[ $# -eq 0 ]]; then
-    lane_die "guard-script: empty command" 2
-  fi
-  [[ -f "$script" ]] || lane_die "guard-script: not a file: $script" 1
-
-  local inode1 hash1 inode2 hash2
-  inode1="$(lane_stat_inode "$script")"
-  hash1="$(lane_hash_file "$script")"
-
-  local rc=0
-  "$@" || rc=$?
-
-  if [[ -f "$script" ]]; then
-    inode2="$(lane_stat_inode "$script")"
-    hash2="$(lane_hash_file "$script")"
-  else
-    inode2="<gone>"
-    hash2="<gone>"
-  fi
-
-  if [[ "$inode1" != "$inode2" || "$hash1" != "$hash2" ]]; then
-    {
-      echo "lane guard-script: '$script' CHANGED WHILE '$*' WAS RUNNING."
-      echo "  inode: $inode1 -> $inode2"
-      echo "  sha256: $hash1 -> $hash2"
-      echo "Bash reads a script incrementally by byte offset; a mid-run edit"
-      echo "can make it re-execute or skip a block (tools/gauntlet/TIERS.md,"
-      echo "tools/gauntlet/README.md). Anything '$*' did after the edit landed"
-      echo "may not reflect the script you started with. Do not trust this"
-      echo "run's output without checking what changed and when."
-    } >&2
-  fi
-
-  return "$rc"
-}
-
-# ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
 
@@ -693,10 +599,6 @@ lane_main() {
   board)
     shift
     lane_cmd_board "$@"
-    ;;
-  guard-script)
-    shift
-    lane_cmd_guard_script "$@"
     ;;
   -h | --help | help | "")
     lane_top_help

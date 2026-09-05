@@ -469,17 +469,17 @@ def survey(root: Path, roots: tuple[str, ...], run_probes: bool) -> tuple[list[F
     return findings, counts
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="tools/gate commands", description=__doc__.split("\n")[0])
     parser.add_argument("--root", default=".", help="repository root")
     parser.add_argument("--roots", nargs="*", default=list(DEFAULT_ROOTS),
                         help="documents and directories surveyed (default: the runbooks)")
-    parser.add_argument("--baseline", help="triaged findings, as JSON")
+    parser.add_argument("--baseline", default=str(Path(__file__).resolve().parent / "commands-baseline.json"), help="triaged findings, as JSON")
     parser.add_argument("--check", action="store_true", help="fail on any finding outside the baseline")
     parser.add_argument("--write", action="store_true", help="rewrite the baseline from this survey")
     parser.add_argument("--no-probe", action="store_true", help="resolve programs only; run nothing")
     parser.add_argument("--json", action="store_true", help="machine-readable survey")
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
 
     root = Path(arguments.root).resolve()
     if not (root / ".git").exists():
@@ -543,4 +543,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

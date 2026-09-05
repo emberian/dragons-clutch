@@ -17,7 +17,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 use syn::{Expr, Item};
 
 use crate::{
-    enumerate::{collect_refusals, rust_sources},
+    enumerate::collect_refusals,
     model::{Band, BandTier, Refusal},
 };
 
@@ -274,33 +274,12 @@ fn package_name(manifest: &str) -> Option<String> {
 /// The route inventory walks `TARGETS`. That is right for coverage and wrong
 /// for uniqueness: the codes that actually collided belong to the test-only
 /// caller programs, which are exactly the ones no target names.
-pub fn sweep(root: &Path) -> Result<Vec<DeclaredRefusal>, String> {
-    let owners = package_directories(root)?;
+pub fn sweep(sources: &crate::sources::Sources) -> Vec<DeclaredRefusal> {
     let mut found = Vec::new();
-    for (package, directory) in &owners {
-        for path in rust_sources(directory)? {
-            // Innermost-first ordering means the first package whose directory
-            // contains this file is the one that compiles it.
-            let real = owners
-                .iter()
-                .find(|(_, candidate)| path.starts_with(candidate))
-                .map(|(name, _)| name.as_str());
-            if real != Some(package.as_str()) {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(parsed) = syn::parse_file(&text) else {
-                continue;
-            };
+    for (package, directory) in &sources.packages {
+        for source in sources.owned_by(package, directory) {
             let mut refusals = Vec::new();
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .into_owned();
-            collect_refusals(&parsed.items, package, &relative, &mut refusals);
+            collect_refusals(&source.file.items, package, &source.relative, &mut refusals);
             for refusal in refusals {
                 found.push(DeclaredRefusal {
                     package: package.clone(),
@@ -311,7 +290,7 @@ pub fn sweep(root: &Path) -> Result<Vec<DeclaredRefusal>, String> {
     }
     found.sort_by(|left, right| left.refusal.id.cmp(&right.refusal.id));
     found.dedup_by(|left, right| left.refusal.id == right.refusal.id);
-    Ok(found)
+    found
 }
 
 /// Check that no two refusals share a code and that every code sits in the

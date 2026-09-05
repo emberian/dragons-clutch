@@ -522,6 +522,7 @@ mod tests {
                 unclassified: Vec::new(),
                 no_persisted_discriminant: None,
             }],
+            bands: Vec::new(),
         }
     }
 

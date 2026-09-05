@@ -1152,7 +1152,7 @@ def write_sbom(
         "discovered from tracked manifests rather than maintained as a "
         "separate count. Regenerate with `tools/sbom/sbom_check.py`; check "
         "for drift with `tools/sbom/sbom_check.py --verify`. Automatically, "
-        "that check is the `sbom` tier of `tools/ci/run.sh` and the "
+        "that check is the `sbom` tier of `tools/gate` and the "
         "`lib/sbomVerify.test.ts` case in `apps/dclutch-web`'s `npm test` — "
         "see `tools/sbom/README.md`."
     )

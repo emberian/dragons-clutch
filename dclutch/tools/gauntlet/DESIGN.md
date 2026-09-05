@@ -154,8 +154,8 @@ is worth more than 2,300 green tests that agreed with themselves.
 ## Principle 5 — One supported top-level command
 
 `tools/gauntlet/run.sh` is the supported top-level operation in both its modes.
-`--mode census` enumerates the static route/refusal surface and renders the
-accumulated report, needing no validator or port. `--mode full`, the default,
+`--mode census` (which delegates to `tools/gate census`) enumerates the static
+route/refusal surface and renders the accumulated report, needing no validator or port. `--mode full`, the default,
 builds the seven role ELFs, launches a localhost validator, runs the tier-1
 campaign and folds it -- 25-31 minutes, measured 2026-09-03.
 

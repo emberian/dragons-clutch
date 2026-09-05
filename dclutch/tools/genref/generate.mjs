@@ -148,9 +148,6 @@ const tsModules = fs
   .filter((f) => f.endsWith(".ts"))
   .sort();
 
-const registrySource = read(
-  path.join(REPO, "crates", "dclutch-refusal-registry", "src", "lib.rs"),
-);
 
 // -------------------------------------------------- route execution status
 
@@ -495,34 +492,23 @@ function routeStatus(routeId) {
 
 // ------------------------------------------------------ refusal band table
 
-// Parse `/// Band ... .` doc lines paired with `pub const *_BASE: u32 = ...;`
-const bandRows = [];
-{
-  const lines = registrySource.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(
-      /^pub const ([A-Z0-9_]+(?:_BASE|_REFUSAL_BASE)): u32 = (0x[0-9A-Fa-f_]+);/,
-    );
-    if (!m) continue;
-    // walk back over the doc comment block
-    let doc = [];
-    for (let j = i - 1; j >= 0; j--) {
-      const dm = lines[j].match(/^\/\/\/ ?(.*)$/);
-      if (!dm) break;
-      doc.unshift(dm[1]);
-    }
-    const docText = doc.join(" ").trim();
-    if (!/^Band /.test(docText)) continue;
-    const base = parseInt(m[2].replaceAll("_", ""), 16);
-    bandRows.push({
-      constant: m[1],
-      base,
-      band: base >> 12,
-      doc: docText.replace(/\.$/, ""),
-    });
-  }
-  bandRows.sort((a, b) => a.base - b.base);
+// From the census inventory, which reads the registry crate's generated table:
+// one author for the allocation, shared with the client route-census mirrors.
+// (This used to regex `lib.rs` for constants that moved to `generated_bands.rs`
+// on 2026-09-02, and shipped an empty table until 2026-09-04.)
+if (!Array.isArray(inventory.bands) || inventory.bands.length === 0) {
+  throw new Error("the census inventory carries no bands; rebuild it (tools/gate census)");
 }
+const bandShift = Math.log2(inventory.bands[0].span);
+const bandRows = inventory.bands
+  .map((b) => ({
+    base: b.base,
+    band: b.base >> bandShift,
+    doc: `Band ${b.base >> bandShift} -- \`${b.package}\` (${b.label}${
+      b.tier === "test-caller" ? ", test caller" : ""
+    })`,
+  }))
+  .sort((a, b) => a.base - b.base);
 
 // ------------------------------------------------------------ ABI modules
 
@@ -1438,7 +1424,7 @@ ${
     "refusals.md",
     generatedHeader([
       "census inventory",
-      "crates/dclutch-refusal-registry/src/lib.rs",
+      "crates/dclutch-refusal-registry (bands, via the census inventory)",
     ]) +
       `# Refusal codes
 

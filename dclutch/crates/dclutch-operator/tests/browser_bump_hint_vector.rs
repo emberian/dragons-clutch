@@ -42,7 +42,7 @@
 //! --test browser_bump_hint_vector`, and only when a seed order deliberately
 //! moved. THAT RUN REFUSES on purpose: it writes both copies and then fails,
 //! because a test cannot review its own regeneration. Finish the move with
-//! `python3 tools/ci/wire-vector-pins.py --update` and commit the fixtures and
+//! `python3 tools/gate emission --pins --update` and commit the fixtures and
 //! their pins together. Note that the write branch writes the SDK copy too,
 //! which nothing here reads back -- both are pinned for that reason.
 
@@ -290,14 +290,14 @@ fn browser_bump_hint_vector_matches_the_live_seed_constructors() {
         // on BOTH sides at once: regenerate, and the encoder, the fixture and
         // the browser mirror agree again about bytes nobody read. The test
         // cannot verify its own regeneration, so it refuses instead, and the
-        // pin in tools/ci/wire-vector-pins.tsv -- which no test can write -- is
+        // pin in tools/gates/wire-vector-pins.tsv -- which no test can write -- is
         // what a human moves in the same commit.
         panic!(
             "DCLUTCH_WRITE_WIRE_VECTOR=1 wrote the regenerated vector. This is a \
              REFUSAL, not a failure of the encoder.\n\
              The checked-in bytes have changed and nothing has reviewed them yet. \
              Run\n\
-             \n    python3 tools/ci/wire-vector-pins.py --update\n\n\
+             \n    python3 tools/gate emission --pins --update\n\n\
              and commit the regenerated fixture AND the moved pin together, with \
              the digests\n\
              in the message. Separately, each half reads as an accident to \

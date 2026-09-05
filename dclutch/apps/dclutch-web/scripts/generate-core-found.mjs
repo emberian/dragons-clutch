@@ -35,7 +35,7 @@ const outputUrl = new URL('../lib/generated/coreFound.ts', import.meta.url);
 // "coreFound is 82 of 95 Lean-owned" was a number that existed ONLY in commit
 // messages. Nothing computed it, so nothing could contradict a wrong one, and a
 // conversion that silently regressed it would read exactly like one that did
-// not. That is the same gap `tools/emission-guard/COVERAGE.md` exists to close,
+// not. That is the same gap `tools/gates/emission-coverage.md` exists to close,
 // and the same answer: derive the number, print it on every run, and gate it
 // against a floor that moves only when somebody edits one line on purpose.
 //

@@ -27,7 +27,7 @@ these pages always match the source they describe. Regenerate with
   widths and offsets, account tables.
 
 Current totals: **12 programs**, **165 routes**
-(119 with a witness -- a campaign binding or a corroborated devnet
+(118 with a witness -- a campaign binding or a corroborated devnet
 transaction), **357 refusal codes**.
 
 If you'd rather start with prose, the [guides](../guides/README.md)

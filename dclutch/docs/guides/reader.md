@@ -60,7 +60,7 @@ risk.
 
 ```sh
 # build the programs and enumerate every route they accept (no chain):
-tools/gauntlet/run.sh --mode census
+tools/gate census
 
 # found a market on a throwaway local validator and join it as a
 # participant. It builds its own chain and tears it down afterwards, and it

@@ -105,5 +105,5 @@ reverse. The two lists are kept in step at
 `packages/dclutch-cli/src/main.ts`.
 
 Every command on this page is replayed as `--help` by the `runbooks` CI tier
-([`tools/doc-commands`](../../tools/doc-commands/README.md)), so a flag that gets
+([`tools/gate commands`](../../tools/gates/README.md)), so a flag that gets
 renamed out from under this page turns it red rather than stranding you.

@@ -25,6 +25,6 @@ test "$(wc -l < "$temporary" | tr -d ' ')" -eq 42
 # runs `tools/lane.sh fmt` on this `do not edit` file -- a direct rustfmt never
 # sees the `#[rustfmt::skip]` that lives in the sibling module. That is not
 # hypothetical (`ea4c46e02`), and it is why this pair sat in
-# `tools/emission-guard/fixpoint-debt.tsv`.
+# `tools/gates/fixpoint-debt.tsv`.
 rustfmt --edition 2024 "$temporary"
 cmp "$temporary" "$accepted"

@@ -24,6 +24,10 @@ pub struct Inventory {
     /// Exact source revision, when the caller supplied one.
     pub source_revision: Option<String>,
     pub programs: Vec<ProgramSurface>,
+    /// The refusal-band allocation, as `crates/dclutch-refusal-registry`
+    /// declares it, so every reader of this inventory reads one author.
+    #[serde(default)]
+    pub bands: Vec<Band>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

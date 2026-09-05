@@ -148,9 +148,9 @@ band 0 is never allocated, so a code below `0x1000` is not ours.
   reaching for the test, ask whether the code it needs exists.
 - Bands are append-only. A new program takes the next free base; a deleted
   program's band is withdrawn, never reused.
-- `dclutch-route-census inventory --check-unique` is the gate, and it runs in
-  `tools/gauntlet/run.sh`.
-- **`tools/genref/generate.sh` refuses a dirty tree (exit 3).** It reads the working
+- `tools/gate census` is the gate (`dclutch-route-census inventory --check-unique`),
+  and it runs in the `cheap` tier.
+- **`tools/gate reference` refuses a dirty tree (exit 2).** It reads the working
   tree, and in a shared checkout that emits reference docs for code not in HEAD —
   measured 2026-09-01, it silently deleted another lane's landed refusal rows.
   Regenerate from a detached worktree at HEAD; `--allow-dirty` only when you have
@@ -159,8 +159,8 @@ band 0 is never allocated, so a code below `0x1000` is not ours.
   and the client mirrors emitted from it close a cycle, so one pass leaves
   `abi/refusalRegistryV1.md` a pass behind; `--converge` settles the loop, bounds
   it at three passes, and REFUSES a tree that still moves on the third. Nobody
-  needs to remember the two-pass rule any more. `tools/ci/run.sh genref` asks the
-  same question of a committed revision.
+  needs to remember the two-pass rule any more. `tools/gate reference --check
+  --converge` asks the same question of a committed revision.
 
 ## A `map_err` that discards its cause converts a located defect into a search
 
@@ -339,9 +339,9 @@ construction belong outside the kernel in explicitly named adapters.
   per-function frame manifest cannot be recaptured after the fact by a
   bystander, because the double build is longer than this tree's interval
   between program commits (three correct recaptures were each invalidated
-  within minutes on 2026-09-02), so capture with `tools/frameguard/run.sh --at
-  <commit>` in the same commit, and `frameguard.py owed --repo . --baseline
-  tools/frameguard/baseline.json` names who has not.
+  within minutes on 2026-09-02), so capture with `tools/gate frames --at
+  <commit> --capture <file>` in the same commit, and `tools/gate frames owed`
+  names who has not.
 - Every fixed bound is labeled as mathematical, chain-derived, measured-profile,
   or provisional. Provisional bounds require a lifting plan.
 - Add adversarial tests with each invariant or parser. Do not weaken a refusal

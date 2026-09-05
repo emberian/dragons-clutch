@@ -21,6 +21,7 @@ use crate::{
         Unclassified,
     },
     phases::{AdmissionIndex, GuardMap},
+    sources::Sources,
 };
 
 /// Minimal token rendering. `syn`'s `printing` feature gives us
@@ -176,38 +177,25 @@ struct PendingConstant {
 /// four crates, and until it folded, the four `Action::Retire` routes the Core
 /// dispatch separates BY that width were indistinguishable to every reader
 /// downstream -- so `corroborate.py` credited none of them and said so.
-pub fn index_constants(root: &Path) -> Result<ConstantIndex, String> {
+pub fn index_constants(sources: &Sources) -> ConstantIndex {
     let mut index = ConstantIndex::default();
     let mut pending: Vec<PendingConstant> = Vec::new();
-    for directory in ["crates", "programs"] {
-        let base = root.join(directory);
-        if !base.is_dir() {
-            continue;
-        }
-        for path in rust_sources(&base)? {
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(file) = syn::parse_file(&text) else {
-                continue;
-            };
-            let relative = relative(root, &path);
-            let krate = crate_of(&relative);
-            index.crates.insert(krate.clone());
-            let mut imports = BTreeMap::new();
-            collect_imports(&file.items, &mut imports);
-            index_constants_in_items(
-                &file.items,
-                &relative,
-                &krate,
-                &imports,
-                &mut index,
-                &mut pending,
-            );
-        }
+    for source in &sources.files {
+        let krate = crate_of(&source.relative);
+        index.crates.insert(krate.clone());
+        let mut imports = BTreeMap::new();
+        collect_imports(&source.file.items, &mut imports);
+        index_constants_in_items(
+            &source.file.items,
+            &source.relative,
+            &krate,
+            &imports,
+            &mut index,
+            &mut pending,
+        );
     }
     fold_pending_constants(&mut index, pending);
-    Ok(index)
+    index
 }
 
 /// `crates/dclutch-market/src/generated.rs` -> `dclutch_market`.
@@ -703,27 +691,20 @@ fn module_path_for(crate_src: &Path, file: &Path) -> String {
     segments.join("::")
 }
 
-fn index_crate(root: &Path, crate_src: &Path) -> Result<CrateIndex, String> {
-    index_sources(root, &[crate_src.to_path_buf()])
+fn index_crate(sources: &Sources, crate_src: &Path) -> CrateIndex {
+    index_sources(sources, &[crate_src.to_path_buf()])
 }
 
 /// Index every `src` root given, in order, as one namespace.
-fn index_sources(root: &Path, sources: &[PathBuf]) -> Result<CrateIndex, String> {
+fn index_sources(sources: &Sources, roots: &[PathBuf]) -> CrateIndex {
     let mut index = CrateIndex::default();
-    for crate_src in sources {
-        for path in rust_sources(crate_src)? {
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(file) = syn::parse_file(&text) else {
-                continue;
-            };
-            let module = module_path_for(crate_src, &path);
-            let relative = relative(root, &path);
-            collect_functions(&file.items, &module, &relative, &mut index);
+    for crate_src in roots {
+        for source in sources.under(crate_src) {
+            let module = module_path_for(crate_src, &source.path);
+            collect_functions(&source.file.items, &module, &source.relative, &mut index);
         }
     }
-    Ok(index)
+    index
 }
 
 /// The type a declaration names, unwrapped through one generic layer.
@@ -2139,6 +2120,7 @@ pub struct ProgramTarget {
 /// Enumerate every program's dispatch surface under `root`.
 pub fn enumerate(
     root: &Path,
+    sources: &Sources,
     targets: &[ProgramTarget],
     constants: &ConstantIndex,
     admissions: &AdmissionIndex,
@@ -2152,7 +2134,7 @@ pub fn enumerate(
         if !lib.is_file() {
             return Err(format!("no crate root at {}", lib.display()));
         }
-        let index = index_crate(root, &crate_src)?;
+        let index = index_crate(sources, &crate_src);
         // The guard descent reads a wider namespace than the dispatch walk:
         // this program's own crate first, then every first-party crate it
         // depends on. `resolve_from` prefers the caller's own module, so a
@@ -2166,7 +2148,7 @@ pub fn enumerate(
                 .join(&target.package)
                 .join("Cargo.toml"),
         ));
-        let guard_index = index_sources(root, &guard_sources)?;
+        let guard_index = index_sources(sources, &guard_sources);
         let text =
             fs::read_to_string(&lib).map_err(|error| format!("read {}: {error}", lib.display()))?;
         let file: File =
@@ -2174,17 +2156,11 @@ pub fn enumerate(
         let lib_relative = relative(root, &lib);
 
         let mut refusals = Vec::new();
-        for path in rust_sources(&crate_src)? {
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(parsed) = syn::parse_file(&text) else {
-                continue;
-            };
+        for source in sources.under(&crate_src) {
             collect_refusals(
-                &parsed.items,
+                &source.file.items,
                 &target.label,
-                &relative(root, &path),
+                &source.relative,
                 &mut refusals,
             );
         }
@@ -2209,17 +2185,11 @@ pub fn enumerate(
         // this census while W1f was executing two of them on a validator. A
         // program's public entry is a fact about the crate, not about one file.
         let mut discovered = find_entrypoints(&file.items, &lib_relative);
-        for path in rust_sources(&crate_src)? {
-            if path == lib {
+        for source in sources.under(&crate_src) {
+            if source.path == lib {
                 continue;
             }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(parsed) = syn::parse_file(&text) else {
-                continue;
-            };
-            discovered.extend(find_entrypoints(&parsed.items, &relative(root, &path)));
+            discovered.extend(find_entrypoints(&source.file.items, &source.relative));
         }
         discovered.dedup_by(|left, right| left.1 == right.1);
 
@@ -2323,6 +2293,7 @@ pub fn enumerate(
         source_root: root.to_string_lossy().into_owned(),
         source_revision,
         programs,
+        bands: Vec::new(),
     })
 }
 

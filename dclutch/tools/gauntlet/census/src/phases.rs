@@ -306,25 +306,12 @@ impl AdmissionIndex {
 }
 
 /// Index every `const NAME: MarketAdmissionV1 = ...;` under `root`.
-pub fn index_admissions(root: &std::path::Path) -> Result<AdmissionIndex, String> {
+pub fn index_admissions(sources: &crate::sources::Sources) -> AdmissionIndex {
     let mut index = AdmissionIndex::default();
-    for directory in ["crates", "programs"] {
-        let base = root.join(directory);
-        if !base.is_dir() {
-            continue;
-        }
-        for path in rust_sources(&base)? {
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(file) = syn::parse_file(&text) else {
-                continue;
-            };
-            let relative = crate::enumerate::relative(root, &path);
-            index_items(&file.items, &relative, &mut index);
-        }
+    for source in &sources.files {
+        index_items(&source.file.items, &source.relative, &mut index);
     }
-    Ok(index)
+    index
 }
 
 fn index_items(items: &[Item], relative: &str, index: &mut AdmissionIndex) {

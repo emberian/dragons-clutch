@@ -41,7 +41,7 @@ failure shape as a warm target directory reporting zero diagnostics for a crate
 it never recompiled.
 
 The JSON form is deliberately complete rather than a top-N view. It is the
-machine-readable input to `tools/frameguard/frameguard.py`, whose committed
+machine-readable input to `tools/gate frames`, whose committed
 per-function ratchet catches growth while it is still below the hard wall:
 
     sbf-frame-sizes.py OBJECT --format json
