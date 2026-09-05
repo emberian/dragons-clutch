@@ -18178,6 +18178,37 @@ mod tests {
     }
 
     #[test]
+    /// THE PIN AND THE CENSUS ARE ONE NUMBER, and this is what says so.
+    ///
+    /// `FoundingSubmissionOperationV1::exact_unique_accounts` carried its own
+    /// count of the DCLTGMF3 frame while `GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3`
+    /// carried the measured one. Seating the failure escrow at founding moved the
+    /// frame from 58 to 60 -- the escrow's Position and its admission -- and moved
+    /// the constant, the fixture and the census with it. It did not move the
+    /// journal's table, which is consulted only when a real founding compiles its
+    /// real message. Cohort-16 met that on devnet on 2026-09-05, three transactions
+    /// from Open, with "DCLTGMF3 resolved account count changed: expected 58,
+    /// observed 60"; the frame was right and the pin was a mirror, for the second
+    /// time in the same table.
+    #[test]
+    fn the_dcltgmf3_journal_pin_is_the_measured_census_and_not_a_second_count() {
+        let (payer, prepared) = generic_market_founding_census_fixture_v3();
+        let census = authenticate_generic_market_founding_lock_census_v3(payer, &prepared)
+            .expect("canonical DCLTGMF3 census");
+        assert_eq!(
+            census.complete_keys,
+            crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltgmf3
+                .exact_unique_accounts(false),
+        );
+        // A market that bought a ladder publishes a RecoveryPolicyV2 record and
+        // every frame that authenticates it carries its raw/staging PAIR.
+        assert_eq!(
+            crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltgmf3
+                .exact_unique_accounts(true),
+            census.complete_keys + 2,
+        );
+    }
+
     fn generic_founding_final_compiler_census_pins_the_60_key_shape() {
         let (payer, prepared) = generic_market_founding_census_fixture_v3();
         let census = authenticate_generic_market_founding_lock_census_v3(payer, &prepared)

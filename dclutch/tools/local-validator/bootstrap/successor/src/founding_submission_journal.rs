@@ -37,6 +37,10 @@ pub(crate) enum FoundingSubmissionOperationV1 {
     CoreFundingAcceptV1,
 }
 
+/// A `RecoveryPolicyV2` record's raw and staging accounts: the exact two keys
+/// a frame gains when the market it authenticates bought a funded ladder.
+const FOUNDING_RECOVERY_POLICY_RECORD_PAIR_V1: usize = 2;
+
 impl FoundingSubmissionOperationV1 {
     pub(crate) const ORDER: [Self; 6] = [
         Self::Dcltcfq1,
@@ -85,11 +89,24 @@ impl FoundingSubmissionOperationV1 {
         match self {
             Self::Dcltcfq1 => 49,
             Self::Dcltpcb2 => 60,
+            // ONE AUTHOR, AND THIS IS NOT IT. The composed founding frame's
+            // width is `GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3`, which the
+            // census fixture derives from, the census test pins, and
+            // `authenticate_generic_market_founding_lock_census_v3` checks a
+            // live founding against. This table restated it as 58 and was not
+            // moved when seating the failure escrow at founding took the frame
+            // to 60 -- the escrow's Position and its admission. Cohort-16 met
+            // that on devnet on 2026-09-05, three transactions from Open, and
+            // it is the SECOND time this one table has been a stale mirror of
+            // a frame that moved. It now reads the number instead of holding
+            // one, and the recovery arm keeps the raw/staging pair as the only
+            // thing this operation adds on its own account.
             Self::Dcltgmf3 => {
                 if recovery_policy {
-                    60
+                    super::GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+                        + FOUNDING_RECOVERY_POLICY_RECORD_PAIR_V1
                 } else {
-                    58
+                    super::GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
                 }
             }
             // Canonical V7 frames are pairwise distinct and carry their own
@@ -1324,9 +1341,21 @@ mod tests {
         }
         assert_eq!(Op::CoreFundingCreateV1.exact_unique_accounts(false), 18);
         assert_eq!(Op::CoreFundingCreateV1.exact_unique_accounts(true), 20);
-        // The measured pair, from the first recovery-bearing founding.
-        assert_eq!(Op::Dcltgmf3.exact_unique_accounts(false), 58);
-        assert_eq!(Op::Dcltgmf3.exact_unique_accounts(true), 60);
+        // NOT A LITERAL, for the reason this table exists to demonstrate.
+        // These two lines held 58 and 60 and were the THIRD author of the
+        // composed founding frame's width, so they agreed with the stale pin
+        // and disagreed with the frame -- which is why the table's own drift
+        // reached devnet green. The width has one author, and it is the
+        // constant the census fixture is derived from and a live founding is
+        // checked against.
+        assert_eq!(
+            Op::Dcltgmf3.exact_unique_accounts(false),
+            super::super::GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+        );
+        assert_eq!(
+            Op::Dcltgmf3.exact_unique_accounts(true),
+            super::super::GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 + 2
+        );
     }
 
     fn message(signers: &[Pubkey], operation: FoundingSubmissionOperationV1) -> VersionedMessage {
