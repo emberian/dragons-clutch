@@ -252,7 +252,10 @@ use solana_program::{instruction::InstructionError, pubkey::Pubkey, rent::Rent};
 use solana_program_test::BanksClientError;
 use solana_sdk::transaction::TransactionError;
 
+use dclutch_market::capability_program::CAPABILITY_ROOT_SELECTION_OFFSET;
 use dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
+use dclutch_registry_sbf::RegistryError;
+use dclutch_registry::release_set::CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET;
 use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, REGISTRY_PROGRAM_ID,
     RENT_PROGRAM_ID, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
@@ -621,6 +624,191 @@ async fn a_permit_prepaid_below_todays_minimum_still_expires_on_the_deployed_elf
     assert!(
         credit_after.lamports > credit_before.lamports,
         "the stranded prepayment must reach the RentCredit, not stay stranded"
+    );
+}
+
+/// THE TWO HOSTILES THE CONFIG-IDENTITY RULING OWED, ON THE REAL ELFs.
+///
+/// `2cf96117a` settled that a Series root's `selection().config()` is the
+/// Registry RECORD DIGEST `hash(config_record_bytes)` and not the
+/// domain-separated `template_content_id(t)`, and
+/// `native_tests::the_series_root_config_identity_has_one_author` proves the
+/// two values are distinct and that the artifact join derives the second from
+/// the bytes. What neither shows is that the PROGRAM refuses when a root
+/// carries the wrong one. These two do, on the deployed ELFs.
+///
+/// Both perturb the one account the two readers share -- the finalized
+/// Template record, which IS this family's config record -- from opposite
+/// sides. `RootNamesTheContentId` leaves the record alone and restates the
+/// ROOT's config field as `template_content_id(t)`, which is a coordinate at
+/// which no Registry record can exist, so the derived raw address is not the
+/// account presented. `TemplateBytesRestated` leaves the root alone and flips
+/// one byte of the RECORD, so `hash(&data)` is no longer the digest the root
+/// and the PDA both name.
+///
+/// # THE POSITIVE CONTROL IS RUN, NOT ASSERTED FROM THE FIXTURE
+///
+/// Both legs refuse `Content` (`0x4003`), which is the code 2,124 sites of this
+/// program publish and which the shared pre-Market Expire wall publishes too --
+/// so matching the discriminant proves nothing on its own (ledger `M-38`), and
+/// `borrow_record_against` fuses ELEVEN conjuncts into that one code. The row
+/// therefore submits the UNPERTURBED fixture first, in its own bank, and
+/// requires each hostile to refuse STRICTLY CHEAPER than it does. That is a
+/// measurement of where the transaction stopped, and it is self-calibrating:
+/// when the shared wall moves, the control moves with it and this row keeps
+/// meaning the same thing. What it does NOT claim is which of the eleven
+/// conjuncts fired; that needs the discriminant split, and the CU each leg
+/// reports is what a lane doing that split will bind its new code to.
+#[derive(Clone, Copy, Debug)]
+enum ConfigIdentityHostileV1 {
+    RootNamesTheContentId,
+    TemplateBytesRestated,
+}
+
+/// The exact code each restated identity refuses with, and WHERE.
+///
+/// They are not the same program, and that is the finding rather than an
+/// inconvenience. A root naming the content id never reaches Trading at all:
+/// the Registry's own transparent continuation refuses it, so the code is
+/// `RegistryError::Continuation` in band 1 and no Series byte is read. A
+/// restated Template record does reach Trading and refuses
+/// `TradingSbfError::Content` in the family-neutral record borrow. Two
+/// perturbations of one account, two programs, two bands -- which is exactly
+/// why this row could never have been written as `is_err()`.
+const fn config_identity_hostile_code_v1(hostile: ConfigIdentityHostileV1) -> u32 {
+    match hostile {
+        ConfigIdentityHostileV1::RootNamesTheContentId => RegistryError::Continuation as u32,
+        ConfigIdentityHostileV1::TemplateBytesRestated => TradingSbfError::Content as u32,
+    }
+}
+
+fn apply_config_identity_hostile_v1(
+    fixture: &mut SeriesPremarketExpiryChainFixtureV1,
+    hostile: ConfigIdentityHostileV1,
+) {
+    match hostile {
+        ConfigIdentityHostileV1::RootNamesTheContentId => {
+            let content_id = fixture.template_content_id;
+            let root = fixture
+                .install_accounts
+                .iter_mut()
+                .find(|candidate| candidate.key == fixture.parent_root)
+                .expect("parent root install account");
+            let start = CAPABILITY_ROOT_SELECTION_OFFSET + CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET;
+            let field = root
+                .account
+                .data
+                .get_mut(start..start + 32)
+                .expect("root selection config field");
+            assert_ne!(
+                field, content_id,
+                "the unperturbed root must NOT already name the content id",
+            );
+            field.copy_from_slice(&content_id);
+        }
+        ConfigIdentityHostileV1::TemplateBytesRestated => {
+            let record = fixture
+                .install_accounts
+                .iter_mut()
+                .find(|candidate| candidate.key == fixture.config_raw)
+                .expect("Template/config record install account");
+            let byte = record
+                .account
+                .data
+                .first_mut()
+                .expect("a nonempty Template record");
+            *byte ^= 0x01;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_restated_config_identity_refuses_before_the_composition() {
+    // THE CONTROL, in its own bank: what the unperturbed fixture costs before
+    // it stops. Every hostile below has to stop cheaper than this or it did not
+    // reach its own subject.
+    let control = {
+        let artifacts = elves();
+        let mut test = program_test_without_forced_budget(&artifacts);
+        let fixture = build_chain(&mut test, &artifacts);
+        install_series_premarket_expiry_accounts_v1(
+            &mut test,
+            &Rent::default(),
+            &fixture.install_accounts,
+            &fixture.externally_installed,
+        )
+        .expect("install control chain accounts");
+        let instructions = series_expire_transaction_v1(&fixture);
+        let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+        add_lookup_table(&mut test, &addresses);
+        let mut context = start_with_substrate(test, fixture_substrate()).await;
+        context
+            .warp_to_slot(2)
+            .expect("warp beyond the Series retry deadline");
+        match submit_v0_observed(&mut context, &instructions, addresses, None, &[]).await {
+            // The route completes: the control is then the whole successful
+            // execution, and any refusal at all is cheaper than it.
+            Ok(execution) => execution.compute_units_consumed,
+            Err(refusal) => refusal.compute_units_consumed,
+        }
+    };
+    assert!(control > 0, "the control must report a price");
+
+    let mut observed: Vec<(ConfigIdentityHostileV1, Option<u32>, u64)> = Vec::new();
+    for hostile in [
+        ConfigIdentityHostileV1::RootNamesTheContentId,
+        ConfigIdentityHostileV1::TemplateBytesRestated,
+    ] {
+        let artifacts = elves();
+        let mut test = program_test_without_forced_budget(&artifacts);
+        let mut fixture = build_chain(&mut test, &artifacts);
+        let report = physical_report(&fixture);
+        apply_config_identity_hostile_v1(&mut fixture, hostile);
+        install_series_premarket_expiry_accounts_v1(
+            &mut test,
+            &Rent::default(),
+            &fixture.install_accounts,
+            &fixture.externally_installed,
+        )
+        .expect("install config-identity hostile chain accounts");
+        let instructions = series_expire_transaction_v1(&fixture);
+        let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+        add_lookup_table(&mut test, &addresses);
+        let mut context = start_with_substrate(test, fixture_substrate()).await;
+        context
+            .warp_to_slot(2)
+            .expect("warp beyond the Series retry deadline");
+        let before =
+            capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
+                .await
+                .expect("config-identity hostile prestates");
+        let refusal =
+            match submit_v0_observed(&mut context, &instructions, addresses, None, &[]).await {
+                Ok(_) => panic!("{hostile:?} unexpectedly executed"),
+                Err(refusal) => refusal,
+            };
+        observed.push((
+            hostile,
+            refusal_code(&refusal.error),
+            refusal.compute_units_consumed,
+        ));
+        let after =
+            capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
+                .await
+                .expect("config-identity hostile poststates");
+        assert_series_premarket_expiry_rollback_v1(&report, &before, &after)
+            .expect("complete config-identity hostile rollback");
+    }
+    let wrong = observed
+        .iter()
+        .filter(|(hostile, code, cost)| {
+            *code != Some(config_identity_hostile_code_v1(*hostile)) || *cost >= control
+        })
+        .count();
+    assert_eq!(
+        wrong, 0,
+        "each restated config identity must refuse its own exact code strictly \
+         cheaper than the {control}-CU control: {observed:#?}",
     );
 }
 

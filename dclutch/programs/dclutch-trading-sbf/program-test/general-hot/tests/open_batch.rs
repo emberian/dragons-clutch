@@ -227,7 +227,7 @@ fn load_accelerator_elf() -> Vec<u8> {
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR"));
     let path = env::var_os("DCLUTCH_GENERAL_ACCELERATOR_ELF_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|| directory.join("dclutch_general_accelerator_sbf.so"));
+        .unwrap_or_else(|| directory.join("dclutch_accelerator_sbf.so"));
     fs::read(path).expect("current General accelerator ELF")
 }
 
@@ -1208,7 +1208,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
         &mut test,
-        "dclutch_general_accelerator_sbf",
+        "dclutch_accelerator_sbf",
         ACCELERATOR_PROGRAM,
         &accelerator_elf,
         substrate,
@@ -1477,7 +1477,7 @@ async fn a_general_descriptor_seals_through_the_family_neutral_producer() {
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
         &mut test,
-        "dclutch_general_accelerator_sbf",
+        "dclutch_accelerator_sbf",
         ACCELERATOR_PROGRAM,
         &accelerator_elf,
         substrate,
@@ -1954,7 +1954,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
         &mut test,
-        "dclutch_general_accelerator_sbf",
+        "dclutch_accelerator_sbf",
         ACCELERATOR_PROGRAM,
         &accelerator_elf,
         substrate,
@@ -2743,7 +2743,7 @@ async fn a_market_founded_on_a_foreign_entry_refuses_its_first_action_by_name() 
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
         &mut test,
-        "dclutch_general_accelerator_sbf",
+        "dclutch_accelerator_sbf",
         ACCELERATOR_PROGRAM,
         &accelerator_elf,
         substrate,

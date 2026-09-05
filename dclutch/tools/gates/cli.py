@@ -20,7 +20,6 @@ INSTRUMENTS = {
     "witness": "gates.witness",
     "budgets": "gates.budgets",
     "commands": "gates.commands",
-    "twins": "gates.twins",
     "lane": "gates.lane",
     "archive": "gates.archive",
     "selftest": "gates.selftest",

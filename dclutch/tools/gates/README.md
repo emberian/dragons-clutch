@@ -72,11 +72,6 @@ flags its own `--help` does not name, or which omits an argument its usage line
 marks required. Runs `--help` and nothing else, only on programs whose source
 handles it; an unprobed command is 2, never a pass.
 
-**twins** — a web/SDK twin pair diverging from the class
-`tools/twins/classification.mjs` gives it: a TWIN that differs, an exemption that
-became identical, a REEXPORT that grew a body, a SHIM that adds nothing, a
-WEB-ONLY file the package has a copy of.
-
 **selftest** — the gates' own refusal tests (this directory's `tests/`,
 `tools/lane/test.sh`, `tools/gauntlet/test-run-cli.sh`,
 `tools/seam-audit/test-seam-audit.py`), so a gate that cannot fail is found

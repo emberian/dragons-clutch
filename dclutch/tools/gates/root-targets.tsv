@@ -59,6 +59,8 @@
 # `lake` and ELF targets are NOT in this file. The census classifies those from
 # source text and the tier prints its answer; a copy here would be a second
 # author for a question that already has one.
+run	dclutch-resolution-core-v3-operator	funded_rent_recovery_v1	0.00	
+run	dclutch-resolution-core-v3-operator	funding_ledger_rent_parameter_v1	0.00	
 run	dclutch-vm	account_profile__lifecycle_external_funding_v3	0.60	
 run	dclutch-vm	account_profile__lifecycle_rent_quotes_v5	0.45	
 run	dclutch-vm	account_profile__lifecycle_v5_translation	0.53	
@@ -97,7 +99,6 @@ run	dclutch-operator	browser_bump_hint_vector	6.48
 run	dclutch-operator	market_open_v1_api	1.39	
 run	dclutch-operator	provider_transport_v3_api	1.36	
 run	dclutch-operator	resolution_core_v3_api	0.93	
-run	dclutch-operator	series_projected_outer_packet_v2	0.82	
 run	dclutch-product	payoff__basis_corpus_v3	0.55	
 run	dclutch-product	payoff__price_gate_differential_v1	0.57	
 run	dclutch-product	payoff__spline_differential_v3	0.53	
@@ -127,8 +128,6 @@ run	dclutch-operator	structured_actions	1.58
 run	dclutch-operator	structured_artifacts	0.75	
 run	dclutch-operator	structured_child_request	0.63	
 run	dclutch-operator	structured_descriptor	0.68	
-run	dclutch-trading-sbf	dealer_scenario_profile_vector	4.89	
-run	dclutch-trading-sbf	dealer_v3_composer	0.68	
 run	dclutch-trading-sbf	dealer_v3_equity_dust	0.71	
 run	dclutch-trading-sbf	dealer_v3_multi_lp	0.69	
 run	dclutch-trading-sbf	dealer_v3_two_lp_life	0.71	

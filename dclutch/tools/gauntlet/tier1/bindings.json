@@ -260,11 +260,11 @@
       "note": "Projected Custody in one rollback domain against a Market that does not exist: Initialize (with Core's ProjectFound37 projection CPI), OpenHoard, OpenSourceCompartment, staged against the controller funding ledgers DCLTCFQ1 already prepared. The transaction carries ComputeBudget::RequestHeapFrame, and the route presents the instructions sysvar its entrypoint adapter uses to re-derive that grant. The two FundingLedgerV2 accounts moved OUT of this transaction when the founding was split; the Resolution CPI that created them moved with them, and so did the Registry reauthentication."
     },
     {
-      "label": "pre-fund the founding's five program-allocated accounts",
+      "label": "pre-fund the founding's program-allocated accounts",
       "routes": [],
       "program": "",
       "outcome": "executed",
-      "note": "Five System transfers. Core allocates the Market and the one-shot founding permit and Claims allocates the aggregate, the founder Position, and the admission with `allocate` and `assign` only, never a transfer, so each must already hold its rent. The Market and the permit are compared for EXACT equality with their rent minima, and all three Claims balances are folded byte-exactly into the Claims request Core commits to inside the permit."
+      "note": "One System transfer per program-allocated account (the founding escrow joined them in 266c1d687, and the label stopped counting). Core allocates the Market and the one-shot founding permit and Claims allocates the aggregate, the founder Position, and the admission with `allocate` and `assign` only, never a transfer, so each must already hold its rent. The Market and the permit are compared for EXACT equality with their rent minima, and all three Claims balances are folded byte-exactly into the Claims request Core commits to inside the permit."
     },
     {
       "label": "DCLTGMF3 refuses a substituted Claims request and rolls the whole founding back",

@@ -345,9 +345,9 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
         PRODUCT_RECORD_SCHEMA_ID_V2,
         expected_product_digest,
         Error::ProductRecord,
-        hints.at(0),
+        hints.at(ProductWalkRecordV3::Product),
     )?;
-    derived.set(0, product_bumps.raw, product_bumps.staging);
+    derived.set(ProductWalkRecordV3::Product, product_bumps.raw, product_bumps.staging);
     let product_data = frame
         .product
         .raw
@@ -360,18 +360,18 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
         RESULT_DOMAIN_SCHEMA_ID_V2,
         product.result_domain_digest(),
         Error::ResultDomainRecord,
-        hints.at(1),
+        hints.at(ProductWalkRecordV3::ResultDomain),
     )?;
-    derived.set(1, domain_bumps.raw, domain_bumps.staging);
+    derived.set(ProductWalkRecordV3::ResultDomain, domain_bumps.raw, domain_bumps.staging);
     let (portfolio_record, portfolio_bumps) = authenticate_record_hinted(
         registry_program,
         frame.portfolio,
         PORTFOLIO_SCHEMA_ID_V2,
         product.portfolio_digest(),
         Error::PortfolioRecord,
-        hints.at(2),
+        hints.at(ProductWalkRecordV3::Portfolio),
     )?;
-    derived.set(2, portfolio_bumps.raw, portfolio_bumps.staging);
+    derived.set(ProductWalkRecordV3::Portfolio, portfolio_bumps.raw, portfolio_bumps.staging);
     let domain_data = frame
         .result_domain
         .raw
@@ -660,9 +660,9 @@ where
         GRADED_BASIS_RECORD_SCHEMA_ID_V3,
         basis_digest,
         Error::LinkedBasisRecord,
-        hints.at(3),
+        hints.at(ProductWalkRecordV3::LinkedBasis),
     )?;
-    derived.set(3, basis_bumps.raw, basis_bumps.staging);
+    derived.set(ProductWalkRecordV3::LinkedBasis, basis_bumps.raw, basis_bumps.staging);
     let basis_data = linked_basis
         .raw
         .try_borrow_data()
@@ -751,22 +751,47 @@ impl RecordBumpHintsV2 {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProductRecordBumpsV3(pub [u8; 8]);
 
+/// The four records the Product graph walk visits, in the order it visits them
+/// and the order [`ProductRecordBumpsV3`] carries their pairs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductWalkRecordV3 {
+    /// The Product record itself.
+    Product,
+    /// The ResultDomain the Product names.
+    ResultDomain,
+    /// The Portfolio the Product names.
+    Portfolio,
+    /// The basis record the Product links.
+    LinkedBasis,
+}
+
 impl ProductRecordBumpsV3 {
     /// Nothing mined: every derivation on the walk searches.
     pub const ABSENT: Self = Self([0; 8]);
 
-    /// One record's pair, by its position in the walk.
+    /// One record's pair.
     #[must_use]
-    pub const fn at(self, record: usize) -> RecordBumpHintsV2 {
-        RecordBumpHintsV2 {
-            raw: self.0[record * 2],
-            staging: self.0[record * 2 + 1],
-        }
+    pub const fn at(self, record: ProductWalkRecordV3) -> RecordBumpHintsV2 {
+        let [p0, p1, d0, d1, f0, f1, b0, b1] = self.0;
+        let (raw, staging) = match record {
+            ProductWalkRecordV3::Product => (p0, p1),
+            ProductWalkRecordV3::ResultDomain => (d0, d1),
+            ProductWalkRecordV3::Portfolio => (f0, f1),
+            ProductWalkRecordV3::LinkedBasis => (b0, b1),
+        };
+        RecordBumpHintsV2 { raw, staging }
     }
 
-    fn set(&mut self, record: usize, raw: u8, staging: u8) {
-        self.0[record * 2] = raw;
-        self.0[record * 2 + 1] = staging;
+    fn set(&mut self, record: ProductWalkRecordV3, raw: u8, staging: u8) {
+        let [p0, p1, d0, d1, f0, f1, b0, b1] = &mut self.0;
+        let (slot_raw, slot_staging) = match record {
+            ProductWalkRecordV3::Product => (p0, p1),
+            ProductWalkRecordV3::ResultDomain => (d0, d1),
+            ProductWalkRecordV3::Portfolio => (f0, f1),
+            ProductWalkRecordV3::LinkedBasis => (b0, b1),
+        };
+        *slot_raw = raw;
+        *slot_staging = staging;
     }
 }
 

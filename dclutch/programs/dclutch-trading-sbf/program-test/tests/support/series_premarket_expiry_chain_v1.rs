@@ -232,6 +232,17 @@ pub struct SeriesPremarketExpiryChainFixtureV1 {
     pub rent_credit: Pubkey,
     /// Trading-derived readonly caller for Core's atomic precommit expiry.
     pub precommit_caller: Pubkey,
+    /// The finalized Template record, which IS this family's config record.
+    ///
+    /// One account, two readers: the root's `selection().config()` is its
+    /// Registry RECORD DIGEST `hash(bytes)`, and the artifact join derives the
+    /// Template's CONTENT identity from the same bytes. A hostile that wants to
+    /// restate either one needs the account they are both read from.
+    pub config_raw: Pubkey,
+    /// The domain-separated Template content identity, which is exactly the
+    /// value a root's config field must NEVER carry -- it names a coordinate at
+    /// which no Registry record can exist.
+    pub template_content_id: [u8; 32],
     /// Exact composite-root prestate.
     pub parent_root_prestate: Vec<u8>,
     /// Exact prepared Ticket prestate.
@@ -495,6 +506,8 @@ pub fn build_series_premarket_expiry_chain_v1(
         permit_account: substrate.permit_account.key,
         rent_credit: substrate.rent_credit.key,
         precommit_caller: precommit_caller.key,
+        config_raw: substrate.finalized.template.raw,
+        template_content_id: records.template_id.to_bytes(),
         parent_root_prestate: controller.root.account.data.clone(),
         ticket_prestate: controller.ticket_state.account.data.clone(),
         root_poststate,

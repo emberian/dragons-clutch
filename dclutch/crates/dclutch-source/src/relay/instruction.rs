@@ -764,8 +764,12 @@ mod tests {
             .to_bytes()
             .expect("encode");
         assert_eq!(bytes.len(), failure.len());
-        let differing: alloc::vec::Vec<usize> = (0..bytes.len())
-            .filter(|index| bytes[*index] != failure[*index])
+        let differing: alloc::vec::Vec<usize> = bytes
+            .iter()
+            .zip(failure.iter())
+            .enumerate()
+            .filter(|(_, (ours, theirs))| ours != theirs)
+            .map(|(index, _)| index)
             .collect();
         assert_eq!(differing, alloc::vec![ACTION_OFFSET]);
     }

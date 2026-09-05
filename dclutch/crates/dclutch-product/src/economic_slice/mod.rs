@@ -1651,7 +1651,10 @@ mod tests {
         // A refunding set is still ONE set: a vector that mints more failure
         // claims than ordinary ones is refused before any write.
         let mut skewed = quantities.clone();
-        skewed[24..32].copy_from_slice(&9_u64.to_le_bytes());
+        // The fourth quantity, bytes 24..32, becomes 9 against the others' 5.
+        for (byte, skew) in skewed.iter_mut().skip(24).zip(9_u64.to_le_bytes()) {
+            *byte = skew;
+        }
         assert_eq!(
             execute_basket(
                 &mut market,

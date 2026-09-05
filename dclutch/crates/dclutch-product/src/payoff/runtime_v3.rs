@@ -2299,8 +2299,8 @@ mod tests {
         let liability: u64 = failure.iter().map(|payout| payout * SUPPLY).sum();
         assert_eq!(liability, hoard);
         // The founder's 1,499,999,800 ordinary claims and the stranger's 200
-        // draw their own shares and nothing else, and the two exhaust it.
-        assert_eq!(1_499_999_800_u64 * 1 + 200_u64 * 1, hoard);
+        // each draw one unit and nothing else, and the two exhaust it.
+        assert_eq!(1_499_999_800_u64 + 200_u64, hoard);
     }
 
     #[test]

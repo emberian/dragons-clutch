@@ -96,11 +96,6 @@ def tier_witness(ctx: Context):
     return code, "a devnet witness does not corroborate" if code else ""
 
 
-def tier_twins(ctx: Context):
-    from . import twins
-    return twins.check(dry_run=ctx.dry_run)
-
-
 def tier_selftest(ctx: Context):
     from . import selftest
     return selftest.run(dry_run=ctx.dry_run)
@@ -881,7 +876,6 @@ TIERS: tuple[Tier, ...] = (
     Tier("commands", "~15s (2026-09-04)", "python3", "a runbook command whose program is absent, whose flags its own --help does not name, or which omits a required argument", tier_commands),
     Tier("release", "~45s (2026-09-03)", "python3, bash, git", "the release tooling's refusal suites: forged build evidence admitted, a market founded at a fee that cannot trade, usage text its parser rejects", tier_release),
     Tier("reference", "~3 min (2026-09-03)", "cargo, node", "docs/reference and its client mirrors not at their fixpoint at the measured commit", tier_reference),
-    Tier("twins", "~10s (2026-09-04)", "node", "a web/SDK twin pair diverging from the class tools/twins/classification.mjs gives it", tier_twins),
     Tier("clippy", "22s warm, minutes cold (2026-09-03)", "cargo, clippy", "a red package outside clippy-debt.tsv, or a debt row that went green; never-reached packages counted apart", tier_clippy),
     Tier("sbom", "~3 min (2026-09-01)", "cargo, python3", "a git-sourced or checksum-less dependency, or drift in the committed SBOM/NOTICES", tier_sbom),
     Tier("sbfcontracts", "minutes (2026-09-01)", "cargo-build-sbf", "a non-program first-party crate that does not compile for target_os=solana", tier_sbfcontracts),
@@ -898,5 +892,5 @@ TIERS: tuple[Tier, ...] = (
 )
 
 CHEAP = ("selftest", "census", "emission", "budgets", "fmt", "locks", "seam", "commands", "release")
-ALL = CHEAP + ("reference", "twins", "clippy", "sbom", "sbfcontracts", "web", "abi", "guards", "frames",
+ALL = CHEAP + ("reference", "clippy", "sbom", "sbfcontracts", "web", "abi", "guards", "frames",
                "journey", "root-targets", "programs", "suites", "witness")

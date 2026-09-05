@@ -1,5 +1,5 @@
-# tools/ci/fmt-baseline.txt -- the files `cargo fmt --all --check` still finds,
-# and who owes each one. Read by tools/ci/run.sh's `fmt` tier.
+# tools/gates/fmt-baseline.txt -- the files `cargo fmt --all --check` still finds,
+# and who owes each one. Read by `tools/gate fmt`.
 #
 # THIS LIST ONLY SHRINKS. A file here is one somebody must reformat; a file NOT
 # here that rustfmt disagrees with fails the gate. Both directions fail, which

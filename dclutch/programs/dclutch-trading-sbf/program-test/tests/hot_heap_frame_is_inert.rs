@@ -197,7 +197,19 @@ const PACKET_LIMIT: usize = 1_232;
 /// continuation frame gained a `RequestHeapFrame` and the continuation arm
 /// gained the heap comparison its top-level sibling always had. Both routes
 /// moved; what did not cancel is here.
-const CONTINUATION_ROUTE_DELTA_FLOOR_V1: u64 = 91_593;
+///
+/// # Why it is now 91,039
+///
+/// The simplification convergence (`docs/evidence/SIMPLIFICATION_CONVERGENCE_2026_09_04.md`)
+/// split `hot_v3` into its family modules and boxed the projection keys out
+/// of `execute_authenticated_hot_v3`'s frame (`6f2d1fc64`); the outer
+/// composition got cheaper in a key-independent way. Re-measured over TWENTY
+/// seeds at `1ef14c5a1` (hbox, `run-hot-cu.sh --probe`, immutable substrate):
+/// **91,039 ten times, 94,039 six times, 97,039 twice, 100,039 once, 106,039
+/// once** -- every residual exactly 554 below the previous floor on the same
+/// clean `ADMISSION_ATTEMPT_CU_V1` grid, zero seed-to-seed jitter. Down by
+/// 554 and one order of magnitude past the jitter bar, so the floor moves.
+const CONTINUATION_ROUTE_DELTA_FLOOR_V1: u64 = 91_039;
 
 /// How far the floor may drift before this gate calls it a change.
 ///
