@@ -76,6 +76,16 @@ const EXHAUST_SEQUENCE_V1: u64 = 3;
 /// it is paid back the bounty out of the market's own compartment.
 const WORKER_FUNDING_LAMPORTS: u64 = 2_000_000_000;
 
+/// The sentence the crank driver refuses a too-early crank with.
+///
+/// Matched rather than parsed: this tier needs to tell "not yet due" from every
+/// other refusal, and the driver states that distinction in words because the
+/// two seconds it names are the whole of what a caller has to know. A driver
+/// that stopped saying this would make the marker stop matching, and the tier
+/// would report the refusal as a STOP -- loudly, in its transcript -- rather
+/// than quietly treat some other refusal as a hostile satisfied.
+const CRANK_TOO_EARLY_MARKER_V1: &str = "a crank is admissible STRICTLY after the deadline";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum WalkV1 {
@@ -374,6 +384,7 @@ fn drive_crank(
     terminal_sequence: u64,
     label: &str,
 ) -> Result<CrankRunV1> {
+    let mut hostile: Option<String> = None;
     let base = vec![
         "--rpc-url".to_owned(),
         checked.rpc_url.clone(),
@@ -406,9 +417,21 @@ fn drive_crank(
             .display()
             .to_string(),
     ]);
-    let planned = crate::recovery_crank::run_v1(preflight, ExpectedClusterV1::OwnedLoopback);
-    let planned = match planned {
-        Ok(planned) => planned,
+    let planned = match crate::recovery_crank::run_v1(preflight, ExpectedClusterV1::OwnedLoopback) {
+        Ok(planned) => Some(planned),
+        // THE PREFLIGHT REFUSAL IS THE HOSTILE, NOT A STOP. The driver refuses
+        // a not-yet-due crank inside `plan`, before it builds anything, which
+        // is exactly the conjunct this tier exists to exercise: a crank is
+        // admissible STRICTLY after its leg's deadline. So a refusal carrying
+        // that sentence is the hostile SATISFIED, and the walk continues into
+        // the bounded wait. Any other refusal is a real one and stops the walk.
+        //
+        // This tier read it as a stop on its first live run and reported a walk
+        // that had proved its own hostile and then declined to continue.
+        Err(error) if error.to_string().contains(CRANK_TOO_EARLY_MARKER_V1) => {
+            hostile = Some(error.to_string());
+            None
+        }
         Err(error) => {
             stages.push(StageV1::new(
                 label,
@@ -427,13 +450,20 @@ fn drive_crank(
             });
         }
     };
-    let remaining = planned.due_unix_seconds - planned.observed_unix_seconds;
+    // A refused preflight built no plan, so there is no distance to compare
+    // against the ceiling: the driver has already said the leg is not due, and
+    // its own bounded wait is what decides whether the target is reachable.
+    let remaining = match &planned {
+        Some(planned) => planned.due_unix_seconds - planned.observed_unix_seconds,
+        None => 0,
+    };
 
     // NOT YET DUE, AND FURTHER AWAY THAN THIS CAMPAIGN MAY WAIT. This is a
     // real measurement of the market this tier founded, not a failure of the
     // driver: the wait is bounded on purpose and a target past the ceiling is
     // refused rather than slept for.
-    if remaining >= request.max_wait_seconds {
+    if planned.is_some() && remaining >= request.max_wait_seconds {
+        let planned = planned.as_ref().expect("a not-yet-due report carries its plan");
         stages.push(StageV1::new(
             label,
             "not-yet-due",
@@ -518,6 +548,7 @@ fn drive_crank(
             "frameAccounts": landed.frame_accounts,
             "signature": signature,
             "computeUnitsConsumed": units,
+            "refusedBeforeTheDeadline": hostile,
         }),
     })
 }

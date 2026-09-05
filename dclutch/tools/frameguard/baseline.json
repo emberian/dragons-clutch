@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "272fb867d36aac86aeaa6c816637f6151ab7bb15",
+  "commit": "1999e4e074d78d4e17b7b4bfda1cf198fb101e1e",
   "link_count": 12,
   "links": [
     {
@@ -4364,9 +4364,9 @@
         },
         {
           "frames_bytes": [
-            0
+            64
           ],
-          "symbol": "_ZN31dclutch_general_accelerator_sbf12verify_cause17h<hash>E"
+          "symbol": "_ZN31dclutch_general_accelerator_sbf15candidate_cause17h<hash>E"
         },
         {
           "frames_bytes": [

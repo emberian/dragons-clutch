@@ -5039,3 +5039,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   frame is unowned) — deferred to after the convergence, since SIMPLIFY-TRADING is restructuring the Series arm.
 - Disk at 25–27 GiB under twelve lanes' check targets; closed lanes' directories reclaimed; the live tree's 78 GB target is
   ember's and untouched.
+- SIMPLIFY-TRADING closed (branch `simplify/trading` at `11a962cf7`, seven commits, +19,534 / −59,880 over 99 files;
+  SIMPLIFY_TRADING.md at its worktree root): `hot_v3.rs` 20,276 → 1,038 + eleven family modules (functions moved whole, 68 of
+  69 `#[inline(never)]` stages kept, no outside import changed); **the Dealer scenario checkpoint chain ×7 routes, Custody's
+  reservation route and selector 9's scenario closure deleted (64 files, −39,113 — every route program-test-witnessed
+  only, reverse deps read first; the four Custody codes stay as withdrawn variants for band contiguity)**; sixteen
+  `dealer/v3_*/v4_*` modules renamed to concept names; 184 lines of dated narration out; 157 routes / 357 codes, none
+  renumbered. Left: the registered-Direct V4 branch (C-04 wall, kept whole); the Series v3→v5 flatten; the `Content` split.
+  Owed to convergence: frames (Trading, Custody, Dealer-accelerator ELFs move — cohort-16 carries), genref, the mirrors.
