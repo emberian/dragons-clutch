@@ -454,11 +454,13 @@ sponsored release was re-minted against finalized slot 493,780,905:
 `bbbc324e…` → `f8aca67e…`. **That is the Pyth receiver redeploy again**, the same
 root cause behind every stale release pin this project has chased.
 
-The founding was **not executed**. A General founding campaign runs for the best
-part of an hour on one payer key, and the Direct market's settle — §7 — was due
-inside that window on the same payer. Two concurrent durable campaigns on one
-key is a collision this lane declined to create. Everything the execute needs is
-staged in `general/`.
+The founding was deferred here on the belief that it would collide with the
+settle on one payer key. **That belief rested on a misread clock and §10
+supersedes it**: the settle was almost two hours out, not fifty minutes, and the
+founding was executed and activated. The deferral reasoning is left standing
+rather than deleted because the mistake it records — bounding a devnet act
+against a time the lane never checked — is what §10's burned market identities
+came from.
 
 ## 7. The settle is a clock
 
@@ -472,3 +474,142 @@ gets a fresh output path, and it reuses the prepaid `input-settle.json` because
 regenerating that document would move the certificate PDA off the seat that was
 paid for. Its ceiling **refused** a 7,716 s wait until the wait was stated
 deliberately, which is the ceiling working.
+
+## 8. The settle, the terminal, and the winning stranger paid
+
+| act | signature | slot | CU |
+| --- | --- | --- | --- |
+| settle | `641JyvMWqAGyUJhaK1fXo7FvH2YQPH3fjLQh5Shau9XpZcJMuo2wUcRePHabc4udKyNUP8qUjddxjEwzgU6ZqeJX` | 493,825,024 | 131,192 |
+| admit-terminal | `5LCBtiezNduDBXyVtDnhfSKQhNHgoHYDLr9p7bdFyL4xYefQDCJtkUDaRrvkxqaLq2xASitrmf4V8Q3U4idMv9r5` | 493,826,348 | 82,282 |
+| custody replay | `4LfQK3ReWZKPNA4gVomPX79iQccWhNcC6pKKkRvwCAeZwdYFDzva3C3TggNPUr4fe3WwEeCxc8GwmiN6dbhjsNYc` | 493,826,534 | 106,272 |
+| **stranger payout** | `5hkFEF7ZjMcsZfvWFKNW6E89ahnCe5Sb4p7MNhQixiJfdBMjukDRXHWoRrqh1jheEhjvaPnDMfeQ53SfJDYkwiho` | 493,827,300 | 220,484 |
+
+The settle landed on attempt 1, and its certificate `CEjAknLzC8AoDzLj7bXXoF4hDxieY7gg1xfoZcZMf9Xk`
+is 312 bytes of `DCSRCER2` with **kind 1, not 4** — the row's own verifier, read
+off the account rather than off the report. The Market's phase byte at CoreState
+offset 10 then went **1 to 2**, and `terminal_receipt` at offset 328 carries the
+certificate's own address: the `admit-terminal` verifier, both halves.
+
+**The winning stranger was paid, and this is the first time on this protocol.**
+Participant-2's account went from 0 to **600 atoms** and the Hoard fell from
+500,000,001 to 499,999,401 — a fall of exactly 600, which is the `payout` row's
+verifier to the atom (200 claims at payout scale 3). Cohort-14 traded outcome 0,
+drew cell 1 and paid zero; cohort-15's fill never landed. The founder was then
+paid at claim indices 1, 0 and 2 (166,666,467 then 166,666,667 twice), and
+**the Hoard reached exactly 0**.
+
+*The honest selector, both readings.* Outcome 1 was written into the cohort-16
+manifest at 12:59, hours before this lane existed and before any capture. But
+this lane authored the two intent tickets at 19:16, **eight minutes after the
+capture landed at 19:08**, so it could have chosen knowing the reading and a
+reader is entitled to assume it might have. It did not re-derive the cell; it
+took the manifest's number. Both facts belong here rather than only the
+flattering one.
+
+## 9. RETIREMENT IS UNREACHABLE, AND THE WALL HAS MOVED UPSTREAM
+
+The market reached Terminal, paid every holder, and drained its Hoard to zero.
+It still cannot retire, and the reason is §4's defect reaching its conclusion:
+
+    BeginRetiring is blocked: Claims supply at index 3 is 166666667;
+    produce and execute wallet terminal payouts first
+
+Index 3 is the market's fourth outcome — `--cuts 10200,10600` makes three cells
+plus the explicit failure outcome, and `coefficients [1,0,1,0]` pays 0 there.
+The Claims aggregate minted a full complete set at that index and **no Position
+was ever seated with it**. The instruction "produce and execute wallet terminal
+payouts first" cannot be followed, and that is measured, not inferred:
+
+    wallet-terminal-payout-input --claim-index 3
+      founder        -> payout quantity must be within 1..=0 atoms at claim index 3
+      participant-2  -> payout quantity must be within 1..=0 atoms at claim index 3
+      participant-1  -> payout quantity must be within 1..=0 atoms at claim index 3
+
+A range whose upper bound is below its lower bound is the shape of an empty
+holding. And it is not a holder this lane failed to name: every other founding
+identity — beneficiary, projection witness, source funder, substituted founder,
+campaign payer — has **no Claims Position account at all** ("wallet payout
+snapshot is missing Claims Position ..."), so the three that exist are all there
+are, and all three read zero at index 3.
+
+So the chain closes: the founding seats three of four outcomes; L3 says so at
+the first census; `authenticate_direct_claim_schedule_v1` refuses to certify a
+landed fill because the seller cannot supply a fourth nonzero row; every payout
+drains its own index; index 3 has no holder to drain; `BeginRetiring` refuses
+while its supply is nonzero; and the only mechanism that could lower it refuses
+to be built. **This market can never be retired, by any sequence of acts.**
+
+**The wall this project has been tracking has moved.** `tools/cohort/README.md`
+records the retirement wall as `DirectCloseCapability`, blocked because a
+market's manifest declares no dependency edges — *"a cohort that intends to
+retire must found a manifest whose Direct entry declares its Resolution
+dependencies. Until then no market reaches this row, and that is why retirement
+has never completed on any chain."* Cohort-16.1 **did** found such a manifest
+(COHORT-16C's activation carried the dependency ledger, 521,895 CU over 36
+accounts), and this run got past nothing else to reach it: the sequence never
+got as far as `DirectCloseCapability`, because `BeginRetiring` is stage one and
+it stopped there. The named wall was not refuted and was not reached. A new,
+earlier one was found in front of it.
+
+`outstanding_capabilities` at CoreState offset 280 still reads **1**.
+
+Two coordinates the next lane should not have to rediscover: the terminal
+sequence refuses the founding's DCLTGMF3 routing table (*"supplied terminal ALT
+holds 11338560 against the 9387840 its funded rate of 5080 lamports per byte
+prices 1720 bytes"*) and must be run with **no** `--lookup-table`, building its
+own; and it refuses the founding evidence alone (*"the Direct first-use accounts
+are created together by the first trade, so campaign evidence must carry all of
+them or none. It carries direct_trading_funding_ledger and omits
+direct_capability_root"*) until `devnet-refresh-evidence-v1` supplies the root —
+whose flags are `--plan --expected-plan-sha256 --market-input
+--expected-market-input-sha256 --campaign-report --expected-campaign-report-sha256
+--output`, and which takes no `--market` and no `--evidence`.
+
+## 10. The General market is founded and activated, and a founding cannot be interrupted
+
+| | |
+| --- | --- |
+| Open Market | `65Yq3q6tgHArrJtZPhf5RAgNzpPAGcZSoBmT4D3As9n5` |
+| atomic Found frame | `5dzKEFZDnxEPSQzVvKfKfQ…` (Lock, Found, Realize, Claims, Open, DCLTGMF3) |
+| activation | `2y2NaDKpFQTwYypQhvsgyQ6kokXZaABQ98yfERmcDVQvZQCs4ad9Xzv9Fx9ZoGUh5YJae67dwQLsYhrU`, slot 493,809,950, **520,541 CU** |
+| activation root | `4NcnH7ptihcAjYyNX2xbKypnkTCQCpLMBGscX7fduCsF`, 360 bytes, lifecycle **Active** |
+
+The row's verifier is that the root named in advance is the root occupied, and
+it holds exactly: `expectedRootTailSha256` and `rootTailSha256` are both
+`a2717010554944b20b873403bd35438d4171071e810443645fcb6672f7be7082`.
+
+**A founding campaign has no suffix resume, and this lane proved it the
+expensive way.** The first attempt was bounded by a 55-minute `timeout` chosen
+against a misread clock. The SIGTERM landed at 446 transactions, after every
+ladder stage was complete — a rerun reports substrate, publication, initialize,
+succession and activation all *"already complete, skipped"* — but inside the
+founding, and the rerun then refuses:
+
+    this founding has STARTED on this chain (the Open Market does not exist at
+    H9TsXtAAcyJWQ3Wznza4mSqY36FFAmwEv4jEXP4qPEq1 but this founding has started:
+    collateral mint 8bdPW7bb…, collateral wallet J31bkZKf…, realm record
+    79bikSkH…), but no compatible durable DCLTPCB2 checkpoint authenticates a
+    safe suffix resume
+
+Those identities are burned and `H9TsXtAA…` will never exist. The recovery is a
+fresh collateral mint/wallet pair and a fresh evidence path, which is what the
+`-16d` founding is. **The publication stages resume and the founding frame does
+not**, so an operator who must bound a founding must bound it before the frame,
+never during. A killed campaign also leaves `campaign-open.json.lock`, which is
+deliberate — *"locks are never removed automatically"* — and the operator act is
+to confirm the recorded `pid` is gone and then remove it.
+
+## 11. What is owed
+
+1. **The founding's failure-outcome seating** (§4, §9). Every other item here is
+   downstream of it. Owner: whoever owns the Direct founding's complete-set
+   seating at `payout scale 3 / basis width 4`.
+2. **The deployment-set journal's missing Upgrade-row producer** — COHORT-16C's
+   defect (a), still unrepaired; `bind-upgrade-row.py` in the job directory is an
+   operator act standing in for a producer.
+3. The checked-upgrade phase loop's blockhash race, and the Loader's
+   10,240-byte extension minimum — COHORT-16C's (b) and (c), unrepaired.
+4. **A General translation-validation corpus.** Three cohorts running have had
+   to say that the manifest they publish is Direct-shaped.
+5. OpenBatch N=2, which is still the only route that would put a transaction
+   through the accelerator and give it its first witness on any chain.
