@@ -693,10 +693,10 @@ pub(crate) fn resolve(
 /// measured on hbox `20260906T150850Z`, the frame is **1,508 bytes** against
 /// the 1,232-byte ceiling. It rides a finalized address lookup table like the
 /// two provider frames and `CloseFund`, through the producer's own
-/// `publish_routing_table`. The relayed-vertical tier sends the same builder's
-/// instruction as a legacy packet and is right to: its walked market carries a
-/// narrower release graph, and a frame's width is a fact about the market it
-/// names rather than about the route.
+/// `publish_routing_table`. The relayed-vertical tier sends this same builder's
+/// instruction as a legacy packet, so the width is a fact about the market a
+/// frame names and not about the route; why that market's is narrower is not
+/// measured here and this comment does not guess.
 ///
 /// Nothing about the permission changes: a Market that has resolved may be
 /// admitted terminal by anyone, and the permission is the certificate rather

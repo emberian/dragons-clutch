@@ -7201,6 +7201,23 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
         system_program: system_program::ID,
         recovery_policy: recovery.map(|pair| (pair.raw, pair.staging)),
     })?;
+    // THE FOURTH RESTATEMENT OF THE ORDER, and the one PROGRAMS-18A's sweep did
+    // not reach. `ea9174135` gave the six mutations one author
+    // (`TerminalStageV1::ORDERED`) and reversed `DirectCloseCapability` and
+    // `ResolutionCloseFund`; it found and fixed the `#[cfg(test)]` router, the
+    // completion verifier's `protocol_order` and that verifier's fixture. This
+    // list is the fourth, and no test in this file could have caught it: it is
+    // built only by a function that needs a live chain, and every host test
+    // constructs its closures by hand. From the reversal until 2026-09-06 every
+    // real terminal sequence therefore refused at
+    // `terminal_lookup_union_from_closures_v1` with "ALT coordinate closure set
+    // is not the exact ordered six-stage sequence" -- measured by the journey
+    // tier on hbox `20260906T152908Z`, the first run of any tier to reach a
+    // Terminal Market since the reorder.
+    //
+    // The order here is the ALT union's declaration order and not a run order;
+    // `canonical_union_addresses` sorts the addresses anyway. What it has to be
+    // is the same order, because that is the check.
     Ok((
         vec![
             core_begin_retiring_meta_closure_v1(
@@ -7211,8 +7228,8 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
                 pubkey(&plan.core.programdata_id)?,
             ),
             begin,
-            resolution_close,
             close,
+            resolution_close,
             handoff,
             aggregate,
         ],

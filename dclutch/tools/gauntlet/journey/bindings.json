@@ -154,7 +154,7 @@
       "note": "Two System transfers. The resolver is deliberately NOT the submitter: the two roles are separable in the protocol, and a campaign that collapses them cannot tell whether the separation holds."
     },
     {
-      "label": "journey: Core admits the terminal state of an atomically founded Market",
+      "label": "journey: Core composes the provider execution that mints the terminal certificate",
       "routes": [
         "core/execute_provider_v3::process#ExecuteProvider",
         "core/process_instruction",
@@ -163,34 +163,17 @@
       ],
       "program": "core",
       "outcome": "executed",
-      "note": "THE MARKET RESOLVES. Core drives the provider execution, the adapter decodes the posted update under the CHAIN_STATE_SOURCES rules, the statistic and window admit it, and a ResolutionSuccess certificate is minted at the Market's own terminal winner. Poststate asserted: Phase Terminal, a terminal receipt naming the certificate this campaign prepaid, Source Resolved, and a certificate whose selector equals the winner the Market itself records \u2014 the last of those is the one that would catch a certificate bound to a different Market's material."
+      "note": "THE SOURCE RESOLVES AND THE CERTIFICATE IS MINTED. Core drives the provider execution, the adapter decodes the posted update under the CHAIN_STATE_SOURCES rules, the statistic and window admit it, and a ResolutionSuccess certificate is minted at the selector the Source's own decision carries. Poststate asserted: Source Resolved, and a certificate that binds this Market, this generation and the seat this campaign prepaid. RELABELLED 2026-09-06, routes unchanged. The label read \"Core admits the terminal state\" for the life of the tier while these routes said `ExecuteProvider`, and the two disagreed; `execute_provider_v3`'s own module comment says the standalone Core AdmitTerminal is a LATER instruction that commits the Market transition. The stage used to assert Phase::Terminal and a terminal receipt here, which is a poststate no route in this transaction writes -- and while one label covered both acts there was nothing in the transcript to notice that the second had never been sent."
     },
     {
-      "label": "journey: a resolved Market begins retiring",
+      "label": "journey: Core admits the terminal state of an atomically founded Market",
       "routes": [
-        "core/begin_retiring::process#BeginRetiring",
-        "core/process_instruction"
+        "core/process_instruction",
+        "core/resolution::process#AdmitTerminal"
       ],
       "program": "core",
       "outcome": "executed",
-      "note": "Five accounts, no signer, no lookup table, and PERMISSIONLESS: a Market that has resolved may be retired by anyone, because the permission is the terminal receipt rather than a key. The route admits only Phase::Terminal, so this transaction existing at all is evidence that the provider legs above really resolved the Market rather than leaving it plausibly resolved."
-    },
-    {
-      "label": "journey: prepay the Source closure receipt",
-      "routes": [],
-      "program": "",
-      "outcome": "executed",
-      "note": "One System transfer. Same rule as every other precommitted output in this protocol: the receipt is prepaid before the route that writes it, and the campaign cross-checks the operator's derived address against the one it funded so a derivation drift is a named mismatch rather than a transfer into nowhere."
-    },
-    {
-      "label": "journey: Resolution closes the Source subtree of a retiring Market",
-      "routes": [
-        "resolution/process_instruction",
-        "resolution/core_effect::process_direct_funding_close_v1"
-      ],
-      "program": "resolution",
-      "outcome": "executed",
-      "note": "CORRECTED: this row claimed `executed` for four routes the transaction could not have executed, and that false claim is why the register credited `core/resolution::process#CloseFund`. The campaign built the closure with `build_resolution_close_fund_v3`, whose `instruction.program_id` is the CORE program, and Core has refused ResolutionCoreActionV1::CloseFund since `a34ff595` split durable activation from close -- now BY NAME, as CoreSbfError::UnsupportedAction (0x301C), at decode, before a single account is parsed (core-sbf/src/resolution.rs:144-146). A binding is what flips a row to `witnessed` in a register that never consults the ledger, so a claim of `executed` on a guaranteed refusal is exactly the false green this census exists to remove -- and it survived because no fold had ever been run against a real journey transcript. The campaign now submits `build_resolution_direct_close_fund_v1` from the SAME finalized snapshot: the V3 planner remains the semantic owner of the certificate, the three-slot discharge arithmetic and the retirement projection (every lamport figure the stage asserts against the persisted receipt is still its declaration), and only the execution boundary moves to the program that owns the route. The two routes named here are the ones that instruction drives, and `resolution/core_effect::process_direct_funding_close_v1` is independently proven executable against real ELFs by tools/gauntlet/resolution-core-v3 (`core-v3: CloseFund closes all three rows of the subset ledger`, 260,141 CU). WHAT THIS ROW NO LONGER CLAIMS, and why neither is a regression: `core/resolution::process#CloseFund` is now enumerated AT ITS OWN REFUSAL (resolution.rs:144) and can never execute, and `resolution/process_close#CloseFund` is reachable only through a Core-effect envelope that only Core CPIs -- which Core refuses at decode. Both are filed in blocked.json rather than left looking unstarted. This campaign has not been re-run: the journey needs a live validator and a compiled Market run-spec, so the row is corrected to what the instruction drives and its execution is owed a run."
+      "note": "PLACEHOLDER -- authored from the run's own invoke sequence."
     },
     {
       "label": "journey: sweeping past the rent floor refuses",

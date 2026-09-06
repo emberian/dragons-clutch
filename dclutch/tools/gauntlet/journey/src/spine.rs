@@ -1309,10 +1309,16 @@ pub(crate) fn retire(
 /// Close the one Direct maker replay the fill opened, so the capability close
 /// can reach its zero-count gate.
 ///
-/// `local-private-validator-direct-close-maker-v1`, the shipped command, with
-/// the coordinates read out of the fill's own public manifest rather than
-/// re-derived here: the maker is `/replaySetup/maker` and the replay is
-/// `/replaySetup/custodyReplay`, both written by the producer that opened them.
+/// `local-private-validator-direct-close-maker-v1`, the shipped command. The
+/// ONLY coordinate this passes is the maker, `/replaySetup/maker` out of the
+/// fill's own public manifest; the driver finds that maker's unique replay in
+/// the authenticated Direct history itself. The first version of this stage
+/// also passed `--maker-replay`, using the manifest's `/replaySetup/custodyReplay`
+/// -- which is the CLAIMS CUSTODY replay and not the Direct maker child -- and
+/// the driver refused it by name (`--maker-replay differs from the
+/// authenticated Direct maker child`, hbox `20260906T152908Z`). The flag exists
+/// for an operator who has a reason to pin one; a campaign that has no such
+/// reason is a second author with worse information.
 ///
 /// A refusal is a FINDING and never a stop -- the driver refuses BY NAME on the
 /// two states a real market can be in (`CloseMakerFeeOutstanding` when the
@@ -1352,15 +1358,12 @@ fn close_direct_maker_replay(
             .and_then(Value::as_str)
             .and_then(|text| text.parse::<Pubkey>().ok())
     };
-    let (Some(maker), Some(replay)) = (
-        field("/replaySetup/maker"),
-        field("/replaySetup/custodyReplay"),
-    ) else {
+    let Some(maker) = field("/replaySetup/maker") else {
         spine.refused(
             stage,
-            "the fill's public manifest names no maker replay",
-            "`/replaySetup/maker` and `/replaySetup/custodyReplay` are the producer's own record \
-             of the replay it opened; a manifest without them is a finding about that document."
+            "the fill's public manifest names no maker",
+            "`/replaySetup/maker` is the producer's own record of whose replay it opened; a \
+             manifest without it is a finding about that document."
                 .into(),
         );
         return;
@@ -1386,8 +1389,6 @@ fn close_direct_maker_replay(
         context.market.to_string(),
         "--maker".to_owned(),
         maker.to_string(),
-        "--maker-replay".to_owned(),
-        replay.to_string(),
         "--evidence".to_owned(),
         evidence.display().to_string(),
         "--fee-payer-keypair".to_owned(),
@@ -1411,7 +1412,7 @@ fn close_direct_maker_replay(
             compute,
             format!(
                 "`local-private-validator-direct-close-maker-v1 --execute` closed maker {maker}'s \
-                 replay {replay}. It is the only route that decrements \
+                 replay. It is the only route that decrements \
                  `open_maker_root_count`, it runs inside Retiring, and the count it took down is \
                  what `DirectCloseCapability` gates on. Permissionless: no party to the market \
                  signed it."

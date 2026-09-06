@@ -322,9 +322,16 @@ before anybody writes a number down.
 
 ## What the whole life costs, measured
 
-Run `20260827T172103Z-606c042e8416-h4`, N=4, one real validator, real ELFs: 161
-transactions, 17,293,041 CU, zero unexpected refusals, and the Market ends
-`Retiring` carrying a terminal receipt.
+**The table below is the pre-substrate campaign's** (`20260827T172103Z-606c042e8416-h4`,
+N=4, 161 transactions, 17,293,041 CU) and is kept for the routes it priced, not
+as this tier's current shape: that run founded through the ladder, and its
+"resolution funding" and "begin retiring" rows are acts this tier's atomic
+founding and shipped terminal-sequence driver own now. The current campaign's
+per-stage numbers are in each run's transcript; hbox `20260906T150850Z`, N=4,
+measured founding through Open 198 tx / 6,270,009 CU, the Direct capability
+activation 5 / 547,294, the admission 3 / 345,247, the Direct Hot fill 9 /
+2,102,027, the fee settlement 1 / 94,766, the Pyth transport 21 / 820,188 and
+rent recovery 2 / 7,517.
 
 | stage | tx | CU |
 |---|---|---|
