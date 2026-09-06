@@ -68,6 +68,9 @@ DRIVER_BINARY = "dclutch-local-successor-bootstrap"
 ATTEMPTS = 6
 JOURNAL_PASSES = 40
 ROLE_FLAG = {"rent": "rent-credit"}
+# Write-directory flags whose driver creates the directory itself and refuses
+# one that already exists.
+FRESH_DIRECTORY_FLAGS = {"account-dir"}
 
 # Which rows fan out over which markets. A row naming `{market.` runs once per
 # market whose kind is in the set; the ROW KEY says which, so every new row of
@@ -475,7 +478,18 @@ def substitute(text: str, document: dict, prior: dict | None, market: dict | Non
         if raw == "execute":
             return '${EXTRA[@]+"${EXTRA[@]}"}'
         if raw.startswith("execute:"):
-            return '$( [ "$MODE" = --execute ] && printf %s ' + "'" + raw[len("execute:"):] + "'" + " )"
+            # DOUBLE QUOTES, because the payload carries $HERE. Single-quoted,
+            # `--fee-payer-keypair $HERE/keys/campaign-payer.json` reached the
+            # driver with the four characters `$HERE` in it and earned "fee
+            # settlement payer keypair path must be absolute" -- a refusal about
+            # a path that was never a path. The outer $( ) is deliberately
+            # unquoted so the payload still splits into separate arguments; the
+            # generator already refuses absolute paths, and a job directory with
+            # a space in its name would be caught by the self-contained test.
+            payload = raw[len("execute:"):]
+            if '"' in payload:
+                raise Emission(f"{where}: an {{execute:…}} payload may not contain a double quote")
+            return '$( [ "$MODE" = --execute ] && printf %s "' + payload + '" )'
         if raw.startswith("pubkey:"):
             path = one(check_steps.PLACEHOLDER.fullmatch(raw[len("pubkey:"):])) if raw[len("pubkey:"):].startswith("{") else raw[len("pubkey:"):]
             return '$(solana-keygen pubkey "$HERE/' + path + '")'
@@ -630,14 +644,36 @@ def emit(row, view_step, document, prior, market, stages) -> str:
                     acts.append((line, substitute(done_spec, document, prior, market, {**scope, **extra}, stages, where) if done_spec else None))
                     continue
                 if skip:
-                    output = re.search(r"--(?:output|evidence|out)(?:-dir)?\s+(\S+)", line)
-                    if not output:
+                    # THE PATH A `?` CHECKS IS THE ROW'S OWN OUTPUT, WHICH IS
+                    # ALWAYS UNDER $OUT. Taking the first write-shaped flag was
+                    # wrong the moment a row also READ one: `arm-relay` passes
+                    # `--evidence $HERE/<market>/campaign-open.json`, the
+                    # founding's report, before its `--output $OUT/...`, so both
+                    # invocations announced "present, not overwriting" about an
+                    # input that had of course been there since the founding,
+                    # and the stage produced nothing. Measured on cohort-17.
+                    candidates = [(m.group(1), m.group(2)) for m in re.finditer(
+                        r"--(output|evidence|out|completion)(?:-dir)?\s+(\S+)", line)]
+                    named = [v for f, v in candidates if f != "evidence"] \
+                        or [v for f, v in candidates]
+                    if not named:
                         raise Emission(f"{where}: a `?` invocation names no --output/--evidence to check")
-                    line = f'if [ -e "{output.group(1)}" ]; then echo "{output.group(1)} present, not overwriting"; else {line}; fi'
+                    line = f'if [ -e "{named[0]}" ]; then echo "{named[0]} present, not overwriting"; else {line}; fi'
                 else:
-                    output = re.search(r"--(?:output|evidence|out|completion)(?:-dir)?\s+(\S+)", line)
-                    if output and output.group(1).startswith("$OUT"):
-                        line = f'backup "{output.group(1)}"; rm -rf "{output.group(1)}"\n{line}'
+                    output = re.search(r"--(output|evidence|out|completion)(-dir)?\s+(\S+)", line)
+                    if output and output.group(3).startswith("$OUT"):
+                        path = output.group(3)
+                        # A DIRECTORY THIS ROW MUST HAND THE DRIVER HAS TO SURVIVE
+                        # ITS OWN BACKUP. `--output-dir` is emptied for the fresh
+                        # attempt and then recreated, because the driver refuses
+                        # "No such file or directory" on an absent one -- the
+                        # preamble's mkdir and this rm otherwise cancel out, which
+                        # is what cohort-17 measured.
+                        remake = ""
+                        if output.group(2) and output.group(1) not in FRESH_DIRECTORY_FLAGS \
+                           and f"{output.group(1)}-dir" not in FRESH_DIRECTORY_FLAGS:
+                            remake = f'; mkdir -p "{path}"'
+                        line = f'backup "{path}"; rm -rf "{path}"{remake}\n{line}'
                 plain.append(line)
 
     # A ROW THAT WRITES OUTSIDE $OUT HAS TO BE ALLOWED TO. The preamble creates
@@ -653,10 +689,19 @@ def emit(row, view_step, document, prior, market, stages) -> str:
     # parents are derived from the row's own write flags rather than listed.
     written = set()
     for line, _ in acts + [(t, None) for t in plain]:
-        for value in re.findall(r"--[a-z-]*(?:output|evidence|completion|campaign|journal|account|dump|receipt)[a-z-]*\s+(\S+)", line):
+        for flag, value in re.findall(r"--([a-z-]*(?:output|evidence|completion|campaign|journal|account|dump|receipt)[a-z-]*)\s+(\S+)", line):
             if not (value.startswith("$HERE/") or value.startswith("$OUT/")):
                 continue
-            parent = value.rsplit("/", 1)[0]
+            # A `-dir` flag names a directory, and the two drivers that take one
+            # want OPPOSITE things: `devnet-direct-trade-produce-v1 --output-dir`
+            # refuses "No such file or directory" when it is absent, and
+            # `prepare --account-dir` refuses "create fresh account directory:
+            # File exists" when it is present. Both measured on cohort-17. So
+            # the leaf is created for every write directory except the ones a
+            # driver insists on creating itself, and that set is named here
+            # rather than guessed from the flag's shape.
+            parent = value if (flag.endswith("-dir") and flag not in FRESH_DIRECTORY_FLAGS) \
+                else value.rsplit("/", 1)[0]
             if parent not in ("$HERE", "$OUT"):
                 written.add(parent)
     if written:

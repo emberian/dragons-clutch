@@ -195,6 +195,10 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
     let campaign_report = request.work.join("founding-evidence.json");
     let founding = crate::substrate::found_market(&checked, &mut rpc, &market_path, &campaign_report)?;
     let authority = crate::substrate::authority_keypair(&checked)?;
+    // The founder's collateral wallet answers to the founding's `campaign-payer`
+    // role, not to the administration authority above; see
+    // `distribute_collateral`.
+    let collateral_owner = crate::substrate::campaign_payer_keypair(&checked)?;
     let mut session = JourneySessionV1 {
         validator: checked.validator,
         rpc,
@@ -293,6 +297,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         &mut session.rpc,
         &addresses,
         &session.authority,
+        &collateral_owner,
         decimals,
         &mut holders,
         &mut session.transactions,

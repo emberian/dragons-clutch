@@ -400,6 +400,23 @@ pub(crate) fn found_market(
 
 /// The retained-authority keypair: the substrate's bankroll and the session's
 /// signing authority, exactly the role `found_through_open` used.
+/// The key the founding's collateral wallet is owned BY.
+///
+/// `found_market` runs `campaign --founding-only` under the `campaign-payer`
+/// role, and the founding's own suffix-resume check is
+/// `wallet.owner == payer.pubkey()` -- so the founder's collateral wallet
+/// answers to this key and to no other. It is NOT `authority_keypair`, which
+/// is the `core-upgrade-authority` role a campaign signs its administration
+/// with, and a caller that wanted to move a founded market's collateral and
+/// reached for the authority got Token-2022's `OwnerMismatch` from the chain.
+pub(crate) fn campaign_payer_keypair(substrate: &CheckedSubstrateV1) -> Result<Keypair> {
+    load_keypair(&role_key_path(
+        &substrate.report.campaign_founding_keypairs,
+        "campaign-payer",
+        "campaign founding keypairs",
+    )?)
+}
+
 pub(crate) fn authority_keypair(substrate: &CheckedSubstrateV1) -> Result<Keypair> {
     load_keypair(&role_key_path(
         &substrate.report.keypairs,

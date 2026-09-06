@@ -326,11 +326,26 @@ pub(crate) fn distribute_collateral(
     rpc: &mut Rpc,
     addresses: &MarketAddressesV1,
     payer: &Keypair,
+    collateral_owner: &Keypair,
     decimals: u8,
     holders: &mut [HolderV1],
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
 ) -> Result<(StageReportV1, u64)> {
+    // The key the founder's collateral wallet ANSWERS TO, which is not the
+    // campaign's administration authority.
+    //
+    // Token-2022 validates a `TransferChecked` against the SOURCE account's
+    // own `owner` field, and the founding writes that field as its
+    // `campaign-payer` role -- its suffix-resume check is literally
+    // `wallet.owner == payer.pubkey()`. This stage signed with the
+    // `core-upgrade-authority` instead, and never found out, because `share`
+    // had been zero on every run this tier had ever completed: the founding
+    // ran its projected-Custody prestate ladder twice, the two lanes consumed
+    // the whole supply, and the transfer branch was never taken. A
+    // LADDER-BEARING founding leaves the founder holding a share, the branch
+    // executed for the first time on 2026-09-06, and the chain answered
+    // `OwnerMismatch` in one line.
     let holder_count = u32::try_from(holders.len())
         .map_err(|_| Error::new("holder count exceeded a u32, which no load knob needs"))?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
@@ -398,16 +413,20 @@ pub(crate) fn distribute_collateral(
                     AccountMeta::new(addresses.founder_wallet, false),
                     AccountMeta::new_readonly(addresses.mint, false),
                     AccountMeta::new(token.pubkey(), false),
-                    AccountMeta::new_readonly(payer.pubkey(), true),
+                    AccountMeta::new_readonly(collateral_owner.pubkey(), true),
                 ],
                 data: transfer,
             });
+        }
+        let mut extra: Vec<&Keypair> = vec![&token];
+        if share > 0 && collateral_owner.pubkey() != payer.pubkey() {
+            extra.push(collateral_owner);
         }
         let evidence = rpc.send_with_signers(
             &format!("journey: open and fund synthetic holder {index}"),
             &instructions,
             payer,
-            &[&token],
+            &extra,
         )?;
         compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
         fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
