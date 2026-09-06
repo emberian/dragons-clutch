@@ -568,6 +568,23 @@ have stage four tolerate its absence -- changes either the order a market
 already executed or `dclutch-operator`, which is compiled into the Claims, Core,
 Custody and Registry links. This lane changed no program.
 
+> **CORRECTION, 2026-09-06, lane COHORT-17E.** The clause "`dclutch-operator`,
+> which is compiled into the Claims, Core, Custody and Registry links" is WRONG,
+> and the same wrong sentence is repeated in this document's COHORT-17D
+> addendum. `dclutch-operator` is a `[dev-dependencies]` entry of all four
+> programs and is in NO link's path-dependency closure: `tools/gates/frames.py`
+> drops an edge whose every `dep_kind` is `dev` when it walks a link's closure,
+> which is why an operator change moves no frame row. Read directly:
+> `programs/dclutch-{claims,core,custody,registry}-sbf/Cargo.toml` each name it
+> under `[dev-dependencies]`. Settled by PROGRAMS-18A and confirmed here by
+> running `tools/gate frames` before and after this lane's operator change --
+> PASS both times, the complete per-function manifest matching the ratchet
+> admitted at `1dd18be91`, every one of the eight links unmoved. **An operator
+> repair is HOST-ONLY. It needs a driver rebuild, not a re-release, not a
+> redeploy, and not a new cohort.** Both facts this document deferred to
+> cohort-18 were repairable on cohort-17 all along, and one of them was
+> repaired on it: see the COHORT-17E addendum.
+
 Market `9e8fTH75s82pjcEK8pY8PaLPoZW6W1am1qQ6J4JHjagQ` therefore stands at
 `DCLTCOR3` phase byte **3 (Retiring)** with `outstanding_capabilities = 1`, an
 empty Hoard, three discharged columns, its failure column seated in the escrow,
@@ -1018,3 +1035,185 @@ only thing between a fully spent refunding market and Retired.
 
 The site's featured market is UNCHANGED, for the third cohort running and for
 the same reason: there is no retired market to feature.
+
+---
+
+# ADDENDUM, 2026-09-06 night. Lane COHORT-17E.
+
+**Devnet evidence. Not mainnet evidence.** The deployed eight, the candidate
+`932edc83f` and the release gate `a98ed988…` are all UNCHANGED; every commit in
+this addendum is host or runbook. `tools/gate frames` PASSED before the first
+change and again after the last: the complete per-function frame manifest of
+all eight links matches the ratchet admitted at `1dd18be91`.
+
+## 1. THE HANDOFF LANDED, AND THE OPERATOR REPAIR WAS HOST-ONLY
+
+    RetirementReplayHandoff  oxjzfjwH1Tsv7j8VZeka5pfhk3NtJmhW7MqpwhTae6USj1mYVK4fPB6H6pDgyqmGM8qi5WKd68j9K8WDFVqicb5
+                             slot 494,191,265, 188,686 CU, fee 5,000, 644 wire bytes
+
+COHORT-17D convicted the refusal — `0x3003 CoreSbfError::Reference` at 61,946
+CU, `retirement_replay_handoff_v1.rs:326`, `accounts[PAYER].lamports() !=
+request.payer_lamports()` — and deferred it to cohort-18 on the ground that its
+producer is compiled into four links. It is not (see the correction above), and
+the repair took a driver rebuild.
+
+**One author for the payer's lamports.** `handoff_payer_lamports_at_load_v1` is
+now the only place the observed balance becomes the balance the route reads:
+the snapshot carries the exact fee this stage's own message pays and the
+producer subtracts it, feeding both the request and the plan observation from
+one expression. `expected_payer_lamports` becomes the protocol-only poststate,
+BEFORE the fee, which is the basis an exterior caller compares against the
+observed prestate — the program's own receipt reports what it READ and is
+therefore already net of the fee, and the planner now asserts that the two
+differ by exactly the committed fee.
+
+**The fee is quoted, never assumed, and the quote is checked against the signed
+bytes.** The fee and the request depend on each other: the fee is quoted for a
+compiled message and the message carries the request the fee goes into.
+`settle_retirement_handoff_payer_fee_v1` iterates and returns only the pass
+whose own compiled message pays exactly the fee its own bytes commit —
+convergence asserted rather than argued, because changing those eight bytes
+moves the request digest and one static caller-authority key and moves nothing
+that prices a message. `build_protocol_stage_journal_v1` then re-quotes with
+`getFeeForMessage` for the message it is about to sign and refuses unless the
+committed account is that message's fee payer and the committed fee is that
+message's fee. The landed packet's journal reads `transactionFeeLamports: 5000`
+and the chain charged 5,000.
+
+**The other three balances the route compares are excluded by construction, not
+by observation.** `trading_replay`, `hoard` and `rent_credit` take no
+subtraction because none can be the fee payer: `require_handoff_distinct`
+refuses any snapshot in which they alias the PAYER role, and
+`only_the_payer_role_can_be_the_fee_payer_the_route_compares` asserts it for
+each of the three by name.
+
+**RED-PROVEN against the DEPLOYED ELFs.** The SBF harness case
+`a_request_built_from_the_pre_fee_balance_refuses_and_the_net_one_lands` runs
+against `core 2f28309f…` and `custody 2600db72…`, byte-identical to cohort-17's
+deployed set. The pre-fee request refuses `0x3003` at **61,870 CU** — the
+devnet reading was 61,946 — and the identical packet with those eight bytes net
+of the fee the harness itself quotes lands at 183,793. Both halves, one test,
+one program, eight bytes apart. Every other case in that file pays from the
+harness's mint keypair, which left the frame's PAYER role never debited and its
+observed and read balances the same number, so none of them could ever have
+caught this.
+
+## 2. THREE MORE WALLS FELL BEHIND IT, AND ALL THREE WERE HOST
+
+**`Claims` was one code over eleven conjuncts.** The checkpointed campaign
+refused `checkpoint AggregateRetirement: Claims` with nothing to say which of
+eleven return sites across two functions produced it. Split into five
+accusations — `UnescrowedSupply`, `FailureIndex`, `BasisRecord`,
+`BasisContract`, `EscrowFrame`, `EscrowResidue` — leaving `Claims` on the one
+site it is about.
+
+**The aggregate carries the product INSTANCE, not its record.**
+`authenticate_claims` compared the Claims aggregate's `product_instance_id`
+against the Core state's `product_record`. Those are different 32 bytes on
+every market ever founded — Core offsets 112 and 80. Read off market 2: the
+aggregate holds `f7512201…`, which is the Core state's `product_id` byte for
+byte; its `product_record` is `bd203b38…`. Market 1 reads the same pair. The
+DEPLOYED Claims program is the field's semantic owner and binds the instance
+(`rational_product_v3.rs:201`, `affine_batch_v2.rs:700`), and so does every
+other host reader of it; this was the only reader in the tree that read the
+record. **The fixture agreed because one hand wrote both**:
+`market_retirement_v1_lifecycle.rs` seeded its aggregate from
+`identity.product_record`, so the harness and the reader mirrored each other
+about a value no chain carries. The fixture now seeds it the way Claims writes
+it.
+
+**The campaign's classification did not count shape A's escrow tail.**
+`build_aggregate_retirement_campaign_v1` classified the refund as market +
+rent_credit + checkpoint + custody_replay + hoard_vault and compared the sum
+against the operator's `expected_refund_delta`. On a refunding market those
+disagree by exactly the escrow pair's rent: the prepare packet closes the
+failure-column Position and its admission INTO the checkpoint, so the operator
+counts `claims_aggregate + escrow.rent()`. The classification now carries the
+tail, present exactly when the closure burns a column, and stays INDEPENDENT of
+the operator's — the equality is what makes it a check.
+
+**And one runbook defect.** The retire row typed `--source-receipt` from the
+cohort manifest, which holds market 2's SETTLEMENT receipt `CQhYgPTm…` (464
+bytes, `DCLTSPR1`); the account the campaign wants is the
+`SourceClosureReceiptV3` its own `ResolutionCloseFund` stage writes, `AgFyF27L…`
+(416 bytes, `DCSRCLS3`), which the terminal sequence already records in
+`session.json`. The row reads it there now.
+
+## 3. THE WALL: THE CHECKPOINTED RETIREMENT HAS NO ALT PRODUCER
+
+With every check above passing, the campaign builds all four packets' exact
+frames — prepare, close-vault, close-replay, finish — from finalized chain
+state, opens the prepare's durable journal, and then refuses compiling the
+first message:
+
+    aggregate-retirement-prepare: v0 message: PacketTooLarge
+
+**`devnet-aggregate-retirement-v1` requires a supplied `--lookup-table` and
+nothing in the tree produces one for this frame.** Measured against market 2's
+38-account prepare frame:
+
+    terminal ALT   5WRnxEvPnC2hftYB1MDNwkLjr1wp9ZXWccdpczdNdnbB   52 addresses, 14 static
+    manifest ALT   EX5MafgFsroPVwV9aaNMqYdum4PnKPHYytPNrNsPnBdU   64 addresses,  9 static
+    both together                                                             4 static
+
+and the same four are missing from all four packets:
+
+    BhUz7WYNT1AZwHDniU1rAUN1dRM5Fx8n8UHVdjnVbKNT
+    GBDfbQRxtYAF3aVAUVScWWXswt8kDxwkTtjVdKbz1WDv
+    7jrSBj5gefyhKNbedtxWWo6HmKomjucj2nMQqcpgWn4s
+    9FiZyD9bqgRDYr1eHacVWvAgftveY9oWHjT2sr4c1pzS
+
+**All four read `AccountNotFound`: they are accounts this retirement CREATES,
+at addresses derived from the campaign's own plan.** That is why no
+earlier-frozen table can carry them and why this is a producer gap rather than
+a wrong address. The terminal sequence's ALT is frozen over the union of its
+six stages' closures, and its `AggregateRetirement` closure is the ONE-SHOT
+35-account frame; the checkpointed route's frame is 38 on all four packets and
+its extra addresses do not exist until the campaign is planned. The row's
+`{market.lookup_table}` is therefore not repairable by naming a different
+address, which is why this lane did not change it.
+
+The shape the repair wants already exists in this runbook: the General
+`openbatch` row is a TWO-PASS row precisely because its caller-authority span is
+seeded by the plan's own digest. The retirement campaign needs the same —
+plan, then create/extend/freeze an ALT over the plan's own union, then execute
+against it — and each of those is a durable journal the campaign does not yet
+have.
+
+## 4. WHERE THE MARKET STANDS
+
+Market `AvKSizb7j3VCzB41bKxYXntoXyRojDVM9UzyjgFvAadR`: `DCLTCOR3` phase byte
+**3 (Retiring)**, `outstanding_capabilities` **0**, Hoard 0, three ordinary
+columns discharged, the failure column seated at `68d1nDjN…` holding
+166,666,667 against an aggregate supply of `[0, 0, 0, 166666667]`, zero open
+maker roots, both funding ledgers closed, and **every terminal stage this
+market can run has run** — five of the sequence's six are finalized, the
+Trading-role custody replay is closed and the Core-role replay exists. Nothing
+about it is destroyed. The campaign document holds all four packets' exact
+frames — prepare, close-vault, close-replay, finish, 38 accounts each — and the
+prepare has a durable journal at phase `prepared`: built from finalized chain
+state, no key read, no packet signed. They wait only on a table.
+
+The terminal sequence itself cannot report completion on a refunding market:
+its stage 16 is the one-shot route, which refuses by name for a seated escrow
+and points at the checkpointed route, while the row's second loop is gated on a
+`completion.json` that shape A can never produce. The retire row's gate is owed
+the same ruling as its table.
+
+**No market has been retired on any chain.** The site's featured market is
+UNCHANGED, for the fourth cohort running and for the same reason.
+
+## 5. THE WITNESS REGISTER
+
+`tools/gate witness --discover` against this document takes cohort-17 from 17
+corroborated routes to **19**: 29 records from 37 signatures, 8 carrying no
+resolvable first-party magic. `tools/gate witness --check`: 7 documents, **140**
+distinct routes, 0 problems.
+
+## 6. THE LEDGER
+
+    payer    1.673324417 → 1.671206137   (-0.002118280 exactly: the handoff's
+             5,000-lamport fee plus the Core replay's 2,113,280 rent. Every
+             other refusal this lane met came before a key was read, so it
+             cost nothing.)
+    deployer 26.572399090   UNCHANGED. This lane deployed nothing.

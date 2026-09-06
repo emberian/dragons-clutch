@@ -680,11 +680,44 @@ simulating with `sigVerify` off: the refusal moves from `0x3003` at 61,946 CU to
 caller-authority PDA is seeded by the request digest.
 
 The producer is `crates/dclutch-operator/src/terminal_retirement_v1.rs:1748`
-(`payer_lamports: snapshot.payer.lamports`), and `dclutch-operator` is compiled
-into the Claims, Core, Custody and Registry links. **Cohort-18 therefore carries
-TWO operator facts, not one**: which stage owns the Resolution funding ledger,
-and that a request committing the fee payer's balance commits it net of the fee.
-Market `AvKSizb7…` cannot reach `Retired` on cohort-17's programs.
+(`payer_lamports: snapshot.payer.lamports`).
+
+**THAT PACKET HAS SINCE LANDED, AND THE PARAGRAPH THAT USED TO STAND HERE WAS
+WRONG** (lane COHORT-17E, 2026-09-06). It said `dclutch-operator` is compiled
+into the Claims, Core, Custody and Registry links and that cohort-18 would have
+to carry the repair. It is a `[dev-dependencies]` entry of all four and in NO
+link's path-dependency closure -- `tools/gates/frames.py` drops an edge whose
+every `dep_kind` is `dev` -- so an operator repair is HOST-ONLY: a driver
+rebuild, no re-release, no redeploy, no new cohort. `tools/gate frames` passed
+before the repair and after it, all eight links matching the ratchet admitted at
+`1dd18be91`.
+
+`handoff_payer_lamports_at_load_v1` is the one author now: the snapshot carries
+the exact fee this stage's own message pays, quoted with `getFeeForMessage` for
+a message of the stage's geometry and re-checked by the journal builder against
+the bytes it is about to sign. `RetirementReplayHandoff` landed on market
+`AvKSizb7…` -- `oxjzfjwH…`, slot 494,191,265, 188,686 CU.
+
+**WHAT THIS ROW NOW MEETS IS A MISSING PRODUCER**, not a conjunct:
+`aggregate-retirement-prepare: v0 message: PacketTooLarge`.
+`devnet-aggregate-retirement-v1` requires a supplied `--lookup-table` and
+nothing in the tree builds one for the checkpointed 38-account frame. The
+terminal sequence's table is frozen over its six stages' closures and its
+`AggregateRetirement` closure is the ONE-SHOT 35-account frame; measured on
+market 2, that table leaves 14 accounts static and the manifest's leaves 9, and
+**both together still leave 4** -- all of which read `AccountNotFound`, because
+they are accounts this retirement CREATES at addresses derived from the
+campaign's own plan. No earlier-frozen table can carry them, so
+`{market.lookup_table}` on this row is not repairable by naming a different
+address. The campaign wants the shape the General `openbatch` row already has:
+plan, then create/extend/freeze over the plan's own union, then execute, each a
+durable journal.
+
+**And this row's own gate is owed a ruling.** Its second loop waits on
+`$OUT/terminal/completion.json`, and the terminal sequence completes only when
+all six of its journals finalize AND the Market account is exactly closed --
+which its stage 16, the one-shot route, refuses by name for a seated escrow.
+A refunding market can never produce that file.
 
 **A SECOND wall sits behind that one, and it is a program change rather than a
 founding input: a market founded REFUNDING cannot reach this row at all.**

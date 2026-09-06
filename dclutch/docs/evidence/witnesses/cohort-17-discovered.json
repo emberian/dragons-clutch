@@ -932,7 +932,33 @@
         "resolution/process_instruction"
       ],
       "not_corroborated": []
+    },
+    {
+      "stage": "dclcrh01-494191265",
+      "magic": "DCLCRH01",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "oxjzfjwH1Tsv7j8VZeka5pfhk3NtJmhW7MqpwhTae6USj1mYVK4fPB6H6pDgyqmGM8qi5WKd68j9K8WDFVqicb5",
+      "instruction_data_len": 208,
+      "routes": [
+        "core/process_instruction",
+        "core/retirement_replay_handoff_v1::process",
+        "custody/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLCRH01, and the tree dispatches core/retirement_replay_handoff_v1::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494191265,
+      "compute_units": 188686,
+      "programs_invoked": [
+        "core",
+        "custody"
+      ],
+      "routes_corroborated": [
+        "core/process_instruction",
+        "core/retirement_replay_handoff_v1::process",
+        "custody/process_instruction"
+      ],
+      "not_corroborated": []
     }
   ],
-  "corroborated_route_count": 18
+  "corroborated_route_count": 19
 }
