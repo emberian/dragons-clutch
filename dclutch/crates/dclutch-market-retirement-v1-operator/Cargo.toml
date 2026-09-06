@@ -17,11 +17,15 @@ dclutch-product = { path = "../dclutch-product", features = ["svm"] }
 dclutch-registry = { path = "../dclutch-registry" }
 dclutch-source = { path = "../dclutch-source" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
+serde = { version = "1.0", features = ["derive"] }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
 solana-sdk-ids = "=3.1.0"
 spl-token-interface = "=3.0.0"
+
+[dev-dependencies]
+serde_json = "1.0"
 
 [lints]
 workspace = true

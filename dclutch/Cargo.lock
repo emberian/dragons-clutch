@@ -2518,6 +2518,8 @@ dependencies = [
  "dclutch-registry",
  "dclutch-resolution-core-v3-operator",
  "dclutch-source",
+ "serde",
+ "serde_json",
  "solana-program",
  "solana-program-option",
  "solana-program-pack",

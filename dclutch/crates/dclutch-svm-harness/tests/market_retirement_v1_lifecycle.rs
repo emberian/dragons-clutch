@@ -19,6 +19,9 @@ use dclutch_market_retirement_v1_operator::{
     CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1, MarketRetirementOperatorErrorV1,
     MarketRetirementSnapshotV1, ResolutionRetirementReceiptFactsV3,
     build_checkpoint_market_retirement_v1, build_market_retirement_v1,
+    terminal_stage_order_v1::{
+        TerminalStageOrderErrorV1, TerminalStageV1, authenticate_terminal_stage_order_v1,
+    },
 };
 use dclutch_product::payoff::runtime_v3::{
     BasisInputV3, BasisKindV3, ProductBasisV3, basis_record_bytes_v3, compile_basis_v3,
@@ -1864,6 +1867,80 @@ async fn a_refunding_market_retires_once_the_closure_burns_its_failure_column() 
     assert!(
         census.iter().all(|keys| *keys <= 64),
         "three more accounts per packet stays under the runtime lock wall: {census:?}"
+    );
+}
+
+/// WHAT THIS CAMPAIGN COVERS OF THE TERMINAL SEQUENCE, AND WHAT IT DOES NOT.
+///
+/// This file drives a market to `Retired` on real ELFs, and for three cohorts
+/// that fact was read as coverage of the whole retirement. It is not. The
+/// terminal sequence is six protocol mutations, declared once in
+/// `dclutch_market_retirement_v1_operator::terminal_stage_order_v1`; this
+/// campaign drives the LAST one, `AggregateRetirement`, decomposed into its four
+/// checkpoint packets, and it drives it against a prestate
+/// `seed_exact_retirement_prestate` writes directly: `outstanding_capabilities =
+/// 0` and a `SourceClosureReceiptV3` set into the account rather than produced
+/// by `ResolutionCloseFund`.
+///
+/// So the two stages whose ORDER the ruling fixes -- `DirectCloseCapability`,
+/// which preserves the Resolution dependency funding ledger, and
+/// `ResolutionCloseFund`, which closes it -- are not in this walk at all. This
+/// campaign agreed with the wrong order because it could not see it, and the
+/// pair was executed for the first time on devnet, in cohort-17, on a market
+/// that can never be repaired.
+///
+/// This test is the boundary said out loud. It reads the ONE declaration rather
+/// than restating an order, holds the ruled adjacency, refuses the inverted one
+/// by name, and pins the two prestate facts that make this campaign blind to the
+/// pair. Covering the pair on real ELFs is OWED: it needs a fixture with a live
+/// Direct capability child and both physical funding ledgers, which this
+/// fixture has never had.
+#[tokio::test]
+async fn the_checkpoint_campaign_drives_the_last_declared_stage_and_not_the_ruled_pair() {
+    assert_eq!(
+        TerminalStageV1::ORDERED.last().copied(),
+        Some(TerminalStageV1::AggregateRetirement),
+        "the four packets below are the last declared stage"
+    );
+    assert!(
+        TerminalStageV1::DirectCloseCapability.ordinal()
+            < TerminalStageV1::ResolutionCloseFund.ordinal(),
+        "the stage that preserves the dependency ledger runs before its owner closes it"
+    );
+    let inverted = [
+        TerminalStageV1::CoreBeginRetiring,
+        TerminalStageV1::DirectBeginRetiring,
+        TerminalStageV1::ResolutionCloseFund,
+        TerminalStageV1::DirectCloseCapability,
+        TerminalStageV1::RetirementReplayHandoff,
+        TerminalStageV1::AggregateRetirement,
+    ];
+    assert_eq!(
+        authenticate_terminal_stage_order_v1(&inverted),
+        Err(TerminalStageOrderErrorV1::ResolutionCloseFundBeforeDirectClose),
+        "the order this campaign could not have caught refuses at the declaration"
+    );
+    authenticate_terminal_stage_order_v1(&TerminalStageV1::ORDERED).expect("the ruled order");
+
+    // The two prestate facts that make this campaign blind to the pair, read
+    // off the fixture rather than asserted about it.
+    let (fixture, mut context) = joined_fixture().await;
+    seed_exact_retirement_prestate(&mut context, &fixture).await;
+    let market = CoreState::decode(
+        &required_observed(&mut context, fixture.base.market)
+            .await
+            .data,
+    )
+    .expect("seeded Core Market");
+    assert_eq!(
+        market.outstanding_capabilities, 0,
+        "no capability child stands, so DirectCloseCapability has nothing to close here"
+    );
+    assert_eq!(market.phase, Phase::Retiring);
+    let closure = required_observed(&mut context, fixture.base.closure).await;
+    assert_eq!(
+        closure.owner, RESOLUTION_PROGRAM_ID,
+        "the Source closure receipt is SEEDED at this owner, not produced by ResolutionCloseFund"
     );
 }
 

@@ -37,6 +37,9 @@ use dclutch_market::{
 };
 use dclutch_market_retirement_v1_operator::{
     MarketRetirementSnapshotV1, build_market_retirement_v1,
+    terminal_stage_order_v1::{
+        TerminalStageOrderErrorV1, TerminalStageV1, authenticate_terminal_stage_prefix_v1,
+    },
 };
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
@@ -391,39 +394,15 @@ struct TerminalSequenceCompletionV1 {
     compute_units_consumed: String,
 }
 
-/// The six protocol mutations in their sole admissible order.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub(crate) enum TerminalStageV1 {
-    CoreBeginRetiring,
-    DirectBeginRetiring,
-    ResolutionCloseFund,
-    DirectCloseCapability,
-    RetirementReplayHandoff,
-    AggregateRetirement,
-}
-
-impl TerminalStageV1 {
-    pub(crate) const ORDERED: [Self; 6] = [
-        Self::CoreBeginRetiring,
-        Self::DirectBeginRetiring,
-        Self::ResolutionCloseFund,
-        Self::DirectCloseCapability,
-        Self::RetirementReplayHandoff,
-        Self::AggregateRetirement,
-    ];
-
-    pub(crate) const fn ordinal(self) -> u8 {
-        match self {
-            Self::CoreBeginRetiring => 0,
-            Self::DirectBeginRetiring => 1,
-            Self::ResolutionCloseFund => 2,
-            Self::DirectCloseCapability => 3,
-            Self::RetirementReplayHandoff => 4,
-            Self::AggregateRetirement => 5,
-        }
-    }
-}
+// The six protocol mutations and their sole admissible order are DECLARED in
+// `dclutch_market_retirement_v1_operator::terminal_stage_order_v1` -- the
+// operator crate this driver and the `dclutch-svm-harness` retirement campaign
+// both link -- and imported above. This file used to declare them itself, which
+// is how the order came to be wrong here for three cohorts with nothing in the
+// tree able to disagree: the only other consumer of a stage order was this
+// file's own tests. `ORDERED` now says `DirectCloseCapability` before
+// `ResolutionCloseFund`, and the declaration holds that ruling with a
+// `const _: () = assert!(..)` naming why.
 
 /// `ResolutionCloseFund`'s declared ComputeBudget limit.
 ///
@@ -456,11 +435,13 @@ const RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1: u32 = 267_518;
 /// the route runs inside the default meter.
 ///
 /// `None` is not "unbudgeted". It is the positive claim that the route fits
-/// 200,000 compute units, and every `None` below except the three stages after
-/// `ResolutionCloseFund` has landed on devnet inside it. Those three have never
-/// been reached, so nothing here can honestly declare a number for them; if one
-/// meets the meter, the finding is a new row with its own measured draw, not a
-/// blanket.
+/// 200,000 compute units, and every `None` below that has landed on devnet
+/// landed inside it -- `CoreBeginRetiring` at 23,106 and `DirectBeginRetiring`
+/// at 92,137. `DirectCloseCapability`, `RetirementReplayHandoff` and
+/// `AggregateRetirement` have never executed on any chain, and the reorder does
+/// not change that: cohort-17 reached `ResolutionCloseFund` and stopped. Nothing
+/// here can honestly declare a number for them; if one meets the meter, the
+/// finding is a new row with its own measured draw, not a blanket.
 const fn terminal_stage_compute_unit_limit_v1(stage: TerminalStageV1) -> Option<u32> {
     match stage {
         TerminalStageV1::ResolutionCloseFund => Some(RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1),
@@ -8659,12 +8640,39 @@ fn route_retiring_market(progress: AuthenticatedTerminalProgressV1) -> Result<Te
     }
 }
 
+/// The Direct root is retiring: its capability close is the only next act.
+///
+/// This used to read the RESOLUTION state here and send a market whose fund was
+/// still open to `ResolutionCloseFund` -- a second author of the stage order,
+/// agreeing with the wrong `ORDERED` because both were written in this file.
+/// Under the ruling the Resolution fund is IRRELEVANT at this point except that
+/// it must still be open: the Direct close decodes the dependency ledger, so a
+/// market whose fund has already closed cannot be routed forward at all.
 #[cfg(test)]
 fn route_retiring_direct(progress: AuthenticatedTerminalProgressV1) -> Result<TerminalRouteV1> {
     if progress.replay != RetirementReplayStateV1::Trading || progress.outstanding_capabilities != 1
     {
         return Err(refusal(
-            "Direct close or replay handoff partially committed before Resolution CloseFund",
+            "Direct close or replay handoff partially committed before the Direct capability close",
+        ));
+    }
+    if progress.resolution == ResolutionTerminalStateV1::Closed {
+        return Err(refusal(
+            TerminalStageOrderErrorV1::ResolutionCloseFundBeforeDirectClose.message(),
+        ));
+    }
+    Ok(TerminalRouteV1::Execute(
+        TerminalStageV1::DirectCloseCapability,
+    ))
+}
+
+/// The Direct root is closed and Core's capability count is zero: the
+/// Resolution fund closes next, then the replay handoff, then the aggregate.
+#[cfg(test)]
+fn route_closed_direct(progress: AuthenticatedTerminalProgressV1) -> Result<TerminalRouteV1> {
+    if progress.outstanding_capabilities != 0 {
+        return Err(refusal(
+            "Direct root closure lacks the exact Core capability decrement",
         ));
     }
     match progress.resolution {
@@ -8674,31 +8682,17 @@ fn route_retiring_direct(progress: AuthenticatedTerminalProgressV1) -> Result<Te
         ResolutionTerminalStateV1::ReadyToClose => Ok(TerminalRouteV1::Execute(
             TerminalStageV1::ResolutionCloseFund,
         )),
-        ResolutionTerminalStateV1::Closed => Ok(TerminalRouteV1::Execute(
-            TerminalStageV1::DirectCloseCapability,
-        )),
-    }
-}
-
-#[cfg(test)]
-fn route_closed_direct(progress: AuthenticatedTerminalProgressV1) -> Result<TerminalRouteV1> {
-    if progress.resolution != ResolutionTerminalStateV1::Closed
-        || progress.outstanding_capabilities != 0
-    {
-        return Err(refusal(
-            "Direct root closure lacks the exact Resolution closure or Core capability decrement",
-        ));
-    }
-    match progress.replay {
-        RetirementReplayStateV1::Trading => Ok(TerminalRouteV1::Execute(
-            TerminalStageV1::RetirementReplayHandoff,
-        )),
-        RetirementReplayStateV1::Core => Ok(TerminalRouteV1::Execute(
-            TerminalStageV1::AggregateRetirement,
-        )),
-        RetirementReplayStateV1::Closed => Err(refusal(
-            "Custody replay closed outside the atomic aggregate-retirement poststate",
-        )),
+        ResolutionTerminalStateV1::Closed => match progress.replay {
+            RetirementReplayStateV1::Trading => Ok(TerminalRouteV1::Execute(
+                TerminalStageV1::RetirementReplayHandoff,
+            )),
+            RetirementReplayStateV1::Core => Ok(TerminalRouteV1::Execute(
+                TerminalStageV1::AggregateRetirement,
+            )),
+            RetirementReplayStateV1::Closed => Err(refusal(
+                "Custody replay closed outside the atomic aggregate-retirement poststate",
+            )),
+        },
     }
 }
 
@@ -9507,14 +9501,12 @@ fn authenticate_terminal_completion_v1(completion: &TerminalSequenceCompletionV1
     {
         index += 1;
     }
-    let protocol_order = [
-        TerminalCompletionMutationV1::CoreBeginRetiring,
-        TerminalCompletionMutationV1::DirectBeginRetiring,
-        TerminalCompletionMutationV1::ResolutionCloseFund,
-        TerminalCompletionMutationV1::DirectCloseCapability,
-        TerminalCompletionMutationV1::RetirementReplayHandoff,
-        TerminalCompletionMutationV1::AggregateRetirement,
-    ];
+    // DERIVED from the one declaration, not retyped. This array was a second
+    // copy of the stage order living four thousand lines from the first, and a
+    // reorder that moved only the first would have made every honest completion
+    // document unverifiable while reading like a tampering refusal.
+    let protocol_order = TerminalStageV1::ORDERED
+        .map(|stage| completion_mutation_v1(&DurableTerminalMutationV1::Protocol { stage }));
     if completion.journals.len() != index + protocol_order.len()
         || completion.journals[index..]
             .iter()
@@ -9987,15 +9979,17 @@ fn authenticate_terminal_session_semantics_v1(
     market_input: &MarketRunInput,
     evidence: &CampaignTerminalEvidenceV1,
 ) -> Result<Vec<Pubkey>> {
-    let stage_three_path = arguments
+    // `ResolutionCloseFund` is stage FOUR under the ruled order; the local used
+    // to be called `stage_three` and the number is not what identifies it.
+    let close_fund_path = arguments
         .journal_dir
         .join(stage_journal_name_v1(TerminalStageV1::ResolutionCloseFund));
-    let stage_three = stage_three_path
+    let close_fund = close_fund_path
         .exists()
-        .then(|| read_terminal_journal_v1(&stage_three_path))
+        .then(|| read_terminal_journal_v1(&close_fund_path))
         .transpose()?;
-    authenticate_terminal_receipt_funding_v1(rpc, arguments, session, stage_three.as_ref())?;
-    let pinned_receipt = stage_three
+    authenticate_terminal_receipt_funding_v1(rpc, arguments, session, close_fund.as_ref())?;
+    let pinned_receipt = close_fund
         .as_ref()
         .filter(|journal| journal.phase != StageJournalPhaseV1::Planned)
         .map(|journal| {
@@ -10640,6 +10634,21 @@ fn authenticate_terminal_journal_prefix_v1(
     journal_dir: &Path,
     prepay_required: bool,
 ) -> Result<()> {
+    // THE NAMED CAUSE FIRST. A directory holding `ResolutionCloseFund` without
+    // `DirectCloseCapability` in front of it is not a generic hole: it is the
+    // exact fault cohort-17 met on devnet, where stage three closed the
+    // Resolution dependency funding ledger the Direct close decodes and
+    // preserves, and market `9e8fTH75...` can never close its capability again.
+    // The declaration owns that accusation so every reader gets one page.
+    let present: Vec<TerminalStageV1> = TerminalStageV1::ORDERED
+        .into_iter()
+        .filter(|stage| journal_dir.join(stage_journal_name_v1(*stage)).exists())
+        .collect();
+    if let Err(error @ TerminalStageOrderErrorV1::ResolutionCloseFundBeforeDirectClose) =
+        authenticate_terminal_stage_prefix_v1(&present)
+    {
+        return Err(refusal(error.message()));
+    }
     let mut ordered = Vec::with_capacity(7);
     for stage in TerminalStageV1::ORDERED {
         if stage == TerminalStageV1::ResolutionCloseFund && prepay_required {
@@ -12443,14 +12452,10 @@ mod tests {
     }
 
     fn test_terminal_completion() -> TerminalSequenceCompletionV1 {
-        let mutations = [
-            TerminalCompletionMutationV1::CoreBeginRetiring,
-            TerminalCompletionMutationV1::DirectBeginRetiring,
-            TerminalCompletionMutationV1::ResolutionCloseFund,
-            TerminalCompletionMutationV1::DirectCloseCapability,
-            TerminalCompletionMutationV1::RetirementReplayHandoff,
-            TerminalCompletionMutationV1::AggregateRetirement,
-        ];
+        // The fixture's six rows come from the ONE declaration too: a hand-typed
+        // ladder here would go on agreeing with whatever this file used to say.
+        let mutations = TerminalStageV1::ORDERED
+            .map(|stage| completion_mutation_v1(&DurableTerminalMutationV1::Protocol { stage }));
         let journals = mutations
             .into_iter()
             .enumerate()
@@ -12555,53 +12560,116 @@ mod tests {
         }
     }
 
+    /// The router walks the ONE declared order, and the walk is DERIVED from
+    /// `TerminalStageV1::ORDERED` rather than retyped -- a hand-written ladder
+    /// is how this file came to hold a second, disagreeing author of the order.
     #[test]
     fn exact_six_stage_route_and_operational_prepay_are_ordered() {
         let mut value = initial();
-        assert_eq!(
-            route_terminal_progress_v1(value).unwrap(),
-            TerminalRouteV1::Execute(TerminalStageV1::CoreBeginRetiring)
-        );
-        value.core = CoreTerminalStateV1::Retiring;
-        assert_eq!(
-            route_terminal_progress_v1(value).unwrap(),
-            TerminalRouteV1::Execute(TerminalStageV1::DirectBeginRetiring)
-        );
-        value.direct = DirectTerminalStateV1::Retiring;
-        assert_eq!(
-            route_terminal_progress_v1(value).unwrap(),
-            TerminalRouteV1::PrepayResolutionReceipt
-        );
-        value.resolution = ResolutionTerminalStateV1::ReadyToClose;
-        assert_eq!(
-            route_terminal_progress_v1(value).unwrap(),
-            TerminalRouteV1::Execute(TerminalStageV1::ResolutionCloseFund)
-        );
-        value.resolution = ResolutionTerminalStateV1::Closed;
-        assert_eq!(
-            route_terminal_progress_v1(value).unwrap(),
-            TerminalRouteV1::Execute(TerminalStageV1::DirectCloseCapability)
-        );
-        value.direct = DirectTerminalStateV1::Closed;
-        value.outstanding_capabilities = 0;
-        assert_eq!(
-            route_terminal_progress_v1(value).unwrap(),
-            TerminalRouteV1::Execute(TerminalStageV1::RetirementReplayHandoff)
-        );
-        value.replay = RetirementReplayStateV1::Core;
-        assert_eq!(
-            route_terminal_progress_v1(value).unwrap(),
-            TerminalRouteV1::Execute(TerminalStageV1::AggregateRetirement)
-        );
-        value.core = CoreTerminalStateV1::Closed;
-        value.replay = RetirementReplayStateV1::Closed;
-        value.claims_aggregate_live = false;
-        value.rent_credit_live = false;
-        value.hoard_vault_live = false;
+        let mut walked = Vec::new();
+        // The prepay is an operational act, not a protocol stage: it appears
+        // once, immediately before `ResolutionCloseFund`, and it is the only
+        // route this walk sees that `ORDERED` does not name.
+        for stage in TerminalStageV1::ORDERED {
+            if stage == TerminalStageV1::ResolutionCloseFund {
+                assert_eq!(
+                    route_terminal_progress_v1(value).unwrap(),
+                    TerminalRouteV1::PrepayResolutionReceipt,
+                    "the receipt prepay stands immediately before its stage"
+                );
+                value.resolution = ResolutionTerminalStateV1::ReadyToClose;
+            }
+            let route = route_terminal_progress_v1(value).unwrap();
+            assert_eq!(route, TerminalRouteV1::Execute(stage));
+            walked.push(stage);
+            match stage {
+                TerminalStageV1::CoreBeginRetiring => value.core = CoreTerminalStateV1::Retiring,
+                TerminalStageV1::DirectBeginRetiring => {
+                    value.direct = DirectTerminalStateV1::Retiring;
+                }
+                TerminalStageV1::DirectCloseCapability => {
+                    value.direct = DirectTerminalStateV1::Closed;
+                    value.outstanding_capabilities = 0;
+                }
+                TerminalStageV1::ResolutionCloseFund => {
+                    value.resolution = ResolutionTerminalStateV1::Closed;
+                }
+                TerminalStageV1::RetirementReplayHandoff => {
+                    value.replay = RetirementReplayStateV1::Core;
+                }
+                TerminalStageV1::AggregateRetirement => {
+                    value.core = CoreTerminalStateV1::Closed;
+                    value.replay = RetirementReplayStateV1::Closed;
+                    value.claims_aggregate_live = false;
+                    value.rent_credit_live = false;
+                    value.hoard_vault_live = false;
+                }
+            }
+        }
+        assert_eq!(walked, TerminalStageV1::ORDERED);
         assert_eq!(
             route_terminal_progress_v1(value).unwrap(),
             TerminalRouteV1::Complete
         );
+    }
+
+    /// THE HOSTILE THE RULING EXISTS FOR, at the router: a Retiring Direct root
+    /// whose Resolution fund has ALREADY closed. That is cohort-17's market, and
+    /// the router names the cause rather than routing it into a close whose
+    /// dependency ledger no longer exists.
+    #[test]
+    fn a_closed_resolution_fund_before_the_direct_close_refuses_by_name() {
+        let mut hostile = initial();
+        hostile.core = CoreTerminalStateV1::Retiring;
+        hostile.direct = DirectTerminalStateV1::Retiring;
+        hostile.resolution = ResolutionTerminalStateV1::Closed;
+        let error = route_terminal_progress_v1(hostile).unwrap_err().to_string();
+        assert!(
+            error.contains("destroys the Direct close's own input"),
+            "the router must name the lost dependency, not the shape: {error}"
+        );
+        // The control: the same state with the fund still open routes forward.
+        let mut honest = hostile;
+        honest.resolution = ResolutionTerminalStateV1::ReadyToClose;
+        assert_eq!(
+            route_terminal_progress_v1(honest).unwrap(),
+            TerminalRouteV1::Execute(TerminalStageV1::DirectCloseCapability)
+        );
+    }
+
+    /// The same accusation off a journal DIRECTORY, which is what a resumed run
+    /// actually holds: cohort-17's `retire-1/terminal/journal` in one line.
+    #[test]
+    fn a_journal_directory_that_closed_the_fund_first_refuses_by_name() {
+        let directory = unique_test_path("close-fund-before-direct-close");
+        fs::create_dir(&directory).expect("journal directory");
+        for stage in [
+            TerminalStageV1::CoreBeginRetiring,
+            TerminalStageV1::DirectBeginRetiring,
+            TerminalStageV1::ResolutionCloseFund,
+        ] {
+            fs::write(directory.join(stage_journal_name_v1(stage)), b"{}").expect("journal");
+        }
+        let error = authenticate_terminal_journal_prefix_v1(&directory, false)
+            .expect_err("a closed dependency ledger is not a generic hole")
+            .to_string();
+        assert!(
+            error.contains("destroys the Direct close's own input"),
+            "the prefix check must name the lost dependency: {error}"
+        );
+        // The control: the ruled prefix, same three counts, is admitted.
+        let ruled = unique_test_path("direct-close-before-close-fund");
+        fs::create_dir(&ruled).expect("journal directory");
+        for stage in [
+            TerminalStageV1::CoreBeginRetiring,
+            TerminalStageV1::DirectBeginRetiring,
+            TerminalStageV1::DirectCloseCapability,
+        ] {
+            fs::write(ruled.join(stage_journal_name_v1(stage)), b"{}").expect("journal");
+        }
+        authenticate_terminal_journal_prefix_v1(&ruled, false).expect("the ruled prefix");
+        fs::remove_dir_all(directory).expect("remove journal directory");
+        fs::remove_dir_all(ruled).expect("remove journal directory");
     }
 
     #[test]
@@ -13447,9 +13515,15 @@ mod tests {
         assert!(authenticate_terminal_journal_prefix_v1(&directory, false).is_err());
         fs::remove_file(&second).expect("remove later stage");
 
+        // The complete ordered prefix in FRONT of the prepay's own seat, so the
+        // only hole this case leaves is the prepay journal. Before the reorder
+        // this list stopped at `DirectBeginRetiring` and the missing stage was
+        // the Direct close, which now refuses for its own named reason -- and
+        // would have made this case pass while measuring nothing.
         for stage in [
             TerminalStageV1::CoreBeginRetiring,
             TerminalStageV1::DirectBeginRetiring,
+            TerminalStageV1::DirectCloseCapability,
         ] {
             fs::write(directory.join(stage_journal_name_v1(stage)), b"prefix")
                 .expect("prefix stage");
@@ -13459,7 +13533,13 @@ mod tests {
             b"close without prepay",
         )
         .expect("later close");
-        assert!(authenticate_terminal_journal_prefix_v1(&directory, true).is_err());
+        let error = authenticate_terminal_journal_prefix_v1(&directory, true)
+            .expect_err("a CloseFund journal over a missing prepay")
+            .to_string();
+        assert!(
+            error.contains("later action after a missing durable prefix"),
+            "the hole here is the prepay, not the Direct close: {error}"
+        );
         fs::remove_dir_all(directory).expect("remove journal directory");
     }
 

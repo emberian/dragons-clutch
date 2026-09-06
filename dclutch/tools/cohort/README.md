@@ -525,6 +525,64 @@ three suffix magics at `dclutch-core-sbf/src/lib.rs:392`). The 2,152-byte
 `RETIREMENT_INSTRUCTION_BYTES_V1` aggregate route is the legacy builder's and
 nothing in this row submits it.
 
+**THE QUESTION ABOVE IS ANSWERED, AND THE STAGES ARE RENUMBERED** (lane
+PROGRAMS-18A, 2026-09-06). Which stage owns those lamports: **Resolution does,
+and it takes them LAST.** Core `CloseCapability` on the Direct entry decodes both
+physical funding ledgers -- the Trading-owned selected row, which it closes, and
+the Resolution-owned dependency row, which it PRESERVES byte for byte and
+re-states as a `PreservedFundingLedgerV1` poststate -- so the stage that
+preserves a dependency must run before the stage that owns and closes it.
+`DirectCloseCapability` now runs BEFORE `ResolutionCloseFund`.
+
+The consequences for reading this file and cohort-17's evidence:
+
+- **the terminal sequence's stages are `CoreBeginRetiring`,
+  `DirectBeginRetiring`, `DirectCloseCapability`, `ResolutionCloseFund`,
+  `RetirementReplayHandoff`, `AggregateRetirement`.** The Direct close is stage
+  THREE now and the Resolution close is stage FOUR; every sentence above this
+  one, and every line of
+  `docs/evidence/COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md`, was written
+  under the old numbering and says the opposite. The JOURNAL FILENAMES did not
+  move -- `13-resolution-close-fund.json`, `14-direct-close-capability.json` --
+  because the number in a journal name is a stage IDENTITY assigned when the
+  sequence was first written, and the run order is `TerminalStageV1::ORDERED`
+  and nothing else.
+- **the order is declared once**, in
+  `crates/dclutch-market-retirement-v1-operator/src/terminal_stage_order_v1.rs`,
+  which is the operator crate the devnet driver and the ProgramTest retirement
+  campaign both link and which is in no SBF link's path-dependency closure. A
+  `const _: () = assert!(..)` holds the ruled adjacency: writing the old order
+  back does not compile.
+- **NO PROGRAM MOVES.** Core's kernel admits `CloseCapability` in `Open`,
+  `Terminal` and `Retiring` alike (`dclutch_market::close_capability_child`),
+  Resolution admits `CloseFund` in exactly `(Retiring, Consumed)`
+  (`RESOLUTION_CLOSE_FUND_ADMISSIBLE_PRESTATES_V1`), and the only ordering fact
+  either can see is `dclutch_market::retire`'s `outstanding_capabilities == 0` --
+  which orders the Direct close before this row and says nothing about
+  `CloseFund`. The order is a host obligation, and the repair is host-only: no
+  ELF, no frame baseline row and no release digest moves.
+- **the wrong order now refuses BY NAME on both sides.** A journal directory
+  holding `ResolutionCloseFund` without `DirectCloseCapability` in front of it
+  refuses at the driver's prefix check naming the destroyed input, not as a
+  generic hole; and a Direct close whose frame carries a vacated funding ledger
+  refuses `TerminalRetirementErrorV1::ClosedFundingLedger` rather than the
+  `Capability(InvalidLength)` cohort-17 had to convict from a journal and two
+  chain reads.
+- **cohort-17's market `9e8fTH75...` is still unretirable**, and this is not a
+  repair of it: its `GqyjjFmG...` is gone and recreating it would be fabricating
+  protocol state. It stands at `Retiring` with `outstanding_capabilities = 1`.
+  **Cohort-18 carries the reorder**, and it carries it as a HOST change: the same
+  ELFs, the same release gate, a driver rebuild.
+- **and the pair is still not covered off devnet.** The ProgramTest campaign
+  drives `AggregateRetirement` only, against a prestate seeded with
+  `outstanding_capabilities = 0` and a `SourceClosureReceiptV3` written into the
+  account rather than produced by `ResolutionCloseFund`, so it agreed with the
+  wrong order because it could not see it. That boundary is now asserted in the
+  campaign itself
+  (`the_checkpoint_campaign_drives_the_last_declared_stage_and_not_the_ruled_pair`).
+  A fixture with a live Direct capability child and both physical funding
+  ledgers is OWED.
+
 **A SECOND wall sits behind that one, and it is a program change rather than a
 founding input: a market founded REFUNDING cannot reach this row at all.**
 Decision 0025 seats the failure coordinate in an escrow Position whose owner is
@@ -617,8 +675,11 @@ with `Direct close caller preflight: Successor(MakerRootCountInvariant)`
 `blocks` edge.** A close runs INSIDE `Retiring` -- `DirectCloseMakerPlanErrorV1::
 InvalidRootState` refuses one that is not -- and the root enters `Retiring` only
 when the terminal sequence lands `DirectBeginRetiring`, its stage two of six. So
-the order is: `retire` (stages zero to two land, stage three refuses), this row,
-`retire` again (the sequence's journal resumes at stage three). An edge in
+the order is: `retire` (its first two stages land, the Direct close refuses),
+this row, `retire` again (the sequence's journal resumes at the Direct close).
+Cohort-17 met that refusal at what was then stage four; under PROGRAMS-18A's
+reorder the Direct close is stage THREE and sits immediately behind
+`DirectBeginRetiring`, which is where this row belongs and always did. An edge in
 either direction would be a deadlock; the sequence's own durable journal is what
 makes the resume safe rather than a second transaction identity.
 

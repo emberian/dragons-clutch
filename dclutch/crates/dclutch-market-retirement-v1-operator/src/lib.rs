@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod terminal_stage_order_v1;
+
 use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,

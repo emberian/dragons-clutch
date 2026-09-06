@@ -532,6 +532,19 @@ pub enum TerminalRetirementErrorV1 {
     Realm(dclutch_market::realm::Error),
     /// `dclutch_custody::token_svm` refused; the cause is its own.
     Token(dclutch_custody::token_svm::Error),
+    /// A funding ledger in the Direct close frame is a VACANT account: no data,
+    /// no lamports, owned by the System Program. Something closed it before
+    /// this close ran.
+    ///
+    /// The close decodes BOTH physical ledgers -- the selected row's own, which
+    /// it closes, and the foreign controller's, which it PRESERVES byte for
+    /// byte -- so a vacated one is not a malformed record, it is a destroyed
+    /// input. Cohort-17 met this on devnet as `Capability(InvalidLength)`, the
+    /// coarse code `FundingLedgerV2::decode` returns for a zero-byte buffer,
+    /// and it took a journal read and two chain reads to learn that the empty
+    /// buffer was the Resolution dependency ledger `ResolutionCloseFund` had
+    /// already closed. The cause is now on the wire the operator reads.
+    ClosedFundingLedger,
 }
 
 /// Physical funding ledgers the production Direct close frame carries.
@@ -736,6 +749,7 @@ pub fn preflight_direct_native_close_caller_v1(
         return Err(TerminalRetirementErrorV1::Frame);
     }
     let observation = close_preflight_observation(snapshot)?;
+    require_live_funding_ledgers_v1(snapshot)?;
     let market =
         CoreState::decode(&snapshot.market.data).map_err(TerminalRetirementErrorV1::MarketCore)?;
     let manifest = CapabilityManifestV1::decode(&snapshot.manifest.data)
@@ -802,6 +816,7 @@ pub fn build_direct_native_close_v1(
     snapshot: &DirectNativeCloseSnapshotV1,
 ) -> Result<DirectNativeCloseReportV1, TerminalRetirementErrorV1> {
     let observation = close_observation(snapshot)?;
+    require_live_funding_ledgers_v1(snapshot)?;
     let market = authenticate_close_market(snapshot)?;
     authenticate_close_releases(snapshot, market)?;
     // The Rent sysvar is still AUTHENTICATED here -- key, owner, executable bit,
@@ -1463,6 +1478,32 @@ fn authenticate_close_rent_credit(
         || credit.generation() != market.identity.generation
     {
         return Err(TerminalRetirementErrorV1::Projection);
+    }
+    Ok(())
+}
+
+/// Refuse a Direct close whose frame carries a CLOSED funding ledger, naming
+/// the cause rather than the symptom.
+///
+/// The stage that PRESERVES the Resolution dependency ledger runs before the
+/// stage that owns and closes it
+/// (`dclutch_market_retirement_v1_operator::terminal_stage_order_v1`). This
+/// function is what a run that violated that order meets: it is checked before
+/// any decode, so the operator says "a funding ledger this close needs is
+/// closed" instead of the `InvalidLength` a zero-byte buffer produces four
+/// layers down.
+///
+/// Vacancy is the exact shape an absent account takes when it is read at a
+/// finalized slot -- System-owned, zero lamports, zero bytes -- and it is
+/// distinct from a ledger that is merely wrong, which goes on refusing through
+/// `authenticate_close_funding` for its own reason.
+fn require_live_funding_ledgers_v1(
+    snapshot: &DirectNativeCloseSnapshotV1,
+) -> Result<(), TerminalRetirementErrorV1> {
+    for account in &snapshot.funding_ledgers {
+        if account.data.is_empty() && account.lamports == 0 && account.owner == system_program::ID {
+            return Err(TerminalRetirementErrorV1::ClosedFundingLedger);
+        }
     }
     Ok(())
 }
@@ -2233,6 +2274,66 @@ mod tests {
         snapshot.funding_ledgers[0].owner = snapshot.resolution_program.key;
         snapshot.funding_ledgers[1].owner = snapshot.trading_program.key;
         snapshot
+    }
+
+    /// COHORT-17'S DEVNET FAULT, in one line: the stage that owns the
+    /// Resolution dependency funding ledger closed it before the stage that
+    /// preserves it ran, and the Direct close then met a zero-byte account.
+    ///
+    /// It refused `Capability(InvalidLength)` -- the code
+    /// `FundingLedgerV2::decode` returns for any buffer of the wrong width --
+    /// and locating the empty buffer took a journal read and two chain reads.
+    /// The cause is named now, on both entry points, and the CONTROL is the
+    /// same fixture with its ledgers live: that one refuses further in, for its
+    /// own reason, so this discriminant cannot be reached by accident.
+    #[test]
+    fn a_closed_dependency_funding_ledger_refuses_by_name_and_not_by_length() {
+        for position in 0..DIRECT_NATIVE_CLOSE_FUNDING_LEDGERS_V1 {
+            let mut closed = close_snapshot();
+            // Exactly the shape an absent account takes when it is read at a
+            // finalized slot: System-owned, zero lamports, zero bytes.
+            closed.funding_ledgers[position].owner = system_program::ID;
+            closed.funding_ledgers[position].lamports = 0;
+            closed.funding_ledgers[position].data = Vec::new();
+            assert_eq!(
+                build_direct_native_close_v1(&closed).unwrap_err(),
+                TerminalRetirementErrorV1::ClosedFundingLedger,
+                "ledger {position} was closed and the builder must say so"
+            );
+            let mut discovery = closed;
+            discovery.caller_authority = None;
+            assert_eq!(
+                preflight_direct_native_close_caller_v1(&discovery).unwrap_err(),
+                TerminalRetirementErrorV1::ClosedFundingLedger,
+                "the preflight is the entry point the driver calls first"
+            );
+        }
+
+        let live = close_snapshot();
+        assert_ne!(
+            build_direct_native_close_v1(&live).unwrap_err(),
+            TerminalRetirementErrorV1::ClosedFundingLedger,
+            "a live pair of ledgers cannot reach the closed-ledger accusation"
+        );
+        let mut live_discovery = live;
+        live_discovery.caller_authority = None;
+        assert_ne!(
+            preflight_direct_native_close_caller_v1(&live_discovery).unwrap_err(),
+            TerminalRetirementErrorV1::ClosedFundingLedger
+        );
+    }
+
+    /// A ledger that is present but the WRONG WIDTH is still a record defect
+    /// and still refuses through the capability decode. The new accusation is
+    /// about a destroyed account, not about a short one.
+    #[test]
+    fn a_short_but_funded_ledger_is_not_the_closed_ledger_accusation() {
+        let mut short = close_snapshot();
+        short.funding_ledgers[0].data = vec![0_u8; 3];
+        assert_ne!(
+            build_direct_native_close_v1(&short).unwrap_err(),
+            TerminalRetirementErrorV1::ClosedFundingLedger
+        );
     }
 
     fn handoff_snapshot() -> RetirementReplayHandoffSnapshotV1 {
