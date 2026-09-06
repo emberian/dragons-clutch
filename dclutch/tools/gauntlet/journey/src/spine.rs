@@ -907,6 +907,98 @@ pub(crate) fn settle_fee(
 /// signs for the packet, and no program signs a CallerAuthority PDA anywhere in
 /// the frame. See the register's own corrected entry.
 #[allow(clippy::too_many_arguments)]
+/// Create the Market's Claims-role Custody replay, which terminal payout decodes
+/// and never creates.
+///
+/// # The producer gap this closes for the journey
+///
+/// `programs/dclutch-claims-sbf/src/custody_replay_v1.rs` is a dedicated
+/// first-use creation route -- only the Claims program can produce a Claims-role
+/// caller authority, so only it can create the Claims-role replay -- and
+/// `terminal_settlement_v3` deliberately does NOT create it, because creation is
+/// never a side effect of a payout. The founding creates a TRADING-role replay
+/// (`founding_normal_custody_replay`, `CallerRoleV1::Trading`); the Claims-role
+/// one at the same market, release set and custody context is a different PDA
+/// and nothing here had ever asked for it.
+///
+/// So the redemption refused twice, on two chains, with a true sentence about an
+/// account that did not exist: `wallet payout snapshot is missing Claims Custody
+/// replay 4U7Sq…` (hbox `20260906T152908Z`) and `… 9cp1MV3…`
+/// (`20260906T155320Z`). The devnet spine has driven this act since cohort 14 --
+/// `31-admit-terminal` runs `devnet-claims-custody-replay-v1` before the
+/// admission -- and this is its loopback arm, the same shipped command.
+///
+/// It takes no custody context: the Claims aggregate is the sole persisted owner
+/// of the Market's Custody namespace (decision 0008 §1) and the driver reads
+/// release set, Realm, generation and context off it.
+fn create_claims_custody_replay(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    fee_payer: Pubkey,
+    fee_payer_keypair: &Path,
+) {
+    let stage = "redemption: the Market's Claims-role Custody replay is created for the first time";
+    let Ok(output) = context
+        .dir("claims-custody-replay")
+        .map(|dir| dir.join("claims-custody-replay.json"))
+    else {
+        return;
+    };
+    let arguments = vec![
+        "--rpc-url".to_owned(),
+        context.rpc_url.to_owned(),
+        "--plan".to_owned(),
+        context.plan.display().to_string(),
+        "--evidence".to_owned(),
+        context.campaign_report.display().to_string(),
+        "--market".to_owned(),
+        context.market.to_string(),
+        "--fee-payer".to_owned(),
+        fee_payer.to_string(),
+        "--fee-payer-keypair".to_owned(),
+        fee_payer_keypair.display().to_string(),
+        "--output".to_owned(),
+        output.display().to_string(),
+        "--execute".to_owned(),
+    ];
+    let outcome = crate::claims_custody_replay::run_owned_loopback_v1(arguments);
+    let label = "journey redemption: Claims-role Custody replay creation";
+    let (landed, compute) = match read_json(&output) {
+        Ok(document) => {
+            let result = harvest_document(rpc, label, &document, &mut spine.transactions);
+            spine
+                .reports
+                .insert("claims-custody-replay".into(), document);
+            result
+        }
+        Err(_) => (0, 0),
+    };
+    match outcome {
+        Ok(()) => spine.executed(
+            stage,
+            landed,
+            compute,
+            "`local-private-validator-claims-custody-replay-v1 --execute`: the only caller of the \
+             DCLCCR01 route outside a program test. Fifteen accounts, a 48-byte wire carrying a \
+             Market coordinate and nothing else; the release set, Realm, generation and custody \
+             context come off the Claims aggregate, the rent refund off Core's own \
+             `rent_beneficiary`, and the driver reads the replay back to prove Custody created it \
+             at revision 1."
+                .into(),
+        ),
+        Err(error) => spine.refused(
+            stage,
+            &error.to_string(),
+            format!(
+                "`local-private-validator-claims-custody-replay-v1` refused: {error}. Every \
+                 economic fact it uses is read off the Claims aggregate, so a refusal here is a \
+                 statement about that account and the Market's Custody namespace."
+            ),
+        ),
+    }
+}
+
 pub(crate) fn redeem(
     rpc: &mut Rpc,
     context: &SpineContextV1<'_>,
@@ -919,6 +1011,14 @@ pub(crate) fn redeem(
     fee_payer_keypair: &Path,
 ) -> Result<()> {
     let stage = "redemption: a holder redeems through wallet-signed terminal settlement";
+    // FIRST USE, ONCE PER MARKET. The payout decodes the Claims-role Custody
+    // replay and never creates it, so the creation runs in front of the first
+    // payout and nowhere else. The driver is idempotent by refusal rather than
+    // by guess: a replay that already exists refuses by name and the refusal is
+    // recorded as this stage's own finding.
+    if !context.work.join("claims-custody-replay").exists() {
+        create_claims_custody_replay(rpc, context, spine, fee_payer, fee_payer_keypair);
+    }
     let input_arguments = vec![
         "--rpc-url".to_owned(),
         context.rpc_url.to_owned(),
