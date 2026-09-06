@@ -853,40 +853,24 @@ fn campaign(
             report: spine_work.join("admission-stranger.json"),
         },
     ];
-    // THE ADMISSION NEEDS A ROUTING TABLE AND NOTHING WAS PUBLISHING ONE.
+    // THE ADMISSION'S `PacketTooLarge` IS NOT A KEY-COUNT PROBLEM, and this
+    // empty slice is a measurement rather than an omission.
     //
     // `local-private-validator-user-position-admission-v1` compiles a v0
-    // message and takes `--routing-table`; the spine has carried the argument
-    // since it was written and this tier passed the empty slice, so the message
-    // was compiled bare. The first run that ever reached this stage refused at
+    // message and takes `--routing-table`, and the spine has carried that
+    // argument since it was written, so the obvious reading of
     // `admission message compilation: PacketTooLarge` (hbox
-    // `20260906T110501Z`) -- the Trading->Claims chain's frame does not fit a
-    // legacy packet, which is the same measurement `resolution::resolve` and
-    // the founding already make about their own frames.
+    // `20260906T110501Z`) was that nobody had published a table. Measured, hbox
+    // `20260906T112833Z`: a frozen table over the FOUNDING'S WHOLE account set
+    // -- every address its evidence recorded, six transactions to create,
+    // extend and freeze -- was declared to the driver and the admission refused
+    // with the same `PacketTooLarge`. So the message does not exceed the packet
+    // by movable keys, and the next step is to read the compiled message's own
+    // key/data split rather than to publish a bigger table.
     //
-    // The set is the FOUNDING'S OWN account evidence, not a hand-listed frame:
-    // a table is an untrusted routing projection, the driver re-authenticates
-    // every key it takes from one, and a table this campaign enumerated by hand
-    // would be a second author of the admission frame. A superset costs three
-    // extension pages and nothing else -- the compiler moves only the keys the
-    // message actually carries, and a program id and the fee payer are never
-    // movable.
-    let mut routing_addresses: Vec<solana_sdk::pubkey::Pubkey> = session
-        .accounts
-        .values()
-        .map(|account| crate::plan::pubkey(&account.address))
-        .collect::<Result<Vec<_>>>()?;
-    routing_addresses.sort_unstable();
-    routing_addresses.dedup();
-    let (_, admission_tables) = crate::market::publish_routing_table_over_v1(
-        &mut session.rpc,
-        &session.authority,
-        "user-position admission",
-        &routing_addresses,
-        &mut session.transactions,
-    )?;
-    let admission_routing: Vec<solana_sdk::pubkey::Pubkey> =
-        admission_tables.iter().map(|table| table.key).collect();
+    // The table is not kept: it cost six transactions per run and changed
+    // nothing, and unproven machinery in front of a wall is how a tier stops
+    // being able to say what its own numbers mean.
     spine::admit_strangers(
         &mut session.rpc,
         &context,
@@ -894,7 +878,7 @@ fn campaign(
         &strangers,
         payer,
         &payer_key,
-        &admission_routing,
+        &[],
     )?;
     spine::fill(&mut session.rpc, &context, &mut spine, &strangers[0].report)?;
     spine::settle_fee(

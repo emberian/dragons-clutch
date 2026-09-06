@@ -77,7 +77,23 @@ impl DeployedClosureRentRuleV1 {
 /// release gate certifies and the deploy runbook records. Append-only: a row
 /// describes a cohort that exists on some chain, and deleting one would make
 /// that cohort's closure receipts unpredictable again.
-const LIVE_RENT_SYSVAR_CLOSURE_RESOLUTION_ELF_SHA256_V1: [&str; 1] = [
+const LIVE_RENT_SYSVAR_CLOSURE_RESOLUTION_ELF_SHA256_V1: [&str; 2] = [
+    // cohort-17, 846,656 bytes, deployed to devnet as
+    // gYWBUAqMzr5V6HzvB8xhTETUZGdPSDr7dD5A3raqPGt at slot 493,941,536, from
+    // deploy commit 932edc83fc5a108fa362be216c84a3b0f78f29b4. These are also
+    // cohort-16's and cohort-16.1's bytes, which never reached a closure.
+    //
+    // The rule is MEASURED IN THE BYTES' OWN SOURCE, not inherited: at that
+    // commit `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:367`
+    // computes `ledger_rent_lamports = rent.minimum_balance(
+    // RESOLUTION_FUNDING_LEDGER_BYTES)` and `programs/dclutch-core-sbf/src/
+    // resolution.rs:542` does the same. The one place a funded rate is named in
+    // that program is `pre_market_funding_v1.rs:146`, which DERIVES it when the
+    // ledger is CREATED -- that is how the rate reaches offset 12 and it is not
+    // the closure. So the closing ledger is priced from the Rent sysvar of the
+    // executing slot, which is this list. RENT-FLOORS/PROGRAMS-16 has not
+    // landed, and FUNDED_RATE_CLOSURE_RESOLUTION_ELF_SHA256_V1 is still empty.
+    "7be8a398be52342546a953cccc04b7276411041eca0081990d1e43be5ed7c34b",
     // cohort-15, 829,888 bytes, deployed to devnet as
     // 24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn at slot 492,745,773. The
     // deploy commit is 1cae26fd61defbefd20bcd52acc449b6e94e64ed, which predates
