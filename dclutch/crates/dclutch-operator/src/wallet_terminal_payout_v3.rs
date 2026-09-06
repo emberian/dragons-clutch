@@ -862,29 +862,72 @@ fn validate_custody_route(
     // account with the same rule; see `rational_terminal_v3::token_amount`.
     let recipient = TokenAccount::parse_base_or_immutable_owner(input.recipient_token_bytes)
         .map_err(WalletTerminalPayoutErrorV3::Token)?;
-    if route.custody_replay != expected_replay
-        || route.custody_authority != expected_authority
-        || route.hoard != expected_hoard
-        || replay.caller_role != CustodyCallerRoleV1::Claims
-        || replay.release_set != market.release_set
-        || replay.market != market.logical_market
-        || replay.realm != market.realm_id
-        || replay.context != market.custody_context
-        || replay.caller_program != route.claims_program.to_bytes()
-        || replay.next_revision == u64::MAX
-        || replay.generation != market.generation
-        || hoard.mint != route.collateral_mint.to_bytes()
-        || hoard.owner != route.custody_authority.to_bytes()
-        || hoard.state != AccountState::Initialized
-        || recipient.mint != route.collateral_mint.to_bytes()
-        || recipient.owner != input.recipient_owner
-        || recipient.state != AccountState::Initialized
-        || TokenProgram::parse(route.token_program.to_bytes()).is_err()
-        || route.custody_program == Pubkey::default()
-        || route.token_program == Pubkey::default()
-        || route.recipient == Pubkey::default()
-        || route.terminal_certificate == Pubkey::default()
-    {
+    // TWENTY-TWO CONJUNCTS, ONE CODE, AND NOW A NAMED CAUSE ON THE REFUSING
+    // PATH. `WalletTerminalPayoutErrorV3::Custody` is what an operator sees, and
+    // the journey tier met it on hbox `20260906T161551Z` with nothing to act on:
+    // "wallet terminal payout builder: Custody" is a search, not a location. The
+    // wire cannot carry the distinction -- this is one host-side variant an
+    // operator reads, not a program code -- so the cause goes on the refusing
+    // path, which is the same answer `authenticate_close_funding` gave in
+    // `dclutch-resolution-core-v3-operator` ("close-funding refused: {conjunct}")
+    // after cohort-15D read `Resolution CloseFund: Funding` and could say only
+    // that the wall was somewhere in three things. The code on the wire is
+    // unchanged and every conjunct still refuses.
+    let conjunct = if route.custody_replay != expected_replay {
+        Some(
+            "the route's Claims-role Custody replay is not the one the market's own coordinates derive",
+        )
+    } else if route.custody_authority != expected_authority {
+        Some("the route's Custody authority is not the one the market and release set derive")
+    } else if route.hoard != expected_hoard {
+        Some(
+            "the route's Hoard is not the HoardPrincipal vault this market's custody context derives",
+        )
+    } else if replay.caller_role != CustodyCallerRoleV1::Claims {
+        Some("the replay's caller role is not Claims")
+    } else if replay.release_set != market.release_set {
+        Some("the replay's release set is not the aggregate's")
+    } else if replay.market != market.logical_market {
+        Some("the replay names another logical market")
+    } else if replay.realm != market.realm_id {
+        Some("the replay names another Realm")
+    } else if replay.context != market.custody_context {
+        Some("the replay's custody context is not the aggregate's")
+    } else if replay.caller_program != route.claims_program.to_bytes() {
+        Some("the replay's caller program is not the route's Claims program")
+    } else if replay.next_revision == u64::MAX {
+        Some("the replay's revision cursor is exhausted")
+    } else if replay.generation != market.generation {
+        Some("the replay's generation is not the aggregate's")
+    } else if hoard.mint != route.collateral_mint.to_bytes() {
+        Some("the Hoard holds another mint")
+    } else if hoard.owner != route.custody_authority.to_bytes() {
+        Some("the Hoard is not owned by the Custody authority")
+    } else if hoard.state != AccountState::Initialized {
+        Some("the Hoard token account is not initialized")
+    } else if recipient.mint != route.collateral_mint.to_bytes() {
+        Some("the recipient token account holds another mint")
+    } else if recipient.owner != input.recipient_owner {
+        Some(
+            "the recipient token account is owned by somebody other than the stated recipient owner",
+        )
+    } else if recipient.state != AccountState::Initialized {
+        Some("the recipient token account is not initialized")
+    } else if TokenProgram::parse(route.token_program.to_bytes()).is_err() {
+        Some("the route's token program is not a token program this protocol admits")
+    } else if route.custody_program == Pubkey::default() {
+        Some("the route's Custody program is the default key")
+    } else if route.token_program == Pubkey::default() {
+        Some("the route's token program is the default key")
+    } else if route.recipient == Pubkey::default() {
+        Some("the route's recipient is the default key")
+    } else if route.terminal_certificate == Pubkey::default() {
+        Some("the route's terminal certificate is the default key")
+    } else {
+        None
+    };
+    if let Some(conjunct) = conjunct {
+        eprintln!("wallet-terminal-payout custody refused: {conjunct}");
         return Err(WalletTerminalPayoutErrorV3::Custody);
     }
     Ok(replay)

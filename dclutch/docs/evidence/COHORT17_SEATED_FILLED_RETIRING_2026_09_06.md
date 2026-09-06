@@ -641,3 +641,203 @@ stays RED until someone spends an hbox link build on `--capture` twice and
     rent returned by the two closes                +2,926,080 lamports
       to CuSvrfJ3rTEdkwNGW9EEWhTX9Y4db3iiy6RHDgcTDRdB, the beneficiary the
       replays themselves name -- not to the payer, and not to this lane
+
+---
+
+# ADDENDUM, 2026-09-06 evening. Lane COHORT-17C. Devnet evidence, not mainnet evidence.
+
+Cohort-17's market `9e8fTH75…` can never be retired: `ResolutionCloseFund` ran
+before `DirectCloseCapability` and destroyed an input that stage decodes and
+preserves. PROGRAMS-18A ruled the order, gave it one author, and the ruling is
+HOST-ONLY — the same eight ELFs, the same release gate `a98ed988…`, a driver
+rebuild. So this lane founded a SECOND refunding Direct market on the same
+cohort, at the same release set, and drove it to the boundary the ruled order
+opens.
+
+**The market reached `Retiring` with both funding ledgers alive — a state no
+market on any chain has held — and stopped inside `DirectCloseCapability` on a
+frame ordering, located to one conjunct with its three numbers.** No market has
+been retired on any chain, and this document says so.
+
+This addendum does not edit anything above it.
+
+## 1. THE SECOND MARKET, AND WHAT DID NOT MOVE
+
+    driver     rebuilt three times; the last is 8e5bd2259 plus this lane's split
+               discriminant, detached worktree, debug, toolchain 1.97.1,
+               CARGO_TARGET_DIR the live tree's target/
+    candidate  932edc83f UNCHANGED
+    gate       a98ed988f9d266084b3835dc5f838a03c8513810669395373960d58ce7df6be3 UNCHANGED
+    deployed   the same eight ids at the same eight slots; no redeploy, no re-release
+
+    Open Market      AvKSizb7j3VCzB41bKxYXntoXyRojDVM9UzyjgFvAadR
+    window record    9CLAg1X6hpQjGrEszWM59Dupn7zRkGkNBwJRNqWT1McX
+    window           1788703359 → 1788705159 (14:02:39Z, 1,800 s)
+    collateral mint  9qJXBAcyeTJn3hq7sGb8mgh1dkXAp9m2UqLjiLtMipzg
+    Hoard vault      86ZYfCNMX5uwc9NFRbDk5oUBF8NU3bVYkQkPLHwzs6Ub
+    Claims aggregate DbnUvBnHvJy1SuxCMnF6yewFWmB9JeBudFMXQyizzjso
+    failure escrow   68d1nDjNAczqGLCMw3HEHbLXEChdc6j7HZmnvCvpB1GU
+    routing table    EX5MafgFsroPVwV9aaNMqYdum4PnKPHYytPNrNsPnBdU
+    Direct root      CjwSZR42g29oDzdax89GAX7r2RckcKu5T6h8JXcGkV1s
+    funding ledgers  7zJ8t92AzhC7BRonwMmE1sYZ8XUbjyvLqVLkJ7gmoM9N (Trading, mask 0b0001)
+                     4Sng5gjNDBK2jS6dRfuRZ4YF2AmGTvuLsqMWNoifNdbg (Resolution, mask 0b1110)
+
+The founding derived the same terms market 1 derived — reserve 1,000,000,002
+atoms, budget 500,000,001, basis width 4, payout scale 3, 166,666,667 complete
+sets exact — in **83 transactions for 0.155320329 SOL**, a fifth of market 1's,
+because the cohort's published records already existed and the campaign skipped
+them.
+
+| act | signature | slot | CU |
+| --- | --- | --- | --- |
+| activate | `2tc1WspUjJfs3ywQJKeHJWZR22qCcFoUthUjjsuCgkZDNqMCb8mQu8DwE13NpTcRpP7HqMZond6jaAs73QgSYppx` | 494,087,716 | 505,377 |
+| prepay certificate | `4dCjMyG4abKhHQVXzfjwfwk8GHcDvoGCBvv2nafu9PyR9rQPo6k6TFGMzAQa89sQUdTAsS61uDbn5CPdjLCDKcgM` | 494,088,243 | 450 |
+| admit participant-1 | `21tePvWMywdhfVwp2Gxt8YfPaS4f72yR61kEn4FWbihcu2MfUvdimjrwUBNjmEmCWsPFTRypyi42H4fr2LakMJDy` | — | — |
+| admit participant-2 | `62y8KDzGPXW2eCWbZYKMvbDmBxSGZAwcsi8XDYpZBcCD7KApH58Ab7rgVdDMipKk4pGhMpfZRx3v5QLSMa4Uf25y` | — | — |
+| **fill (Hot)** | `1KkuAiBYEiLpF38iDbK6r84WwWgJjBHFtdaKJvfpPdMKaQZru2PuTGsmzEHAN4hKGDbp6BteM49e1SzwCQVAkD1` | 494,092,572 | **1,116,620** |
+| fee settlement | `28Cy9iPpG9LH7jyBqVHB7PQVBjwVCihdSoy6i8bcxo5nfNk2qAR3Z8Ws82Ps4msBy5VksERvrgUdUkBNw3FrPRbq` | 494,092,706 | 90,353 |
+| relay capture | `4GmiTe4nM1toijRV7nMH34SMRPsBFjG5nQKEGBEef2sLf2BvuityZsdyuPabfBrfUi3DgCre7wunRUQB6aCggLmw` | 494,099,419 | 114,773 |
+| relay settle | `3QepdGiXfauZtcLfBkRgik8ojeoCR6SAKbKTxyJv3oNpHx4oHpXPCwsk2n5ixcK3jQpjED4PHvstwCSTZHDgD7s9` | 494,150,841 | 138,933 |
+| admit terminal | `2q1ZnpJAYJvnYqsHGb62kdVVCFrwaJpisE7rwVAToH5wzzJNx2DPZBLhjMiqGPuTmfUGGCDJaAViCPKHgCqSrLbo` | 494,151,126 | 76,285 |
+| custody replay | `5BKhaEC86PK52y58rDaPSVQQE2jPjCBsZQCCHBVSBa9X4N6714kvmtkFEbyd8LnyHtueqxpFaiQ1y1xdrUjT951P` | 494,151,055 | 85,375 |
+| close maker (seller) | `rrMpe3KSU4oeZxiFPTj4scA1v5hxqyMVnZSBtzTzKB85cwECtFpBpFtYkVxo1Zv6vmxAdct5WatgkMfki3Y65Ws` | 494,156,357 | 98,248 |
+| close maker (buyer) | `2KK9CT8EUKnbg2Xiyb3b2g9NgNYhbUUoiMHzLMuFhsAwg8Xgb4ytCc6qrN2usrqzrPJcnSpx5AT5eBVkVZ4H5y8B` | 494,156,447 | 98,248 |
+| **CoreBeginRetiring** | `zH6efxzcP72NcZWdeKfEkTvsYQAkJNQfuxy31bsrtZEkGhnLkcc5ug6NiETfh7UkHhApCzc2kLVcoyV33KN4EMb` | — | — |
+| **DirectBeginRetiring** | `xfXSwkDpZJSeDofcSxoWrQPEkACPEhXZTHgvY2gzQLL43UQ52DSpwsZa3p5Kz95fcXHiKyxEEi5zSiLoKepgvkk` | — | — |
+
+**`ResolutionCloseFund` DID NOT RUN, and that is the reorder working.** In
+market 1 it was stage three and it destroyed the ledger stage four preserves. In
+market 2 the terminal sequence executed `CoreBeginRetiring`, then
+`DirectBeginRetiring`, then went to `DirectCloseCapability` — the ruled order,
+on a chain, for the first time.
+
+## 2. THE MARKET RESOLVED TO OUTCOME 2 AND THE STRANGER WAS PAID NOTHING, HONESTLY
+
+The certificate `Avf7aMpuGGAFRPze1JiWFUGLQiv97UfgN8qsyTR5YqJB` reads **kind 1**
+(`ResolutionSuccess`, not the failure kind 4), **selector 2**, result numerator
+10,686,301,883 over denominator 1, observed at 1788703585. The market's cuts are
+10200 and 10600 over a denominator of 100, so 106.86 is the top ordinary cell
+and index 2 is the honest selector's answer.
+
+The stranger, participant-2, had bought **200 atoms at outcome 1** and holds
+`[0, 200, 0, 0]`. Their terminal payout ran and paid **0 atoms**
+(`64KrrWoPouaaQJUe9uVGgbkwdwLm74aB2k3YeVaj64HgidmdYyYpFYLsQkYF86VnsmYv9dd4fKCn4vHJKmWs6h2i`,
+slot 494,151,571, 159,803 CU). That is not a failure of the market; it is the
+market. Cohort-17's market 1 resolved to outcome 1 and its stranger was paid
+600; this one resolved to 2 and this one was not. **A market whose stranger can
+only ever be paid is not a market.**
+
+The founder then claimed all three ordinary indices and the Hoard reached zero:
+
+| claim index | atoms | signature | slot | CU |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | `24XTzDiJCccCKydY7S7CQQ8sq1pGuLYHz1BfoGK2gc3ntrb7D3d1NCJXHaFJqgsXUtj1SyJALN6CWrjvmMmPRvqD` | 494,152,679 | 159,803 |
+| 1 | 0 | `5LszQzdeN8bXkJwWfSpvVk25dHkpDoKPuhQxDdj9g78DpXqHgyMyXEYDzSSVu6KtREeytBq2eUex29CmoYL61o3s` | 494,153,035 | 159,803 |
+| **2** | **500,000,001** | `64M1L5BxhdTV5qKE9qFYNUuH4B538BWQaGYXqkwqeYvAgV7X8z6vMch2nVtRXMTkKiFHi2KDHnmu2zsbZfGw2pgn` | 494,153,397 | 222,897 |
+
+Census at the terminal boundary, read off chain: **L1 holds** (1,000,000,002
+atoms across 5 accounts == Mint supply), **L3 holds** (4 Positions sum to
+`[0, 0, 0, 166666667]`), Hoard **0**, and L4 reports INAPPLICABLE by name
+because settlement discharged the liability it is stated about. The escrow at
+`68d1nDjN…` holds the whole failure column and the founder was issued no failure
+claim; at the founding boundary it read `[0, 0, 0, 166666667]` against a founder
+`[166666667, 166666467, 166666667, 0]` and a stranger `[0, 200, 0, 0]`.
+
+## 3. THE WALL: ONE CONJUNCT, THREE NUMBERS, AND A FRAME THAT DISAGREES WITH ITS OWN RULE
+
+    Direct close caller preflight: CloseFundingMasks(4, 15, [14, 1], InvalidDependency)
+
+`validate_funding_ledger_masks_v2` orders the two ledger masks by their lowest
+selected entry index and refuses a pair that is not ascending
+(`crates/dclutch-market/src/capability_manifest/funding.rs:1577`). The three
+numbers are the manifest entry count, the selected entry's required dependency
+union, and the masks in the order the frame presents them:
+
+- **entry count 4** and **required union `0b1111`**. The manifest's entry 0
+  carries `dependency_count 3` and the ascending array `[1, 2, 3]`, read off
+  `D2S8BHbVsPxzVnRE2nPEqQF4RtFv3jCRoEW6mMHCxKcS` at
+  `CAPABILITY_ENTRY_DEPENDENCY_COUNT_OFFSET_V1`. **`manifest-edges`'s verifier is
+  satisfied on a real market for the first time**, and its closure is every bit.
+- **masks `[0b1110, 0b0001]`**. The Resolution dependency ledger is presented
+  FIRST and the Trading selected ledger second.
+- and the Direct capability root reads **entry index 0** at
+  `CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET`, where
+  `selected_funding_ledger_leads_v1` says the SELECTED ledger leads.
+
+So the frame contradicts the rule the driver states one function away, and it is
+a HOST disagreement: no program was asked and none was changed. It could not
+have been found before, because it needs a market at `Retiring` with **two live
+physical funding ledgers**, which is exactly the coverage PROGRAMS-18A named as
+owed — cohort-17's market 1 reached this preflight with its Resolution ledger
+already closed and refused on the zero-byte account first.
+
+**Before the split there was nothing to say which of twelve calls produced
+`Capability(InvalidDependency)`.** `7a4fff006` gives the funding walk's calls
+their own names and gives the mask partition its numbers; the two lines above
+are that commit's whole output on its first run.
+
+## 4. FIVE RUNBOOK DEFECTS AND ONE HOST DEFECT, EACH FOUND BY RUNNING A SECOND MARKET
+
+1. **`build-sim-config.py` named one market implicitly** — `<job>/market/`
+   literally — so a second Direct market got a config naming the FIRST market.
+   Repaired with `--market-dir`; `sim-config` and `admissions` now fan out per
+   market (`843ceb73a`).
+2. **The same repair left three `job / "sim"` literals behind `--work-dir`**, so
+   the config was written with market 1's Position addresses and aimed market 2's
+   admissions at market 1's reports. One `work_dir` now (`b8e07f89d`).
+3. **`census` blocked `relay-capture`, which is bound by the market's WINDOW.**
+   A read in front of a deadline spends the deadline. The edge is deleted and
+   `arm-relay` — whose `input-capture.json` the capture actually sends — blocks
+   it instead (`e1d3712e1`).
+4. **Two rows whose shape was `once` and whose act was not** (`ae879936c`): the
+   fill's session is nine durable stages and `once` drove ONE, printed exit zero
+   and wrote GREEN over an unfilled market; and the prepay certificate is a
+   plan-then-sign pair whose planned report the row's own `backup; rm -rf`
+   deleted between the two runs, so it could never sign. `journal` and
+   `attempts`.
+5. **A window is not a sprint** (`29bbb2a53`). `relay-capture` fired six attempts
+   in thirty seconds of an 1,800-second window and called it a failure. Both
+   cohort-17 markets exhausted the six and landed on the next try — market 1 at
+   652 s into its window refusing `ProviderFreshness` 0x8012 six times first,
+   market 2 at 523 s refusing `ProviderWindow` 0x8011 six times first, and both
+   of those codes say in their own doc comments that they are "no answer rather
+   than a wrong one". A `wait:` row now paces 60 attempts against the window's
+   own deadline.
+6. **THE HOST DEFECT THAT ONLY A SECOND MARKET COULD HAVE** (`8e5bd2259`). The
+   capability seal is ONE ACCOUNT PER RELEASE SET: both markets carry
+   `capabilitySeal DMS8YN3RNsDRHdpy5VVhrGwRUQD7pThP893nwhQ78p3u`, market 1
+   published it, and market 2's session observed it — `phase: finalized`, null
+   `expectedSignature` — and signed **eight** mutations where
+   `authenticate_embedded_direct_mutations_v1` demanded
+   `extension_count + 6` = nine. `close-maker` refused "embedded Direct evidence
+   did not own the exact setup/ALT/seal/Hot mutation count", so no second market
+   on any cohort could have had its maker roots closed, and that is the whole
+   distance between a filled market and a retired one. Both shapes are admitted
+   now, the refusal names both, and the Hot row's ACTION INDEX is unmoved at
+   `extension_count + 4` because the session still HAS a seal stage — only
+   whether it was signed moves.
+
+And one restatement of the terminal order that PROGRAMS-18A's sweep did not
+reach was already found and fixed in this tree by the journey tier
+(`55225a504`) before this lane's first pass; this lane paid for it only with a
+driver rebuild, and no chain act was attempted by the refused pass.
+
+## 5. THE LEDGER
+
+    payer   2.004789706 → 1.676102937   (-0.328686769 over 83 founding
+            transactions, the activation, the prepay, two admissions and their
+            capital, the nine-stage fill, the fee settlement, seven captures,
+            the settle, admit-terminal, the custody replay, four payouts, two
+            maker closes and seven terminal-sequence transactions)
+    deployer 26.572399090   UNCHANGED. This lane deployed nothing.
+
+## 6. WHAT THE NEXT LANE INHERITS
+
+Market `AvKSizb7…` stands at `DCLTCOR3` **phase 3 Retiring** with
+`outstanding_capabilities = 1`, Hoard 0, three ordinary columns discharged, the
+failure column seated, zero open maker roots, **both funding ledgers alive**,
+and a frozen terminal ALT with `CoreBeginRetiring` and `DirectBeginRetiring`
+finalized in its journal. It is the first market ever to hold that state, and
+unlike `9e8fTH75…` **nothing about it is destroyed**: the one thing in front of
+`DirectCloseCapability` is which of two host authors owns the funding slice's
+order, and the refusal now names the conjunct and prints the three numbers.

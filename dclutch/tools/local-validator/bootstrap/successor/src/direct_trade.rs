@@ -5833,14 +5833,36 @@ fn authenticate_embedded_direct_mutations_v1(
         .checked_add(19)
         .ok_or_else(|| refusal("embedded Direct extension count overflowed"))?
         / 20;
-    let expected_mutation_count = extension_count
+    // THE CAPABILITY SEAL IS ONE ACCOUNT PER RELEASE SET, NOT PER MARKET, so a
+    // session that finds it already published signs no seal transaction and its
+    // evidence carries one row fewer. Measured 2026-09-06 on cohort-17: market 1
+    // published `DMS8YN3RNsDRHdpy5VVhrGwRUQD7pThP893nwhQ78p3u` and market 2 --
+    // the SECOND Direct market on the same cohort -- observed the identical
+    // account, wrote `0006-capability-seal.json` with `phase: finalized` and a
+    // null `expectedSignature`, and drove eight mutations instead of nine. The
+    // count was `extension_count + 6` and nothing else, so `close-maker` refused
+    // and no second market on any cohort could have had its maker roots closed,
+    // which is what stands between a filled market and `Retired`.
+    //
+    // The discriminator is not a guess: a seal row is in `evidence.mutations`
+    // exactly when this session SIGNED it. Both shapes are admitted and the
+    // refusal names both.
+    let sealed_mutation_count = extension_count
         .checked_add(6)
         .ok_or_else(|| refusal("embedded Direct mutation count overflowed"))?;
-    if evidence.mutations.len() != expected_mutation_count {
+    let unsealed_mutation_count = extension_count
+        .checked_add(5)
+        .ok_or_else(|| refusal("embedded Direct mutation count overflowed"))?;
+    let this_session_sealed = if evidence.mutations.len() == sealed_mutation_count {
+        true
+    } else if evidence.mutations.len() == unsealed_mutation_count {
+        false
+    } else {
         return Err(refusal(
-            "embedded Direct evidence did not own the exact setup/ALT/seal/Hot mutation count",
+            "embedded Direct evidence did not own the exact setup/ALT/seal/Hot mutation count, \
+             with or without the capability seal this session may not have had to sign",
         ));
-    }
+    };
     let mut previous_slot = 0_u64;
     for (index, row) in evidence.mutations.iter().enumerate() {
         if evidence
@@ -5900,14 +5922,21 @@ fn authenticate_embedded_direct_mutations_v1(
                     extension_count + 1,
                     None,
                 )
-            } else if ordinal == extension_count + 2 {
+            } else if ordinal == extension_count + 2 && this_session_sealed {
                 (
                     "capability-seal",
                     DirectTradeStageV1::CapabilitySeal,
                     extension_count + 3,
                     None,
                 )
-            } else if ordinal == extension_count + 3 {
+            } else if ordinal == extension_count + 2 || ordinal == extension_count + 3 {
+                // The Hot row's ACTION INDEX does not move when the seal was
+                // already published: the session still has a capability-seal
+                // stage and still numbers the Hot after it. Only whether the
+                // seal was signed -- and so whether it is a mutation -- moves.
+                if (ordinal == extension_count + 3) != this_session_sealed {
+                    return Err(refusal("embedded Direct mutation order was not total"));
+                }
                 ("hot", DirectTradeStageV1::Hot, extension_count + 4, None)
             } else {
                 return Err(refusal("embedded Direct mutation order was not total"));
@@ -5966,7 +5995,7 @@ fn authenticate_embedded_direct_mutations_v1(
     let expected_activation_index = extension_count
         .checked_add(2)
         .ok_or_else(|| refusal("embedded Direct activation index overflowed"))?;
-    let (freeze_index, seal_index) = freeze_and_seal_mutation_indices_v1(extension_count);
+    let (freeze_index, successor_index) = freeze_and_seal_mutation_indices_v1(extension_count);
     let freeze_slot = evidence
         .mutations
         .get(freeze_index)
@@ -5974,8 +6003,8 @@ fn authenticate_embedded_direct_mutations_v1(
         .slot;
     let seal_slot = evidence
         .mutations
-        .get(seal_index)
-        .ok_or_else(|| refusal("embedded Direct capability-seal mutation disappeared"))?
+        .get(successor_index)
+        .ok_or_else(|| refusal("embedded Direct mutation after the lookup freeze disappeared"))?
         .slot;
     authenticate_lookup_activation_slot_order_v1(
         activation
@@ -6030,7 +6059,8 @@ fn authenticate_embedded_direct_mutations_v1(
 /// action rows: `replay-setup` and `token-setup`.
 const DIRECT_SETUP_MUTATION_COUNT_V1: usize = 2;
 
-/// Where the lookup freeze and the capability seal sit in `evidence.mutations`.
+/// Where the lookup freeze, and the first action signed after it, sit in
+/// `evidence.mutations`.
 ///
 /// The action ordinals this function is derived from -- freeze at
 /// `extension_count + 1`, seal at `extension_count + 2` -- are ordinals into
@@ -6040,6 +6070,13 @@ const DIRECT_SETUP_MUTATION_COUNT_V1: usize = 2;
 /// close refused "embedded Direct lookup activation was outside the
 /// freeze-to-seal interval", having compared it to the third `lookup-extend`
 /// and the `lookup-freeze` instead of the freeze and the seal.
+///
+/// The SECOND index is the freeze's successor and not "the seal" by name. When
+/// this session signed the capability seal it is the seal; when the seal was
+/// already published for this release set it is the Hot. The invariant is the
+/// same either way and is what the interval was always about: the activation
+/// was observed after the table was frozen and before the next thing that
+/// used it.
 const fn freeze_and_seal_mutation_indices_v1(extension_count: usize) -> (usize, usize) {
     (
         DIRECT_SETUP_MUTATION_COUNT_V1 + extension_count + 1,
@@ -7260,14 +7297,14 @@ mod tests {
     use solana_program::pubkey::Pubkey;
 
     use super::{
-        DirectClaimBalanceEvidenceV1, DirectFinalizedMutationEvidenceV1,
-        DirectLookupActivationEvidenceV1, DirectPositionTransitionEvidenceV1,
-        DirectTradeExpectedPoststateV1, DirectTradeFinalizedEvidenceV1, DirectTradeJournalPhaseV1,
-        DirectTradeJournalV1, DirectTradeObservedPoststateV1, DirectTradeStageV1,
-        JOURNAL_SCHEMA_V1, OWNED_EVIDENCE_SCHEMA_V1, OWNED_JOURNAL_SCHEMA_V1,
-        OWNED_PRIVATE_SESSION_SCHEMA_V1, OWNED_PUBLIC_MANIFEST_SCHEMA_V1,
-        authenticate_direct_claim_schedule_v1, authenticate_direct_history_v1,
-        authenticate_embedded_direct_evidence_identity_v1,
+        DIRECT_SETUP_MUTATION_COUNT_V1, DirectClaimBalanceEvidenceV1,
+        DirectFinalizedMutationEvidenceV1, DirectLookupActivationEvidenceV1,
+        DirectPositionTransitionEvidenceV1, DirectTradeExpectedPoststateV1,
+        DirectTradeFinalizedEvidenceV1, DirectTradeJournalPhaseV1, DirectTradeJournalV1,
+        DirectTradeObservedPoststateV1, DirectTradeStageV1, JOURNAL_SCHEMA_V1,
+        OWNED_EVIDENCE_SCHEMA_V1, OWNED_JOURNAL_SCHEMA_V1, OWNED_PRIVATE_SESSION_SCHEMA_V1,
+        OWNED_PUBLIC_MANIFEST_SCHEMA_V1, authenticate_direct_claim_schedule_v1,
+        authenticate_direct_history_v1, authenticate_embedded_direct_evidence_identity_v1,
         authenticate_lookup_activation_slot_order_v1, direct_chaos_mutation_v1,
         direct_evidence_digest_v1, direct_evidence_schema_v1, direct_journal_schema_v1,
         direct_private_schema_v1, direct_public_schema_v1, expected_stage_v1,
@@ -7311,6 +7348,57 @@ mod tests {
             assert_eq!(
                 kinds[seal], "capability-seal",
                 "{lookup_addresses} addresses: index {seal} is not the seal"
+            );
+        }
+    }
+
+    /// THE SEAL IS NOT THIS SESSION'S TO SIGN TWICE. The capability seal is one
+    /// account per release set, so the SECOND Direct market on a cohort finds it
+    /// published and drives `extension_count + 5` mutations, with the Hot row
+    /// standing where the seal stood. The freeze's successor index is then the
+    /// Hot, and it is still the upper bound the lookup activation must precede.
+    ///
+    /// Red before the repair: the count guard admitted only
+    /// `extension_count + 6`, so cohort-17's market 2 refused `close-maker` at
+    /// "embedded Direct evidence did not own the exact setup/ALT/seal/Hot
+    /// mutation count" and no second market on any cohort could reach `Retired`.
+    #[test]
+    fn a_session_that_did_not_sign_the_seal_puts_the_hot_where_the_seal_stood() {
+        for lookup_addresses in [1_usize, 20, 21, 40, 57, 61] {
+            let extension_count = lookup_addresses.div_ceil(20);
+            let mut sealed = vec!["replay-setup", "token-setup", "lookup-create"];
+            sealed.extend(std::iter::repeat_n("lookup-extend", extension_count));
+            sealed.push("lookup-freeze");
+            sealed.push("capability-seal");
+            sealed.push("hot");
+            let mut unsealed = sealed.clone();
+            unsealed.remove(unsealed.len() - 2);
+
+            assert_eq!(sealed.len(), extension_count + 6);
+            assert_eq!(unsealed.len(), extension_count + 5);
+
+            let (freeze, successor) = freeze_and_seal_mutation_indices_v1(extension_count);
+            assert_eq!(sealed[freeze], "lookup-freeze");
+            assert_eq!(unsealed[freeze], "lookup-freeze");
+            assert_eq!(
+                sealed[successor], "capability-seal",
+                "{lookup_addresses} addresses: a session that sealed puts the seal here"
+            );
+            assert_eq!(
+                unsealed[successor], "hot",
+                "{lookup_addresses} addresses: a session that did not seal puts the Hot here"
+            );
+            // And the ladder the authenticator walks agrees with both lists:
+            // the Hot sits at ordinal `extension_count + 3` when the seal was
+            // signed and at `extension_count + 2` when it was not, and its
+            // ACTION INDEX is `extension_count + 4` either way.
+            assert_eq!(
+                sealed.len() - DIRECT_SETUP_MUTATION_COUNT_V1 - 1,
+                extension_count + 3
+            );
+            assert_eq!(
+                unsealed.len() - DIRECT_SETUP_MUTATION_COUNT_V1 - 1,
+                extension_count + 2
             );
         }
     }

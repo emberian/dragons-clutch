@@ -1134,26 +1134,90 @@ fn campaign(
 
     // ---------------------------------------------- the spine: the redemption
     //
-    progress.entering("redemption: a holder redeems through wallet-signed terminal settlement");
-    // The stranger is paid before anything retires, because retirement refuses
-    // to compile at all while the Hoard holds an atom that belongs to a holder.
-    spine::redeem(
-        &mut session.rpc,
-        &context,
-        &mut spine,
-        "founding-founder",
-        crate::substrate::load_keypair(&spine_key(&checked.report, "founding-founder")?)?.pubkey(),
-        addresses.founder_wallet,
-        0,
-        payer,
-        &payer_key,
-    )?;
+    progress.entering("redemption: every holder of the winning outcome is paid");
+    // EVERY HOLDER, AND THE RECIPIENT IS AN ACCOUNT THE HOLDER OWNS.
+    //
+    // Two corrections the chain made, both on hbox. The recipient was
+    // `addresses.founder_wallet`, which is the FOUNDING's `collateral_wallet`
+    // and is owned by the founding authority rather than by the
+    // `founding-founder` role whose Position the payout debits; the builder
+    // refused `WalletTerminalPayoutErrorV3::Custody` and, once that code named
+    // its conjunct, said which of its twenty-two it was: *the recipient token
+    // account is owned by somebody other than the stated recipient owner*
+    // (`20260906T163803Z`). The accounts a holder owns are the Direct token
+    // accounts the fill's token setup created, and the fill's own public
+    // manifest names them beside their owners.
+    //
+    // And one payout is not the whole redemption: `BeginRetiring is blocked:
+    // Claims supply at index 0 is 166666667; produce and execute wallet
+    // terminal payouts first` (`20260906T155320Z`) is the protocol saying the
+    // retirement is gated on the winning outcome's whole supply, so both sides
+    // of the fill redeem before anything retires.
+    let fill_manifest = spine_work.join("fill").join("direct-trade-public.json");
+    let holders: Vec<(
+        String,
+        String,
+        solana_sdk::pubkey::Pubkey,
+        solana_sdk::pubkey::Pubkey,
+    )> = match std::fs::read(&fill_manifest)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+    {
+        Some(document) => {
+            let key = |pointer: &str| -> Option<solana_sdk::pubkey::Pubkey> {
+                document
+                    .pointer(pointer)
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|text| text.parse::<solana_sdk::pubkey::Pubkey>().ok())
+            };
+            [
+                (
+                    "seller",
+                    "founding-founder",
+                    "/seller/maker",
+                    "/route/custody/sellerToken",
+                ),
+                (
+                    "buyer",
+                    "participant",
+                    "/buyer/maker",
+                    "/route/custody/buyerToken",
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(holder, role, owner, token)| {
+                Some((holder.to_owned(), role.to_owned(), key(owner)?, key(token)?))
+            })
+            .collect()
+        }
+        None => Vec::new(),
+    };
+    if holders.is_empty() {
+        progress.unexpected_refusals.push(
+            "redemption: the fill left no public manifest, so no holder's own token account could              be named and nothing was redeemed"
+                .to_owned(),
+        );
+    }
+    for (holder, role, owner, recipient) in holders {
+        spine::redeem(
+            &mut session.rpc,
+            &context,
+            &mut spine,
+            &holder,
+            &role,
+            owner,
+            recipient,
+            0,
+            payer,
+            &payer_key,
+        )?;
+    }
     progress.stages.append(&mut spine.stages);
     session.transactions.append(&mut spine.transactions);
     progress.unexpected_refusals.append(&mut spine.refusals);
     ledger.observe(
         &mut session.rpc,
-        "redemption: a holder redeems through wallet-signed terminal settlement",
+        "redemption: every holder of the winning outcome is paid",
         0,
         0,
         LamportClaimV1::inapplicable(

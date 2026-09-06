@@ -32,6 +32,10 @@
     {
       "signature": "2dUc4EkP2L6JjTVE2GdfjPEagTwZJkW2XSuZXj7QjfEgx2wvXMiWDGNDLUu73SRKSnqv6G2XdEqcmvvwRJ5QAu1R",
       "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4dCjMyG4abKhHQVXzfjwfwk8GHcDvoGCBvv2nafu9PyR9rQPo6k6TFGMzAQa89sQUdTAsS61uDbn5CPdjLCDKcgM",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
     }
   ],
   "records": [
@@ -210,7 +214,616 @@
         "claims/terminal_settlement_v3::process"
       ],
       "not_corroborated": []
+    },
+    {
+      "stage": "dcltdmc1-494059660",
+      "magic": "DCLTDMC1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "771oHXjD5fXd9vx6rakDq48vk5hV485ydaFyJQ5XT75vapaKSjWnb8UVS2mAwXG4qj7wNSBGHafBM497oWk4oDD",
+      "instruction_data_len": 96,
+      "routes": [
+        "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTDMC1, and the tree dispatches trading/direct_close_maker_v1::process_direct_close_maker_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494059660,
+      "compute_units": 98248,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltdmc1-494059757",
+      "magic": "DCLTDMC1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "5NJTCZ3z2hhvzVCeWNWEEUyCCN2Z6T2HVBZ5uuQSfQQbk7cHg8wa2RbDxaDbHwb7SKCbHvTPi68BPjb1L5BR7WWk",
+      "instruction_data_len": 96,
+      "routes": [
+        "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTDMC1, and the tree dispatches trading/direct_close_maker_v1::process_direct_close_maker_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494059757,
+      "compute_units": 98248,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-activatecapability-494087716",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "2tc1WspUjJfs3ywQJKeHJWZR22qCcFoUthUjjsuCgkZDNqMCb8mQu8DwE13NpTcRpP7HqMZond6jaAs73QgSYppx",
+      "instruction_data_len": 528,
+      "routes": [
+        "core/capability::process#CloseCapability",
+        "core/process_instruction",
+        "core/process_instruction#CloseCapability",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 8 = `Action::ActivateCapability`, which selects core/capability::process#CloseCapability, core/process_instruction#CloseCapability. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "ActivateCapability",
+        "tag": 8,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/found::process#Found",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on `Action::Found`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/resolution::process#Retire",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on `Action::AdmitTerminal`, `Action::Retire`, `Action::VerifyReadiness`"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 8 = `Action::ActivateCapability` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 494087716,
+      "compute_units": 505377,
+      "programs_invoked": [
+        "core",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "core/capability::process#CloseCapability",
+        "core/process_instruction",
+        "core/process_instruction#CloseCapability",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltpua1-494088846",
+      "magic": "DCLTPUA1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "21tePvWMywdhfVwp2Gxt8YfPaS4f72yR61kEn4FWbihcu2MfUvdimjrwUBNjmEmCWsPFTRypyi42H4fr2LakMJDy",
+      "instruction_data_len": 328,
+      "routes": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTPUA1, and the tree dispatches trading/user_position_admission_v1::process_user_position_admission_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494088846,
+      "compute_units": 165802,
+      "programs_invoked": [
+        "claims",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltpua1-494088993",
+      "magic": "DCLTPUA1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "62y8KDzGPXW2eCWbZYKMvbDmBxSGZAwcsi8XDYpZBcCD7KApH58Ab7rgVdDMipKk4pGhMpfZRx3v5QLSMa4Uf25y",
+      "instruction_data_len": 328,
+      "routes": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTPUA1, and the tree dispatches trading/user_position_admission_v1::process_user_position_admission_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494088993,
+      "compute_units": 171802,
+      "programs_invoked": [
+        "claims",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dclthot3-494092572",
+      "magic": "DCLTHOT3",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "1KkuAiBYEiLpF38iDbK6r84WwWgJjBHFtdaKJvfpPdMKaQZru2PuTGsmzEHAN4hKGDbp6BteM49e1SzwCQVAkD1",
+      "instruction_data_len": 584,
+      "routes": [
+        "claims/process_instruction",
+        "custody/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTHOT3, and the tree dispatches trading/hot_v3::process_hot_execution_v3 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494092572,
+      "compute_units": 1116620,
+      "programs_invoked": [
+        "claims",
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "custody/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltdfs1-494092706",
+      "magic": "DCLTDFS1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "28Cy9iPpG9LH7jyBqVHB7PQVBjwVCihdSoy6i8bcxo5nfNk2qAR3Z8Ws82Ps4msBy5VksERvrgUdUkBNw3FrPRbq",
+      "instruction_data_len": 96,
+      "routes": [
+        "custody/process_instruction",
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTDFS1, and the tree dispatches trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494092706,
+      "compute_units": 90353,
+      "programs_invoked": [
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "custody/process_instruction",
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltspi1-494099419",
+      "magic": "DCLTSPI1",
+      "program": "resolution",
+      "outcome": "executed",
+      "signature": "4GmiTe4nM1toijRV7nMH34SMRPsBFjG5nQKEGBEef2sLf2BvuityZsdyuPabfBrfUi3DgCre7wunRUQB6aCggLmw",
+      "instruction_data_len": 32,
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to resolution begins with DCLTSPI1, and the tree dispatches resolution/sponsored_push_v1::process_sponsored_push_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494099419,
+      "compute_units": 114773,
+      "programs_invoked": [
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltspi1-494150841",
+      "magic": "DCLTSPI1",
+      "program": "resolution",
+      "outcome": "executed",
+      "signature": "3QepdGiXfauZtcLfBkRgik8ojeoCR6SAKbKTxyJv3oNpHx4oHpXPCwsk2n5ixcK3jQpjED4PHvstwCSTZHDgD7s9",
+      "instruction_data_len": 32,
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to resolution begins with DCLTSPI1, and the tree dispatches resolution/sponsored_push_v1::process_sponsored_push_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494150841,
+      "compute_units": 138933,
+      "programs_invoked": [
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-admitterminal-494151126",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "2q1ZnpJAYJvnYqsHGb62kdVVCFrwaJpisE7rwVAToH5wzzJNx2DPZBLhjMiqGPuTmfUGGCDJaAViCPKHgCqSrLbo",
+      "instruction_data_len": 592,
+      "routes": [
+        "core/process_instruction",
+        "core/resolution::process#Retire"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 3 = `Action::AdmitTerminal`, which selects core/resolution::process#Retire. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "AdmitTerminal",
+        "tag": 3,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/capability::process#CloseCapability",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/found::process#Found",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::Found`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#CloseCapability",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 3 = `Action::AdmitTerminal` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 494151126,
+      "compute_units": 76285,
+      "programs_invoked": [
+        "core"
+      ],
+      "routes_corroborated": [
+        "core/process_instruction",
+        "core/resolution::process#Retire"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dclccr01-494151055",
+      "magic": "DCLCCR01",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "5BKhaEC86PK52y58rDaPSVQQE2jPjCBsZQCCHBVSBa9X4N6714kvmtkFEbyd8LnyHtueqxpFaiQ1y1xdrUjT951P",
+      "instruction_data_len": 48,
+      "routes": [
+        "claims/custody_replay_v1::process",
+        "claims/process_instruction",
+        "custody/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLCCR01, and the tree dispatches claims/custody_replay_v1::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494151055,
+      "compute_units": 85375,
+      "programs_invoked": [
+        "claims",
+        "custody"
+      ],
+      "routes_corroborated": [
+        "claims/custody_replay_v1::process",
+        "claims/process_instruction",
+        "custody/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltdmc1-494156357",
+      "magic": "DCLTDMC1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "rrMpe3KSU4oeZxiFPTj4scA1v5hxqyMVnZSBtzTzKB85cwECtFpBpFtYkVxo1Zv6vmxAdct5WatgkMfki3Y65Ws",
+      "instruction_data_len": 96,
+      "routes": [
+        "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTDMC1, and the tree dispatches trading/direct_close_maker_v1::process_direct_close_maker_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494156357,
+      "compute_units": 98248,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltdmc1-494156447",
+      "magic": "DCLTDMC1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "2KK9CT8EUKnbg2Xiyb3b2g9NgNYhbUUoiMHzLMuFhsAwg8Xgb4ytCc6qrN2usrqzrPJcnSpx5AT5eBVkVZ4H5y8B",
+      "instruction_data_len": 96,
+      "routes": [
+        "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTDMC1, and the tree dispatches trading/direct_close_maker_v1::process_direct_close_maker_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494156447,
+      "compute_units": 98248,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-beginretiring-494154699",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "zH6efxzcP72NcZWdeKfEkTvsYQAkJNQfuxy31bsrtZEkGhnLkcc5ug6NiETfh7UkHhApCzc2kLVcoyV33KN4EMb",
+      "instruction_data_len": 72,
+      "routes": [
+        "core/begin_retiring::process#BeginRetiring",
+        "core/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 6 = `Action::BeginRetiring`, which selects core/begin_retiring::process#BeginRetiring. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "BeginRetiring",
+        "tag": 6,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/capability::process#CloseCapability",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/found::process#Found",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::Found`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#CloseCapability",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/resolution::process#Retire",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::AdmitTerminal`, `Action::Retire`, `Action::VerifyReadiness`"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 6 = `Action::BeginRetiring` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 494154699,
+      "compute_units": 22762,
+      "programs_invoked": [
+        "core"
+      ],
+      "routes_corroborated": [
+        "core/begin_retiring::process#BeginRetiring",
+        "core/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltdbr1-494154825",
+      "magic": "DCLTDBR1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "xfXSwkDpZJSeDofcSxoWrQPEkACPEhXZTHgvY2gzQLL43UQ52DSpwsZa3p5Kz95fcXHiKyxEEi5zSiLoKepgvkk",
+      "instruction_data_len": 320,
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTDBR1, and the tree dispatches trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494154825,
+      "compute_units": 92715,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsq03-494151571",
+      "magic": "DCLTSQ03",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "64KrrWoPouaaQJUe9uVGgbkwdwLm74aB2k3YeVaj64HgidmdYyYpFYLsQkYF86VnsmYv9dd4fKCn4vHJKmWs6h2i",
+      "instruction_data_len": 640,
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLTSQ03, and the tree dispatches claims/terminal_settlement_v3::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494151571,
+      "compute_units": 159803,
+      "programs_invoked": [
+        "claims"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsq03-494152679",
+      "magic": "DCLTSQ03",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "24XTzDiJCccCKydY7S7CQQ8sq1pGuLYHz1BfoGK2gc3ntrb7D3d1NCJXHaFJqgsXUtj1SyJALN6CWrjvmMmPRvqD",
+      "instruction_data_len": 640,
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLTSQ03, and the tree dispatches claims/terminal_settlement_v3::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494152679,
+      "compute_units": 159803,
+      "programs_invoked": [
+        "claims"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsq03-494153035",
+      "magic": "DCLTSQ03",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "5LszQzdeN8bXkJwWfSpvVk25dHkpDoKPuhQxDdj9g78DpXqHgyMyXEYDzSSVu6KtREeytBq2eUex29CmoYL61o3s",
+      "instruction_data_len": 640,
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLTSQ03, and the tree dispatches claims/terminal_settlement_v3::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494153035,
+      "compute_units": 159803,
+      "programs_invoked": [
+        "claims"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsq03-494153397",
+      "magic": "DCLTSQ03",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "64M1L5BxhdTV5qKE9qFYNUuH4B538BWQaGYXqkwqeYvAgV7X8z6vMch2nVtRXMTkKiFHi2KDHnmu2zsbZfGw2pgn",
+      "instruction_data_len": 640,
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process",
+        "custody/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLTSQ03, and the tree dispatches claims/terminal_settlement_v3::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494153397,
+      "compute_units": 222897,
+      "programs_invoked": [
+        "claims",
+        "custody"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process",
+        "custody/process_instruction"
+      ],
+      "not_corroborated": []
     }
   ],
-  "corroborated_route_count": 8
+  "corroborated_route_count": 17
 }

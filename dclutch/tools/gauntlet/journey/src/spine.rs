@@ -1003,6 +1003,7 @@ pub(crate) fn redeem(
     rpc: &mut Rpc,
     context: &SpineContextV1<'_>,
     spine: &mut SpineV1,
+    holder: &str,
     owner_role: &str,
     owner: Pubkey,
     recipient: Pubkey,
@@ -1010,7 +1011,15 @@ pub(crate) fn redeem(
     fee_payer: Pubkey,
     fee_payer_keypair: &Path,
 ) -> Result<()> {
-    let stage = "redemption: a holder redeems through wallet-signed terminal settlement";
+    // ONE STAGE PER HOLDER, and every path this stage writes carries the
+    // holder's name. `BeginRetiring is blocked: Claims supply at index 0 is
+    // 166666667; produce and execute wallet terminal payouts first` (hbox
+    // `20260906T155320Z`) is the protocol saying the retirement is gated on
+    // EVERY holder of the winning outcome being paid, not one of them -- so a
+    // single fixed `payout-input.json` was a shape that could only ever pay the
+    // first.
+    let stage =
+        &format!("redemption: {holder} redeems through wallet-signed terminal settlement") as &str;
     // FIRST USE, ONCE PER MARKET. The payout decodes the Claims-role Custody
     // replay and never creates it, so the creation runs in front of the first
     // payout and nowhere else. The driver is idempotent by refusal rather than
@@ -1057,10 +1066,10 @@ pub(crate) fn redeem(
             return Ok(());
         }
     };
-    let input_path = context.work.join("payout-input.json");
+    let input_path = context.work.join(format!("payout-input-{holder}.json"));
     std::fs::write(&input_path, serde_json::to_vec_pretty(&input)?)?;
-    let journal_dir = context.dir("payout-journal")?;
-    let evidence = context.work.join("payout-evidence.json");
+    let journal_dir = context.dir(&format!("payout-journal-{holder}"))?;
+    let evidence = context.work.join(format!("payout-evidence-{holder}.json"));
     let arguments = vec![
         "--rpc-url".to_owned(),
         context.rpc_url.to_owned(),
@@ -1082,7 +1091,7 @@ pub(crate) fn redeem(
         |_| crate::wallet_terminal_payout_exterior::run(arguments.clone()),
         || evidence.exists(),
     );
-    let label = "journey redemption: wallet terminal payout";
+    let label = &format!("journey redemption: wallet terminal payout ({holder})") as &str;
     let (landed, compute) = harvest_dir(rpc, label, &journal_dir, &mut spine.transactions);
     match outcome {
         Ok(passes) => {
@@ -1099,7 +1108,9 @@ pub(crate) fn redeem(
                      Hoard's."
                 ),
             );
-            spine.reports.insert("redemption".into(), document);
+            spine
+                .reports
+                .insert(format!("redemption-{holder}"), document);
         }
         Err((passes, error)) => {
             spine.refused(
@@ -1111,7 +1122,7 @@ pub(crate) fn redeem(
                 ),
             );
             spine.reports.insert(
-                "redemption".into(),
+                format!("redemption-{holder}"),
                 serde_json::json!({
                     "outcome": "refused",
                     "passes": passes,

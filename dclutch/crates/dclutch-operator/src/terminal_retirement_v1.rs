@@ -504,6 +504,29 @@ pub enum TerminalRetirementErrorV1 {
     MarketCore(dclutch_market::Error),
     /// `dclutch_market::capability_manifest` refused; the cause is its own.
     Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_market::capability_manifest` refused INSIDE the Direct close's
+    /// funding-ledger walk, and the first field is which call.
+    ///
+    /// The walk maps twelve distinct calls onto one `Capability` code, and it is
+    /// the only part of the close a market with TWO LIVE physical funding
+    /// ledgers reaches -- a state no fixture has ever held and which cohort-17's
+    /// market 1 could not reach, because its Resolution ledger was already
+    /// closed and the walk refused on the zero-byte account first. Cohort-17's
+    /// market 2 met `Capability(InvalidDependency)` there with nothing to say
+    /// which of the twelve produced it. A coarse code is legitimate when the
+    /// causes are one accusation; these are twelve different accusations about
+    /// four different accounts.
+    CloseFunding(&'static str, dclutch_market::capability_manifest::Error),
+    /// The two-ledger mask partition refused, and the refusal carries the
+    /// three numbers it is about: the manifest entry count, the selected
+    /// entry's required dependency union, and the ledger masks in the order
+    /// the frame presents them.
+    CloseFundingMasks(
+        u16,
+        u16,
+        [u16; 2],
+        dclutch_market::capability_manifest::Error,
+    ),
     /// `dclutch_market::capability_program` refused; the cause is its own.
     CapabilityProgram(dclutch_market::capability_program::Error),
     /// `dclutch_operator` refused; the cause is its own.
@@ -1355,10 +1378,12 @@ fn authenticate_close_funding(
     let mut preserved_dependencies = Vec::new();
     for (index, account) in snapshot.funding_ledgers.iter().enumerate() {
         let ledger = FundingLedgerV2::decode(&account.data)
-            .map_err(TerminalRetirementErrorV1::Capability)?;
+            .map_err(|error| TerminalRetirementErrorV1::CloseFunding("ledger-decode", error))?;
         let authenticated = ledger
             .authenticate(manifest_id, manifest)
-            .map_err(TerminalRetirementErrorV1::Capability)?;
+            .map_err(|error| {
+                TerminalRetirementErrorV1::CloseFunding("ledger-authenticate", error)
+            })?;
         let mask = ledger.selected_mask();
         let selected = mask & selected_bit != 0;
         let controller = if selected {
@@ -1376,11 +1401,13 @@ fn authenticate_close_funding(
             manifest_id,
             ledger,
         )
-        .map_err(TerminalRetirementErrorV1::Capability)?;
+        .map_err(|error| TerminalRetirementErrorV1::CloseFunding("ledger-derivation", error))?;
         let expected = Pubkey::find_program_address(&derivation.seed_components(), &controller).0;
         let exact_rent = authenticated
             .funded_rent_minimum(account.data.len())
-            .map_err(TerminalRetirementErrorV1::Capability)?;
+            .map_err(|error| {
+                TerminalRetirementErrorV1::CloseFunding("funded-rent-minimum", error)
+            })?;
         if account.key != expected
             || account.owner != controller
             || account.executable
@@ -1390,14 +1417,18 @@ fn authenticate_close_funding(
         }
         authenticated
             .validate_native_custody(account.lamports, exact_rent, selected)
-            .map_err(TerminalRetirementErrorV1::Capability)?;
+            .map_err(|error| {
+                TerminalRetirementErrorV1::CloseFunding("validate-native-custody", error)
+            })?;
         let mut row_index = 0_u16;
         while row_index < ledger.slot_count() {
-            let entry_index = manifest_entry_for_ledger_row_v2(mask, row_index)
-                .map_err(TerminalRetirementErrorV1::Capability)?;
-            let slot = authenticated
-                .slot(entry_index)
-                .map_err(TerminalRetirementErrorV1::Capability)?;
+            let entry_index =
+                manifest_entry_for_ledger_row_v2(mask, row_index).map_err(|error| {
+                    TerminalRetirementErrorV1::CloseFunding("row-to-manifest-entry", error)
+                })?;
+            let slot = authenticated.slot(entry_index).map_err(|error| {
+                TerminalRetirementErrorV1::CloseFunding("authenticated-slot", error)
+            })?;
             if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status()) {
                 return Err(TerminalRetirementErrorV1::Projection);
             }
@@ -1417,9 +1448,13 @@ fn authenticate_close_funding(
                     exact_rent,
                     snapshot.rent_credit.key.to_bytes(),
                 )
-                .map_err(TerminalRetirementErrorV1::Capability)?,
+                .map_err(|error| {
+                    TerminalRetirementErrorV1::CloseFunding("close-custody-native-only", error)
+                })?,
             )
-            .map_err(TerminalRetirementErrorV1::Capability)?;
+            .map_err(|error| {
+                TerminalRetirementErrorV1::CloseFunding("close-slot-in-place", error)
+            })?;
             if !close.ledger_can_close()
                 || close.expected_post_ledger_lamports() != 0
                 || close.remaining_realm_collateral() != 0
@@ -1438,8 +1473,19 @@ fn authenticate_close_funding(
         }
         masks.push(mask);
     }
-    validate_funding_ledger_masks_v2(manifest.entry_count(), required_union, &masks)
-        .map_err(TerminalRetirementErrorV1::Capability)?;
+    validate_funding_ledger_masks_v2(manifest.entry_count(), required_union, &masks).map_err(
+        |error| {
+            TerminalRetirementErrorV1::CloseFundingMasks(
+                manifest.entry_count(),
+                required_union,
+                [
+                    masks.first().copied().unwrap_or_default(),
+                    masks.get(1).copied().unwrap_or_default(),
+                ],
+                error,
+            )
+        },
+    )?;
     let selected_index = selected_index.ok_or(TerminalRetirementErrorV1::Projection)?;
     if masks.get(selected_index).copied() != Some(selected_bit) {
         return Err(TerminalRetirementErrorV1::Projection);
