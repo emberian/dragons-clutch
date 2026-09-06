@@ -757,17 +757,11 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     let descriptor_metas = meta_pair(&activation_descriptor)?;
     // The funding slice in the order `validate_funding_ledger_masks_v2`
     // requires: by each ledger's lowest selected entry index.
-    let funding_slice = if crate::market::selected_funding_ledger_leads_v1(entry_index) {
-        [
-            AccountMeta::new(funding_ledger, false),
-            AccountMeta::new_readonly(resolution_funding_ledger, false),
-        ]
-    } else {
-        [
-            AccountMeta::new_readonly(resolution_funding_ledger, false),
-            AccountMeta::new(funding_ledger, false),
-        ]
-    };
+    let funding_slice = crate::market::ordered_funding_ledger_slice_v1(
+        entry_index,
+        AccountMeta::new(funding_ledger, false),
+        AccountMeta::new_readonly(resolution_funding_ledger, false),
+    );
     let accounts = vec![
         AccountMeta::new(market, false),
         realm_metas[0].clone(),

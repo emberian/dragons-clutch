@@ -6353,6 +6353,38 @@ pub(crate) const fn selected_funding_ledger_leads_v1(entry_index: u16) -> bool {
     entry_index == 0
 }
 
+/// Position of the SELECTED ledger inside a canonically ordered two-ledger
+/// funding slice. The close writes exactly this one and preserves the other.
+pub(crate) const fn selected_funding_ledger_position_v1(entry_index: u16) -> usize {
+    if selected_funding_ledger_leads_v1(entry_index) {
+        0
+    } else {
+        1
+    }
+}
+
+/// Order a two-ledger funding slice the way `validate_funding_ledger_masks_v2`
+/// requires: by each ledger's lowest selected manifest index.
+///
+/// EVERY author of a funding slice calls this — the activation frames, the
+/// close's discovery snapshot, and the meta closure the caller preflight
+/// checks the frame against. A frame built by one rule and validated against
+/// another is exactly the disagreement cohort-17's market 2 hit at
+/// `CloseFundingMasks(4, 15, [14, 1], InvalidDependency)`: the discovery
+/// hard-coded the Resolution dependency first while the closure derived
+/// Trading first, and the two masks were not ascending.
+pub(crate) fn ordered_funding_ledger_slice_v1<T>(
+    entry_index: u16,
+    selected: T,
+    dependency: T,
+) -> [T; 2] {
+    if selected_funding_ledger_leads_v1(entry_index) {
+        [selected, dependency]
+    } else {
+        [dependency, selected]
+    }
+}
+
 pub(crate) fn manifest_required_union_v1(entry_count: u16) -> Result<u16> {
     if entry_count == 0 || entry_count > u16::BITS as u16 {
         return Err(Error::new(
@@ -18411,6 +18443,47 @@ mod tests {
             manifest_required_union_v1(4).expect("union") ^ 0x0001,
             0x000e
         );
+    }
+
+    /// The slice EVERY frame author builds is the slice the preflight accepts.
+    ///
+    /// The rule above is about a boolean; this is about the two accounts a
+    /// frame actually carries. Cohort-17's market 2 refused
+    /// `CloseFundingMasks(4, 15, [14, 1], InvalidDependency)` because the close
+    /// discovery hard-coded the Resolution dependency first while the meta
+    /// closure derived Trading first — one market, two host authors. Run this
+    /// against a slice built the hard-coded way and the index-0 arm is red.
+    #[test]
+    fn the_ordered_funding_slice_is_what_the_mask_validator_accepts() {
+        use dclutch_market::capability_manifest::validate_funding_ledger_masks_v2;
+
+        let union = manifest_required_union_v1(4).expect("union");
+        // Index 0 is the shape every devnet market founded so far carries;
+        // index 3 is the shape the four-entry fixture carries. Both are legal
+        // manifests and the two orders are opposite.
+        for entry_index in [0_u16, 3] {
+            let selected = 1_u16 << entry_index;
+            let dependency = union ^ selected;
+            let slice = ordered_funding_ledger_slice_v1(entry_index, selected, dependency);
+            validate_funding_ledger_masks_v2(4, union, &slice).unwrap_or_else(|error| {
+                panic!("entry {entry_index} built slice {slice:?}: {error:?}")
+            });
+            let position = selected_funding_ledger_position_v1(entry_index);
+            assert_eq!(
+                slice[position], selected,
+                "entry {entry_index}: the close would write the dependency ledger"
+            );
+            assert_eq!(
+                slice[1 - position], dependency,
+                "entry {entry_index}: the close would preserve its own ledger"
+            );
+        }
+
+        // The two arms really are opposite orders, so a hard-coded slice is
+        // wrong for exactly one of them.
+        assert_eq!(ordered_funding_ledger_slice_v1(0, 0b0001, 0b1110), [1, 14]);
+        assert_eq!(ordered_funding_ledger_slice_v1(3, 0b1000, 0b0111), [7, 8]);
+        assert!(validate_funding_ledger_masks_v2(4, 0b1111, &[14, 1]).is_err());
     }
 
     /// The wall the ladder tier hit, as a host test, from both sides.

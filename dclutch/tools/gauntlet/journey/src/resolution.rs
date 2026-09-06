@@ -706,7 +706,7 @@ pub(crate) fn admit_terminal(
     payer: &Keypair,
     addresses: &ResolutionAddressesV1,
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
+) -> Result<(StageReportV1, crate::ledger::LamportClaimV1, Option<u32>)> {
     let before = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
         .map_err(|error| Error::new(format!("Market: {error:?}")))?;
     if before.phase != Phase::Open || before.readiness != Readiness::Consumed {
@@ -723,6 +723,7 @@ pub(crate) fn admit_terminal(
                 ),
             },
             crate::ledger::LamportClaimV1::fees(0),
+            None,
         ));
     }
 
@@ -816,6 +817,11 @@ pub(crate) fn admit_terminal(
             "one address lookup table, rent-funded to route the 1,508-byte AdmitTerminal frame \
              past the legacy packet limit",
         ),
+        // THE OUTCOME COUNT, HANDED ON RATHER THAN RE-DERIVED. The redemption
+        // has to discharge every claim index the Product carries, not just the
+        // winner's, and this is the Product-authenticated count the operator
+        // already read from the finalized Product graph.
+        Some(report.outcome_count),
     ))
 }
 

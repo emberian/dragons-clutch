@@ -431,23 +431,50 @@ struct TerminalSequenceCompletionV1 {
 /// frame can redraw its bump.
 const RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1: u32 = 267_518;
 
+/// `DirectCloseCapability`'s declared ComputeBudget limit.
+///
+/// The second route in this sequence not to fit the 200,000-CU default meter,
+/// and the first market ever to reach it said so on chain: cohort-17's market
+/// 2, 2026-09-06, consumed 200,000 of 200,000 and failed at `exceeded CUs meter
+/// at BPF instruction` inside Core. It is the heaviest stage of the six by a
+/// factor of five -- Core walks the two-ledger funding partition, projects the
+/// close in place, and CPIs into Trading, which alone draws 211,558.
+///
+/// The number is derived under `tools/gauntlet/CU_BUDGETS.md`'s rule --
+/// `tolerance = roundup(band, 10_000) + 10_000`, floor 15,000; `budget =
+/// measured + tolerance`; `measured` is the highest draw, never a single run.
+/// Market 2's own unlandable durable message, rebuilt with a 1,400,000-CU probe
+/// and simulated on devnet with `sigVerify` off, drew 500,929 three times out
+/// of three -- 500,779 inside Core, of which 211,558 is Trading's, plus the 150
+/// the ComputeBudget instruction costs itself -- so the band is 0 and the
+/// tolerance is its floor. 500,929 + 15,000 = 515,929, which is 36.9% of
+/// Solana's 1,400,000 per-transaction ceiling.
+///
+/// The band is 0 for the same reason `ResolutionCloseFund`'s is: a devnet route
+/// over accounts that already exist, against ELFs fixed for the life of a
+/// cohort, so no PDA in the frame can redraw its bump.
+const DIRECT_CLOSE_CAPABILITY_COMPUTE_UNIT_LIMIT_V1: u32 = 515_929;
+
 /// The ComputeBudget limit a stage's durable message declares, or `None` when
 /// the route runs inside the default meter.
 ///
 /// `None` is not "unbudgeted". It is the positive claim that the route fits
 /// 200,000 compute units, and every `None` below that has landed on devnet
 /// landed inside it -- `CoreBeginRetiring` at 23,106 and `DirectBeginRetiring`
-/// at 92,137. `DirectCloseCapability`, `RetirementReplayHandoff` and
-/// `AggregateRetirement` have never executed on any chain, and the reorder does
-/// not change that: cohort-17 reached `ResolutionCloseFund` and stopped. Nothing
-/// here can honestly declare a number for them; if one meets the meter, the
-/// finding is a new row with its own measured draw, not a blanket.
+/// at 92,137. `DirectCloseCapability` met the meter on cohort-17's market 2 and
+/// now carries its own measured row, which is what that comment said the
+/// finding would be. `RetirementReplayHandoff` and `AggregateRetirement` have
+/// still never executed on any chain; nothing here can honestly declare a
+/// number for them, and if one meets the meter the finding is a third measured
+/// row, not a blanket.
 const fn terminal_stage_compute_unit_limit_v1(stage: TerminalStageV1) -> Option<u32> {
     match stage {
         TerminalStageV1::ResolutionCloseFund => Some(RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1),
+        TerminalStageV1::DirectCloseCapability => {
+            Some(DIRECT_CLOSE_CAPABILITY_COMPUTE_UNIT_LIMIT_V1)
+        }
         TerminalStageV1::CoreBeginRetiring
         | TerminalStageV1::DirectBeginRetiring
-        | TerminalStageV1::DirectCloseCapability
         | TerminalStageV1::RetirementReplayHandoff
         | TerminalStageV1::AggregateRetirement => None,
     }
@@ -458,14 +485,16 @@ const fn terminal_stage_compute_unit_limit_v1(stage: TerminalStageV1) -> Option<
 ///
 /// The value a session declares may be re-pinned -- a measurement is a
 /// measurement -- and a finalized journal must stay verifiable across that.
-/// What may never change is that `ResolutionCloseFund` does not fit the
-/// default meter, so a durable message for it that declares nothing is refused
-/// by name however the table is later edited.
+/// What may never change is that `ResolutionCloseFund` and
+/// `DirectCloseCapability` do not fit the default meter, so a durable message
+/// for either that declares nothing is refused by name however the table is
+/// later edited. Both facts were bought the same way: a packet that consumed
+/// 200,000 of 200,000 on devnet and could never land.
 const fn terminal_route_requires_declared_budget_v1(mutation: &DurableTerminalMutationV1) -> bool {
     matches!(
         mutation,
         DurableTerminalMutationV1::Protocol {
-            stage: TerminalStageV1::ResolutionCloseFund
+            stage: TerminalStageV1::ResolutionCloseFund | TerminalStageV1::DirectCloseCapability
         }
     )
 }
@@ -6121,10 +6150,18 @@ pub(crate) fn direct_native_close_discovery_from_chain_v1(
         realm_staging: account(realm.staging, "Direct close Realm staging")?,
         manifest: account(manifest.raw, "Direct close manifest")?,
         manifest_staging: account(manifest.staging, "Direct close manifest staging")?,
-        funding_ledgers: vec![
-            account(coordinates[5], "Resolution dependency FundingLedger")?,
-            account(coordinates[6], "Trading selected FundingLedger")?,
-        ],
+        // Canonical mask order, from the one author of that rule. The
+        // discovery is what the caller preflight builds its masks from, so an
+        // order typed here rather than derived is an order the preflight
+        // refuses.
+        funding_ledgers: crate::market::ordered_funding_ledger_slice_v1(
+            evidence.direct_selected_manifest_entry_index,
+            (coordinates[6], "Trading selected FundingLedger"),
+            (coordinates[5], "Resolution dependency FundingLedger"),
+        )
+        .into_iter()
+        .map(|(key, label)| account(key, label))
+        .collect::<Result<Vec<_>>>()?,
         root: account(coordinates[7], "Direct root")?,
         activation_cache: account(coordinates[8], "activation cache")?,
         core_program: account(coordinates[9], "Core program")?,
@@ -7029,14 +7066,14 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
     // Canonical mask order, which is a fact about the selected entry's manifest
     // POSITION and never about which controller owns which ledger.
     // `selected_funding_ledger_leads_v1` is the one author of that rule.
-    let (funding_ledgers, selected_funding_position) =
-        if crate::market::selected_funding_ledger_leads_v1(
-            evidence.direct_selected_manifest_entry_index,
-        ) {
-            ([trading_funding, resolution_funding], 0)
-        } else {
-            ([resolution_funding, trading_funding], 1)
-        };
+    let funding_ledgers = crate::market::ordered_funding_ledger_slice_v1(
+        evidence.direct_selected_manifest_entry_index,
+        trading_funding,
+        resolution_funding,
+    );
+    let selected_funding_position = crate::market::selected_funding_ledger_position_v1(
+        evidence.direct_selected_manifest_entry_index,
+    );
     let close = direct_native_close_meta_closure_v1(&DirectNativeCloseCoordinateInputV1 {
         release_set,
         role_request_digest: [4; 32],
@@ -7255,9 +7292,9 @@ fn direct_native_close_closure_from_discovery_v1(
     }
     // Discovery already ordered the slice canonically; which of the two the
     // close WRITES follows the selected entry's position, not a controller.
-    let selected_funding_position = usize::from(!crate::market::selected_funding_ledger_leads_v1(
+    let selected_funding_position = crate::market::selected_funding_ledger_position_v1(
         evidence.direct_selected_manifest_entry_index,
-    ));
+    );
     direct_native_close_meta_closure_v1(&DirectNativeCloseCoordinateInputV1 {
         release_set: hex32(&plan.release_set_id)?,
         role_request_digest: request_digest,
@@ -9554,6 +9591,7 @@ fn load_or_create_terminal_session_v1(
     input_digests: &(String, String, String, Option<String>),
 ) -> Result<TerminalSequenceSessionV1> {
     if arguments.session.exists() {
+        amend_terminal_session_compute_budgets_v1(&arguments.session, &arguments.journal_dir)?;
         let session = read_terminal_session_v1(&arguments.session)?;
         authenticate_terminal_session_inputs_v1(&session, arguments, input_digests)?;
         return Ok(session);
@@ -10126,6 +10164,98 @@ fn authenticate_terminal_session_v1(session: &TerminalSequenceSessionV1) -> Resu
             declared_terminal_compute_budgets_v1()
         )));
     }
+    Ok(())
+}
+
+/// Whether a persisted table may be amended to `declared` by ADDING rows only.
+///
+/// Every stage the session already declares must keep the exact number it
+/// declares -- a re-pin under a live sequence is the drift the guard exists for
+/// -- and the difference must be additions alone. Whether those additions are
+/// legal for THIS sequence is a second question, about journals, answered by
+/// the caller.
+fn terminal_compute_budget_additions_v1(
+    persisted: &[TerminalStageComputeBudgetV1],
+    declared: &[TerminalStageComputeBudgetV1],
+) -> Option<Vec<TerminalStageV1>> {
+    let mut additions = Vec::new();
+    for row in declared {
+        match persisted.iter().find(|held| held.stage == row.stage) {
+            Some(held) if held.compute_unit_limit == row.compute_unit_limit => {}
+            Some(_) => return None,
+            None => additions.push(row.stage),
+        }
+    }
+    if persisted
+        .iter()
+        .any(|held| !declared.iter().any(|row| row.stage == held.stage))
+    {
+        return None;
+    }
+    (!additions.is_empty()).then_some(additions)
+}
+
+/// Amend a live session that predates a stage's MEASURED ComputeBudget row.
+///
+/// `authenticate_terminal_session_v1` holds the session's table and the
+/// driver's exactly equal, so a sequence cannot change the budget a signed
+/// stage compiled against. A stage that has never been planned compiled
+/// nothing: its canonical journal path does not exist, and a packet that was
+/// planned and then retired as unlandable moved aside under its own signature,
+/// which is what frees that path. So a table that only GAINS such a stage is
+/// not a change to any commitment this sequence has made, and refusing it would
+/// force a market already at Retiring -- with a frozen ALT and finalized stages
+/// on chain -- to abandon both over a number no signed packet has ever read.
+///
+/// Cohort-17's market 2 is why this exists: `DirectCloseCapability` met the
+/// 200,000-CU default meter on the first market ever to reach that stage, and
+/// its budget could not be declared without this.
+///
+/// Everything else stays refused by the guard, which runs immediately after:
+/// a changed value, a removed row, or an addition for a stage whose canonical
+/// journal already exists in any phase.
+fn amend_terminal_session_compute_budgets_v1(
+    session_path: &Path,
+    journal_dir: &Path,
+) -> Result<()> {
+    let source = fs::read(session_path)?;
+    let Ok(mut session) = serde_json::from_slice::<TerminalSequenceSessionV1>(&source) else {
+        return Ok(());
+    };
+    let declared = declared_terminal_compute_budgets_v1();
+    let Some(additions) =
+        terminal_compute_budget_additions_v1(&session.declared_compute_unit_limits, &declared)
+    else {
+        return Ok(());
+    };
+    for stage in &additions {
+        if journal_dir.join(stage_journal_name_v1(*stage)).exists() {
+            return Ok(());
+        }
+    }
+    session.declared_compute_unit_limits = declared;
+    refresh_terminal_session_digest_v1(&mut session)?;
+    let temporary = session_path.with_file_name(format!(
+        ".{}.terminal-session-amend-{}.tmp",
+        session_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| refusal("terminal session needs a UTF-8 file name"))?,
+        std::process::id()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(&session)?)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&temporary, session_path)?;
+    println!(
+        "amended terminal session ComputeBudget table with unplanned stages {additions:?}; \
+         every stage it already declared kept its exact number"
+    );
     Ok(())
 }
 
@@ -11518,13 +11648,109 @@ mod tests {
             RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1 < 1_400_000,
             "and one above the ceiling would not fit at all"
         );
-        // Exactly one route declares, and it is the one that met the meter.
+        // Exactly the routes that met the meter declare, in stage order.
         assert_eq!(
             declared_terminal_compute_budgets_v1(),
-            vec![TerminalStageComputeBudgetV1 {
-                stage: TerminalStageV1::ResolutionCloseFund,
-                compute_unit_limit: RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1,
-            }]
+            vec![
+                TerminalStageComputeBudgetV1 {
+                    stage: TerminalStageV1::DirectCloseCapability,
+                    compute_unit_limit: DIRECT_CLOSE_CAPABILITY_COMPUTE_UNIT_LIMIT_V1,
+                },
+                TerminalStageComputeBudgetV1 {
+                    stage: TerminalStageV1::ResolutionCloseFund,
+                    compute_unit_limit: RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1,
+                },
+            ]
+        );
+    }
+
+    /// THE SECOND NUMBER IS DERIVED, NOT CHOSEN, BY THE SAME RULE.
+    ///
+    /// Cohort-17's market 2 was the first market on any chain to reach
+    /// `DirectCloseCapability`, and it consumed 200,000 of 200,000 inside Core.
+    /// Its own unlandable durable message, rebuilt under a 1,400,000-CU probe
+    /// and simulated on devnet 2026-09-06, drew 500,929 three times out of
+    /// three -- 500,779 in Core, of which 211,558 is the Trading CPI, plus the
+    /// ComputeBudget instruction's own 150 -- so the band is 0 and the
+    /// tolerance is its floor.
+    #[test]
+    fn the_direct_close_budget_is_its_measured_draw_plus_the_trees_tolerance() {
+        const MEASURED: u32 = 500_929;
+        const BAND: u32 = 0;
+        let tolerance = (BAND.div_ceil(10_000) * 10_000 + 10_000).max(15_000);
+        assert_eq!(tolerance, 15_000, "a zero band bottoms out at the floor");
+        assert_eq!(
+            DIRECT_CLOSE_CAPABILITY_COMPUTE_UNIT_LIMIT_V1,
+            MEASURED + tolerance
+        );
+        assert!(
+            DIRECT_CLOSE_CAPABILITY_COMPUTE_UNIT_LIMIT_V1 > 200_000,
+            "a budget inside the default meter would not need declaring"
+        );
+        assert!(
+            DIRECT_CLOSE_CAPABILITY_COMPUTE_UNIT_LIMIT_V1 < 1_400_000,
+            "and one above the ceiling would not fit at all"
+        );
+        // The route's obligation is a fact about the route, so the message it
+        // signs may never omit the declaration.
+        assert!(terminal_route_requires_declared_budget_v1(
+            &DurableTerminalMutationV1::Protocol {
+                stage: TerminalStageV1::DirectCloseCapability,
+            }
+        ));
+    }
+
+    /// A live session may GAIN a measured row and may never lose or move one.
+    ///
+    /// The guard this serves refuses a table that changed under a sequence
+    /// whose earlier stages are already signed. An addition for a stage that
+    /// has never been planned is not that: cohort-17's market 2 sat at Retiring
+    /// with a frozen ALT and two finalized stages when `DirectCloseCapability`
+    /// met the meter, and the number could not be declared without amending its
+    /// session.
+    #[test]
+    fn a_session_budget_table_may_only_gain_unplanned_rows() {
+        let row = |stage, compute_unit_limit| TerminalStageComputeBudgetV1 {
+            stage,
+            compute_unit_limit,
+        };
+        let close_fund = row(TerminalStageV1::ResolutionCloseFund, 267_518);
+        let direct = row(TerminalStageV1::DirectCloseCapability, 515_929);
+
+        assert_eq!(
+            terminal_compute_budget_additions_v1(
+                std::slice::from_ref(&close_fund),
+                &[direct.clone(), close_fund.clone()]
+            ),
+            Some(vec![TerminalStageV1::DirectCloseCapability]),
+            "an addition beside an unchanged row is the amendable case"
+        );
+        assert_eq!(
+            terminal_compute_budget_additions_v1(
+                std::slice::from_ref(&close_fund),
+                std::slice::from_ref(&close_fund)
+            ),
+            None,
+            "an identical table is not an amendment"
+        );
+        assert_eq!(
+            terminal_compute_budget_additions_v1(
+                std::slice::from_ref(&close_fund),
+                &[
+                    direct.clone(),
+                    row(TerminalStageV1::ResolutionCloseFund, 267_519)
+                ]
+            ),
+            None,
+            "a re-pinned value under a live sequence is the drift the guard is for"
+        );
+        assert_eq!(
+            terminal_compute_budget_additions_v1(
+                &[direct.clone(), close_fund.clone()],
+                std::slice::from_ref(&close_fund)
+            ),
+            None,
+            "and a removal is never an addition"
         );
     }
 

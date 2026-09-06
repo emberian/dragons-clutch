@@ -1084,7 +1084,7 @@ fn campaign(
     // third, as the same builder every shipped driver calls.
     progress.entering(resolution::ADMIT_TERMINAL_STAGE_V1);
     let before_admit = session.transactions.len();
-    let (admit_report, admit_lamports) = match resolution::admit_terminal(
+    let (admit_report, admit_lamports, outcome_count) = match resolution::admit_terminal(
         &mut session.rpc,
         &session.authority,
         &resolution_addresses,
@@ -1115,6 +1115,7 @@ fn campaign(
                     "the terminal admission refused, so what it placed and where is exactly what \
                      is not known; L7 does not guess across a wall",
                 ),
+                None,
             )
         }
     };
@@ -1198,19 +1199,31 @@ fn campaign(
                 .to_owned(),
         );
     }
+    // EVERY CLAIM INDEX, NOT THE WINNER'S. `BeginRetiring is blocked: Claims
+    // supply at index 0 ...` became `... at index 1 ...` the moment both
+    // holders had redeemed index 0 (hbox `20260906T170113Z`): the retirement is
+    // gated on the aggregate's WHOLE liability record, and a Position carries a
+    // claim on every outcome. A losing claim discharges for zero collateral --
+    // `terminal_settlement_v3` names positive and zero payouts as two admitted
+    // shapes of one route -- so this walks the Product's own outcome count,
+    // which the terminal admission read off the finalized Product graph and
+    // handed on rather than being re-derived here.
+    let claim_indices = outcome_count.unwrap_or(1);
     for (holder, role, owner, recipient) in holders {
-        spine::redeem(
-            &mut session.rpc,
-            &context,
-            &mut spine,
-            &holder,
-            &role,
-            owner,
-            recipient,
-            0,
-            payer,
-            &payer_key,
-        )?;
+        for claim_index in 0..claim_indices {
+            spine::redeem(
+                &mut session.rpc,
+                &context,
+                &mut spine,
+                &format!("{holder}-claim-{claim_index}"),
+                &role,
+                owner,
+                recipient,
+                claim_index,
+                payer,
+                &payer_key,
+            )?;
+        }
     }
     progress.stages.append(&mut spine.stages);
     session.transactions.append(&mut spine.transactions);
