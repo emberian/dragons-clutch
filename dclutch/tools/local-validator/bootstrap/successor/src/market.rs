@@ -385,6 +385,20 @@ impl<'a> FoundingSubmissionRecorderV1<'a> {
     }
 }
 
+/// A compiled founding packet and the exact keys the frame it was compiled
+/// FROM declares.
+///
+/// THE FRAME IS THE ONE AUTHOR OF ITS OWN WIDTH. The bounded instruction list
+/// names a payer, a program per instruction, and a pubkey per account meta;
+/// the set of those is what a correct compilation must resolve to, whatever an
+/// address lookup table moved off the static list. Both halves come out of the
+/// same `bounded` here so that no second reader can be built that bounds the
+/// instructions differently and then disagrees about the answer.
+struct CompiledFoundingFrameV1 {
+    message: VersionedMessage,
+    declared_keys: BTreeSet<Pubkey>,
+}
+
 fn compile_current_founding_message_v1(
     label: &str,
     payer: Pubkey,
@@ -393,9 +407,10 @@ fn compile_current_founding_message_v1(
     tables: &[ObservedAccount],
     heap_frame_bytes: Option<u32>,
     blockhash: Hash,
-) -> Result<VersionedMessage> {
+) -> Result<CompiledFoundingFrameV1> {
     let bounded = bounded_instructions(instructions, heap_frame_bytes)
         .map_err(|error| Error::new(format!("{label}: {error}")))?;
+    let declared_keys = declared_frame_keys_v1(payer, &bounded);
     let plan = dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
         payer,
         &bounded,
@@ -404,16 +419,47 @@ fn compile_current_founding_message_v1(
         tables,
     )
     .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
-    Ok(plan.message)
+    Ok(CompiledFoundingFrameV1 {
+        message: plan.message,
+        declared_keys,
+    })
 }
 
+/// Exactly the keys a bounded instruction frame names, counted once each.
+///
+/// The payer is always a message key and a program id can never be moved into
+/// a lookup table, so this set is precisely what a compiled v0 message must
+/// resolve to across its static list and every lookup it uses.
+fn declared_frame_keys_v1(payer: Pubkey, bounded: &[Instruction]) -> BTreeSet<Pubkey> {
+    let mut declared = BTreeSet::new();
+    declared.insert(payer);
+    for instruction in bounded {
+        declared.insert(instruction.program_id);
+        for meta in &instruction.accounts {
+            declared.insert(meta.pubkey);
+        }
+    }
+    declared
+}
+
+/// Every key the compiled message resolves to is exactly a key its own frame
+/// declared, and no declared key was lost on the way.
+///
+/// The expectation is the frame, not a table. A per-operation table of widths
+/// keyed on whether the market carried a recovery policy used to stand here;
+/// it mirrored a frame that moved four times and refused the first
+/// recovery-bearing founding ever attempted with `expected 62, observed 60`
+/// against a message whose own lock census printed 60 twice. Set equality is
+/// both stronger than the count it replaces and incapable of going stale:
+/// an aliased lookup index, a dropped account and a table body that does not
+/// match the frame are each a named key here.
 fn authenticate_resolved_founding_message_v1(
     operation: FoundingSubmissionOperationV1,
-    recovery_policy: bool,
+    declared: &BTreeSet<Pubkey>,
     message: &VersionedMessage,
     tables: &[ObservedAccount],
 ) -> Result<()> {
-    let mut resolved = std::collections::BTreeSet::new();
+    let mut resolved = BTreeSet::new();
     let (static_keys, lookups) = match message {
         VersionedMessage::Legacy(message) => (message.account_keys.as_slice(), &[][..]),
         VersionedMessage::V0(message) => (
@@ -455,17 +501,21 @@ fn authenticate_resolved_founding_message_v1(
             }
         }
     }
-    if resolved.len() != operation.exact_unique_accounts(recovery_policy) {
+    if resolved != *declared {
+        let missing = declared.difference(&resolved).next().copied();
+        let extra = resolved.difference(declared).next().copied();
         return Err(Error::new(format!(
-            "{} resolved account count changed: expected {}, observed {} (market {} a recovery policy)",
+            "{} compiled message does not resolve to its own frame: the frame declares {} keys, \
+             the message resolves {}{}{}",
             operation.label(),
-            operation.exact_unique_accounts(recovery_policy),
+            declared.len(),
             resolved.len(),
-            if recovery_policy {
-                "carries"
-            } else {
-                "does not carry"
-            },
+            missing
+                .map(|key| format!(", first declared key the message never resolves: {key}"))
+                .unwrap_or_default(),
+            extra
+                .map(|key| format!(", first resolved key the frame never declared: {key}"))
+                .unwrap_or_default(),
         )));
     }
     Ok(())
@@ -503,10 +553,11 @@ fn authenticate_current_founding_intent_v1(
     )?;
     authenticate_resolved_founding_message_v1(
         operation,
-        binding.market_has_recovery_policy,
-        &recomputed,
+        &recomputed.declared_keys,
+        &recomputed.message,
         tables,
     )?;
+    let recomputed = recomputed.message;
     let expected_signers = expected_signers
         .iter()
         .map(ToString::to_string)
@@ -583,7 +634,7 @@ fn send_durable_founding_v1(
             .get("lastValidBlockHeight")
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| Error::new("founding blockhash omitted last-valid height"))?;
-        let message = compile_current_founding_message_v1(
+        let compiled = compile_current_founding_message_v1(
             label,
             payer.pubkey(),
             instructions,
@@ -594,10 +645,12 @@ fn send_durable_founding_v1(
         )?;
         authenticate_resolved_founding_message_v1(
             operation,
-            recorder.binding.market_has_recovery_policy,
-            &message,
+            &compiled.declared_keys,
+            &compiled.message,
             tables,
         )?;
+        let declared_unique_accounts = compiled.declared_keys.len();
+        let message = compiled.message;
         let message_bytes = message.serialize();
         let exact_fee_lamports = rpc
             .call(
@@ -612,6 +665,7 @@ fn send_durable_founding_v1(
             FoundingSubmissionPlanV1 {
                 operation,
                 message,
+                declared_unique_accounts,
                 last_valid_block_height,
                 exact_fee_lamports,
                 expected_signers: expected_signers.clone(),
@@ -9682,7 +9736,17 @@ const GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1: usize =
     8 + GENERIC_FOUND_AND_PERMIT_CALLER_BUMP_COUNT_V1;
 
 /// Exact width of the composed frame's commit-last Core Open window.
-const GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1: usize = 23;
+///
+/// Core declares it; this host tool reads it. The declaration is
+/// `GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1` in `dclutch-market`, the contract
+/// crate this binary already depends on and the same crate Core's Open stage
+/// subslices against -- so a host utility gets the program's number without
+/// depending on an SBF program crate. Spelling it again here made this file a
+/// second author of a width that has already moved once (twenty-one to
+/// twenty-three, when the failure escrow was seated at founding), and three
+/// doc comments in this file still said "21-account" afterwards.
+const GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1: usize =
+    dclutch_market::GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1;
 
 /// Exact `DCLTGFP1` frame width before the founding's FundingLedgerV2 tail:
 /// the composed `DCLTGMF3` frame minus its Core Open window, checkpoint last.
@@ -9709,8 +9773,8 @@ const GENERIC_MARKET_OPEN_MAGIC_V1: [u8; 8] = *b"DCLTGMO1";
 const GENERIC_MARKET_OPEN_INSTRUCTION_BYTES_V1: usize = 8 + 1;
 
 /// Two readonly raw requests — the selected Found artifact and the Claims
-/// request — then Core's exact 21-account Open window. Small enough for
-/// inline v0 with no lookup table and no extended heap.
+/// request — then Core's Open window, exactly as wide as Core declares it.
+/// Small enough for inline v0 with no lookup table and no extended heap.
 const GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1: usize = 2 + GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
 
 /// The Market, the permit, and the RentCredit: Core Open's sole mutations.
@@ -11073,11 +11137,12 @@ fn build_generic_market_founding_v3(
     })
 }
 
-/// Build the exact 104 + physical-funding-count account `DCLTGFP1` frame.
+/// Build the exact `GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1` +
+/// physical-funding-count account `DCLTGFP1` frame.
 ///
 /// This is a second independent derivation of the composed `DCLTGMF3` frame
-/// with its 21-account Core Open window removed and the controller-funding
-/// checkpoint kept last, and the corpus asserts the splice equality against
+/// with its Core Open window removed -- exactly as wide as Core declares that
+/// window -- and the controller-funding checkpoint kept last, and the corpus asserts the splice equality against
 /// `build_generic_market_founding_v3` meta for meta. The union-writability
 /// discipline and the twelve distinct writable keys are unchanged, because
 /// every writable Open-window key — the Market, the permit, the RentCredit,
@@ -11316,8 +11381,9 @@ fn build_generic_found_and_permit_v3(
     })
 }
 
-/// Build the exact 23-account `DCLTGMO1` frame: two readonly raw requests,
-/// then Core's 21-account Open window.
+/// Build the exact `GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1`-account `DCLTGMO1`
+/// frame: two readonly raw requests, then Core's Open window at the width
+/// Core declares.
 ///
 /// The window is byte-identical in key order to the composed route's Open
 /// section, and the corpus asserts that equality. Writability differs by
@@ -11669,15 +11735,16 @@ fn append_distinct_funding_readiness_accounts_v1(
 fn authenticate_funding_readiness_compiled_geometry_v1(
     payer: Pubkey,
     operation: FoundingSubmissionOperationV1,
-    recovery_policy: bool,
     instructions: &[Instruction],
     observation: Observation,
     routing_tables: &[ObservedAccount],
 ) -> Result<CompiledMessageGeometryV1> {
     let base = funding_readiness_compiled_geometry_v1(payer, instructions, routing_tables)?;
+    let bounded = bounded_instructions(instructions, None)?;
+    let declared_keys = declared_frame_keys_v1(payer, &bounded);
     let compiled = dclutch_versioned_message_operator::compile_v0_message(
         payer,
-        &bounded_instructions(instructions, None)?,
+        &bounded,
         solana_hash::Hash::new_from_array([0x73; 32]),
         observation,
         routing_tables,
@@ -11690,7 +11757,7 @@ fn authenticate_funding_readiness_compiled_geometry_v1(
     })?;
     authenticate_resolved_founding_message_v1(
         operation,
-        recovery_policy,
+        &declared_keys,
         &compiled.message,
         routing_tables,
     )?;
@@ -11720,7 +11787,7 @@ fn authenticate_funding_readiness_compiled_geometry_v1(
         )?,
         routing_tables,
     )?;
-    if base.complete_keys != operation.exact_unique_accounts(recovery_policy)
+    if base.complete_keys != declared_keys.len()
         || base.required_signatures != operation.exact_required_signatures()
         || plus_one.complete_keys != base.complete_keys.saturating_add(1)
         || plus_two.complete_keys != base.complete_keys.saturating_add(2)
@@ -11801,14 +11868,12 @@ fn execute_one_funding_readiness_v1(
     submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<(TransactionEvidence, CompiledMessageGeometryV1)> {
     let instructions = funding_readiness_instructions_v1(payer.pubkey(), instruction, prepay);
-    // The frame's own coordinates decide the width: the recovery record's
-    // raw/staging pair is in the frame exactly when the market has a recovery
-    // policy, so the pin reads the presence from the same struct that builds
-    // the accounts rather than from a second opinion.
+    // The frame decides its own width. The recovery record's raw/staging pair
+    // is in this frame exactly when the market has a recovery policy, and the
+    // frame is where that is already true -- there is nothing left to tell it.
     let geometry = authenticate_funding_readiness_compiled_geometry_v1(
         payer.pubkey(),
         operation,
-        coordinates.recovery_policy.is_some(),
         &instructions,
         observation,
         routing_tables,
@@ -17266,7 +17331,7 @@ mod tests {
         )
         .expect("stage-1 frame");
 
-        // Splice the 21-account Open window out of the composed frame; the
+        // Splice Core's Open window out of the composed frame; the
         // stage-1 assembly must reproduce the remainder meta for meta,
         // privilege for privilege — the shared windows were not perturbed.
         let open_start =
@@ -17734,6 +17799,7 @@ mod tests {
             system_index,
             writable,
             data_len,
+            expected_complete_keys,
             expected_message_bytes,
             expected_packet_bytes,
         ) in [
@@ -17744,6 +17810,7 @@ mod tests {
                 Some(15),
                 &[1_usize, 12][..],
                 72 + 280 + 224,
+                20,
                 852,
                 917,
             ),
@@ -17754,6 +17821,7 @@ mod tests {
                 Some(17),
                 &[12_usize, 13, 14][..],
                 440,
+                22,
                 720,
                 785,
             ),
@@ -17764,6 +17832,7 @@ mod tests {
                 None,
                 &[1_usize][..],
                 72 + 280 + 224,
+                22,
                 808,
                 873,
             ),
@@ -17797,16 +17866,16 @@ mod tests {
             let geometry = authenticate_funding_readiness_compiled_geometry_v1(
                 payer,
                 operation,
-                true,
                 &instructions,
                 table.observation,
                 std::slice::from_ref(&table),
             )
             .expect("routed geometry");
-            assert_eq!(
-                geometry.complete_keys,
-                operation.exact_unique_accounts(true)
-            );
+            // The fixture is this test's own construction, so its width is a
+            // fixture fact and belongs in the fixture row. What is NOT pinned
+            // here is the production frame's width: the authenticator above
+            // reads that off the frame it compiles.
+            assert_eq!(geometry.complete_keys, expected_complete_keys);
             assert_eq!(geometry.required_signatures, 1);
             assert_eq!(geometry.message_bytes, expected_message_bytes);
             assert_eq!(geometry.packet_bytes, expected_packet_bytes);
@@ -17829,7 +17898,7 @@ mod tests {
         );
         let table = frozen_funding_readiness_table_v1(payer, &instructions);
         let blockhash = Hash::new_from_array([0x73; 32]);
-        let message = compile_current_founding_message_v1(
+        let compiled = compile_current_founding_message_v1(
             operation.label(),
             payer,
             &instructions,
@@ -17839,6 +17908,8 @@ mod tests {
             blockhash,
         )
         .expect("current message");
+        let declared_unique_accounts = compiled.declared_keys.len();
+        let message = compiled.message;
         let binding = FoundingSubmissionBindingV1::new(
             "devnet",
             crate::cluster::DEVNET_GENESIS_HASH,
@@ -17847,7 +17918,6 @@ mod tests {
             "11".repeat(32),
             "22".repeat(32),
             payer,
-            true,
         )
         .expect("binding");
         let resolved_digest = "33".repeat(32);
@@ -17859,6 +17929,7 @@ mod tests {
             FoundingSubmissionPlanV1 {
                 operation,
                 message,
+                declared_unique_accounts,
                 last_valid_block_height: 900,
                 exact_fee_lamports: 5_000,
                 expected_signers: vec![payer],
@@ -18237,37 +18308,93 @@ mod tests {
         );
     }
 
-    /// THE PIN AND THE CENSUS ARE ONE NUMBER, and this is what says so.
+    /// The wall the ladder tier hit, as a host test, from both sides.
     ///
-    /// `FoundingSubmissionOperationV1::exact_unique_accounts` carried its own
-    /// count of the DCLTGMF3 frame while `GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3`
-    /// carried the measured one. Seating the failure escrow at founding moved the
-    /// frame from 58 to 60 -- the escrow's Position and its admission -- and moved
-    /// the constant, the fixture and the census with it. It did not move the
-    /// journal's table, which is consulted only when a real founding compiles its
-    /// real message. Cohort-16 met that on devnet on 2026-09-05, three transactions
-    /// from Open, with "DCLTGMF3 resolved account count changed: expected 58,
-    /// observed 60"; the frame was right and the pin was a mirror, for the second
-    /// time in the same table.
+    /// `FoundingSubmissionOperationV1::exact_unique_accounts` carried a second
+    /// count of the DCLTGMF3 frame keyed on whether the market bought a
+    /// recovery ladder: the measured base on the categorical arm and that base
+    /// plus a typed `RecoveryPolicyV2` raw/staging PAIR on the recovery arm.
+    /// The pair is not in this frame. The first recovery-bearing founding ever
+    /// attempted -- the `ladder` gauntlet tier, 2026-09-06, a loopback
+    /// validator -- was refused three transactions from Open with "expected 62,
+    /// observed 60" against a message whose own lock census printed 60 twice.
+    /// That was the FOURTH time the same table mirrored a frame that moved.
+    ///
+    /// The first half of this test is the red proof: the exact `+2` the table
+    /// added still refuses, and it refuses by name. The second half is the
+    /// repair: the frame is asked what it declares, and what it declares is
+    /// what the compiled message resolves to -- for the ladder shape and the
+    /// categorical shape alike, because it was never a function of either.
     #[test]
-    fn the_dcltgmf3_journal_pin_is_the_measured_census_and_not_a_second_count() {
+    fn the_founding_frame_is_the_only_author_of_its_own_resolved_width() {
+        use crate::market::founding_submission_journal::FoundingSubmissionOperationV1 as Op;
+
         let (payer, prepared) = generic_market_founding_census_fixture_v3();
-        let census = authenticate_generic_market_founding_lock_census_v3(payer, &prepared)
-            .expect("canonical DCLTGMF3 census");
+        let instructions = std::slice::from_ref(&prepared.instruction);
+        let table = frozen_funding_readiness_table_v1(payer, instructions);
+        let compiled = compile_current_founding_message_v1(
+            "DCLTGMF3",
+            payer,
+            instructions,
+            table.observation,
+            std::slice::from_ref(&table),
+            Some(FOUNDING_HEAP_FRAME_BYTES),
+            Hash::new_from_array([0x43; 32]),
+        )
+        .expect("the census fixture compiles over its own routing table");
+
+        // The frame declares, the message resolves, and they agree.
+        authenticate_resolved_founding_message_v1(
+            Op::Dcltgmf3,
+            &compiled.declared_keys,
+            &compiled.message,
+            std::slice::from_ref(&table),
+        )
+        .expect("a founding message resolves to exactly the frame it was compiled from");
         assert_eq!(
-            census.complete_keys,
-            crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltgmf3
-                .exact_unique_accounts(false),
+            compiled.declared_keys.len(),
+            GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3,
+            "the frame declares the measured census, with no ladder term either way"
         );
-        // A market that bought a ladder publishes a RecoveryPolicyV2 record and
-        // every frame that authenticates it carries its raw/staging PAIR.
-        assert_eq!(
-            crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltgmf3
-                .exact_unique_accounts(true),
-            census.complete_keys + 2,
+
+        // RED PROOF. Add the raw/staging pair the deleted table added for a
+        // market that bought a ladder, and the frame and the message part.
+        let mut inflated = compiled.declared_keys.clone();
+        inflated.insert(Pubkey::new_from_array([0xa1; 32]));
+        inflated.insert(Pubkey::new_from_array([0xa2; 32]));
+        let refusal = authenticate_resolved_founding_message_v1(
+            Op::Dcltgmf3,
+            &inflated,
+            &compiled.message,
+            std::slice::from_ref(&table),
+        )
+        .expect_err("a declaration two keys wider than the message must refuse");
+        assert!(
+            refusal.0.contains(&format!(
+                "the frame declares {} keys, the message resolves {}",
+                GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 + 2,
+                GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+            )),
+            "the refusal must say which side is which: {}",
+            refusal.0
+        );
+        assert!(
+            refusal
+                .0
+                .contains("first declared key the message never resolves"),
+            "the refusal must name a key, not only a count: {}",
+            refusal.0
         );
     }
 
+    /// The frozen shape of the composed founding frame, measured on the fixture.
+    ///
+    /// This carried no `#[test]` between the day it was written and
+    /// 2026-09-06, so the five numbers and the digest below were compiled and
+    /// never evaluated: the census pin the tree believed it had was a function
+    /// nothing called. Only the unused-item warning showed it, in a crate that
+    /// emits enough of those to bury one.
+    #[test]
     fn generic_founding_final_compiler_census_pins_the_60_key_shape() {
         let (payer, prepared) = generic_market_founding_census_fixture_v3();
         let census = authenticate_generic_market_founding_lock_census_v3(payer, &prepared)
@@ -18725,44 +18852,40 @@ mod live_founding_boundary {
 
     /// The binding a founding's own journal states, rebuilt from that journal.
     ///
-    /// Every field is the journal's; only the recovery-policy shape is not
-    /// recorded, and it is resolved by asking which of the two geometries the
-    /// journal authenticates under rather than by consulting the Market input.
+    /// Every field of it is the journal's. This used to search two candidate
+    /// bindings and keep whichever one authenticated, because the binding
+    /// carried a recovery-policy flag that selected between two typed frame
+    /// widths and the journal did not record which shape it was. The widths
+    /// have one author now -- the frame each message was compiled from, whose
+    /// count each journal recorded at plan time -- so there is nothing left to
+    /// search for, and a refusal here names its own cause instead of being
+    /// reported as "no geometry authenticates".
     fn binding_from_journals_v1(
         journals: &[FoundingSubmissionJournalV1],
     ) -> FoundingSubmissionBindingV1 {
         let head = journals
             .first()
             .expect("a founding states at least one journal");
-        let mut refusal = None;
-        for market_has_recovery_policy in [true, false] {
-            let binding = FoundingSubmissionBindingV1 {
-                cluster: head.cluster.clone(),
-                genesis_hash: head.genesis_hash.clone(),
-                evidence_path: head.evidence_path.clone(),
-                rpc_url: head.rpc_url.clone(),
-                plan_sha256: head.plan_sha256.clone(),
-                market_sha256: head.market_sha256.clone(),
-                payer: head.payer.parse::<Pubkey>().expect("journal payer"),
-                market_has_recovery_policy,
-            };
-            // The geometry pin is per-operation, and the three founding legs
-            // are shape-invariant -- so only the whole set discriminates.
-            match journals
-                .iter()
-                .try_for_each(|journal| authenticate_founding_submission_v1(&binding, journal))
-            {
-                Ok(()) => {
-                    println!("binding: market_has_recovery_policy = {market_has_recovery_policy}");
-                    return binding;
-                }
-                Err(error) => refusal = Some(error),
-            }
+        let binding = FoundingSubmissionBindingV1 {
+            cluster: head.cluster.clone(),
+            genesis_hash: head.genesis_hash.clone(),
+            evidence_path: head.evidence_path.clone(),
+            rpc_url: head.rpc_url.clone(),
+            plan_sha256: head.plan_sha256.clone(),
+            market_sha256: head.market_sha256.clone(),
+            payer: head.payer.parse::<Pubkey>().expect("journal payer"),
+        };
+        for journal in journals {
+            authenticate_founding_submission_v1(&binding, journal).unwrap_or_else(|error| {
+                panic!(
+                    "the report's own {} journal does not authenticate under the binding it \
+                     states: {}",
+                    journal.operation.label(),
+                    error.0
+                )
+            });
         }
-        panic!(
-            "no geometry authenticates the report's own six journals: {}",
-            refusal.map(|error| error.0).unwrap_or_default()
-        )
+        binding
     }
 
     #[test]

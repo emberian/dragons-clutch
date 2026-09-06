@@ -37,10 +37,6 @@ pub(crate) enum FoundingSubmissionOperationV1 {
     CoreFundingAcceptV1,
 }
 
-/// A `RecoveryPolicyV2` record's raw and staging accounts: the exact two keys
-/// a frame gains when the market it authenticates bought a funded ladder.
-const FOUNDING_RECOVERY_POLICY_RECORD_PAIR_V1: usize = 2;
-
 impl FoundingSubmissionOperationV1 {
     pub(crate) const ORDER: [Self; 6] = [
         Self::Dcltcfq1,
@@ -59,73 +55,6 @@ impl FoundingSubmissionOperationV1 {
             Self::CoreFundingCreateV1 => "core-funding-create-v1",
             Self::ResolutionFundingActivateV1 => "resolution-funding-activate-v1",
             Self::CoreFundingAcceptV1 => "core-funding-accept-v1",
-        }
-    }
-
-    /// The exact unique-account width of one operation's compiled message.
-    ///
-    /// `recovery_policy` says whether this market was founded WITH a recovery
-    /// policy. A market that bought one publishes a `RecoveryPolicyV2` record,
-    /// and every frame that authenticates that record carries its raw/staging
-    /// PAIR, so those frames are exactly two accounts wider. A market founded
-    /// without one publishes no such record and its frames are the narrower
-    /// shape. `funding_readiness.rs` measures both widths directly against the
-    /// frame it builds
-    /// (`every_observed_semantic_position_is_nonaliased_and_bounded`); this pin
-    /// exists to catch drift, so it has to know the same two shapes rather than
-    /// refuse either one as drift.
-    ///
-    /// THE ATOMIC FOUNDING IS ONE OF THOSE FRAMES, and this table said it was
-    /// not. `DCLTGMF3` was pinned at a flat 58 under the belief that "the three
-    /// founding legs are shape-invariant", which was true of every market that
-    /// had ever been founded because none of them had bought a ladder: Core's
-    /// `authenticate_recovery_policy` runs on every composed resolution action
-    /// but the `Some` arm had never executed. The first recovery-bearing
-    /// founding attempted on a chain -- 2026-09-04, the `ladder` gauntlet tier,
-    /// a loopback validator -- compiled a 60-account DCLTGMF3 and was refused by
-    /// this pin, three transactions from Open. The frame was right and the pin
-    /// was a mirror; the two shapes are now both stated.
-    pub(crate) const fn exact_unique_accounts(self, recovery_policy: bool) -> usize {
-        match self {
-            Self::Dcltcfq1 => 49,
-            Self::Dcltpcb2 => 60,
-            // ONE AUTHOR, AND THIS IS NOT IT. The composed founding frame's
-            // width is `GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3`, which the
-            // census fixture derives from, the census test pins, and
-            // `authenticate_generic_market_founding_lock_census_v3` checks a
-            // live founding against. This table restated it as 58 and was not
-            // moved when seating the failure escrow at founding took the frame
-            // to 60 -- the escrow's Position and its admission. Cohort-16 met
-            // that on devnet on 2026-09-05, three transactions from Open, and
-            // it is the SECOND time this one table has been a stale mirror of
-            // a frame that moved. It now reads the number instead of holding
-            // one, and the recovery arm keeps the raw/staging pair as the only
-            // thing this operation adds on its own account.
-            Self::Dcltgmf3 => {
-                if recovery_policy {
-                    super::GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
-                        + FOUNDING_RECOVERY_POLICY_RECORD_PAIR_V1
-                } else {
-                    super::GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
-                }
-            }
-            // Canonical V7 frames are pairwise distinct and carry their own
-            // program key as a frame account. The bounded inline v0 packet
-            // adds exactly the disposable payer and ComputeBudget program.
-            Self::CoreFundingCreateV1 => {
-                if recovery_policy {
-                    20
-                } else {
-                    18
-                }
-            }
-            Self::ResolutionFundingActivateV1 | Self::CoreFundingAcceptV1 => {
-                if recovery_policy {
-                    22
-                } else {
-                    20
-                }
-            }
         }
     }
 
@@ -222,12 +151,6 @@ pub(crate) struct FoundingSubmissionBindingV1 {
     pub(crate) plan_sha256: String,
     pub(crate) market_sha256: String,
     pub(crate) payer: Pubkey,
-    /// Whether the market this run founds carries a recovery policy. It is a
-    /// market fact, not a run fact, but it belongs beside `market_sha256`
-    /// because every geometry pin in this module is a function of it and the
-    /// operation, and a journal loaded against the wrong shape would refuse a
-    /// correct frame as drift.
-    pub(crate) market_has_recovery_policy: bool,
 }
 
 impl FoundingSubmissionBindingV1 {
@@ -239,7 +162,6 @@ impl FoundingSubmissionBindingV1 {
         plan_sha256: impl Into<String>,
         market_sha256: impl Into<String>,
         payer: Pubkey,
-        market_has_recovery_policy: bool,
     ) -> Result<Self> {
         if !evidence_path.is_absolute() {
             return Err(refusal("founding journal evidence path must be absolute"));
@@ -255,7 +177,6 @@ impl FoundingSubmissionBindingV1 {
             plan_sha256: plan_sha256.into(),
             market_sha256: market_sha256.into(),
             payer,
-            market_has_recovery_policy,
         };
         authenticate_binding_v1(&binding)?;
         Ok(binding)
@@ -266,6 +187,23 @@ impl FoundingSubmissionBindingV1 {
 pub(crate) struct FoundingSubmissionPlanV1 {
     pub(crate) operation: FoundingSubmissionOperationV1,
     pub(crate) message: VersionedMessage,
+    /// The distinct-key count the frame this message was compiled from
+    /// DECLARES, produced by that frame and passed in with it.
+    ///
+    /// ONE AUTHOR. This module used to hold a per-operation table of exact
+    /// widths keyed by whether the market carried a recovery policy, and that
+    /// table was a mirror of a frame that moved four times: 58 while the base
+    /// was 58, unmoved when the recovery ladder made the ladder founding two
+    /// wider, unmoved again when the failure escrow made the base 60, and
+    /// finally reading the base constant on the categorical arm while the
+    /// recovery arm still added a typed `+2` -- which is what refused the
+    /// first recovery-bearing founding ever attempted, three transactions from
+    /// Open, with `expected 62, observed 60` against a message whose own
+    /// census printed 60 twice. A mirror cannot be kept honest by editing it.
+    /// The frame that gets compiled now says how many distinct keys it names,
+    /// and this journal's job is to check that the compiled message resolves
+    /// to exactly those and no others.
+    pub(crate) declared_unique_accounts: usize,
     pub(crate) last_valid_block_height: u64,
     pub(crate) exact_fee_lamports: u64,
     pub(crate) expected_signers: Vec<Pubkey>,
@@ -400,18 +338,14 @@ pub(crate) fn plan_founding_submission_v1(
         return Err(refusal("founding recovery payload was empty"));
     }
     let (unique, required_signatures) = message_geometry_v1(&plan.message, &plan.expected_signers)?;
-    if unique
-        != plan
-            .operation
-            .exact_unique_accounts(binding.market_has_recovery_policy)
+    if unique != plan.declared_unique_accounts
         || required_signatures != plan.operation.exact_required_signatures()
         || plan.expected_signers.first() != Some(&binding.payer)
     {
         return Err(refusal(format!(
-            "{} planned geometry changed: expected {} unique accounts and {} signers, observed {unique} and {required_signatures}",
+            "{} planned geometry changed: its own frame declares {} unique accounts and {} signers, the compiled message resolves {unique} and {required_signatures}",
             plan.operation.label(),
-            plan.operation
-                .exact_unique_accounts(binding.market_has_recovery_policy),
+            plan.declared_unique_accounts,
             plan.operation.exact_required_signatures(),
         )));
     }
@@ -769,10 +703,6 @@ pub(crate) fn authenticate_founding_submission_v1(
         || journal.intent_sha256 != intent_digest_v1(journal)?
         || journal.state_sha256 != state_digest_v1(journal)?
         || journal.last_valid_block_height == 0
-        || journal.exact_unique_message_accounts
-            != journal
-                .operation
-                .exact_unique_accounts(binding.market_has_recovery_policy)
         || journal.expected_signers.len() != journal.operation.exact_required_signatures()
     {
         return Err(refusal("founding journal identity or state digest changed"));
@@ -1280,7 +1210,6 @@ mod tests {
             digest(1),
             digest(2),
             payer,
-            true,
         )
         .expect("binding")
     }
@@ -1294,72 +1223,19 @@ mod tests {
             digest(1),
             digest(2),
             payer,
-            true,
         )
         .expect("loopback binding")
     }
 
-    /// A market founded with NO recovery policy publishes no recovery record,
-    /// so every frame that authenticates that record loses its raw and staging
-    /// accounts and nothing else. Pinning BOTH widths is what stops either
-    /// shape being read as drift and refused -- which has now happened twice,
-    /// once to the first market ever founded WITHOUT a policy and once to the
-    /// first market ever founded WITH one.
+    /// A synthetic packet of exactly `total` distinct keys.
     ///
-    /// THE SET OF FRAMES THAT NARROW IS MEASURED, NOT ASSUMED. This test used
-    /// to assert that all three founding legs were shape-invariant, and two of
-    /// them are: DCLTCFQ1 and DCLTPCB2 run before the Source exists. DCLTGMF3
-    /// does not -- it composes Core resolution actions, every one of which
-    /// authenticates the policy pair -- and the belief survived only because no
-    /// market had ever bought a ladder. The `ladder` gauntlet tier founded one
-    /// on a loopback validator on 2026-09-04 and compiled a 60-account
-    /// DCLTGMF3 against this table's flat 58.
-    #[test]
-    fn only_the_pre_source_founding_legs_ignore_the_recovery_policy() {
-        use FoundingSubmissionOperationV1 as Op;
-        for operation in [Op::Dcltcfq1, Op::Dcltpcb2] {
-            assert_eq!(
-                operation.exact_unique_accounts(true),
-                operation.exact_unique_accounts(false),
-                "{} runs before the Source exists and must not depend on the recovery policy",
-                operation.label()
-            );
-        }
-        for operation in [
-            Op::Dcltgmf3,
-            Op::CoreFundingCreateV1,
-            Op::ResolutionFundingActivateV1,
-            Op::CoreFundingAcceptV1,
-        ] {
-            assert_eq!(
-                operation.exact_unique_accounts(true) - operation.exact_unique_accounts(false),
-                2,
-                "{} must lose exactly the recovery record's raw/staging pair when the market \
-                 bought no ladder",
-                operation.label()
-            );
-        }
-        assert_eq!(Op::CoreFundingCreateV1.exact_unique_accounts(false), 18);
-        assert_eq!(Op::CoreFundingCreateV1.exact_unique_accounts(true), 20);
-        // NOT A LITERAL, for the reason this table exists to demonstrate.
-        // These two lines held 58 and 60 and were the THIRD author of the
-        // composed founding frame's width, so they agreed with the stale pin
-        // and disagreed with the frame -- which is why the table's own drift
-        // reached devnet green. The width has one author, and it is the
-        // constant the census fixture is derived from and a live founding is
-        // checked against.
-        assert_eq!(
-            Op::Dcltgmf3.exact_unique_accounts(false),
-            super::super::GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
-        );
-        assert_eq!(
-            Op::Dcltgmf3.exact_unique_accounts(true),
-            super::super::GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 + 2
-        );
-    }
+    /// The width is this helper's own choice and has nothing to say about any
+    /// real frame. It used to be read out of a per-operation table of production
+    /// widths, which made every test in this module a consumer of the mirror the
+    /// module no longer holds.
+    const SYNTHETIC_PACKET_ACCOUNTS_V1: usize = 22;
 
-    fn message(signers: &[Pubkey], operation: FoundingSubmissionOperationV1) -> VersionedMessage {
-        let total = operation.exact_unique_accounts(true);
+    fn message(signers: &[Pubkey], total: usize) -> VersionedMessage {
         let mut static_keys = signers.to_vec();
         static_keys.push(Pubkey::new_unique());
         let loaded = total - static_keys.len();
@@ -1394,7 +1270,8 @@ mod tests {
             &binding,
             FoundingSubmissionPlanV1 {
                 operation,
-                message: message(&signer_keys, operation),
+                message: message(&signer_keys, SYNTHETIC_PACKET_ACCOUNTS_V1),
+                declared_unique_accounts: SYNTHETIC_PACKET_ACCOUNTS_V1,
                 last_valid_block_height: 900,
                 exact_fee_lamports: 5_000,
                 expected_signers: signer_keys,
@@ -1637,7 +1514,8 @@ mod tests {
             &local_binding,
             FoundingSubmissionPlanV1 {
                 operation: local_operation,
-                message: message(&[payer.pubkey()], local_operation),
+                message: message(&[payer.pubkey()], SYNTHETIC_PACKET_ACCOUNTS_V1),
+                declared_unique_accounts: SYNTHETIC_PACKET_ACCOUNTS_V1,
                 last_valid_block_height: 900,
                 exact_fee_lamports: 0,
                 expected_signers: vec![payer.pubkey()],
@@ -1658,7 +1536,8 @@ mod tests {
             &binding,
             FoundingSubmissionPlanV1 {
                 operation: local_operation,
-                message: message(&[payer.pubkey()], local_operation),
+                message: message(&[payer.pubkey()], SYNTHETIC_PACKET_ACCOUNTS_V1),
+                declared_unique_accounts: SYNTHETIC_PACKET_ACCOUNTS_V1,
                 last_valid_block_height: 900,
                 exact_fee_lamports: 0,
                 expected_signers: vec![payer.pubkey()],
@@ -1671,14 +1550,17 @@ mod tests {
             },
         );
         assert!(public_zero.is_err());
+        // THE WALL, IN THIS MODULE'S OWN SENTENCE. A frame that declares two
+        // keys the compiled message does not resolve is exactly what the
+        // deleted recovery arm produced against a real ladder founding --
+        // `expected 62, observed 60` -- and it refuses here, naming both sides
+        // rather than a table nobody can see.
         let wrong = plan_founding_submission_v1(
             &binding,
             FoundingSubmissionPlanV1 {
                 operation: FoundingSubmissionOperationV1::Dcltgmf3,
-                message: message(
-                    &[payer.pubkey(), Pubkey::new_unique()],
-                    FoundingSubmissionOperationV1::Dcltpcb2,
-                ),
+                message: message(&[payer.pubkey()], SYNTHETIC_PACKET_ACCOUNTS_V1),
+                declared_unique_accounts: SYNTHETIC_PACKET_ACCOUNTS_V1 + 2,
                 last_valid_block_height: 1,
                 exact_fee_lamports: 1,
                 expected_signers: vec![payer.pubkey()],
@@ -1689,8 +1571,18 @@ mod tests {
                 completion_contract_sha256: digest(3),
                 recovery_payload: b"recovery".to_vec(),
             },
+        )
+        .expect_err("a frame that declares more keys than its message resolves must refuse");
+        assert!(
+            wrong.0.contains(&format!(
+                "its own frame declares {} unique accounts and 1 signers, the compiled message \
+                 resolves {} and 1",
+                SYNTHETIC_PACKET_ACCOUNTS_V1 + 2,
+                SYNTHETIC_PACKET_ACCOUNTS_V1
+            )),
+            "the journal must say which side is which: {}",
+            wrong.0
         );
-        assert!(wrong.is_err());
         assert!(
             FoundingSubmissionBindingV1::new(
                 "devnet",
@@ -1700,7 +1592,6 @@ mod tests {
                 digest(1),
                 digest(2),
                 payer.pubkey(),
-                true,
             )
             .is_err()
         );
@@ -1713,7 +1604,6 @@ mod tests {
                 digest(1),
                 digest(2),
                 payer.pubkey(),
-                true,
             )
             .is_err()
         );
@@ -1726,7 +1616,6 @@ mod tests {
                 digest(1),
                 digest(2),
                 payer.pubkey(),
-                true,
             )
             .is_err()
         );
