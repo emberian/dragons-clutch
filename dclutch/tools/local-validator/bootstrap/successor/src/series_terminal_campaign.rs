@@ -459,6 +459,19 @@ const SERIES_RETIREMENT_ROLES_V1: [&str; 31] = [
     "refund-wallet",
 ];
 
+/// Decision 0025's escrow tail, as three additional acquisition roles.
+///
+/// A refunding Market's retirement carries the escrow Position, its admission
+/// and the Market's linked basis record in EVERY packet's frame, and a Series
+/// capture that cannot name them cannot capture one. They are a GROUP: a route
+/// declares all three or none, because half a tail is a shape neither program
+/// accepts and `market_retirement_snapshot_from_durable_v1` refuses it.
+const SERIES_RETIREMENT_ESCROW_ROLES_V1: [&str; 3] = [
+    "failure-escrow-position",
+    "failure-escrow-admission",
+    "linked-basis-record",
+];
+
 /// Host-decoded current-source corpus. Fixed arrays are exact-width so no
 /// runtime slice can silently alter one emitter's geometry.
 struct DecodedSeriesCurrentSourceV1 {
@@ -1931,17 +1944,23 @@ fn authenticate_series_terminal_campaign_input_v1(
     }
     let mut all_retirement_paths = Vec::<&Path>::new();
     for (index, route) in input.market_retirements.iter().enumerate() {
-        let expected_roles = SERIES_RETIREMENT_ROLES_V1
+        let categorical_roles = SERIES_RETIREMENT_ROLES_V1
             .into_iter()
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
+        let mut refunding_roles = categorical_roles.clone();
+        refunding_roles.extend(
+            SERIES_RETIREMENT_ESCROW_ROLES_V1
+                .into_iter()
+                .map(str::to_owned),
+        );
+        let declared = route
+            .role_addresses
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
         if route.ordinal != u32::try_from(index).map_err(|_| refusal("too many retirements"))?
-            || route
-                .role_addresses
-                .keys()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                != expected_roles
+            || (declared != categorical_roles && declared != refunding_roles)
             || !route.snapshot.is_absolute()
             || !route.campaign.is_absolute()
             || !route.journal_dir.is_absolute()

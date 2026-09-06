@@ -79,22 +79,59 @@ rm -rf "$evidence_dir"
 mkdir -p "$evidence_dir"
 
 echo "campaign: retirement-checkpoint (market_retirement_v1_lifecycle)"
-# Filtered to the checkpointed test on purpose. The file's other test is the
-# LEGACY atomic retirement, whose transactions carry no label; recording them
-# would demand bindings for a route family this tier does not claim.
+# THREE walks, and the filter is deliberate on both sides.
+#
+# What runs: the CATEGORICAL checkpointed retirement, the REFUNDING one whose
+# prepare burns the failure column decision 0025 seats, and the four hostiles
+# that burn refuses by discriminant. Until 2026-09-06 only the first ran here,
+# so the entire terminal lifecycle of a REFUNDING market -- the shape the burn
+# exists for -- was invisible to the census while its own suite was green. That
+# is the same instrument gap this tier was built to close, one market shape
+# over.
+#
+# What does not: the file's remaining tests are the LEGACY atomic retirement,
+# whose transactions carry no label, and the seated-column negative control,
+# which submits nothing. Recording the first would demand bindings for a route
+# family this tier does not claim.
+#
+# `--test-threads=1` because program logs from one binary interleave, and every
+# binding below is authored from a log line.
+# The three names go AFTER `--`: `cargo test` takes ONE positional filter and
+# hands the rest to libtest, which takes many.
 SBF_OUT_DIR="$sbf_out" DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR="$evidence_dir" \
     cargo test --manifest-path crates/dclutch-svm-harness/Cargo.toml \
     --test market_retirement_v1_lifecycle \
+    -- --exact --test-threads=1 --nocapture \
     checkpointed_retirement_is_packet_bounded_resumable_and_conserving \
-    -- --exact --test-threads=1 --nocapture
+    a_refunding_market_retires_once_the_closure_burns_its_failure_column \
+    the_closure_burn_refuses_its_four_hostiles_by_discriminant
 
-# The chain is twelve acts. Fewer files than that means two transactions
-# collapsed onto one signature -- the census dedup key -- and the fold would
-# silently under-count rather than fail.
+# THE EXPECTED COUNT IS DERIVED, not declared.
+#
+# Evidence files are named by SIGNATURE -- the census's dedup key -- so two
+# transactions that collapse onto one signature overwrite rather than fail, and
+# the fold silently under-counts. The guard against that used to be the literal
+# `12`, which stopped being true the moment a second walk joined the campaign
+# and would have had to be re-typed for every walk after.
+#
+# The number that moves with the campaign is the tier's own binding list: the
+# census fails an unbound transaction AND fails a binding that matched nothing,
+# and every label here is submitted exactly once, so one file per binding label
+# is the campaign's own statement of how many acts it performs. A collapse
+# shows up as a shortfall named here, with the better message, before the census
+# reports it as a binding that matched nothing.
+expected="$(python3 -c 'import json,sys; print(len({b["label"] for b in json.load(open(sys.argv[1]))["bindings"]}))' "$tier_dir/bindings.json")"
 recorded="$(find "$evidence_dir" -name '*.json' | wc -l | tr -d ' ')"
-if [ "$recorded" -ne 12 ]; then
-    echo "retirement-checkpoint: recorded $recorded transactions, expected 12." >&2
-    echo "  A missing file is a duplicated signature, not a skipped act." >&2
+if [ "$recorded" -eq 0 ]; then
+    echo "retirement-checkpoint: recorded NOTHING." >&2
+    echo "  The campaign ran and the instrument was disconnected: check that" >&2
+    echo "  DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR reached the test process." >&2
+    exit 1
+fi
+if [ "$recorded" -ne "$expected" ]; then
+    echo "retirement-checkpoint: recorded $recorded transactions, and bindings.json" >&2
+    echo "  names $expected labels. A shortfall is a duplicated signature, not a" >&2
+    echo "  skipped act; a surplus is a submitted act nobody has bound yet." >&2
     exit 1
 fi
 

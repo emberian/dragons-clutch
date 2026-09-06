@@ -17,7 +17,9 @@ use dclutch_market::{
 };
 use dclutch_market_retirement_v1_operator::{
     CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, CHECKPOINT_RETIREMENT_FINISH_BYTES_V1,
-    CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1, CheckpointMarketRetirementReportV1,
+    CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1, CORE_REFUNDING_RETIREMENT_ACCOUNT_COUNT_V1,
+    CORE_RETIREMENT_ACCOUNT_COUNT_V1, CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1,
+    CheckpointMarketRetirementReportV1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -36,8 +38,76 @@ pub(crate) const AGGREGATE_RETIREMENT_JOURNAL_SCHEMA_V1: &str =
     "dclutch-owned-loopback-aggregate-retirement-journal-v1";
 pub(crate) const AGGREGATE_RETIREMENT_COMPLETION_SCHEMA_V1: &str =
     "dclutch-owned-loopback-aggregate-retirement-completion-v1";
-pub(crate) const EXACT_RETIREMENT_PROTOCOL_AND_PAYER_KEYS_V1: usize = 36;
-pub(crate) const EXACT_RETIREMENT_RESOLVED_KEYS_WITH_COMPUTE_BUDGET_V1: usize = 37;
+
+/// The two frames a checkpointed retirement can present, and the four exact
+/// widths each one fixes.
+///
+/// A retirement presents ONE frame across all four packets (the campaign
+/// builder asserts it), so this is a property of the retirement rather than of
+/// a packet. The account counts have one author -- the operator's
+/// `CORE_RETIREMENT_ACCOUNT_COUNT_V1` and
+/// `CORE_REFUNDING_RETIREMENT_ACCOUNT_COUNT_V1` -- and everything else here is
+/// derived from them: the payer is the one key a Core frame does not already
+/// carry (the Core program is in the frame at index 4), and the ComputeBudget
+/// program is the one further key a submitted packet resolves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AggregateRetirementFrameShapeV1 {
+    /// The thirty-five-account frame every categorical Market retires through.
+    Categorical,
+    /// Decision 0025 shape A: the escrow Position, its admission and the linked
+    /// basis record, trailing on all four packets.
+    Refunding,
+}
+
+impl AggregateRetirementFrameShapeV1 {
+    pub(crate) fn from_account_count_v1(count: usize) -> Result<Self> {
+        match count {
+            CORE_RETIREMENT_ACCOUNT_COUNT_V1 => Ok(Self::Categorical),
+            CORE_REFUNDING_RETIREMENT_ACCOUNT_COUNT_V1 => Ok(Self::Refunding),
+            other => Err(refusal(format!(
+                "retirement operator presented a {other}-account frame; a checkpointed retirement \
+                 is {CORE_RETIREMENT_ACCOUNT_COUNT_V1} accounts, or \
+                 {CORE_REFUNDING_RETIREMENT_ACCOUNT_COUNT_V1} when it carries decision 0025's \
+                 escrow tail"
+            ))),
+        }
+    }
+
+    pub(crate) const fn accounts(self) -> usize {
+        match self {
+            Self::Categorical => CORE_RETIREMENT_ACCOUNT_COUNT_V1,
+            Self::Refunding => CORE_REFUNDING_RETIREMENT_ACCOUNT_COUNT_V1,
+        }
+    }
+
+    /// Unique protocol keys plus the fee payer.
+    pub(crate) const fn protocol_and_payer_keys(self) -> usize {
+        self.accounts() + 1
+    }
+
+    /// Those, plus the ComputeBudget program a submitted packet resolves.
+    pub(crate) const fn resolved_keys_with_compute_budget(self) -> usize {
+        self.protocol_and_payer_keys() + 1
+    }
+
+    /// What the escrow tail costs a v0 packet over the chain's frozen table.
+    ///
+    /// Six bytes, and DERIVED rather than chosen: three more table-resolved
+    /// accounts are three more one-byte indexes in the instruction's account
+    /// list and three more in the lookup's writable/readonly index arrays, and
+    /// no static key and no request byte moves (shape A is a frame change, not
+    /// an ABI change). It agrees with the harness's measured v0 extents --
+    /// `market_retirement_v1_lifecycle.rs`'s categorical 1,083/1,139/1,139/1,019
+    /// against its refunding 1,089/1,145/1,145/1,025 -- and
+    /// `authenticate_packet_binding_v1` refuses by name on the exact byte if a
+    /// real packet ever disagrees.
+    const fn escrow_tail_wire_bytes(self) -> usize {
+        match self {
+            Self::Categorical => 0,
+            Self::Refunding => 2 * CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -83,12 +153,13 @@ impl AggregateRetirementOperationV1 {
         }
     }
 
-    pub(crate) const fn expected_wire_bytes(self) -> usize {
-        match self {
+    pub(crate) const fn expected_wire_bytes(self, shape: AggregateRetirementFrameShapeV1) -> usize {
+        let categorical = match self {
             Self::Prepare => 1_135,
             Self::CloseVault | Self::CloseReplay => 1_191,
             Self::Finish => 1_071,
-        }
+        };
+        categorical + shape.escrow_tail_wire_bytes()
     }
 
     pub(crate) const fn expected_data_bytes(self) -> usize {
@@ -1236,9 +1307,9 @@ fn durable_operation_v1(
     payer: Pubkey,
     instruction: &Instruction,
 ) -> Result<DurableRetirementOperationV1> {
-    if instruction.accounts.len() != 35 || instruction.data.len() != operation.expected_data_bytes()
-    {
-        return Err(refusal("retirement operator changed account or data width"));
+    let shape = AggregateRetirementFrameShapeV1::from_account_count_v1(instruction.accounts.len())?;
+    if instruction.data.len() != operation.expected_data_bytes() {
+        return Err(refusal("retirement operator changed its request width"));
     }
     if operation != AggregateRetirementOperationV1::Prepare {
         let suffix = AggregateRetirementSuffixRequestV1::decode(
@@ -1269,9 +1340,11 @@ fn durable_operation_v1(
         .chain(instruction.accounts.iter().map(|meta| meta.pubkey))
         .collect::<BTreeSet<_>>()
         .len();
-    if exact != EXACT_RETIREMENT_PROTOCOL_AND_PAYER_KEYS_V1 {
+    if exact != shape.protocol_and_payer_keys() {
         return Err(refusal(format!(
-            "retirement instruction resolved {exact} protocol/payer keys, expected {EXACT_RETIREMENT_PROTOCOL_AND_PAYER_KEYS_V1}",
+            "retirement instruction resolved {exact} protocol/payer keys, expected {} for a {}-account frame",
+            shape.protocol_and_payer_keys(),
+            shape.accounts(),
         )));
     }
     Ok(DurableRetirementOperationV1 {
@@ -1288,7 +1361,7 @@ fn durable_operation_v1(
             .collect(),
         data_base64: BASE64.encode(&instruction.data),
         data_sha256: sha256_hex(&instruction.data),
-        expected_wire_bytes: operation.expected_wire_bytes(),
+        expected_wire_bytes: operation.expected_wire_bytes(shape),
         exact_protocol_and_payer_keys: exact,
     })
 }
@@ -1299,12 +1372,12 @@ fn authenticate_operation_v1(
     core: Pubkey,
 ) -> Result<()> {
     let instruction = operation.instruction()?;
+    let shape = AggregateRetirementFrameShapeV1::from_account_count_v1(instruction.accounts.len())?;
     if instruction.program_id != core
-        || instruction.accounts.len() != 35
         || instruction.data.len() != operation.operation.expected_data_bytes()
         || operation.data_sha256 != sha256_hex(&instruction.data)
-        || operation.expected_wire_bytes != operation.operation.expected_wire_bytes()
-        || operation.exact_protocol_and_payer_keys != EXACT_RETIREMENT_PROTOCOL_AND_PAYER_KEYS_V1
+        || operation.expected_wire_bytes != operation.operation.expected_wire_bytes(shape)
+        || operation.exact_protocol_and_payer_keys != shape.protocol_and_payer_keys()
     {
         return Err(refusal("durable retirement operation changed"));
     }
@@ -1315,6 +1388,17 @@ fn authenticate_operation_v1(
     Ok(())
 }
 
+/// The one frame this campaign's four operations present.
+pub(crate) fn campaign_frame_shape_v1(
+    campaign: &AggregateRetirementCampaignV1,
+) -> Result<AggregateRetirementFrameShapeV1> {
+    let first = campaign
+        .operations
+        .first()
+        .ok_or_else(|| refusal("retirement campaign carried no operation"))?;
+    AggregateRetirementFrameShapeV1::from_account_count_v1(first.instruction()?.accounts.len())
+}
+
 fn authenticate_packet_binding_v1(
     campaign: &AggregateRetirementCampaignV1,
     operation: AggregateRetirementOperationV1,
@@ -1323,16 +1407,19 @@ fn authenticate_packet_binding_v1(
     require_sha256(&packet.message_sha256, "packet message")?;
     require_sha256(&packet.resolved_account_keys_sha256, "packet resolved keys")?;
     require_sha256(&packet.exact_key_set_sha256, "packet key set")?;
+    // The shape is the CAMPAIGN's, not this packet's: one retirement presents
+    // one frame across all four operations, and `build_aggregate_retirement_campaign_v1`
+    // refuses a set that does not.
+    let shape = campaign_frame_shape_v1(campaign)?;
     if packet.lookup_table_sha256 != campaign.lookup_table_sha256
-        || packet.resolved_account_keys.len()
-            != EXACT_RETIREMENT_RESOLVED_KEYS_WITH_COMPUTE_BUDGET_V1
+        || packet.resolved_account_keys.len() != shape.resolved_keys_with_compute_budget()
     {
         return Err(refusal(
             "retirement packet changed ALT or resolved-key width",
         ));
     }
     let bytes = decode_base64(&packet.signed.packet_base64, "retirement signed packet")?;
-    if bytes.len() != operation.expected_wire_bytes()
+    if bytes.len() != operation.expected_wire_bytes(shape)
         || packet.signed.packet_sha256 != sha256_hex(&bytes)
     {
         return Err(refusal("retirement packet width or digest changed"));
@@ -1382,15 +1469,16 @@ fn authenticate_packet_binding_v1(
         .chain(instruction.accounts.iter().map(|meta| meta.pubkey))
         .collect::<BTreeSet<_>>();
     let observed_set = resolved.iter().copied().collect::<BTreeSet<_>>();
-    if expected_set.len() != EXACT_RETIREMENT_RESOLVED_KEYS_WITH_COMPUTE_BUDGET_V1
+    if expected_set.len() != shape.resolved_keys_with_compute_budget()
         || observed_set != expected_set
         || sha256_hex(&pubkey_bytes(
             &observed_set.iter().copied().collect::<Vec<_>>(),
         )) != packet.exact_key_set_sha256
     {
-        return Err(refusal(
-            "retirement packet did not bind the exact 36-key route plus ComputeBudget",
-        ));
+        return Err(refusal(format!(
+            "retirement packet did not bind the exact {}-key route plus ComputeBudget",
+            shape.protocol_and_payer_keys(),
+        )));
     }
     let VersionedMessage::V0(message) = &transaction.message else {
         return Err(refusal("retirement packet was not v0"));
@@ -1719,7 +1807,21 @@ mod tests {
         market: Pubkey,
         checkpoint: Pubkey,
     ) -> CheckpointMarketRetirementReportV1 {
-        let mut accounts = (1..=35)
+        report_with_shape(
+            core,
+            market,
+            checkpoint,
+            AggregateRetirementFrameShapeV1::Categorical,
+        )
+    }
+
+    fn report_with_shape(
+        core: Pubkey,
+        market: Pubkey,
+        checkpoint: Pubkey,
+        shape: AggregateRetirementFrameShapeV1,
+    ) -> CheckpointMarketRetirementReportV1 {
+        let mut accounts = (1..=u8::try_from(shape.accounts()).expect("frame width"))
             .map(|byte| AccountMeta::new_readonly(key(byte), false))
             .collect::<Vec<_>>();
         accounts[0] = AccountMeta::new(market, false);
@@ -1803,6 +1905,43 @@ mod tests {
             .expect("campaign")
     }
 
+    /// The same campaign a REFUNDING Market retires through: three trailing
+    /// accounts on all four packets and nothing else moved.
+    fn refunding_campaign() -> AggregateRetirementCampaignV1 {
+        let core = key(5);
+        let claims = key(6);
+        let market = key(40);
+        let checkpoint = key(41);
+        let input = AggregateRetirementCampaignInputV1 {
+            genesis_hash: key(90).to_string(),
+            rpc_url: "http://127.0.0.1:43210/".into(),
+            plan_sha256: "11".repeat(32),
+            evidence_sha256: "22".repeat(32),
+            payer: key(80),
+            lookup_table: key(81),
+            lookup_table_sha256: "33".repeat(32),
+            core_program: core,
+            claims_program: claims,
+            market: account(market, core, 10, vec![1]),
+            rent_credit: account(key(42), key(7), 20, vec![2]),
+            checkpoint: account(checkpoint, claims, 30, vec![3]),
+            custody_replay: account(key(43), key(8), 40, vec![4]),
+            hoard_vault: account(key(44), key(8), 50, vec![5]),
+            source_receipt: account(key(45), key(9), 1, vec![6]),
+            refund_wallet: account(key(46), system_program::ID, 1_000, Vec::new()),
+        };
+        build_aggregate_retirement_campaign_v1(
+            input,
+            &report_with_shape(
+                core,
+                market,
+                checkpoint,
+                AggregateRetirementFrameShapeV1::Refunding,
+            ),
+        )
+        .expect("refunding campaign")
+    }
+
     fn projection(phase: AggregateRetirementChainPhaseV1) -> AggregateRetirementChainProjectionV1 {
         let mut value = AggregateRetirementChainProjectionV1 {
             phase,
@@ -1876,6 +2015,73 @@ mod tests {
                 .operations
                 .iter()
                 .all(|operation| operation.exact_protocol_and_payer_keys == 36)
+        );
+        assert_eq!(
+            campaign_frame_shape_v1(&campaign).expect("shape"),
+            AggregateRetirementFrameShapeV1::Categorical
+        );
+    }
+
+    /// A refunding Market's retirement is the SAME four operations three
+    /// accounts wider, and the journal admits it as its own shape rather than
+    /// as a defect.
+    ///
+    /// Before 2026-09-06 this journal spelled `35`, `36` and `37` as constants,
+    /// so a devnet or loopback retirement of a refunding Market -- the frame
+    /// decision 0025's burn requires -- was refused at "retirement operator
+    /// changed account or data width" before it reached a chain. The request
+    /// widths are IDENTICAL in both shapes, which is the assertion that keeps
+    /// shape A a frame change rather than an ABI change.
+    #[test]
+    fn the_journal_binds_the_refunding_frame_as_its_own_shape() {
+        let categorical = campaign();
+        let campaign = refunding_campaign();
+        authenticate_aggregate_retirement_campaign_v1(&campaign).expect("refunding campaign");
+        assert_eq!(
+            campaign_frame_shape_v1(&campaign).expect("shape"),
+            AggregateRetirementFrameShapeV1::Refunding
+        );
+        assert_eq!(
+            campaign
+                .operations
+                .iter()
+                .map(|operation| operation.expected_wire_bytes)
+                .collect::<Vec<_>>(),
+            [1_141, 1_197, 1_197, 1_077],
+            "six bytes per packet: three table-resolved account indexes in the instruction and \
+             three in the lookup's index arrays"
+        );
+        assert!(
+            campaign
+                .operations
+                .iter()
+                .all(|operation| operation.exact_protocol_and_payer_keys == 39)
+        );
+        assert_eq!(
+            campaign
+                .operations
+                .iter()
+                .map(|operation| operation.instruction().expect("instruction").data.len())
+                .collect::<Vec<_>>(),
+            categorical
+                .operations
+                .iter()
+                .map(|operation| operation.instruction().expect("instruction").data.len())
+                .collect::<Vec<_>>(),
+            "shape A moves no request byte"
+        );
+    }
+
+    /// Any width that is neither shape is refused by name, with both admitted
+    /// widths in the sentence.
+    #[test]
+    fn a_frame_that_is_neither_shape_refuses_by_name() {
+        let error = AggregateRetirementFrameShapeV1::from_account_count_v1(36)
+            .expect_err("36 is neither shape");
+        let text = error.to_string();
+        assert!(
+            text.contains("36-account frame") && text.contains("35") && text.contains("38"),
+            "{text}"
         );
     }
 

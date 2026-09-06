@@ -57,6 +57,7 @@ use dclutch_operator::{
         project_retirement_replay_handoff_coordinate_closure_v1,
     },
 };
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::continuation_v1::{
     RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1,
@@ -130,7 +131,7 @@ use crate::{
         decode_routed_market, finalized_snapshot, require_direct_retirement_evidence,
         required_account, routed_record,
     },
-    wallet_terminal::authenticate_role,
+    wallet_terminal::{FinalizedSnapshotV1, authenticate_role},
 };
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk_ids::{compute_budget, system_program, sysvar};
@@ -6604,6 +6605,44 @@ pub(crate) fn plan_aggregate_retirement_caller_v1(
     })
 }
 
+/// Derive this Market's failure escrow off the Claims aggregate itself.
+///
+/// Every input is the aggregate account's own: the Claims program is its owner,
+/// the logical Market and the runtime width are its header fields. So a
+/// substituted document cannot point this at another Market's escrow, and the
+/// derivation has the one author every other host consumer uses
+/// (`dclutch_operator::failure_escrow_v1`, re-exporting
+/// `dclutch_claims::protocol_position_v2::failure_escrow_v1`).
+///
+/// `None` means there is no escrow to look for at all -- the account is not the
+/// Claims aggregate this snapshot expects, or its width seats no failure
+/// coordinate. It is never an assertion that the escrow is empty: that is a
+/// question about the account at the derived address, which the caller reads.
+fn derived_failure_escrow_v1(
+    preliminary: &FinalizedSnapshotV1,
+    aggregate: Pubkey,
+    claims: Pubkey,
+) -> Result<Option<dclutch_operator::failure_escrow_v1::FailureEscrowV1>> {
+    let account = preliminary
+        .account(aggregate)
+        .map_err(|error| Error::new(format!("Claims aggregate: {error}")))?;
+    if account.owner != claims || account.lamports == 0 {
+        return Ok(None);
+    }
+    let Ok(view) =
+        dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2::decode(&account.data)
+    else {
+        return Ok(None);
+    };
+    Ok(dclutch_operator::failure_escrow_v1::failure_escrow_v1(
+        claims,
+        view.logical_market,
+        aggregate,
+        view.claim_count,
+    )
+    .ok())
+}
+
 pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
@@ -6614,14 +6653,40 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
 ) -> Result<(MarketRetirementSnapshotV1, Vec<ObservedAccount>)> {
     let registry = pubkey(&plan.registry.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
     let release = hex32(&plan.release_set_id)?;
     let context = hex32(&evidence.founding_custody_context)?;
     let rent_credit = evidence_pubkey(evidence, "founding_lifecycle_rent_credit")?;
-    let preliminary = finalized_snapshot(rpc, &[rent_credit])?;
+    let claims_aggregate = evidence_pubkey(evidence, "claims_aggregate")?;
+    let preliminary = finalized_snapshot(rpc, &[rent_credit, claims_aggregate])?;
     let credit_account = preliminary.account(rent_credit)?.clone();
     let credit = LifecycleRentCreditV2::decode(&credit_account.data)
         .map_err(|error| Error::new(format!("aggregate RentCredit: {error:?}")))?;
     let refund_wallet = Pubkey::new_from_array(credit.refund_wallet().to_bytes());
+    // THE ESCROW TAIL'S THREE ADDRESSES, EACH FROM ITS ONE AUTHOR.
+    //
+    // The pair is DERIVED off the aggregate this snapshot already reads --
+    // program, logical Market and runtime width are the aggregate's own fields,
+    // so this cannot be pointed at another Market's escrow. The linked basis
+    // record is NOT derivable from the aggregate, and it is not re-derived by a
+    // second hand either: it is a content-addressed Registry record whose
+    // digest the FOUNDING PRODUCER stored under `linked_liability_basis_record`
+    // (`market.rs`'s `publish_market_records`, published under
+    // `GRADED_BASIS_RECORD_SCHEMA_ID_V3`), and `routed_record` recomputes the
+    // address from that stored digest and refuses a report whose row does not
+    // reproduce it. The producer's digest is the author; this path is a reader.
+    let escrow = derived_failure_escrow_v1(&preliminary, claims_aggregate, claims)?;
+    // Resolved leniently on purpose. A founding evidence document written before
+    // the label existed retires exactly as it did, and a Market that turns out to
+    // have a SEATED column without one is refused by name below rather than
+    // built into a plan the chain refuses.
+    let basis_record = routed_record(
+        evidence,
+        "linked_liability_basis_record",
+        registry,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    )
+    .ok();
     let realm = routed_record(
         evidence,
         "realm_record",
@@ -6661,7 +6726,7 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         registry,
         pubkey(&plan.core.program_id)?,
         pubkey(&plan.core.programdata_id)?,
-        pubkey(&plan.claims.program_id)?,
+        claims,
         pubkey(&plan.claims.programdata_id)?,
         pubkey(&plan.resolution.program_id)?,
         pubkey(&plan.resolution.programdata_id)?,
@@ -6669,7 +6734,7 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         pubkey(&plan.custody.programdata_id)?,
         pubkey(&plan.rent_credit.program_id)?,
         source_receipt,
-        evidence_pubkey(evidence, "claims_aggregate")?,
+        claims_aggregate,
         core_replay,
         hoard,
         authority,
@@ -6693,6 +6758,20 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         sysvar::rent::ID,
         refund_wallet,
     ];
+    // The escrow tail sits at fixed indexes AFTER the thirty-one and BEFORE the
+    // caller's own additional keys, so the frame's shape is a property of this
+    // function rather than of what a caller appended.
+    let mut escrow_index = None;
+    if let Some(escrow) = escrow {
+        escrow_index = Some(keys.len());
+        keys.push(escrow.position);
+        keys.push(escrow.admission);
+    }
+    let mut basis_index = None;
+    if let Some(basis) = basis_record {
+        basis_index = Some(keys.len());
+        keys.push(basis.raw);
+    }
     keys.extend_from_slice(additional_keys);
     let snapshot = finalized_snapshot(rpc, &keys)?;
     let account = |index: usize, label: &str| -> Result<ObservedAccount> {
@@ -6700,6 +6779,34 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
             .account(keys[index])
             .map_err(|error| Error::new(format!("{label}: {error}")))
             .cloned()
+    };
+    // SEATED OR VACANT, decided by the chain rather than by which read returned.
+    // A Market whose derived escrow holds nothing is the exact thirty-five-account
+    // retirement that shipped; one whose escrow is live carries all three trailing
+    // accounts, and if the founding evidence names no basis record the tail is
+    // refused BY NAME here rather than built into a plan the chain refuses.
+    let tail = match escrow_index {
+        Some(base) => {
+            let position = account(base, "aggregate failure-escrow Position")?;
+            if position.lamports == 0 || position.data.is_empty() {
+                None
+            } else {
+                let admission = account(base + 1, "aggregate failure-escrow admission")?;
+                let basis = basis_index
+                    .ok_or_else(|| {
+                        Error::new(format!(
+                            "this Market's failure column is seated in escrow Position {} and its \
+                             founding evidence carries no canonical linked_liability_basis_record; \
+                             the closure's burn needs that record in frame and no second hand may \
+                             re-derive its address",
+                            position.key
+                        ))
+                    })
+                    .and_then(|index| account(index, "aggregate linked basis record"))?;
+                Some((position, admission, basis))
+            }
+        }
+        None => None,
     };
     let retirement = MarketRetirementSnapshotV1 {
         market: account(0, "aggregate Market")?,
@@ -6733,20 +6840,11 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         rent_programdata: account(28, "aggregate Rent ProgramData")?,
         rent_sysvar: account(29, "aggregate Rent sysvar")?,
         refund_wallet: account(30, "aggregate refund wallet")?,
-        // OWED, and named rather than defaulted. Decision 0025's closure burn
-        // needs the escrow Position, its admission and the linked basis record
-        // in the retirement's frame, and this devnet path can derive the first
-        // two off the aggregate it already reads
-        // (`dclutch_claims::protocol_position_v2::failure_escrow_v1`) but has
-        // no route to the third: the linked basis record's address is carried
-        // by the founding producer, not by the terminal evidence this function
-        // is given. Until that argument is threaded, a devnet retirement of a
-        // refunding Market builds the thirty-five-account plan and the chain
-        // refuses it with `0x5503` -- which is exactly the wall this path had
-        // before, refused by name rather than mis-built. Cohort-17.
-        failure_escrow_position: None,
-        failure_escrow_admission: None,
-        linked_basis_record: None,
+        // Decision 0025's escrow tail, threaded. All three or none: half a tail
+        // is a shape neither program accepts, and the builder refuses it.
+        failure_escrow_position: tail.as_ref().map(|(position, _, _)| position.clone()),
+        failure_escrow_admission: tail.as_ref().map(|(_, admission, _)| admission.clone()),
+        linked_basis_record: tail.as_ref().map(|(_, _, basis)| basis.clone()),
     };
     let mut prestate = snapshot.accounts.values().cloned().collect::<Vec<_>>();
     prestate.sort_unstable_by_key(|account| account.key);
@@ -7360,6 +7458,17 @@ fn fresh_protocol_stage_from_chain_v1(
             )?;
             let report = build_market_retirement_v1(&snapshot)
                 .map_err(|error| Error::new(format!("aggregate retirement: {error:?}")))?;
+            // The one-shot route's Core frame is fixed at thirty-five accounts,
+            // so it carries no escrow tail and its Claims closure reaches the
+            // supply loop with the failure column still standing. Now that this
+            // path threads the tail it can say so before a submission rather
+            // than after one: the checkpointed route is where a refunding
+            // Market retires.
+            if report.failure_escrow_seated {
+                return Err(Error::new(
+                    "this Market's failure column is seated in its derived escrow, and the                      one-shot AggregateRetirement frame is fixed at thirty-five accounts, so its                      Claims closure would refuse the retirement by name (0x5503). Retire it                      through the checkpointed route, whose four packets carry the escrow pair and                      the linked basis record and whose prepare burns the column (decision 0025,                      shape A)",
+                ));
+            }
             let closure = TerminalMetaClosureV1 {
                 stage,
                 program_id: report.instruction.program_id,

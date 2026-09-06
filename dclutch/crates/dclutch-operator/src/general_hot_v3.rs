@@ -145,8 +145,9 @@ pub const GENERAL_HOT_HEAP_FRAME_BYTES_V3: u32 = DIRECT_HOT_HEAP_FRAME_BYTES_V1;
 /// The heap frame above was emitted explicitly and the compute limit was not,
 /// so every General successor transaction this crate compiled carried the
 /// runtime's per-instruction default. On devnet at `65Yq3q6t…` that is 202,850
-/// units for the Trading instruction and `OpenBatch` at N=2 measures 654,000 to
-/// 677,000 in `tools/gauntlet/general-hot`: the transaction failed
+/// units for the Trading instruction and `OpenBatch` measures 650,340 (N=2),
+/// 663,016 (N=13) and 670,326 (N=258) in `tools/gauntlet/general-hot`, at
+/// `1dd18be91` on hbox with platform-tools v1.53: the transaction failed
 /// `ProgramFailedToComplete` — *"exceeded CUs meter at BPF instruction"* — at
 /// the first devnet attempt, having reached the program. The harness could not
 /// see it because the program-test caller pushes its own

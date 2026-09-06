@@ -15,7 +15,7 @@ use dclutch_claims::{
         ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestInputV1,
         ClaimsMarketClosureRequestV1,
     },
-    protocol_position_v2::{ProtocolPositionAdmissionSeedsV2, ProtocolPositionSeedsV2},
+    protocol_position_v2::failure_escrow_v1,
     retirement_checkpoint_handoff_v1::{
         CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
         ClaimsRetirementCheckpointHandoffReceiptV1, ClaimsRetirementCheckpointHandoffRequestV1,
@@ -76,6 +76,17 @@ use spl_token_interface::state::{Account as SplTokenAccount, AccountState};
 pub const REGISTRY_RETIREMENT_CONTINUATION_PREFIX_ACCOUNTS_V1: usize = 10;
 /// Exact Core retirement frame before the invocation-scoped Registry admission.
 pub const CORE_RETIREMENT_ACCOUNT_COUNT_V1: usize = 35;
+/// Decision 0025's escrow tail: the Position, its admission and the basis record.
+pub const CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1: usize = 3;
+/// Exact Core retirement frame for a REFUNDING Market's checkpointed route.
+///
+/// Present on ALL FOUR packets, because one retirement presents one frame and
+/// the three suffix packets carry accounts they never read. This is the whole
+/// of shape A's frame growth, and the two counts here are the ONLY two widths
+/// a checkpointed retirement's packet may have -- a consumer that has to tell
+/// the shapes apart asks these rather than spelling 35 and 38 again.
+pub const CORE_REFUNDING_RETIREMENT_ACCOUNT_COUNT_V1: usize =
+    CORE_RETIREMENT_ACCOUNT_COUNT_V1 + CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1;
 /// Exact nested Core retirement data width.
 pub const MARKET_RETIREMENT_CORE_INSTRUCTION_BYTES_V1: usize = REQUEST_BYTES
     + RETIREMENT_BUNDLE_BYTES_V1
@@ -1267,14 +1278,18 @@ fn authenticate_claims(
 /// nothing else, and the linked basis record reproduces the aggregate's own
 /// `basis_id` and says the Market refunds on failure.
 ///
-/// It does NOT re-derive the escrow OWNER, and that is deliberate: whether that
-/// owner is the capability PDA at the failure selector is the rule the Claims
-/// program authenticates with `FailureEscrowIdentityV1::derive`, and the host
-/// spelling of it has one author the CALLER uses
-/// (`dclutch_claims::protocol_position_v2::failure_escrow_v1`) to find these
-/// three accounts in the first place. A caller that hands this builder some
-/// other canonical Position gets a plan the chain refuses by name
-/// (`ClaimsSbfError::FailureEscrow`, `0x5010`), not a plan that succeeds.
+/// It also RE-DERIVES the escrow's owner the way the chain does, off the
+/// aggregate's own coordinates -- `failure_escrow_v1` takes the Claims program
+/// from the aggregate's owner, the logical Market and the runtime width from
+/// its header -- and requires the pair in frame to be that derivation's two
+/// addresses under that owner. Until 2026-09-06 it took the Position's OWN
+/// recorded owner as the seed and so authenticated the canonical-pair shape
+/// without authenticating WHICH owner, which made "these are this Market's
+/// escrow accounts" a property of the caller's derivation rather than of this
+/// builder. The chain refuses the difference by name
+/// (`ClaimsSbfError::FailureEscrow`, `0x5010`), so nothing unsafe was
+/// constructible; what was missing is that the builder could not say it, and a
+/// plan refused on chain costs a submission to learn what one read decides.
 fn authenticate_failure_escrow(
     snapshot: &MarketRetirementSnapshotV1,
     claims: LiabilityBasisMarketViewV2,
@@ -1319,27 +1334,25 @@ fn authenticate_failure_escrow(
     }
     let position = LiabilityBasisPositionViewV2::decode(&position_account.data)
         .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?;
-    let expected_position = Pubkey::find_program_address(
-        &ProtocolPositionSeedsV2::new(snapshot.claims_aggregate.key.to_bytes(), position.owner)
-            .map_err(|_| MarketRetirementOperatorErrorV1::Frame)?
-            .as_slices(),
-        &snapshot.claims_program.key,
+    // The owner is DERIVED, not read off the Position. Every input is the
+    // aggregate's own -- program, logical Market, runtime width -- so this
+    // cannot be pointed at another Market's escrow, and it is the same
+    // derivation `FailureEscrowIdentityV1::derive` makes inside Claims.
+    let derived = failure_escrow_v1(
+        snapshot.claims_program.key,
+        claims.logical_market,
+        snapshot.claims_aggregate.key,
+        claims.claim_count,
     )
-    .0;
-    let expected_admission = Pubkey::find_program_address(
-        &ProtocolPositionAdmissionSeedsV2::new(
-            snapshot.claims_aggregate.key.to_bytes(),
-            position.owner,
-        )
-        .map_err(|_| MarketRetirementOperatorErrorV1::Frame)?
-        .as_slices(),
-        &snapshot.claims_program.key,
-    )
-    .0;
+    .map_err(|_| MarketRetirementOperatorErrorV1::Frame)?;
+    if derived.failure_selector != failure_selector {
+        return Err(MarketRetirementOperatorErrorV1::Claims);
+    }
     if position_account.owner != snapshot.claims_program.key
         || admission_account.owner != snapshot.claims_program.key
-        || position_account.key != expected_position
-        || admission_account.key != expected_admission
+        || position_account.key != derived.position
+        || admission_account.key != derived.admission
+        || position.owner != derived.owner.to_bytes()
         || admission_account.data.is_empty()
         || position.market_account != snapshot.claims_aggregate.key.to_bytes()
         || position.basis_id != claims.basis_id
@@ -1923,11 +1936,13 @@ fn core_accounts(
         snapshot.failure_escrow_admission.as_ref(),
         snapshot.linked_basis_record.as_ref(),
     ) {
-        accounts.extend_from_slice(&[
+        let tail = [
             AccountMeta::new(position.key, false),
             AccountMeta::new(admission.key, false),
             AccountMeta::new_readonly(basis.key, false),
-        ]);
+        ];
+        debug_assert_eq!(tail.len(), CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1);
+        accounts.extend_from_slice(&tail);
     }
     accounts
 }

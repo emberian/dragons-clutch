@@ -1171,7 +1171,10 @@ mod tests {
     /// payout is zero under every certificate, and whose only mover wants a
     /// drained Hoard -- an instruction no party can follow. Each arm below is a
     /// different fact about the same number, and the point of the test is that
-    /// they get different sentences.
+    /// they get different answers: five refusals that each name an act some
+    /// party can still perform, and one ADMISSION for the residue itself, whose
+    /// discharge is a step of the retirement rather than anything a preflight
+    /// can ask for.
     #[test]
     fn a_seated_failure_column_is_not_an_unpaid_holder() {
         let market_key = Pubkey::new_unique();
@@ -1278,10 +1281,15 @@ mod tests {
         .expect_err("a substituted escrow observation must refuse");
         assert!(error.to_string().contains("not the derived"), "{error}");
 
-        // THE WALL, stated as itself.
+        // THE RESIDUE, ADMITTED. Until the closure burn shipped (`7d45d6ba3`,
+        // 2026-09-06) this arm was the wall and the preflight's sentence about
+        // it was the longest in the file. The column is discharged by a step of
+        // the retirement itself, so a seated residue is no longer a reason to
+        // block the act that BEGINS the retirement, and every other arm above
+        // still refuses -- each one leaves an act some party can perform.
         let mut seated = escrow_position(&aggregate, derived.owner, &[0, 0, 0, residue]);
         seated.key = derived.position;
-        let error = authenticate_zero_claims(
+        authenticate_zero_claims(
             &aggregate,
             aggregate.key,
             claims,
@@ -1289,21 +1297,6 @@ mod tests {
             custody_context,
             Some(&seated),
         )
-        .expect_err("a seated residue still blocks BeginRetiring");
-        let text = error.to_string();
-        assert!(
-            text.contains("no payout can unblock it")
-                && text.contains(&derived.position.to_string())
-                && text.contains(&derived.owner.to_string())
-                && text.contains("closure's burn")
-                && text.contains("decision 0012"),
-            "the seated residue must name the escrow, its keyless owner, the burn that \
-             discharges it and the rule that decides whether THIS Market can reach it, and must \
-             NOT instruct a payout: {text}"
-        );
-        assert!(
-            !text.contains("wallet terminal payouts first"),
-            "the instruction no party can follow must be gone: {text}"
-        );
+        .expect("a wholly seated residue is discharged by the closure, not by a payout");
     }
 }

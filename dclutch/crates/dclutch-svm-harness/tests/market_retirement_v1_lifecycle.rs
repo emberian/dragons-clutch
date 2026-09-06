@@ -1955,6 +1955,21 @@ async fn the_closure_burn_refuses_its_four_hostiles_by_discriminant() {
         protocol_account(JOINED_CLAIMS_PROGRAM_ID, decoy_bytes),
     );
 
+    // THE BUILDER REFUSES THE DECOY BEFORE THE CHAIN DOES. The decoy is a
+    // canonical protocol-Position pair under its OWN recorded owner holding
+    // exactly the residue at exactly the failure coordinate, so every rule
+    // stated against the Position's own bytes admits it; what refuses it is
+    // re-deriving the owner off the aggregate the way Claims does. Until
+    // 2026-09-06 this snapshot compiled a plan and the operator learned the
+    // difference by submitting it.
+    let mut decoy_snapshot = snapshot.clone();
+    decoy_snapshot.failure_escrow_position = observed_or_none(&mut context, decoy).await;
+    assert_eq!(
+        build_checkpoint_market_retirement_v1(&decoy_snapshot),
+        Err(MarketRetirementOperatorErrorV1::Claims),
+        "a canonical Position at another owner is not this Market's derived escrow"
+    );
+
     let mut wrong_escrow = plan.prepare.clone();
     wrong_escrow.accounts[35].pubkey = decoy;
     let (table, addresses) =

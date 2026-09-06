@@ -14,27 +14,51 @@ the same gap `claims-fractional-atomic` closed for the fractional claim-check
 life, and the thing the unwitnessed-routes list warned about when it said an
 unwitnessed route "is a statement about coverage and not about correctness".
 
-The campaign is unchanged apart from twelve call sites that now go through the
-harness's shared `submit_recorded`. The other test in the same file — the
-LEGACY atomic retirement — is deliberately left unlabelled, and the runner
-filters to the checkpointed test so the fold contains exactly the chain.
+The campaign is unchanged apart from the call sites that now go through the
+harness's shared `submit_recorded`. The other tests in the same file — the
+LEGACY atomic retirement, whose transactions carry no label, and the
+seated-column negative control, which submits nothing — are deliberately left
+out, and the runner names the three tests it drives so the fold contains exactly
+the two chains and the burn's hostiles.
 
-## The chain
+## The two chains
 
-Four accepted acts and eight hostiles, one transaction each:
+A market retires in one of two shapes, and since 2026-09-06 this tier drives
+both. Twenty-one transactions: the categorical walk's four accepted acts and
+eight hostiles, the refunding walk's four accepted acts, and the closure burn's
+four hostiles with their own positive control.
 
-| act | CU | what it does |
-|---|---|---|
-| prepare | 225,798 | hands the Claims aggregate to Core; Claims + Core in the frame |
-| close-vault | 229,762 | closes the HoardPrincipal vault; Core + Custody + SPL Token |
-| close-replay | 220,472 | closes the Custody replay; Core + Custody, **no token frame** |
-| finish | 166,219 | closes the checkpoint, the Market and the RentCredit; Core + Rent |
+| act | categorical CU | refunding CU | what it does |
+|---|---:|---:|---|
+| prepare | 139,884 | 148,544 | hands the Claims aggregate to Core; Claims + Core in the frame. The refunding one also **burns** the failure column and closes the escrow pair |
+| close-vault | 126,725 | 124,440 | closes the HoardPrincipal vault; Core + Custody + SPL Token |
+| close-replay | 117,503 | 110,718 | closes the Custody replay; Core + Custody, **no token frame** |
+| finish | 102,967 | 96,182 | closes the checkpoint, the Market and the RentCredit; Core + Rent |
 
-The eight hostiles carry four distinct refusal codes —
+These figures are one fold, re-taken 2026-09-06 at `42c3bb931` on Linux under
+platform-tools v1.53. Most of them moved from the numbers this file used to
+carry, which came from an earlier fold on different artifacts; per-row CU is a
+measurement of a build and not a property of a route, and the table says which
+build.
+
+The refunding walk's frame is **thirty-eight accounts on all four packets** —
+the escrow Position, its protocol-Position admission and the Market's linked
+`ProductBasisV3` record, trailing — because `aggregate_retirement_journal.rs`
+requires one frame per retirement and the three suffix packets carry accounts
+they never read. The categorical walk is the exact thirty-five that shipped and
+no request byte differs between them: shape A is a frame change, not an ABI
+change.
+
+The categorical walk's eight hostiles carry four distinct refusal codes —
 `claims/ClaimsMarketClosureSbfErrorV1::Identity`, `core/CoreSbfError::Market`
 (four of them), `core/CoreSbfError::ChildAck`, `core/CoreSbfError::AccountFrame`
 — and each has its own label, because a shared label would let the census read
-all four `Market` refusals off whichever ran first.
+all four `Market` refusals off whichever ran first. The burn's four carry three
+more: `claims/ClaimsSbfError::FailureEscrow` for a canonical Position at another
+owner, `claims/ClaimsMarketClosureSbfErrorV1::Basis` for a record this Market was
+not founded on, and `::Liability` twice — once for a stranger holding part of the
+column and once for an escrow holding a tradeable claim beside the residue,
+because those are the same accusation from the two sides of an equality.
 
 ## The packet position, stated once so it cannot drift
 
@@ -55,6 +79,18 @@ The campaign now submits what it claims.
 | close-replay | 2,157 | +925 | **1,139** |
 | finish | 2,037 | +805 | **1,019** |
 | finish, substituted-wallet hostile | 2,005 | +773 | **1,018** |
+| prepare, refunding | 2,200 | +968 | **1,089** |
+| close-vault, refunding | 2,256 | +1,024 | **1,145** |
+| close-replay, refunding | 2,256 | +1,024 | **1,145** |
+| finish, refunding | 2,136 | +904 | **1,025** |
+
+**The escrow tail costs six bytes a packet, and six is derived.** Three more
+table-resolved accounts are three more one-byte indexes in the instruction's
+account list and three more in the lookup's writable/readonly index arrays; no
+static key moves, because a payer and an invoked program are the only two and
+neither is new. `aggregate_retirement_journal.rs`'s
+`AggregateRetirementFrameShapeV1` derives the devnet packets' expected widths the
+same way, and would refuse a real packet that disagreed on the exact byte.
 
 **One table for the chain, not one per route.** The four 35-meta frames share
 their coordinates, so a table per route would be a rent per route for a single
@@ -88,8 +124,10 @@ table touches those, so if a request grows there is no third lever.
     tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh
 
 It builds seven SBF programs, refuses on any stack-frame-overwrite diagnostic,
-refuses if the fold is not exactly twelve transactions (a missing file is a
-duplicated signature, not a skipped act), evaluates seven witnesses, and folds.
+refuses if the fold's transaction count is not the number of labels
+`bindings.json` names — derived rather than declared, because evidence files are
+keyed by signature and a collapse overwrites rather than fails — evaluates eight
+witnesses, and folds.
 It is a **ProgramTest fast lane**: nothing deploys through Loader V3, the
 ProgramData accounts are constructed by the campaign, and ProgramTest has no
 finalized commitment. `TIERS.md` states the bar.

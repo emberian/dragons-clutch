@@ -378,16 +378,28 @@ makes the loop terminate at two passes rather than diverge.
 Both lookup-table acts are `?`: the driver refuses to overwrite its own
 evidence, so a resumed stage reuses the table it already paid rent for.
 
-**It needs the cohort-17 Trading link.** Cohort-16.1's `OpenBatch` reached the
-accelerator -- the first on any chain -- and refused `TradingSbfError::Transition`
-`0x4004` on the accelerator's ack, cause
-`GeneralAcceleratorSemanticErrorV3::ConfigMarket`: the General AccountProfile
-projected the Portfolio's `claim_basis_id` @96 into `SEMANTIC_BASIS_ID` while
-the config binds `semantic_basis_identity_v3(linked_basis)`, the liability basis
-@128. The rule now projects @128. It lives in `dclutch-trading`, which is
-compiled into the Trading SBF link, so this row cannot pass before a cohort that
-redeploys Trading -- and it needs no re-founding, because the live portfolio
-already carries the config's value at @128.
+**It needs a fresh General founding, and it needs no Trading redeploy.**
+Cohort-16.1's `OpenBatch` reached the accelerator -- the first on any chain --
+and refused `TradingSbfError::Transition` `0x4004` on the accelerator's ack,
+cause `GeneralAcceleratorSemanticErrorV3::ConfigMarket`: the General
+AccountProfile projected the Portfolio's `claim_basis_id` @96 into
+`SEMANTIC_BASIS_ID` while the config binds
+`semantic_basis_identity_v3(linked_basis)`, the liability basis @128. The rule
+now projects @128.
+
+WHERE THAT RULE LIVES WAS MEASURED, because the obvious answer was wrong. Two
+commits differing only in that one constant build a **byte-identical**
+`dclutch_trading_sbf.so`, `65ff376e876e3398d4e438171a955314202c9d3c7a194a9035231f203ac0c596`,
+and a byte-identical accelerator, `d2ff2b87ac79e5329b83f10e10a2f2d9b03ac16d445d070188f03946598da91a`,
+while their campaigns disagree completely. `programs/dclutch-trading-sbf` names
+`account_rules_v3` nowhere: Trading INTERPRETS a profile artifact presented as an
+account. The operator encodes that artifact
+(`general_selected_release_v1.rs:1166`) and binds `digest(account_profile)` into
+the per-action `CapabilityProgramV4` descriptor (1216-1218), which the founding
+pins as its manifest entry. So the fix moves the published artifact, the
+descriptor and the entry, and moves no link: a market founded at the old entry
+cannot select the new profile, and no market needs its Portfolio touched --
+the live record already carries the config's value at @128.
 
 ### close-batch
 
@@ -554,11 +566,22 @@ What this row must supply, and where each address comes from:
   Claims aggregate alone (its owner is the program, its header carries the
   logical Market and the runtime width);
 - the linked basis record: the address the FOUNDING producer used. It is not
-  derivable from the aggregate, and the devnet retirement path
-  (`terminal_sequence.rs`, `aggregate_retirement_snapshot_from_chain_v1`) does
-  not yet receive it -- it passes `None`, builds the thirty-five-account plan and
-  the chain refuses `0x5503`, which is the same wall refused by name rather than
-  mis-built. **Threading that one address is what this row is still owed.**
+  derivable from the aggregate, and it is not re-derived by a second hand
+  either. `market.rs`'s `publish_market_records` publishes it under
+  `GRADED_BASIS_RECORD_SCHEMA_ID_V3` and writes it into the founding evidence as
+  `linked_liability_basis_record`; the retirement path reads it there through
+  `routed_record`, which recomputes the address from the digest the producer
+  stored and refuses a report whose row does not reproduce it. **Threaded at
+  `42c3bb931` (lane HOST-RETIRE, 2026-09-06)**, along with the journal's shape:
+  `aggregate_retirement_journal.rs` spelled 35 accounts, 36 protocol-and-payer
+  keys and 37 resolved keys as constants, so this row would have refused a
+  refunding retirement at "retirement operator changed account or data width"
+  before it reached a chain. It now names two shapes and derives every width
+  from the operator's two account counts.
+
+Nothing about this row is validator-run yet. Both walls above are host-side and
+closed; what stands between them and a Retired refunding market on any chain is
+a cohort founded on links that carry the burn.
 
 The cost, restated: two ELFs move, so cohort-17 is a full re-release of every
 program plus a re-found under decision 0012, with frame-baseline rows for both

@@ -20,28 +20,28 @@
       "kind": "evidence-jq",
       "query": "[.transactions[] | select(.label | startswith(\"retirement checkpoint:\")) | \"\\(.label | split(\": \")[1] | split(\" \")[0])=\\(.wire_bytes)\"] | unique | sort | join(\" + \")",
       "expect": "close-replay=1139 + close-vault=1139 + finish=1018 + finish=1019 + prepare=1083",
-      "provenance": "All twelve were 2,005 to 2,157 bytes as legacy messages against Solana's 1,232-byte PACKET_DATA_BYTES -- up to 925 over -- so not one of them could be submitted anywhere, and ProgramTest submits no packet to say so. The aggregate retirement had ALREADY been split into four transactions to get this far; the split alone does not reach the packet, and the table is what carries it. They now execute as v0 messages over ONE table frozen for the chain: the four 35-meta frames share their coordinates, so a table per route would be a rent per route for a single market's retirement. 34 of the 35 addresses become one-byte indexes and two stay static -- the payer and the invoked program, which no table can move. The two `finish` figures differ by one byte because the substituted-wallet hostile collapses two coordinates onto one address and so resolves 33 rather than 34. These are DATA-bound frames now: the requests are 744 to 864 bytes and no table touches those, so there is no third lever if a request grows. Figures here exclude the ComputeBudget instructions; AGGREGATE_RETIREMENT_CHECKPOINT_SPLIT_2026_08_28.md records 1,135/1,191/1,191/1,071, which is these numbers plus the 52 bytes of a compute-unit limit and a priority fee."
+      "provenance": "All twelve were 2,005 to 2,157 bytes as legacy messages against Solana's 1,232-byte PACKET_DATA_BYTES -- up to 925 over -- so not one of them could be submitted anywhere, and ProgramTest submits no packet to say so. The aggregate retirement had ALREADY been split into four transactions to get this far; the split alone does not reach the packet, and the table is what carries it. They now execute as v0 messages over ONE table frozen for the chain: the four 35-meta frames share their coordinates, so a table per route would be a rent per route for a single market's retirement. 34 of the 35 addresses become one-byte indexes and two stay static -- the payer and the invoked program, which no table can move. The two `finish` figures differ by one byte because the substituted-wallet hostile collapses two coordinates onto one address and so resolves 33 rather than 34. These are DATA-bound frames now: the requests are 744 to 864 bytes and no table touches those, so there is no third lever if a request grows. Figures here exclude the ComputeBudget instructions; AGGREGATE_RETIREMENT_CHECKPOINT_SPLIT_2026_08_28.md records 1,135/1,191/1,191/1,071, which is these numbers plus the 52 bytes of a compute-unit limit and a priority fee. This witness covers the CATEGORICAL walk only, by label prefix; the refunding walk's four frames have their own row below, and the two together are what say the tail costs six bytes."
     },
     {
       "id": "every-retirement-refusal-reached-a-programs-own-taxonomy",
       "kind": "evidence-jq",
       "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
       "expect": "0",
-      "provenance": "The Solana runtime reports a privilege, frame or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every one of this campaign's eight refusals is a decision Core or Claims made on a named field, so a bare runtime refusal appearing here would mean a hostile case stopped being about the retirement chain."
+      "provenance": "The Solana runtime reports a privilege, frame or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every one of this campaign's twelve refusals -- eight in the categorical walk and the burn's four hostiles -- is a decision Core or Claims made on a named field, so a bare runtime refusal appearing here would mean a hostile case stopped being about the retirement chain."
     },
     {
-      "id": "the-chain-is-exactly-four-accepted-acts",
+      "id": "the-accepted-acts-are-four-per-walk-and-one-control",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.error == null)] | length | tostring",
-      "expect": "4",
-      "provenance": "CHECKPOINT_RETIREMENT_* declares four instruction shapes -- prepare, close-vault, close-replay, finish -- and `build_checkpoint_market_retirement_v1` returns exactly those four. A fifth accepted transaction would mean the campaign found a second way into the terminal state; a fourth becoming a third would mean a stage stopped being reachable."
+      "query": "[.transactions[] | select(.error == null) | (.label | split(\":\")[0])] | group_by(.) | map(\"\\(.[0])=\\(length)\") | sort | join(\" + \")",
+      "expect": "burn hostiles=1 + refunding retirement=4 + retirement checkpoint=4",
+      "provenance": "CHECKPOINT_RETIREMENT_* declares four instruction shapes -- prepare, close-vault, close-replay, finish -- and `build_checkpoint_market_retirement_v1` returns exactly those four, for a categorical Market and for a refunding one alike: shape A is a frame change, not a fifth packet. So each walk accepts four and no more. The one further accepted act is the burn hostiles' positive control, submitted last from the fixture the four hostiles ran against so that a hostile refusing because the setup was broken takes the control down with it. A fifth accepted act in either walk would mean the campaign found a second way into the terminal state; a fourth becoming a third would mean a stage stopped being reachable. Counting per walk rather than in total is what keeps this witness able to say WHICH walk changed."
     },
     {
-      "id": "the-claims-handoff-is-the-only-act-that-invokes-claims",
+      "id": "only-a-prepare-ever-reaches-claims-and-these-are-the-eight",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select([.logs[] | select(test(\"^Program 8yRstXxCnC3jTgWtUFVRLJ51ojpkUW1kw9eRsrHhAK4R invoke\"))] | length > 0) | .label] | length | tostring",
-      "expect": "2",
-      "provenance": "Claims is handed off exactly once, by the prepare. Only two of the twelve transactions may reach the Claims program at all -- the accepted prepare and the hostile whose aggregate owner was substituted -- and in particular the REPLAYED prepare must not, because a replay that re-entered the handoff would be spending Claims compute to discover a fact Core already holds in its own checkpoint. The address is this tier's gauntlet-local Claims id from programs.json."
+      "query": "[.transactions[] | select([.logs[] | select(test(\"^Program 8yRstXxCnC3jTgWtUFVRLJ51ojpkUW1kw9eRsrHhAK4R invoke\"))] | length > 0) | .label] | sort | join(\" | \")",
+      "expect": "burn hostile: a stranger holds part of the column | burn hostile: not the derived escrow | burn hostile: substituted basis record | burn hostile: the escrow holds a tradeable claim | burn hostiles: the honest packet still burns | refunding retirement: prepare burns the failure column | retirement checkpoint: prepare against a Claims aggregate reassigned to the System program | retirement checkpoint: prepare hands the Claims aggregate to Core",
+      "provenance": "Claims is handed off exactly once per walk, by the prepare, and NAMING the acts that reach it is stronger than counting them: a count of eight passes if a suffix reaches Claims and a prepare does not. Every label here is a prepare-class packet. Two facts this states that nothing else does. The REPLAYED prepare must not appear: a replay that re-entered the handoff would spend Claims compute to discover a fact Core already holds in its own checkpoint, and it does not -- Core refuses it at 63,851 CU with Claims never invoked. And no close-vault, close-replay or finish packet appears in either walk, including the refunding walk's three, which CARRY the escrow tail in frame and never read it. The address in the query is this tier's gauntlet-local Claims id from programs.json."
     },
     {
       "id": "retirement-no-transaction-exceeds-the-packet-maximum",
@@ -49,6 +49,13 @@
       "query": "[.transactions[] | select(.wire_bytes != null and .wire_bytes > 1232)] | length | tostring",
       "expect": "0",
       "provenance": "Against Solana's 1,232-byte PACKET_DATA_BYTES. Twelve transactions were over it before 2026-09-02, which is what the earlier form of this witness recorded as a defect. Nulls are excluded on purpose: an unmeasured transaction is not a transaction that fits, and `retirement-checkpoint-measured-every-transaction` is what holds that count at zero."
+    },
+    {
+      "id": "the-refunding-frames-ride-the-same-frozen-table-six-bytes-wider",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"refunding retirement:\")) | \"\\(.label | split(\": \")[1])=\\(.wire_bytes)\"] | unique | sort | join(\" + \")",
+      "expect": "close replay=1145 + close vault=1145 + finish=1025 + prepare burns the failure column=1089",
+      "provenance": "The categorical walk above is 1,083/1,139/1,139/1,019 for the same four acts, so the escrow tail costs SIX bytes a packet and the same one frozen table carries it. Six is derived and not chosen: three more table-resolved accounts are three more one-byte indexes in the instruction's account list and three more in the lookup's writable/readonly index arrays, and no static key moves because a payer and an invoked program are the only two static keys and neither is new. The requests do not move at all -- shape A is a frame change, not an ABI change -- so if a request ever grows there is still no third lever. `aggregate_retirement_journal.rs`'s `AggregateRetirementFrameShapeV1` derives the devnet packets' expected widths the same way and would refuse a real packet that disagreed on the exact byte."
     }
   ]
 }
