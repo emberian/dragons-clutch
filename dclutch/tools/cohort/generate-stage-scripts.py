@@ -70,7 +70,12 @@ JOURNAL_PASSES = 40
 ROLE_FLAG = {"rent": "rent-credit"}
 
 # Which rows fan out over which markets. A row naming `{market.` runs once per
-# market whose kind is in the set; the stage key says which.
+# market whose kind is in the set; the ROW KEY says which, so every new row of
+# a kind the default does not cover has to be named here. Cohort-16 and
+# cohort-17 both paid for that: `openbatch-two-pass` and its two successors ask
+# for `{market.result_domain_record}`, a field only a General market carries,
+# and the default kinds sent them at market 1 -- so the generator refused the
+# whole family and the acts were run by hand.
 MARKET_KIND = {
     "found-two-source": ("two-source",),
     "crank-ladder": ("two-source",),
@@ -80,6 +85,10 @@ MARKET_KIND = {
     "found-general": ("general",),
     "activate-general": ("general",),
     "openbatch-refounded": ("general",),
+    "openbatch-two-pass": ("general",),
+    "openbatch-frozen-tables": ("general",),
+    "close-batch": ("general",),
+    "second-open-batch": ("general",),
     "openbatch": ("general",),
     "seal-general": ("general",),
 }

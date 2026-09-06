@@ -1,0 +1,267 @@
+{
+  "schema": "dclutch-cohort-manifest-v1",
+  "cohort": 17,
+  "prior_cohort": 16,
+  "job_dir": "/Users/ember/jobs/dclutch-cohort17-20260906",
+  "deploy_commit": "932edc83fc5a108fa362be216c84a3b0f78f29b4",
+  "roles": [
+    "registry",
+    "rent",
+    "custody",
+    "resolution",
+    "claims",
+    "trading",
+    "core"
+  ],
+  "owned_roles": [
+    "custody",
+    "resolution",
+    "claims",
+    "trading",
+    "core"
+  ],
+  "cluster": {
+    "genesis_hash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    "public_url": "https://api.devnet.solana.com",
+    "rpc_url_env": "DCLUTCH_RPC_URL",
+    "rpc_url_command": "printf 'https://devnet.helius-rpc.com/?api-key=%s' \"$(cat \"$HOME/.helius-key\")\""
+  },
+  "host": {
+    "solana_cli_env": "DCLUTCH_SOLANA_CLI",
+    "deployer_keypair_env": "DCLUTCH_DEPLOYER_KEYPAIR",
+    "repo_env": "DCLUTCH_REPO",
+    "builder": "hbox",
+    "node_env": "DCLUTCH_NODE",
+    "node_archive_env": "DCLUTCH_NODE_ARCHIVE"
+  },
+  "upgrade_authority": "4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP",
+  "payer": {
+    "campaign_payer_keypair": "keys/campaign-payer.json",
+    "founder_keypair": "keys/founder.json",
+    "substituted_founder_keypair": "keys/substituted.json",
+    "participant_keypairs": [
+      "keys/participant-1.json",
+      "keys/participant-2.json"
+    ]
+  },
+  "plan": {
+    "sealed": "plan-seal.json",
+    "unsealed": "plan.json",
+    "deployment_set_journal": "upgrade/deployment-set.json"
+  },
+  "programs": {
+    "registry": "5RFL5hcwdmLx14gJ42WYdPWXtbUnJZ87SeCxynN8iGAR",
+    "rent": "DQ2uHwanwoPa9PDV8wVvkfK2Qgz4fkBjxWA19dPkHFYp",
+    "custody": "8kVd1sCp2CqwZoBbQaCRDLBBXthjcec8693tHAi5PS5j",
+    "resolution": "gYWBUAqMzr5V6HzvB8xhTETUZGdPSDr7dD5A3raqPGt",
+    "claims": "2cCWKUtU4AiVKuvNKUNumsjib9H5JoVXNdaqQFrYVE25",
+    "trading": "272BExJXWc7FSFh5PLps6DBWVWqoggmskoPbfbp21VNd",
+    "core": "2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM"
+  },
+  "markets": [
+    {
+      "label": "1",
+      "kind": "direct",
+      "address": "",
+      "window_record": "",
+      "window_start": "",
+      "mint": "",
+      "hoard": "",
+      "aggregate": "",
+      "work_dir": "market",
+      "collateral_mint_keypair": "keys/collateral-mint.json",
+      "collateral_wallet_keypair": "keys/collateral-wallet.json",
+      "cuts": "10200,10600",
+      "coefficients": "1,0,1,0",
+      "cut_denominator": "100",
+      "band_anchor": "10395",
+      "band_volatility_bps": "200",
+      "band_window_slots": "10000",
+      "band_plausible_half_widths": "3",
+      "band_max_cell_share_bps": "9000",
+      "window_lead_seconds": "2400",
+      "lookup_table": "",
+      "source_receipt": "",
+      "generation": "1",
+      "census": {
+        "tokens": [],
+        "positions": [],
+        "watches": []
+      },
+      "payout": {
+        "owner_keypair": "keys/participant-2.json",
+        "recipient": "",
+        "claim_index": "1"
+      },
+      "fill": {
+        "outcome": "1",
+        "seller_collateral_account": "",
+        "buyer_collateral_account": "",
+        "buyer_participant_report": "sim/admissions/participant-2.json",
+        "debtor_keypair": "keys/participant-2.json"
+      }
+    },
+    {
+      "label": "G",
+      "kind": "general",
+      "address": "",
+      "work_dir": "general",
+      "collateral_mint_keypair": "keys/collateral-mint-general.json",
+      "collateral_wallet_keypair": "keys/collateral-wallet-general.json",
+      "window_lead_seconds": "2400",
+      "lookup_table": "",
+      "seal_routing_table": "",
+      "cuts": "10200,10600",
+      "coefficients": "1,0,1,0",
+      "cut_denominator": "100",
+      "band_anchor": "10395",
+      "band_volatility_bps": "200",
+      "band_window_slots": "10000",
+      "band_plausible_half_widths": "3",
+      "band_max_cell_share_bps": "9000",
+      "result_domain_record": "",
+      "portfolio_record": "",
+      "linked_basis_record": "",
+      "rent_credit": "",
+      "generation": "1"
+    },
+    {
+      "label": "S",
+      "kind": "two-source",
+      "address": "",
+      "window_record": "",
+      "window_start": "",
+      "mint": "",
+      "hoard": "",
+      "aggregate": "",
+      "work_dir": "market-s",
+      "collateral_mint_keypair": "keys/collateral-mint-c.json",
+      "collateral_wallet_keypair": "keys/collateral-wallet-c.json",
+      "recovery_rungs": "2500:120",
+      "cuts": "10200,10600",
+      "coefficients": "1,0,1,0",
+      "cut_denominator": "100",
+      "band_anchor": "10395",
+      "band_volatility_bps": "200",
+      "band_window_slots": "10000",
+      "band_plausible_half_widths": "3",
+      "band_max_cell_share_bps": "9000",
+      "window_lead_seconds": "2100",
+      "lookup_table": "",
+      "source_receipt": "",
+      "generation": "1",
+      "census": {
+        "tokens": [],
+        "positions": [],
+        "watches": []
+      },
+      "payout": {
+        "owner_keypair": "keys/founder.json",
+        "recipient": "",
+        "claim_index": "0"
+      },
+      "fill": {
+        "outcome": "1",
+        "seller_collateral_account": "",
+        "buyer_collateral_account": "",
+        "buyer_participant_report": "sim/admissions/participant-2.json",
+        "debtor_keypair": "keys/participant-2.json"
+      }
+    }
+  ],
+  "general_accelerator": {
+    "program_id": "WMGVfhVuWuMRCkBDnR7nrqj6uY1XbnxQtShxdM4h7km",
+    "deployment_slot": "",
+    "elf_sha256": "",
+    "semantic_release_id": "",
+    "registry_pin_source": "programs/dclutch-registry-sbf/src/record_v1.rs",
+    "registry_pin_text": "DEPLOYMENT_SLOT: u64 = 493_639_473",
+    "elf": "candidate/elf/accelerator.so",
+    "keypair": "keys/program-accelerator.json"
+  },
+  "general": {
+    "rent_credit_width": "128",
+    "policy_schema": "dclutch-general-devnet-policy-v2"
+  },
+  "required_commits": {
+    "closure-burn": {
+      "rev": "7d45d6ba3",
+      "why": "the closure burns the failure column no certificate pays, so a refunding market can reach BeginRetiring; Claims and Core both move"
+    },
+    "host-retirement-tail": {
+      "rev": "42c3bb931",
+      "why": "the retirement journal derives its two account shapes and threads the linked basis record, so a refunding retirement is buildable at all"
+    },
+    "general-liability-basis": {
+      "rev": "1dd18be91",
+      "why": "the General account profile projects the portfolio's LIABILITY basis at offset 128, which is what the accelerator's config binds; it moves the published artifact and no link"
+    },
+    "profile-checkpoints": {
+      "rev": "fc39a5bc7",
+      "why": "the hot-cu checkpoints reach the strategy, the lifecycle preplan and the caller authority; the OpenBatch walls were localized with them"
+    },
+    "caller-authority-seed": {
+      "rev": "1cae26fd6",
+      "why": "the caller-authority seed change the General route needs; step 03 on chain is its only proof"
+    },
+    "statistic-source-scale": {
+      "rev": "4cd2b9cb5",
+      "why": "StatisticSpecV1 carries source_scale_exponent, so cuts in dollars mean what they say"
+    },
+    "one-accelerator": {
+      "rev": "5b4fe2313",
+      "why": "the folded accelerator link -- General, Dealer and series-shadow in one program"
+    },
+    "recovery-ladder-alternative": {
+      "rev": "beca9243e",
+      "why": "the ladder's alternative source can be observed and a market answered on its second rung"
+    },
+    "funded-rent-rate": {
+      "rev": "c0a1586b1",
+      "why": "the funding ledger header records the exemption-scaled rent rate it was funded at"
+    }
+  },
+  "collateral_release": {
+    "founded": "",
+    "prior_keeps": "430369ce72f5e1dcfa19dcee63d5e15f9fbf2d6c9950c5caab53d5c028ae0a2d",
+    "test_manifest": "tools/local-validator/bootstrap/successor/Cargo.toml",
+    "test_bin": "dclutch-local-successor-bootstrap",
+    "test_filter": "collateral_release"
+  },
+  "pyth": {
+    "receiver": "96QrNCjmh32H9quY9DX4NEH81nECVsbkATBDZeoVbvLV",
+    "push_oracle": "8xAeURaAWExxyHUXJSgjsg5r96Ydr3G4cek2if7imQmz",
+    "receiver_config": "DaWUKXCyXsnzcvLUyeJRWou8KTn7XtadgTsdhJ6RHS7b",
+    "price_update": "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE",
+    "declaration_source": "crates/dclutch-source/src/pyth/sponsored_push.rs",
+    "config_bytes": "370",
+    "config_discriminator": "9b0caae01efacc82"
+  },
+  "economics": {
+    "direct_fee_basis_points": "50",
+    "fill_gross_atoms": "200",
+    "hot_cu_ceiling": "1,400,000",
+    "prior_cohort_hot_cu": "1,111,824",
+    "openbatch_n": "2",
+    "participant_count": "2",
+    "participant_count_word": "two",
+    "settle_certificate_bytes": "312",
+    "payer_capital_sol": "2",
+    "participant_capital_sol": "0.05",
+    "ticket_valid_slots": "3000",
+    "crank_max_wait_seconds": "2000",
+    "checked_roles": [
+      "core",
+      "claims",
+      "trading",
+      "resolution",
+      "custody"
+    ]
+  },
+  "relay_replay": {
+    "window": "1788369759,1788371559,7200,0",
+    "now": "1788348159",
+    "capture_would_fire": "17:23:39 UTC / 13:23:39 EDT, 1740s of window left",
+    "settle_would_fire": "19:53:09 UTC / 15:53:09 EDT, 29s past the deadline"
+  }
+}

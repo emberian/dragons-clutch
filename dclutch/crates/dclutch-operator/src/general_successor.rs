@@ -1449,7 +1449,17 @@ mod tests {
             general_artifact_release: checked.general_artifact_release,
             artifacts,
             product_record: [0x48; 32],
-            family_request_digest: Sha256::digest(request_bytes).into(),
+            // THE ROUTE'S AUTHOR, not the bare hash. `serialize_plan_v5` rejoins
+            // this field against `family_request_digest_v3(request_bytes)` --
+            // the domain-separated, length-prefixed derivation the chain seeds
+            // every admitted caller-authority PDA with -- and this fixture kept
+            // spelling `Sha256::digest`, so the serializer refused its own test
+            // from COHORT-16F's repair onward, red at 7c1c677ab and unwatched by
+            // any gate. Third instance of one shape: the producer moved and the
+            // fixture that had been a second author for the same number did not.
+            family_request_digest: family_request_digest_v3(&request_bytes)
+                .expect("family request digest")
+                .to_bytes(),
             lifecycle,
         };
         let successor = GeneralSuccessorInstructionV5 {

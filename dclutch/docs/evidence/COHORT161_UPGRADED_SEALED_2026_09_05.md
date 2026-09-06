@@ -1209,3 +1209,57 @@ to read.
            (permanent), ten transaction fees at 75,000 lamports.
            NOTHING was spent on the OpenBatch itself: preflight refused the send.
     deployer 28.657732010, unchanged. No top-up.
+
+---
+
+# ADDENDUM, 2026-09-06, lane PROGRAMS-17F: the account rule is in no link, and the fix is a founding
+
+Offline evidence: real ELFs in `tools/gauntlet/general-hot`, on hbox under
+`swarm-build`, platform-tools v1.53. Nothing on any chain moved.
+
+**§ "THE TWO VALUES ARE THIS MARKET'S OWN" IS CORRECT ABOUT WHICH SIDE IS WRONG
+AND WRONG ABOUT WHAT IT COSTS.** That section says *"The account rule is in
+`dclutch-trading`, which is compiled into the Trading SBF link, so moving it is a
+program change and a cohort-17 link."* It is not in the link. Two commits
+differing in that one constant and nothing else build a **byte-identical**
+`dclutch_trading_sbf.so`,
+`65ff376e876e3398d4e438171a955314202c9d3c7a194a9035231f203ac0c596`, and a
+byte-identical `dclutch_accelerator_sbf.so`,
+`d2ff2b87ac79e5329b83f10e10a2f2d9b03ac16d445d070188f03946598da91a`, while their
+campaigns disagree completely; `programs/dclutch-trading-sbf` names
+`account_rules_v3` nowhere. Trading INTERPRETS an account profile presented as an
+account. The operator encodes it (`general_selected_release_v1.rs:1166`) and binds
+`digest(account_profile)` into the per-action `CapabilityProgramV4` descriptor
+(`1216-1218`), which a founding pins as its manifest entry.
+
+So the repair moves a published artifact, a descriptor and an entry, and moves no
+link. A market founded at the old entry cannot select the new profile: **this needs
+a fresh General founding, not a Trading redeploy.** Everything else in that section
+stands — the account rule was the outlier, and no Portfolio is touched, because
+the live record already carries the config's value at offset 128.
+
+The frame ratchet agrees and was not asked to: two independent captures at
+`1dd18be91` are identical to each other and, function for function across all
+eight links, identical to `7d45d6ba3`'s baseline.
+
+**THE RULE, AND THE PROOF IN BOTH DIRECTIONS.** `account_rules_v3.rs`'s
+semantic-basis operation projects `PORTFOLIO_LIABILITY_BASIS_ID_OFFSET` (128)
+instead of `PORTFOLIO_CLAIM_BASIS_ID_OFFSET` (96), and the General harness now
+derives the config's basis from the founding rather than spelling a literal that
+reached both sides of `require_market`. At `1dd18be91`:
+
+| rule | campaign |
+| --- | --- |
+| @128 | 6 passed, 0 failed. The hostile refuses `0x4004` at 349,511 CU, with the accelerator's `config/bank semantic basis` log printed exactly once. |
+| @96 | 2 passed, 4 failed. The three committing campaigns fail `Custom(16388)` — devnet's own code — and the hostile OPENS A BATCH at 666,861 CU. |
+
+**THE CU TABLE, re-drawn at `1dd18be91`**: `OpenBatch` costs 650,340 CU at N=2,
+663,016 at N=13 and 670,326 at N=258, each 4 invocations over 55 accounts. The
+band this document quotes as the harness's estimate, 654,000–677,000, was one
+width's reading with no commit beside it.
+
+**THE TWO-PASS ROW.** The five acts this document's COHORT-16F addendum measured
+by hand are now `openbatch-frozen-tables` in `tools/cohort/steps.tsv`
+(since cohort-17, replacing `openbatch-two-pass`, which retires at 16), and
+`close-batch` and `second-open-batch` carry the same shape with their verifiers
+saying the ordering is inherited rather than separately measured.
