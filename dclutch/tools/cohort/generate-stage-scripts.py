@@ -66,6 +66,18 @@ ALLOWED_ABSOLUTE = {"/dev/null"}
 ABSOLUTE = re.compile(r"""(?<![\w$:/])/(?!/)[A-Za-z0-9._/-]+""")
 DRIVER_BINARY = "dclutch-local-successor-bootstrap"
 ATTEMPTS = 6
+# A WINDOW IS NOT A SPRINT. `relay-capture` and `relay-settle` fire against a
+# provider whose "come back later" refusals -- `ProviderWindow` 0x8011 and
+# `ProviderFreshness` 0x8012, which the program's own doc comments call "no
+# answer rather than a wrong one" -- are ANSWERED BY WAITING: the sponsored Pyth
+# account has to be pushed with a publication inside this market's window. Six
+# back-to-back attempts spend thirty seconds of an 1,800-second window and then
+# call it a failure. Both cohort-17 markets exhausted the six and then landed by
+# hand on the next try -- market 1 at 652 seconds into its window, market 2 at
+# 523. So a `wait:` row's attempts are PACED and bounded by the window's own
+# DEADLINE, which the loop already re-reads every pass.
+WINDOW_ATTEMPTS = 60
+WINDOW_ATTEMPT_PAUSE_SECONDS = 20
 JOURNAL_PASSES = 40
 ROLE_FLAG = {"rent": "rent-credit"}
 # Write-directory flags whose driver creates the directory itself and refuses
@@ -329,6 +341,7 @@ for attempt in $(seq 1 %(attempts)s); do
 %(plan)s > "$OUT/log-%(label)s-a$attempt-plan.txt" 2>&1 || true
 %(sign)s > "$OUT/log-%(label)s-a$attempt-sign.txt" 2>&1 && { echo "%(upper)s_LANDED attempt=$attempt"; LANDED=yes; break; }
     grep -iE "^Error|refus|supersed" "$OUT/log-%(label)s-a$attempt-sign.txt" | head -3 || true
+%(pause)s
 done
 [ "$LANDED" = yes ] || { echo "%(upper)s_NOT_LANDED after %(attempts)s attempts" >&2; exit 1; }
 """
@@ -722,8 +735,12 @@ def emit(row, view_step, document, prior, market, stages) -> str:
         for line, _ in acts:
             act_label = re.search(r"--action\s+(\S+)", line)
             act_label = act_label.group(1) if act_label else "act"
-            body += ATTEMPT_LOOP % {"attempts": ATTEMPTS, "label": act_label, "upper": act_label.upper().replace("-", "_"),
-                                    "plan": "    " + line, "sign": "    " + line}
+            windowed = row["shape"].startswith("wait:")
+            pause = (f'    sleep "${{ATTEMPT_PAUSE_SECONDS:-{WINDOW_ATTEMPT_PAUSE_SECONDS}}}"'
+                     if windowed else "")
+            body += ATTEMPT_LOOP % {"attempts": WINDOW_ATTEMPTS if windowed else ATTEMPTS,
+                                    "label": act_label, "upper": act_label.upper().replace("-", "_"),
+                                    "plan": "    " + line, "sign": "    " + line, "pause": pause}
     elif row["shape"] == "journal":
         if plain:
             body += "\n" + "\n".join(plain) + "\n"

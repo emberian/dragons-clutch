@@ -84,9 +84,11 @@ fn role_key_path(
     role: &str,
     which: &'static str,
 ) -> Result<PathBuf> {
-    map.get(role)
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::new(format!("the prepare report's {which} map omits role {role}")))
+    map.get(role).map(PathBuf::from).ok_or_else(|| {
+        Error::new(format!(
+            "the prepare report's {which} map omits role {role}"
+        ))
+    })
 }
 
 /// prepare-mutable -> spawn -> wait -> authenticate -> campaign activation.
@@ -143,6 +145,28 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
         .arg(mint.pubkey().to_string())
         .arg("--ticks-per-slot")
         .arg("16")
+        // A LONG RUN NEEDS ITS HISTORY, and this tier was running without it.
+        //
+        // `solana-test-validator` keeps `--limit-ledger-size` shreds in root
+        // slots and DEFAULTS TO 10,000 -- roughly seven hundred slots of a
+        // journey, against a run that reaches nine thousand. Past that the
+        // roots are purged in chunks, and `getTransaction` answers null for a
+        // signature `getSignatureStatuses --searchTransactionHistory` still
+        // calls finalized. Every driver here re-verifies its earlier stages
+        // from history, so a purge between two stages strands the journal
+        // permanently and no retry recovers it: hbox `20260906T140439Z` lost a
+        // Direct fill to `finalized signature omitted finalized transaction
+        // history` after its admission had landed, and JOURNEY-6 read the same
+        // purge as a property of the substrate ("null ~750 slots back") and
+        // derived the founding's routing table around it.
+        //
+        // `docs/evidence/DIRECT_FILL_WALLS_2026_08_31.md` named this in August
+        // and `tools/local-validator/dclutch-successor-validator` has passed the
+        // flag since; this launcher never did. Same knob, same spelling, same
+        // default. Budget about 470 KB per slot, measured there -- a journey's
+        // ledger lives under the run's own work directory and goes with it.
+        .arg("--limit-ledger-size")
+        .arg(std::env::var("DCLUTCH_LIMIT_LEDGER_SIZE").unwrap_or_else(|_| "100000000".to_owned()))
         .arg("--bind-address")
         .arg("127.0.0.1")
         .arg("--rpc-port")

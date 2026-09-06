@@ -390,6 +390,13 @@ pub(crate) fn resolve_through_pyth(
     }
 
     // ------------------------------------------------- the dClutch submit leg
+    // ONE READ FOR BOTH PROVIDER FRAMES. The submit and the execute name the
+    // same Registry artifact pair, and it is the LIVE profile's, not the plan's.
+    let live_registry_artifact = live_registry_artifact_pair_v1(
+        rpc,
+        addresses.core_program,
+        pubkey(&plan.registry.program_id)?,
+    )?;
     let post_update_body = RECEIVER_POST_UPDATE
         .get(8..)
         .ok_or_else(|| Error::new("captured receiver PostUpdate body is narrower than its tag"))?
@@ -403,8 +410,8 @@ pub(crate) fn resolve_through_pyth(
             )
             .0,
             registry_programdata: pubkey(&plan.registry.programdata_id)?,
-            registry_artifact: crate::runtime::record(plan, "registry_artifact_release")?.0,
-            registry_artifact_staging: crate::runtime::record(plan, "registry_artifact_release")?.1,
+            registry_artifact: live_registry_artifact.0,
+            registry_artifact_staging: live_registry_artifact.1,
             core_programdata: addresses.core_programdata,
             resolution_program: addresses.resolution_program,
             resolution_programdata: addresses.resolution_programdata,
@@ -534,8 +541,8 @@ pub(crate) fn resolve_through_pyth(
         &execute_snapshot(rpc, addresses, submit.lifecycle, provider)?,
         ProviderExecuteDeploymentV3 {
             registry_programdata: pubkey(&plan.registry.programdata_id)?,
-            registry_artifact: crate::runtime::record(plan, "registry_artifact_release")?.0,
-            registry_artifact_staging: crate::runtime::record(plan, "registry_artifact_release")?.1,
+            registry_artifact: live_registry_artifact.0,
+            registry_artifact_staging: live_registry_artifact.1,
             core_programdata: addresses.core_programdata,
             // The TRADING role, and it means it. This campaign passed CUSTODY
             // here first, because that is what the operator's own ProgramTest
@@ -950,11 +957,30 @@ fn write_frame_capture_v1(
             );
         }
     }
+    // THE FRAME, IN ITS OWN ORDER. The replay needs only the packet, but a
+    // reader convicting a coarse refusal needs to say "the account at index
+    // 17", and recovering an index from a compiled v0 message means resolving
+    // its lookup tables by hand. The program reads its accounts positionally,
+    // so the positions are what the capture states.
+    let frames: Vec<serde_json::Value> = bounded
+        .iter()
+        .map(|instruction| {
+            serde_json::json!({
+                "programId": instruction.program_id.to_string(),
+                "accounts": instruction
+                    .accounts
+                    .iter()
+                    .map(|meta| meta.pubkey.to_string())
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     let document = serde_json::json!({
         "schema": "dclutch-devnet-frame-capture-v1",
         "label": label,
         "warpSlot": rpc.finalized_slot()?,
         "transactionBase64": BASE64.encode(&packet),
+        "instructions": frames,
         "state": state,
     });
     if let Some(parent) = path.parent() {
@@ -971,6 +997,70 @@ fn write_frame_capture_v1(
         packet.len()
     );
     Ok(())
+}
+
+/// The Registry artifact-release record pair the LIVE infrastructure profile
+/// names.
+///
+/// DERIVED FROM THE CHAIN, because the plan's `registry_artifact_release` is the
+/// PREDECESSOR. The substrate succeeds the Registry before the founding
+/// (`infrastructure_succession`), so the V2 profile Core owns names a successor
+/// release id and keeps the plan's id in its `predecessor_registry_artifact`
+/// field. `authenticate_infrastructure` reads that profile and requires the
+/// frame's record to live at the hash of the CURRENT id, so a frame built from
+/// the plan carries a record that is finalized, self-consistent, Registry-owned,
+/// exactly 216 bytes, with a vacant cursor -- and is the wrong record.
+///
+/// That is what refused every Pyth submit this tier ever sent:
+/// `ResolutionError::FinalizedRecord` 0x8004 at
+/// `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:672`,
+/// convicted by replaying run 13's captured frame and corrupting each of the six
+/// records in turn -- none of the six moved the compute units, so the frame
+/// never reached five of them (hbox `20260906T140439Z`; profile
+/// `ff5763c6...`, frame `616c2f91...`, which is the profile's own predecessor).
+///
+/// The addresses are the program's own derivation, not a lookup: a succession
+/// this tier does not know about moves both together.
+fn live_registry_artifact_pair_v1(
+    rpc: &mut Rpc,
+    core_program: Pubkey,
+    registry: Pubkey,
+) -> Result<(Pubkey, Pubkey)> {
+    use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_registry::release_set::{
+        PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, ProtocolInfrastructureProfileV2,
+    };
+    let address = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+        &core_program,
+    )
+    .0;
+    let account = rpc.required_account(address, "protocol infrastructure profile")?;
+    if account.owner != core_program
+        || account.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+    {
+        return Err(Error::new(format!(
+            "the infrastructure profile at {address} is {} bytes owned by {}, not the \
+             {PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2} bytes Core owns",
+            account.data.len(),
+            account.owner
+        )));
+    }
+    let profile = ProtocolInfrastructureProfileV2::decode(&account.data)
+        .map_err(|error| Error::new(format!("infrastructure profile: {error:?}")))?;
+    let digest = profile.registry().artifact_release().to_bytes();
+    let schema = dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+    let raw =
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0;
+    let staging =
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry).0;
+    // The frame is doomed without it, and a missing record is a statement about
+    // the succession rather than about this route.
+    rpc.required_account(
+        raw,
+        "the Registry artifact release the live infrastructure profile names",
+    )?;
+    Ok((raw, staging))
 }
 
 fn send(

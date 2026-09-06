@@ -315,13 +315,29 @@ fn main() -> ExitCode {
     deployment_slots.sort_unstable();
     deployment_slots.dedup();
     println!("replay: captured deployment slots {deployment_slots:?}");
+    // ONE SLOT, AND THE REFUSAL IS THE INSTRUMENT WORKING. `max + 1` was tried
+    // (JOURNEY-7, on a loopback capture whose programs sat at slots 0, 4, 7 and
+    // 973) on the reading that `extract` admits `deployment_slot <=
+    // latest_root_slot`: it dies `ProgramCacheHitMaxLimit` with zero logs. The
+    // cache's `latest_root_slot` in ProgramTest is 0, not `BankForks::root()`,
+    // so only slot 0 takes that clause and every other slot has to be the fork
+    // root itself. The rule below is the measured one.
+    //
+    // WHICH SLOT TO EQUALIZE TO is not free either: the release pins that then
+    // have to move live in two places, and only one of them can be rewritten.
+    // A standalone `ArtifactReleaseV1` raw record is CONTENT-ADDRESSED -- its
+    // body hashes to the digest in its own address -- so its `deployment_slot`
+    // cannot be edited; the Registry activation cache is a PDA and can. Pick D
+    // = the slot the immovable record already pins, `--programdata-slot`
+    // everything to D, and `--set-account` the cache with each role's pin moved
+    // to match.
     let bank_slot = match deployment_slots.as_slice() {
         [] => warp,
         [only] => only.saturating_add(1),
         many => die(format!(
             "the capture's loaded programs carry {} distinct deployment slots {many:?}; \
-             equalize them with --programdata-slot (and move each release's own pin with \
-             --set-account) before replaying",
+             equalize them with --programdata-slot to the slot the content-addressed artifact \
+             record pins, and move each release's own pin with --set-account, before replaying",
             many.len()
         )),
     };

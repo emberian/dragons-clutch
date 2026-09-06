@@ -36,18 +36,18 @@ describe('the deployment manifest', () => {
     // them. These literals are the review copy, so the table cannot move
     // without a reviewer seeing which cohort it moved to.
     expect(DEVNET_DEPLOYMENT_V1.programs).toEqual({
-      registry: '6gRRiB9BtQFN6AquyLXXjuiX1GYN2xyW8nqCTc3xJzkV',
-      rent: '42xN9ULoMpULmeDbdGCtyAo82FRJved6sojUun6NSKdt',
-      custody: '8UkoNCPD4JuWBiHWdc7WaM3j7Fj9jbf8Fe926Q1CDceo',
-      resolution: 'jrjXw2Rph15VyJB3ztbRgoHUPJrcvMSHV6svRUYtUw3',
-      claims: '8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk',
-      trading: 'ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3',
-      core: '4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe',
+      registry: '5RFL5hcwdmLx14gJ42WYdPWXtbUnJZ87SeCxynN8iGAR',
+      rent: 'DQ2uHwanwoPa9PDV8wVvkfK2Qgz4fkBjxWA19dPkHFYp',
+      custody: '8kVd1sCp2CqwZoBbQaCRDLBBXthjcec8693tHAi5PS5j',
+      resolution: 'gYWBUAqMzr5V6HzvB8xhTETUZGdPSDr7dD5A3raqPGt',
+      claims: '2cCWKUtU4AiVKuvNKUNumsjib9H5JoVXNdaqQFrYVE25',
+      trading: '272BExJXWc7FSFh5PLps6DBWVWqoggmskoPbfbp21VNd',
+      core: '2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM',
       // The eighth, and the first cohort ever to deploy one from the runbook.
       // It is in `programs` and NOT in `PROTOCOL_ROLES_V1`, which is the whole
       // distinction: a program a reader can look up and a liveness gate must
       // ask about, and not a role any PDA derivation or owner check consults.
-      accelerator: '6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y',
+      accelerator: 'WMGVfhVuWuMRCkBDnR7nrqj6uY1XbnxQtShxdM4h7km',
     });
     expect(deployedProgramRolesV1(DEVNET_DEPLOYMENT_V1)).toEqual([...DEPLOYED_PROGRAM_ROLES_V1]);
     expect(deployedProgramRolesV1(LOCAL_DEPLOYMENT_V1)).toEqual([...PROTOCOL_ROLES_V1]);
@@ -55,15 +55,15 @@ describe('the deployment manifest', () => {
     // this and the manifest together. Pinned here so the value cannot change
     // without a reviewer seeing it — but it is a HINT the session follows past,
     // so a cohort making it stale costs a reader accuracy, not a session.
-    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('2xVxMvfypJyo9bacGz1FFeK4L2qgqcsHaGoR9cbun6wV');
+    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('CKuMxu7gQN5SuoP58Ns7pFgida9WkvuyYK2cjpusPuHX');
     expect(DEVNET_DEPLOYMENT_V1.genesisHash).toBe('EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
     expect(DEVNET_DEPLOYMENT_V1.endpoint).toBe('https://api.devnet.solana.com');
   });
 
   it('carries the Loader-derived ProgramData and deployment slot for every devnet program', () => {
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.registry).toEqual({ programData: '68Jh5pD42XWmYq5ViWoX3MKHMeENCRbgdxdGb8B7UY6k', deploymentSlot: '493638685' });
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.core).toEqual({ programData: 'BbyZZAwbz37VwLR6zMQMm2bJAhfqbJVFAxr9HbFRQ5AU', deploymentSlot: '493639301' });
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.accelerator).toEqual({ programData: 'DfJLGB1W12cUYGpw3doG2DmMDe6ubR2UkmrrUsqosa9g', deploymentSlot: '493639473' });
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.registry).toEqual({ programData: '7jT8nsQuqxB7ELo4nfzTdQkmihvtNsbipgoxmryYiNpe', deploymentSlot: '493941313' });
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.core).toEqual({ programData: 'EMTaPpryWfbh5mTEwCrz5DVDdnJpYwX5sSeH91bz8Yvq', deploymentSlot: '493941954' });
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.accelerator).toEqual({ programData: '3c4zo42BrvpUj3EFftCPM77VxtZvRxNK7vHBFW5Y5Pmu', deploymentSlot: '493942086' });
     for (const role of DEPLOYED_PROGRAM_ROLES_V1) {
       const evidence = DEVNET_PROGRAM_EVIDENCE_V1[role];
       expect(new PublicKey(evidence.programData).toBase58()).toBe(evidence.programData);

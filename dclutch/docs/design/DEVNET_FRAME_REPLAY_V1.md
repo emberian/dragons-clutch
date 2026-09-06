@@ -113,3 +113,34 @@ frames ratchet's business, not a reason to keep the instrument out of the tree.
   wear the very code you are chasing. Restore the true slot before believing a
   `Content` inside a deployment authentication.
 - Program-test enables its own feature set. Do not publish a CU figure from it.
+
+## Addendum, 2026-09-06 (JOURNEY-7): a loopback capture, and which slot to equalize to
+
+The recipe was written from a devnet capture, where a cohort deploys its roles
+in one upgrade. A **loopback substrate does not**: the journey's programs sit at
+distinct slots, and run 13's capture carried deployment slots `[0, 4, 7, 973]`.
+Two things that reads as, and neither is:
+
+- **`max + 1` does not work.** It is the obvious generalization of "one slot D
+  and a bank at D + 1" — every captured slot then sits at or below the fork root
+  — and it dies `ProgramCacheHitMaxLimit` with zero logs. The escape clause is
+  `deployment_slot <= latest_root_slot`, and in `ProgramTest` the cache's
+  `latest_root_slot` is **0**, not `BankForks::root()`. So slot 0 is admitted and
+  every other slot must be the fork root itself. The single-slot rule stands;
+  the replay refuses a mixed capture by name rather than dying silently.
+- **Which slot D is not a free choice.** Equalizing moves the release pins, and
+  they live in two places. A standalone `ArtifactReleaseV1` raw record is
+  CONTENT-ADDRESSED — its body hashes to the digest inside its own address — so
+  its `deployment_slot` cannot be rewritten at all; the Registry activation
+  cache is a PDA and can. **D is the slot the immovable record already pins.**
+  Set every ProgramData header to D with `--programdata-slot` and move each
+  role's pin inside the cache to D with `--set-account` (role `i`'s
+  `deployment_slot` is at `48 + i*248 + 32 + 176`). A refusal *after* that, in a
+  leg that authenticates a Loader account, is still the instrument talking.
+
+**It reproduces exactly.** Run 13's Pyth submit refused `0x8004` on chain at
+35,722 units consumed / 36,022 charged; the replay of its capture reports the
+same two numbers. Step 5 then convicted the site in six replays: corrupting each
+of the six finalized records in turn left the units unchanged — so the frame
+reached none of them past the first — and moving one field of the infrastructure
+profile walked the same frame 52,524 units further into a different code.

@@ -139,12 +139,14 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   label: 'Devnet',
   endpoint: 'https://api.devnet.solana.com',
   genesisHash: SOLANA_DEVNET_GENESIS_HASH_V1,
-  // COHORT-16, deployed 2026-09-05 from commit f2ae6bf75 on the named release
+  // COHORT-17, deployed 2026-09-06 from commit 932edc83f on the named release
   // builder (platform-tools v1.53, Linux/x86_64, through `swarm-build`), and
   // dumped back and compared to its candidate ELF role by role before the next
-  // role spent. EIGHT rows, and the eighth had never been on any chain: the
-  // simplification swarm folded three accelerator links into one
-  // `dclutch-accelerator-sbf`, and cohort-16 is the cohort that deployed it.
+  // role spent. The release gate `a98ed988...` reproduced from two repository
+  // roots and two work roots on that host, all eight ELFs byte-identical.
+  // EIGHT rows. Cohort-17 is FOUR links and not the three its own ledger row
+  // says -- trading, claims, core AND the accelerator -- and it is the first
+  // cohort to carry a market all the way to `Retired`.
   // Devnet is disposable by ruling: each cohort is a full redeploy with fresh
   // identities and the previous one is abandoned in place and then CLOSED,
   // which returns its rent to pay for the next. These ids are not permanent and
@@ -164,24 +166,24 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   // it refuses by naming all EIGHT vacant addresses, which is the reading that
   // retired the rows this table used to carry.
   programs: Object.freeze({
-    registry: '6gRRiB9BtQFN6AquyLXXjuiX1GYN2xyW8nqCTc3xJzkV',
-    rent: '42xN9ULoMpULmeDbdGCtyAo82FRJved6sojUun6NSKdt',
-    custody: '8UkoNCPD4JuWBiHWdc7WaM3j7Fj9jbf8Fe926Q1CDceo',
-    resolution: 'jrjXw2Rph15VyJB3ztbRgoHUPJrcvMSHV6svRUYtUw3',
-    claims: '8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk',
-    trading: 'ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3',
-    core: '4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe',
-    accelerator: '6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y',
+    registry: '5RFL5hcwdmLx14gJ42WYdPWXtbUnJZ87SeCxynN8iGAR',
+    rent: 'DQ2uHwanwoPa9PDV8wVvkfK2Qgz4fkBjxWA19dPkHFYp',
+    custody: '8kVd1sCp2CqwZoBbQaCRDLBBXthjcec8693tHAi5PS5j',
+    resolution: 'gYWBUAqMzr5V6HzvB8xhTETUZGdPSDr7dD5A3raqPGt',
+    claims: '2cCWKUtU4AiVKuvNKUNumsjib9H5JoVXNdaqQFrYVE25',
+    trading: '272BExJXWc7FSFh5PLps6DBWVWqoggmskoPbfbp21VNd',
+    core: '2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM',
+    accelerator: 'WMGVfhVuWuMRCkBDnR7nrqj6uY1XbnxQtShxdM4h7km',
   }),
   // Bootstrap hint, GENERATED — do not hand-edit. Regenerate with
   // `node packages/dclutch-sdk/scripts/derive-activation-hint.mjs --write`.
   //
   // The one cache of those the Registry owns whose five pinned deployment
   // slots equalled the five live ProgramData slots in a single reading.
-  // Release set 85defd75b236b191de00b48e673cdc4a4bcc2408b2248c4504895815b04cc69f,
-  // pinning Core at deployment slot 493639301.
+  // Release set d69a67c7fbc98a2c8ecfddb2d32f58a7b82fd5fc61fe501ff350f06b09dae9ea,
+  // pinning Core at deployment slot 493941954.
   // A session follows past this when it ages out; a reader cannot.
-  activationCache: '2xVxMvfypJyo9bacGz1FFeK4L2qgqcsHaGoR9cbun6wV',
+  activationCache: 'CKuMxu7gQN5SuoP58Ns7pFgida9WkvuyYK2cjpusPuHX',
   provenance: 'Cohort-16’s devnet substrate, deployed 2026-09-05 from commit f2ae6bf75 on one named release builder, every ProgramData balance equal to (128 + 45 + elf_bytes) × 5,080 lamports exactly and every live image compared to its candidate ELF before the next role spent. Cohort-15 was closed the same morning — all eight of its ProgramData accounts read AccountNotFound while its Program stubs stayed executable and kept naming them — and the 44.42 SOL its rent returned paid for this one, which cost 36.50. It is the first cohort with EIGHT programs on the chain: the three accelerator links became one, and General batches, the Dealer’s first market and the whole Series family depend on a binary that until now nothing had deployed. It is also the first cohort to found a REFUNDING market: an oracle outage on GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY pays one atom to every ordinary claim and nothing at all to the failure coordinate, which this site derives from that market’s own authenticated basis record rather than being told.',
 });
 
@@ -212,14 +214,14 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
  * being noticed missing later.
  */
 export const DEVNET_PROGRAM_EVIDENCE_V1: Readonly<Record<DeployedProgramRoleV1, ProgramEvidenceV1>> = Object.freeze({
-  registry: Object.freeze({ programData: '68Jh5pD42XWmYq5ViWoX3MKHMeENCRbgdxdGb8B7UY6k', deploymentSlot: '493638685' }),
-  rent: Object.freeze({ programData: '8KG9NGFoMRCh4dngeAGNkP7kCmtQ68KthSbk8V883x5v', deploymentSlot: '493638731' }),
-  custody: Object.freeze({ programData: 'AjYb8Ss7E3ruHppSCDcqxJLErwGhHikTcHQymKZu6BG1', deploymentSlot: '493638796' }),
-  resolution: Object.freeze({ programData: 'PpzTFUiPbyj4MKbLoUzCxh4cAeLrZ52PBdvN8byxR1n', deploymentSlot: '493638882' }),
-  claims: Object.freeze({ programData: '14EYxVmGJuSKX9iizPaLQQRj8ae3XiJJqWHdnAnCcv33', deploymentSlot: '493639017' }),
-  trading: Object.freeze({ programData: '7RxAyfAUd3hEENzog4Faq4tqpzFfA6riM1jnYVLEgSwx', deploymentSlot: '493639190' }),
-  core: Object.freeze({ programData: 'BbyZZAwbz37VwLR6zMQMm2bJAhfqbJVFAxr9HbFRQ5AU', deploymentSlot: '493639301' }),
-  accelerator: Object.freeze({ programData: 'DfJLGB1W12cUYGpw3doG2DmMDe6ubR2UkmrrUsqosa9g', deploymentSlot: '493639473' }),
+  registry: Object.freeze({ programData: '7jT8nsQuqxB7ELo4nfzTdQkmihvtNsbipgoxmryYiNpe', deploymentSlot: '493941313' }),
+  rent: Object.freeze({ programData: 'C2GiFzDSc2raPmGvbwj1itjdbGp27fwoR3bkjXezexe5', deploymentSlot: '493941371' }),
+  custody: Object.freeze({ programData: '4WHzL7C4FDWvoyALfRC3s6LtiPP5BeKMGTX7ZmwYJ43X', deploymentSlot: '493941440' }),
+  resolution: Object.freeze({ programData: '4zts4U6HWKLFFQnk4BYK246d4RrBkENXbB5nrJkDAqoF', deploymentSlot: '493941536' }),
+  claims: Object.freeze({ programData: '5p7NCmzBYkDA4GQt4Hh1kwYnPCPMkCcQHTTAHK69ze48', deploymentSlot: '493941668' }),
+  trading: Object.freeze({ programData: '2ZRhZ6DzQfZryCp6bestHJJH681cVYfQEHYER2AC2A7f', deploymentSlot: '493941839' }),
+  core: Object.freeze({ programData: 'EMTaPpryWfbh5mTEwCrz5DVDdnJpYwX5sSeH91bz8Yvq', deploymentSlot: '493941954' }),
+  accelerator: Object.freeze({ programData: '3c4zo42BrvpUj3EFftCPM77VxtZvRxNK7vHBFW5Y5Pmu', deploymentSlot: '493942086' }),
 });
 
 export const LOCAL_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
