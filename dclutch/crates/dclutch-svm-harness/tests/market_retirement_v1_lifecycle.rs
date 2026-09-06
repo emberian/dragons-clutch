@@ -378,7 +378,12 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
             logical_market: market.to_bytes(),
             release_set,
             registry_program: REGISTRY_PROGRAM_ID.to_bytes(),
-            product_instance_id: identity.product_record.to_bytes(),
+            // SEEDED THE WAY CLAIMS WRITES IT, which is the Core state's
+            // product INSTANCE and not its record. Seeding it from
+            // `product_record` made this fixture a mirror of the retirement
+            // operator's own reader rather than of the program that owns the
+            // field, so the two agreed about a value no chain ever carries.
+            product_instance_id: identity.product_id.to_bytes(),
             basis_id: [0xd2; 32],
             realm_id: base.realm,
             custody_context: market.to_bytes(),
@@ -1394,16 +1399,15 @@ async fn a_seated_failure_column_refuses_the_claims_handoff_by_name() {
         },
     );
 
-    // The host mirror refuses too, and coarsely: `Claims` is the same code ten
-    // identity mismatches carry. Asserted so the on-chain reading below is
-    // known to be the one that names the cause.
+    // The host mirror refuses too, and it now names WHICH: a supply standing at
+    // a coordinate this closure will not discharge, with no escrow tail to
+    // discharge it. `Claims` used to be the same code eleven conjuncts carried,
+    // so this assertion could only say "it refused"; it says what.
     let seated_snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
-    assert!(
-        matches!(
-            build_checkpoint_market_retirement_v1(&seated_snapshot),
-            Err(MarketRetirementOperatorErrorV1::Claims)
-        ),
-        "the retirement builder refuses a seated residue, under its coarse Claims code"
+    assert_eq!(
+        build_checkpoint_market_retirement_v1(&seated_snapshot),
+        Err(MarketRetirementOperatorErrorV1::UnescrowedSupply),
+        "a seated residue with no escrow tail is an undischargeable supply, by name"
     );
 
     let before = joined_snapshot(&mut context, &fixture).await;

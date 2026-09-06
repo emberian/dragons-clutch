@@ -630,6 +630,18 @@ fn load_or_create_campaign_v1(
             hoard_vault: initial_account(&snapshot.hoard_vault),
             source_receipt: initial_account(&snapshot.source_receipt),
             refund_wallet: initial_account(&snapshot.refund_wallet),
+            // Present exactly when the closure burns a column. The equality
+            // against the operator's own delta is what makes this an
+            // independent classification and not a copy of it.
+            failure_escrow: match (
+                snapshot.failure_escrow_position.as_ref(),
+                snapshot.failure_escrow_admission.as_ref(),
+            ) {
+                (Some(position), Some(admission)) => {
+                    Some((initial_account(position), initial_account(admission)))
+                }
+                _ => None,
+            },
         },
         &report,
     )?;
@@ -1487,6 +1499,7 @@ mod tests {
                 hoard_vault: initial_account_v1(key(44), key(8), 50, vec![5]),
                 source_receipt: initial_account_v1(key(45), key(9), 1, vec![6]),
                 refund_wallet: initial_account_v1(key(46), system_program::ID, 1_000, Vec::new()),
+                failure_escrow: None,
             },
             &report,
         )

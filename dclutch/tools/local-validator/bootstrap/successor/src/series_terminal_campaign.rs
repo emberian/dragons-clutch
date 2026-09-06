@@ -2865,6 +2865,17 @@ fn load_or_create_series_aggregate_campaign_v1(
             hoard_vault: initial(&snapshot.hoard_vault),
             source_receipt: initial(&snapshot.source_receipt),
             refund_wallet: initial(&snapshot.refund_wallet),
+            // A durable Series capture taken before shape A shipped carries no
+            // tail and classifies exactly as it did; one whose Market burns a
+            // failure column carries both accounts and their rent is part of
+            // the Claims refund.
+            failure_escrow: match (
+                snapshot.failure_escrow_position.as_ref(),
+                snapshot.failure_escrow_admission.as_ref(),
+            ) {
+                (Some(position), Some(admission)) => Some((initial(position), initial(admission))),
+                _ => None,
+            },
         },
         report,
     )?;

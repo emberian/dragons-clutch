@@ -40,6 +40,7 @@ use dclutch_registry::{
 };
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_message::Message;
 use solana_program::{
     clock::Clock,
     hash::hash,
@@ -66,6 +67,9 @@ const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd4; 32]);
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd5; 32]);
 const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd6; 32]);
 const GENERATION: u64 = 9;
+/// The frame PAYER role's funded balance, and the one the honest request
+/// commits when nothing debits that account for the message.
+const PAYER_LAMPORTS: u64 = 2_000_000_000;
 const REVISION: u64 = 7;
 const CONTEXT: [u8; 32] = [0x44; 32];
 
@@ -393,7 +397,7 @@ fn fixture(fault: Fault) -> (ProgramTest, Fixture) {
         payer.pubkey(),
         system_program::ID,
         Vec::new(),
-        2_000_000_000,
+        PAYER_LAMPORTS,
     );
     let mut identity = MarketIdentity {
         market_id: CoreIdentity::new([0xff; 32]).expect("placeholder"),
@@ -597,7 +601,7 @@ fn fixture(fault: Fault) -> (ProgramTest, Fixture) {
         core_rent,
         hoard_lamports,
         rent_credit_lamports,
-        2_000_000_000,
+        PAYER_LAMPORTS,
     )
     .expect("handoff request");
     (
@@ -801,16 +805,51 @@ async fn submit(
     handoff: Instruction,
     label: &str,
 ) -> Result<(), BanksClientError> {
+    submit_paid_by(context, fixture, handoff, label, FeePayer::Harness).await
+}
+
+/// Which account Solana debits for the message.
+///
+/// Not a detail of the harness: `accounts[PAYER].lamports()` is a conjunct of
+/// this route, and the fee is taken from the fee payer while the transaction
+/// LOADS, so a route that reads the fee payer's balance reads it net of the
+/// fee. Every case above pays from the harness's own mint account, which leaves
+/// the frame's PAYER role never debited and its two balances the same number --
+/// so none of them could have caught the operator committing the wrong one.
+/// `FeePayer::Frame` is the devnet shape, where the frame's PAYER role and the
+/// message's fee payer are one account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FeePayer {
+    Harness,
+    Frame,
+}
+
+async fn submit_paid_by(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    handoff: Instruction,
+    label: &str,
+    fee_payer: FeePayer,
+) -> Result<(), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
-    let transaction = Transaction::new_signed_with_payer(
-        &[
-            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
-            handoff,
-        ],
-        Some(&context.payer.pubkey()),
-        &[&context.payer, &fixture.payer],
-        blockhash,
-    );
+    let instructions = [
+        ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+        handoff,
+    ];
+    let transaction = match fee_payer {
+        FeePayer::Harness => Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&context.payer.pubkey()),
+            &[&context.payer, &fixture.payer],
+            blockhash,
+        ),
+        FeePayer::Frame => Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&fixture.payer.pubkey()),
+            &[&fixture.payer],
+            blockhash,
+        ),
+    };
     let signature = transaction
         .signatures
         .first()
@@ -997,4 +1036,153 @@ async fn hostile_substitution_replay_partial_rent_phase_and_release_refuse_with_
             "{fault:?} must roll back byte-for-byte"
         );
     }
+}
+
+/// One author for the payer's lamports, and it is the message's own fee that
+/// separates the two candidates.
+fn request_with_payer_lamports(
+    request: RetirementReplayHandoffRequestV1,
+    payer_lamports: u64,
+) -> RetirementReplayHandoffRequestV1 {
+    RetirementReplayHandoffRequestV1::new(
+        request.market(),
+        request.context(),
+        request.trading_replay_digest(),
+        request.hoard_data_digest(),
+        request.generation(),
+        request.revision(),
+        request.trading_replay_lamports(),
+        request.core_replay_rent_lamports(),
+        request.hoard_lamports(),
+        request.rent_credit_lamports(),
+        payer_lamports,
+    )
+    .expect("handoff request")
+}
+
+/// `getFeeForMessage` for the exact message this case signs. The harness owns
+/// the number; the test never writes one.
+async fn frame_payer_message_fee(context: &mut ProgramTestContext, fixture: &Fixture) -> u64 {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let message = Message::new_with_blockhash(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            instruction(fixture, Fault::None),
+        ],
+        Some(&fixture.payer.pubkey()),
+        &blockhash,
+    );
+    context
+        .banks_client
+        .get_fee_for_message(message)
+        .await
+        .expect("fee quote")
+        .expect("the harness quoted a fee for this message")
+}
+
+async fn payer_lamports(context: &mut ProgramTestContext, fixture: &Fixture) -> u64 {
+    context
+        .banks_client
+        .get_account(fixture.payer.pubkey())
+        .await
+        .expect("payer read")
+        .expect("payer")
+        .lamports
+}
+
+/// THE FRAME'S PAYER ROLE PAYING FOR ITS OWN MESSAGE, WHICH IS THE DEVNET SHAPE.
+///
+/// Core compares `accounts[PAYER].lamports()` against `request.payer_lamports()`
+/// and refuses `Reference`. Solana debits the fee payer while the transaction
+/// LOADS, so when those two accounts are one account the route reads a balance
+/// the message has already reduced. Every other case in this file pays from the
+/// harness's mint keypair, so the frame's PAYER role was never debited and the
+/// observed and read balances were the same number -- which is why a devnet
+/// packet refused `0x3003` at 61,946 CU (cohort-17D) against a green file.
+///
+/// Both halves run against the SAME code and differ in eight bytes, so the code
+/// is what the red half convicts. `Reference` is one code over many conjuncts;
+/// what makes this case about the payer conjunct is not the code, it is that
+/// the identical packet with those eight bytes reduced by the quoted fee lands.
+#[tokio::test]
+async fn a_request_built_from_the_pre_fee_balance_refuses_and_the_net_one_lands() {
+    let (test, mut fixture) = fixture(Fault::None);
+    let mut context = test.start_with_context().await;
+    let before = snapshot(&mut context, &fixture).await;
+    assert_eq!(before.payer.lamports, PAYER_LAMPORTS);
+
+    let fee = frame_payer_message_fee(&mut context, &fixture).await;
+    assert!(
+        fee > 0,
+        "a zero-fee harness cannot tell the two requests apart, and this case is only about their difference"
+    );
+
+    // RED. The fixture's request commits `PAYER_LAMPORTS`, the balance an
+    // observer reads before the fee -- exactly what the operator committed.
+    assert_eq!(
+        refusal(
+            submit_paid_by(
+                &mut context,
+                &fixture,
+                instruction(&fixture, Fault::None),
+                "core replay handoff: the request commits the balance before its own fee",
+                FeePayer::Frame,
+            )
+            .await
+        ),
+        Some(CORE_REFERENCE),
+        "a request built from the pre-fee balance must refuse at the payer conjunct"
+    );
+    let refused = snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        refused.payer.lamports,
+        PAYER_LAMPORTS - fee,
+        "the refused message still paid its fee, which is the whole mechanism"
+    );
+    assert_eq!(
+        Snapshot {
+            payer: before.payer.clone(),
+            ..refused.clone()
+        },
+        before,
+        "apart from the fee the refusal must roll back byte for byte"
+    );
+
+    // GREEN. Re-quote for the message this half actually signs: the new request
+    // moves the digest and therefore the caller-authority key, and moves
+    // nothing that prices a message. The equality is the assertion.
+    let observed = payer_lamports(&mut context, &fixture).await;
+    assert_eq!(observed, PAYER_LAMPORTS - fee);
+    fixture.request = request_with_payer_lamports(fixture.request, observed - fee);
+    let requoted = frame_payer_message_fee(&mut context, &fixture).await;
+    assert_eq!(
+        requoted, fee,
+        "changing the committed balance must not change what the message costs"
+    );
+
+    submit_paid_by(
+        &mut context,
+        &fixture,
+        instruction(&fixture, Fault::None),
+        "core replay handoff: the request commits the balance the route reads",
+        FeePayer::Frame,
+    )
+    .await
+    .expect("the request that commits the balance at load lands");
+
+    let after = snapshot(&mut context, &fixture).await;
+    assert!(after.trading_replay.is_none());
+    assert_eq!(
+        after.payer.lamports,
+        observed - fee - fixture.request.core_replay_rent_lamports(),
+        "the payer pays the fee and the Core replay's rent, and nothing else"
+    );
+    assert_eq!(
+        after.rent_credit.lamports - refused.rent_credit.lamports,
+        fixture.request.trading_replay_lamports()
+    );
 }

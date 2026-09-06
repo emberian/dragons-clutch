@@ -216,6 +216,17 @@ pub struct RetirementReplayHandoffCoordinateInputV1 {
 pub struct RetirementReplayHandoffSnapshotV1 {
     /// Externally signing payer for the vacant Core replay.
     pub payer: ObservedAccount,
+    /// Exact fee the message carrying this handoff pays, quoted for that
+    /// message and not assumed.
+    ///
+    /// Solana debits the fee payer while the transaction LOADS, so a program
+    /// that reads `accounts[PAYER].lamports()` reads the observed balance
+    /// already net of it. The request commits the balance the program will
+    /// read, so this is the one place the two differ and
+    /// `handoff_payer_lamports_at_load_v1` is the one author that closes the
+    /// gap. Zero is legitimate and means the frame's PAYER role does not pay
+    /// for the message.
+    pub payer_transaction_fee_lamports: u64,
     /// Retiring Core Market.
     pub market: ObservedAccount,
     /// Market-selected Registry activation cache.
@@ -307,8 +318,15 @@ pub struct RetirementReplayHandoffReportV1 {
     pub expected_payer_owner: Pubkey,
     /// Exact payer bytes, unchanged by the handoff.
     pub expected_payer_data: Vec<u8>,
-    /// Exact payer lamports after the rent prepayment.
+    /// Exact payer lamports after the rent prepayment and BEFORE the message
+    /// fee, which is the protocol-only poststate an exterior caller compares
+    /// against the observed prestate. It is the receipt's `payer_post_lamports`
+    /// plus `payer_transaction_fee_lamports`: the program's own receipt reports
+    /// what it read, and what it read is already net of the fee.
     pub expected_payer_lamports: u64,
+    /// Exact payer balance the route READS, which the request commits: the
+    /// observed balance less this message's own fee.
+    pub payer_lamports_at_load: u64,
     /// Exact RentCredit owner, unchanged by the handoff.
     pub expected_rent_credit_owner: Pubkey,
     /// Exact RentCredit bytes, unchanged by the handoff.
@@ -1661,6 +1679,33 @@ fn content_id(bytes: [u8; 32]) -> Result<ContentId, TerminalRetirementErrorV1> {
     ContentId::new(bytes).map_err(|_| TerminalRetirementErrorV1::Projection)
 }
 
+/// The payer balance the handoff route READS, which is not the balance the
+/// snapshot OBSERVES.
+///
+/// Core compares `accounts[PAYER].lamports()` against `request.payer_lamports()`
+/// (`retirement_replay_handoff_v1.rs`, the `Reference` conjunct), and Solana has
+/// already debited the message's own fee from the fee payer by the time the
+/// route runs. Cohort-17D convicted that gap on chain: the packet refused
+/// `0x3003` at 61,946 CU, and the same packet with these eight bytes reduced by
+/// the fee moved the refusal past this conjunct.
+///
+/// The route compares three other balances -- `trading_replay`, `hoard` and
+/// `rent_credit` -- and none of them takes this subtraction, because none of
+/// them can be the fee payer: `require_handoff_distinct` refuses the whole
+/// snapshot when any role aliases the PAYER role, and
+/// `handoff_snapshot_refuses_mixed_finality_and_every_role_alias` asserts that
+/// for each of the three by name. They are excluded by construction, not by
+/// having been checked once against one chain.
+fn handoff_payer_lamports_at_load_v1(
+    snapshot: &RetirementReplayHandoffSnapshotV1,
+) -> Result<u64, TerminalRetirementErrorV1> {
+    snapshot
+        .payer
+        .lamports
+        .checked_sub(snapshot.payer_transaction_fee_lamports)
+        .ok_or(TerminalRetirementErrorV1::Projection)
+}
+
 /// Build the one atomic Trading-to-Core retirement replay handoff.
 pub fn build_retirement_replay_handoff_v1(
     snapshot: &RetirementReplayHandoffSnapshotV1,
@@ -1680,6 +1725,7 @@ pub fn build_retirement_replay_handoff_v1(
     let rent =
         decode_rent(&snapshot.rent_sysvar).map_err(TerminalRetirementErrorV1::Observation)?;
     let core_rent = rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1);
+    let payer_lamports_at_load = handoff_payer_lamports_at_load_v1(snapshot)?;
     let request = RetirementReplayHandoffRequestV1::new(
         snapshot.market.key.to_bytes(),
         context,
@@ -1691,7 +1737,7 @@ pub fn build_retirement_replay_handoff_v1(
         core_rent,
         snapshot.hoard.lamports,
         snapshot.rent_credit.lamports,
-        snapshot.payer.lamports,
+        payer_lamports_at_load,
     )
     .map_err(TerminalRetirementErrorV1::RetirementReplayHandoff)?;
     let request_body = request.to_bytes();
@@ -1745,7 +1791,7 @@ pub fn build_retirement_replay_handoff_v1(
             core_replay_lamports: snapshot.core_replay.lamports,
             hoard_lamports: snapshot.hoard.lamports,
             rent_credit_lamports: snapshot.rent_credit.lamports,
-            payer_lamports: snapshot.payer.lamports,
+            payer_lamports: payer_lamports_at_load,
         },
         expected_core_replay_digest,
     )
@@ -1823,7 +1869,12 @@ pub fn build_retirement_replay_handoff_v1(
         expected_trading_replay_lamports: 0,
         expected_payer_owner: snapshot.payer.owner,
         expected_payer_data: snapshot.payer.data.clone(),
-        expected_payer_lamports: expected_receipt.payer_post_lamports,
+        expected_payer_lamports: snapshot
+            .payer
+            .lamports
+            .checked_sub(core_rent)
+            .ok_or(TerminalRetirementErrorV1::Projection)?,
+        payer_lamports_at_load,
         expected_rent_credit_owner: snapshot.rent_credit.owner,
         expected_rent_credit_data: snapshot.rent_credit.data.clone(),
         expected_rent_credit_lamports: expected_receipt.rent_credit_post_lamports,
@@ -1866,7 +1917,7 @@ pub fn preflight_retirement_replay_handoff_caller_v1(
         rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1),
         snapshot.hoard.lamports,
         snapshot.rent_credit.lamports,
-        snapshot.payer.lamports,
+        handoff_payer_lamports_at_load_v1(snapshot)?,
     )
     .map_err(TerminalRetirementErrorV1::RetirementReplayHandoff)?;
     let request_digest = hash(&request.to_bytes()).to_bytes();
@@ -2387,6 +2438,7 @@ mod tests {
         system.key = system_program::ID;
         RetirementReplayHandoffSnapshotV1 {
             payer: account(40),
+            payer_transaction_fee_lamports: 0,
             market: account(41),
             activation_cache: account(42),
             registry_program: account(43),
@@ -2793,5 +2845,59 @@ mod tests {
                 "role index {index} must not alias payer"
             );
         }
+    }
+
+    /// The route compares four balances and only ONE of them takes the fee
+    /// subtraction. The other three are excluded by construction rather than by
+    /// observation: each of them aliasing the PAYER role is a refusal, so none
+    /// of them can be the account Solana debits for the message.
+    #[test]
+    fn only_the_payer_role_can_be_the_fee_payer_the_route_compares() {
+        let baseline = handoff_snapshot();
+        for (role, alias) in [
+            ("rent_credit", 15_usize),
+            ("trading_replay", 16),
+            ("hoard", 18),
+        ] {
+            let mut hostile = baseline.clone();
+            match alias {
+                15 => hostile.rent_credit.key = hostile.payer.key,
+                16 => hostile.trading_replay.key = hostile.payer.key,
+                18 => hostile.hoard.key = hostile.payer.key,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                require_handoff_distinct(&hostile),
+                Err(TerminalRetirementErrorV1::Alias),
+                "{role} carries a balance the route compares and must not be the fee payer"
+            );
+        }
+    }
+
+    /// One author, and it subtracts.
+    #[test]
+    fn the_payer_lamports_the_route_reads_are_the_observed_balance_less_this_message_fee() {
+        let mut snapshot = handoff_snapshot();
+        snapshot.payer.lamports = 1_673_324_417;
+        snapshot.payer_transaction_fee_lamports = 5_000;
+        assert_eq!(
+            handoff_payer_lamports_at_load_v1(&snapshot),
+            Ok(1_673_319_417)
+        );
+
+        snapshot.payer_transaction_fee_lamports = 0;
+        assert_eq!(
+            handoff_payer_lamports_at_load_v1(&snapshot),
+            Ok(1_673_324_417),
+            "a frame whose PAYER role does not pay for the message reads the observed balance"
+        );
+
+        snapshot.payer.lamports = 4_999;
+        snapshot.payer_transaction_fee_lamports = 5_000;
+        assert_eq!(
+            handoff_payer_lamports_at_load_v1(&snapshot),
+            Err(TerminalRetirementErrorV1::Projection),
+            "a payer that cannot cover its own fee is a refusal, never a wrapped balance"
+        );
     }
 }

@@ -290,6 +290,32 @@ pub enum MarketRetirementOperatorErrorV1 {
     Resolution,
     /// Claims aggregate identity, width, revision, or liability differed.
     Claims,
+    /// The escrow tail's own accusations, split out of `Claims` on 2026-09-06.
+    ///
+    /// `Claims` covered eleven conjuncts across two functions, and cohort-17's
+    /// market 2 met it at the last stage of the first retirement any market has
+    /// reached with a seated failure column -- with nothing to say which. These
+    /// are five different accusations about four different accounts, so they
+    /// are five codes.
+    ///
+    /// A supply standing at a coordinate the closure will not discharge: no
+    /// escrow at all, or a non-failure column that is not zero.
+    UnescrowedSupply,
+    /// The refunding failure index, or the derived escrow's disagreement with
+    /// it.
+    FailureIndex,
+    /// The linked LiabilityBasis record did not decode, or its semantic
+    /// identity is not the aggregate's.
+    BasisRecord,
+    /// The basis record decoded and is the aggregate's, but its width or its
+    /// refund-on-failure contract is not this retirement's.
+    BasisContract,
+    /// The escrow Position or its admission is not the derived pair, or the
+    /// Position does not answer to the aggregate.
+    EscrowFrame,
+    /// The failure column is not exactly the escrow's residue: an unpayable
+    /// column partly in hands that can be paid is an outstanding liability.
+    EscrowResidue,
     /// Custody replay, vault, Realm, token, or conservation facts differed.
     Custody,
     /// A deterministic address, account alias, or privilege profile differed.
@@ -1249,7 +1275,19 @@ fn authenticate_claims(
         || claims.logical_market != snapshot.market.key.to_bytes()
         || claims.release_set != market.identity.selected_release_set.to_bytes()
         || claims.registry_program != snapshot.registry_program.key.to_bytes()
-        || claims.product_instance_id != market.identity.product_record.to_bytes()
+        // THE PRODUCT INSTANCE, NOT THE PRODUCT RECORD. The Claims program is
+        // the semantic owner of this field and binds it to the Core state's
+        // `product_id` -- `rational_product_v3.rs:201` and
+        // `affine_batch_v2.rs:700` in the deployed link both compare
+        // `core.identity.product_id.to_bytes() != market.product_instance_id`
+        // -- and so do every other host reader of it
+        // (`wallet_terminal_input.rs:488`, `rational_representation.rs:642`).
+        // This reader alone read the RECORD, the Registry content identity of
+        // the product's record, which is a different 32 bytes on every Market
+        // that has ever been founded. Only a Market that actually reaches the
+        // closure meets it, and until cohort-17's market 2 none ever had; the
+        // fixture agreed because one hand wrote both it and this line.
+        || claims.product_instance_id != market.identity.product_id.to_bytes()
         || claims.realm_id != market.identity.realm_id.to_bytes()
         || claims.generation != market.identity.generation
     {
@@ -1309,7 +1347,7 @@ fn authenticate_failure_escrow(
                     .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?
                     != 0
                 {
-                    return Err(MarketRetirementOperatorErrorV1::Claims);
+                    return Err(MarketRetirementOperatorErrorV1::UnescrowedSupply);
                 }
             }
             return Ok(FailureEscrowStateV1::Vacant);
@@ -1321,18 +1359,18 @@ fn authenticate_failure_escrow(
     };
     let failure_selector = u32::try_from(
         refunding_failure_index(claims.claim_count)
-            .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?,
+            .map_err(|_| MarketRetirementOperatorErrorV1::FailureIndex)?,
     )
-    .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?;
+    .map_err(|_| MarketRetirementOperatorErrorV1::FailureIndex)?;
     let basis = ProductBasisV3::decode(&basis_account.data)
-        .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?;
+        .map_err(|_| MarketRetirementOperatorErrorV1::BasisRecord)?;
     let semantic = semantic_basis_id_v3(&basis_account.data)
-        .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?;
-    if semantic != claims.basis_id
-        || basis.basis_width() != claims.claim_count
-        || !basis.refunds_on_failure()
-    {
-        return Err(MarketRetirementOperatorErrorV1::Claims);
+        .map_err(|_| MarketRetirementOperatorErrorV1::BasisRecord)?;
+    if semantic != claims.basis_id {
+        return Err(MarketRetirementOperatorErrorV1::BasisRecord);
+    }
+    if basis.basis_width() != claims.claim_count || !basis.refunds_on_failure() {
+        return Err(MarketRetirementOperatorErrorV1::BasisContract);
     }
     let position = LiabilityBasisPositionViewV2::decode(&position_account.data)
         .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?;
@@ -1348,7 +1386,7 @@ fn authenticate_failure_escrow(
     )
     .map_err(|_| MarketRetirementOperatorErrorV1::Frame)?;
     if derived.failure_selector != failure_selector {
-        return Err(MarketRetirementOperatorErrorV1::Claims);
+        return Err(MarketRetirementOperatorErrorV1::FailureIndex);
     }
     if position_account.owner != snapshot.claims_program.key
         || admission_account.owner != snapshot.claims_program.key
@@ -1360,7 +1398,7 @@ fn authenticate_failure_escrow(
         || position.basis_id != claims.basis_id
         || position.claim_count != claims.claim_count
     {
-        return Err(MarketRetirementOperatorErrorV1::Claims);
+        return Err(MarketRetirementOperatorErrorV1::EscrowFrame);
     }
     let mut residue = 0;
     for claim in 0..claims.claim_count {
@@ -1380,11 +1418,11 @@ fn authenticate_failure_escrow(
             // rest of it in hands that can be paid, and that is an outstanding
             // liability rather than a residue.
             if supply == 0 || supply != held {
-                return Err(MarketRetirementOperatorErrorV1::Claims);
+                return Err(MarketRetirementOperatorErrorV1::EscrowResidue);
             }
             residue = supply;
         } else if supply != 0 || held != 0 {
-            return Err(MarketRetirementOperatorErrorV1::Claims);
+            return Err(MarketRetirementOperatorErrorV1::UnescrowedSupply);
         }
     }
     let rent = position_account

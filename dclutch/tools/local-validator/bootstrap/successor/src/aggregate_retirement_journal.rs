@@ -267,6 +267,19 @@ pub(crate) struct AggregateRetirementCampaignInputV1 {
     pub(crate) hoard_vault: AggregateRetirementInitialAccountV1,
     pub(crate) source_receipt: AggregateRetirementInitialAccountV1,
     pub(crate) refund_wallet: AggregateRetirementInitialAccountV1,
+    /// Decision 0025 shape A's escrow tail: the failure-column Position and its
+    /// admission, present exactly when this Market's closure burns a column.
+    ///
+    /// The prepare packet closes both to the checkpoint, so their rent is part
+    /// of the Claims refund and part of what the refund wallet finally
+    /// receives. The classification below is INDEPENDENT of the operator's, and
+    /// the equality against `report.expected_refund_delta` is what makes it a
+    /// check rather than a copy -- so a caller that supplies this tail when the
+    /// report did not count it, or omits it when the report did, refuses here.
+    pub(crate) failure_escrow: Option<(
+        AggregateRetirementInitialAccountV1,
+        AggregateRetirementInitialAccountV1,
+    )>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -498,11 +511,23 @@ pub(crate) fn build_aggregate_retirement_campaign_v1(
             "campaign binding or immutable refund wallet was invalid",
         ));
     }
+    let escrow_rent = match input.failure_escrow.as_ref() {
+        Some((position, admission)) => position
+            .lamports
+            .checked_add(admission.lamports)
+            .ok_or_else(|| refusal("classified failure-escrow rent overflowed"))?,
+        None => 0,
+    };
+    let claims_refund = input
+        .checkpoint
+        .lamports
+        .checked_add(escrow_rent)
+        .ok_or_else(|| refusal("classified Claims refund overflowed"))?;
     let expected_refund_delta = input
         .market
         .lamports
         .checked_add(input.rent_credit.lamports)
-        .and_then(|value| value.checked_add(input.checkpoint.lamports))
+        .and_then(|value| value.checked_add(claims_refund))
         .and_then(|value| value.checked_add(input.custody_replay.lamports))
         .and_then(|value| value.checked_add(input.hoard_vault.lamports))
         .ok_or_else(|| refusal("classified retirement lamports overflowed"))?;
@@ -538,7 +563,7 @@ pub(crate) fn build_aggregate_retirement_campaign_v1(
     let classified_lamports = AggregateRetirementClassifiedLamportsV1 {
         market: input.market.lamports,
         rent_credit: input.rent_credit.lamports,
-        claims_refund: input.checkpoint.lamports,
+        claims_refund,
         custody_replay: input.custody_replay.lamports,
         hoard_vault: input.hoard_vault.lamports,
         expected_refund_delta,
@@ -1900,6 +1925,7 @@ mod tests {
             hoard_vault: account(key(44), key(8), 50, vec![5]),
             source_receipt: account(key(45), key(9), 1, vec![6]),
             refund_wallet: account(key(46), system_program::ID, 1_000, Vec::new()),
+            failure_escrow: None,
         };
         build_aggregate_retirement_campaign_v1(input, &report(core, market, checkpoint))
             .expect("campaign")
@@ -1929,6 +1955,7 @@ mod tests {
             hoard_vault: account(key(44), key(8), 50, vec![5]),
             source_receipt: account(key(45), key(9), 1, vec![6]),
             refund_wallet: account(key(46), system_program::ID, 1_000, Vec::new()),
+            failure_escrow: None,
         };
         build_aggregate_retirement_campaign_v1(
             input,

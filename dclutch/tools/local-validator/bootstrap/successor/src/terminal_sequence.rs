@@ -1233,6 +1233,18 @@ pub(crate) struct TerminalSemanticMutationV1 {
     /// exterior caller maps these identities onto its payer/refund wallets;
     /// it never assumes those roles are distinct.
     pub(crate) protocol_lamport_deltas: BTreeMap<Pubkey, i128>,
+    /// The account whose balance THIS STAGE'S OWN INSTRUCTION BYTES commit net
+    /// of the message fee, and the exact fee they commit.
+    ///
+    /// Almost every route reads no balance of the account that pays for the
+    /// message, and says so with `None`. A route that does read one is
+    /// committing a number the message it rides in changes: Solana debits the
+    /// fee payer while the transaction loads. `build_protocol_stage_journal_v1`
+    /// refuses unless the named account is the message's fee payer AND the
+    /// committed fee is the fee `getFeeForMessage` quotes for the message it is
+    /// about to sign, so the commitment is checked against the signed bytes
+    /// rather than trusted from whoever produced them.
+    pub(crate) payer_fee_commitment: Option<(Pubkey, u64)>,
 }
 
 /// Durable identity of one mutation. ALT operations are infrastructure
@@ -1685,6 +1697,17 @@ pub(crate) fn build_protocol_stage_journal_v1(
     let message_bytes = compiled.message.serialize();
     let message_base64 = BASE64.encode(&message_bytes);
     let transaction_fee_lamports = terminal_fee_for_message(rpc, &message_base64)?;
+    // A stage whose instruction bytes commit the fee payer's balance net of the
+    // fee is only correct if that account is THIS message's fee payer and that
+    // fee is THIS message's fee. Both are checked against the bytes about to be
+    // signed, not against whatever produced them.
+    if let Some((committed_key, committed_fee)) = mutation.payer_fee_commitment
+        && (committed_key != payer || committed_fee != transaction_fee_lamports)
+    {
+        return Err(refusal(
+            "terminal stage instruction commits a payer fee its own signed message does not pay",
+        ));
+    }
     let payer_pre = prestate_by_key
         .get(&payer)
         .ok_or_else(|| refusal("terminal prestate omitted fee payer"))?;
@@ -1980,6 +2003,7 @@ pub(crate) fn build_resolution_receipt_prepay_journal_v1(
             (payer.key, -i128::from(top_up)),
             (receipt.key, i128::from(top_up)),
         ]),
+        payer_fee_commitment: None,
     };
     let mut journal = build_protocol_stage_journal_v1(
         rpc,
@@ -2066,6 +2090,7 @@ pub(crate) fn authenticate_resolution_receipt_prepay_planned_journal_v1(
             (payer.key, -i128::from(top_up)),
             (receipt.key, i128::from(top_up)),
         ]),
+        payer_fee_commitment: None,
     };
     authenticate_planned_protocol_owner_v1(
         journal,
@@ -4367,7 +4392,9 @@ fn authenticate_core_effect_acknowledgement_v1(
     let envelope_bytes = instruction_data
         .get(REQUEST_BYTES..REQUEST_BYTES + CORE_EFFECT_ENVELOPE_BYTES_V1)
         .ok_or_else(|| {
-            refusal("a Core effect acknowledgement was declared for an instruction with no envelope")
+            refusal(
+                "a Core effect acknowledgement was declared for an instruction with no envelope",
+            )
         })?;
     let envelope = CoreEffectEnvelopeV1::decode(envelope_bytes)
         .map_err(|error| Error::new(format!("terminal effect envelope: {error:?}")))?;
@@ -5375,6 +5402,7 @@ pub(crate) fn plan_core_begin_retiring_from_chain_v1(
                 expected_market_data,
             )],
             protocol_lamport_deltas: BTreeMap::from([(market_key, 0)]),
+            payer_fee_commitment: None,
         },
         closure,
         prestate,
@@ -5884,6 +5912,7 @@ pub(crate) fn plan_direct_begin_retiring_caller_v1(
                     }),
                     expected_accounts: vec![root],
                     protocol_lamport_deltas: BTreeMap::new(),
+                    payer_fee_commitment: None,
                 },
             ))
         }
@@ -6151,6 +6180,7 @@ pub(crate) fn plan_resolution_close_caller_v1(
             (snapshot.closure_destination.key, 0),
             (snapshot.beneficiary.key, i128::from(facts.refund_lamports)),
         ]),
+        payer_fee_commitment: None,
     })
 }
 
@@ -6271,6 +6301,7 @@ pub(crate) fn plan_direct_native_close_caller_v1(
                 i128::from(report.rent_credit_delta_lamports),
             ),
         ]),
+        payer_fee_commitment: None,
     })
 }
 
@@ -6597,12 +6628,24 @@ pub(crate) fn plan_retirement_replay_handoff_caller_v1(
         .lamports
         .checked_add(report.trading_replay_refund_lamports)
         .ok_or_else(|| refusal("replay handoff RentCredit refund overflowed"))?;
+    // The program's receipt reports the balance the program READ, which is
+    // already net of the message fee; the poststate this caller compares
+    // against the observed prestate is the protocol-only one, before it. The
+    // two therefore differ by exactly the committed fee, and that identity is
+    // the join between the operator's request author and the journal's fee
+    // author -- if either drifts, this is where it shows.
+    let receipt_plus_fee = report
+        .expected_receipt
+        .payer_post_lamports
+        .checked_add(snapshot.payer_transaction_fee_lamports)
+        .ok_or_else(|| refusal("replay handoff payer receipt-plus-fee overflowed"))?;
     if expected_payer != report.expected_payer_lamports
         || expected_credit != report.expected_rent_credit_lamports
+        || receipt_plus_fee != report.expected_payer_lamports
         || hash(&report.expected_core_replay_data).to_bytes() != report.expected_core_replay_digest
     {
         return Err(refusal(
-            "replay handoff byte, payer-rent, or RentCredit arithmetic disagreed",
+            "replay handoff byte, payer-rent, payer-fee, or RentCredit arithmetic disagreed",
         ));
     }
     Ok(TerminalSemanticMutationV1 {
@@ -6664,6 +6707,7 @@ pub(crate) fn plan_retirement_replay_handoff_caller_v1(
             ),
             (report.hoard, 0),
         ]),
+        payer_fee_commitment: Some((snapshot.payer.key, snapshot.payer_transaction_fee_lamports)),
     })
 }
 
@@ -6687,6 +6731,10 @@ pub(crate) fn plan_retirement_replay_handoff_two_pass_from_chain_v1(
     };
     let full = RetirementReplayHandoffSnapshotV1 {
         payer: account(discovery.payer.key, "handoff payer")?,
+        // Carried, never re-derived: the request digest the preflight fetched a
+        // caller-authority PDA for was computed under THIS fee, and a second
+        // author here would move the PDA out from under the account just read.
+        payer_transaction_fee_lamports: discovery.payer_transaction_fee_lamports,
         market: account(discovery.market.key, "handoff Market")?,
         activation_cache: account(discovery.activation_cache.key, "handoff activation cache")?,
         registry_program: account(discovery.registry_program.key, "handoff Registry program")?,
@@ -6820,6 +6868,10 @@ pub(crate) fn retirement_replay_handoff_discovery_from_chain_v1(
     };
     Ok(RetirementReplayHandoffSnapshotV1 {
         payer: account(payer, "handoff payer")?,
+        // Discovery reads the chain; it does not compile a message, so it
+        // cannot quote a fee. `settle_retirement_handoff_payer_fee_v1` is where
+        // this stops being zero.
+        payer_transaction_fee_lamports: 0,
         market: account(market, "handoff Market")?,
         activation_cache: account(keys[2], "handoff activation cache")?,
         registry_program: account(registry, "handoff Registry program")?,
@@ -6954,6 +7006,7 @@ pub(crate) fn plan_aggregate_retirement_caller_v1(
                 i128::from(report.expected_refund_delta),
             ),
         ]),
+        payer_fee_commitment: None,
     })
 }
 
@@ -7679,6 +7732,113 @@ fn direct_native_close_closure_from_discovery_v1(
     })
 }
 
+/// How many times the handoff may re-price its own message before the stage
+/// refuses. Two settle it whenever the cluster fee is steady: the first pass
+/// quotes, the second commits and re-quotes to the same number. A third is the
+/// margin for one fee change landing between them; a fourth would be a cluster
+/// repricing every slot, which is a refusal and not a retry.
+const HANDOFF_FEE_SETTLEMENT_PASSES_V1: usize = 3;
+
+/// THE HANDOFF REQUEST COMMITS A BALANCE THIS MESSAGE ITSELF CHANGES.
+///
+/// Core reads `accounts[PAYER].lamports()` and compares it against the
+/// request's `payer_lamports`, and Solana debits the fee payer while the
+/// transaction LOADS -- so what the program reads is the observed balance minus
+/// this very message's fee. Cohort-17D convicted that on chain: `0x3003
+/// CoreSbfError::Reference` at 61,946 CU, and the identical packet with those
+/// eight bytes reduced by the fee moved past the conjunct.
+///
+/// The producer subtracts (`handoff_payer_lamports_at_load_v1`); this is where
+/// the number it subtracts comes from, and it is quoted for a message rather
+/// than assumed. The loop exists because the two depend on each other: the fee
+/// is quoted for a compiled message, and the message carries the request the
+/// fee goes into. It converges because changing those eight bytes moves the
+/// request digest and therefore one static caller-authority key, and moves
+/// nothing that prices a message -- signer count, budget prefix, table. The
+/// loop asserts that rather than asserting it in a comment: it returns only the
+/// pass whose own compiled message pays exactly the fee its own bytes commit.
+#[allow(clippy::too_many_arguments)]
+fn settle_retirement_handoff_payer_fee_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    evidence: &CampaignTerminalEvidenceV1,
+    discovery: &RetirementReplayHandoffSnapshotV1,
+    lookup_table: Pubkey,
+    payer: Pubkey,
+    additional_keys: &[Pubkey],
+    compute_unit_limit: Option<u32>,
+) -> Result<ChainDerivedTerminalMutationV1> {
+    if discovery.payer.key != payer {
+        return Err(refusal(
+            "replay-handoff PAYER role is not the message fee payer, so the request would commit a balance nothing debits",
+        ));
+    }
+    let mut committed = 0_u64;
+    for _ in 0..HANDOFF_FEE_SETTLEMENT_PASSES_V1 {
+        let mut priced = discovery.clone();
+        priced.payer_transaction_fee_lamports = committed;
+        let preflight = preflight_retirement_replay_handoff_caller_v1(&priced)
+            .map_err(|error| Error::new(format!("replay-handoff caller preflight: {error:?}")))?;
+        let closure = retirement_handoff_closure_from_discovery_v1(
+            plan,
+            evidence,
+            &priced,
+            preflight.request_digest,
+        )?;
+        let derived = plan_retirement_replay_handoff_two_pass_from_chain_v1(
+            rpc,
+            &priced,
+            &closure,
+            additional_keys,
+        )?;
+        let quoted =
+            terminal_stage_message_fee_v1(rpc, payer, &derived, lookup_table, compute_unit_limit)?;
+        if quoted == committed {
+            return Ok(derived);
+        }
+        committed = quoted;
+    }
+    Err(refusal(
+        "replay-handoff message fee did not settle: the cluster repriced this stage's own message on every pass",
+    ))
+}
+
+/// Quote `getFeeForMessage` for a message of this stage's exact geometry.
+///
+/// Not a shape a caller describes: the instruction, the optional budget prefix,
+/// the fee payer and the frozen table are the same four inputs
+/// `build_protocol_stage_journal_v1` compiles, and that function re-quotes for
+/// the message it actually signs. This one exists only because a stage whose
+/// bytes commit a fee has to know it before those bytes are final.
+fn terminal_stage_message_fee_v1(
+    rpc: &mut Rpc,
+    payer: Pubkey,
+    derived: &ChainDerivedTerminalMutationV1,
+    lookup_table: Pubkey,
+    compute_unit_limit: Option<u32>,
+) -> Result<u64> {
+    let table = derived
+        .prestate
+        .iter()
+        .find(|account| account.key == lookup_table)
+        .ok_or_else(|| refusal("terminal fee quote omitted the frozen ALT prestate"))?;
+    let mut instructions = Vec::with_capacity(2);
+    if let Some(limit) = compute_unit_limit {
+        instructions.push(ComputeBudgetInstruction::set_compute_unit_limit(limit));
+    }
+    instructions.push(derived.mutation.instruction.clone());
+    let (recent_blockhash, _) = terminal_latest_blockhash(rpc)?;
+    let compiled = compile_v0_message_with_optional_tables(
+        payer,
+        &instructions,
+        recent_blockhash,
+        derived.mutation.observation,
+        std::slice::from_ref(table),
+    )
+    .map_err(|error| Error::new(format!("terminal fee-quote v0 message: {error:?}")))?;
+    terminal_fee_for_message(rpc, &BASE64.encode(compiled.message.serialize()))
+}
+
 fn retirement_handoff_closure_from_discovery_v1(
     plan: &SuccessorPlan,
     evidence: &CampaignTerminalEvidenceV1,
@@ -7799,21 +7959,15 @@ fn fresh_protocol_stage_from_chain_v1(
             let discovery = retirement_replay_handoff_discovery_from_chain_v1(
                 rpc, plan, evidence, market, payer,
             )?;
-            let preflight =
-                preflight_retirement_replay_handoff_caller_v1(&discovery).map_err(|error| {
-                    Error::new(format!("replay-handoff caller preflight: {error:?}"))
-                })?;
-            let closure = retirement_handoff_closure_from_discovery_v1(
+            settle_retirement_handoff_payer_fee_v1(
+                rpc,
                 plan,
                 evidence,
                 &discovery,
-                preflight.request_digest,
-            )?;
-            plan_retirement_replay_handoff_two_pass_from_chain_v1(
-                rpc,
-                &discovery,
-                &closure,
+                table,
+                payer,
                 &table_only,
+                compute_unit_limit,
             )
         }
         TerminalStageV1::AggregateRetirement => {
@@ -11770,6 +11924,7 @@ mod tests {
                 ),
             ],
             protocol_lamport_deltas: BTreeMap::from([(payer, -10), (recipient, 10)]),
+            payer_fee_commitment: None,
         };
         let mut journal = DurableTerminalJournalV1 {
             schema: TERMINAL_JOURNAL_SCHEMA_V1.into(),
@@ -12574,18 +12729,16 @@ mod tests {
         let short = &data[..data.len() - 1];
         let refusal = authenticate_core_effect_acknowledgement_v1(&body, short, trading)
             .expect_err("a short role request is not the width the envelope declares");
-        assert!(
-            refusal.0.contains("role-request tail"),
-            "{}",
-            refusal.0
-        );
+        assert!(refusal.0.contains("role-request tail"), "{}", refusal.0);
 
         // The declaration this all hangs on: the stage says acknowledgement,
         // never authored bytes.
         let declared = durable_return_data_v1(&ExpectedReturnDataV1::CoreEffectAcknowledgement {
             producer: Pubkey::from_str(trading).expect("trading"),
         });
-        declared.authenticate_shape_v1().expect("the shape is one of two");
+        declared
+            .authenticate_shape_v1()
+            .expect("the shape is one of two");
         assert!(declared.body_base64.is_none() && declared.core_effect_acknowledgement);
         let observed = json!({"returnData": {
             "programId": trading,
@@ -12818,8 +12971,9 @@ mod tests {
             .get_mut(&key(1).to_string())
             .expect("the fixture declares the payer poststate")
             .lamports_after_fee -= 1;
-        let error = authenticate_terminal_reconciliation_scope_v1(&unchanged, &widened, Some(&receipt))
-            .expect_err("a second poststate is outside the act");
+        let error =
+            authenticate_terminal_reconciliation_scope_v1(&unchanged, &widened, Some(&receipt))
+                .expect_err("a second poststate is outside the act");
         assert!(
             error
                 .to_string()
