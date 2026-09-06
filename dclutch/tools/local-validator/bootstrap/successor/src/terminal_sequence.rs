@@ -4867,6 +4867,39 @@ fn authenticate_chain_derived_planned_journal_v1(
     )
 }
 
+/// Observe the derived failure escrow of one Market, when the aggregate has a
+/// width that seats one at all.
+///
+/// A Market too narrow to seat an escrow returns `None` rather than an error:
+/// there is no such account to look for, and the preflight's ordinary
+/// unpaid-holder sentence is the correct one there.
+fn failure_escrow_observation_v1(
+    rpc: &mut Rpc,
+    claims: Pubkey,
+    aggregate: Pubkey,
+    aggregate_account: &ObservedAccount,
+) -> Result<Option<ObservedAccount>> {
+    let view = match dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2::decode(
+        &aggregate_account.data,
+    ) {
+        Ok(view) => view,
+        Err(_) => return Ok(None),
+    };
+    let Ok(escrow) = dclutch_operator::failure_escrow_v1::failure_escrow_v1(
+        claims,
+        view.logical_market,
+        aggregate,
+        view.claim_count,
+    ) else {
+        return Ok(None);
+    };
+    let snapshot = finalized_snapshot(rpc, &[escrow.position])?;
+    snapshot
+        .account(escrow.position)
+        .map(|account| Some(account.clone()))
+        .map_err(|error| Error::new(format!("failure escrow Position: {error}")))
+}
+
 pub(crate) fn plan_core_begin_retiring_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
@@ -4931,12 +4964,21 @@ pub(crate) fn plan_core_begin_retiring_from_chain_v1(
         &account(claims, "Claims program")?,
         &account(claims_programdata, "Claims ProgramData")?,
     )?;
+    // The escrow's observation is DIAGNOSIS, not authority: it decides which of
+    // two sentences the preflight prints about a nonzero failure column, and the
+    // snapshot of record above is untouched by it. Its address is derived off
+    // the aggregate the snapshot already carries, so it cannot be pointed at
+    // another Market's escrow, and it costs one bounded read on a path that runs
+    // once per retirement.
+    let aggregate_account = account(aggregate, "Claims aggregate")?;
+    let escrow_observation = failure_escrow_observation_v1(rpc, claims, aggregate, &aggregate_account)?;
     authenticate_zero_claims(
-        &account(aggregate, "Claims aggregate")?,
+        &aggregate_account,
         aggregate,
         claims,
         market,
         hex32(&evidence.founding_custody_context)?,
+        escrow_observation.as_ref(),
     )?;
     let request = Request::administrative(
         Action::BeginRetiring,

@@ -589,8 +589,9 @@ mod tests {
 
     use dclutch_claims::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-        LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
-        liability_basis_vector_width_v2,
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
+        LiabilityBasisPositionInputV2, encode_liability_basis_market_into_v2,
+        encode_liability_basis_position_into_v2, liability_basis_vector_width_v2,
     };
     use dclutch_market::{Identity, MarketIdentity, Phase, Readiness, StateBumpsV1};
     use dclutch_operator::{Finality, Observation, ObservedAccount};
@@ -1108,15 +1109,202 @@ mod tests {
         let claims = Pubkey::new_unique();
         let custody_context = [13; 32];
         let zero = claims_aggregate(market, claims, custody_context, &[0, 0, 0]);
-        assert!(authenticate_zero_claims(&zero, zero.key, claims, market, custody_context).is_ok());
+        assert!(
+            authenticate_zero_claims(&zero, zero.key, claims, market, custody_context, None).is_ok()
+        );
 
         let live = claims_aggregate(market, claims, custody_context, &[0, 7, 0]);
-        let error = authenticate_zero_claims(&live, live.key, claims, market, custody_context)
-            .expect_err("live liability must block BeginRetiring");
+        let error =
+            authenticate_zero_claims(&live, live.key, claims, market, custody_context, None)
+                .expect_err("live liability must block BeginRetiring");
         assert!(error.to_string().contains("index 1 is 7"));
+        assert!(
+            error.to_string().contains("wallet terminal payouts first"),
+            "an ordinary coordinate's holder CAN be paid, so the instruction stands: {error}"
+        );
 
-        let error = authenticate_zero_claims(&zero, zero.key, claims, market, [14; 32])
+        let error = authenticate_zero_claims(&zero, zero.key, claims, market, [14; 32], None)
             .expect_err("substituted custody context must refuse");
         assert!(error.to_string().contains("custody/generation join"));
+    }
+
+    /// The escrow's Position at the width the aggregate owes over.
+    fn escrow_position(
+        aggregate: &ObservedAccount,
+        owner: Pubkey,
+        balances: &[u64],
+    ) -> ObservedAccount {
+        let width = liability_basis_vector_width_v2(
+            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+            u32::try_from(balances.len()).unwrap(),
+        )
+        .unwrap();
+        let mut data = vec![0_u8; width];
+        encode_liability_basis_position_into_v2(
+            LiabilityBasisPositionInputV2 {
+                revision: 1,
+                market_account: aggregate.key.to_bytes(),
+                owner: owner.to_bytes(),
+                basis_id: [12; 32],
+            },
+            balances,
+            &mut data,
+        )
+        .unwrap();
+        ObservedAccount {
+            observation: aggregate.observation,
+            key: Pubkey::default(),
+            owner: aggregate.owner,
+            lamports: 1,
+            executable: false,
+            data,
+        }
+    }
+
+    /// A REFUNDING market's residue is not an unpaid holder, and the preflight
+    /// has to stop saying it is.
+    ///
+    /// The message it printed until decision 0025's 2026-09-05 addendum told an
+    /// operator to "produce and execute wallet terminal payouts first" for a
+    /// coordinate whose holder is a program-derived address with no key, whose
+    /// payout is zero under every certificate, and whose only mover wants a
+    /// drained Hoard -- an instruction no party can follow. Each arm below is a
+    /// different fact about the same number, and the point of the test is that
+    /// they get different sentences.
+    #[test]
+    fn a_seated_failure_column_is_not_an_unpaid_holder() {
+        let market_key = Pubkey::new_unique();
+        let market = terminal_market(market_key, 1);
+        let claims = Pubkey::new_unique();
+        let custody_context = [13; 32];
+        let residue = 166_666_667_u64;
+        let aggregate = claims_aggregate(market, claims, custody_context, &[0, 0, 0, residue]);
+        let derived = dclutch_operator::failure_escrow_v1::failure_escrow_v1(
+            claims,
+            market_key.to_bytes(),
+            aggregate.key,
+            4,
+        )
+        .expect("derived escrow");
+        assert_eq!(derived.failure_selector, 3);
+
+        // Nobody looked. Absence and a seated residue are the same number and
+        // different facts, so the preflight refuses to guess between them.
+        let error = authenticate_zero_claims(
+            &aggregate,
+            aggregate.key,
+            claims,
+            market,
+            custody_context,
+            None,
+        )
+        .expect_err("an unobserved escrow must refuse");
+        assert!(
+            error.to_string().contains(&derived.position.to_string())
+                && error.to_string().contains("was not observed"),
+            "{error}"
+        );
+
+        // The account does not exist: this market never seated its column, so
+        // the supply is in hands that can be paid and the old sentence is right.
+        let mut vacant = escrow_position(&aggregate, derived.owner, &[0, 0, 0, 0]);
+        vacant.key = derived.position;
+        vacant.data = Vec::new();
+        vacant.lamports = 0;
+        let error = authenticate_zero_claims(
+            &aggregate,
+            aggregate.key,
+            claims,
+            market,
+            custody_context,
+            Some(&vacant),
+        )
+        .expect_err("a vacant escrow must refuse");
+        assert!(
+            error.to_string().contains("does not exist")
+                && error.to_string().contains("wallet terminal payouts first"),
+            "{error}"
+        );
+
+        // A stranger holds part of the column. Not the seated residue, and the
+        // part in hands CAN be paid.
+        let mut partial = escrow_position(&aggregate, derived.owner, &[0, 0, 0, residue - 1]);
+        partial.key = derived.position;
+        let error = authenticate_zero_claims(
+            &aggregate,
+            aggregate.key,
+            claims,
+            market,
+            custody_context,
+            Some(&partial),
+        )
+        .expect_err("a partially seated column must refuse");
+        assert!(
+            error.to_string().contains("NOT wholly the seated residue")
+                && error.to_string().contains("wallet terminal payouts first"),
+            "{error}"
+        );
+
+        // An escrow that also holds an ordinary claim is not the seated residue
+        // either, whatever its failure balance says.
+        let mut hybrid = escrow_position(&aggregate, derived.owner, &[0, 0, 0, residue]);
+        hybrid.key = derived.position;
+        let mut ordinary_aggregate =
+            claims_aggregate(market, claims, custody_context, &[0, 0, 5, residue]);
+        ordinary_aggregate.key = aggregate.key;
+        let error = authenticate_zero_claims(
+            &ordinary_aggregate,
+            ordinary_aggregate.key,
+            claims,
+            market,
+            custody_context,
+            Some(&hybrid),
+        )
+        .expect_err("an ordinary coordinate with supply must refuse first");
+        assert!(error.to_string().contains("index 2 is 5"), "{error}");
+
+        // A substituted observation is refused by address, not read.
+        let mut substituted = escrow_position(&aggregate, derived.owner, &[0, 0, 0, residue]);
+        substituted.key = Pubkey::new_unique();
+        let error = authenticate_zero_claims(
+            &aggregate,
+            aggregate.key,
+            claims,
+            market,
+            custody_context,
+            Some(&substituted),
+        )
+        .expect_err("a substituted escrow observation must refuse");
+        assert!(
+            error.to_string().contains("not the derived"),
+            "{error}"
+        );
+
+        // THE WALL, stated as itself.
+        let mut seated = escrow_position(&aggregate, derived.owner, &[0, 0, 0, residue]);
+        seated.key = derived.position;
+        let error = authenticate_zero_claims(
+            &aggregate,
+            aggregate.key,
+            claims,
+            market,
+            custody_context,
+            Some(&seated),
+        )
+        .expect_err("a seated residue still blocks BeginRetiring");
+        let text = error.to_string();
+        assert!(
+            text.contains("no payout can unblock it")
+                && text.contains(&derived.position.to_string())
+                && text.contains(&derived.owner.to_string())
+                && text.contains("closure's burn")
+                && text.contains("cohort-17"),
+            "the seated residue must name the escrow, its keyless owner and the burn that is \
+             owed, and must NOT instruct a payout: {text}"
+        );
+        assert!(
+            !text.contains("wallet terminal payouts first"),
+            "the instruction no party can follow must be gone: {text}"
+        );
     }
 }

@@ -429,12 +429,37 @@ pub fn decode_routed_market_v1(
 
 /// Authenticate one Claims aggregate against a Market, and refuse the retiring
 /// path while any claim still has supply.
+///
+/// # The two ways a supply can be nonzero, and why they need different words
+///
+/// An ORDINARY coordinate with outstanding supply means holders have not been
+/// paid, and "produce and execute wallet terminal payouts first" is a true
+/// instruction: somebody holds a key and can follow it.
+///
+/// A refunding Market's FAILURE coordinate is not that. Decision 0025 seats it
+/// in an escrow Position whose owner is a program-derived address with no key,
+/// no certificate pays it (`runtime_v3`'s `FailureCoordinateNotPayable` and the
+/// failure arm's "nothing to the failure coordinate"), and the merge that could
+/// move it wants a Hoard terminal settlement has already drained. Telling an
+/// operator to produce a payout for it is instructing an act NO party can
+/// perform, and that is what this function said until the addendum to decision
+/// 0025 (2026-09-05) named the shape. It now says what is actually owed: the
+/// closure's burn of that column, which is a Claims program change and rides
+/// cohort-17 as a re-release plus a re-found under decision 0012.
+///
+/// `escrow` is the observation of the derived failure-escrow Position, which
+/// the caller finds with [`crate::failure_escrow_v1::failure_escrow_v1`] off
+/// this same aggregate. It is optional because a categorical Market has no such
+/// account; passing `None` where the failure column IS outstanding is refused
+/// by name rather than read as absence, which is the difference between "the
+/// escrow does not hold it" and "nobody looked".
 pub fn authenticate_zero_claims_v1(
     account: &ObservedAccount,
     expected: Pubkey,
     claims: Pubkey,
     market: CoreState,
     custody_context: [u8; 32],
+    escrow: Option<&ObservedAccount>,
 ) -> Result<()> {
     let aggregate = LiabilityBasisMarketViewV2::decode(&account.data)
         .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
@@ -453,17 +478,126 @@ pub fn authenticate_zero_claims_v1(
             "Claims aggregate address/owner/Market/release/Product/Realm/custody/generation join refused",
         ));
     }
+    let derived = crate::failure_escrow_v1::failure_escrow_v1(
+        claims,
+        aggregate.logical_market,
+        account.key,
+        aggregate.claim_count,
+    )
+    .ok();
     for claim_index in 0..aggregate.claim_count {
         let supply = aggregate
             .supply(&account.data, claim_index)
             .map_err(|error| Error::new(format!("Claims supply {claim_index}: {error:?}")))?;
-        if supply != 0 {
+        if supply == 0 {
+            continue;
+        }
+        let seated = derived.is_some_and(|derived| derived.failure_selector == claim_index);
+        if !seated {
             return Err(Error::new(format!(
                 "BeginRetiring is blocked: Claims supply at index {claim_index} is {supply}; produce and execute wallet terminal payouts first"
             )));
         }
+        let derived = derived.expect("a seated coordinate has a derived escrow");
+        return Err(seated_failure_column_refusal_v1(
+            account,
+            &aggregate,
+            derived,
+            claim_index,
+            supply,
+            escrow,
+        ));
     }
     Ok(())
+}
+
+/// State the seated residue as the wall it is, having first checked that it IS
+/// the residue rather than a stranger's unpaid claim wearing the same index.
+fn seated_failure_column_refusal_v1(
+    account: &ObservedAccount,
+    aggregate: &LiabilityBasisMarketViewV2,
+    derived: crate::failure_escrow_v1::FailureEscrowV1,
+    claim_index: u32,
+    supply: u64,
+    escrow: Option<&ObservedAccount>,
+) -> Error {
+    let position = derived.position;
+    let Some(escrow) = escrow else {
+        return Error::new(format!(
+            "BeginRetiring is blocked: Claims supply at index {claim_index} is {supply}, which is \
+             this Market's failure coordinate, and the derived escrow Position {position} was not \
+             observed. Observe it before reading this supply as either a seated residue or an \
+             unpaid holder: the two are the same number and different facts"
+        ));
+    };
+    if escrow.key != position {
+        return Error::new(format!(
+            "the observation offered for the failure escrow is of {}, not the derived {position}",
+            escrow.key
+        ));
+    }
+    if escrow.data.is_empty() || escrow.lamports == 0 {
+        return Error::new(format!(
+            "BeginRetiring is blocked: Claims supply at index {claim_index} is {supply} and the \
+             derived escrow Position {position} does not exist, so this Market did not seat its \
+             failure column and the supply is in hands that can be paid; produce and execute \
+             wallet terminal payouts first"
+        ));
+    }
+    let held = match escrow_native_v1(escrow, aggregate.claim_count) {
+        Ok(held) => held,
+        Err(error) => return error,
+    };
+    let outside = held
+        .iter()
+        .enumerate()
+        .filter(|(index, balance)| **balance != 0 && *index != claim_index as usize)
+        .map(|(index, balance)| format!("{index}={balance}"))
+        .collect::<Vec<_>>();
+    let seated = held.get(claim_index as usize).copied().unwrap_or(0);
+    if seated != supply || !outside.is_empty() {
+        let outside = if outside.is_empty() {
+            "nothing".to_owned()
+        } else {
+            outside.join(", ")
+        };
+        return Error::new(format!(
+            "BeginRetiring is blocked: Claims supply at index {claim_index} is {supply} and the \
+             derived escrow {position} holds {seated} there and {outside} elsewhere, so this \
+             column is NOT wholly the seated residue. Some of it is in hands that can be paid; \
+             produce and execute wallet terminal payouts first"
+        ));
+    }
+    Error::new(format!(
+        "BeginRetiring is blocked, and no payout can unblock it: Claims supply at index \
+         {claim_index} is {supply}, seated in this Market's failure escrow {position} at aggregate \
+         {}, whose owner {} is a program-derived address with no key. No certificate pays that \
+         coordinate and the refunding merge needs a Hoard terminal settlement has drained, so \
+         there is no act any party can perform here. What is owed is the closure's burn of that \
+         column (decision 0025, addendum of 2026-09-05, shape A): a Claims program change that \
+         rides cohort-17 as a re-release plus a re-found under decision 0012. Until it ships this \
+         Market cannot retire and its rent stays locked",
+        account.key, derived.owner
+    ))
+}
+
+/// Read one escrow Position's native vector at the aggregate's own width.
+fn escrow_native_v1(escrow: &ObservedAccount, claim_count: u32) -> Result<Vec<u64>> {
+    let view = LiabilityBasisPositionViewV2::decode(&escrow.data)
+        .map_err(|error| Error::new(format!("failure escrow Position: {error:?}")))?;
+    if view.claim_count != claim_count {
+        return Err(Error::new(format!(
+            "the failure escrow carries {} outcomes and the Claims aggregate owes over \
+             {claim_count}; the two cannot be compared coordinate by coordinate",
+            view.claim_count
+        )));
+    }
+    (0..claim_count)
+        .map(|index| {
+            view.balance(&escrow.data, index)
+                .map_err(|error| Error::new(format!("failure escrow balance {index}: {error:?}")))
+        })
+        .collect()
 }
 
 /// The Market's Custody namespace, read from the account that owns it.

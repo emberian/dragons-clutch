@@ -442,6 +442,38 @@ three suffix magics at `dclutch-core-sbf/src/lib.rs:392`). The 2,152-byte
 `RETIREMENT_INSTRUCTION_BYTES_V1` aggregate route is the legacy builder's and
 nothing in this row submits it.
 
+**A SECOND wall sits behind that one, and it is a program change rather than a
+founding input: a market founded REFUNDING cannot reach this row at all.**
+Decision 0025 seats the failure coordinate in an escrow Position whose owner is
+a program-derived address with no key. No certificate pays that column
+(`runtime_v3.rs:972`, `:990`), so terminal settlement drains every ordinary
+claim and the Hoard and leaves it standing; the closure's own conjunct then
+refuses `ClaimsMarketClosureSbfErrorV1::Liability` on it
+(`programs/dclutch-claims-sbf/src/market_closure_v1.rs:656-668`) and the
+operator hoists that conjunct to the `BeginRetiring` preflight, so no
+transaction is ever built. Cohort-16.1 is in exactly this state on devnet: the
+escrow Position `7FQCfc4RrrsATEe969eNVYoLjDukmBVKMAxM1yg7AzcQ` holds
+`[0, 0, 0, 166666667]` at revision 1 and has never moved.
+
+The repair is decision 0025's shape A: **closure BURNS that column** -- the
+aggregate's supply and the escrow's Position debited by the same amount at that
+one coordinate -- and closes the escrow's Position and admission alongside the
+aggregate, rent to the market's RentCredit like every other closed account. It
+is not a relaxed supply check: `protocol_position_v2.rs:608` refuses to close a
+Position with any nonzero balance, so a closure that merely tolerated the column
+would strand the escrow's two accounts and leak their rent. The burn must
+precede the escrow's close and the close must precede checkpoint 1's handoff,
+because the handoff reassigns the aggregate to Core and no Position of that
+market can be closed afterwards.
+
+Until it ships, **this row is reachable only by a CATEGORICAL market**, and a
+cohort that intends to retire a refunding one is founding a market it cannot
+retire. The route is a Claims and a Core program change, so cohort-17 carries it
+as a re-release plus a re-found under decision 0012 with frame-baseline rows for
+both links. The preflight now says so by name rather than instructing a payout
+nobody can produce (`crates/dclutch-operator/src/wallet_terminal_input.rs`,
+lane PROGRAMS-17C, 2026-09-05).
+
 ### found-two-source
 
 The first cohort market that buys a second answerer. Decision 0027's funded

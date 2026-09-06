@@ -15,6 +15,9 @@ refunding market `MergeCompleteSet` is redefined over the ORDINARY coordinates
 — recorded in the amendment section at the end of this record; ESCROW-2 stated
 it in Lean at `e37116b03` and ember may reverse it to the immobile-coordinate
 shape.**
+**A fourth section, 2026-09-05 (lane PROGRAMS-17C), records what shape A costs
+once you know that the economic slice is not the writer, and states the closure
+law in Lean; the preflight that instructed an impossible act is repaired.**
 **Amended a third time on 2026-09-05 (lane PROGRAMS-17B): the escrow shipped
 with no way to DISCHARGE it, so no market founded under this record can retire
 — the failure column is unpayable under every certificate and its holder has no
@@ -495,3 +498,121 @@ schedule is now joined against the two Positions' own nonzero coordinates
 (`tools/local-validator/bootstrap/successor/src/direct_trade.rs`,
 `a_refunding_seller_without_the_failure_coordinate_certifies`), which is the
 invariant the count stood in for and is strictly stronger than it.
+
+## Addendum, 2026-09-05 (lane PROGRAMS-17C): what shape A costs once you know which writer moves a claim
+
+The addendum above ruled A and described the burn as "writing the escrow's
+vector and the aggregate's supply at that coordinate to zero in one program
+act". That is still exactly the act. What it did not have is **which code
+writes a claim on a live market**, and the answer changes the size of the work
+from a closure edit to a two-program frame change. This section records it so
+the lane that implements A is not surprised by it, and so the estimate in the
+ruling is not read as smaller than it is.
+
+### The economic slice is not the writer
+
+`crates/dclutch-product/src/economic_slice`'s `execute_basket` — the function
+whose `RedeemNativeTerminal` arm looks exactly like the burn — **is reachable
+from no live route**. It decodes the `DCLTEMK2` `Market` family, which carries
+a `phase` byte and a `hoard` word; the account a founding actually writes is
+`LiabilityBasisV2`, magic `DCLLBM02`
+(`crates/dclutch-claims/src/liability_basis_state_v2.rs:215-252`), which
+carries **neither**. Its two SBF call sites are the `ClaimsPlanV1` generic
+route, marked `ECONOMIC_SLICE_MIGRATION_ONLY`
+(`programs/dclutch-claims-sbf/src/lib.rs:594-604`), and
+`claims_conservation_v1`, which reads one account with two incompatible
+decoders and is proved unexecutable on real ELFs
+(`programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/claims_conservation.rs:1-54`).
+
+The live writer is the signed-delta waist:
+`signed_delta_v3::apply_deltas`/`apply_coordinate`/`commit_candidates`
+(`programs/dclutch-claims-sbf/src/signed_delta_v3.rs:1074`, `:1107`, `:1138`),
+fed by the debit `product_basis_terminal_v3.rs:456-469` authors — the same
+magnitude off the aggregate's supply and off the Position's balance at one
+coordinate. **So the burn is that debit**, and the addendum's "the `payout == 0`
+arm exists and is complete, what is missing is a party who can authorize it" is
+even more exactly true than it read: the arithmetic is one function.
+
+Two consequences.
+
+**There is no Hoard in the frame to check.** Outstanding collateral is a
+Custody token account, not an aggregate field, so a burn route cannot prove
+"this column releases no collateral" by reading the aggregate. Two things prove
+it instead, and A needs both: the linked basis record's
+`refunds_on_failure` (`runtime_v3.rs:946`), which is why the column is unpayable
+under every certificate; and retirement's own checkpoint 2, whose
+`CloseVault` (`programs/dclutch-core-sbf/src/retire_v1.rs:703-722`) reaches a
+Custody route that refuses a vault holding any atoms at all
+(`programs/dclutch-custody-sbf/src/lib.rs:1339`, `:1480` — `token.amount != 0`).
+The basis record has to join the closure's frame.
+
+**The kernel's Lean twin is `closureBurnPost`, not a `BasketAction`.** The law
+landed at `EconomicKernel.lean` states the burn as a post-state function beside
+`refundingSplitPost`/`refundingMergePost`, in the file's own idiom, and relates
+it to the kernel's `redeemPost` off the failure walk. Adding a `BasketAction`
+would have grown a dead enum.
+
+### The ordering is forced, and it is the ruling's own
+
+`protocol_position_v2`'s close reads the aggregate and refuses unless it is
+still Claims-owned and decodes as `LiabilityBasisV2`
+(`programs/dclutch-claims-sbf/src/protocol_position_v2.rs:727`, `:938-947`).
+Retirement's checkpoint 1 reassigns the aggregate to Core
+(`market_closure_v1.rs:733`), after which **no Position of that market can ever
+be closed again**. So the escrow's Position and admission must be closed before
+the handoff, and the burn before that. There is no arrangement in which the
+burn is one instruction and the escrow's close is a later, ordinary one: the
+ruling's "one program act, with the escrow in the frame … closing both escrow
+accounts alongside the aggregate" is not a preference, it is the only order
+that exists.
+
+### What has to grow, and what does not
+
+- **Claims `market_closure_v1`'s frame**, today 11 (12 with the continuation):
+  the escrow Position, the escrow admission and the linked basis record, as
+  TRAILING accounts, so a categorical market's closure keeps its exact current
+  frame and behaviour.
+- **Core's retirement frame**, today 35 for each of the four packets, which the
+  journal requires to be identical across all four
+  (`tools/local-validator/bootstrap/successor/src/aggregate_retirement_journal.rs:459-466`).
+  The same three trailing accounts, on all four packets, or the stability
+  assertion is what breaks.
+- **`crates/dclutch-market-retirement-v1-operator`**, which builds that frame,
+  and the `BeginRetiring` preflight, which already knows the escrow's address
+  (`crates/dclutch-operator/src/failure_escrow_v1.rs`, landed by this lane).
+- **Nothing about the entitlement.** The burn is authorized by the Core caller
+  PDA the closure already authenticates (`market_closure_v1.rs:380-397`). That
+  is the whole reason A was ruled over B: B bought a route by adding a second
+  keyless-signer exemption, and A buys the same outcome by adding none.
+- **One author for the coordinate debit.** `signed_delta_v3::apply_coordinate`
+  is private; the burn must call it rather than spell a second `put_u64` pair.
+
+### The hostiles the route owes
+
+A refunding market whose failure column is not wholly in the derived escrow
+refuses `Liability` — the residue rule is an equality against the escrow's own
+balance, not a licence to ignore an index. A categorical market with any
+outstanding supply refuses `Liability`, unchanged. A burn whose named escrow is
+not the derived PDA refuses `ClaimsSbfError::FailureEscrow` (`0x5010`), which
+already exists and already means exactly that. A burn on a market whose basis
+does not refund on failure refuses, because that column is payable and its
+holder can sign for it. And the categorical retirement must stay byte-identical,
+which the trailing-account shape is chosen to make checkable rather than argued.
+
+### Cost, restated with what is now known
+
+Two ELFs move, Claims and Core, so cohort-17 carries the re-release and the
+re-found under decision 0012 as the ruling said, **and** frame-baseline rows for
+two links rather than one. The evidence bar is the existing checkpointed
+retirement harness
+(`crates/dclutch-svm-harness/tests/market_retirement_v1_lifecycle.rs:1238`,
+driven by `tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh`)
+extended with a refunding prestate: the wall is red there today and the burn is
+what turns it green.
+
+**What this lane landed**: the Lean closure law (eleven declarations, zero
+`sorry`; the wall as `a_seated_failure_column_forecloses_retirement`, the burn's
+L1/L3 conservation, and `the_closure_burn_admits_the_retirement_it_foreclosed`
+by the same predicate with nothing relaxed), and the `BeginRetiring` preflight,
+which stopped instructing an act no party can perform. **What is owed**: the
+route above. No devnet act was performed and no SBF crate was touched.

@@ -40,6 +40,8 @@ pub mod source_readiness;
 pub mod structured;
 /// Wallet-terminal payout input derivation, callable from a browser.
 pub mod wallet_terminal_input;
+/// The host's one author for a Market's refunding failure escrow.
+pub mod failure_escrow_v1;
 /// Wallet-terminal payout derivation, callable from a browser.
 pub mod wallet_terminal_payout;
 

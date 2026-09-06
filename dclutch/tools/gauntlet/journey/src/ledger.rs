@@ -393,66 +393,35 @@ pub(crate) const FAILURE_ESCROW_LABEL_V1: &str = "failure-escrow";
 /// host spellings of a PDA derivation is how a census comes to look for a
 /// Position at an address the founding never wrote, so there is one here and
 /// `market.rs` calls it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FailureEscrowV1 {
-    /// Coordinate a refunding complete set seats away from every holder.
-    pub(crate) failure_selector: u32,
-    /// `ClaimsCapability` owner PDA at `(logical market, failure selector)`.
-    pub(crate) owner: Pubkey,
-    /// The escrow's `LiabilityBasisV2` Position under that owner.
-    pub(crate) position: Pubkey,
-    /// The escrow's protocol-Position admission record under that owner.
-    pub(crate) admission: Pubkey,
-}
+/// One Market's derived failure escrow, re-exported from the host's author.
+///
+/// The derivation moved to `dclutch_operator::failure_escrow_v1` when the
+/// `BeginRetiring` preflight became its second host consumer: two host
+/// spellings of a PDA derivation is how a census comes to look for a Position
+/// at an address the founding never wrote. `market.rs` and the preflight both
+/// call the one author; the regression test below stays here, because what it
+/// pins is that THIS census reproduces a real devnet account.
+pub(crate) use dclutch_operator::failure_escrow_v1::FailureEscrowV1;
 
 /// Derive one Market's failure escrow from coordinates the chain itself holds.
 ///
-/// Every input is read off the Claims aggregate account: the program is its
-/// `owner`, the logical Market and the runtime width are its own header fields.
-/// A caller therefore cannot point this at another Market's escrow, and a
-/// census that reads the aggregate at all can close L3 without being told
-/// anything further.
-///
-/// Errors at a width no escrow is derivable at, which is the same structural
-/// floor `refunding_failure_index` states: a refunding set needs one ordinary
-/// coordinate and one failure coordinate.
+/// Every input is read off the Claims aggregate: the program is its `owner`,
+/// the logical Market and the runtime width are its own header fields. A caller
+/// therefore cannot point this at another Market's escrow, and a census that
+/// reads the aggregate at all can close L3 without being told anything further.
 pub(crate) fn failure_escrow_v1(
     claims_program: Pubkey,
     logical_market: [u8; 32],
     aggregate: Pubkey,
     claim_count: u32,
 ) -> Result<FailureEscrowV1> {
-    let failure = dclutch_product::economic_slice::refunding_failure_index(claim_count)
-        .map_err(|error| Error::new(format!("failure escrow selector: {error:?}")))?;
-    let failure_selector = u32::try_from(failure)
-        .map_err(|_| Error::new("failure escrow selector does not fit this runtime width"))?;
-    let owner = Pubkey::find_program_address(
-        &ProtocolPositionClaimsCapabilitySeedsV2::new(logical_market, failure_selector)
-            .map_err(|error| Error::new(format!("failure escrow owner seeds: {error:?}")))?
-            .as_slices(),
-        &claims_program,
+    dclutch_operator::failure_escrow_v1::failure_escrow_v1(
+        claims_program,
+        logical_market,
+        aggregate,
+        claim_count,
     )
-    .0;
-    let position = Pubkey::find_program_address(
-        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
-            .map_err(|error| Error::new(format!("failure escrow Position seeds: {error:?}")))?
-            .as_slices(),
-        &claims_program,
-    )
-    .0;
-    let admission = Pubkey::find_program_address(
-        &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
-            .map_err(|error| Error::new(format!("failure escrow admission seeds: {error:?}")))?
-            .as_slices(),
-        &claims_program,
-    )
-    .0;
-    Ok(FailureEscrowV1 {
-        failure_selector,
-        owner,
-        position,
-        admission,
-    })
+    .map_err(|error| Error::new(format!("failure escrow: {error}")))
 }
 
 /// What the ledger watches, and the laws it evaluates over it.
