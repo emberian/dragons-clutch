@@ -9,6 +9,7 @@ publish = false
 # the root's, which is the drift the fold deleted.
 [dev-dependencies]
 dclutch-core-sbf = { path = "../../programs/dclutch-core-sbf", features = ["no-entrypoint"] }
+dclutch-claims-sbf = { path = "../../programs/dclutch-claims-sbf", features = ["no-entrypoint"] }
 dclutch-resolution-proof-sbf = { path = "../../programs/dclutch-resolution-proof-sbf", features = ["no-entrypoint"] }
 dclutch-resolution-receipt-test-caller-sbf = { path = "test-programs/resolution-receipt-caller", features = ["no-entrypoint"] }
 dclutch-pre-market-funding-test-caller-sbf = { path = "test-programs/pre-market-funding-caller", features = ["no-entrypoint"] }

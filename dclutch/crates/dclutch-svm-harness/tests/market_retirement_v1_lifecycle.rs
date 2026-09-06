@@ -4,8 +4,8 @@ include!("resolution_core_v3_lifecycle.rs");
 
 use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-    LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
-    liability_basis_vector_width_v2,
+    LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2,
+    encode_liability_basis_market_into_v2, liability_basis_vector_width_v2,
 };
 use dclutch_market_retirement_v1_operator::{
     CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, CHECKPOINT_RETIREMENT_FINISH_BYTES_V1,
@@ -24,6 +24,20 @@ use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
 use spl_token_interface::state::{Account as SplAccount, AccountState};
+
+/// The discriminant a seated refunding failure column refuses with at the
+/// Claims handoff.
+///
+/// The accusation is the Claims closure's own -- "a nonzero aggregate supply
+/// prevented closure" -- and, MEASURED, that is also what the transaction
+/// reports: `0x5503` reaches the caller through Core's CPI rather than Core's
+/// own `ChildCpi` (`programs/dclutch-core-sbf/src/retire_v1.rs:585`), which is
+/// what the `map_err` there would have suggested. The child's code is the one
+/// on the wire, so an operator reading a failed retirement reads the Claims
+/// band and goes to the right program. Derived from the enum rather than
+/// written: a band move must break this reading rather than relabel it.
+const CHECKPOINT_PREPARE_SEATED_RESIDUE_REFUSAL_V1: u32 =
+    dclutch_claims_sbf::market_closure_v1::ClaimsMarketClosureSbfErrorV1::Liability as u32;
 
 /// This campaign's OWN Claims and Trading programs, and its own release set.
 ///
@@ -1232,6 +1246,134 @@ fn unique_account_locks(instruction: &Instruction, payer: Pubkey) -> usize {
         .chain(instruction.accounts.iter().map(|meta| meta.pubkey))
         .collect::<std::collections::BTreeSet<_>>()
         .len()
+}
+
+/// THE WALL, on real ELFs, with a discriminant instead of an `is_err()`.
+///
+/// PROGRAMS-17B convicted the closure's `Liability` conjunct from the source
+/// and from a HOST message: cohort-16.1's refusal arrived as a `BeginRetiring`
+/// preflight sentence and no transaction was ever built, so the ON-CHAIN
+/// refusal every reading since has named had no witness at all. This is its
+/// first. "Nothing fired" and "my instrument was disconnected" log the same
+/// way, and the whole of decision 0025's shape A is a repair to a refusal
+/// nobody had seen refuse.
+///
+/// The residue is planted AFTER the plan is built, deliberately. Three authors
+/// carry the same conjunct -- the operator's retirement builder
+/// (`market-retirement-v1-operator`, which refuses `Claims`), the
+/// `BeginRetiring` preflight, and the Claims program -- and only the third one
+/// is the chain. Building against a zero-supply aggregate and then giving the
+/// chain the column is how this test asks the third one instead of the first.
+/// Nothing else about the packet moves: the revision the request expects is
+/// unchanged, so the closure reaches its supply loop rather than refusing on
+/// identity first.
+#[tokio::test]
+async fn a_seated_failure_column_refuses_the_claims_handoff_by_name() {
+    let (fixture, mut context) = joined_fixture().await;
+    seed_exact_retirement_prestate(&mut context, &fixture).await;
+    let snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    let plan = build_checkpoint_market_retirement_v1(&snapshot)
+        .expect("checkpointed plan against an empty aggregate");
+    let (checkpoint_table, checkpoint_addresses) = frozen_route_lookup_table(
+        &mut context,
+        &[
+            plan.prepare.clone(),
+            plan.close_vault.clone(),
+            plan.close_replay.clone(),
+            plan.finish.clone(),
+        ],
+    )
+    .await;
+
+    // The state terminal settlement leaves on a refunding market: every
+    // ordinary coordinate paid and gone, the failure column standing at the
+    // quantity the founding seated in an escrow no key opens.
+    const SEATED_RESIDUE: u64 = 166_666_667;
+    let empty = required_observed(&mut context, fixture.claims_aggregate).await;
+    let view = LiabilityBasisMarketViewV2::decode(&empty.data).expect("planted aggregate");
+    let failure = u32::try_from(
+        dclutch_product::economic_slice::refunding_failure_index(view.claim_count)
+            .expect("a width that seats a failure coordinate"),
+    )
+    .expect("failure selector");
+    let mut supplies = vec![0_u64; view.claim_count as usize];
+    supplies[failure as usize] = SEATED_RESIDUE;
+    let mut seated_bytes = vec![
+        0;
+        liability_basis_vector_width_v2(
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            view.claim_count,
+        )
+        .expect("aggregate width")
+    ];
+    encode_liability_basis_market_into_v2(
+        LiabilityBasisMarketInputV2 {
+            revision: view.revision,
+            logical_market: view.logical_market,
+            release_set: view.release_set,
+            registry_program: view.registry_program,
+            product_instance_id: view.product_instance_id,
+            basis_id: view.basis_id,
+            realm_id: view.realm_id,
+            custody_context: view.custody_context,
+            generation: view.generation,
+        },
+        &supplies,
+        &mut seated_bytes,
+    )
+    .expect("aggregate carrying the seated residue");
+    let raw = observed(&mut context, fixture.claims_aggregate)
+        .await
+        .expect("raw aggregate");
+    set_account(
+        &mut context,
+        fixture.claims_aggregate,
+        Account {
+            data: seated_bytes,
+            ..raw
+        },
+    );
+
+    // The host mirror refuses too, and coarsely: `Claims` is the same code ten
+    // identity mismatches carry. Asserted so the on-chain reading below is
+    // known to be the one that names the cause.
+    let seated_snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    assert!(
+        matches!(
+            build_checkpoint_market_retirement_v1(&seated_snapshot),
+            Err(MarketRetirementOperatorErrorV1::Claims)
+        ),
+        "the retirement builder refuses a seated residue, under its coarse Claims code"
+    );
+
+    let before = joined_snapshot(&mut context, &fixture).await;
+    let refusal = submit_recorded_over_table_v0(
+        &mut context,
+        std::slice::from_ref(&plan.prepare),
+        &[],
+        "retirement checkpoint: prepare against a seated refunding failure column",
+        checkpoint_table,
+        &checkpoint_addresses,
+        PREPARE_EXTENT,
+    )
+    .await
+    .expect_err("a nonzero failure supply must refuse the Claims handoff");
+    let code = match &refusal {
+        BanksClientError::TransactionError(TransactionError::InstructionError(
+            _,
+            InstructionError::Custom(code),
+        )) => *code,
+        other => panic!("expected a custom program error, got {other:?}"),
+    };
+    assert_eq!(
+        code, CHECKPOINT_PREPARE_SEATED_RESIDUE_REFUSAL_V1,
+        "the seated residue must refuse by the discriminant this lane names, not merely refuse"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        before,
+        "the refusal is byte and lamport atomic: no checkpoint, no handoff, no refund"
+    );
 }
 
 #[tokio::test]

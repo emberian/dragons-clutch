@@ -2981,6 +2981,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "dclutch-claims",
+ "dclutch-claims-sbf",
  "dclutch-core-contract",
  "dclutch-core-sbf",
  "dclutch-custody",
