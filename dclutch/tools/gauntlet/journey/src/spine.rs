@@ -122,6 +122,18 @@ pub(crate) struct SpineV1 {
     /// Accounts these stages created, for the conservation ledger to name
     /// before the census that follows them.
     pub(crate) aperture: Vec<ApertureEntryV1>,
+    /// Collateral atoms the terminal payouts DECLARED they moved out of the
+    /// Hoard, summed off each payout driver's own evidence.
+    ///
+    /// L2 is "the Hoard moves only by what the stage DECLARED", and the
+    /// redemption boundary declared zero while the payouts drained the Hoard --
+    /// which the law caught the first time this tier ever paid a holder (hbox
+    /// `20260906T174856Z`, `the Hoard moved -500000001 atoms ... and the stage
+    /// declared 0`). The declaration is the DRIVER's `payout` field, not a
+    /// number this tier derives: restating the payout arithmetic here and then
+    /// calling the agreement evidence is the second-author mistake the whole
+    /// spine exists to avoid.
+    pub(crate) paid_atoms: u128,
 }
 
 impl SpineV1 {
@@ -132,6 +144,7 @@ impl SpineV1 {
             refusals: Vec::new(),
             reports: serde_json::Map::new(),
             aperture: Vec::new(),
+            paid_atoms: 0,
         }
     }
 
@@ -1118,6 +1131,12 @@ pub(crate) fn redeem(
     match outcome {
         Ok(passes) => {
             let document = read_json(&evidence)?;
+            spine.paid_atoms = spine.paid_atoms.saturating_add(u128::from(
+                document
+                    .get("payout")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| Error::new("the payout evidence declared no `payout` amount"))?,
+            ));
             let (extra, more) = harvest_document(rpc, label, &document, &mut spine.transactions);
             spine.executed(
                 stage,

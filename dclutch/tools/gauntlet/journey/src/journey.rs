@@ -683,6 +683,19 @@ fn campaign(
             .into(),
     });
 
+    // THE PHASE L4 RETIRES ON, BOUND BEFORE THE FIRST CENSUS.
+    //
+    // `ConservationLedgerV1::track_market` and the whole `market_phase` arm of
+    // L4 -- the named `inapplicable`, its reason, the three phases it admits --
+    // were written for cohort-14b's post-payout boundary and nothing ever
+    // called the binder: `cargo check` reported `method track_market is never
+    // used` and the phase read as `None`, so L4 went on asking "Hoard >= worst
+    // outcome" of a Market that had paid. The first run of this tier that ever
+    // redeemed a holder read three L4 VIOLATIONS at boundaries where the
+    // protocol had done exactly what it should (hbox `20260906T174856Z`). A
+    // reader, a schema and a refusal with no producer is the shape; this is the
+    // producer.
+    ledger.track_market(addresses.market);
     progress.entering("admission: the founding really left an Open Market");
     let (claim_unit_atoms, decimals) = stages::admit_open_market(
         &mut session.rpc,
@@ -1228,11 +1241,17 @@ fn campaign(
     progress.stages.append(&mut spine.stages);
     session.transactions.append(&mut spine.transactions);
     progress.unexpected_refusals.append(&mut spine.refusals);
+    let spine_paid_atoms = spine.paid_atoms;
+    // WHAT THE PAYOUTS DECLARED THEY MOVED. Summed off each driver's own
+    // `payout` field; L2 then compares the chain's Hoard delta against the
+    // drivers' declaration rather than against a zero nobody meant.
+    let declared_payout = i128::try_from(spine_paid_atoms)
+        .map_err(|_| Error::new("the declared payout total exceeded an i128"))?;
     ledger.observe(
         &mut session.rpc,
         "redemption: every holder of the winning outcome is paid",
         0,
-        0,
+        declared_payout.saturating_neg(),
         LamportClaimV1::inapplicable(
             "the payout driver writes its own lamport receipt; L7 does not restate it",
         ),
