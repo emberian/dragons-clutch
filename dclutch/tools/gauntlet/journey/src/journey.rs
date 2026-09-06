@@ -24,6 +24,14 @@ pub(crate) const DEFAULT_HOLDER_COUNT: u32 = 4;
 
 const TRANSCRIPT_SCHEMA_V1: &str = "dclutch-journey-transcript-v1";
 
+/// The rung this campaign's Market buys, in the SHIPPED flag's spelling.
+///
+/// The same string `tools/gauntlet/ladder/` founds with: one rung, a TWO-source
+/// market, at a 2,500-bp confidence bound tighter than the lab's 10,000-bp
+/// ceiling -- a market whose first choice went silent has a reason to demand a
+/// better-conditioned reading from its second.
+const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:120";
+
 /// A stage the journey could not run, and exactly what stands in the way.
 ///
 /// A gap is not a TODO. It names the route, the code that refuses, and the lane
@@ -160,7 +168,25 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         Some(50),
         Some(fee_recipient.pubkey()),
     )?;
-    let market_input = crate::market::demo_market_input(registry, direct.compiler())?;
+    // THE MARKET BUYS A LADDER, and it has to: `resolution::derive` locates a
+    // `recovery_policy_record` in the founding's evidence and refuses a Market
+    // whose record shape it does not recognise, while `LocalMarketShapeV1`'s
+    // default is NO ladder ("defaulting a market into buying one would be
+    // spending on the caller's behalf"). Those two have been unsatisfiable
+    // together for as long as the tier has been unrunnable, and the first live
+    // run of this rebuilt tier found it after 189 founding transactions. One
+    // rung is the width that leaves the founding's own shape unmoved -- the
+    // Resolution manifest's hard four is `1 + rungs.max(1) + 2`, four at zero
+    // rungs and four at one -- so this differs from the lab default in exactly
+    // the record the resolution stage needs and in nothing else. The rung
+    // string goes through the SHIPPED `--recovery-rungs` parser rather than a
+    // second one, the way the ladder tier does it.
+    let rungs = crate::local_mutable::parse_recovery_rungs_v1(DEFAULT_RECOVERY_RUNGS_V1)?;
+    let shape = crate::market::LocalMarketShapeV1 {
+        recovery: Some(rungs),
+        ..crate::market::LocalMarketShapeV1::default()
+    };
+    let market_input = crate::market::demo_market_input_shaped(registry, direct.compiler(), &shape)?;
     let market_path = request.work.join("market.json");
     std::fs::write(&market_path, serde_json::to_vec_pretty(&market_input)?)?;
 

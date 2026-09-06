@@ -86,6 +86,21 @@ const WORKER_FUNDING_LAMPORTS: u64 = 2_000_000_000;
 /// than quietly treat some other refusal as a hostile satisfied.
 const CRANK_TOO_EARLY_MARKER_V1: &str = "a crank is admissible STRICTLY after the deadline";
 
+/// `wait_until_unix_seconds_v1`'s own sentence for a target it will not sleep
+/// to (`sponsored_schedule.rs`).
+///
+/// A preflight that refused with the marker above builds NO PLAN, so the
+/// not-yet-due guard below -- which measures `due - observed` off a plan --
+/// cannot fire, and the walk goes on into the driver's bounded wait. That wait
+/// is the second half of the same measurement and it refuses for the same
+/// reason, and until 2026-09-06 its refusal was propagated with `?` and killed
+/// the campaign before a transcript existed. It is a FINDING, recorded on this
+/// stage exactly as the preflight's own refusals are: nothing was sent, the
+/// conjunct held, and the distance is in the driver's sentence. Only a wait
+/// that refuses for THIS reason is recorded; any other error still stops the
+/// walk.
+const CRANK_CEILING_MARKER_V1: &str = "past the stated ceiling of";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum WalkV1 {
@@ -514,7 +529,29 @@ fn drive_crank(
         "--worker-keypair".to_owned(),
         worker_keypair.display().to_string(),
     ]);
-    let landed = crate::recovery_crank::run_v1(execute, ExpectedClusterV1::OwnedLoopback)?;
+    let landed = match crate::recovery_crank::run_v1(execute, ExpectedClusterV1::OwnedLoopback) {
+        Ok(landed) => landed,
+        Err(error) if error.to_string().contains(CRANK_CEILING_MARKER_V1) => {
+            let reason = error.to_string();
+            stages.push(StageV1::new(
+                label,
+                "not-yet-due",
+                format!(
+                    "The shipped advance-recovery driver refused the preflight as too early and                      then refused its own bounded wait: {reason} No key was opened and nothing                      was sent. On this fixture that is arithmetic rather than a defect -- the                      primary leg's deadline is the captured publication instant plus                      `max_age`, and the local Pyth fixture declares a ONE-YEAR shelf life, so                      every rung a loopback market buys is anchored a year past the capture.                      `LocalMarketShapeV1::terminal_max_age_seconds` is the stated remedy and                      this tier does not use it, because a shelf life short enough for the                      primary leg to close in a lab makes the frozen publication already stale                      for the rung after it: a rung ANSWERED on this fixture needs a publication                      the lab can refresh, which is a fixture question."
+                ),
+            ));
+            return Ok(CrankRunV1 {
+                landed: false,
+                report: serde_json::json!({
+                    "sequence": terminal_sequence,
+                    "outcome": "not-yet-due",
+                    "reason": reason,
+                    "refusedBeforeTheDeadline": hostile,
+                }),
+            });
+        }
+        Err(error) => return Err(error),
+    };
     let evidence = landed
         .landed
         .ok_or_else(|| Error::new("an executed crank reported no landed transaction"))?;
