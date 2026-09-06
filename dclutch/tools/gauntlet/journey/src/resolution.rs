@@ -37,16 +37,17 @@ use dclutch_product::admission::{
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_resolution_core_v3_operator::{
-    Observation, ObservedAccount, ResolutionCloseFundSnapshotV3, ResolutionCreateFundSnapshotV3,
-    ResolutionVerifyFundReadySnapshotV3, build_resolution_close_fund_v3,
-    build_resolution_create_fund_v3, build_resolution_direct_close_fund_v1,
-    build_resolution_verify_fund_ready_v3, select_resolution_funding_entries_v3,
-    validate_resolution_close_fund_report_v3, validate_resolution_create_fund_report_v3,
+    Observation, ObservedAccount, ResolutionCloseFundSnapshotV3, ResolutionCoreOperatorErrorV3,
+    ResolutionCreateFundSnapshotV3, ResolutionFundingCauseV3, ResolutionVerifyFundReadySnapshotV3,
+    build_resolution_close_fund_v3, build_resolution_create_fund_v3,
+    build_resolution_direct_close_fund_v1, build_resolution_verify_fund_ready_v3,
+    select_resolution_funding_entries_v3, validate_resolution_close_fund_report_v3,
     validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source::resolution::{
-    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+    FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
+    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -406,111 +407,141 @@ pub(crate) fn resolve(
     let mut submitted = 0_usize;
     let mut compute_units = 0_u64;
 
-    // 1. Prepay only the vacant Source state. Founding already initialized and
-    //    funded the canonical Resolution-owned subset ledger, whose three rows
-    //    must still be Pending. CreateFund consumes that existing ledger; it
-    //    neither creates it nor accepts a second funding transfer.
-    let create = build_resolution_create_fund_v3(&create_snapshot(rpc, addresses)?)
-        .map_err(|error| Error::new(format!("chain-derived CreateFund: {error:?}")))?;
-    validate_resolution_create_fund_report_v3(&create)
-        .map_err(|error| Error::new(format!("CreateFund report: {error:?}")))?;
-    if create.source_top_up_lamports > 0 {
-        let evidence = rpc.send(
-            "journey: prepay the Source resolution state",
-            &[transfer(
-                &payer.pubkey(),
-                &addresses.source_state,
-                create.source_top_up_lamports,
-            )],
-            payer,
-        )?;
-        fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
-        compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
-        submitted += 1;
-        transactions.push(evidence);
-    }
-
-    // Rebuild from the prepaid snapshot and insist the Source destination now
-    // has exactly the required balance before publishing the routed frame.
-    let create = build_resolution_create_fund_v3(&create_snapshot(rpc, addresses)?)
-        .map_err(|error| Error::new(format!("chain-derived CreateFund after prepay: {error:?}")))?;
-    validate_resolution_create_fund_report_v3(&create)
-        .map_err(|error| Error::new(format!("CreateFund report after prepay: {error:?}")))?;
-    if create.source_top_up_lamports != 0 {
+    // ------------------------------------------------------------------------
+    // THE ATOMIC FOUNDING IS THE AUTHOR OF CreateFund AND ActivateFund.
+    //
+    // Until 2026-09-06 this stage BUILT and SENT `CreateFund` itself, and it
+    // could not: the founding leaves the Source resolution state already
+    // created and the funding already activated, so the builder refused before
+    // any transaction existed. The refusal was `Funding`, a code standing over
+    // forty conjuncts, and three thirty-five-minute hbox runs said only that.
+    // Split, it named itself on the first run that reached this stage
+    // (`20260906T104204Z`, finalized slot 7,952):
+    //
+    //     chain-derived CreateFund: FundingConjunct(SourceDestinationNotVacant {
+    //         expected == observed, owner = the Resolution program, data_len: 224 })
+    //
+    // -- the Source state EXISTS, at exactly the address this campaign derives,
+    // owned by the Resolution controller. Two authors for one act, and the
+    // founding is the one the chain accepted.
+    //
+    // So this stage OBSERVES what the founding left and drives only what the
+    // founding did not. That is not a weaker stage: the poststate assertions
+    // below are the same ones the old code made after its own CreateFund, and
+    // the double-create hostile is stronger than it was, because the builder
+    // now refuses to construct the second frame at all and does it BY NAME.
+    let source_account = rpc.required_account(addresses.source_state, "Source resolution state")?;
+    if source_account.owner != addresses.resolution_program || source_account.executable {
         return Err(Error::new(format!(
-            "the Source prepayment did not reach its exact target: {} lamports remain",
-            create.source_top_up_lamports
+            "the Source resolution state at {} is owned by {} and not by this Market's Resolution \
+             controller {}",
+            addresses.source_state, source_account.owner, addresses.resolution_program
         )));
     }
-
-    // 2. The frame does not fit a legacy packet, and that is a measurement
-    //    rather than an inconvenience: `CreateFund` carries eighteen accounts
-    //    and a Core effect envelope. It rides
-    //    a finalized address lookup table as a v0 transaction, exactly as
-    //    Found31 and DCLTGMF1 do, through the producer's own table publisher --
-    //    one author for the routing shape rather than a second copy of it here.
-    let before_tables = transactions.len();
-    let (routing, tables) = crate::market::publish_routing_table(
-        rpc,
-        payer,
-        "Resolution CreateFund",
-        std::slice::from_ref(&create.instruction),
-        transactions,
-    )?;
-    submitted += transactions.len().saturating_sub(before_tables);
-    fees = fees.saturating_add(crate::provider::fees_since(transactions, before_tables));
-    let mut table_lamports = crate::provider::table_rent(&tables);
-
-    // 3. The honest creation consumes the already-existing Pending ledger.
-    let evidence = rpc.send_v0_with_signers(
-        "journey: an Open Market creates its Source state from its pending Resolution ledger",
-        std::slice::from_ref(&create.instruction),
-        payer,
-        &[],
-        routing,
-        &tables,
-    )?;
-    fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
-    compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
-    submitted += 1;
-    transactions.push(evidence);
-
-    let source = SourceResolutionStateV2::decode(
-        &rpc.required_account(addresses.source_state, "Source resolution state")?
-            .data,
-    )
-    .map_err(|error| Error::new(format!("SourceResolutionStateV2: {error:?}")))?;
+    let source = SourceResolutionStateV2::decode(&source_account.data)
+        .map_err(|error| Error::new(format!("SourceResolutionStateV2: {error:?}")))?;
     if source.phase() != SourceResolutionPhaseV1::Primary
         || source.market() != addresses.market.to_bytes()
         || source.generation() != addresses.generation
     {
-        return Err(Error::new(
-            "the created Source resolution state does not bind this Market at this generation",
-        ));
+        return Err(Error::new(format!(
+            "the founding's Source resolution state does not bind this Market at this generation \
+             in its primary phase: phase {:?}, generation {}",
+            source.phase(),
+            source.generation()
+        )));
     }
-    for (entry_index, status) in funding_statuses(rpc, addresses)? {
-        if status != FundingLedgerStatusV2::Pending {
+
+    // THE DOUBLE-CREATE HOSTILE, SATISFIED WITHOUT A TRANSACTION. The Source
+    // PDA is one per Market generation and the prepaid-output rule refuses
+    // anything not System-owned and empty; the builder enforces that rule off
+    // chain, so a second CreateFund never reaches a validator. The exact
+    // discriminant is named -- a bare `is_err()` here would pass on any of the
+    // builder's forty other refusals.
+    match build_resolution_create_fund_v3(&create_snapshot(rpc, addresses)?) {
+        Err(ResolutionCoreOperatorErrorV3::FundingConjunct(
+            ResolutionFundingCauseV3::SourceDestinationNotVacant {
+                expected,
+                observed,
+                owner,
+                data_len,
+                ..
+            },
+        )) if expected == addresses.source_state.to_bytes()
+            && observed == expected
+            && owner == addresses.resolution_program.to_bytes() =>
+        {
+            let _ = data_len;
+        }
+        other => {
             return Err(Error::new(format!(
-                "Resolution funding row {entry_index} is {status:?} immediately after creation, \
-                 not Pending"
+                "a second CreateFund against a Market whose Source state already exists must \
+                 refuse with SourceDestinationNotVacant naming that account and its Resolution \
+                 owner; the builder answered {other:?}"
             )));
         }
     }
 
-    // 4. Double create. The Source PDA is one per Market generation, and the
-    //    prepaid-output rule refuses anything not System-owned and empty.
-    let double = rpc.send_v0_expected_failure_with_signers(
-        "journey: a second CreateFund at the same generation refuses",
-        &[create.instruction],
-        payer,
-        &[],
-        routing,
-        &tables,
+    // The founding's ActivateFund left an immutable receipt, and
+    // `VerifyFundReady` is the Core acceptance that reads it. A campaign that
+    // found no receipt would be about to build a frame with nothing to accept.
+    let receipt = rpc.required_account(
+        addresses.activation_receipt,
+        "Resolution funding activation receipt",
     )?;
-    fees = fees.saturating_add(double.fee_lamports.unwrap_or(0));
-    compute_units = compute_units.saturating_add(double.compute_units_consumed.unwrap_or(0));
-    submitted += 1;
-    transactions.push(double);
+    if receipt.owner != addresses.resolution_program
+        || receipt.executable
+        || receipt.data.len() != FUNDING_ACTIVATION_RECEIPT_BYTES_V1
+    {
+        return Err(Error::new(format!(
+            "the funding activation receipt at {} is {} bytes owned by {}, and this campaign \
+             expects {FUNDING_ACTIVATION_RECEIPT_BYTES_V1} bytes owned by {}",
+            addresses.activation_receipt,
+            receipt.data.len(),
+            receipt.owner,
+            addresses.resolution_program
+        )));
+    }
+
+    let before = funding_statuses(rpc, addresses)?;
+    if before
+        .iter()
+        .all(|(_, status)| *status == FundingLedgerStatusV2::Active)
+    {
+        // Nothing left for this campaign to drive. Recorded as a measurement of
+        // the founding rather than as a stage this tier executed, because a
+        // campaign that claimed to have activated a ledger it found already
+        // active would be counting another author's work as its own.
+        return Ok((
+            StageReportV1 {
+                stage: "resolution: create and activate the Market's Resolution funding".into(),
+                outcome: "not-driven".into(),
+                transactions: 0,
+                compute_units: 0,
+                note: format!(
+                    "THE FOUNDING HAD ALREADY DONE ALL OF IT. The Source resolution state at {} \
+                     exists in its primary phase bound to this Market at generation {}, the \
+                     activation receipt at {} is present at its exact width, and all three \
+                     selected funding rows {:?} are already Active. A second CreateFund refuses \
+                     to be built at all, by name. This campaign sent nothing here and says so.",
+                    addresses.source_state,
+                    addresses.generation,
+                    addresses.activation_receipt,
+                    before.map(|(entry_index, _)| entry_index)
+                ),
+            },
+            crate::ledger::LamportClaimV1::fees(0),
+        ));
+    }
+    for (entry_index, status) in before {
+        if status != FundingLedgerStatusV2::Pending {
+            return Err(Error::new(format!(
+                "Resolution funding row {entry_index} is {status:?} after the founding, and this \
+                 campaign can continue only from a uniformly Pending or a uniformly Active \
+                 ledger: {before:?}"
+            )));
+        }
+    }
 
     // 5. Activation. Core stays Open + Consumed: an already-open Market
     //    consumed its readiness at the commit-last Open, and the activation
@@ -541,7 +572,7 @@ pub(crate) fn resolve(
         transactions,
         before_verify_tables,
     ));
-    table_lamports = table_lamports.saturating_add(crate::provider::table_rent(&verify_tables));
+    let table_lamports = crate::provider::table_rent(&verify_tables);
     let evidence = rpc.send_v0_with_signers(
         "journey: activate the Resolution subset ledger of an Open Market",
         std::slice::from_ref(&verify.instruction),
@@ -590,21 +621,23 @@ pub(crate) fn resolve(
             transactions: submitted,
             compute_units,
             note: format!(
-                "The atomically founded Market consumed its existing Pending Resolution subset \
-                 ledger to create the Source resolution state, then activated the ledger's three \
-                 selected rows, on a real validator, with a fee payer and no other signer -- the \
-                 funding ladder's whole frame is non-signing, which is why it is reachable at all \
-                 while every Claims mutation is not. A second CreateFund at the same generation \
-                 was proved to refuse. Manifest entries {:?} carry the recovery, exhaustion and \
-                 failure compartments. The Market stayed Open + Consumed, and its rent beneficiary \
-                 gained exactly the {} lamports the activation declared.",
+                "THE FOUNDING CREATED THE SOURCE STATE AND WROTE THE ACTIVATION RECEIPT; THIS \
+                 CAMPAIGN DROVE THE CORE ACCEPTANCE. `VerifyFundReady` landed on a real validator \
+                 with a fee payer and no other signer -- the funding ladder's whole frame is \
+                 non-signing, which is why it is reachable at all while every Claims mutation is \
+                 not -- and it moved the ledger's three selected rows from Pending to Active. A \
+                 second CreateFund at the same generation was proved to refuse BEFORE any frame \
+                 existed, by name: the builder answered SourceDestinationNotVacant against the \
+                 founding's own Source state. Manifest entries {:?} carry the recovery, \
+                 exhaustion and failure compartments. The Market stayed Open + Consumed, and its \
+                 rent beneficiary gained exactly the {} lamports the activation declared.",
                 addresses.funding_entry_indices, verify.expected_beneficiary_credit_lamports
             ),
         },
         crate::ledger::LamportClaimV1::fees(fees).with_unwatched(
             table_lamports,
-            "two address lookup tables, rent-funded to route CreateFund and VerifyFundReady past \
-             the legacy packet limit",
+            "one address lookup table, rent-funded to route VerifyFundReady past the legacy \
+             packet limit",
         ),
     ))
 }

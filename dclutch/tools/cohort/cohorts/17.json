@@ -113,13 +113,13 @@
     {
       "label": "G",
       "kind": "general",
-      "address": "",
+      "address": "E5jHZvCPLJ2K22dayGuJM9MzDZhKS5FGPqz45cJ3HabY",
       "work_dir": "general",
       "collateral_mint_keypair": "keys/collateral-mint-general.json",
       "collateral_wallet_keypair": "keys/collateral-wallet-general.json",
       "window_lead_seconds": "2400",
-      "lookup_table": "",
-      "seal_routing_table": "",
+      "lookup_table": "4jZvzXdtbS12sCwA9bHdYD57LQDTiJKgzmTt5YUdbqJq",
+      "seal_routing_table": "3Q1dJ8JCpBajEUSq4M4iPouD5nAMgEXk7Fm1XnBsECpG",
       "cuts": "10200,10600",
       "coefficients": "1,0,1,0",
       "cut_denominator": "100",
@@ -128,11 +128,11 @@
       "band_window_slots": "10000",
       "band_plausible_half_widths": "3",
       "band_max_cell_share_bps": "9000",
-      "result_domain_record": "",
-      "portfolio_record": "",
-      "linked_basis_record": "",
-      "rent_credit": "",
-      "generation": "1"
+      "result_domain_record": "GzaQibVTxLVcdaHD2nRb4uhQHgMvn7iARwHFo4Kcyk5V",
+      "portfolio_record": "A87J263uYDcMhY1bjEDHRLTjbdAnjFNKGcG294x4T9w2",
+      "linked_basis_record": "DRETjpnLtT4eYrRz8GS8DghkQJVW2MEiCsPaFo2yz7C5",
+      "rent_credit": "2oaNBEctfWKwgPFc9fHueBN3YY7gLqohbqn62rNCUNC2",
+      "generation": "2"
     },
     {
       "label": "S",

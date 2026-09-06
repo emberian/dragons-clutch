@@ -805,6 +805,25 @@ fn campaign(
     // case and the one a campaign that only ever admits its trader never runs.
     let participant = context_pubkey(&context, "participant")?;
     let fixture_source = evidence_pubkey(&session.accounts, "local_participant_fixture_source")?;
+    // THE BUYER'S WALLET HAS TO EXIST, and it did not. The founding gives the
+    // participant a collateral token account and never gives the participant's
+    // own key a lamport, and an address that has never held one is not an
+    // account: `getMultipleAccounts` answers null for it. The shipped admission
+    // driver requires the collateral source's OWNER to be observable -- it
+    // authenticates the owner rather than taking the token account's word for
+    // it -- so the first run that ever reached this stage refused with
+    // "snapshot missing required account 2HazeEr9...", which is that wallet
+    // (hbox `20260906T104204Z`; the address resolves to the founding evidence's
+    // own `localParticipantFixtureLiquidity.sourceOwner`).
+    //
+    // Funded here rather than in the founding because it is THIS campaign that
+    // decided to trade as that participant; a founding that pre-funded every
+    // key some later campaign might sign with would be spending on its behalf.
+    session.transactions.push(session.rpc.airdrop(
+        "journey: fund the buyer's own wallet, whose key the founding never funded",
+        participant,
+        2_000_000_000,
+    )?);
     let second = solana_sdk::signature::Keypair::new();
     let second_key = spine_work.join("second-stranger.json");
     write_keypair_file(&second_key, &second)?;
@@ -851,11 +870,9 @@ fn campaign(
         participant,
         &payer_key,
     )?;
-    let spine_admission_stages = spine.stages.len();
     progress.stages.append(&mut spine.stages);
     session.transactions.append(&mut spine.transactions);
     progress.unexpected_refusals.append(&mut spine.refusals);
-    let _ = spine_admission_stages;
     ledger.observe(
         &mut session.rpc,
         "trading: admission, the Direct Hot fill, and the fee settlement",
