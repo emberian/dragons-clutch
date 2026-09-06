@@ -1,164 +1,201 @@
 #!/usr/bin/env bash
-# JRNY: run the whole-life journey campaign and fold it into the census.
+# JRNY: one Market's WHOLE life on a validator this runner stands up itself.
 #
-#   archive -> ELFs -> journey binary -> campaign -> witnesses -> census
+#   gate -> archive -> campaign binary -> checked-mutable substrate (ONE
+#   validator) -> market -> founding -> the whole life -> witnesses -> census
 #
-# This is a family tier and owns its own runner, per TIERS.md. It does NOT add a
-# stage to run.sh: run.sh owns tier 1 and the census, and a shared script every
-# family edits is the numbered-directory race one level down.
+# THE SUBSTRATE IS THIS TIER'S OWN, and that is the change of 2026-09-06.
+# Until then this runner REFUSED to start without `--market PATH`, because a
+# Market can only be compiled by `DirectMarketCompilerOwnedV1::load_local`,
+# which authenticates a checked local mutable plan and observes a LIVE loopback
+# deployment first -- and nothing here could produce one. The banner said the
+# ordering `prepare -> boot -> administer -> compile -> found -> keep going` was
+# "its own unit"; this is that unit. `tools/gauntlet/relayed-vertical/src/
+# substrate.rs` already implemented the bring-up and `tools/gauntlet/ladder/`
+# already proved a tier can drive several shipped commands against one live
+# child; the campaign links that file rather than forking it.
 #
-# The journey is a SUPERSET of the tier-1 campaign, not a sibling of it. It
-# calls the tier-1 producer's own `found_through_open` in-process and then keeps
-# going on the same validator, so its evidence document carries every tier-1
-# transaction plus the journey's. Two consequences the script depends on:
+# TWO THINGS WENT AWAY WITH IT, and neither is missing:
 #
-#   * the bindings handed to `census observe` are tier 1's PLUS the journey's,
-#     merged at run time. The census fails an unbound transaction and fails a
-#     binding that matched nothing, so a second hand-maintained copy of tier 1's
-#     31 bindings would rot the first time tier 1 changed. There is one copy.
-#   * the witness evaluator runs TWICE against the same evidence: once with
-#     tier 1's witnesses and the bootstrap plan as context, once with the
-#     journey's witnesses and the journey transcript as context. The evaluator
-#     takes one context file, and it is shared, so calling it twice is the
-#     supported shape; forking it would not be.
+#   * the seven SBF builds and the offline program-id derivation. The CHECKED
+#     RELEASE GATE supplies the artifacts and `local-mutable-prepare-v1` derives
+#     the identities from it, which is the same substitution the ladder made.
+#   * the frame-diagnostics exemption file. `cargo build-sbf` exits ZERO when
+#     the SBF backend reports that a call overwrites its own stack frame, and
+#     this runner used to count those lines itself. It no longer builds the
+#     ELFs, so it no longer can -- and it no longer needs to: a
+#     CHECKED_UPGRADE_GATE.json is emitted ONLY in strict mode, and strict mode
+#     refuses a nonzero diagnostic count. A gate that exists IS the zero-
+#     diagnostic proof TIERS.md asks a tier's build stage to make.
 #
-# WHAT THIS PRODUCES IS LOCAL-VALIDATOR EVIDENCE. Not devnet, not mainnet.
-# Nothing here signs with a persisted key, funds an external account, publishes,
-# or deploys anywhere but a fresh localhost ledger on 127.0.0.1, at the base
-# --rpc-port names (default 20890).
-#
-# There is no longer a SINGLE GLOBAL SLOT: `--rpc-port auto` here and in
-# `run.sh --mode full` each take a free 42-port block, so these run beside each
-# other. The DEFAULT is still 20890, so two runs that both take the default
-# still contend -- and still never kill a solana-test-validator whose --ledger
-# is not under their own --work root.
+# WHAT THIS PRODUCES IS LOCAL-VALIDATOR EVIDENCE at the exact revision the gate
+# names. Not devnet, not mainnet. Everything runs on 127.0.0.1; nothing here
+# signs with a persisted key outside its own --work root, funds an external
+# account, publishes, or observes any public cluster.
 set -euo pipefail
 
 usage() {
     cat <<'USAGE'
-usage: tools/gauntlet/journey/run-journey.sh [options]
+usage: tools/gauntlet/journey/run-journey.sh --checked-release-gate PATH [options]
+
+  --checked-release-gate PATH
+                        REQUIRED. A CHECKED_UPGRADE_GATE.json built by
+                        tools/release/checked-release-candidate.sh. The gate is
+                        this tier's build stage: it is emitted ONLY in strict
+                        mode, and strict mode refuses a nonzero SBF
+                        stack-frame-overwrite diagnostic count.
+
+                          tools/release/checked-release-candidate.sh \
+                              --work DIR --commit REV --genesis-cohort \
+                              --node ABS/node --node-archive ABS/node.tar.xz
 
   --repo PATH           source repository (default: this script's repository)
-  --rpc-port PORT|auto  the validator origin for this run (default 20890, or
-                        $DCLUTCH_GAUNTLET_RPC_PORT). `auto` takes a free base
-                        so this can run beside another campaign.
-  --ledger PATH         the census ledger to fold this run into
-                        (default: --gauntlet-work/out/ledger.json). Give a
-                        concurrent run its own home, or share one and let the
-                        lock serialise the fold.
-  --work PATH           journey scratch root (default: /private/tmp/dclutch-journey)
-  --gauntlet-work PATH  the shared gauntlet root whose inventory and ledger this
-                        tier reads and accumulates into
-                        (default: /private/tmp/dclutch-gauntlet)
-  --market PATH         a Market run-spec compiled against a LIVE checked local
-                        deployment by `dclutch-local-successor-bootstrap
-                        local-private-validator-market-v1`. REQUIRED: Direct is
-                        deployment-bound, so no standalone compiler can mint one.
-  --commit REV          source revision to archive and build (default: HEAD)
+  --worktree            build the campaign from the WORKING TREE instead of from
+                        `git archive` of the gate's revision. DEVELOPMENT MODE:
+                        the transcript's own revision and the gate's then
+                        differ, and a campaign whose host code no commit names
+                        is not release evidence.
+  --rpc-port PORT|auto  validator base (default: auto; a free 42-port block)
+  --work PATH           scratch root (default: /private/tmp/dclutch-journey)
   --holders N           synthetic holder count, the load knob (default: 4)
-  --keypair-seed HEX    64 lowercase hex passed to the producer's TEST-ONLY,
-                        LOOPBACK-ONLY determinism switch. Defaults to a fixed
-                        campaign seed, because a conservation ledger whose
-                        numbers cannot be compared between runs is a diary.
-                        Pass `none` to take fresh unreproducible keys instead.
-  --allow-stale-fixture-pins
-                        pass through to tier1/launcher.sh; see that file for
-                        what the recorded override gives up
-  -h, --help            show this message
+  --census              fold this run's evidence into the shared census ledger
+  --gauntlet-work PATH  the shared gauntlet root whose inventory and ledger the
+                        census fold reads (default: /private/tmp/dclutch-gauntlet)
+  -h, --help            this page, and nothing else runs
 
 Run `tools/gauntlet/run.sh --mode census` first if there is no inventory yet;
 it takes seconds and needs no chain.
 USAGE
 }
 
-REPO=""
+die() { printf 'journey: %s\n' "$*" >&2; exit 1; }
+say() { printf '\n== %s\n' "$*"; }
+sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GAUNTLET="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO="$(cd "$GAUNTLET/../.." && pwd)"
+GATE=""
+RPC_PORT="auto"
 WORK="/private/tmp/dclutch-journey"
-GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
-COMMIT="HEAD"
+WORKTREE=0
 HOLDERS="4"
-ALLOW_STALE_PINS="false"
-RPC_PORT="${DCLUTCH_GAUNTLET_RPC_PORT:-20890}"
-LEDGER_ARG=""
-MARKET_ARG=""
-# A fixed, checked-in campaign seed. It is safe here and ONLY here: the producer
-# refuses the flag outright unless the RPC endpoint is loopback, and this tier
-# only ever names a 127.0.0.1 origin. Its value is the SHA-256 of the ASCII string
-# "dclutch/gauntlet/journey/campaign-seed/v1", so it is a stated derivation
-# rather than a number somebody typed.
-KEYPAIR_SEED="$(printf '%s' 'dclutch/gauntlet/journey/campaign-seed/v1' | shasum -a 256 | cut -d' ' -f1)"
+CENSUS=0
+GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --checked-release-gate) GATE="${2:?--checked-release-gate needs a value}"; shift 2 ;;
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
+        --worktree) WORKTREE=1; shift ;;
         --rpc-port) RPC_PORT="${2:?--rpc-port needs a value}"; shift 2 ;;
-        --ledger) LEDGER_ARG="${2:?--ledger needs a value}"; shift 2 ;;
-        --market) MARKET_ARG="${2:?--market needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
-        --gauntlet-work) GAUNTLET_WORK="${2:?--gauntlet-work needs a value}"; shift 2 ;;
-        --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
         --holders) HOLDERS="${2:?--holders needs a value}"; shift 2 ;;
-        --keypair-seed) KEYPAIR_SEED="${2:?--keypair-seed needs a value}"; shift 2 ;;
-        --allow-stale-fixture-pins) ALLOW_STALE_PINS="true"; shift ;;
+        --census) CENSUS=1; shift ;;
+        --gauntlet-work) GAUNTLET_WORK="${2:?--gauntlet-work needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
-if [ -z "$REPO" ]; then
-    REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-fi
-case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
-case "$HOLDERS" in ''|*[!0-9]*) echo "--holders must be a decimal count" >&2; exit 2 ;; esac
-[ "$HOLDERS" -gt 0 ] || { echo "--holders must be positive" >&2; exit 2; }
-
-# The origin. See the same block in tools/gauntlet/run.sh for why this is a
-# parameter and not a constant: it is in no authenticated material, so moving
-# it moves nothing the transcript, the witnesses or the CU budgets read.
-# `auto` is resolved LATE, at the campaign stage, by allocate_rpc_port below.
+[ -n "$GATE" ] || { usage >&2; die "--checked-release-gate is required"; }
+case "$GATE" in /*) ;; *) die "--checked-release-gate must be an absolute path" ;; esac
+[ -f "$GATE" ] || die "--checked-release-gate is not a readable file: $GATE"
+case "$WORK" in /*) ;; *) die "--work must be absolute" ;; esac
+case "$HOLDERS" in ''|*[!0-9]*) die "--holders must be a decimal count" ;; esac
+[ "$HOLDERS" -gt 0 ] || die "--holders must be positive"
 if [ "$RPC_PORT" != "auto" ]; then
-    case "$RPC_PORT" in
-        ''|*[!0-9]*) echo "--rpc-port must be a decimal port or 'auto'" >&2; exit 2 ;;
-    esac
-    [ "$RPC_PORT" -ge 1024 ] && [ "$RPC_PORT" -le 65494 ] || {
-        echo "--rpc-port must be 1024-65494 so the launcher's 42-port block fits under 65535" >&2
-        exit 2
-    }
+    case "$RPC_PORT" in ''|*[!0-9]*) die "--rpc-port must be a decimal port or 'auto'" ;; esac
+    [ "$RPC_PORT" -ge 1024 ] && [ "$RPC_PORT" -le 65494 ] \
+        || die "--rpc-port must be 1024-65494 so the launcher's 42-port block fits under 65535"
 fi
 
-GAUNTLET="$REPO/tools/gauntlet"
-TIER="$GAUNTLET/journey"
-SOURCE="$WORK/source"
-ELF_DIR="$WORK/elf"
-BUILD_TARGET="$WORK/build-target"
-HOST_TARGET="$WORK/host-target"
+for tool in git jq shasum python3 cargo solana-test-validator; do
+    command -v "$tool" >/dev/null 2>&1 || die "required command not found: $tool"
+done
+# hbox is co-tenant with another project's build. Containment is structural.
+if command -v swarm-build >/dev/null 2>&1; then WRAP="swarm-build"; else WRAP=""; fi
+run_build() { if [ -n "$WRAP" ]; then "$WRAP" "$@"; else "$@"; fi; }
+
+# ------------------------------------------------------------- the ledger lock
+#
+# `census observe` is a READ-MODIFY-WRITE of one JSON file every family runner
+# defaults to sharing, so two concurrent folds would silently lose one side's
+# observations -- a corruption that looks exactly like "that route never
+# executed". `mkdir` is the lock because it is atomic on every filesystem this
+# runs on and needs no flock(1), which macOS does not ship.
+ledger_lock() {
+    local lock="$1.lock" waited=0
+    while ! mkdir "$lock" 2>/dev/null; do
+        if [ "$waited" -ge 300 ]; then
+            echo "breaking a ledger lock held over 5 minutes: $lock" >&2
+            rm -rf "$lock"; continue
+        fi
+        [ "$waited" = 0 ] && echo "waiting for the ledger lock at $lock" >&2
+        sleep 1; waited=$((waited + 1))
+    done
+    printf '%s\n' "$$" > "$lock/pid"; LEDGER_LOCK_HELD="$lock"
+}
+ledger_unlock() { [ -n "${LEDGER_LOCK_HELD:-}" ] && rm -rf "$LEDGER_LOCK_HELD"; LEDGER_LOCK_HELD=""; }
+trap ledger_unlock EXIT
+
+mkdir -p "$WORK"/{logs,runs}
 LOGS="$WORK/logs"
-RUNS="$WORK/runs"
+
+# ------------------------------------------------------------------ 1. the gate
+# THE GATE NAMES THE REVISION, and the campaign is built from that exact
+# revision rather than from whatever the working tree happens to hold. A
+# campaign whose host code and whose ELFs come from two commits is measuring a
+# pair nobody can reproduce.
+GATE_SHA256="$(sha256 "$GATE")"
+GATE_REVISION="$(jq -r '.source_revision' "$GATE")"
+GATE_TREE="$(jq -r '.source_tree_sha256' "$GATE")"
+printf '%s\n' "$GATE_REVISION" | grep -Eq '^[0-9a-f]{40}$' || die "gate names no 40-hex source revision"
+printf '%s\n' "$GATE_TREE" | grep -Eq '^[0-9a-f]{64}$' || die "gate names no 64-hex source tree digest"
+say "journey at gate $GATE_SHA256, revision $GATE_REVISION (holders=$HOLDERS)"
+
+SOURCE="$WORK/source"
+if [ "$WORKTREE" = 1 ]; then
+    SOURCE="$REPO"
+    say "building the campaign from the WORKING TREE (development mode; not release evidence)"
+elif [ ! -f "$WORK/stamps.archive" ] || [ "$(cat "$WORK/stamps.archive")" != "$GATE_REVISION" ]; then
+    say "stage archive ($GATE_REVISION)"
+    rm -rf "$SOURCE"; mkdir -p "$SOURCE"
+    git -C "$REPO" archive "$GATE_REVISION" | tar -x -C "$SOURCE" \
+        || die "the gate's revision is not in this repository: $GATE_REVISION"
+    printf '%s\n' "$GATE_REVISION" > "$WORK/stamps.archive"
+else
+    echo "stage archive: up to date"
+fi
+# The tier's own files, which may not be in the gate's revision yet. Copied
+# rather than symlinked so the built binary names one directory.
+if [ "$WORKTREE" != 1 ]; then
+    rm -rf "$SOURCE/tools/gauntlet/journey"
+    mkdir -p "$SOURCE/tools/gauntlet"
+    cp -R "$SCRIPT_DIR" "$SOURCE/tools/gauntlet/journey"
+fi
+
+# ------------------------------------------------------------- 2. the campaign
+HOST_TARGET="$WORK/host-target"
+say "stage campaign binary"
+( cd "$SOURCE" && CARGO_TARGET_DIR="$HOST_TARGET" \
+    run_build cargo build --release -p dclutch-journey-campaign ) \
+    > "$LOGS/build-journey.log" 2>&1 \
+    || { tail -n 40 "$LOGS/build-journey.log" >&2; die "campaign build failed"; }
 JOURNEY_BIN="$HOST_TARGET/release/dclutch-journey-campaign"
-INVENTORY="$GAUNTLET_WORK/out/inventory.json"
-LEDGER="${LEDGER_ARG:-$GAUNTLET_WORK/out/ledger.json}"
+[ -x "$JOURNEY_BIN" ] || die "journey binary missing: $JOURNEY_BIN"
 
-mkdir -p "$WORK" "$LOGS" "$RUNS" "$ELF_DIR"
-
-sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
-sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
-say() { printf '\n== %s\n' "$*"; }
-die() { printf 'journey: %s\n' "$*" >&2; exit 1; }
-# Resolve `--rpc-port auto` into a base whose WHOLE 42-port block binds.
+# ------------------------------------------------------------ 3. the port block
 #
 # Deliberately NOT `bind(0)`. The kernel's ephemeral range is the range it also
 # hands to every ordinary outbound connection, so a base drawn from it is the
 # most likely port on the machine to be stolen out from under a validator. And
-# it is resolved LATE, immediately before the campaign, because a base chosen
-# at argument-parse time is six minutes of SBF builds away from being used.
-# Both halves are measured, not theorised: the first parallel campaign attempt
-# picked ephemeral 49952 at parse time and found it occupied when it got there.
-#
-# So: a band well below the ephemeral range, a start offset keyed to this
-# process so two concurrent runs do not begin at the same candidate, and every
-# candidate proved by actually binding all 42 ports at once.
+# it is resolved LATE, immediately before the campaign, because a base chosen at
+# argument-parse time is a build away from being used -- both halves measured,
+# not theorised.
 allocate_rpc_port() {
     python3 - "$$" <<'PY'
 import socket, sys
-
 BAND_LOW, BAND_HIGH, STRIDE = 21000, 48000, 64
 count = (BAND_HIGH - BAND_LOW) // STRIDE
 start = int(sys.argv[1]) % count
@@ -167,394 +204,57 @@ for step in range(count):
     held = []
     try:
         for offset in (0, 2, 3, *range(10, 42)):
-            member = socket.socket()
-            member.bind(("127.0.0.1", base + offset))
-            held.append(member)
+            member = socket.socket(); member.bind(("127.0.0.1", base + offset)); held.append(member)
     except OSError:
-        for sock in held:
-            sock.close()
+        for sock in held: sock.close()
         continue
-    for sock in held:
-        sock.close()
-    print(base)
-    break
+    for sock in held: sock.close()
+    print(base); break
 else:
     raise SystemExit("no free 42-port block in 21000-48000 on 127.0.0.1")
 PY
 }
+BASE="$RPC_PORT"
+[ "$BASE" = "auto" ] && { BASE="$(allocate_rpc_port)" || die "--rpc-port auto: no free 42-port block"; }
 
+RUN="$WORK/runs/$(date -u '+%Y%m%dT%H%M%SZ')-${GATE_REVISION:0:12}-h$HOLDERS"
+mkdir -p "$RUN"
+say "campaign: living one Market's whole life (validator base $BASE, run $RUN)"
 
-# ------------------------------------------------------------- the ledger lock
-#
-# `census observe` is a READ-MODIFY-WRITE of one JSON file. Every family runner
-# and this script default to the same `/private/tmp/dclutch-gauntlet/out/
-# ledger.json`, so now that campaigns can run concurrently, two of them folding
-# evidence at the same moment would silently lose one side's observations --
-# a corruption that looks exactly like "that route never executed".
-#
-# `mkdir` is the lock because it is atomic on every filesystem this runs on and
-# needs no flock(1), which macOS does not ship. The holder's pid is recorded so
-# a stale lock names who to look for, and a lock older than the timeout is
-# broken rather than deadlocking a lane at 3am.
-ledger_lock() {
-    local lock="$1.lock" waited=0
-    while ! mkdir "$lock" 2>/dev/null; do
-        if [ "$waited" -ge 300 ]; then
-            local holder=""
-            [ -f "$lock/pid" ] && holder="$(cat "$lock/pid" 2>/dev/null || true)"
-            echo "ledger lock at $lock held for over 5 minutes by pid ${holder:-unknown}; breaking it" >&2
-            rm -rf "$lock"
-            continue
-        fi
-        [ "$waited" = 0 ] && echo "waiting for the ledger lock at $lock" >&2
-        sleep 1
-        waited=$((waited + 1))
-    done
-    printf '%s\n' "$$" > "$lock/pid"
-    LEDGER_LOCK_HELD="$lock"
-}
-ledger_unlock() {
-    [ -n "${LEDGER_LOCK_HELD:-}" ] && rm -rf "$LEDGER_LOCK_HELD"
-    LEDGER_LOCK_HELD=""
-}
-trap ledger_unlock EXIT
+# The prepare seed: a STATED derivation rather than a number somebody typed. It
+# is safe here and ONLY here -- the producer refuses the flag outright unless the
+# endpoint is loopback, and this tier only ever names a 127.0.0.1 origin.
+SEED="$(printf '%s' 'dclutch/gauntlet/journey/campaign-seed/v1' | shasum -a 256 | cut -d' ' -f1)"
 
+JOURNEY_ARGS=(run
+    --transcript "$RUN/transcript.json"
+    --work "$RUN/campaign"
+    --rpc-port "$BASE"
+    --checked-release-gate "$GATE"
+    --expected-gate-sha256 "$GATE_SHA256"
+    --expected-source-revision "$GATE_REVISION"
+    --expected-source-tree-sha256 "$GATE_TREE"
+    --seed "$SEED"
+    --holders "$HOLDERS")
 
-for tool in git jq shasum python3 cargo solana-test-validator cargo-build-sbf; do
-    command -v "$tool" >/dev/null 2>&1 || die "required command not found: $tool"
-done
-[ -f "$INVENTORY" ] || die "no census inventory at $INVENTORY. Run 'tools/gauntlet/run.sh --mode census' first; it takes seconds and needs no chain."
-
-# hbox is co-tenant with codex's HOL build. Containment is structural.
-if command -v swarm-build >/dev/null 2>&1; then WRAP="swarm-build"; else WRAP=""; fi
-run_build() { if [ -n "$WRAP" ]; then "$WRAP" "$@"; else "$@"; fi; }
-
-SOURCE_REVISION="$(git -C "$REPO" rev-parse "$COMMIT")"
-SOURCE_DIGEST="$(git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" | sha256_stdin)"
-# The ELF stage is keyed on the artifacts' OWN inputs, not on the whole tree.
-# Keying it on SOURCE_DIGEST meant every edit to this tier's README rebuilt seven
-# SBF programs, which is six minutes per iteration to re-derive artifacts that
-# cannot have changed. The set below is exhaustive for `cargo build-sbf`: nothing
-# outside it is compiled into a program. `--full-tree` is deliberate so the key
-# does not depend on the invoking directory.
-ELF_INPUT_DIGEST="$(git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" \
-    -- programs crates Cargo.toml Cargo.lock rust-toolchain.toml | sha256_stdin)"
-say "journey at $SOURCE_REVISION (holders=$HOLDERS, keypairs=$([ "$KEYPAIR_SEED" = none ] && echo fresh || echo deterministic))"
-
-# ------------------------------------------------------------------ 1. archive
-if [ ! -f "$WORK/stamps.archive" ] || [ "$(cat "$WORK/stamps.archive")" != "$SOURCE_DIGEST" ]; then
-    say "stage archive"
-    rm -rf "$SOURCE"; mkdir -p "$SOURCE"
-    git -C "$REPO" archive "$SOURCE_REVISION" | tar -x -C "$SOURCE"
-    printf '%s\n' "$SOURCE_DIGEST" > "$WORK/stamps.archive"
-else
-    echo "stage archive: up to date"
-fi
-
-# --------------------------------------------------------------------- 2. ELFs
-ROLES="registry:dclutch-registry-sbf:dclutch_registry_sbf
-core:dclutch-core-sbf:dclutch_core_sbf
-claims:dclutch-claims-sbf:dclutch_claims_sbf
-trading:dclutch-trading-sbf:dclutch_trading_sbf
-resolution:dclutch-resolution-proof-sbf:dclutch_resolution_proof_sbf
-custody:dclutch-custody-sbf:dclutch_custody_sbf
-rent:dclutch-rent-sbf:dclutch_rent_sbf"
-
-DIAGNOSTIC_PATTERN='overwrites values in the frame'
-
-# The gauntlet may already hold this exact revision's artifacts. Reuse them only
-# when its own stamp says they were built from this digest -- an ELF directory
-# that merely exists proves nothing about what is in it.
-REUSED="false"
-# run.sh keys its own ELF stamp on the whole-tree digest, so its artifacts are
-# reusable only when that digest matches -- a stricter test than this tier's, and
-# reusing under it is always sound.
-if [ -f "$GAUNTLET_WORK/stamps/elf" ] \
-   && [ "$(cat "$GAUNTLET_WORK/stamps/elf")" = "$SOURCE_DIGEST" ]; then
-    REUSED="true"
-    for entry in $ROLES; do
-        role="${entry%%:*}"
-        [ -f "$GAUNTLET_WORK/elf/$role.so" ] || REUSED="false"
-        [ -f "$GAUNTLET_WORK/logs/build-$role.log" ] || REUSED="false"
-    done
-fi
-
-if [ "$REUSED" = "true" ]; then
-    say "stage elf: reusing the gauntlet's artifacts for this exact revision"
-    for entry in $ROLES; do
-        role="${entry%%:*}"
-        cp "$GAUNTLET_WORK/elf/$role.so" "$ELF_DIR/$role.so"
-        cp "$GAUNTLET_WORK/logs/build-$role.log" "$LOGS/build-$role.log"
-        printf '  %s  %s\n' "$(sha256 "$ELF_DIR/$role.so")" "$role"
-    done
-elif [ ! -f "$WORK/stamps.elf" ] || [ "$(cat "$WORK/stamps.elf")" != "$ELF_INPUT_DIGEST" ]; then
-    say "stage elf"
-    for entry in $ROLES; do
-        role="${entry%%:*}"; rest="${entry#*:}"; package="${rest%%:*}"; stem="${rest#*:}"
-        echo "build: $role ($package)"
-        ( cd "$SOURCE" && CARGO_TARGET_DIR="$BUILD_TARGET" \
-            run_build cargo build-sbf --manifest-path "programs/$package/Cargo.toml" ) \
-            > "$LOGS/build-$role.log" 2>&1 \
-            || { tail -n 40 "$LOGS/build-$role.log" >&2; die "SBF build failed: $role"; }
-        cp "$BUILD_TARGET/deploy/$stem.so" "$ELF_DIR/$role.so"
-        printf '  %s  %s (%s frame diagnostics)\n' "$(sha256 "$ELF_DIR/$role.so")" "$role" \
-            "$(grep -c "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" || true)"
-    done
-    printf '%s\n' "$ELF_INPUT_DIGEST" > "$WORK/stamps.elf"
-else
-    echo "stage elf: up to date"
-fi
-
-# `cargo build-sbf` exits ZERO when the SBF backend reports that a call
-# overwrites its own stack frame and "may cause undefined behavior during
-# execution". An artifact the toolchain calls potentially-undefined has no
-# business producing evidence, and only the build stage is in a position to
-# say so. Unlike run.sh, this tier REFUSES rather than warning: the journey's
-# whole claim is about state that survives a long chain of transactions, and
-# undefined behaviour anywhere in that chain voids the claim silently.
-# The narrow exception is frame-diagnostics.json, shaped like blocked.json: it
-# names the exact mangled symbol, the measured count, why this campaign does not
-# reach it, and who owns the fix. Anything it does not name, or a count that
-# GREW, stops the run.
-: > "$WORK/frame-diagnostics.txt"
-for entry in $ROLES; do
-    role="${entry%%:*}"
-    grep -h "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" 2>/dev/null \
-        | sed "s|^|$role\t|" >> "$WORK/frame-diagnostics.txt" || true
-done
-# Run unconditionally, including when nothing was observed: an empty observed
-# file is exactly the case where a STALE exemption needs reporting, and gating
-# the checker on `-s` meant a lapsed entry could sit here forever unnoticed.
-python3 "$TIER/check-frame-diagnostics.py" \
-        "$TIER/frame-diagnostics.json" "$WORK/frame-diagnostics.txt" >&2 || \
-    die "SBF stack-frame-overwrite diagnostics are not covered by tools/gauntlet/journey/frame-diagnostics.json; refusing to run a journey on artifacts the toolchain calls potentially-undefined."
-
-# ----------------------------------------------------------- 3. journey binary
-JOURNEY_DIGEST="$(cat "$TIER/Cargo.toml" "$TIER"/src/*.rs | sha256_stdin)"
-if [ ! -f "$WORK/stamps.tool" ] || [ "$(cat "$WORK/stamps.tool")" != "$JOURNEY_DIGEST-$SOURCE_DIGEST" ]; then
-    say "stage tool"
-    # Built from the ARCHIVE, not the working tree: the journey compiles the
-    # tier-1 producer's source files into itself, so building it from a dirty
-    # tree would silently mix revisions of the founding into a campaign whose
-    # attestations name one.
-    ( cd "$SOURCE/tools/gauntlet/journey" && CARGO_TARGET_DIR="$HOST_TARGET" \
-        run_build cargo build --release ) > "$LOGS/build-journey.log" 2>&1 \
-        || { tail -n 40 "$LOGS/build-journey.log" >&2; die "journey build failed"; }
-    printf '%s\n' "$JOURNEY_DIGEST-$SOURCE_DIGEST" > "$WORK/stamps.tool"
-else
-    echo "stage tool: up to date"
-fi
-[ -x "$JOURNEY_BIN" ] || die "journey binary missing: $JOURNEY_BIN"
-
-# ----------------------------------------------------------------- 4. campaign
-if [ "$RPC_PORT" = "auto" ]; then
-    RPC_PORT="$(allocate_rpc_port)" || die "--rpc-port auto: no free 42-port block"
-    echo "allocated rpc base: $RPC_PORT"
-fi
-if python3 -c 'import socket,sys
-s=socket.socket(); s.settimeout(0.5)
-sys.exit(0 if s.connect_ex(("127.0.0.1",int(sys.argv[1])))==0 else 1)' "$RPC_PORT"; then
-    die "127.0.0.1:$RPC_PORT is occupied. Pass --rpc-port auto to take a free base instead."
-fi
-
-# Checked AGAIN here, immediately before the campaign. The earlier check is six
-# minutes of SBF builds away from this point, and on 2026-08-27 a lane took the
-# slot inside that window and the run died after paying for every artifact.
-if python3 -c 'import socket,sys
-s=socket.socket(); s.settimeout(0.5)
-sys.exit(0 if s.connect_ex(("127.0.0.1",int(sys.argv[1])))==0 else 1)' "$RPC_PORT"; then
-    die "127.0.0.1:$RPC_PORT was taken while this run was building; re-run to reuse the stamped artifacts, or pass --rpc-port auto"
-fi
-
-RUN="$RUNS/$(date -u '+%Y%m%dT%H%M%SZ')-${SOURCE_REVISION:0:12}-h$HOLDERS"
-mkdir -p "$RUN/attestation"
-LAUNCHER="$GAUNTLET/tier1/launcher.sh"
-chmod +x "$LAUNCHER" "$SOURCE/tools/local-validator/dclutch-successor-validator"
-export GAUNTLET_SOURCE_ROOT="$SOURCE"
-export GAUNTLET_ALLOW_STALE_FIXTURE_PINS="$ALLOW_STALE_PINS"
-
-SOLANA_VERSION="$(solana --version 2>/dev/null | head -n 1 || echo unknown)"
-BUILD_SBF_RAW="$(cargo-build-sbf --version)"
-
-# Candidate-local program addresses, derived offline from a fixed domain and the
-# role name. The domain is TIER 1's: the journey deploys the same seven
-# artifacts under the same identities, and inventing a second address family
-# would make the two campaigns' ledger rows describe different programs.
-program_id_for() {
-    python3 - "$1" <<'PY'
-import hashlib, sys
-ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-raw = hashlib.sha256(b"dclutch/gauntlet/program-id/v1\nrole=" + sys.argv[1].encode()).digest()
-value = int.from_bytes(raw, "big")
-out = ""
-while value:
-    value, remainder = divmod(value, 58)
-    out = ALPHABET[remainder] + out
-for byte in raw:
-    if byte:
-        break
-    out = "1" + out
-print(out)
-PY
-}
-
-for entry in $ROLES; do
-    role="${entry%%:*}"; rest="${entry#*:}"; package="${rest%%:*}"
-    elf="$ELF_DIR/$role.so"; log="$LOGS/build-$role.log"
-    jq -n \
-        --arg elf_path "$elf" \
-        --arg elf_sha256 "$(sha256 "$elf")" \
-        --arg program_id "$(program_id_for "$role")" \
-        --arg commit "$SOURCE_REVISION" \
-        --arg archive_sha256 "$SOURCE_DIGEST" \
-        --arg cargo_build_sbf_version "$(printf '%s\n' "$BUILD_SBF_RAW" | sed -n '1p')" \
-        --arg platform_tools_version "$(printf '%s\n' "$BUILD_SBF_RAW" | sed -n '2p')" \
-        --arg rustc_version "$(printf '%s\n' "$BUILD_SBF_RAW" | sed -n '3p')" \
-        --arg solana_version "$SOLANA_VERSION" \
-        --arg build_command "cargo build-sbf --manifest-path programs/$package/Cargo.toml" \
-        --arg build_log_sha256 "$(sha256 "$log")" \
-        '{
-            schema: "dclutch-gauntlet-artifact-attestation-v1",
-            elf_path: $elf_path, elf_sha256: $elf_sha256, program_id: $program_id,
-            commit: $commit, archive_sha256: $archive_sha256,
-            cargo_build_sbf_version: $cargo_build_sbf_version,
-            platform_tools_version: $platform_tools_version,
-            rustc_version: $rustc_version, solana_version: $solana_version,
-            build_command: $build_command, build_log_sha256: $build_log_sha256,
-            verifier: { status: "clean", diagnostic_count: 0 },
-            sbf_backend_frame_diagnostics: 0,
-            assumptions: [
-                "program_id is a gauntlet-local address derived offline from a fixed domain and the role name; no private key exists for it",
-                "verifier.status records that cargo build-sbf produced a loadable ELF, not an absence of backend frame diagnostics",
-                "archive_sha256 is SHA-256 of the git ls-tree -r --full-tree listing at the exact source revision",
-                "this tier REFUSES a nonzero backend frame diagnostic count before it reaches this file, so zero here is checked, not assumed"
-            ]
-        }' > "$RUN/attestation/$role.json"
-done
-
-# The Resolution role's semantic release identity is a PROTOCOL FACT: the
-# producer refuses any other. The preimage is HASHED here rather than the digest
-# constant copied, so the check is against the semantic statement and not
-# against the code under test.
-RESOLUTION_RELEASE_PREIMAGE='dclutch/release/source-resolution-controller-core-effects-source-closure-v4'
-semantic_release_for() {
-    if [ "$1" = "resolution" ]; then
-        printf '%s' "$RESOLUTION_RELEASE_PREIMAGE" | sha256_stdin
-    else
-        printf 'dclutch/gauntlet/semantic-release/v1\nrole=%s\ncommit=%s\n' "$1" "$SOURCE_REVISION" | sha256_stdin
-    fi
-}
-
-# The Market run-spec is SUPPLIED, not minted here.
-#
-# It used to come from `"$JOURNEY_BIN" demo-market`, on the reasoning that
-# shelling out to a second binary would be a second build of the same function.
-# That reasoning expired: Direct is deployment-bound now, `demo-market` refuses
-# unconditionally (`src/main.rs`, "a standalone registry address cannot
-# authenticate the checked local Direct deployment"), and this runner went on
-# calling it for two days because public CI gates that the campaign COMPILES and
-# nothing runs it. `the_runner_invokes_no_retired_subcommand` is the gate that
-# now fails instead.
-#
-# A market can only be compiled by `DirectMarketCompilerOwnedV1::load_local`,
-# which authenticates a checked local mutable plan against a gate on disk and
-# observes a LIVE loopback deployment first. That ordering --
-#
-#   prepare the checked-mutable substrate -> boot a validator over it ->
-#   run the administration campaign through activation -> compile the market
-#   against the LIVE deployment -> found -> keep going
-#
-# -- is what `tools/gauntlet/relayed-vertical/` already implements, and building
-# it into this runner is its own unit
-# (docs/evidence/LOCAL_CAMPAIGN_SERIES_2026_08_30.md). Until that lands, this
-# tier accepts a market someone else compiled, so the campaign is runnable by
-# anyone holding one rather than runnable by nobody.
-#
-# TWO THINGS ABOUT THE MARKET YOU SUPPLY, one relayed and one measured.
-#
-# RELAYED, from the lane that owns the compiler and NOT independently verified
-# here: `local-private-validator-market-v1` wants its `--plan` from
-# `local-mutable-prepare-v1` behind a checked-release gate rather than from a
-# standalone call, and its shape defaults are said to resolve into a single
-# bucket -- a market nobody could lose. Treat a market compiled with bare
-# defaults as economically degenerate until that lane says otherwise.
-#
-# MEASURED HERE, so it is not the same claim: the compiler's default shape is
-# `cuts = [12_000, 18_000]` over `cut_denominator = 100` with coefficients
-# `[1, 0, 1, 0]` (`bootstrap/successor/src/market.rs`, `LocalMarketShapeV1::
-# default`), which is a FOUR-outcome market, not a one-outcome one. Whatever
-# "one bucket" refers to, it is not the width.
-#
-# AND IT IS NOT WHAT LIMITS THE CONSERVATION LEDGER ANYWAY, which is worth
-# saying so nobody holds a market back on this tier's account. The ledger's
-# per-class law (L8) is bounded by how many Custody COMPARTMENTS the market
-# opens, not by how its outcomes resolve, and this journey opens
-# `HoardPrincipal` and nothing else whatever shape it is founded with. A
-# non-degenerate market makes the campaign economically interesting; it does
-# not turn a two-class ledger into an eight-class one.
-[ -n "$MARKET_ARG" ] || die "no Market run-spec: pass --market PATH.
-
-Direct is deployment-bound, so this runner cannot mint one and the retired
-demo-market compiler refuses by design. Compile one against a live checked
-local deployment:
-
-  dclutch-local-successor-bootstrap local-private-validator-market-v1 \\
-    --plan <substrate>/plan.json --rpc-url http://127.0.0.1:<port>/ \\
-    --fee-basis-points 50 --fee-recipient-keypair <keys>/fee-recipient.json \\
-    > market.json
-
-then re-run with --market market.json. The seven SBF roles this run already
-built are stamped and will be reused."
-[ -f "$MARKET_ARG" ] || die "--market is not a file: $MARKET_ARG"
-jq . "$MARKET_ARG" > "$RUN/market.json" || die "--market is not valid JSON: $MARKET_ARG"
-
-SPEC="$RUN/spec.json"
-{
-    printf '{\n'
-    printf '  "schema": "dclutch-local-successor-run-spec-v2",\n'
-    printf '  "rpc_url": "http://127.0.0.1:%s/",\n' "$RPC_PORT"
-    printf '  "launcher": "%s",\n' "$LAUNCHER"
-    printf '  "ledger": "%s/ledger",\n' "$RUN"
-    printf '  "account_dir": "%s/accounts",\n' "$RUN"
-    printf '  "plan": "%s/plan.json",\n' "$RUN"
-    printf '  "output": "%s/evidence.json",\n' "$RUN"
-    for entry in $ROLES; do
-        role="${entry%%:*}"; key="$role"; [ "$key" = "rent" ] && key="rent_credit"
-        printf '  "%s": {\n' "$key"
-        printf '    "program_id": "%s",\n' "$(program_id_for "$role")"
-        printf '    "elf_path": "%s",\n' "$ELF_DIR/$role.so"
-        printf '    "elf_sha256": "%s",\n' "$(sha256 "$ELF_DIR/$role.so")"
-        printf '    "semantic_release_id": "%s",\n' "$(semantic_release_for "$role")"
-        printf '    "attestation": "%s"\n' "$RUN/attestation/$role.json"
-        printf '  },\n'
-    done
-    printf '  "market": '
-    cat "$RUN/market.json"
-    printf '\n}\n'
-} > "$SPEC.raw"
-jq . "$SPEC.raw" > "$SPEC" || die "assembled run spec is not valid JSON"
-
-say "campaign: living one Market's whole life on a fresh localhost ledger"
-echo "run directory: $RUN"
-JOURNEY_ARGS=(run --spec "$SPEC" --transcript "$RUN/transcript.json" --holders "$HOLDERS")
-if [ "$KEYPAIR_SEED" != "none" ]; then
-    JOURNEY_ARGS+=(--keypair-seed "$KEYPAIR_SEED")
-fi
+STATUS=0
 if ! "$JOURNEY_BIN" "${JOURNEY_ARGS[@]}" \
         > "$RUN/campaign.stdout" 2> "$RUN/campaign.stderr"; then
     tail -n 60 "$RUN/campaign.stderr" >&2
     echo "journey: campaign FAILED; evidence, transcript and logs are under $RUN" >&2
-    printf '%s\n' "$RUN" > "$WORK/last-run"
-    exit 1
+    STATUS=1
 fi
 printf '%s\n' "$RUN" > "$WORK/last-run"
 
-EVIDENCE="$RUN/evidence.json"
 TRANSCRIPT="$RUN/transcript.json"
-[ -f "$EVIDENCE" ] || die "campaign evidence missing: $EVIDENCE"
+EVIDENCE="$RUN/campaign/evidence.json"
+# A campaign that met a wall still writes both documents -- that is the whole
+# design -- so the fold below runs on a failed run too, and only the exit code
+# says the run failed.
 [ -f "$TRANSCRIPT" ] || die "campaign transcript missing: $TRANSCRIPT"
+[ -f "$EVIDENCE" ] || die "campaign evidence missing: $EVIDENCE"
 
-# ---------------------------------------------------------------- 5. the ledger
+# ---------------------------------------------------------------- 4. the ledger
 say "conservation ledger"
 jq -r '
     "verdict: \(.conservation_verdict)   holders: \(.holder_count)   claim unit: \(.claim_unit_atoms) atoms",
@@ -565,42 +265,49 @@ jq -r '
        "    aggregate supply \(.aggregate_supply)   Positions \(.position_totals)",
        (.verdicts[] | "      \(.law) \(.status)  \(.detail)"))
 ' "$TRANSCRIPT"
-if [ "$(jq -r '.conservation_verdict' "$TRANSCRIPT")" != "conserved" ]; then
-    die "the conservation ledger reported violations; see $TRANSCRIPT"
-fi
 
-# -------------------------------------------------------------- 6. witnesses
+say "stages"
+jq -r '.stages[] | "  \(.outcome | ascii_upcase)  \(.stage)  [\(.transactions) tx, \(.compute_units) CU]"' \
+    "$TRANSCRIPT"
+
+# ------------------------------------------------------------- 5. witnesses
 say "witnesses: tier 1's, against this campaign's evidence"
-"$GAUNTLET/tier1/check-witnesses.sh" "$GAUNTLET/tier1/witnesses.json" "$EVIDENCE" "$RUN/plan.json"
+"$GAUNTLET/tier1/check-witnesses.sh" "$GAUNTLET/tier1/witnesses.json" \
+    "$EVIDENCE" "$RUN/campaign/substrate/plan.json" || STATUS=1
 say "witnesses: the journey's, against its transcript"
-"$GAUNTLET/tier1/check-witnesses.sh" "$TIER/witnesses.json" "$EVIDENCE" "$TRANSCRIPT"
+"$GAUNTLET/tier1/check-witnesses.sh" "$SCRIPT_DIR/witnesses.json" \
+    "$EVIDENCE" "$TRANSCRIPT" || STATUS=1
 
-# ----------------------------------------------------------------- 7. census
-say "census"
-jq '{registry:.registry.program_id, core:.core.program_id, claims:.claims.program_id,
-     trading:.trading.program_id, resolution:.resolution.program_id,
-     custody:.custody.program_id, rent:.rent_credit.program_id}' \
-    "$RUN/plan.json" > "$RUN/programs.json"
-
-# One copy of tier 1's bindings, merged at run time. See the header.
-jq -s '{campaign: "journey",
-        note: ("Whole-life journey. Tier 1'"'"'s bindings are merged in at run time from " +
-               "tools/gauntlet/tier1/bindings.json because the journey submits every tier-1 " +
-               "transaction before its own; there is exactly one copy of them."),
-        bindings: (.[0].bindings + .[1].bindings)}' \
-    "$GAUNTLET/tier1/bindings.json" "$TIER/bindings.json" > "$RUN/bindings.json"
-
-ledger_lock "$LEDGER"
-cargo run --quiet --manifest-path "$GAUNTLET/census/Cargo.toml" -- observe \
-    --inventory "$INVENTORY" \
-    --ledger "$LEDGER" \
-    --bindings "$RUN/bindings.json" \
-    --programs "$RUN/programs.json" \
-    --evidence "$EVIDENCE"
-ledger_unlock
+# ---------------------------------------------------------------- 6. census
+if [ "$CENSUS" = 1 ]; then
+    say "census"
+    INVENTORY="$GAUNTLET_WORK/out/inventory.json"
+    LEDGER="$GAUNTLET_WORK/out/ledger.json"
+    [ -f "$INVENTORY" ] || die "--census needs $INVENTORY; run 'tools/gauntlet/run.sh --mode census' first"
+    jq '{registry:.registry.program_id, core:.core.program_id, claims:.claims.program_id,
+         trading:.trading.program_id, resolution:.resolution.program_id,
+         custody:.custody.program_id, rent:.rent_credit.program_id}' \
+        "$RUN/campaign/substrate/plan.json" > "$RUN/programs.json"
+    # One copy of tier 1's bindings, merged at run time: the journey submits
+    # every founding transaction the infrastructure floor does before its own,
+    # and a second hand-maintained copy of them would rot the first time tier 1
+    # changed. There is exactly one copy.
+    jq -s '{campaign: "journey",
+            note: ("Whole-life journey. Tier 1'"'"'s bindings are merged in at run time from " +
+                   "tools/gauntlet/tier1/bindings.json because the journey submits every " +
+                   "founding transaction before its own; there is exactly one copy of them."),
+            bindings: (.[0].bindings + .[1].bindings)}' \
+        "$GAUNTLET/tier1/bindings.json" "$SCRIPT_DIR/bindings.json" > "$RUN/bindings.json"
+    ledger_lock "$LEDGER"
+    cargo run --quiet --manifest-path "$GAUNTLET/census/Cargo.toml" -- observe \
+        --inventory "$INVENTORY" --ledger "$LEDGER" \
+        --bindings "$RUN/bindings.json" --programs "$RUN/programs.json" \
+        --evidence "$EVIDENCE" || STATUS=1
+    ledger_unlock
+fi
 
 say "done"
 echo "evidence:   $EVIDENCE"
 echo "transcript: $TRANSCRIPT"
-echo "ledger:     $LEDGER"
-echo "journey: render the report with 'tools/gauntlet/run.sh --mode census'"
+echo "journey: render the report with 'tools/gate census'"
+exit "$STATUS"

@@ -8,12 +8,13 @@ use std::{
 
 use dclutch_market::CoreState;
 use serde::Serialize;
+use serde_json::Value;
 use solana_sdk::signature::Signer;
 
 use crate::{
     Error, Result,
     ledger::{ClassClaimV1, ConservationLedgerV1, LamportClaimV1, ObservationV1},
-    provider, resolution,
+    provider, resolution, spine,
     stages::{self, MarketAddressesV1, StageReportV1},
 };
 
@@ -71,20 +72,114 @@ pub(crate) struct JourneyTranscriptV1 {
     /// never traded for a green run.
     pub(crate) unexpected_refusals: Vec<String>,
     pub(crate) gaps: Vec<GapV1>,
+    /// One machine-readable row per shipped-command stage: the admission, the
+    /// fill, the fee settlement, the redemption and the three retirement
+    /// drivers, each carrying the driver's OWN document rather than this
+    /// tier's summary of it.
+    pub(crate) spine: Value,
     pub(crate) observations: Vec<ObservationV1>,
     pub(crate) transactions_total: usize,
     pub(crate) compute_units_total: u64,
 }
 
+/// Everything the whole-life campaign needs from its runner.
+///
+/// The journey used to take a `--spec` and a `--market` somebody else had
+/// compiled, and it could not stand up its own substrate at all: a Market can
+/// only be compiled by `DirectMarketCompilerOwnedV1::load_local`, which
+/// observes a LIVE checked deployment, and the runner had no way to produce
+/// one whose program identities matched the ones it was about to deploy. So
+/// the tier accepted a market compiled against SOME OTHER deployment, which is
+/// a market this campaign could not found. Since 2026-09-06 it brings the
+/// substrate up itself, exactly as `tools/gauntlet/ladder/` does, and compiles
+/// the Market against the deployment it is standing on.
+pub(crate) struct JourneyRequestV1 {
+    pub(crate) transcript: PathBuf,
+    pub(crate) work: PathBuf,
+    pub(crate) rpc_port: u16,
+    pub(crate) checked_release_gate: PathBuf,
+    pub(crate) expected_gate_sha256: String,
+    pub(crate) expected_source_revision: String,
+    pub(crate) expected_source_tree_sha256: String,
+    pub(crate) seed: String,
+    pub(crate) holder_count: u32,
+}
+
+/// A live campaign session over the checked-mutable substrate.
+///
+/// The shape `found_through_open` used to return, rebuilt from the campaign's
+/// own founding report -- the same substitution the relayed vertical made when
+/// it needed a validator that outlives one command. The validator is this
+/// process's child and dropping this kills it.
+struct JourneySessionV1 {
+    #[allow(dead_code)]
+    validator: crate::substrate::ValidatorGuardV1,
+    rpc: crate::rpc::Rpc,
+    rpc_url: String,
+    plan: crate::model::SuccessorPlan,
+    plan_sha256: String,
+    plan_path: PathBuf,
+    authority: solana_sdk::signature::Keypair,
+    transactions: Vec<crate::model::TransactionEvidence>,
+    accounts: std::collections::BTreeMap<String, crate::model::AccountEvidence>,
+}
+
 /// Live one Market's whole life, and account for every atom while doing it.
-pub(crate) fn execute(
-    spec_path: &Path,
-    transcript_path: &Path,
-    holder_count: u32,
-    keypair_seed: Option<&str>,
-) -> Result<JourneyTranscriptV1> {
-    validate_new_path(transcript_path, "--transcript")?;
-    let mut session = crate::runtime::found_through_open(spec_path, keypair_seed)?;
+pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> {
+    validate_new_path(&request.transcript, "--transcript")?;
+    std::fs::create_dir_all(&request.work)?;
+    let holder_count = request.holder_count;
+
+    // ---------------------------------------- 1. the checked-mutable substrate
+    let substrate_dir = request.work.join("substrate");
+    std::fs::create_dir_all(&substrate_dir)?;
+    let checked = crate::substrate::bring_up(&crate::substrate::SubstrateRequestV1 {
+        work: &substrate_dir,
+        checked_release_gate: &request.checked_release_gate,
+        expected_gate_sha256: &request.expected_gate_sha256,
+        expected_source_revision: &request.expected_source_revision,
+        expected_source_tree_sha256: &request.expected_source_tree_sha256,
+        seed: &request.seed,
+        rpc_port: request.rpc_port,
+    })?;
+
+    // ------------------------------- 2. the Market, compiled against the chain
+    //
+    // The default shape is FOUR outcomes over two cuts, which at
+    // `categorical_founding_payout_scale_v3` is a payout scale of three -- a
+    // REFUNDING market, whose failure column the founding seats rather than
+    // issues. That is not a knob this tier turns: it is what the lab's default
+    // market has been since the refunding scale landed, and it is the shape the
+    // closure burn at the end of this campaign exists for.
+    let registry = crate::plan::pubkey(&checked.plan.registry.program_id)?;
+    let fee_recipient = solana_sdk::signature::Keypair::new();
+    let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
+        &checked.plan_path,
+        &checked.rpc_url,
+        registry,
+        Some(50),
+        Some(fee_recipient.pubkey()),
+    )?;
+    let market_input = crate::market::demo_market_input(registry, direct.compiler())?;
+    let market_path = request.work.join("market.json");
+    std::fs::write(&market_path, serde_json::to_vec_pretty(&market_input)?)?;
+
+    // ------------------------------------------------------- 3. the founding
+    let mut rpc = crate::rpc::Rpc::connect(&checked.rpc_url)?;
+    let campaign_report = request.work.join("founding-evidence.json");
+    let founding = crate::substrate::found_market(&checked, &mut rpc, &market_path, &campaign_report)?;
+    let authority = crate::substrate::authority_keypair(&checked)?;
+    let mut session = JourneySessionV1 {
+        validator: checked.validator,
+        rpc,
+        rpc_url: checked.rpc_url.clone(),
+        plan: checked.plan,
+        plan_sha256: checked.plan_sha256,
+        plan_path: checked.plan_path.clone(),
+        authority,
+        transactions: founding.transactions,
+        accounts: founding.market.accounts,
+    };
     let addresses = MarketAddressesV1::from_evidence(&session.accounts)?;
 
     let mut ledger = ConservationLedgerV1::new(addresses.mint, session.authority.pubkey());
@@ -117,40 +212,56 @@ pub(crate) fn execute(
         "founding through Open",
         0,
         0,
-        // The founding's lamport placements are the tier-1 producer's, and this
-        // ledger does not restate them: it would be re-deriving another
+        // The founding's lamport placements are the founding campaign's, and
+        // this ledger does not restate them: it would be re-deriving another
         // campaign's arithmetic and calling the agreement evidence. L7 begins
         // at the first journey-owned boundary.
         LamportClaimV1::inapplicable(
-            "the founding's lamport movements belong to the tier-1 producer and are covered by \
-             tier 1's own witnesses; this ledger accounts for lamports from the first \
+            "the founding's lamport movements belong to `campaign --founding-only` and are \
+             covered by tier 1's own witnesses; this ledger accounts for lamports from the first \
              journey-owned boundary onward",
         ),
-        // The same boundary, and the same reason: the founding's compartment
-        // placements are the producer's. Declaring `unchanged()` here would be
-        // false -- the founding funds the Hoard out of nothing -- and it would
-        // also be unevaluated, since the first census has no predecessor. L8
-        // accounts per class from the first journey-owned boundary onward.
+        // The same boundary, and the same reason. Declaring `unchanged()` here
+        // would be false -- the founding funds the Hoard out of nothing -- and
+        // it would also be unevaluated, since the first census has no
+        // predecessor.
         ClassClaimV1::inapplicable(
-            "the founding's compartment placements belong to the tier-1 producer; this ledger \
+            "the founding's compartment placements belong to the founding campaign; this ledger \
              accounts per compartment class from the first journey-owned boundary onward",
         ),
     )?;
 
-    let mut stages = vec![StageReportV1 {
-        stage: "founding through Open".into(),
-        outcome: "executed".into(),
-        transactions: session.transactions.len(),
-        compute_units: session
-            .transactions
-            .iter()
-            .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
-            .sum(),
-        note: "the tier-1 producer's own code, called in this process rather than copied: \
-               seven-artifact genesis, immutable five-role activation, Found31, DCLTPCB1, and \
-               DCLTGMF1 with Open last."
-            .into(),
-    }];
+    let mut stages = vec![
+        StageReportV1 {
+            stage: "checked-mutable substrate".into(),
+            outcome: "executed".into(),
+            transactions: 0,
+            compute_units: 0,
+            note: format!(
+                "`local-mutable-prepare-v1` derived the seven-role mutable substrate from the \
+                 checked release gate ({}), a fresh solana-test-validator booted the prepared \
+                 account directory, and the administration campaign published, initialized and \
+                 activated through the retained authority. THE VALIDATOR STAYS UP for every stage \
+                 below -- that is why this tier can drive shipped commands at all, and why the \
+                 in-process tier-1 supervisor could not host them.",
+                request.expected_gate_sha256
+            ),
+        },
+        StageReportV1 {
+            stage: "founding through Open".into(),
+            outcome: "executed".into(),
+            transactions: session.transactions.len(),
+            compute_units: session
+                .transactions
+                .iter()
+                .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
+                .sum(),
+            note: "`campaign --founding-only` over the live checked substrate: the market compiled \
+                   by `DirectMarketCompilerOwnedV1::load_local` against THIS deployment, four \
+                   outcomes over two cuts, which is a refunding payout scale of three."
+                .into(),
+        },
+    ];
 
     let (distribution, distribution_fees) = stages::distribute_collateral(
         &mut session.rpc,
@@ -171,10 +282,6 @@ pub(crate) fn execute(
         0,
         0,
         LamportClaimV1::fees(distribution_fees),
-        // Every transfer is founder wallet to holder wallet: two accounts of
-        // the SAME class, and neither is a Custody vault. So every compartment
-        // moved zero, which is the strong claim -- it fails if one atom reaches
-        // a vault, and unlike L5's single total it says WHICH vault.
         ClassClaimV1::unchanged(),
     )?;
 
@@ -193,11 +300,106 @@ pub(crate) fn execute(
         0,
         0,
         LamportClaimV1::fees(ring_fees),
-        // A ring of holder-to-holder transfers: same class at both ends.
         ClassClaimV1::unchanged(),
     )?;
 
     let mut unexpected_refusals = Vec::new();
+
+    // ------------------------------------------- the spine: admission and fill
+    //
+    // Everything from here is a SHIPPED command, called in this process with
+    // the argument vector a host would type. See `spine.rs` for why that is the
+    // whole design rather than a convenience.
+    let spine_work = request.work.join("spine");
+    std::fs::create_dir_all(&spine_work)?;
+    let payer_key = spine_key(&checked.report, "campaign-payer")?;
+    let payer = crate::substrate::load_keypair(&payer_key)?.pubkey();
+    let context = spine::SpineContextV1 {
+        rpc_url: &session.rpc_url,
+        plan: &session.plan_path,
+        campaign_report: &campaign_report,
+        market_input: &market_path,
+        market: addresses.founding_market,
+        work: &spine_work,
+        keypairs: &checked.report.keypairs,
+        founding_keypairs: &checked.report.campaign_founding_keypairs,
+    };
+    let mut spine = spine::SpineV1::new();
+
+    // TWO STRANGERS, and the second one is not decoration. The buyer carries
+    // the collateral leg because the fill needs delegated collateral; the
+    // second admission is a Position and nothing else, which is the ordinary
+    // case and the one a campaign that only ever admits its trader never runs.
+    let participant = context_pubkey(&context, "participant")?;
+    let fixture_source = evidence_pubkey(&session.accounts, "local_participant_fixture_source")?;
+    let second = solana_sdk::signature::Keypair::new();
+    let second_key = spine_work.join("second-stranger.json");
+    write_keypair_file(&second_key, &second)?;
+    session.transactions.push(session.rpc.airdrop(
+        "journey: fund the second stranger's rent",
+        second.pubkey(),
+        2_000_000_000,
+    )?);
+    let strangers = vec![
+        spine::StrangerV1 {
+            label: "buyer".into(),
+            owner: participant,
+            keypair: spine_key(&checked.report, "participant")?,
+            collateral: Some(spine::StrangerCollateralV1 {
+                source_owner: participant,
+                source_owner_keypair: spine_key(&checked.report, "participant")?,
+                source_account: fixture_source,
+                quantity_atoms: crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1,
+            }),
+            report: spine_work.join("admission-buyer.json"),
+        },
+        spine::StrangerV1 {
+            label: "stranger".into(),
+            owner: second.pubkey(),
+            keypair: second_key,
+            collateral: None,
+            report: spine_work.join("admission-stranger.json"),
+        },
+    ];
+    spine::admit_strangers(
+        &mut session.rpc,
+        &context,
+        &mut spine,
+        &strangers,
+        payer,
+        &payer_key,
+        &[],
+    )?;
+    spine::fill(
+        &mut session.rpc,
+        &context,
+        &mut spine,
+        &strangers[0].report,
+    )?;
+    spine::settle_fee(&mut session.rpc, &context, &mut spine, participant, &payer_key)?;
+    let spine_admission_stages = spine.stages.len();
+    stages.append(&mut spine.stages);
+    session.transactions.append(&mut spine.transactions);
+    unexpected_refusals.append(&mut spine.refusals);
+    let _ = spine_admission_stages;
+    ledger.observe(
+        &mut session.rpc,
+        "trading: admission, the Direct Hot fill, and the fee settlement",
+        0,
+        0,
+        // The spine's acts move lamports through drivers whose own receipts
+        // account for them; this ledger does not restate that arithmetic, and
+        // says so rather than declaring a number it did not derive.
+        LamportClaimV1::inapplicable(
+            "the admission, fill and fee-settlement drivers each write their own lamport receipt; \
+             L7 does not restate another author's arithmetic",
+        ),
+        // COLLATERAL, on the other hand, is exactly what this ledger is for.
+        // A fill moves atoms between two token accounts of the same class and
+        // opens no vault, so every compartment must move zero -- which is the
+        // strong claim, and it fails if one atom reaches a vault.
+        ClassClaimV1::unchanged(),
+    )?;
 
     let (resolution_report, resolution_lamports) = resolution::resolve(
         &mut session.rpc,
@@ -206,16 +408,12 @@ pub(crate) fn execute(
         &mut session.transactions,
     )?;
     stages.push(resolution_report);
-    // The funding ladder moves lamports and no collateral at all: the Source
-    // state and three Funds are lamport compartments, and the Hoard is not a
-    // party to any of it. Declaring zero on both atom laws is the strong claim.
     ledger.observe(
         &mut session.rpc,
         "resolution: create and activate the Market's Resolution funding",
         0,
         0,
         resolution_lamports,
-        // The funding ladder is lamports only. No compartment sees an atom.
         ClassClaimV1::unchanged(),
     )?;
 
@@ -233,8 +431,6 @@ pub(crate) fn execute(
             &provider_plan,
             &mut session.transactions,
         ) {
-            // Resolution moves no collateral: a terminal certificate is an assertion
-            // about which outcome won, not a transfer.
             Ok((report, lamports)) => (report, lamports, ClassClaimV1::unchanged()),
             Err(error) => {
                 unexpected_refusals.push(format!(
@@ -247,30 +443,20 @@ pub(crate) fn execute(
                         outcome: "refused".into(),
                         transactions: 0,
                         compute_units: 0,
-                        note: format!(
-                            "REFUSED, and the refusal is the finding: {error}. Everything the legs \
-                         need is on this chain -- the receiver and router ELFs are loaded by the \
-                         launcher, the Pyth release record is published by the infrastructure \
-                         plan, and the Market's own source spec, window spec, statistic spec, \
-                         provider release and adapter configuration are finalized records at the \
-                         identities its SourceMaterialV3 names."
-                        ),
+                        note: format!("REFUSED, and the refusal is the finding: {error}."),
                     },
                     LamportClaimV1::inapplicable(
-                        "the stage refused part way through, so what it placed and where is exactly \
-                     what is not known; L7 does not guess across a wall",
+                        "the stage refused part way through, so what it placed and where is \
+                         exactly what is not known; L7 does not guess across a wall",
                     ),
                     ClassClaimV1::inapplicable(
                         "the stage refused part way through, so which compartments it touched is \
-                     exactly what is not known; L8 does not guess across a wall either",
+                         exactly what is not known; L8 does not guess across a wall either",
                     ),
                 )
             }
         };
     stages.push(provider_report);
-    // Resolution moves no collateral either: a terminal certificate is an
-    // assertion about which outcome won, not a transfer. The Hoard must not
-    // move by one atom while the Market becomes resolvable-against.
     ledger.observe(
         &mut session.rpc,
         "resolution: the Pyth transport carries the Market to Terminal",
@@ -278,6 +464,44 @@ pub(crate) fn execute(
         0,
         provider_lamports,
         provider_classes,
+    )?;
+
+    // ---------------------------------------------- the spine: the redemption
+    //
+    // The stranger is paid before anything retires, because retirement refuses
+    // to compile at all while the Hoard holds an atom that belongs to a holder.
+    spine::redeem(
+        &mut session.rpc,
+        &context,
+        &mut spine,
+        "founding-founder",
+        crate::substrate::load_keypair(&spine_key(&checked.report, "founding-founder")?)?.pubkey(),
+        addresses.founder_wallet,
+        0,
+        payer,
+        &payer_key,
+    )?;
+    stages.append(&mut spine.stages);
+    session.transactions.append(&mut spine.transactions);
+    unexpected_refusals.append(&mut spine.refusals);
+    ledger.observe(
+        &mut session.rpc,
+        "redemption: a holder redeems through wallet-signed terminal settlement",
+        0,
+        0,
+        LamportClaimV1::inapplicable(
+            "the payout driver writes its own lamport receipt; L7 does not restate it",
+        ),
+        // A payout DEBITS the Hoard, which is the one compartment claim this
+        // campaign cannot state as `unchanged`. Declaring it inapplicable would
+        // be a lie of omission, so the ledger records the movement and the
+        // per-class law reads it from the chain rather than from the driver.
+        ClassClaimV1::inapplicable(
+            "a terminal payout debits the HoardPrincipal compartment by exactly the atoms it \
+             pays, and the amount is the driver's own derivation from the Position's claim \
+             vector; L8 records the compartment rather than asserting a number this tier did not \
+             derive",
+        ),
     )?;
 
     // Retirement runs BEFORE rent recovery, and the order is load-bearing: the
@@ -298,10 +522,46 @@ pub(crate) fn execute(
         0,
         0,
         retirement_lamports,
-        // Closing the Source subtree refunds lamports; the Hoard's atoms are
-        // not a party to it. Zero for every compartment, the Hoard included --
-        // which is the clause C-10 is sharpest about, stated where it can fail.
         ClassClaimV1::unchanged(),
+    )?;
+
+    // ---------------------------------------------- the spine: the retirement
+    //
+    // TWO AUTHORS FOR BeginRetiring, stated rather than hidden. The stage above
+    // is this tier's own hand-built BeginRetiring plus the Source closure, and
+    // it is what the journey's existing bindings witness. The shipped
+    // terminal-sequence driver below owns the same act, plus DirectBeginRetiring,
+    // ResolutionCloseFund, DirectCloseCapability and the replay handoff, and
+    // then the four checkpoint packets. Whichever of the two the chain accepts
+    // first, the other reports what it met, and the transcript says which --
+    // which is the shape a convergence needs before one of them is deleted.
+    let source_receipt = evidence_pubkey(&session.accounts, "source_closure_receipt")
+        .or_else(|_| evidence_pubkey(&session.accounts, "founding_source_receipt"))
+        .unwrap_or(addresses.founding_market);
+    spine::retire(
+        &mut session.rpc,
+        &context,
+        &mut spine,
+        source_receipt,
+        payer,
+        &payer_key,
+    )?;
+    stages.append(&mut spine.stages);
+    session.transactions.append(&mut spine.transactions);
+    unexpected_refusals.append(&mut spine.refusals);
+    ledger.observe(
+        &mut session.rpc,
+        "retirement: the checkpointed packets close the Claims aggregate, the vault and the replay",
+        0,
+        0,
+        LamportClaimV1::inapplicable(
+            "the aggregate-retirement driver writes a conservation receipt that classifies every \
+             lamport its four packets moved; restating it here would be a second arithmetic",
+        ),
+        ClassClaimV1::inapplicable(
+            "the checkpoint chain CLOSES the HoardPrincipal vault, so the compartment set itself \
+             changes across this boundary and `unchanged` is not the honest claim",
+        ),
     )?;
 
     let (rent, rent_fees) = stages::recover_rent(
@@ -318,7 +578,6 @@ pub(crate) fn execute(
         0,
         0,
         LamportClaimV1::fees(rent_fees),
-        // Rent recovery sweeps lamport credits and closes no collateral vault.
         ClassClaimV1::unchanged(),
     )?;
 
@@ -341,15 +600,21 @@ pub(crate) fn execute(
         });
     }
 
-    let evidence = session.evidence();
-    let evidence_path = PathBuf::from(&session.spec.output);
+    let evidence_path = request.work.join("evidence.json");
+    let evidence = serde_json::json!({
+        "schema": "dclutch-local-successor-run-evidence-v2",
+        "rpc_url": session.rpc_url,
+        "plan_sha256": session.plan_sha256,
+        "transactions": serde_json::to_value(&session.transactions)?,
+        "accounts": serde_json::to_value(&session.accounts)?,
+    });
     write_json(&evidence_path, &evidence)?;
 
     let violations = ledger.violations();
     let transcript = JourneyTranscriptV1 {
         schema: TRANSCRIPT_SCHEMA_V1.into(),
         holder_count,
-        deterministic_keypairs: keypair_seed.is_some(),
+        deterministic_keypairs: true,
         evidence: evidence_path.display().to_string(),
         conservation_verdict: if violations.is_empty() {
             "conserved".into()
@@ -362,6 +627,7 @@ pub(crate) fn execute(
         stages,
         unexpected_refusals: unexpected_refusals.clone(),
         gaps,
+        spine: Value::Object(spine.reports.clone()),
         observations: ledger.observations().to_vec(),
         transactions_total: session.transactions.len(),
         compute_units_total: session
@@ -370,12 +636,12 @@ pub(crate) fn execute(
             .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
             .sum(),
     };
-    write_json(transcript_path, &transcript)?;
+    write_json(&request.transcript, &transcript)?;
     if !violations.is_empty() {
         return Err(Error::new(format!(
             "the conservation ledger reported {} violated law(s); the transcript is at {}:\n  {}",
             violations.len(),
-            transcript_path.display(),
+            request.transcript.display(),
             violations.join("\n  ")
         )));
     }
@@ -384,11 +650,57 @@ pub(crate) fn execute(
             "{} stage(s) that were supposed to execute refused; the transcript and the complete \
              conservation ledger are at {}:\n  {}",
             unexpected_refusals.len(),
-            transcript_path.display(),
+            request.transcript.display(),
             unexpected_refusals.join("\n  ")
         )));
     }
     Ok(transcript)
+}
+
+/// One role key file out of the prepare report, founding roles first.
+fn spine_key(
+    report: &crate::local_mutable::LocalMutablePrepareReportV1,
+    role: &str,
+) -> Result<PathBuf> {
+    report
+        .campaign_founding_keypairs
+        .get(role)
+        .or_else(|| report.keypairs.get(role))
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "the prepare report names no key file for role `{role}`"
+            ))
+        })
+}
+
+fn context_pubkey(context: &spine::SpineContextV1<'_>, role: &str) -> Result<solana_sdk::pubkey::Pubkey> {
+    let path = context
+        .founding_keypairs
+        .get(role)
+        .or_else(|| context.keypairs.get(role))
+        .ok_or_else(|| Error::new(format!("the prepare report names no role `{role}`")))?;
+    Ok(crate::substrate::load_keypair(Path::new(path))?.pubkey())
+}
+
+fn evidence_pubkey(
+    accounts: &std::collections::BTreeMap<String, crate::model::AccountEvidence>,
+    label: &str,
+) -> Result<solana_sdk::pubkey::Pubkey> {
+    let evidence = accounts
+        .get(label)
+        .ok_or_else(|| Error::new(format!("the founding's evidence names no `{label}` account")))?;
+    crate::plan::pubkey(&evidence.address)
+}
+
+/// Write one Solana-convention keypair file for a disposable loopback role.
+fn write_keypair_file(path: &Path, keypair: &solana_sdk::signature::Keypair) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let bytes: Vec<u8> = keypair.to_bytes().to_vec();
+    std::fs::write(path, serde_json::to_vec(&bytes)?)?;
+    Ok(())
 }
 
 fn market_phase(
@@ -416,33 +728,74 @@ fn market_phase(
 /// entry names the exact predicate, so the claim is checkable without rerunning
 /// anything.
 ///
-/// Two of JRNY-1's five entries are gone from this list, because the campaign
-/// now executes them: the resolution FUNDING ladder is a stage, and the rent
-/// SWEEP always was. What is left is the trading half, which is behind three
-/// independent walls rather than the one the Hot gate looked like, and the
-/// terminal half, which is behind one.
+/// # TWO OF THIS REGISTER'S REASONS WERE FALSE, and both are deleted here
+///
+/// A gap register earns its keep only if a lane that reads it can trust it, and
+/// this one carried two claims that had stopped being true. They are recorded
+/// as corrections rather than quietly dropped, because the next lane's cost of
+/// believing a stale entry is exactly what this paragraph is for.
+///
+/// **"The whole trading half is behind three independent walls, the first of
+/// which is a prestate circularity."** The first wall said admitting a second
+/// party a Claims Position is itself a Claims mutation and therefore behind the
+/// same Hot gate the trade is behind. It is not: `trading/
+/// user_position_admission_v1::process_user_position_admission_v1#Admit` is a
+/// TOP-LEVEL Trading route a wallet signs for itself, shipped as
+/// `local-private-validator-user-position-admission-v1`, and this campaign now
+/// calls it twice before it trades. The third wall -- the packet arithmetic
+/// that computed the canonical Direct Hot continuation as 36 bytes over the
+/// legacy limit -- was answered by measurement, not by argument: a Direct Hot
+/// fill landed on a loopback validator on 2026-08-31 at 1,282,624 CU
+/// (`docs/evidence/FIRST_LOCAL_DIRECT_FILL_2026_08_31.md`), riding a frozen
+/// address lookup table as a v0 packet, which is the shape the arithmetic did
+/// not consider. The second wall -- that the canonical artifact family is
+/// derived for ONE market geometry -- is the one that survived, and it survived
+/// as a fact about `direct-hot/`'s fixture family rather than about this tier,
+/// which compiles its Direct capability against the market it founds.
+///
+/// **"Redemption is a SignedDeltaV3-framed Claims route and carries the same
+/// signing-CallerAuthority requirement as every other Claims mutation, so it is
+/// also behind the Hot gate."** False since terminal settlement became
+/// family-neutral: `crates/dclutch-claims/src/terminal_settlement_v3.rs` is
+/// "the sole wire authority between an authenticated orchestration caller and
+/// Claims for terminal settlement", the owner signs for their own Position and
+/// a fee payer signs the packet, and the shipped
+/// `local-private-validator-wallet-terminal-payout-v1` is a wallet-signed
+/// top-level act. This campaign drives it.
+///
+/// The retirement entry is gone for the plainest reason: the campaign runs it.
+/// `local-private-validator-terminal-sequence-v1` walks CloseFund and
+/// BeginRetiring and the replay handoff, and
+/// `local-private-validator-aggregate-retirement-v1` drives the four
+/// checkpointed packets. What each of them MET on a live chain is in the
+/// transcript's stage rows, which is where a measurement belongs; a wall this
+/// campaign hit at run time is not a gap register entry, it is a refusal with a
+/// signature next to it.
 fn gap_register() -> Vec<GapV1> {
     vec![
         GapV1 {
-            stage: "post-open life: outcome-token distribution and holder-to-holder transfers".into(),
+            stage: "post-open life: outcome-token distribution and holder-to-holder transfers"
+                .into(),
             routes: vec![
                 "claims/protocol_position_v2::process".into(),
                 "claims/sparse_native_transfer_v1::process".into(),
             ],
             owner: "W2i (Trading Hot gate)".into(),
-            reason: "Every Claims mutation frame puts a CallerAuthority at index 0 that must be \
-                     BOTH a signer and the CallerAuthoritySeedsV1 PDA under the calling program, \
-                     and then re-authenticates that program against the Registry activation cache \
-                     as the Trading role (protocol_position_v2.rs authenticate at \
-                     ExecutionRoleV1::Trading; sparse_native_transfer_v1.rs authenticate_authority \
-                     and authenticate_releases). Only a program can sign its own PDA, so on a \
-                     validator carrying the immutable five-role release set the sole admissible \
-                     caller is the deployed Trading program -- and Trading\'s outer dispatch routes \
-                     everything that is not DCLTGMF1, DCLTPCB1, DCLTPCA1, or the capability seal \
-                     into hot_v3::process_hot_execution_v3. So the whole of post-Open Claims life \
-                     is behind the Hot gate, not just Direct fills. There is no wallet-constructible \
-                     frame to submit, which is why this is stated from the code rather than from a \
-                     refusal.".into(),
+            reason: "NARROWED, and the narrowing is the point. `sparse_native_transfer_v1` -- one \
+                     holder handing outcome tokens to another after Open -- puts a CallerAuthority \
+                     at index 0 that must be BOTH a signer and the CallerAuthoritySeedsV1 PDA \
+                     under the calling program, and re-authenticates that program against the \
+                     Registry activation cache as the Trading role. Only a program can sign its \
+                     own PDA, so the sole admissible caller is the deployed Trading program, and \
+                     Trading's outer dispatch routes everything that is not DCLTGMF1, DCLTPCB1, \
+                     DCLTPCA1 or the capability seal into hot_v3. That much is unchanged. What is \
+                     NOT behind that gate, and used to be listed here as though it were: admitting \
+                     a Position (a top-level Trading route this campaign now drives twice) and \
+                     terminal settlement (a wallet-signed top-level Claims route this campaign now \
+                     drives). So the remaining gap is the SECONDARY MARKET -- holder to holder in \
+                     outcome tokens between Open and Terminal -- and not post-Open Claims life as \
+                     a whole."
+                .into(),
         },
         GapV1 {
             stage: "post-open life: a Custody vault cycle per holder".into(),
@@ -452,116 +805,53 @@ fn gap_register() -> Vec<GapV1> {
                 "custody/process_instruction#CloseVault".into(),
             ],
             owner: "W2i (Trading Hot gate)".into(),
-            reason: "Custody\'s nine-account common prefix has the same shape: index 0 is a signing \
+            reason: "Custody's nine-account common prefix has the same shape: index 0 is a signing \
                      CallerAuthority PDA and index 4 is the caller program, re-authenticated \
                      against the activation cache. A holder cannot open, deposit to, or withdraw \
                      from a vault directly; the operation has to arrive by CPI from an activated \
-                     role, which post-Open means Trading Hot."
-                .into(),
-        },
-        GapV1 {
-            stage: "trading: N holders fill through the real Registry Hot continuation".into(),
-            routes: vec![
-                "registry/hot_continuation_v2::process".into(),
-                "trading/hot_v3::process_hot_execution_v3".into(),
-                "direct/ordinary_bundle_v4 (InlineOrdinary)".into(),
-            ],
-            owner: "BUNDLE (pattern 1, the artifact-derived chain-fixture builder); the packet \
-                    arithmetic below is a Registry/Direct wire decision"
-                .into(),
-            reason: "The Hot DOOR is open -- `registry_hot_continuation` is 15/15 at the real \
-                     32,768-byte heap under a 1,400,000 CU ceiling -- and this campaign still \
-                     cannot walk through it, for three independent reasons that are worth keeping \
-                     separate because they have different owners and different fixes.\n\n\
-                     (1) PRESTATE. The gate proves the bundle against a ProgramTest bank into \
-                     which the whole Direct artifact family is PLANTED: nine finalized Registry \
-                     record pairs (manifest, ProgramSetV2, CapabilityProgramV4 descriptor, \
-                     DirectExecutionConfigV1, AccountProfile, RequestProfile, Transition, Effect, \
-                     LifecyclePolicy), the capability root, the capability seal, a Claims Position \
-                     per party and two maker replay roots. The founding publishes NONE of them. \
-                     Six of those planting sites do have real routes (Registry Begin/Append/\
-                     Finalize for every record, and the seal outer, which the gate itself proves \
-                     executes) -- but the Claims Positions do not: admitting a second party a \
-                     Position is itself a Claims mutation, so the trading prestate is behind the \
-                     Hot gate that the trade is behind. That circularity is the finding, and it is \
-                     what pattern 1 has to break.\n\n\
-                     (2) SHAPE. The canonical family is not protocol-wide; it is derived for ONE \
-                     market geometry. `direct-hot/src/lib.rs` builds its AccountProfile widths from \
-                     a THREE-claim aggregate (coordinate 13 = header + 3 rows; coordinates 32/33 = \
-                     Position header + 3 rows) and a THREE-cut result domain (coordinate 18). This \
-                     campaign\'s Market is the SOL/USD range product: four outcomes, two cuts. So \
-                     even with the prestate published, the shipped artifact identities do not \
-                     describe this Market, and the family has to be regenerated per market shape. \
-                     A builder that takes the artifacts as given would bend the MARKET to the \
-                     fixture, which is the fixture-is-never-the-authority failure in its purest \
-                     form.\n\n\
-                     (3) PACKET. Computed, not measured, and it needs measuring: the harness pins \
-                     its canonical two-instruction wire at exactly 1,228 bytes with FOUR bytes of \
-                     margin under the 1,232-byte limit, and it reaches its 1,400,000 CU ceiling \
-                     through ProgramTest\'s `set_compute_max_units` bank override. A validator has \
-                     no such override: the default limit is 200,000 per instruction, so a real \
-                     submission must carry `SetComputeUnitLimit` itself. That instruction adds the \
-                     ComputeBudget program id to the static key list (a program id can never be \
-                     resolved through an address lookup table) plus its own compiled instruction: \
-                     32 + 8 = 40 bytes, for 1,268 -- 36 bytes OVER the packet limit. If that \
-                     arithmetic holds, the canonical Direct Hot continuation is provable in \
-                     ProgramTest and unsubmittable on a chain, and the fix is a wire decision at \
-                     its owner, not a campaign trick."
+                     role. This campaign reaches Custody through the fill and through the \
+                     retirement's close-vault packet, both of which are CPI from an activated \
+                     role, and never as a holder's own vault cycle."
                 .into(),
         },
         GapV1 {
             stage: "trading: replay pressure and concurrent submission".into(),
             routes: vec!["direct/successor::MakerReplayRootV1 nonce advance".into()],
-            owner: "this tier, the day a fill executes".into(),
-            reason: "Both probes are written to run the moment a fill lands, and both are stated \
+            owner: "this tier, the day after its first fill lands".into(),
+            reason: "Both probes are written to run and neither is driven, and they are stated \
                      here so the day they run is not the day they are designed. REPLAY: resubmit \
                      the byte-identical bundle and require SuccessorError::NonceMismatch, surfaced \
                      as TradingSbfError::Transition. That refusal has no on-chain test anywhere in \
-                     the tree today -- the nearest thing submits the same bundle twice inside a \
-                     mutation test whose assertion is about a corrupted byte, so a replay refusal \
-                     and a corruption refusal are indistinguishable in it. CONCURRENCY: two \
-                     holders submitting fills against the same maker in one slot; exactly one must \
-                     commit and the other must refuse on the nonce rather than both committing or \
-                     both refusing. Neither is constructible until (3) above is answered."
+                     the tree -- the nearest thing submits the same bundle twice inside a mutation \
+                     test whose assertion is about a corrupted byte, so a replay refusal and a \
+                     corruption refusal are indistinguishable in it. CONCURRENCY: two holders \
+                     submitting fills against the same maker in one slot; exactly one must commit \
+                     and the other must refuse on the nonce rather than both committing or both \
+                     refusing. The shipped Direct trade driver advances ONE durable action per \
+                     invocation against a journal, which is the right shape for a resumable host \
+                     and the wrong one for a concurrency probe: the probe needs two packets in \
+                     flight, which means a second signer and a deliberate race, and neither is \
+                     something a resumption loop can express."
                 .into(),
         },
         GapV1 {
-            stage: "redemption: winners redeem through terminal settlement".into(),
-            routes: vec!["claims/terminal_settlement_v3::process".into()],
-            owner: "the resolution gap above, then the Hot gate".into(),
-            reason: "Two walls, in this order. Terminal settlement needs a Market carrying a \
-                     terminal receipt, and this campaign now gets closer to one than any before it \
-                     -- the Source state exists, the three Funds are Active -- and still stops at \
-                     the provider legs for the reason the resolution gap gives. Behind that, \
-                     settlement is a SignedDeltaV3-framed Claims route and carries the same \
-                     signing-CallerAuthority requirement as every other Claims mutation, so it is \
-                     also behind the Hot gate. The loser side is worth stating precisely because \
-                     it is the half that gets skipped: a zero-payout redemption must refuse or \
-                     move exactly zero atoms, and which of the two it does is the thing to \
-                     measure, not to assume."
+            stage: "trading: the canonical Direct artifact family is derived for ONE market \
+                    geometry"
                 .into(),
-        },
-        GapV1 {
-            stage: "retirement: the atomic close of Claims, Custody and the Hoard".into(),
-            routes: vec![
-                "core/retire_v1::process#Retire".into(),
-                "core/resolution::process#Retire".into(),
-                "rent/process_close_v2#Close".into(),
-            ],
-            owner: "the Hot gate, which is not where this gap was expected to be".into(),
-            reason: "This gap used to read \'behind the terminal receipt\'. The receipt now exists, \
-                     this campaign begins retiring and closes the whole Source subtree, and the \
-                     gap MOVED rather than closing. `build_market_retirement_v1` compiles ONE \
-                     atomic Registry continuation that closes the Claims aggregate, the Custody \
-                     replay and the Hoard vault together, and it refuses to compile at all while \
-                     the Hoard holds a single atom -- partial Custody settlement cannot retire. \
-                     That is the correct rule. But this Market\'s Hoard holds the entire founding \
-                     principal, emptying it means redeeming, and redemption is a Claims mutation \
-                     behind the Hot gate. So the LAST step of the Market\'s life is behind the \
-                     same door as the middle of it, and the retirement stage reports it with the \
-                     Hoard\'s measured balance rather than by reading the operator. `rent/\
-                     process_close_v2#Close` is behind the retirement in turn: it needs a retired \
-                     Market and a Core close-authority signer."
+            routes: vec!["direct/ordinary_bundle_v4 (InlineOrdinary)".into()],
+            owner: "BUNDLE (the artifact-derived chain-fixture builder)".into(),
+            reason: "The one wall of the old three-wall entry that survived measurement. \
+                     `direct-hot/src/lib.rs` builds its AccountProfile widths from a THREE-claim \
+                     aggregate (coordinate 13 = header + 3 rows; coordinates 32/33 = Position \
+                     header + 3 rows) and a THREE-cut result domain (coordinate 18). This \
+                     campaign's Market is the four-outcome, two-cut lab default, so the SHIPPED \
+                     fixture identities do not describe it and the family has to be regenerated \
+                     per market shape. This tier is not blocked by that -- it compiles its Direct \
+                     capability against the market it founds, through \
+                     `DirectMarketCompilerOwnedV1::load_local` -- but any campaign that took the \
+                     shipped artifacts as given would be bending the MARKET to the fixture, which \
+                     is the fixture-is-never-the-authority failure in its purest form. Kept here \
+                     so nobody re-derives it as a discovery."
                 .into(),
         },
     ]

@@ -2,51 +2,100 @@
 
 The census answered *does each route run at all*. This tier asks a different
 question: **does a Market, founded the way a founder founds one, survive being
-used** — distributed, custodied, resolved, redeemed, retired — **with every
+used** — distributed, traded, resolved, redeemed, retired — **with every
 collateral atom accounted for at every step**.
 
 ```sh
-tools/gauntlet/run.sh --mode census          # once, for the inventory
-tools/gauntlet/journey/run-journey.sh --holders 4
+tools/gauntlet/run.sh --mode census                 # once, for the inventory
+tools/gauntlet/journey/run-journey.sh \
+    --checked-release-gate ABS/CHECKED_UPGRADE_GATE.json --rpc-port auto
 ```
 
-It takes `127.0.0.1:20890` by default and `--rpc-port auto` takes a free
-42-port block instead. `run.sh --mode full` is unavailable at HEAD; coordinate
-with other named validator campaigns on the wave board before taking a port.
-`--ledger PATH` gives a concurrent run its own census ledger.
+## 2026-09-06: the tier stands up its own substrate, and this file changed under it
+
+Everything below this section that describes `--market`, `--spec`,
+`found_through_open`, `--keypair-seed`, the seven in-runner SBF builds or
+`frame-diagnostics.json` is **superseded**. Read this section for what the tier
+is now; the older prose is kept for the incidents it records, not for its
+instructions.
+
+**The substrate.** The runner used to refuse to start without `--market PATH`,
+and nothing could produce one: a Market compiles only through
+`DirectMarketCompilerOwnedV1::load_local`, which observes a LIVE checked
+deployment first, and this runner had no deployment of its own. It now brings up
+the checked-mutable substrate itself from a `CHECKED_UPGRADE_GATE.json` —
+`local-mutable-prepare-v1`, a fresh `solana-test-validator` over the prepared
+account directory, the administration campaign through activation — links
+`tools/gauntlet/relayed-vertical/src/substrate.rs` rather than forking it (the
+ladder links the same file), compiles the Market against the deployment it is
+standing on, founds it with `campaign --founding-only`, and **keeps the
+validator** for every stage after. The gate is the build stage: it is emitted
+only in strict mode and strict mode refuses a nonzero SBF
+stack-frame-overwrite diagnostic count, so a gate that exists IS the
+zero-diagnostic proof `TIERS.md` asks for. That is why the runner no longer
+builds ELFs and no longer carries a diagnostics exemption file.
+
+**The four stages.** Admission, fill, redemption and retirement were four
+`GapV1`s. They are stages now, and every act is the **shipped command a host
+runs**, called in this process with the argument vector a host would type —
+`src/spine.rs` names the entry point beside each one. A tier that rebuilt any of
+those frames would be measuring a second author; that is the lesson
+`tools/gauntlet/ladder/` wrote down and this file follows it.
+
+**Two of the old gap register's reasons were false**, and `gap_register()` says
+so with the evidence rather than dropping them quietly: admitting a Position is
+a top-level Trading route a wallet signs for itself, and terminal settlement is
+wallet-signed top-level Claims. The packet arithmetic that made the canonical
+Direct Hot continuation unsubmittable was answered by a fill that landed on a
+loopback validator on 2026-08-31.
+
+**Resumption loops, not calls.** Three of the drivers advance exactly one
+durable action per invocation — that is their crash-safety contract — so each
+stage is a bounded loop with a stated ceiling, and a stage that hits the ceiling
+reports how far it got. A refused stage is a FINDING recorded with the driver's
+own sentence; the run fails at the end, after the transcript exists.
+
+**Owed.** The tier now has two authors for `BeginRetiring`: this campaign's own
+hand-built stage, which its existing bindings witness, and the shipped
+terminal-sequence driver. Both run and the transcript says which the chain
+accepted; one of them is a deletion. And `bindings.json` does not yet cover the
+spine's labels — deliberately: bindings are authored from what the ledger
+OBSERVED, never from what a campaign ought to touch, which is the rule
+`tools/gauntlet/retirement-checkpoint/` wrote down after manufacturing exactly
+that false green.
 
 ## Not a fast lane
 
 There is no `solana-program-test` lane here and there will not be one. The
-journey begins with the tier-1 founding, which fails all four of `TIERS.md`'s
+journey begins with a real founding, which fails all four of `TIERS.md`'s
 fast-lane conditions — genesis Loader-v3 ProgramData spans, a real
 `SetAuthority(Some -> None)`, the 1,232-byte packet limit that Found31 misses by
 ten, and real per-transaction compute. Answering them one at a time would just
 be four separate noes.
 
-## The producer is the tier-1 producer
+## The producer is the successor, all of it
 
-`src/main.rs` compiles `tools/local-validator/bootstrap/successor/src/`'s five
-modules into this binary by `#[path]`. They are not copies. The journey calls
-`runtime::found_through_open` and then keeps going **in the same process, on the
-same validator, as the same in-memory founder** — which is not an optimisation
-but the only possibility: the founder key is ephemeral and deliberately never
-persisted, so a second process reading the ledger could not sign as the founder
-if it wanted to.
+`src/main.rs` compiles `tools/local-validator/bootstrap/successor/src/` into
+this binary by `#[path]`. They are not copies. **The set is the whole of it**
+since 2026-09-06, generated from the successor's own `main.rs` module list
+rather than curated: the curated subset's tripwire fired four times in six days,
+twice silently and once for a whole day, because nothing in CI builds this tier.
+Three names are excluded and the header says why — two are submodules of other
+successor files, and `ledger` is this tier's own file, which the successor links
+back the other way.
 
-The one edit this required was splitting the producer's `execute` into
-`found_through_open` plus the write it always did. The bootstrap binary's
-behaviour is unchanged: same transactions, same order, same document.
-
-If the founding moves, this build breaks. That is the intended tripwire — and it
+If the producer moves, this build breaks. That is the intended tripwire — and it
 has a consequence worth knowing before it surprises you. **`cargo check` in this
 directory compiles the producer's files out of the shared working tree**, so it
 goes red while any lane has the bootstrap dirty, whether or not anything is
 wrong with the journey. The authoritative build is the one `run-journey.sh`
-does, from `git archive` of an exact revision; to reproduce it by hand, archive
-HEAD to a scratch directory and check there. Observed on 2026-08-27, when a lane
-mid-way through adding a `--keypair-seed` option turned this tree red for
-several minutes while HEAD was clean.
+does, from `git archive` of the gate's exact revision.
+
+It has a second consequence, newly measured: three of the successor's own
+`#[cfg(test)]` tests in `series_lifecycle_campaign.rs` read evidence fixtures at
+a path relative to `CARGO_MANIFEST_DIR`, so they pass from the successor's
+manifest and fail from this one. That is a fixture path with two possible roots,
+and it is the successor's to fix.
 
 ## Deterministic by default
 

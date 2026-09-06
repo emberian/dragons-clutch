@@ -20,34 +20,145 @@
 
 use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 
-// ------------------------------------------------------------- tier-1, verbatim
+// ------------------------------------------------- the successor, verbatim
 //
-// These modules ARE `tools/local-validator/bootstrap/successor/src/`.
-// They are not copies. A change to the founding reaches this campaign by
-// recompilation, and a change that breaks this campaign breaks this build.
+// These modules ARE `tools/local-validator/bootstrap/successor/src/`. They are
+// not copies. A change to the founding, to a driver, or to the checked-mutable
+// substrate reaches this campaign by recompilation, and a change that breaks
+// this campaign breaks this build.
 //
-// `dead_code` is allowed on exactly these and nowhere else: the journey
-// calls `found_through_open`, not `execute`, and never renders a demo-market
-// spec, so a handful of the producer's own entry points are unreachable HERE
-// while being live in the producer. Silencing it per-item would mean editing
-// the producer to describe a consumer, which is backwards.
+// THE SET IS NOW THE WHOLE OF IT, and that is a repair rather than a flourish.
+// A CURATED subset was the arrangement until 2026-09-06, and its tripwire went
+// off four times in six days -- twice silently, once for a whole day, once
+// inside the hour a lane had linked the previous miss. Every one of those was
+// the same accident: a producer grew a call site into a module this list did
+// not name, and nothing that runs in CI builds this tier. The set below is
+// generated from the successor's own `src/` directory, `main.rs` excepted, so
+// there is no list to keep in sync at all; a file the successor adds is linked
+// the moment this file is regenerated, and a file it deletes reds this build
+// immediately. `dead_code` is allowed on all of them and nowhere else: the
+// journey calls a handful of these entry points and never renders a demo-market
+// spec, so most of the producer's surface is unreachable HERE while being live
+// in the producer.
 //
-// `campaign` and `cluster` joined the list when the devnet driver landed. The
-// journey does not drive an external cluster and never will -- it is
-// loopback-only by construction, and its founder key is ephemeral. They are
-// compiled here anyway, and deliberately: `cluster` is now the one owner of
-// the origin rail that keeps this runner on 127.0.0.1, so a change that
-// weakened that rail must break THIS build too, not only the producer's. That
-// is the whole point of the `#[path]` arrangement.
+// TWO NAMES ARE NOT IN THE GENERATED SET, and both for the same reason: the
+// successor's own `main.rs` declares them with a `#[path]` of its own.
+// `founding_submission_journal` and `owned_loopback_capture` are submodules of
+// `market.rs` and `terminal_exterior_pyth.rs`, so declaring them again here
+// would put one file in two module positions; and `ledger` is THIS TIER'S
+// conservation ledger, which the successor links back the other way -- the two
+// crates share one file, and this file is its home.
+//
+// `cluster` is the one owner of the origin rail that keeps this runner on
+// 127.0.0.1, so a change that weakened that rail must break THIS build too.
+#[path = "../../../local-validator/bootstrap/successor/src/aggregate_retirement_exterior.rs"]
+#[allow(dead_code)]
+mod aggregate_retirement_exterior;
+#[path = "../../../local-validator/bootstrap/successor/src/aggregate_retirement_journal.rs"]
+#[allow(dead_code)]
+mod aggregate_retirement_journal;
 #[path = "../../../local-validator/bootstrap/successor/src/campaign.rs"]
 #[allow(dead_code)]
 mod campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/capability_seal_close.rs"]
+#[allow(dead_code)]
+mod capability_seal_close;
+#[path = "../../../local-validator/bootstrap/successor/src/capability_seal_devnet.rs"]
+#[allow(dead_code)]
+mod capability_seal_devnet;
+#[path = "../../../local-validator/bootstrap/successor/src/chaos_fault.rs"]
+#[allow(dead_code)]
+mod chaos_fault;
+#[path = "../../../local-validator/bootstrap/successor/src/claims_custody_replay.rs"]
+#[allow(dead_code)]
+mod claims_custody_replay;
+#[path = "../../../local-validator/bootstrap/successor/src/closure_receipt_projection.rs"]
+#[allow(dead_code)]
+mod closure_receipt_projection;
 #[path = "../../../local-validator/bootstrap/successor/src/cluster.rs"]
 #[allow(dead_code)]
 mod cluster;
+#[path = "../../../local-validator/bootstrap/successor/src/collateral_release.rs"]
+#[allow(dead_code)]
+mod collateral_release;
+#[path = "../../../local-validator/bootstrap/successor/src/core_bump_projection.rs"]
+#[allow(dead_code)]
+mod core_bump_projection;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_capability_activation.rs"]
+#[allow(dead_code)]
+mod direct_capability_activation;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_close_maker.rs"]
+#[allow(dead_code)]
+mod direct_close_maker;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_fee_settlement.rs"]
+#[allow(dead_code)]
+mod direct_fee_settlement;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_hot_route_manifest.rs"]
+#[allow(dead_code)]
+mod direct_hot_route_manifest;
 #[path = "../../../local-validator/bootstrap/successor/src/direct_market.rs"]
 #[allow(dead_code)]
 mod direct_market;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_resolution_campaign.rs"]
+#[allow(dead_code)]
+mod direct_resolution_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_terminal_children.rs"]
+#[allow(dead_code)]
+mod direct_terminal_children;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_ticket.rs"]
+#[allow(dead_code)]
+mod direct_ticket;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_trade.rs"]
+#[allow(dead_code)]
+mod direct_trade;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_trade_producer.rs"]
+#[allow(dead_code)]
+mod direct_trade_producer;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_trade_setup.rs"]
+#[allow(dead_code)]
+mod direct_trade_setup;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_trade_setup_journal.rs"]
+#[allow(dead_code)]
+mod direct_trade_setup_journal;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_trade_token_setup.rs"]
+#[allow(dead_code)]
+mod direct_trade_token_setup;
+#[path = "../../../local-validator/bootstrap/successor/src/evidence_refresh.rs"]
+#[allow(dead_code)]
+mod evidence_refresh;
+#[path = "../../../local-validator/bootstrap/successor/src/family_hot_campaign.rs"]
+#[allow(dead_code)]
+mod family_hot_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/flagship_resolution.rs"]
+#[allow(dead_code)]
+mod flagship_resolution;
+#[path = "../../../local-validator/bootstrap/successor/src/fractional_market.rs"]
+#[allow(dead_code)]
+mod fractional_market;
+#[path = "../../../local-validator/bootstrap/successor/src/funding_readiness.rs"]
+#[allow(dead_code)]
+mod funding_readiness;
+#[path = "../../../local-validator/bootstrap/successor/src/general_capability_activation.rs"]
+#[allow(dead_code)]
+mod general_capability_activation;
+#[path = "../../../local-validator/bootstrap/successor/src/general_devnet_market.rs"]
+#[allow(dead_code)]
+mod general_devnet_market;
+#[path = "../../../local-validator/bootstrap/successor/src/general_market.rs"]
+#[allow(dead_code)]
+mod general_market;
+#[path = "../../../local-validator/bootstrap/successor/src/general_session.rs"]
+#[allow(dead_code)]
+mod general_session;
+#[path = "../../../local-validator/bootstrap/successor/src/general_settlement_fixture.rs"]
+#[allow(dead_code)]
+mod general_settlement_fixture;
+#[path = "../../../local-validator/bootstrap/successor/src/general_successor_plan.rs"]
+#[allow(dead_code)]
+mod general_successor_plan;
+#[path = "../../../local-validator/bootstrap/successor/src/infrastructure_succession.rs"]
+#[allow(dead_code)]
+mod infrastructure_succession;
 #[path = "../../../local-validator/bootstrap/successor/src/local_mutable.rs"]
 #[allow(dead_code)]
 mod local_mutable;
@@ -60,104 +171,111 @@ mod model;
 #[path = "../../../local-validator/bootstrap/successor/src/plan.rs"]
 #[allow(dead_code)]
 mod plan;
-#[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
+#[path = "../../../local-validator/bootstrap/successor/src/pyth_vaa_provisioning.rs"]
 #[allow(dead_code)]
-mod relayed;
-#[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
-#[allow(dead_code)]
-mod rpc;
-// THE MODULES THE JOURNEY DOES NOT USE AND CANNOT BUILD WITHOUT.
-//
-// Kept deliberately count-free in this header: the number was "six" when the
-// arrangement was first written down and it has already gone stale twice, so
-// a reader who trusts a count here is reading a lie the next lane will tell.
-//
-// The journey founds one Direct market. It does not found a Structured, a
-// General or a Rational one, does not select a capability, and does not drive
-// the funding-readiness suffix — and it links all six anyway, because the
-// files it DOES share have grown call sites into them: `market.rs` calls
-// `crate::selected_capability::` and imports `crate::funding_readiness`,
-// `local_mutable.rs` calls `crate::general_market::`, `crate::rational_market::`
-// and `crate::structured_market::`, `campaign.rs` calls
-// `crate::release_identity::`, both `market.rs` and `selected_capability.rs`
-// call `crate::collateral_release::`, and `market.rs` and `campaign.rs` both
-// call `crate::core_bump_projection::`.
-//
-// This is the `#[path]` tripwire in the header doing exactly what it says, and
-// it went off silently: nothing runs this tier in CI, so the subset fell six
-// modules and one crate behind the successor and the whole whole-life campaign
-// was simply un-buildable until somebody tried to run it. The closure is
-// finite — none of the six reaches outside the set now linked here — so the
-// honest fix is to link them, not to fork the files or to guard the call sites.
-//
-// IT WENT OFF A SECOND TIME on 2026-09-01, and the public `checks` run is what
-// caught it: the overnight completion wave grew `campaign.rs` and `market.rs`
-// call sites into `crate::chaos_fault` and `crate::infrastructure_succession`,
-// and pulled `dclutch-source-readiness-operator` in as an import. Same shape,
-// same remedy, applied per the paragraph above -- link, do not fork. If you are
-// reading this because it went off a third time, that is the tripwire earning
-// its keep; extend the set, and resist the urge to make the journey its own
-// copy of the successor.
-//
-// IT WENT OFF A THIRD TIME on 2026-09-02, exactly as the paragraph above said
-// it would, and this time nothing caught it for a day: `d478c6a5c` gave the
-// founded-versus-admitted collateral release one author in
-// `crate::collateral_release`, and `market.rs` and `selected_capability.rs`
-// both call it. The journey stopped compiling at all -- two `E0433`s and no
-// binary -- while every gate that does not build this tier stayed green. The
-// remedy is the same one, for the third time: link it.
-//
-// AND A FOURTH TIME IN THE SAME HOUR, which is the useful part of the record:
-// the lane that linked `collateral_release` then added
-// `crate::core_bump_projection` to `market.rs` and `campaign.rs`, ran this
-// build, and watched the tripwire fire on its OWN change before it committed.
-// That is what it is for. The set below is not a list to be kept in sync by
-// memory; it is a list this build corrects you about, so run it.
-#[path = "../../../local-validator/bootstrap/successor/src/chaos_fault.rs"]
-#[allow(dead_code)]
-mod chaos_fault;
-#[path = "../../../local-validator/bootstrap/successor/src/collateral_release.rs"]
-#[allow(dead_code)]
-mod collateral_release;
-#[path = "../../../local-validator/bootstrap/successor/src/core_bump_projection.rs"]
-#[allow(dead_code)]
-mod core_bump_projection;
-#[path = "../../../local-validator/bootstrap/successor/src/funding_readiness.rs"]
-#[allow(dead_code)]
-mod funding_readiness;
-#[path = "../../../local-validator/bootstrap/successor/src/general_market.rs"]
-#[allow(dead_code)]
-mod general_market;
-#[path = "../../../local-validator/bootstrap/successor/src/infrastructure_succession.rs"]
-#[allow(dead_code)]
-mod infrastructure_succession;
+mod pyth_vaa_provisioning;
 #[path = "../../../local-validator/bootstrap/successor/src/rational_market.rs"]
 #[allow(dead_code)]
 mod rational_market;
+#[path = "../../../local-validator/bootstrap/successor/src/recovery_crank.rs"]
+#[allow(dead_code)]
+mod recovery_crank;
+#[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
+#[allow(dead_code)]
+mod relayed;
+#[path = "../../../local-validator/bootstrap/successor/src/release_capture.rs"]
+#[allow(dead_code)]
+mod release_capture;
 #[path = "../../../local-validator/bootstrap/successor/src/release_identity.rs"]
 #[allow(dead_code)]
 mod release_identity;
-#[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
+#[path = "../../../local-validator/bootstrap/successor/src/release_lineage.rs"]
 #[allow(dead_code)]
-mod selected_capability;
-#[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
+mod release_lineage;
+#[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
-mod structured_market;
+mod rpc;
 #[path = "../../../local-validator/bootstrap/successor/src/runtime.rs"]
 #[allow(dead_code)]
 mod runtime;
 #[path = "../../../local-validator/bootstrap/successor/src/seed.rs"]
 #[allow(dead_code)]
 mod seed;
+#[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
+#[allow(dead_code)]
+mod selected_capability;
+#[path = "../../../local-validator/bootstrap/successor/src/series_consume_campaign.rs"]
+#[allow(dead_code)]
+mod series_consume_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/series_lifecycle_campaign.rs"]
+#[allow(dead_code)]
+mod series_lifecycle_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/series_permit_expiry_campaign.rs"]
+#[allow(dead_code)]
+mod series_permit_expiry_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/series_terminal_campaign.rs"]
+#[allow(dead_code)]
+mod series_terminal_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/source_abort_exterior.rs"]
+#[allow(dead_code)]
+mod source_abort_exterior;
+#[path = "../../../local-validator/bootstrap/successor/src/spline_product.rs"]
+#[allow(dead_code)]
+mod spline_product;
+#[path = "../../../local-validator/bootstrap/successor/src/sponsored_push.rs"]
+#[allow(dead_code)]
+mod sponsored_push;
+#[path = "../../../local-validator/bootstrap/successor/src/sponsored_release_observation.rs"]
+#[allow(dead_code)]
+mod sponsored_release_observation;
+#[path = "../../../local-validator/bootstrap/successor/src/sponsored_schedule.rs"]
+#[allow(dead_code)]
+mod sponsored_schedule;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
+#[allow(dead_code)]
+mod structured_market;
+#[path = "../../../local-validator/bootstrap/successor/src/terminal_exterior_pyth.rs"]
+#[allow(dead_code)]
+mod terminal_exterior_pyth;
+#[path = "../../../local-validator/bootstrap/successor/src/terminal_lifecycle.rs"]
+#[allow(dead_code)]
+mod terminal_lifecycle;
+#[path = "../../../local-validator/bootstrap/successor/src/terminal_sequence.rs"]
+#[allow(dead_code)]
+mod terminal_sequence;
 #[path = "../../../local-validator/bootstrap/successor/src/upgrade.rs"]
 #[allow(dead_code)]
 mod upgrade;
+#[path = "../../../local-validator/bootstrap/successor/src/user_position_admission.rs"]
+#[allow(dead_code)]
+mod user_position_admission;
+#[path = "../../../local-validator/bootstrap/successor/src/user_position_close.rs"]
+#[allow(dead_code)]
+mod user_position_close;
+#[path = "../../../local-validator/bootstrap/successor/src/wallet_terminal.rs"]
+#[allow(dead_code)]
+mod wallet_terminal;
+#[path = "../../../local-validator/bootstrap/successor/src/wallet_terminal_payout_exterior.rs"]
+#[allow(dead_code)]
+mod wallet_terminal_payout_exterior;
+
+// ------------------------------------------- the relayed vertical's substrate
+//
+// The one bring-up in this tree that leaves a validator RUNNING for a caller to
+// drive more than one command against, and the reason this tier can stand up
+// its own substrate at all. Linked, not forked -- the ladder links the same
+// file -- so a change to how the checked-mutable substrate is stood up must
+// break this tier too.
+#[path = "../../relayed-vertical/src/substrate.rs"]
+#[allow(dead_code)]
+mod substrate;
 
 // ------------------------------------------------------------- this campaign
 mod journey;
 mod ledger;
 mod provider;
 mod resolution;
+mod spine;
 mod stages;
 
 type Result<T> = core::result::Result<T, Error>;
@@ -179,6 +297,15 @@ impl fmt::Display for Error {
 
 impl StdError for Error {}
 
+/// Several linked producer modules propagate the payout operator's error with
+/// `?`, so this binary owes the same conversion the producer's own `main.rs`
+/// declares. Linking a module means owing its error boundary too.
+impl From<dclutch_operator::wallet_terminal_payout::Error> for Error {
+    fn from(error: dclutch_operator::wallet_terminal_payout::Error) -> Self {
+        Self(error.to_string())
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Self::new(error.to_string())
@@ -195,6 +322,37 @@ impl From<std::time::SystemTimeError> for Error {
     fn from(error: std::time::SystemTimeError) -> Self {
         Self::new(error.to_string())
     }
+}
+
+/// The successor's own crate-root argument helpers.
+///
+/// `sponsored_push.rs` imports `crate::absolute`, so a binary that links that
+/// module owes both functions the way it owes the error conversions above.
+/// They are the producer's, byte for byte.
+fn required(value: Option<String>, label: &str) -> Result<String> {
+    value.ok_or_else(|| Error::new(format!("{label} is required")))
+}
+
+fn absolute(value: Option<String>, label: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(required(value, label)?);
+    if !path.is_absolute() {
+        return Err(Error::new(format!("{label} must be absolute")));
+    }
+    Ok(path)
+}
+
+/// The successor's own crate-root stdout helper.
+///
+/// `spline_product.rs` imports `crate::stdout_json_value_v1`, so a binary that
+/// links that module owes the function the way it owes the error conversions
+/// above. It is the producer's, byte for byte
+/// (`tools/local-validator/bootstrap/successor/src/main.rs`): a linked module
+/// is entitled to the crate root its author wrote it against.
+fn stdout_json_value_v1(value: &serde_json::Value) -> Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, value)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
 }
 
 fn main() -> core::result::Result<(), Box<dyn StdError>> {
@@ -219,38 +377,52 @@ fn run() -> Result<()> {
 }
 
 fn run_journey(arguments: Vec<String>) -> Result<()> {
-    let mut spec = None;
-    let mut transcript = None;
-    let mut holders = None;
-    let mut keypair_seed = None;
+    let mut values = std::collections::BTreeMap::new();
     let mut iterator = arguments.into_iter();
-    while let Some(argument) = iterator.next() {
+    while let Some(flag) = iterator.next() {
         let value = iterator
             .next()
-            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
-        let slot = match argument.as_str() {
-            "--spec" => &mut spec,
-            "--transcript" => &mut transcript,
-            "--holders" => &mut holders,
-            "--keypair-seed" => &mut keypair_seed,
-            _ => return Err(Error::new(format!("unknown run argument: {argument}"))),
-        };
-        if slot.replace(value).is_some() {
-            return Err(Error::new(format!("{argument} may be supplied only once")));
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(Error::new(format!("{flag} was given twice")));
         }
     }
-    let holders = match holders {
+    let required = |flag: &str| -> Result<String> {
+        values
+            .get(flag)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("{flag} is required")))
+    };
+    let absolute = |value: String, flag: &str| -> Result<PathBuf> {
+        let path = PathBuf::from(value);
+        if !path.is_absolute() {
+            return Err(Error::new(format!("{flag} must be an absolute path")));
+        }
+        Ok(path)
+    };
+    let holder_count = match values.get("--holders") {
         None => journey::DEFAULT_HOLDER_COUNT,
         Some(value) => value
             .parse::<u32>()
             .map_err(|_| Error::new("--holders must be a decimal count"))?,
     };
-    let transcript = journey::execute(
-        &absolute(spec, "--spec")?,
-        &absolute(transcript, "--transcript")?,
-        holders,
-        keypair_seed.as_deref(),
-    )?;
+    let request = journey::JourneyRequestV1 {
+        transcript: absolute(required("--transcript")?, "--transcript")?,
+        work: absolute(required("--work")?, "--work")?,
+        rpc_port: required("--rpc-port")?
+            .parse()
+            .map_err(|_| Error::new("--rpc-port must be a port number"))?,
+        checked_release_gate: absolute(
+            required("--checked-release-gate")?,
+            "--checked-release-gate",
+        )?,
+        expected_gate_sha256: required("--expected-gate-sha256")?,
+        expected_source_revision: required("--expected-source-revision")?,
+        expected_source_tree_sha256: required("--expected-source-tree-sha256")?,
+        seed: required("--seed")?,
+        holder_count,
+    };
+    let transcript = journey::execute(request)?;
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&transcript)?)?;
     stdout.write_all(b"\n")?;
@@ -271,21 +443,26 @@ fn run_demo_market(_arguments: Vec<String>) -> Result<()> {
     ))
 }
 
-fn required(value: Option<String>, label: &str) -> Result<String> {
-    value.ok_or_else(|| Error::new(format!("{label} is required")))
-}
-
-fn absolute(value: Option<String>, label: &str) -> Result<PathBuf> {
-    let path = PathBuf::from(required(value, label)?);
-    if !path.is_absolute() {
-        return Err(Error::new(format!("{label} must be absolute")));
-    }
-    Ok(path)
-}
-
 fn usage() {
     println!(
-        "Usage:\n  dclutch-journey-campaign run --spec ABSOLUTE_JSON --transcript ABSOLUTE_NEW_JSON [--holders N] [--keypair-seed 64_LOWERCASE_HEX]\n\nThe spec is a `dclutch-local-successor-run-spec-v2` document, exactly the one\nthe tier-1 bootstrap consumes: the journey reaches Open through that producer's\nown code, then keeps going on the same validator as the same in-memory founder.\nThe run-evidence document the census consumes is written to the spec's own\n`output` path and covers the WHOLE journey, founding transactions included.\n--transcript is the journey's own document: stages, gaps, and every\nconservation-ledger census.\n--holders is the load knob; it is the number of synthetic holders the founder\ndistributes collateral to. Default {default}.\n--keypair-seed is the producer's TEST-ONLY, LOOPBACK-ONLY determinism switch,\npassed straight through: it collapses the find_program_address bump-search\nnoise, which is what lets a conservation ledger's numbers be compared between\nruns at all. Read seed.rs before using it anywhere but here.\n\nNothing here signs with a persisted key, funds an external account, publishes,\nor deploys anywhere but a fresh localhost ledger on 127.0.0.1:20890.",
+        "Usage:\n  dclutch-journey-campaign run \\\n      \
+         --transcript ABSOLUTE_NEW_JSON --work ABSOLUTE_DIR --rpc-port PORT \\\n      \
+         --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
+         --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \
+         --expected-source-tree-sha256 HEX64 --seed HEX64 [--holders N]\n\nThe campaign brings up \
+         its own checked-mutable loopback substrate from the named checked\nrelease gate \
+         (local-mutable-prepare-v1), boots a fresh solana-test-validator over\nthe prepared \
+         account directory, administers it through activation, compiles a\nMarket against the LIVE \
+         deployment, founds it, and then lives that Market's whole\nlife against the validator it \
+         is still holding: distribution, a holder ring, two\nstrangers admitted, a Direct Hot \
+         fill, the fee settlement, the Resolution funding\nladder, the Pyth transport to Terminal, \
+         a wallet-signed redemption, CloseFund and\nBeginRetiring, and the four checkpointed \
+         retirement packets -- every one of them\nthrough the SHIPPED command a host would run, \
+         under one conservation ledger.\n\n--holders is the load knob; it is the number of \
+         synthetic holders the founder\ndistributes collateral to. Default {default}.\n--seed is \
+         the prepare stage's 64-lowercase-hex determinism switch for the\nsubstrate's disposable \
+         loopback roles.\n\nEverything runs on 127.0.0.1 and nothing here touches a public \
+         cluster.",
         default = journey::DEFAULT_HOLDER_COUNT
     );
 }

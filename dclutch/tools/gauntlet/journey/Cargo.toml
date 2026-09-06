@@ -8,33 +8,44 @@ publish = false
 
 # Like the tier-1 producer it reuses, this localhost-only host utility is a
 # member of the one workspace.
+#
+# THE DEPENDENCY SET IS THE SUCCESSOR'S, and it is not a coincidence: since
+# 2026-09-06 this binary `#[path]`-compiles the whole of
+# `tools/local-validator/bootstrap/successor/src/`, so it needs exactly what
+# that crate needs. A crate the successor adds and this file does not is the
+# same class of miss as a module the `#[path]` list did not name, and the same
+# fix applies -- read the successor's manifest, do not guess.
 [dependencies]
 base64 = "=0.22.1"
 bincode = "=1.3.3"
-dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
-dclutch-market = { path = "../../../crates/dclutch-market" }
 dclutch-claims = { path = "../../../crates/dclutch-claims" }
+dclutch-claims-sbf = { path = "../../../programs/dclutch-claims-sbf", features = ["no-entrypoint"] }
+dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
 dclutch-custody = { path = "../../../crates/dclutch-custody" }
-dclutch-trading = { path = "../../../crates/dclutch-trading" }
+dclutch-direct-ticket = { path = "../../../crates/dclutch-direct-ticket" }
+dclutch-market = { path = "../../../crates/dclutch-market" }
+dclutch-market-retirement-v1-operator = { path = "../../../crates/dclutch-market-retirement-v1-operator" }
 dclutch-operator = { path = "../../../crates/dclutch-operator" }
 dclutch-product = { path = "../../../crates/dclutch-product" }
 dclutch-product-runtime-v2-operator = { path = "../../../crates/dclutch-product-runtime-v2-operator" }
 dclutch-provider-transport-v3-operator = { path = "../../../crates/dclutch-provider-transport-v3-operator" }
-dclutch-source = { path = "../../../crates/dclutch-source", features = ["synthetic-local-fixture"] }
-dclutch-registry = { path = "../../../crates/dclutch-registry" }
+dclutch-registry = { path = "../../../crates/dclutch-registry", features = ["svm"] }
 dclutch-release-tool = { path = "../../../crates/dclutch-release-tool" }
 dclutch-resolution-core-v3-operator = { path = "../../../crates/dclutch-resolution-core-v3-operator" }
+dclutch-source = { path = "../../../crates/dclutch-source", features = ["synthetic-local-fixture"] }
+dclutch-trading = { path = "../../../crates/dclutch-trading", features = ["svm"] }
+dclutch-trading-sbf = { path = "../../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family"] }
 dclutch-versioned-message-operator = { path = "../../../crates/dclutch-versioned-message-operator" }
+dclutch-vm = { path = "../../../crates/dclutch-vm" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
-solana-hash = "=4.6.0"
-# `market.rs` checks an address-lookup-table's owner. Pinned to the same
-# version the successor pins, because these two compile the same file.
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
-solana-program = { version = "=3.0.0", default-features = false }
+solana-compute-budget-interface = "=3.1.0"
+solana-hash = "=4.6.0"
 solana-loader-v3-interface = { version = "=6.1.0", features = ["bincode"] }
+solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk = "=3.0.0"
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
