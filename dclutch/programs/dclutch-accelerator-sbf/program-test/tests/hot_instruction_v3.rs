@@ -44,6 +44,7 @@ use dclutch_market::capability_program::{
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_vm::effect::v3::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID;
 use dclutch_market::execution_strategy::admitted_v3::ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
+use dclutch_market::execution_strategy::shadow_digest_v3::family_request_digest_v3;
 use dclutch_market::execution_strategy::v2::{
     BankTransportV2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
@@ -1230,7 +1231,21 @@ fn the_builder_turns_one_finalized_general_snapshot_into_a_complete_hot_instruct
     assert_eq!(envelope.release_set(), RELEASE_SET);
     assert_eq!(envelope.root_prestate_digest(), digest(&fixture.root_data));
     assert_eq!(request_bytes.len(), CONTROLLER_REQUEST_BYTES_V2);
-    assert_eq!(report.family_request_digest, digest(request_bytes));
+    // `family_request_digest_v3`, NOT `digest(request_bytes)`, and this
+    // assertion was the bare hash until 2026-09-06. The chain seeds every
+    // admitted caller-authority PDA with
+    // `accelerator_caller_authority_digest_v1(Admitted, THIS value, index)`, so
+    // COHORT-16F's repair moved the report's field to the domain-separated,
+    // length-prefixed derivation and left this test asserting the value the
+    // route no longer publishes -- a second author for one digest, red at
+    // `7c1c677ab` and at every commit since the repair. It reaches the same
+    // function the builder does.
+    assert_eq!(
+        report.family_request_digest,
+        family_request_digest_v3(request_bytes)
+            .expect("family request digest")
+            .to_bytes(),
+    );
 
     // The documented contract: both bump witnesses come from the lifecycle
     // policy and the observed addresses, never from the caller.
