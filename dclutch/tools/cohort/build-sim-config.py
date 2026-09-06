@@ -26,7 +26,7 @@ credential parameter before it is stored, and the simulator resolves the key at
 USE time from `~/.helius-key`; cohort-15's config carried a live key in
 cleartext and the loader now refuses a config that does.
 
-usage: build-sim-config.py --job <dir> --rpc-url <url>
+usage: build-sim-config.py --job <dir> --rpc-url <url> [--market-dir <name>]
                            [--participant <name>]...
                            [--fill-gross-atoms N --direct-fee-basis-points BPS]
                            [--output <path>]
@@ -80,6 +80,12 @@ def main() -> int:
     ap.add_argument("--job", required=True, type=Path)
     ap.add_argument("--rpc-url", required=True)
     ap.add_argument("--work-dir", default=None)
+    # WHICH MARKET. Until cohort-17 this was the literal `market`, and a
+    # cohort founding a SECOND Direct market had no way to say so: the row ran,
+    # read the first market's founding evidence, and wrote a config naming a
+    # market the caller was not trading. The manifest already carries a
+    # `work_dir` per market and it is the only authority for this.
+    ap.add_argument("--market-dir", default="market")
     ap.add_argument("--participant", action="append", default=None)
     # The buyer's delegated allowance is DERIVED, never stated. It must EQUAL
     # the trade's `required_buyer_collateral` exactly -- the allowance
@@ -97,7 +103,7 @@ def main() -> int:
     gross = args.fill_gross_atoms
     required_buyer_collateral = gross + (gross * args.direct_fee_basis_points) // 10_000
     participants = args.participant or ["participant-1", "participant-2"]
-    evidence_path = job / "market" / "campaign-open.json"
+    evidence_path = job / args.market_dir / "campaign-open.json"
     evidence = json.loads(evidence_path.read_text())
     accounts = evidence["execution"]["market"]["accounts"]
 

@@ -111,6 +111,48 @@
       }
     },
     {
+      "label": "2",
+      "kind": "direct",
+      "address": "",
+      "window_record": "",
+      "window_start": "",
+      "mint": "",
+      "hoard": "",
+      "aggregate": "",
+      "work_dir": "market-2",
+      "collateral_mint_keypair": "keys/collateral-mint-2.json",
+      "collateral_wallet_keypair": "keys/collateral-wallet-2.json",
+      "cuts": "10200,10600",
+      "coefficients": "1,0,1,0",
+      "cut_denominator": "100",
+      "band_anchor": "10395",
+      "band_volatility_bps": "200",
+      "band_window_slots": "10000",
+      "band_plausible_half_widths": "3",
+      "band_max_cell_share_bps": "9000",
+      "window_lead_seconds": "2400",
+      "lookup_table": "",
+      "source_receipt": "",
+      "generation": "2",
+      "census": {
+        "tokens": [],
+        "positions": [],
+        "watches": []
+      },
+      "payout": {
+        "owner_keypair": "keys/participant-2.json",
+        "recipient": "",
+        "claim_index": "1"
+      },
+      "fill": {
+        "outcome": "1",
+        "seller_collateral_account": "",
+        "buyer_collateral_account": "",
+        "buyer_participant_report": "market-2/sim/admissions/participant-2.json",
+        "debtor_keypair": "keys/participant-2.json"
+      }
+    },
+    {
       "label": "G",
       "kind": "general",
       "address": "E5jHZvCPLJ2K22dayGuJM9MzDZhKS5FGPqz45cJ3HabY",
