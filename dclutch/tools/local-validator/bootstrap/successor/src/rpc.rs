@@ -2290,11 +2290,58 @@ impl Rpc {
             }
             thread::sleep(Duration::from_millis(100));
         }
-        let transaction = transaction.ok_or_else(|| {
-            Error::new(format!(
-                "{label} {signature} did not reach finalized transaction history"
-            ))
-        })?;
+        let Some(transaction) = transaction else {
+            // WHICH ABSENCE IS THIS? Two very different chains produce the
+            // same empty `getTransaction`: one that CONFIRMED the transaction
+            // and then stopped rooting slots, and one where these bytes never
+            // landed at all. The bare sentence named neither, and the journey
+            // tier lost two thirty-five-minute hbox runs to it on 2026-09-06,
+            // each on a different founding record-publication transaction.
+            //
+            // Two probes, read-only, taken once on the way out. They change no
+            // verdict -- the refusal stands either way, and nothing here is
+            // accepted as evidence of landing -- they only say which chain the
+            // caller was standing on.
+            let at_confirmed = match self.call(
+                "getTransaction",
+                &json!([signature.to_string(), {
+                    "encoding":"json",
+                    "commitment":"confirmed",
+                    "maxSupportedTransactionVersion":0
+                }]),
+            ) {
+                Ok(value) if value.get("meta").is_some() => "IS in confirmed history",
+                Ok(_) => "is absent from confirmed history too",
+                Err(_) => "could not be read at confirmed commitment",
+            };
+            let status_now = match self.call(
+                "getSignatureStatuses",
+                &json!([[signature.to_string()], {"searchTransactionHistory":true}]),
+            ) {
+                Ok(value) => value
+                    .get("value")
+                    .and_then(Value::as_array)
+                    .and_then(|values| values.first())
+                    .map_or_else(
+                        || "unreadable".to_owned(),
+                        |value| {
+                            value
+                                .get("confirmationStatus")
+                                .and_then(Value::as_str)
+                                .unwrap_or("none")
+                                .to_owned()
+                        },
+                    ),
+                Err(_) => "unreadable".to_owned(),
+            };
+            return Err(Error::new(format!(
+                "{label} {signature} did not reach finalized transaction history within {:?}: its \
+                 signature status now reads `{status_now}` and the transaction {at_confirmed}. A \
+                 transaction the chain confirmed but never rooted is a validator that stopped \
+                 finalizing; one absent at both commitments never landed.",
+                self.pacing.confirm_timeout
+            )));
+        };
         let meta = transaction
             .get("meta")
             .ok_or_else(|| Error::new(format!("{label} transaction omitted meta")))?;

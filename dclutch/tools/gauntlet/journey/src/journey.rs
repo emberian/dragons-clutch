@@ -199,6 +199,18 @@ struct JourneyProgressV1 {
     conservation_violations: Vec<String>,
     transactions_total: usize,
     compute_units_total: u64,
+    /// The validator's own URL, as soon as the substrate has one.
+    ///
+    /// A wall met during the FOUNDING -- fifteen of this campaign's
+    /// thirty-five minutes -- has no session and no ledger to read the chain
+    /// through, and reported nothing at all. It does have a validator, and the
+    /// first question a founding wall raises is whether that validator was
+    /// still answering: `... did not reach finalized transaction history` is
+    /// what a refusing program and a STALLED CHAIN both look like from the
+    /// campaign's side, and they are not the same finding. The wall opens its
+    /// own short-lived reader on this URL rather than borrowing the campaign's,
+    /// which keeps the diagnosis out of the founding's own borrow graph.
+    rpc_url: Option<String>,
     /// Accounts a wall reads that the conservation ledger deliberately does
     /// not watch. The Core Market above all: its phase decides which laws
     /// apply and it is kept OUT of the ledger's aperture on purpose (see
@@ -237,18 +249,49 @@ impl JourneyProgressV1 {
         self.conservation_violations = ledger.violations();
     }
 
-    /// Record a wall met before any chain reader existed.
-    fn wall_before_chain(&mut self, error: &Error) {
+    /// Record a wall met before the conservation ledger existed.
+    ///
+    /// There is no aperture to read -- the ledger is what names the accounts --
+    /// but there may be a VALIDATOR, and whether it is still answering is the
+    /// first thing a founding wall has to say.
+    fn wall_before_ledger(&mut self, error: &Error) {
         let sentence = error.to_string();
         self.push_refusal(&sentence);
+        let (finalized_slot, chain_note) = match self.rpc_url.clone() {
+            None => (
+                None,
+                "the wall came before this campaign had a validator at all, so there is no chain \
+                 state to report"
+                    .to_owned(),
+            ),
+            Some(url) => match crate::rpc::Rpc::connect(&url)
+                .and_then(|mut rpc| rpc.finalized_slot().map(|slot| (rpc, slot)))
+            {
+                Ok((_, slot)) => (
+                    Some(slot),
+                    format!(
+                        "the wall came before the conservation ledger existed, so there is no \
+                         aperture to report -- but the validator at {url} ANSWERED, at finalized \
+                         slot {slot}, so the chain was live when the stage refused"
+                    ),
+                ),
+                Err(error) => (
+                    None,
+                    format!(
+                        "the wall came before the conservation ledger existed, and the validator \
+                         at {url} DID NOT ANSWER a fresh reader either: {error}. A stage that \
+                         timed out against a chain in this state timed out on the chain, not on a \
+                         refusal"
+                    ),
+                ),
+            },
+        };
         self.wall = Some(JourneyWallV1 {
             stage: self.stage_in_flight.clone(),
             sentence,
-            finalized_slot: None,
+            finalized_slot,
             chain: Vec::new(),
-            chain_note: "the wall came before this campaign had a validator and a conservation \
-                         ledger to read one through, so there is no chain state to report"
-                .into(),
+            chain_note,
         });
     }
 
@@ -437,11 +480,63 @@ fn run(request: &JourneyRequestV1, progress: &mut JourneyProgressV1) -> Result<(
         }
         None => {
             if let Err(error) = &outcome {
-                progress.wall_before_chain(error);
+                progress.wall_before_ledger(error);
             }
         }
     }
+    write_run_evidence(request, progress, anchor.as_ref());
     outcome
+}
+
+/// Write the run-evidence document the census folds, on EVERY path.
+///
+/// `run-journey.sh` says in its own comment that "a campaign that met a wall
+/// still writes both documents -- that is the whole design", and then dies on
+/// a missing `evidence.json`. It was right about the design and wrong about
+/// the code: this document was written by the last statements of the campaign,
+/// so a wall discarded it exactly as it discarded the transcript, and the
+/// runner's `die` turned every wall into a run with no census row either.
+///
+/// A wall met before the substrate came up has no transactions and no
+/// accounts, and says so with an empty pair rather than with an absent file:
+/// "this run landed nothing" is a fact the census can fold, and "the document
+/// is missing" is not.
+///
+/// A failure to write it is recorded in the transcript's own `evidence` field
+/// and never replaces the campaign's refusal, which is the finding.
+fn write_run_evidence(
+    request: &JourneyRequestV1,
+    progress: &mut JourneyProgressV1,
+    anchor: Option<&(JourneySessionV1, ConservationLedgerV1)>,
+) {
+    let (rpc_url, plan_sha256, transactions, accounts) = match anchor {
+        Some((session, _)) => (
+            session.rpc_url.clone(),
+            session.plan_sha256.clone(),
+            serde_json::to_value(&session.transactions)
+                .unwrap_or_else(|_| Value::Array(Vec::new())),
+            serde_json::to_value(&session.accounts)
+                .unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
+        ),
+        None => (
+            String::new(),
+            String::new(),
+            Value::Array(Vec::new()),
+            Value::Object(serde_json::Map::new()),
+        ),
+    };
+    let path = request.work.join("evidence.json");
+    let evidence = serde_json::json!({
+        "schema": "dclutch-local-successor-run-evidence-v2",
+        "rpc_url": rpc_url,
+        "plan_sha256": plan_sha256,
+        "transactions": transactions,
+        "accounts": accounts,
+    });
+    progress.evidence = match write_json(&path, &evidence) {
+        Ok(()) => path.display().to_string(),
+        Err(error) => format!("UNWRITTEN ({}): {error}", path.display()),
+    };
 }
 
 fn campaign(
@@ -450,6 +545,11 @@ fn campaign(
     anchor: &mut Option<(JourneySessionV1, ConservationLedgerV1)>,
 ) -> Result<()> {
     let holder_count = request.holder_count;
+    // The gap register is READ OFF THE CODE, not off this run, so it belongs in
+    // the document from the first line: a wall met in the founding still has
+    // the same doors closed as a run that finishes, and a transcript that
+    // dropped them would read as though the campaign had no known gaps.
+    progress.gaps = gap_register();
     progress.entering("checked-mutable substrate");
 
     // ---------------------------------------- 1. the checked-mutable substrate
@@ -465,6 +565,27 @@ fn campaign(
         rpc_port: request.rpc_port,
     })?;
 
+    // A ROW IS RECORDED WHEN ITS STAGE FINISHES, not when the campaign gets
+    // around to it. Both of these used to be pushed after `resolution::derive`,
+    // eleven fallible calls later, so a wall anywhere in between produced a
+    // stage register whose only row was the refusal -- a transcript that said
+    // nothing had executed on a chain that had just taken two hundred
+    // transactions.
+    progress.stages.push(StageReportV1 {
+        stage: "checked-mutable substrate".into(),
+        outcome: "executed".into(),
+        transactions: 0,
+        compute_units: 0,
+        note: format!(
+            "`local-mutable-prepare-v1` derived the seven-role mutable substrate from the \
+             checked release gate ({}), a fresh solana-test-validator booted the prepared \
+             account directory, and the administration campaign published, initialized and \
+             activated through the retained authority. THE VALIDATOR STAYS UP for every stage \
+             below -- that is why this tier can drive shipped commands at all, and why the \
+             in-process tier-1 supervisor could not host them.",
+            request.expected_gate_sha256
+        ),
+    });
     progress.entering("the Market, compiled against the deployment it stands on");
     // ------------------------------- 2. the Market, compiled against the chain
     //
@@ -508,6 +629,7 @@ fn campaign(
 
     progress.entering("founding through Open");
     // ------------------------------------------------------- 3. the founding
+    progress.rpc_url = Some(checked.rpc_url.clone());
     let mut rpc = crate::rpc::Rpc::connect(&checked.rpc_url)?;
     let campaign_report = request.work.join("founding-evidence.json");
     let founding =
@@ -545,6 +667,21 @@ fn campaign(
     let anchored = anchor.insert((session, ledger));
     let session = &mut anchored.0;
     let ledger = &mut anchored.1;
+
+    progress.stages.push(StageReportV1 {
+        stage: "founding through Open".into(),
+        outcome: "executed".into(),
+        transactions: session.transactions.len(),
+        compute_units: session
+            .transactions
+            .iter()
+            .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
+            .sum(),
+        note: "`campaign --founding-only` over the live checked substrate: the market compiled by \
+               `DirectMarketCompilerOwnedV1::load_local` against THIS deployment, four outcomes \
+               over two cuts, which is a refunding payout scale of three."
+            .into(),
+    });
 
     progress.entering("admission: the founding really left an Open Market");
     let (claim_unit_atoms, decimals) = stages::admit_open_market(
@@ -596,39 +733,6 @@ fn campaign(
              accounts per compartment class from the first journey-owned boundary onward",
         ),
     )?;
-
-    progress.stages.extend([
-        StageReportV1 {
-            stage: "checked-mutable substrate".into(),
-            outcome: "executed".into(),
-            transactions: 0,
-            compute_units: 0,
-            note: format!(
-                "`local-mutable-prepare-v1` derived the seven-role mutable substrate from the \
-                 checked release gate ({}), a fresh solana-test-validator booted the prepared \
-                 account directory, and the administration campaign published, initialized and \
-                 activated through the retained authority. THE VALIDATOR STAYS UP for every stage \
-                 below -- that is why this tier can drive shipped commands at all, and why the \
-                 in-process tier-1 supervisor could not host them.",
-                request.expected_gate_sha256
-            ),
-        },
-        StageReportV1 {
-            stage: "founding through Open".into(),
-            outcome: "executed".into(),
-            transactions: session.transactions.len(),
-            compute_units: session
-                .transactions
-                .iter()
-                .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
-                .sum(),
-            note:
-                "`campaign --founding-only` over the live checked substrate: the market compiled \
-                   by `DirectMarketCompilerOwnedV1::load_local` against THIS deployment, four \
-                   outcomes over two cuts, which is a refunding payout scale of three."
-                    .into(),
-        },
-    ]);
 
     progress.entering("post-open life: collateral distribution");
     let (distribution, distribution_fees) = stages::distribute_collateral(
@@ -968,7 +1072,6 @@ fn campaign(
         )?,
         market_phase(&mut session.rpc, "found31_market", addresses.found31_market)?,
     ];
-    progress.gaps = gap_register();
     for gap in &progress.gaps.clone() {
         progress.stages.push(StageReportV1 {
             stage: gap.stage.clone(),
@@ -979,16 +1082,6 @@ fn campaign(
         });
     }
 
-    let evidence_path = request.work.join("evidence.json");
-    let evidence = serde_json::json!({
-        "schema": "dclutch-local-successor-run-evidence-v2",
-        "rpc_url": session.rpc_url,
-        "plan_sha256": session.plan_sha256,
-        "transactions": serde_json::to_value(&session.transactions)?,
-        "accounts": serde_json::to_value(&session.accounts)?,
-    });
-    write_json(&evidence_path, &evidence)?;
-    progress.evidence = evidence_path.display().to_string();
     progress.claim_unit_atoms = claim_unit_atoms;
     progress.spine = spine.reports.clone();
     progress.sync(session, ledger);
@@ -1332,6 +1425,29 @@ mod tests {
                     .to_string()
                     .contains(&transcript.display().to_string()),
             "the run still FAILS, and its failure points at the transcript: {error}"
+        );
+        // The runner's own comment promises BOTH documents on a wall, and then
+        // dies on a missing evidence.json. A run that landed nothing says so
+        // with an empty pair rather than with an absent file.
+        let evidence: Value = serde_json::from_slice(
+            &std::fs::read(work.join("evidence.json")).expect("the run-evidence document"),
+        )
+        .expect("the run-evidence document is JSON");
+        assert_eq!(
+            evidence.get("schema").and_then(Value::as_str),
+            Some("dclutch-local-successor-run-evidence-v2")
+        );
+        assert!(
+            evidence
+                .get("transactions")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| rows.is_empty()),
+            "a wall before the substrate landed no transactions, and says so"
+        );
+        assert_eq!(
+            document.get("evidence").and_then(Value::as_str),
+            Some(work.join("evidence.json").display().to_string().as_str()),
+            "the transcript names the evidence document it wrote"
         );
         let _ = std::fs::remove_dir_all(&work);
     }

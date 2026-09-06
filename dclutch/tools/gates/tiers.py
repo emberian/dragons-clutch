@@ -622,6 +622,20 @@ def tier_journey(ctx: Context):
                     env=_env(CARGO_BUILD_JOBS=ctx.jobs)).returncode
         if code:
             note("the journey does not compile or a host test failed; most often the #[path] tripwire: a successor module moved. Fix the journey to match its upstream, never fork the module.")
+        # THE LADDER'S HOST TESTS RAN NOWHERE. The loop below `cargo check
+        # --all-targets`s every other tools/ package, which COMPILES a test
+        # module and never runs it, so `tools/gauntlet/ladder`'s two tests --
+        # one of them pinning the tier's default rung against the shipped
+        # `--recovery-rungs` parser -- have never been a gate's evidence. The
+        # ladder is the journey's sibling by construction: it `#[path]`-links
+        # the same twenty-seven successor modules, so it is behind the same
+        # tripwire and belongs in the same run.
+        ladder = root / "tools/gauntlet/ladder/Cargo.toml"
+        if ladder.is_file():
+            if _run(ctx, ["cargo", "test", "--manifest-path", ladder, "--bins"], cwd=root,
+                    env=_env(CARGO_BUILD_JOBS=ctx.jobs)).returncode:
+                note("the ladder campaign does not compile or a host test failed; it links the same successor modules by #[path] as the journey does.")
+                code = 1
         # The tripwire is every `tools/` PACKAGE, named, not every `tools/`
         # WORKSPACE. Until 2026-09-05 each of these carried its own
         # `[workspace]` table and this loop found them by that table; folding
@@ -1000,7 +1014,7 @@ TIERS: tuple[Tier, ...] = (
     Tier("abi", "~3 min (2026-09-03)", "lake, cargo, wasm-bindgen", "a generated client module that no longer matches the Rust or Lean that printed it (53 verifiers)", tier_abi),
     Tier("guards", "86s warm, 195s cold (2026-09-04)", "lake, rustfmt, node", "a generated file whose bytes no longer match its emitter (77 guards run for real)", tier_guards),
     Tier("frames", "~4 min (2026-09-02)", "cargo-build-sbf", "a function in any of the twelve SBF links whose exact frame differs from the admitted ratchet; names the commits that owe rows", tier_frames),
-    Tier("journey", "minutes (2026-09-03)", "cargo", "the journey campaign or any tools/ workspace failing to compile (the #[path] tripwire)", tier_journey),
+    Tier("journey", "160s warm (2026-09-06)", "cargo", "the journey or ladder campaign failing to compile or a host test of either failing, or any tools/ package failing to compile (the #[path] tripwire)", tier_journey),
     Tier("root-targets", "~4 min (2026-09-03)", "cargo", "a cheap root-workspace integration test that fails, a quarantined one that passes, or a new one with no row", tier_root_targets),
     Tier("programs", "minutes (2026-09-03)", "cargo-build-sbf", "an SBF program that does not build, a frame-overwrite diagnostic, or the public Direct route losing compute margin", tier_programs),
     Tier("suites", "15 min at 3 draws, warm (2026-09-05)", "cargo-build-sbf", "any other SBF program-test suite failing a draw, or DISAGREEING across its draws; each row drawn N times through the runner its owner maintains", tier_suites),

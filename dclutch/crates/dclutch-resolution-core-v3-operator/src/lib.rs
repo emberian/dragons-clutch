@@ -704,7 +704,7 @@ pub fn derive_resolution_funding_detail_coordinates_v3(
         }
         _ => return Err(ResolutionCoreOperatorErrorV3::Record),
     };
-    let funding_entry_indices = select_resolution_funding_entries(material, policy, manifest)?;
+    let funding_entry_indices = select_resolution_funding_entries_v3(material, policy, manifest)?;
     let selected_mask = funding_entry_mask(funding_entry_indices)?;
     let manifest_id = market.identity.capability_manifest.to_bytes();
     let generation_le = market.identity.generation.to_le_bytes();
@@ -2634,7 +2634,7 @@ fn authenticate_founding_records(
     )?;
     let manifest = CapabilityManifestV1::decode(&capability_manifest.data)
         .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
-    let entries = select_resolution_funding_entries(material, policy, manifest)?;
+    let entries = select_resolution_funding_entries_v3(material, policy, manifest)?;
     Ok((material, policy, entries))
 }
 
@@ -2681,7 +2681,27 @@ fn authenticate_optional_recovery_policy(
     Ok(Some(policy))
 }
 
-fn select_resolution_funding_entries(
+/// Derive the three Resolution funding compartments a founding bought.
+///
+/// PUBLIC BECAUSE IT HAD A SECOND AUTHOR. `tools/gauntlet/journey/` needs these
+/// three indices before it can derive the subset ledger's own address, and it
+/// carried a hand-written copy of this derivation to get them -- so the tier
+/// and the builder it was about to call could disagree, and when they did the
+/// tier's copy said one thing, the builder refused with `Funding`, and the
+/// campaign had no way to tell whether the selection or something downstream
+/// of it was the wall. One selection, one author. The tier now derives the
+/// ledger address from the same three entries `build_resolution_create_fund_v3`
+/// will authenticate against.
+///
+/// This is a DERIVATION from finalized records, not a choice: the recovery
+/// compartment is the entry configured by recovery attempt 0's own funding
+/// allocation, the exhaustion compartment is the one configured by the
+/// recovery-policy record, and the failure compartment is the one configured
+/// by this market's own Source material. A material that bought no ladder has
+/// no allocation identity and no policy digest to select by, so its failure
+/// compartment is the entry its own material configures and the other two are
+/// exactly the two remaining Resolution entries in manifest order.
+pub fn select_resolution_funding_entries_v3(
     material: SourceMaterialV3,
     policy: Option<RecoveryPolicyV2>,
     manifest: CapabilityManifestV1<'_>,
@@ -3700,7 +3720,7 @@ fn authenticate_close_funding(
     // `funding_entries_from_mask` walks the selected mask's ascending bits, so
     // it says WHICH three manifest entries this ledger funds and nothing about
     // what each one is FOR. The roles are a fact of the material:
-    // `select_resolution_funding_entries` is the one author of them, is what
+    // `select_resolution_funding_entries_v3` is the one author of them, is what
     // CreateFund selected by, and returns `[recovery, exhaustion, failure]`.
     //
     // This function used to read the mask-ordered list as if it were the
@@ -3715,7 +3735,7 @@ fn authenticate_close_funding(
     // to fire and the repair is the author, not the check. Third instance of
     // this exact defect: `0c26bba0` fixed it at verify-fund-ready and the
     // activation-receipt arm fixed it again, both by comparing MEMBERSHIP.
-    let entries = select_resolution_funding_entries(material, recovery_policy, manifest)
+    let entries = select_resolution_funding_entries_v3(material, recovery_policy, manifest)
         .map_err(|_| refuse("compartment roles are not derivable from this material"))?;
     let mut canonical_ledger = ledger_indices;
     canonical_ledger.sort_unstable();
@@ -5228,7 +5248,7 @@ mod tests {
     /// THE MASK SAYS WHICH THREE ENTRIES; THE MATERIAL SAYS WHAT EACH IS FOR.
     ///
     /// `funding_entries_from_mask` walks the selected mask's ascending bits and
-    /// `select_resolution_funding_entries` returns `[recovery, exhaustion,
+    /// `select_resolution_funding_entries_v3` returns `[recovery, exhaustion,
     /// failure]`. When the entry configured by the market's own material is not
     /// the highest selected index, the two lists agree on MEMBERSHIP and differ
     /// on ORDER -- and anything that reads the mask-ordered list positionally
@@ -5251,7 +5271,7 @@ mod tests {
             readiness_coordinate_fixture(&entries);
         let material = SourceMaterialV3::decode(&material_bytes).expect("material decodes");
         let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decodes");
-        let roles = select_resolution_funding_entries(material, None, manifest)
+        let roles = select_resolution_funding_entries_v3(material, None, manifest)
             .expect("a no-recovery material derives its three compartments");
         assert_eq!(
             roles,
@@ -5275,6 +5295,111 @@ mod tests {
         // the difference: read positionally, the mask list calls index 1 the
         // exhaustion compartment when index 1 IS the failure compartment.
         assert_eq!(roles[2], by_mask[1]);
+    }
+
+    /// FOUR RETURNS THAT SHARED ONE CODE NOW NAME FOUR DIFFERENT THINGS.
+    ///
+    /// Every refusal below was `ResolutionCoreOperatorErrorV3::Funding` before
+    /// 2026-09-06, so a caller that met one learned only that the funding
+    /// derivation had refused -- and the journey tier spent three
+    /// thirty-five-minute runs on exactly that sentence, unable to say whether
+    /// the manifest was short an entry, carried two for one compartment, or
+    /// carried none for the market's own material.
+    ///
+    /// The manifests here are the no-ladder derivation's four ways to fail,
+    /// and the assertion that matters is not any single variant: it is that
+    /// the four are PAIRWISE DIFFERENT. Against the old code this test cannot
+    /// pass at all, because all four values were one value.
+    #[test]
+    fn the_no_ladder_derivation_names_its_refusals_apart() {
+        let material_id = hash(&readiness_material()).to_bytes();
+        let derive = |entries: &[CapabilityEntryV1]| {
+            let (_, _, _, _, _, material_bytes, manifest_bytes) =
+                readiness_coordinate_fixture(entries);
+            let material = SourceMaterialV3::decode(&material_bytes).expect("material decodes");
+            let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decodes");
+            select_resolution_funding_entries_v3(material, None, manifest)
+                .expect_err("this manifest cannot derive three compartments")
+        };
+
+        // Nothing is configured by this market's own material, and there are
+        // more non-material Resolution entries than the two compartments the
+        // derivation has room for.
+        let too_many = derive(&[
+            readiness_entry(1, [31; 32]),
+            readiness_entry(2, [32; 32]),
+            readiness_entry(3, [33; 32]),
+        ]);
+        assert_eq!(
+            too_many,
+            ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::NoLadderCompartmentCount {
+                    others: 3,
+                    manifest_entries: 3,
+                }
+            )
+        );
+
+        // Two entries claim the failure compartment, which is a manifest the
+        // derivation must refuse rather than choose between.
+        let ambiguous = derive(&[
+            readiness_entry(1, material_id),
+            readiness_entry(2, material_id),
+            readiness_entry(3, [33; 32]),
+        ]);
+        assert_eq!(
+            ambiguous,
+            ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::CompartmentAmbiguous {
+                    slot: 2,
+                    held: 0,
+                    second: 1,
+                }
+            )
+        );
+
+        // One non-material entry beside the market's own: the recovery and
+        // exhaustion compartments are not both there.
+        let short = derive(&[
+            readiness_entry(1, material_id),
+            readiness_entry(2, [32; 32]),
+        ]);
+        assert_eq!(
+            short,
+            ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::NoLadderCompartmentCount {
+                    others: 1,
+                    manifest_entries: 2,
+                }
+            )
+        );
+
+        // Exactly two non-material entries and NOTHING configured by the
+        // market's own material: the count is right and the failure
+        // compartment is the one that is missing.
+        let unfunded = derive(&[readiness_entry(1, [31; 32]), readiness_entry(2, [32; 32])]);
+        assert_eq!(
+            unfunded,
+            ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::FailureCompartmentUnfunded {
+                    config: material_id,
+                    controller_entries: 2,
+                    manifest_entries: 2,
+                }
+            )
+        );
+
+        let named = [too_many, ambiguous, short, unfunded];
+        for (first, one) in named.iter().enumerate() {
+            for (second, other) in named.iter().enumerate() {
+                assert_eq!(
+                    first == second,
+                    one == other,
+                    "refusal {first} and refusal {second} must be distinguishable; before the \
+                     split every one of these was `Funding`"
+                );
+            }
+        }
     }
 
     #[test]
@@ -5385,7 +5510,19 @@ mod tests {
             derive_resolution_funding_detail_coordinates_v3(
                 market_key, &market, registry, resolution, &material, &manifest, None,
             ),
-            Err(ResolutionCoreOperatorErrorV3::Funding),
+            // NAMED, not `Funding`. This assertion is the case AGENTS.md
+            // describes: a test that names a coarse code passes on whatever
+            // the callee refuses first, and this one would have gone on
+            // passing if the derivation had started refusing for some
+            // completely different reason. The cause says which -- three
+            // non-material Resolution rows where the derivation has room for
+            // two -- and that is the sentence the test is actually about.
+            Err(ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::NoLadderCompartmentCount {
+                    others: 3,
+                    manifest_entries: 4,
+                }
+            )),
             "a fourth otherwise valid Resolution row cannot become a caller choice"
         );
 
@@ -5425,7 +5562,13 @@ mod tests {
             derive_resolution_funding_detail_coordinates_v3(
                 market_key, &market, registry, resolution, &material, &manifest, None,
             ),
-            Err(ResolutionCoreOperatorErrorV3::Funding),
+            Err(ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::CompartmentAmbiguous {
+                    slot: 2,
+                    held: 1,
+                    second: 2,
+                }
+            )),
             "two failure matches remain ambiguous even when both records are valid"
         );
     }

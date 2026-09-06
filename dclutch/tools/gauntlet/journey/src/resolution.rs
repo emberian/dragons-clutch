@@ -31,24 +31,22 @@ use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerStatusV2, FundingLedgerV2, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_market::{
-    Action, CoreState, Identity as CoreIdentity, Phase, Readiness, Request,
-};
+use dclutch_market::{Action, CoreState, Identity as CoreIdentity, Phase, Readiness, Request};
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_source::resolution::{
-    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V7, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
-};
 use dclutch_resolution_core_v3_operator::{
     Observation, ObservedAccount, ResolutionCloseFundSnapshotV3, ResolutionCreateFundSnapshotV3,
     ResolutionVerifyFundReadySnapshotV3, build_resolution_close_fund_v3,
     build_resolution_create_fund_v3, build_resolution_direct_close_fund_v1,
-    build_resolution_verify_fund_ready_v3, validate_resolution_close_fund_report_v3,
-    validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
+    build_resolution_verify_fund_ready_v3, select_resolution_funding_entries_v3,
+    validate_resolution_close_fund_report_v3, validate_resolution_create_fund_report_v3,
+    validate_resolution_verify_fund_ready_report_v3,
+};
+use dclutch_source::resolution::{
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -252,7 +250,21 @@ pub(crate) fn derive(
     )
     .0;
 
-    let funding_entry_indices = select_funding_entries(&material, &policy, manifest)?;
+    // ONE AUTHOR FOR THE SELECTION. This tier used to carry its own copy of
+    // the derivation so it could compute the subset ledger's address before
+    // calling the builder -- two authors for one fact, and when they disagreed
+    // the tier's copy said one thing and `build_resolution_create_fund_v3`
+    // refused with a code that named nothing. The builder's own selector is
+    // public now and this is its only other caller.
+    let funding_entry_indices =
+        select_resolution_funding_entries_v3(material, Some(policy), manifest).map_err(
+            |error| {
+                Error::new(format!(
+                    "this Market's founding did not buy three Resolution funding compartments this \
+                 campaign can name: {error:?}"
+                ))
+            },
+        )?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|error| Error::new(format!("Market capability manifest identity: {error:?}")))?;
     let selected_mask = funding_entry_indices
@@ -628,60 +640,6 @@ fn funding_statuses(
         );
     }
     Ok(statuses)
-}
-
-fn select_funding_entries(
-    material: &SourceMaterialV3,
-    policy: &RecoveryPolicyV2,
-    manifest: CapabilityManifestV1<'_>,
-) -> Result<[u16; 3]> {
-    let recovery_policy = material
-        .recovery_policy()
-        .ok_or_else(|| Error::new("this Market's source material declares no recovery policy"))?;
-    let expected = [
-        policy
-            .attempt(0)
-            .map_err(|error| Error::new(format!("recovery attempt 0: {error:?}")))?
-            .funding_allocation_id()
-            .to_bytes(),
-        recovery_policy.to_bytes(),
-        hash(&material.to_bytes()).to_bytes(),
-    ];
-    let mut selected = [None; 3];
-    for entry_index in 0..manifest.entry_count() {
-        let entry = manifest
-            .entry(entry_index)
-            .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
-            continue;
-        }
-        for (slot, config) in expected.iter().enumerate() {
-            if entry.config_id().to_bytes() == *config
-                && selected
-                    .get_mut(slot)
-                    .ok_or_else(|| Error::new("funding slot overflow"))?
-                    .replace(entry_index)
-                    .is_some()
-            {
-                return Err(Error::new(format!(
-                    "two manifest entries carry the same Resolution funding configuration at slot \
-                     {slot}"
-                )));
-            }
-        }
-    }
-    let [recovery, exhaustion, failure] = selected;
-    let entries = [
-        recovery.ok_or_else(|| Error::new("no manifest entry funds the recovery attempt"))?,
-        exhaustion.ok_or_else(|| Error::new("no manifest entry funds the recovery policy"))?,
-        failure.ok_or_else(|| Error::new("no manifest entry funds the failure walk"))?,
-    ];
-    if entries[0] == entries[1] || entries[0] == entries[2] || entries[1] == entries[2] {
-        return Err(Error::new(
-            "one manifest entry was selected for two Resolution compartments",
-        ));
-    }
-    Ok(entries)
 }
 
 fn create_snapshot(

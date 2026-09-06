@@ -270,6 +270,28 @@ say "stages"
 jq -r '.stages[] | "  \(.outcome | ascii_upcase)  \(.stage)  [\(.transactions) tx, \(.compute_units) CU]"' \
     "$TRANSCRIPT"
 
+# THE WALL, IF THERE WAS ONE, IN THE TERMINAL. A reader who has just watched
+# thirty-five minutes of transactions scroll past should not have to open JSON
+# to learn which stage stopped and what it said; and the accounts are printed
+# because "the ledger this campaign derived does not exist" and "it exists and
+# something else owns it" are the two findings a funding wall is usually
+# between, and they differ by one column.
+if [ "$(jq -r '.wall // "null"' "$TRANSCRIPT")" != "null" ]; then
+    say "the wall"
+    jq -r '
+        .wall |
+        "  stage:    \(.stage)",
+        "  refusal:  \(.sentence)",
+        "  slot:     \(.finalized_slot // "unread")",
+        (if (.chain_note | length) > 0 then "  chain:    \(.chain_note)" else empty end),
+        (.chain[] |
+            if .present
+            then "    \(.label)  \(.address)  owner \(.owner)  \(.lamports) lamports  \(.data_len) bytes"
+            else "    \(.label)  \(.address)  ABSENT"
+            end)
+    ' "$TRANSCRIPT"
+fi
+
 # ------------------------------------------------------------- 5. witnesses
 say "witnesses: tier 1's, against this campaign's evidence"
 "$GAUNTLET/tier1/check-witnesses.sh" "$GAUNTLET/tier1/witnesses.json" \
