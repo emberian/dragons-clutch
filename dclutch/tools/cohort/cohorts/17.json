@@ -81,7 +81,7 @@
       "band_max_cell_share_bps": "9000",
       "window_lead_seconds": "2400",
       "lookup_table": "DMcjvbaftXzqdoHY8GHJg4Qvf6h7TjeKaeYm5vogMqa9",
-      "source_receipt": "",
+      "source_receipt": "ATAK18WrE4LGTzVhGSQwQijUUEmCZPoysJK4MCjzbqWq",
       "generation": "2",
       "census": {
         "tokens": [
@@ -99,7 +99,7 @@
       },
       "payout": {
         "owner_keypair": "keys/participant-2.json",
-        "recipient": "FsujuPtjS2Q4RowfuF5D12cq71xhLUZ2B1jNHnnrugW3",
+        "recipient": "2N9cx5tyEgZhhdHV5Gu1t87dD7pa5GeUDFeTn94PjJeQ",
         "claim_index": "1"
       },
       "fill": {

@@ -1,0 +1,216 @@
+{
+  "schema": "dclutch-devnet-route-witness-v1",
+  "cohort": "17",
+  "cluster": "devnet",
+  "note": "Built by tools/gauntlet/devnet-witness/tools/gate witness --discover from the signatures in COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md, then corroborated against devnet. No route claim in this file was authored: each comes from the eight bytes the chain shows the transaction sent, resolved against the census route that dispatches on them, and kept only when the route's program is the program the instruction was sent to. Where those eight bytes name a request FAMILY rather than one route, the `action` field records the byte the decoder itself reads to pick the arm -- its offset constant, its tag and the variant that tag names -- and `--check` re-reads that byte from the chain. Every `slot`, `compute_units`, `programs_invoked`, `routes_corroborated` and `not_corroborated` field is written by the tool from the chain's own reply. WHAT THIS DOES NOT SAY: a devnet witness corroborates the PROGRAM, the OUTER MAGIC and any wire discriminant the dispatch selects on. It does not corroborate which internal branch a program took below that, and it is not a proof about every input -- the same boundary `dclutch-route-census observe` draws for the localhost campaigns.",
+  "evidence_documents": [
+    "docs/evidence/COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md"
+  ],
+  "programs": {
+    "registry": "5RFL5hcwdmLx14gJ42WYdPWXtbUnJZ87SeCxynN8iGAR",
+    "rent": "DQ2uHwanwoPa9PDV8wVvkfK2Qgz4fkBjxWA19dPkHFYp",
+    "custody": "8kVd1sCp2CqwZoBbQaCRDLBBXthjcec8693tHAi5PS5j",
+    "resolution": "gYWBUAqMzr5V6HzvB8xhTETUZGdPSDr7dD5A3raqPGt",
+    "claims": "2cCWKUtU4AiVKuvNKUNumsjib9H5JoVXNdaqQFrYVE25",
+    "trading": "272BExJXWc7FSFh5PLps6DBWVWqoggmskoPbfbp21VNd",
+    "core": "2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM",
+    "accelerator": "WMGVfhVuWuMRCkBDnR7nrqj6uY1XbnxQtShxdM4h7km"
+  },
+  "skipped": [
+    {
+      "signature": "4A8x8iW19YD7gQN4pxGc3ejfPi3Pn8cqaYFDghehnjFu4CyeUXW3vQJtxUrNe3TTLPkJhcZm9af8nwKvSTrtiz8v",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "3PZ8wbf8hJooJBc7hQ83ewFcXQCfHo6FjkT4fT3BeTRdyHrb6y6w9u1v9tdzaKyS163xTBKcdGuL6XNasCAurGoy",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "3Ci6SPg2bBZSajY2EchCotUiLeQSxdXCACv4Q3u9powBFXBa4cypVn5ZPsfpjoXnbhg9aR4sJ4QmiV7xV2EBgMK5",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "2dUc4EkP2L6JjTVE2GdfjPEagTwZJkW2XSuZXj7QjfEgx2wvXMiWDGNDLUu73SRKSnqv6G2XdEqcmvvwRJ5QAu1R",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    }
+  ],
+  "records": [
+    {
+      "stage": "dcltspi1-493992422",
+      "magic": "DCLTSPI1",
+      "program": "resolution",
+      "outcome": "executed",
+      "signature": "38nrFuZGazvSDjHxHWUvmvs6soiRsSBdUEgquYLmchmSHvRAzg5rVhgsmK5CWW7kp3rCStfYFMZKcRqwM3qTsxe1",
+      "instruction_data_len": 32,
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to resolution begins with DCLTSPI1, and the tree dispatches resolution/sponsored_push_v1::process_sponsored_push_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493992422,
+      "compute_units": 102773,
+      "programs_invoked": [
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dclthot3-493995625",
+      "magic": "DCLTHOT3",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "4cevxQwCHnTdfT5o6upCVH71ioE5Th99ew4hqgMhdDmweFsEBXnhFFbzwik9NwQwi9GgEHGgAwRqi7ajt2WCc5Zm",
+      "instruction_data_len": 584,
+      "routes": [
+        "claims/process_instruction",
+        "custody/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTHOT3, and the tree dispatches trading/hot_v3::process_hot_execution_v3 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493995625,
+      "compute_units": 1116618,
+      "programs_invoked": [
+        "claims",
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "custody/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltdfs1-493995908",
+      "magic": "DCLTDFS1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "2ike4FN3MkxxZ28xjhS1MbYu5yAK4Pc6xusZEQcUMctxrCCj4uycLHGJnwGXhyDhjRfRc2HHigv9ih3kyT2j1W1n",
+      "instruction_data_len": 96,
+      "routes": [
+        "custody/process_instruction",
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTDFS1, and the tree dispatches trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493995908,
+      "compute_units": 94853,
+      "programs_invoked": [
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "custody/process_instruction",
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsq03-494043824",
+      "magic": "DCLTSQ03",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "5GLKEVCi5pgiebHSZJo4EXCa92ChzFPgVQjx3ajXGgdJwYKPm2tMha7AC7VJUupb943hpcUiRXbCBfiYxvvsUiJn",
+      "instruction_data_len": 640,
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process",
+        "custody/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLTSQ03, and the tree dispatches claims/terminal_settlement_v3::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494043824,
+      "compute_units": 215396,
+      "programs_invoked": [
+        "claims",
+        "custody"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process",
+        "custody/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsq03-494046276",
+      "magic": "DCLTSQ03",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "3sSyg43R28Lo43MSodpCQLS25CNUiEYCT4ojUZQBZmxBCC4ygvZmFQACcPJZjNzXF5obR4C1Za7Pw2mvr26pfdPu",
+      "instruction_data_len": 640,
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLTSQ03, and the tree dispatches claims/terminal_settlement_v3::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494046276,
+      "compute_units": 149302,
+      "programs_invoked": [
+        "claims"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsq03-494046626",
+      "magic": "DCLTSQ03",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "3arxHzuieW4cHddyrykdYgT41wnC7NuHSpfqf8y51x9BZmfvVHawEzPDCCZahLAta4HJ8nHNy7fKLTTHuFwss6vZ",
+      "instruction_data_len": 640,
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process",
+        "custody/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLTSQ03, and the tree dispatches claims/terminal_settlement_v3::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494046626,
+      "compute_units": 215396,
+      "programs_invoked": [
+        "claims",
+        "custody"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process",
+        "custody/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsq03-494046986",
+      "magic": "DCLTSQ03",
+      "program": "claims",
+      "outcome": "executed",
+      "signature": "5uCLdfjrWNAFYBsyYAwXXeC7XLcVsJT7zdEbwhib7bXWxxPH9AexHkoctcaARqcBzKtLDYpiQQbsBsLQ8NrEuamR",
+      "instruction_data_len": 640,
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to claims begins with DCLTSQ03, and the tree dispatches claims/terminal_settlement_v3::process on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494046986,
+      "compute_units": 149302,
+      "programs_invoked": [
+        "claims"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "not_corroborated": []
+    }
+  ],
+  "corroborated_route_count": 8
+}
