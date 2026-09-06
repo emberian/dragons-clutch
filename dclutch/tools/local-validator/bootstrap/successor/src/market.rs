@@ -117,6 +117,7 @@ use dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1;
 #[cfg(test)]
 use dclutch_trading::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3;
 use sha2::{Digest as _, Sha256};
+use solana_address_lookup_table_interface::instruction::derive_lookup_table_address;
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_sdk::{
     hash::Hash,
@@ -5102,27 +5103,38 @@ pub(crate) fn publish_routing_table_over_v1(
 pub(crate) const FROZEN_ROUTING_TABLE_CREATE_LABEL_V1: &str =
     "create DCLTGMF3 frozen routing address lookup table";
 
-/// The founding's own frozen DCLTGMF3 routing table, recovered by address.
+/// The founding's own frozen DCLTGMF3 routing table, DERIVED and authenticated.
 ///
-/// The User Position admission does not fit a packet uncompressed -- measured
-/// at 1,477 wire bytes over 28 static keys against a 1,232 limit, with 366 of
-/// those bytes instruction data, by
-/// `dclutch_operator::user_position_admission_v1`'s own host measurement -- so
-/// it routes through a lookup table or it does not go. The devnet cohorts have
-/// routed through THIS table since cohort-16.1 stopped dead without one
-/// (`tools/cohort/build-sim-config.py`, `simlife_drivers.frozen_routing_table_for`);
-/// this is the same recovery for a driver that runs in process against a
-/// loopback validator, and it publishes nothing, because the founding already
-/// paid for the table this reads.
+/// The User Position admission does not fit a packet uncompressed. Measured by
+/// its own driver on hbox `20260906T122838Z`: **1,443 wire bytes against the
+/// 1,232 limit, 211 too many, with 24 of the route's addresses carriable by a
+/// table at about 31 bytes each** — so it routes through a table or it does not
+/// go. The devnet cohorts have routed it through THIS table since cohort-16.1
+/// stopped dead without one; this is the same recovery for a driver that runs
+/// in process against a loopback validator, and it publishes nothing, because
+/// the founding already paid for the table it reads.
 ///
-/// NOTHING IS SEARCHED AND NOTHING IS TRANSCRIBED. `CreateLookupTable` puts the
-/// table it creates at account index 0 of its own instruction, the founding
-/// recorded that transaction under the label above, and the account is then
-/// authenticated against the founding it claims to serve: owned by the lookup
-/// table program, non-executable, no authority (frozen, so its extension plan
-/// is complete and nothing can add to it after a caller has read it), not
-/// deactivating, and carrying this founding's own market. A wrong pick refuses
-/// rather than routes.
+/// NOTHING IS SEARCHED, NOTHING IS TRANSCRIBED, AND NO TRANSACTION HISTORY IS
+/// ASKED FOR. The devnet twin reads the founding's own `CreateLookupTable`
+/// transaction back by signature; that cannot work here, and the run that
+/// proved it is the reason this is a derivation. `getTransaction` on this
+/// substrate answered **a null result** for a create the founding's own
+/// evidence records at a finalized slot with a null error — the loopback
+/// validator does not serve a signature this old — and a reader that treats
+/// that as "the chain has no such transaction" states something it has not
+/// measured.
+///
+/// The address is a FUNCTION, not a lookup: `CreateLookupTable` derives its
+/// table from the authority and the recent slot it was given, so the founding's
+/// own payer plus the slot its own evidence records for the create pins a small
+/// window of candidates. Every candidate is then AUTHENTICATED against the
+/// founding it claims to serve — owned by the lookup table program,
+/// non-executable, no authority (frozen, so its extension plan is complete and
+/// nothing can add to it after a caller has read it), not deactivating, and
+/// carrying this founding's own market. Exactly one must answer: this founding
+/// creates five frozen tables and THREE of them route its market (measured, run
+/// 6: 56, 45 and 66 addresses), so "frozen and routes this market" identifies
+/// nothing on its own and the create's own slot is what separates them.
 ///
 /// `Ok(None)` is the one absence this admits: a founding that ran before the
 /// publication existed recorded no such transaction. A record that IS present
@@ -5131,6 +5143,7 @@ pub(crate) fn recover_frozen_routing_table_v1(
     rpc: &mut Rpc,
     transactions: &[TransactionEvidence],
     market: Pubkey,
+    authority: Pubkey,
 ) -> Result<Option<Pubkey>> {
     let Some(evidence) = transactions
         .iter()
@@ -5138,108 +5151,52 @@ pub(crate) fn recover_frozen_routing_table_v1(
     else {
         return Ok(None);
     };
-    // THE PACKET, not the JSON view of it. `getTransaction` with
-    // `encoding: "json"` answered a shape this reader could not use on hbox
-    // `20260906T120811Z` and the recovery reported an absence it had not
-    // measured; `confirm` has read the base64 packet and deserialized it since
-    // this driver was written, so the recovery reads what the tree already
-    // reads, and any shape it cannot use is REPORTED rather than translated
-    // into a claim about the chain.
-    let body = rpc.call(
-        "getTransaction",
-        &serde_json::json!([evidence.signature, {
-            "encoding":"base64",
-            "commitment":"finalized",
-            "maxSupportedTransactionVersion":0
-        }]),
-    )?;
-    let shape = || {
-        if body.is_null() {
-            "a null result".to_owned()
-        } else {
-            match body.as_object() {
-                Some(map) => format!(
-                    "an object with keys [{}]",
-                    map.keys().cloned().collect::<Vec<_>>().join(" ")
-                ),
-                None => format!(
-                    "a {} value",
-                    if body.is_array() { "list" } else { "scalar" }
-                ),
-            }
-        }
-    };
-    let packet_base64 = body
-        .get("transaction")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|values| values.first())
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            Error::new(format!(
-                "the founding's routing table creation {} could not be read back: getTransaction \
-                 answered {}",
-                evidence.signature,
-                shape()
-            ))
-        })?;
-    let packet = BASE64
-        .decode(packet_base64)
-        .map_err(|error| Error::new(format!("routing table creation packet base64: {error}")))?;
-    let decoded: VersionedTransaction = bincode::deserialize(&packet)
-        .map_err(|error| Error::new(format!("routing table creation packet: {error}")))?;
-    let keys = decoded.message.static_account_keys();
-    let program = solana_address_lookup_table_interface::program::ID;
-    // NOT `instructions[0]`. Every legacy packet this tree sends carries the two
-    // house ComputeBudget declarations `bounded_instructions` prepends, so the
-    // first instruction is a ComputeBudget instruction with no accounts at all.
-    // The create is selected by its program, which is the only reading that
-    // cannot drift when the prefix changes width.
-    let mut created: Option<Pubkey> = None;
-    for instruction in decoded.message.instructions() {
-        if keys.get(usize::from(instruction.program_id_index)) != Some(&program) {
+    // The create was built from `rpc.finalized_slot()` immediately before it was
+    // sent, so its `recent_slot` is BELOW the slot it landed at by whatever
+    // finalization lagged. The window is generous in that one direction and
+    // stops at the landing slot in the other; the chain's own 512-slot recency
+    // rule for `CreateLookupTable` bounds it absolutely.
+    const RECENT_SLOT_WINDOW_V1: u64 = 192;
+    let landed = evidence.slot;
+    let first = landed.saturating_sub(RECENT_SLOT_WINDOW_V1);
+    let mut found: Vec<(u64, Pubkey)> = Vec::new();
+    for recent_slot in first..=landed {
+        let (candidate, _) = derive_lookup_table_address(&authority, recent_slot);
+        let Some(account) = rpc.account(candidate)? else {
+            continue;
+        };
+        if account.owner != solana_address_lookup_table_interface::program::ID || account.executable
+        {
             continue;
         }
-        let index = instruction.accounts.first().ok_or_else(|| {
-            Error::new("the routing table creation names an ALT instruction with no table")
-        })?;
-        let table = *keys.get(usize::from(*index)).ok_or_else(|| {
-            Error::new("the routing table creation's table index is out of range")
-        })?;
-        if created.is_some_and(|first| first != table) {
-            return Err(Error::new(
-                "the routing table creation names two different lookup tables; a route refuses to \
-                 choose one",
-            ));
+        let Ok(decoded) = AddressLookupTable::deserialize(&account.data) else {
+            continue;
+        };
+        if decoded.meta.authority.is_some() || decoded.meta.deactivation_slot != u64::MAX {
+            continue;
         }
-        created = Some(table);
+        if !decoded.addresses.contains(&market) {
+            continue;
+        }
+        found.push((recent_slot, candidate));
     }
-    let table = created.ok_or_else(|| {
-        Error::new("the routing table creation carried no Address Lookup Table instruction")
-    })?;
-    let account = rpc.account(table)?.ok_or_else(|| {
-        Error::new(format!(
-            "the founding recorded routing table {table} and the chain has no such account"
-        ))
-    })?;
-    let decoded = AddressLookupTable::deserialize(&account.data)
-        .map_err(|error| Error::new(format!("routing table {table} bytes: {error:?}")))?;
-    if account.owner != solana_address_lookup_table_interface::program::ID || account.executable {
-        return Err(Error::new(format!(
-            "routing table {table} is owned by {}, not the Address Lookup Table program",
-            account.owner
-        )));
+    match found.as_slice() {
+        [] => Err(Error::new(format!(
+            "the founding recorded its routing table creation at slot {landed} and no frozen \
+             table routing {market} is derivable from {authority} in the {RECENT_SLOT_WINDOW_V1} \
+             slots before it"
+        ))),
+        [(_, table)] => Ok(Some(*table)),
+        many => Err(Error::new(format!(
+            "{} frozen tables routing {market} are derivable from {authority} within one create \
+             window ({}); a route refuses to choose one",
+            many.len(),
+            many.iter()
+                .map(|(slot, table)| format!("{table} at {slot}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
     }
-    if decoded.meta.authority.is_some() || decoded.meta.deactivation_slot != u64::MAX {
-        return Err(Error::new(format!(
-            "routing table {table} still carries an authority or is deactivating; a route admits              only the frozen table the founding committed to"
-        )));
-    }
-    if !decoded.addresses.contains(&market) {
-        return Err(Error::new(format!(
-            "frozen table {table} does not route {market}; it is some other founding's table"
-        )));
-    }
-    Ok(Some(table))
 }
 
 fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {

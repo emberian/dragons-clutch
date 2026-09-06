@@ -896,6 +896,7 @@ fn campaign(
         &mut session.rpc,
         &session.transactions,
         addresses.founding_market,
+        payer,
     ) {
         Ok(Some(table)) => {
             eprintln!("journey: the admission routes through the founding's frozen table {table}");

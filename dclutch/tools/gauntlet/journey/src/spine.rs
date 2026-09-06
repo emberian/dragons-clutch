@@ -184,7 +184,16 @@ fn signatures_in(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, child) in map {
-                if key == "signature" || key == "expectedSignature" || key == "landedSignature" {
+                // ANY `*Signature` KEY, not three named ones. The Direct
+                // capability activation reports its own act under
+                // `activationSignature`, so run 8 harvested the four routing
+                // table transactions and MISSED the 505,381 CU activation
+                // itself -- the stage reported 4 tx and 33,015 CU for a stage
+                // whose whole subject cost fifteen times that. A harvest that
+                // enumerates field names rots every time a driver names its
+                // signature differently, and it rots SILENTLY, as an
+                // understatement rather than an error.
+                if key == "signature" || key.ends_with("Signature") {
                     if let Some(text) = child.as_str() {
                         out.push(text.to_owned());
                     }
@@ -1035,12 +1044,39 @@ pub(crate) fn retire(
             spine.reports.insert("terminal-sequence".into(), document);
         }
         Err((passes, error)) => {
+            // THE STAGE-FOUR REFUSAL IS ALREADY CONVICTED, and a run that meets
+            // it must read as that conviction rather than as a new mystery.
+            // Cohort-17 found it on devnet: `TerminalStageV1::ORDERED` runs
+            // `ResolutionCloseFund` third and `DirectCloseCapability` fourth,
+            // and stage three CLOSES the Resolution dependency funding ledger
+            // that stage four decodes to build its `CapabilityFundingHeaderV2`
+            // and preserve -- so stage four refuses `Capability(InvalidLength)`
+            // on every market that ran the shipped order. The ruling (the
+            // orchestrator, 2026-09-06) is that the Direct close preserves the
+            // dependency it names and its owner closes it afterwards:
+            // `DirectCloseCapability` runs BEFORE `ResolutionCloseFund`.
+            // PROGRAMS-18A owns making the shipped order and the harness's
+            // order one author; this tier CALLS that driver and does not carry
+            // a second copy of its ordering. So the stage stops here, named,
+            // and no ledger is fabricated past it.
+            let known = error.contains("InvalidLength")
+                && (error.contains("DirectCloseCapability") || error.contains("Capability"));
             spine.refused(
                 sequence_stage,
                 &error,
                 format!(
                     "The shipped terminal-sequence driver refused at invocation {passes}: \
-                     {error}. {landed} of its acts had already finalized."
+                     {error}. {landed} of its acts had already finalized.{}",
+                    if known {
+                        " This is the CONVICTED stage-four refusal: `TerminalStageV1::ORDERED` \
+                         closes the Resolution dependency funding ledger at stage three that \
+                         `DirectCloseCapability` decodes at stage four. The ruling is that the \
+                         Direct close runs FIRST and its owner closes the dependency afterwards; \
+                         PROGRAMS-18A owns the shipped order. Nothing past this stage is driven, \
+                         and no retirement ledger is written for a sequence that did not complete."
+                    } else {
+                        ""
+                    }
                 ),
             );
             spine.reports.insert(
@@ -1163,13 +1199,25 @@ mod tests {
 
     /// The harvester walks for the KEY, so a driver that grows a journal array
     /// is harvested without this file learning its shape.
+    ///
+    /// The rule is `signature` or any `*Signature`, and it was three named
+    /// keys until run 8. The Direct capability activation reports its own act
+    /// under `activationSignature`, so the harvest took the four routing-table
+    /// transactions and MISSED the 505,381 CU activation: the stage reported
+    /// 33,015 CU for a stage whose whole subject cost fifteen times that, and
+    /// nothing failed. This test's old negative case was `notASignature`, which
+    /// was chosen against an exact-match rule and is signature-shaped under a
+    /// suffix one; the negative that carries the meaning is a key that does not
+    /// name a signature at all.
     #[test]
     fn every_signature_key_is_found_at_every_depth() {
         let document = serde_json::json!({
             "signature": "one",
             "landed": {"signature": "two"},
             "journals": [{"signature": "three"}, {"nested": {"signature": "four"}}],
-            "notASignature": "five",
+            "activationSignature": "five",
+            "note": "not a signature",
+            "slot": 91,
         });
         let mut found = Vec::new();
         signatures_in(&document, &mut found);
@@ -1178,7 +1226,7 @@ mod tests {
         // and no array nesting hides a signature, not that the walk emits them
         // in the order a reader of the literal above would guess.
         found.sort();
-        assert_eq!(found, vec!["four", "one", "three", "two"]);
+        assert_eq!(found, vec!["five", "four", "one", "three", "two"]);
     }
 
     /// A completion file that already exists costs zero invocations. This is

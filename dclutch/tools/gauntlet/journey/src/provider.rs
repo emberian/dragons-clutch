@@ -448,7 +448,9 @@ pub(crate) fn resolve_through_pyth(
         &mut submitted,
         transactions,
     )?;
-    // THE SUBMIT'S `0x8004`, LOCALIZED BEFORE IT COSTS A TRANSACTION.
+    // THE SUBMIT'S `0x8004`, READ BESIDE THE CHAIN'S OWN ANSWER. The probe
+    // reports and the transaction is sent regardless; the pair of readings is
+    // what localizes the wall.
     let records = authenticate_frame_records_v1(
         rpc,
         pubkey(&plan.registry.program_id)?,
@@ -936,6 +938,7 @@ fn authenticate_frame_records_v1(
     ];
     let mut consistent = Vec::new();
     let mut unexplained = Vec::new();
+    let mut unfinalized = Vec::new();
     let mut absent = Vec::new();
     for meta in &instruction.accounts {
         let Some(account) = rpc.account(meta.pubkey)? else {
@@ -976,29 +979,34 @@ fn authenticate_frame_records_v1(
             {
                 consistent.push(*name);
             }
-            Some(staging) => {
-                return Err(Error::new(format!(
-                    "the submit's {name} record {} is NOT finalized: its staging cursor {cursor}                      is still live ({} lamports, {} bytes, owner {}). That is one of the eleven                      disjuncts behind ResolutionError::FinalizedRecord and the operator's                      client-side check does not test it.",
-                    meta.pubkey,
-                    staging.lamports,
-                    staging.data.len(),
-                    staging.owner
-                )));
-            }
+            Some(staging) => unfinalized.push(format!(
+                "{name} {} is NOT finalized: its staging cursor {cursor} is still live ({} \
+                 lamports, {} bytes, owner {})",
+                meta.pubkey,
+                staging.lamports,
+                staging.data.len(),
+                staging.owner
+            )),
         }
     }
-    if !unexplained.is_empty() {
-        return Err(Error::new(format!(
-            "the submit names {} registry-owned account(s) that are not self-consistent finalized              records, and a record that does not live at the hash of its own body cannot satisfy              ResolutionError::FinalizedRecord: {}",
-            unexplained.len(),
-            unexplained.join("; ")
-        )));
-    }
+    // A REPORT, NEVER A REFUSAL. The transaction is sent afterwards whatever
+    // this says: the probe's verdict and the chain's own code are two readings
+    // and the pair is what localizes the wall, so a probe that refused would
+    // trade a conviction for a suspicion. It also cannot know which
+    // registry-owned accounts in the frame are RECORDS -- the activation cache
+    // is Registry's too, and run 8 read its 1,288 bytes as "not
+    // self-consistent", which was the probe describing an account nobody
+    // claimed was a record.
     Ok(format!(
-        "{} self-consistent finalized record(s) with vacant staging cursors ({}); {} frame \
+        "{} self-consistent finalized record(s) with vacant cursors ({}); {} registry-owned frame \
+         account(s) that are not records of these schemas [{}]; {} UNFINALIZED [{}]; {} frame \
          account(s) vacant [{}]",
         consistent.len(),
         consistent.join(", "),
+        unexplained.len(),
+        unexplained.join("; "),
+        unfinalized.len(),
+        unfinalized.join("; "),
         absent.len(),
         absent.join(" ")
     ))
