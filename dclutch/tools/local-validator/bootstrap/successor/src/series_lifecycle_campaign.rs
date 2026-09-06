@@ -1330,6 +1330,33 @@ mod tests {
         }
     }
 
+    /// The local-validator evidence directory, from ANY manifest that links
+    /// this file.
+    ///
+    /// It used to be `CARGO_MANIFEST_DIR/../evidence`, which is one root when
+    /// the compiling crate is the successor and a different, absent one when it
+    /// is anything else. `tools/gauntlet/journey` began linking the whole
+    /// successor module set on 2026-09-06 and these three tests went red there
+    /// while staying green here -- a fixture path with two possible roots, and
+    /// the second one only appeared when a second crate compiled the file. This
+    /// walks up to the repository root and joins the tracked path, so there is
+    /// one root however many crates link this module.
+    fn local_validator_evidence_root_v1() -> PathBuf {
+        let mut directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        loop {
+            if directory.join("AGENTS.md").is_file() && directory.join("Cargo.lock").is_file() {
+                return directory.join("tools/local-validator/bootstrap/evidence");
+            }
+            if !directory.pop() {
+                panic!(
+                    "no repository root above {}: this test reads a tracked fixture and cannot \
+                     invent one",
+                    env!("CARGO_MANIFEST_DIR")
+                );
+            }
+        }
+    }
+
     #[test]
     fn direct_terminal_and_aggregate_schemas_are_never_series_evidence() {
         let terminal = artifact(serde_json::json!({
@@ -1434,7 +1461,7 @@ mod tests {
 
     #[test]
     fn committed_physical_occurrence_checkpoints_authenticate_exactly() {
-        let evidence_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../evidence");
+        let evidence_root = local_validator_evidence_root_v1();
         let consume = read_artifact_v1(
             &evidence_root.join("series-consume-replay-2026-08-31.json"),
             "committed Series consume checkpoint",
@@ -1471,7 +1498,7 @@ mod tests {
 
     #[test]
     fn v2_consume_carries_exact_found_transaction_and_digest() {
-        let evidence_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../evidence");
+        let evidence_root = local_validator_evidence_root_v1();
         let mut consume = read_artifact_v1(
             &evidence_root.join("series-consume-replay-2026-08-31.json"),
             "committed Series consume checkpoint",
@@ -1531,7 +1558,7 @@ mod tests {
             "dclutch-series-prefix-consume-source-{}-{nonce}.json",
             std::process::id()
         ));
-        let evidence_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../evidence");
+        let evidence_root = local_validator_evidence_root_v1();
         let mut consume = read_artifact_v1(
             &evidence_root.join("series-consume-replay-2026-08-31.json"),
             "committed Series consume checkpoint",
