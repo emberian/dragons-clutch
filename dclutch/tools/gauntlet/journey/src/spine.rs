@@ -1097,8 +1097,14 @@ pub(crate) fn retire(
             .into(),
     });
 
-    // ---- 2. the terminal sequence: CloseFund, BeginRetiring and the handoff
-    let sequence_stage = "retirement: CloseFund, BeginRetiring and the retirement replay handoff";
+    // ---- 2. the terminal sequence, in the one admissible order
+    //
+    // The label used to name three of the six and name them out of order
+    // ("CloseFund, BeginRetiring and the retirement replay handoff"), which is
+    // the pre-PROGRAMS-18A ordering written into a string. The stage's contents
+    // are `TerminalStageV1::ORDERED` and the note renders them; the label says
+    // what the stage IS, and nothing here restates the order by hand.
+    let sequence_stage = "retirement: the shipped driver walks the terminal sequence's ordered six";
     let journal_dir = context.dir("terminal-journal")?;
     let session = context.work.join("terminal-session.json");
     let completion = context.work.join("terminal-completion.json");
@@ -1127,10 +1133,37 @@ pub(crate) fn retire(
         completion.display().to_string(),
         "--execute".to_owned(),
     ];
-    let outcome = resume_until(
+    let mut outcome = resume_until(
         |_| crate::terminal_sequence::run_terminal_sequence_owned_loopback_v1(sequence.clone()),
         || completion.exists(),
     );
+    // THE ZERO-COUNT GATE BETWEEN STAGES TWO AND THREE, and why it is not
+    // inside the sequence driver.
+    //
+    // `DirectCloseCapability` takes `outstanding_capabilities` to zero, and it
+    // cannot run while the Direct root still holds an open maker root.
+    // `direct_close_maker_v1` is the ONLY route in the protocol that ever
+    // decrements `open_maker_root_count` -- its own module comment says so --
+    // and it runs inside `Retiring`, because `consume_nonce_v2` refuses every
+    // non-Open phase. So a market that was FILLED reaches the third of the six
+    // and stops there until a separate shipped command runs: the devnet spine's
+    // `34-close-maker`, `local-private-validator-direct-close-maker-v1` here.
+    //
+    // It is a separate command rather than a seventh stage because it is a
+    // different program's route (`DCLTDMC1`, Trading), it is per maker replay
+    // rather than per market, and `TerminalStageV1::ORDERED` is the order of
+    // the six PROTOCOL MUTATIONS of the retirement -- a market that never
+    // traded needs none of this and its sequence is complete without it. So the
+    // campaign runs the loop, and only if the loop stops does it close the
+    // replay and resume: the chain decides whether this act is needed, not a
+    // flag here.
+    if !completion.exists() {
+        close_direct_maker_replay(rpc, context, spine, fee_payer_keypair);
+        outcome = resume_until(
+            |_| crate::terminal_sequence::run_terminal_sequence_owned_loopback_v1(sequence.clone()),
+            || completion.exists(),
+        );
+    }
     let label = "journey retirement: terminal sequence";
     let (landed, compute) = harvest_dir(rpc, label, &journal_dir, &mut spine.transactions);
     let lookup_table: Option<String>;
@@ -1271,6 +1304,129 @@ pub(crate) fn retire(
         }
     }
     Ok(())
+}
+
+/// Close the one Direct maker replay the fill opened, so the capability close
+/// can reach its zero-count gate.
+///
+/// `local-private-validator-direct-close-maker-v1`, the shipped command, with
+/// the coordinates read out of the fill's own public manifest rather than
+/// re-derived here: the maker is `/replaySetup/maker` and the replay is
+/// `/replaySetup/custodyReplay`, both written by the producer that opened them.
+///
+/// A refusal is a FINDING and never a stop -- the driver refuses BY NAME on the
+/// two states a real market can be in (`CloseMakerFeeOutstanding` when the
+/// Direct fee is unsettled, live intents when the replay is not drained), and
+/// both are worth reading beside the sequence that stopped. There is nothing to
+/// close on a market that never traded, and that refusal is equally a finding.
+fn close_direct_maker_replay(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    fee_payer_keypair: &Path,
+) {
+    let stage = "retirement: the Direct maker replay is closed so the capability close can reach \
+                 its zero-count gate";
+    let fill = context.work.join("fill");
+    let public = fill.join("direct-trade-public.json");
+    let finalized = fill.join("direct-trade-finalized.json");
+    if !public.exists() || !finalized.exists() {
+        spine.stages.push(StageReportV1 {
+            stage: stage.into(),
+            outcome: "not-driven".into(),
+            transactions: 0,
+            compute_units: 0,
+            note: "The fill stage left no finalized Direct evidence, so this market opened no \
+                   maker replay and there is no decrement to drive. Whatever stopped the terminal \
+                   sequence is not the zero-count gate."
+                .into(),
+        });
+        return;
+    }
+    let Ok(document) = read_json(&public) else {
+        return;
+    };
+    let field = |pointer: &str| -> Option<Pubkey> {
+        document
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .and_then(|text| text.parse::<Pubkey>().ok())
+    };
+    let (Some(maker), Some(replay)) = (
+        field("/replaySetup/maker"),
+        field("/replaySetup/custodyReplay"),
+    ) else {
+        spine.refused(
+            stage,
+            "the fill's public manifest names no maker replay",
+            "`/replaySetup/maker` and `/replaySetup/custodyReplay` are the producer's own record \
+             of the replay it opened; a manifest without them is a finding about that document."
+                .into(),
+        );
+        return;
+    };
+    let Ok(evidence) = context
+        .dir("close-maker")
+        .map(|dir| dir.join("close-maker.json"))
+    else {
+        return;
+    };
+    let arguments = vec![
+        "--rpc-url".to_owned(),
+        context.rpc_url.to_owned(),
+        "--plan".to_owned(),
+        context.plan.display().to_string(),
+        "--market-input".to_owned(),
+        context.market_input.display().to_string(),
+        "--campaign-evidence".to_owned(),
+        context.campaign_report.display().to_string(),
+        "--direct-evidence".to_owned(),
+        finalized.display().to_string(),
+        "--market".to_owned(),
+        context.market.to_string(),
+        "--maker".to_owned(),
+        maker.to_string(),
+        "--maker-replay".to_owned(),
+        replay.to_string(),
+        "--evidence".to_owned(),
+        evidence.display().to_string(),
+        "--fee-payer-keypair".to_owned(),
+        fee_payer_keypair.display().to_string(),
+        "--execute".to_owned(),
+    ];
+    let outcome = crate::direct_close_maker::run_owned_loopback_v1(arguments);
+    let label = "journey retirement: Direct maker replay close";
+    let (landed, compute) = match read_json(&evidence) {
+        Ok(document) => {
+            let result = harvest_document(rpc, label, &document, &mut spine.transactions);
+            spine.reports.insert("close-maker".into(), document);
+            result
+        }
+        Err(_) => (0, 0),
+    };
+    match outcome {
+        Ok(()) => spine.executed(
+            stage,
+            landed,
+            compute,
+            format!(
+                "`local-private-validator-direct-close-maker-v1 --execute` closed maker {maker}'s \
+                 replay {replay}. It is the only route that decrements \
+                 `open_maker_root_count`, it runs inside Retiring, and the count it took down is \
+                 what `DirectCloseCapability` gates on. Permissionless: no party to the market \
+                 signed it."
+            ),
+        ),
+        Err(error) => spine.refused(
+            stage,
+            &error.to_string(),
+            format!(
+                "The shipped maker close refused: {error}. It refuses at PLAN time, before a key \
+                 is opened, so this is a statement about the replay's own authenticated bytes -- \
+                 an unsettled Direct fee or a live intent -- and not about a spent signature."
+            ),
+        ),
+    }
 }
 
 /// SHA-256 of a file, in the spelling the `--expected-*-sha256` flags take.

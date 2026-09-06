@@ -985,7 +985,7 @@ fn campaign(
         ClassClaimV1::unchanged(),
     )?;
 
-    progress.entering("resolution: create and activate the Market's Resolution funding");
+    progress.entering(resolution::FUNDING_LADDER_STAGE_V1);
     let (resolution_report, resolution_lamports) = resolution::resolve(
         &mut session.rpc,
         &session.authority,
@@ -995,7 +995,7 @@ fn campaign(
     progress.stages.push(resolution_report);
     ledger.observe(
         &mut session.rpc,
-        "resolution: create and activate the Market's Resolution funding",
+        resolution::FUNDING_LADDER_STAGE_V1,
         0,
         0,
         resolution_lamports,
@@ -1007,11 +1007,20 @@ fn campaign(
     // is worth more written down beside a complete ledger than thrown as an
     // error that discards the rest of the journey -- so the stage is recorded
     // either way and the run fails at the end, after the transcript exists.
-    progress.entering("resolution: the Pyth transport carries the Market to Terminal");
+    progress.entering(provider::PYTH_TRANSPORT_STAGE_V1);
     // WHERE A REFUSING FRAME IS KEPT. A run tears its validator down, so a wall
     // met here is unaskable afterwards unless the frame and the accounts it
     // named are on disk. The captures live beside the transcript.
     let capture_dir = request.work.join("captures");
+    // WHAT A REFUSED STAGE DID BEFORE IT REFUSED. The stage appends its
+    // evidence to `session.transactions` as it goes, so the work it landed
+    // survives its own error -- but the report it used to write on the error
+    // path stated `0` transactions and `0` compute units, and the transcript
+    // then said run 14's provider stage did nothing while its own transaction
+    // list held nine finalized provider transactions including the 134,743-unit
+    // Pyth submit. The counters are read off the evidence rather than off the
+    // return value, which is the only reading a refusal cannot zero.
+    let before_provider = session.transactions.len();
     let (provider_report, provider_lamports, provider_classes) =
         match provider::resolve_through_pyth(
             &mut session.rpc,
@@ -1024,17 +1033,28 @@ fn campaign(
         ) {
             Ok((report, lamports)) => (report, lamports, ClassClaimV1::unchanged()),
             Err(error) => {
-                progress.unexpected_refusals.push(format!(
-                    "resolution: the Pyth transport carries the Market to Terminal -- {error}"
-                ));
+                progress
+                    .unexpected_refusals
+                    .push(format!("{} -- {error}", provider::PYTH_TRANSPORT_STAGE_V1));
+                let landed = session.transactions.len().saturating_sub(before_provider);
+                let compute = session
+                    .transactions
+                    .iter()
+                    .skip(before_provider)
+                    .filter_map(|evidence| evidence.compute_units_consumed)
+                    .sum::<u64>();
                 (
                     StageReportV1 {
-                        stage: "resolution: the Pyth transport carries the Market to Terminal"
-                            .into(),
+                        stage: provider::PYTH_TRANSPORT_STAGE_V1.into(),
                         outcome: "refused".into(),
-                        transactions: 0,
-                        compute_units: 0,
-                        note: format!("REFUSED, and the refusal is the finding: {error}."),
+                        transactions: landed,
+                        compute_units: compute,
+                        note: format!(
+                            "REFUSED, and the refusal is the finding: {error}. {landed} \
+                             transactions had already finalized, for {compute} compute units; \
+                             they are in the transcript's transaction list under their own \
+                             labels."
+                        ),
                     },
                     LamportClaimV1::inapplicable(
                         "the stage refused part way through, so what it placed and where is \
@@ -1050,11 +1070,66 @@ fn campaign(
     progress.stages.push(provider_report);
     ledger.observe(
         &mut session.rpc,
-        "resolution: the Pyth transport carries the Market to Terminal",
+        provider::PYTH_TRANSPORT_STAGE_V1,
         0,
         0,
         provider_lamports,
         provider_classes,
+    )?;
+
+    // ------------------------------------- the phase byte, the third spine act
+    //
+    // The devnet spine drives capture, then settle, then admit-terminal, and
+    // this tier had only the first two. `resolution::admit_terminal` is the
+    // third, as the same builder every shipped driver calls.
+    progress.entering(resolution::ADMIT_TERMINAL_STAGE_V1);
+    let before_admit = session.transactions.len();
+    let (admit_report, admit_lamports) = match resolution::admit_terminal(
+        &mut session.rpc,
+        &session.authority,
+        &resolution_addresses,
+        &mut session.transactions,
+    ) {
+        Ok(pair) => pair,
+        Err(error) => {
+            progress.unexpected_refusals.push(format!(
+                "{} -- {error}",
+                resolution::ADMIT_TERMINAL_STAGE_V1
+            ));
+            let landed = session.transactions.len().saturating_sub(before_admit);
+            let compute = session
+                .transactions
+                .iter()
+                .skip(before_admit)
+                .filter_map(|evidence| evidence.compute_units_consumed)
+                .sum::<u64>();
+            (
+                StageReportV1 {
+                    stage: resolution::ADMIT_TERMINAL_STAGE_V1.into(),
+                    outcome: "refused".into(),
+                    transactions: landed,
+                    compute_units: compute,
+                    note: format!("REFUSED, and the refusal is the finding: {error}."),
+                },
+                LamportClaimV1::inapplicable(
+                    "the terminal admission refused, so what it placed and where is exactly what \
+                     is not known; L7 does not guess across a wall",
+                ),
+            )
+        }
+    };
+    progress.stages.push(admit_report);
+    ledger.observe(
+        &mut session.rpc,
+        resolution::ADMIT_TERMINAL_STAGE_V1,
+        0,
+        0,
+        admit_lamports,
+        // AdmitTerminal writes the Market's phase byte, its terminal receipt and
+        // its terminal winner. It moves no collateral at all -- no vault is
+        // opened, no atom is transferred -- which is the strong claim, and it
+        // fails if one atom reaches a compartment.
+        ClassClaimV1::unchanged(),
     )?;
 
     // ---------------------------------------------- the spine: the redemption
@@ -1096,49 +1171,36 @@ fn campaign(
         ),
     )?;
 
+    // ---------------------------------------------- the spine: the retirement
+    //
+    // ONE AUTHOR FOR THE TERMINAL SEQUENCE, since 2026-09-06. This tier used to
+    // run its own hand-built `BeginRetiring` plus a Source closure here first,
+    // and `resolution.rs` records why that stage is deleted rather than kept
+    // beside this one: it ran `ResolutionCloseFund` ahead of
+    // `DirectCloseCapability`, which is the pair PROGRAMS-18A reversed and the
+    // one ordering `TerminalStageV1::ORDERED` forbids. The shipped driver walks
+    // the ruled order, and it drives the same corrected V7 close, so the
+    // deletion costs no route its author.
+    //
     // Retirement runs BEFORE rent recovery, and the order is load-bearing: the
     // Source closure refunds its rent into the Market's own beneficiary credit,
     // so sweeping first would sweep a surplus the retirement is about to add to
     // and leave the larger half sitting there.
-    progress.entering("retirement: begin retiring and close the Source subtree");
-    let (retirement, retirement_lamports) = resolution::retire(
-        &mut session.rpc,
-        &session.authority,
-        &resolution_addresses,
-        addresses.hoard,
-        &mut session.transactions,
-    )?;
-    progress.stages.push(retirement);
-    ledger.observe(
-        &mut session.rpc,
-        "retirement: begin retiring and close the Source subtree",
-        0,
-        0,
-        retirement_lamports,
-        ClassClaimV1::unchanged(),
-    )?;
-
-    // ---------------------------------------------- the spine: the retirement
-    //
-    // TWO AUTHORS FOR BeginRetiring, stated rather than hidden. The stage above
-    // is this tier's own hand-built BeginRetiring plus the Source closure, and
-    // it is what the journey's existing bindings witness. The shipped
-    // terminal-sequence driver below owns the same act, plus DirectBeginRetiring,
-    // ResolutionCloseFund, DirectCloseCapability and the replay handoff, and
-    // then the four checkpoint packets. Whichever of the two the chain accepts
-    // first, the other reports what it met, and the transcript says which --
-    // which is the shape a convergence needs before one of them is deleted.
     progress.entering(
         "retirement: the checkpointed packets close the Claims aggregate, the vault and the replay",
     );
-    let source_receipt = evidence_pubkey(&session.accounts, "source_closure_receipt")
-        .or_else(|_| evidence_pubkey(&session.accounts, "founding_source_receipt"))
-        .unwrap_or(addresses.founding_market);
+    // DERIVED, NOT FISHED FOR. This used to read `source_closure_receipt` out
+    // of the founding's evidence, fall back to a second label, and then fall
+    // back to the founding Market's own address -- which is not a closure
+    // receipt at all, so a missing label became a wrong argument rather than a
+    // refusal. `ResolutionAddressesV1::closure_receipt` is this campaign's one
+    // derivation of that PDA, checked against the operator's own on the run
+    // that used to prepay it.
     spine::retire(
         &mut session.rpc,
         &context,
         &mut spine,
-        source_receipt,
+        resolution_addresses.closure_receipt,
         payer,
         &payer_key,
     )?;

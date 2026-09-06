@@ -20,7 +20,7 @@
 //! refuses when the fixture outlives that shelf life rather than letting anyone
 //! widen the number again.
 
-use dclutch_market::{CoreState, Phase};
+use dclutch_market::{CoreState, Phase, Readiness};
 use dclutch_provider_transport_v3_operator::{
     ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
     ProviderSubmitDeploymentV3, ProviderSubmitIntentV3, ProviderSubmitSnapshotV3,
@@ -181,6 +181,14 @@ pub(crate) fn watch(ledger: &mut crate::ledger::ConservationLedgerV1, plan: &Pro
 
 /// Carry the Market from `Open` to `Terminal` through the real Pyth transport.
 #[allow(clippy::too_many_arguments)]
+/// The transport stage's label, in one place.
+///
+/// It used to end "carries the Market to Terminal", which named a poststate the
+/// two routes it drives do not write; the Market's phase byte is the standalone
+/// Core `AdmitTerminal`'s, and that is a separate stage.
+pub(crate) const PYTH_TRANSPORT_STAGE_V1: &str =
+    "resolution: the Pyth transport resolves the Source and mints the terminal certificate";
+
 pub(crate) fn resolve_through_pyth(
     rpc: &mut Rpc,
     payer: &Keypair,
@@ -579,8 +587,15 @@ pub(crate) fn resolve_through_pyth(
     submitted += transactions.len().saturating_sub(before_execute_tables);
     fees = fees.saturating_add(fees_since(transactions, before_execute_tables));
     table_lamports = table_lamports.saturating_add(table_rent(&execute_tables));
+    // THE LABEL NAMES THE ROUTE IT DRIVES. This transaction was labelled
+    // "Core admits the terminal state" for the life of the tier, and its own
+    // binding row names `core/execute_provider_v3::process#ExecuteProvider` --
+    // the two disagreed, and the label is the half that was wrong. Core's
+    // standalone `AdmitTerminal` is a different instruction in a different
+    // stage, and while one label covered both there was nothing in the
+    // transcript to notice that the second had never been sent.
     let evidence = rpc.send_v0_with_signers(
-        "journey: Core admits the terminal state of an atomically founded Market",
+        "journey: Core composes the provider execution that mints the terminal certificate",
         std::slice::from_ref(&execute.instruction),
         payer,
         &[&provider.resolver],
@@ -592,21 +607,33 @@ pub(crate) fn resolve_through_pyth(
     submitted += 1;
     transactions.push(evidence);
 
-    // The poststate, asserted rather than assumed.
-    let terminal = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
-        .map_err(|error| Error::new(format!("terminal Market: {error:?}")))?;
-    if terminal.phase != Phase::Terminal {
+    // THE POSTSTATE THIS ROUTE ACTUALLY WRITES, asserted rather than assumed.
+    //
+    // Until 2026-09-06 the three assertions here were `Phase::Terminal`, a
+    // present `terminal_receipt` and the certificate -- and the first of them
+    // was a poststate `execute_provider_v3` does not write. Its own module
+    // comment says so: the route "invokes the Registry-selected Resolution
+    // program, checks its immediate receipt and terminal poststate. A LATER
+    // STANDALONE CORE `AdmitTerminal` consumes that durable certificate and
+    // commits the Market transition." Runs 14 and 15 both stopped here on `the
+    // provider execution left the Market at Open, not Terminal` -- a true
+    // sentence about the campaign's expectation, not about the chain. The
+    // transport's own poststate is a RESOLVED Source and a ResolutionSuccess
+    // certificate; the Market's phase byte belongs to `resolution::admit_terminal`,
+    // which is the devnet spine's own third act (`31-admit-terminal-*.sh`).
+    let executed = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
+        .map_err(|error| Error::new(format!("Market after provider execution: {error:?}")))?;
+    if executed.phase != Phase::Open || executed.readiness != Readiness::Consumed {
         return Err(Error::new(format!(
-            "the provider execution left the Market at {:?}, not Terminal",
-            terminal.phase
+            "the provider execution left the Market at ({:?}, {:?}) and this route transitions \
+             neither: the standalone Core AdmitTerminal is what moves the phase byte",
+            executed.phase, executed.readiness
         )));
     }
-    let receipt = terminal
-        .terminal_receipt
-        .ok_or_else(|| Error::new("a Terminal Market carries no terminal receipt"))?;
-    if receipt.to_bytes() != addresses.certificate.to_bytes() {
+    if executed.terminal_receipt.is_some() {
         return Err(Error::new(
-            "the Market's terminal receipt names an account this campaign did not prepay",
+            "the provider execution left a terminal receipt on the Market, and no route it drives \
+             writes one; AdmitTerminal is the author of that field",
         ));
     }
     let source = SourceResolutionStateV2::decode(
@@ -628,33 +655,40 @@ pub(crate) fn resolve_through_pyth(
     if certificate.kind != ResolutionCertificateKindV2::ResolutionSuccess
         || certificate.market != addresses.market.to_bytes()
         || certificate.generation != addresses.generation
-        || certificate.selector != terminal.terminal_winner
+        || certificate.receipt_account != addresses.certificate.to_bytes()
     {
         return Err(Error::new(
-            "the terminal certificate does not bind this Market, this generation, and the winner \
-             the Market itself records",
+            "the terminal certificate does not bind this Market, this generation, and the seat \
+             this campaign prepaid",
         ));
     }
 
     Ok((
         StageReportV1 {
-            stage: "resolution: the Pyth transport carries the Market to Terminal".into(),
+            stage: PYTH_TRANSPORT_STAGE_V1.into(),
             outcome: "executed".into(),
             transactions: submitted,
             compute_units,
             note: format!(
-                "The Market is RESOLVED. One captured signed VAA written in chunks and verified by \
-                 the real Wormhole router, one price update posted by the real Pyth receiver, one \
-                 Resolution submission and one Core-driven execution by a resolver key that is not \
-                 the submitter -- and the Market is Terminal on outcome {} with a ResolutionSuccess \
-                 certificate that binds this Market at generation {}. The publication this resolves \
-                 against was {age} seconds old at execution against a window that admits \
-                 {FIXTURE_SHELF_LIFE_SECONDS}: the observation is ABOUT a time inside the Market's \
-                 300-second terminal window, and its PUBLICATION is inside the band around the \
-                 cluster's clock, which is the two-clock shape of the admission and not one \
-                 tolerance doing both jobs. Checked before submission, not inferred after: \
-                 {window_note}.",
-                terminal.terminal_winner, addresses.generation
+                "THE SOURCE IS RESOLVED AND THE CERTIFICATE IS MINTED. One captured signed VAA \
+                 written in chunks and verified by the real Wormhole router, one price update \
+                 posted by the real Pyth receiver, one Resolution submission and one Core-driven \
+                 execution by a resolver key that is not the submitter -- and the Source is \
+                 Resolved with a ResolutionSuccess certificate at {} that binds this Market at \
+                 generation {} on selector {}. The Market is still ({:?}, {:?}) and carries no \
+                 terminal receipt, which is this route's exact contract: a later standalone Core \
+                 AdmitTerminal is what commits the Market transition, and it is the next stage. \
+                 The publication this resolves against was {age} seconds old at execution against \
+                 a window that admits {FIXTURE_SHELF_LIFE_SECONDS}: the observation is ABOUT a \
+                 time inside the Market's 300-second terminal window, and its PUBLICATION is \
+                 inside the band around the cluster's clock, which is the two-clock shape of the \
+                 admission and not one tolerance doing both jobs. Checked before submission, not \
+                 inferred after: {window_note}.",
+                addresses.certificate,
+                addresses.generation,
+                certificate.selector,
+                executed.phase,
+                executed.readiness
             ),
         },
         crate::ledger::LamportClaimV1::fees(fees).with_unwatched(

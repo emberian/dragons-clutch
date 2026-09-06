@@ -66,11 +66,18 @@
       "provenance": "A stage that refuses does not discard this campaign: the transcript and the complete conservation ledger are written first, the refusal is recorded on the stage AND here, and the run fails afterwards. That is deliberate -- a wall is worth more beside a complete ledger than as an error that throws the rest away -- and it means a green ledger is not by itself evidence that the journey got where it was going. This witness is the other half."
     },
     {
-      "id": "the-resolved-market-is-retiring-with-its-source-subtree-closed",
+      "id": "the-terminal-admission-moved-the-markets-phase-byte",
       "kind": "plan-jq",
-      "query": "[.stages[] | select(.stage | startswith(\"retirement: begin retiring\")) | .outcome] | .[0]",
+      "query": "[.stages[] | select(.stage | startswith(\"resolution: Core admits the terminal state\")) | .outcome] | .[0]",
       "expect": "executed",
-      "provenance": "BeginRetiring admits ONLY Phase::Terminal (core/begin_retiring), so this stage executing is a second, independent statement that the provider legs really resolved the Market -- independent because it is the CHAIN refusing or not refusing, rather than this campaign re-reading a field it just asserted. The stage also closes the whole Source subtree through CloseFund and asserts all three Resolution Funds are gone and the rent beneficiary gained exactly the lamports the operator declared."
+      "provenance": "The act runs 14 and 15 stopped one instruction short of. `execute_provider_v3`'s own module comment says the provider execution 'checks its immediate receipt and terminal poststate' and that 'a later standalone Core AdmitTerminal consumes that durable certificate and commits the Market transition' -- so a campaign that drove the submit and the execute and then read the Market expecting Terminal was asserting a poststate no route it drove writes. The devnet spine has driven this as its own third act since cohort 14 (31-admit-terminal, verifier: 'the Market's phase byte goes 1 to 2 and terminal_receipt carries the certificate's own address'), and the stage asserts exactly that plus the Product-authenticated selector the operator READ from the Source's decision. It is separate from the transport witness above it because the two routes have different authors and different poststates, and collapsing them is what hid this wall."
+    },
+    {
+      "id": "the-shipped-driver-walked-the-terminal-sequences-ordered-six",
+      "kind": "plan-jq",
+      "query": "[.stages[] | select(.stage | startswith(\"retirement: the shipped driver walks\")) | .outcome] | .[0]",
+      "expect": "executed",
+      "provenance": "This replaces `the-resolved-market-is-retiring-with-its-source-subtree-closed`, which pinned a stage that is deleted. That stage was this tier's own hand-built BeginRetiring plus a Source closure, and it ran `ResolutionCloseFund` at position two -- ahead of `DirectCloseCapability`, which is the pair PROGRAMS-18A reversed and the one ordering `TerminalStageV1::ORDERED` forbids, because `DirectCloseCapability` PRESERVES the Resolution dependency ledger that `ResolutionCloseFund` closes. The witness now pins the shipped driver, `local-private-validator-terminal-sequence-v1 --execute`, which walks `TerminalStageV1::ORDERED` one durable stage per invocation. It is still the second independent statement the old witness was: `CoreBeginRetiring` admits ONLY Phase::Terminal (core/begin_retiring), so this stage executing at all is the CHAIN saying the provider legs and the terminal admission really resolved the Market, rather than this campaign re-reading a field it just asserted."
     }
   ]
 }

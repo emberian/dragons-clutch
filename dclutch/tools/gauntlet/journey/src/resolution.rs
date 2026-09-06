@@ -31,23 +31,21 @@ use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerStatusV2, FundingLedgerV2, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_market::{Action, CoreState, Identity as CoreIdentity, Phase, Readiness, Request};
+use dclutch_market::{CoreState, Phase, Readiness};
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_resolution_core_v3_operator::{
-    Observation, ObservedAccount, ResolutionCloseFundSnapshotV3, ResolutionCoreOperatorErrorV3,
+    Observation, ObservedAccount, ResolutionAdmitTerminalSnapshotV3, ResolutionCoreOperatorErrorV3,
     ResolutionCreateFundSnapshotV3, ResolutionFundingCauseV3, ResolutionVerifyFundReadySnapshotV3,
-    build_resolution_close_fund_v3, build_resolution_create_fund_v3,
-    build_resolution_direct_close_fund_v1, build_resolution_verify_fund_ready_v3,
-    select_resolution_funding_entries_v3, validate_resolution_close_fund_report_v3,
-    validate_resolution_verify_fund_ready_report_v3,
+    build_resolution_admit_terminal_v3, build_resolution_create_fund_v3,
+    build_resolution_verify_fund_ready_v3, select_resolution_funding_entries_v3,
+    validate_resolution_admit_terminal_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source::resolution::{
     FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
 };
 use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -56,13 +54,8 @@ use dclutch_source::{
     SourceResolutionPhaseV1, SourceResolutionStateV2, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use solana_program::hash::hash;
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-    signature::{Keypair, Signer},
-};
+use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use solana_sdk_ids::{system_program, sysvar};
-use solana_system_interface::instruction::transfer;
 
 use crate::{
     Error, Result,
@@ -381,6 +374,18 @@ pub(crate) fn watch(ledger: &mut ConservationLedgerV1, addresses: &ResolutionAdd
 
 /// Create and activate this Market's Resolution funding, then say exactly how
 /// far the provider legs can go.
+/// The funding-ladder stage's label, in one place.
+///
+/// It used to read "create and activate the Market's Resolution funding", which
+/// named two acts this tier's founding always performs before the stage runs.
+/// The label names the FACT the stage is about; `outcome` names who reached it
+/// -- `executed` when this campaign drove `VerifyFundReady`, `not-driven` when
+/// the atomic founding had already left all three rows Active -- and the note
+/// says which and how it knows. One author per fact; the stage does not claim
+/// another campaign's act by being named after it.
+pub(crate) const FUNDING_LADDER_STAGE_V1: &str =
+    "resolution: the Market's Resolution funding reaches Active";
+
 pub(crate) fn resolve(
     rpc: &mut Rpc,
     payer: &Keypair,
@@ -514,7 +519,7 @@ pub(crate) fn resolve(
         // active would be counting another author's work as its own.
         return Ok((
             StageReportV1 {
-                stage: "resolution: create and activate the Market's Resolution funding".into(),
+                stage: FUNDING_LADDER_STAGE_V1.into(),
                 outcome: "not-driven".into(),
                 transactions: 0,
                 compute_units: 0,
@@ -616,7 +621,7 @@ pub(crate) fn resolve(
 
     Ok((
         StageReportV1 {
-            stage: "resolution: create and activate the Market's Resolution funding".into(),
+            stage: FUNDING_LADDER_STAGE_V1.into(),
             outcome: "executed".into(),
             transactions: submitted,
             compute_units,
@@ -640,6 +645,244 @@ pub(crate) fn resolve(
              packet limit",
         ),
     ))
+}
+
+/// Core admits the terminal state the provider execution left behind.
+///
+/// # The act the journey never drove, and the wall it stood at
+///
+/// `execute_provider_v3`'s own module comment says it plainly: the route
+/// "consumes an already submitted update, derives the current Core caller PDA,
+/// invokes the Registry-selected Resolution program, checks its immediate
+/// receipt and terminal poststate. **A later standalone Core `AdmitTerminal`
+/// consumes that durable certificate and commits the Market transition.**"
+///
+/// The provider execution therefore leaves a Market at `Open + Consumed` with a
+/// `Resolved` Source and a `ResolutionSuccess` certificate, and that is exactly
+/// what runs 14 and 15 met: `the provider execution left the Market at Open,
+/// not Terminal`. The campaign asserted a poststate the executed route does not
+/// write, and the missing act is one instruction that nothing here had ever
+/// built. The devnet spine has driven it as its own stage since cohort 14
+/// (`31-admit-terminal-*.sh`, `devnet-sponsored-push-v1 --action admit-terminal`,
+/// whose stated verifier is "the Market's phase byte goes 1 to 2 and
+/// `terminal_receipt` carries the certificate's own address"), and the ordering
+/// it encodes -- capture, settle, admit-terminal -- is the ordering the journey
+/// was missing the third of.
+///
+/// # Why this is a builder call and not a second frame
+///
+/// `build_resolution_admit_terminal_v3` is the one author of this instruction:
+/// the relayed-vertical tier calls it, the successor's
+/// `devnet-sponsored-push-v1 --action admit-terminal` calls it, and
+/// `flagship_resolution`'s `accept` stage calls it. All three hand it the same
+/// snapshot -- Market, activation cache, the four deployment programs, the
+/// SourceMaterial and capability-manifest pairs, Source state, funding ledger,
+/// certificate, Rent, and the three Product-graph record pairs -- and it derives
+/// the terminal sequence, the receipt kind, the caller-authority PDA and the
+/// selector itself. Nothing here chooses any of them.
+///
+/// **The selector is READ, never chosen.** The report's `selector` is the
+/// Product-authenticated reading of the Source's own decision against the
+/// Product record's outcome count, and the builder has already refused any
+/// certificate whose own selector disagrees with it. The assertion below is the
+/// remaining half: that the byte the Market ends up carrying is that same
+/// reading. A campaign that named a winning outcome and then checked the chain
+/// agreed would be checking its own arithmetic.
+///
+/// Twenty-two accounts, no signer, and it does NOT fit a legacy packet:
+/// measured on hbox `20260906T150850Z`, the frame is **1,508 bytes** against
+/// the 1,232-byte ceiling. It rides a finalized address lookup table like the
+/// two provider frames and `CloseFund`, through the producer's own
+/// `publish_routing_table`. The relayed-vertical tier sends the same builder's
+/// instruction as a legacy packet and is right to: its walked market carries a
+/// narrower release graph, and a frame's width is a fact about the market it
+/// names rather than about the route.
+///
+/// Nothing about the permission changes: a Market that has resolved may be
+/// admitted terminal by anyone, and the permission is the certificate rather
+/// than a key.
+pub(crate) fn admit_terminal(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    addresses: &ResolutionAddressesV1,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
+    let before = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
+        .map_err(|error| Error::new(format!("Market: {error:?}")))?;
+    if before.phase != Phase::Open || before.readiness != Readiness::Consumed {
+        return Ok((
+            StageReportV1 {
+                stage: ADMIT_TERMINAL_STAGE_V1.into(),
+                outcome: "blocked".into(),
+                transactions: 0,
+                compute_units: 0,
+                note: format!(
+                    "AdmitTerminal admits (Open, Consumed) and (Terminal, Consumed) and the \
+                     Market is ({:?}, {:?}). The provider stage above says why.",
+                    before.phase, before.readiness
+                ),
+            },
+            crate::ledger::LamportClaimV1::fees(0),
+        ));
+    }
+
+    let report = build_resolution_admit_terminal_v3(&admit_terminal_snapshot(rpc, addresses)?)
+        .map_err(|error| Error::new(format!("chain-derived AdmitTerminal: {error:?}")))?;
+    validate_resolution_admit_terminal_report_v3(&report)
+        .map_err(|error| Error::new(format!("AdmitTerminal report: {error:?}")))?;
+    if report.instruction.program_id != addresses.core_program {
+        return Err(Error::new(format!(
+            "AdmitTerminal is addressed to {} and this Market's Core program is {}",
+            report.instruction.program_id, addresses.core_program
+        )));
+    }
+    let before_tables = transactions.len();
+    let (routing, tables) = crate::market::publish_routing_table(
+        rpc,
+        payer,
+        "Core AdmitTerminal",
+        std::slice::from_ref(&report.instruction),
+        transactions,
+    )?;
+    let mut submitted = transactions.len().saturating_sub(before_tables);
+    let mut fees = crate::provider::fees_since(transactions, before_tables);
+    let table_lamports = crate::provider::table_rent(&tables);
+    let evidence = rpc.send_v0_with_signers(
+        "journey: Core admits the terminal state of an atomically founded Market",
+        std::slice::from_ref(&report.instruction),
+        payer,
+        &[],
+        routing,
+        &tables,
+    )?;
+    fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
+    let compute_units = evidence.compute_units_consumed.unwrap_or(0);
+    submitted += 1;
+    transactions.push(evidence);
+
+    // THE PHASE BYTE, THE RECEIPT AND THE SELECTOR, read back off the chain.
+    let after = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
+        .map_err(|error| Error::new(format!("terminal Market: {error:?}")))?;
+    if after.phase != Phase::Terminal {
+        return Err(Error::new(format!(
+            "AdmitTerminal left the Market at {:?}, not Terminal",
+            after.phase
+        )));
+    }
+    let receipt = after
+        .terminal_receipt
+        .ok_or_else(|| Error::new("a Terminal Market carries no terminal receipt"))?;
+    if receipt.to_bytes() != addresses.certificate.to_bytes() {
+        return Err(Error::new(format!(
+            "the Market's terminal receipt names {} and this campaign prepaid the certificate at \
+             {}",
+            Pubkey::new_from_array(receipt.to_bytes()),
+            addresses.certificate
+        )));
+    }
+    if after.terminal_winner != report.selector {
+        return Err(Error::new(format!(
+            "the Market records terminal winner {} and the operator read the Product-authenticated \
+             selector {}",
+            after.terminal_winner, report.selector
+        )));
+    }
+
+    Ok((
+        StageReportV1 {
+            stage: ADMIT_TERMINAL_STAGE_V1.into(),
+            outcome: "executed".into(),
+            transactions: submitted,
+            compute_units,
+            note: format!(
+                "THE PHASE BYTE MOVED 1 -> 2. One permissionless unsigned Core instruction, \
+                 twenty-two accounts over a finalized routing table, chain-derived by \
+                 `build_resolution_admit_terminal_v3` -- the same builder the relayed-vertical \
+                 tier, `devnet-sponsored-push-v1 --action admit-terminal` and \
+                 `flagship-resolution --through accept` all call. The Market is Terminal at \
+                 terminal sequence {}, its terminal receipt is the certificate the provider \
+                 execution minted at {}, and its terminal winner is {} -- the selector the \
+                 operator READ from the Source's own decision against a Product-authenticated \
+                 outcome count of {}, not a number this campaign chose. Readiness stayed {:?}.",
+                report.terminal_sequence,
+                addresses.certificate,
+                report.selector,
+                report.outcome_count,
+                after.readiness
+            ),
+        },
+        crate::ledger::LamportClaimV1::fees(fees).with_unwatched(
+            table_lamports,
+            "one address lookup table, rent-funded to route the 1,508-byte AdmitTerminal frame \
+             past the legacy packet limit",
+        ),
+    ))
+}
+
+/// The stage label, in one place: two reports and a witness read it.
+pub(crate) const ADMIT_TERMINAL_STAGE_V1: &str =
+    "resolution: Core admits the terminal state and the Market's phase byte moves";
+
+/// Same-finalized snapshot for the terminal admission.
+///
+/// The five staging cursors are vacant by construction: every record this
+/// Market selects was published in a transaction and never staged again, and a
+/// cursor that is NOT vacant is exactly what `authenticate_finalized_record`
+/// refuses inside the builder.
+fn admit_terminal_snapshot(
+    rpc: &mut Rpc,
+    addresses: &ResolutionAddressesV1,
+) -> Result<ResolutionAdmitTerminalSnapshotV3> {
+    let (observation, present) = rpc.finalized_observed_accounts(
+        &[
+            addresses.market,
+            addresses.activation_cache,
+            addresses.registry_program,
+            addresses.core_program,
+            addresses.core_programdata,
+            addresses.resolution_program,
+            addresses.resolution_programdata,
+            addresses.source_material.raw,
+            addresses.capability_manifest.raw,
+            addresses.source_state,
+            addresses.funding,
+            addresses.certificate,
+            sysvar::rent::ID,
+            addresses.product.raw,
+            addresses.result_domain.raw,
+            addresses.portfolio.raw,
+        ],
+        0,
+    )?;
+    let at = |index: usize| -> Result<ObservedAccount> {
+        present
+            .get(index)
+            .cloned()
+            .ok_or_else(|| Error::new("finalized observation lost an account"))
+    };
+    Ok(ResolutionAdmitTerminalSnapshotV3 {
+        market: at(0)?,
+        activation_cache: at(1)?,
+        registry_program: at(2)?,
+        core_program: at(3)?,
+        core_programdata: at(4)?,
+        resolution_program: at(5)?,
+        resolution_programdata: at(6)?,
+        source_material: at(7)?,
+        source_material_staging: vacant(observation, addresses.source_material.staging),
+        capability_manifest: at(8)?,
+        capability_manifest_staging: vacant(observation, addresses.capability_manifest.staging),
+        source_state: at(9)?,
+        funding_ledger: at(10)?,
+        certificate: at(11)?,
+        rent_sysvar: at(12)?,
+        product_raw: at(13)?,
+        product_staging: vacant(observation, addresses.product.staging),
+        result_domain_raw: at(14)?,
+        result_domain_staging: vacant(observation, addresses.result_domain.staging),
+        portfolio_raw: at(15)?,
+        portfolio_staging: vacant(observation, addresses.portfolio.staging),
+    })
 }
 
 fn funding_statuses(
@@ -825,360 +1068,32 @@ fn evidence_address(evidence: &BTreeMap<String, AccountEvidence>, label: &str) -
     pubkey(&recorded.address)
 }
 
-/// Begin retiring the resolved Market and close its Source subtree.
-///
-/// `BeginRetiring` admits only `Phase::Terminal`, so this stage exists at all
-/// only because the provider legs ran. Both routes here are permissionless and
-/// non-signing, which is the same reason the funding ladder was reachable.
-///
-/// It stops short of the retirement itself, and where it stops is the finding:
-/// see the note this returns.
-pub(crate) fn retire(
-    rpc: &mut Rpc,
-    payer: &Keypair,
-    addresses: &ResolutionAddressesV1,
-    hoard: Pubkey,
-    transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
-    let mut fees = 0_u64;
-    let mut compute_units = 0_u64;
-    let mut submitted = 0_usize;
-
-    let state = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
-        .map_err(|error| Error::new(format!("Market: {error:?}")))?;
-    if state.phase != Phase::Terminal {
-        return Ok((
-            StageReportV1 {
-                stage: "retirement: begin retiring and close the Source subtree".into(),
-                outcome: "blocked".into(),
-                transactions: 0,
-                compute_units: 0,
-                note: format!(
-                    "BeginRetiring admits only Phase::Terminal and the Market is {:?}. The \
-                     resolution stages above say why.",
-                    state.phase
-                ),
-            },
-            crate::ledger::LamportClaimV1::fees(0),
-        ));
-    }
-
-    // BeginRetiring: five accounts, no signer, no lookup table. A Market that
-    // has resolved may be retired by anyone -- the permission is the terminal
-    // receipt, not a key.
-    let request = Request::administrative(
-        Action::BeginRetiring,
-        addresses.generation,
-        CoreIdentity::new(addresses.market.to_bytes())
-            .map_err(|error| Error::new(format!("Market identity: {error:?}")))?,
-    );
-    let evidence = rpc.send(
-        "journey: a resolved Market begins retiring",
-        &[Instruction {
-            program_id: addresses.core_program,
-            accounts: vec![
-                AccountMeta::new(addresses.market, false),
-                AccountMeta::new_readonly(addresses.activation_cache, false),
-                AccountMeta::new_readonly(addresses.registry_program, false),
-                AccountMeta::new_readonly(addresses.core_program, false),
-                AccountMeta::new_readonly(addresses.core_programdata, false),
-            ],
-            data: request
-                .encode()
-                .map_err(|error| Error::new(format!("BeginRetiring request: {error:?}")))?
-                .to_vec(),
-        }],
-        payer,
-    )?;
-    fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
-    compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
-    submitted += 1;
-    transactions.push(evidence);
-
-    let retiring = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
-        .map_err(|error| Error::new(format!("Market: {error:?}")))?;
-    if retiring.phase != Phase::Retiring {
-        return Err(Error::new(format!(
-            "BeginRetiring left the Market at {:?}, not Retiring",
-            retiring.phase
-        )));
-    }
-
-    // CloseFund closes the Source subtree and writes the closure receipt the
-    // retirement itself consumes. Prepaid in its own transaction, same rule as
-    // every other precommitted output.
-    let closure_rent = rpc.minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3)?;
-    let evidence = rpc.send(
-        "journey: prepay the Source closure receipt",
-        &[transfer(
-            &payer.pubkey(),
-            &addresses.closure_receipt,
-            closure_rent,
-        )],
-        payer,
-    )?;
-    fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
-    compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
-    submitted += 1;
-    transactions.push(evidence);
-
-    // ONE snapshot, TWO reports, and the split is the point.
-    //
-    // `build_resolution_close_fund_v3` remains the semantic owner of the
-    // terminal certificate, the exact three-slot discharge arithmetic and the
-    // retirement projection -- every number this stage asserts against the
-    // persisted receipt below comes from it. What it is NOT is a live
-    // execution boundary: its `instruction.program_id` is the CORE program, and
-    // Core has refused `ResolutionCoreActionV1::CloseFund` since `a34ff595`
-    // split durable activation from close. It now refuses BY NAME, as
-    // `CoreSbfError::UnsupportedAction` (0x301C) at decode, at
-    // core-sbf/src/resolution.rs:254. Submitting that instruction was a
-    // guaranteed refusal, and this campaign's binding claimed it EXECUTED --
-    // which is how the register came to credit `#CloseFund` as executed.
-    //
-    // So the plan is still V3 and the SUBMISSION is V7: the same checked plan
-    // sent straight to the program that owns the route, rather than
-    // reconstructed on both sides of a Core CPI that no longer happens. Both
-    // reports are derived from the SAME finalized observation, because two
-    // `close_snapshot` calls could observe different slots and the operator
-    // requires one observation to select every semantic input.
-    let snapshot = close_snapshot(rpc, addresses)?;
-    let close = build_resolution_close_fund_v3(&snapshot)
-        .map_err(|error| Error::new(format!("chain-derived CloseFund: {error:?}")))?;
-    validate_resolution_close_fund_report_v3(&close)
-        .map_err(|error| Error::new(format!("CloseFund report: {error:?}")))?;
-    let direct = build_resolution_direct_close_fund_v1(&snapshot)
-        .map_err(|error| Error::new(format!("chain-derived direct CloseFund: {error:?}")))?;
-    if direct.instruction.program_id != addresses.resolution_program {
-        return Err(Error::new(format!(
-            "the direct close is addressed to {} and this Market's Resolution program is {}",
-            direct.instruction.program_id, addresses.resolution_program
-        )));
-    }
-    if direct
-        .instruction
-        .accounts
-        .iter()
-        .any(|meta| meta.is_signer)
-    {
-        return Err(Error::new(
-            "the direct Resolution close is supposed to be permissionless and unsigned, and this \
-             frame carries a signer",
-        ));
-    }
-    // Identical by construction -- the V7 builder carries the V3 planner's own
-    // receipt through -- and asserted on the report that is actually SUBMITTED,
-    // because that is the one whose execution has to create the account this
-    // campaign prepaid.
-    if direct.closure_receipt != addresses.closure_receipt
-        || close.closure_receipt != direct.closure_receipt
-    {
-        return Err(Error::new(format!(
-            "the operator derives the closure receipt at {} and this campaign prepaid {}",
-            direct.closure_receipt, addresses.closure_receipt
-        )));
-    }
-    let before_tables = transactions.len();
-    let (routing, tables) = crate::market::publish_routing_table(
-        rpc,
-        payer,
-        "Resolution CloseFund",
-        std::slice::from_ref(&direct.instruction),
-        transactions,
-    )?;
-    submitted += transactions.len().saturating_sub(before_tables);
-    fees = fees.saturating_add(crate::provider::fees_since(transactions, before_tables));
-    let table_lamports = crate::provider::table_rent(&tables);
-    let beneficiary_before = rpc
-        .account(addresses.rent_beneficiary)?
-        .map(|account| account.lamports)
-        .unwrap_or(0);
-    let evidence = rpc.send_v0_with_signers(
-        "journey: Resolution closes the Source subtree of a retiring Market",
-        std::slice::from_ref(&direct.instruction),
-        payer,
-        &[],
-        routing,
-        &tables,
-    )?;
-    fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
-    compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
-    submitted += 1;
-    transactions.push(evidence);
-
-    let receipt = SourceClosureReceiptV3::decode(
-        &rpc.required_account(addresses.closure_receipt, "Source closure receipt")?
-            .data,
-    )
-    .map_err(|error| Error::new(format!("SourceClosureReceiptV3: {error:?}")))?;
-    if receipt.market != addresses.market.to_bytes() {
-        return Err(Error::new(
-            "the Source closure receipt does not bind the Market that was closed",
-        ));
-    }
-    for (label, observed, expected) in [
-        (
-            "Source-state refund",
-            receipt.source_refund_lamports,
-            close.source_refund_lamports,
-        ),
-        (
-            "remaining native ledger principal",
-            receipt.ledger_remaining_native_principal,
-            close.ledger_remaining_native_principal,
-        ),
-        (
-            "ledger rent reserve",
-            receipt.ledger_rent_lamports,
-            close.ledger_rent_lamports,
-        ),
-        (
-            "ledger lamport surplus",
-            receipt.ledger_lamport_surplus,
-            close.ledger_lamport_surplus,
-        ),
-        (
-            "total beneficiary refund",
-            receipt.refund_lamports,
-            close.expected_refund_lamports,
-        ),
-    ] {
-        if observed != expected {
-            return Err(Error::new(format!(
-                "the V3 Source closure receipt commits {observed} lamports for {label}, while the \
-                 chain-derived CloseFund report declares {expected}"
-            )));
-        }
-    }
-    let beneficiary_after = rpc
-        .required_account(addresses.rent_beneficiary, "Market rent beneficiary")?
-        .lamports;
-    if beneficiary_after != beneficiary_before.saturating_add(close.expected_refund_lamports) {
-        return Err(Error::new(format!(
-            "the closure refunded the beneficiary {} lamports and the operator declared {}",
-            beneficiary_after.saturating_sub(beneficiary_before),
-            close.expected_refund_lamports
-        )));
-    }
-    if rpc.account(addresses.funding)?.is_some() {
-        return Err(Error::new(
-            "the Resolution subset ledger still exists after the Source subtree was closed",
-        ));
-    }
-
-    // Where it stops, and why. The retirement itself is one atomic Registry
-    // continuation that closes the Claims aggregate, the Custody replay and the
-    // Hoard vault together, and `build_market_retirement_v1` REFUSES to compile
-    // it while the Hoard holds a single atom -- partial Custody settlement
-    // cannot retire, which is the correct rule and not a wall to route around.
-    // This Market's Hoard holds the whole founding principal, because emptying
-    // it means redeeming, and redemption is a Claims mutation behind the Hot
-    // gate. So the last step of the Market's life is behind the same door as
-    // the middle of it, and this stage says so with the Hoard's actual balance
-    // rather than by reading the operator.
-    let hoard_atoms = rpc
-        .account(hoard)?
-        .and_then(|account| {
-            dclutch_custody::token_svm::TokenAccount::parse(&account.data)
-                .ok()
-                .map(|parsed| parsed.amount)
-        })
-        .unwrap_or(0);
-    Ok((
-        StageReportV1 {
-            stage: "retirement: begin retiring and close the Source subtree".into(),
-            outcome: "executed".into(),
-            transactions: submitted,
-            compute_units,
-            note: format!(
-                "The resolved Market entered Retiring and its whole Source subtree is closed: the \
-                 Resolution subset ledger is gone, the Source closure receipt binds this Market, \
-                 and the Market's rent beneficiary gained exactly {} lamports: {} from the Source \
-                 state, {} remaining native principal, {} of ledger rent, and {} of ledger \
-                 surplus. The closure is the V7 DIRECT Resolution close, addressed to the \
-                 Resolution program itself rather than reconstructed on both sides of a Core CPI: \
-                 Core has refused ResolutionCoreActionV1::CloseFund since a34ff595 and now \
-                 refuses it by name as UnsupportedAction (0x301C) at decode, so the V3 \
-                 instruction this stage used to submit could only ever have been refused. The V3 \
-                 planner is still the arithmetic above -- the five lamport figures are its \
-                 declarations, checked against the persisted receipt. Both routes are \
-                 permissionless and non-signing -- a Market that has resolved may be retired by \
-                 anyone, and the permission is the terminal receipt rather than a key. THE RETIREMENT ITSELF DOES NOT RUN, and the reason is measured \
-                 rather than read: `build_market_retirement_v1` refuses to compile the atomic \
-                 continuation while the Hoard holds a single atom (partial Custody settlement \
-                 cannot retire), and this Hoard holds {hoard_atoms}. Emptying it means redeeming, \
-                 redemption is a Claims mutation, and every Claims mutation is behind the Hot \
-                 gate. So the LAST step of the Market's life is behind the same door as the \
-                 middle of it -- which is worth saying plainly, because the retirement gap looked \
-                 like it was behind the terminal receipt right up until the receipt existed.",
-                close.expected_refund_lamports,
-                close.source_refund_lamports,
-                close.ledger_remaining_native_principal,
-                close.ledger_rent_lamports,
-                close.ledger_lamport_surplus,
-            ),
-        },
-        crate::ledger::LamportClaimV1::fees(fees).with_unwatched(
-            table_lamports,
-            "one address lookup table, rent-funded to route CloseFund past the legacy packet limit",
-        ),
-    ))
-}
-
-fn close_snapshot(
-    rpc: &mut Rpc,
-    addresses: &ResolutionAddressesV1,
-) -> Result<ResolutionCloseFundSnapshotV3> {
-    let (observation, present) = rpc.finalized_observed_accounts(
-        &[
-            addresses.market,
-            addresses.activation_cache,
-            addresses.registry_program,
-            addresses.core_program,
-            addresses.core_programdata,
-            addresses.resolution_program,
-            addresses.resolution_programdata,
-            addresses.source_material.raw,
-            addresses.capability_manifest.raw,
-            addresses.source_state,
-            addresses.funding,
-            addresses.certificate,
-            addresses.closure_receipt,
-            addresses.rent_beneficiary,
-            sysvar::clock::ID,
-            sysvar::rent::ID,
-            system_program::ID,
-            addresses.recovery_policy.raw,
-        ],
-        0,
-    )?;
-    let at = |index: usize| -> Result<ObservedAccount> {
-        present
-            .get(index)
-            .cloned()
-            .ok_or_else(|| Error::new("finalized observation lost an account"))
-    };
-    Ok(ResolutionCloseFundSnapshotV3 {
-        market: at(0)?,
-        activation_cache: at(1)?,
-        registry_program: at(2)?,
-        core_program: at(3)?,
-        core_programdata: at(4)?,
-        resolution_program: at(5)?,
-        resolution_programdata: at(6)?,
-        source_material: at(7)?,
-        source_material_staging: vacant(observation, addresses.source_material.staging),
-        capability_manifest: at(8)?,
-        capability_manifest_staging: vacant(observation, addresses.capability_manifest.staging),
-        source_state: at(9)?,
-        funding_ledger: at(10)?,
-        certificate: at(11)?,
-        closure_destination: at(12)?,
-        beneficiary: at(13)?,
-        clock_sysvar: at(14)?,
-        rent_sysvar: at(15)?,
-        system_program: at(16)?,
-        recovery_policy: at(17)?,
-        recovery_policy_staging: vacant(observation, addresses.recovery_policy.staging),
-    })
-}
+// ---------------------------------------------------------------------------
+// THE RETIREMENT HAD TWO AUTHORS, AND THIS ONE IS DELETED (2026-09-06).
+//
+// `resolution::retire` stood here: a hand-built Core `BeginRetiring`, a
+// prepaid Source closure receipt, and `build_resolution_direct_close_fund_v1`.
+// It was this tier's own, its bindings witnessed it, and it ran BEFORE the
+// shipped `local-private-validator-terminal-sequence-v1`.
+//
+// It could never have shared a run with that driver. PROGRAMS-18A gave the six
+// terminal mutations one author
+// (`dclutch_market_retirement_v1_operator::terminal_stage_order_v1`) and one
+// admissible order, and the invariant it encodes is that the stage which
+// PRESERVES a dependency runs before the stage that owns and closes it: Core
+// `CloseCapability` on the Direct entry re-states the Resolution dependency
+// funding ledger byte for byte, and `ResolutionCloseFund` is what closes that
+// ledger. This stage ran `ResolutionCloseFund` at position two, ahead of
+// `DirectCloseCapability` -- the exact pair the ruling reversed, in the exact
+// direction it forbids -- so a journey that ran it would have destroyed
+// `DirectCloseCapability`'s input and stopped three stages short of Retired
+// with a refusal on a zero-byte account.
+//
+// So the convergence is not a preference between two working paths. The
+// shipped driver is kept because it walks `TerminalStageV1::ORDERED` and this
+// one contradicted it; both drive the same corrected V7 route
+// (`build_resolution_direct_close_fund_v1`), so no route loses an author. Its
+// one output nothing else derived -- the Source closure receipt address -- has
+// always been derivable, and `ResolutionAddressesV1::closure_receipt` is where
+// this campaign derives it; `spine::retire` takes that as `--source-receipt`
+// rather than fishing for a label in the founding's evidence.

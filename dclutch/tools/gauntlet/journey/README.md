@@ -55,12 +55,23 @@ stage is a bounded loop with a stated ceiling, and a stage that hits the ceiling
 reports how far it got. A refused stage is a FINDING recorded with the driver's
 own sentence; the run fails at the end, after the transcript exists.
 
-**Owed.** The tier now has two authors for `BeginRetiring`: this campaign's own
-hand-built stage, which its existing bindings witness, and the shipped
-terminal-sequence driver. Both run and the transcript says which the chain
-accepted; one of them is a deletion. And `bindings.json` does not yet cover the
-spine's labels — deliberately: bindings are authored from what the ledger
-OBSERVED, never from what a campaign ought to touch, which is the rule
+**`BeginRetiring` had two authors, and one is deleted (2026-09-06).** This
+campaign used to run its own hand-built `BeginRetiring` plus a Source closure
+before the shipped terminal-sequence driver. It could never have shared a run
+with it: it ran `ResolutionCloseFund` at position two, ahead of
+`DirectCloseCapability`, which is the pair PROGRAMS-18A reversed and the one
+ordering `TerminalStageV1::ORDERED` forbids — Core `CloseCapability` on the
+Direct entry PRESERVES the Resolution dependency ledger byte for byte, and
+`ResolutionCloseFund` is what closes it, so closing first destroys the next
+stage's input and the sequence stops three short of Retired on a zero-byte
+account. The convergence is not a preference between two working paths; both
+drove the same corrected V7 close (`build_resolution_direct_close_fund_v1`), so
+no route lost an author. `resolution.rs` keeps the reasoning where the function
+was.
+
+**Owed.** `bindings.json` does not yet cover the spine's labels —
+deliberately: bindings are authored from what the ledger OBSERVED, never from
+what a campaign ought to touch, which is the rule
 `tools/gauntlet/retirement-checkpoint/` wrote down after manufacturing exactly
 that false green.
 
@@ -168,7 +179,8 @@ labels rather than counting a whole balance as growth.
 | collateral distribution | N synthetic holders open a Token-2022 account and receive a share. N is the load knob. |
 | holder-to-holder | a ring of transfers in which the founder is not a party |
 | resolution funding | `CreateFund` and `VerifyFundReady`, chain-derived, with an over-funded Fund and a double-create refusing first |
-| resolution transport | the real Wormhole router and Pyth receiver, a verified VAA, one posted update, and the two dClutch provider legs that carry the Market to `Terminal` |
+| resolution transport | the real Wormhole router and Pyth receiver, a verified VAA, one posted update, and the two dClutch provider legs that resolve the Source and mint the terminal certificate |
+| terminal admission | the standalone Core `AdmitTerminal` that moves the Market's phase byte 1 → 2 and writes the terminal receipt — the devnet spine's own third act, and the one this tier drove nothing for until 2026-09-06 |
 | rent recovery | `rent/process_sweep_v2#Sweep`, **executed for the first time by any tier**, with the adversarial half first |
 
 ## The resolution half, and why it is reachable at all
