@@ -286,11 +286,31 @@ named in advance must be occupied.
 
 ### arm-relay
 
+**THE PREPAY IS A PLAN-THEN-SIGN PAIR AND THE ROW USED TO DELETE ITS OWN PLAN**
+(COHORT-17C, 2026-09-06). `--action prepay-certificate` writes a key-free
+planned report on the first `--execute` and refuses, asking to be rerun against
+the same output path; under `once` the generator gave that output the ordinary
+`backup; rm -rf`, so the rerun met nothing and planned again. The row could
+never sign, and both of cohort-17's markets signed it by hand. It is `attempts`
+now, which runs the pair back to back, as `relay-capture` and `admit-terminal`
+already did. Its `blocks` edge also moved: it blocks `relay-capture`, which
+sends the `input-capture.json` this row writes, and not `fee-settlement`, which
+reads only the fill's own public manifest.
+
 Arm at **founding** time, not resolution time, and prepay the settle seat: the
 terminal route allocates and assigns the certificate but never funds it, and
 that rent is a caller obligation.
 
 ### sim-config
+
+**ONE MARKET PER CONFIG** (lane COHORT-17C, 2026-09-06). The row is per-market:
+it names the market's own `work_dir`, and the config and the simulator work dir
+live inside it. This was a cohort-level row reading the literal
+`<job>/market/campaign-open.json`, so cohort-17's SECOND Direct market got a
+config naming the FIRST market — and, once `--work-dir` moved but three
+`job / "sim"` literals did not, market 1's Position addresses and market 1's
+admission report paths as well. A per-market fact with a cohort-level author is
+the same shape as a producer with no caller.
 
 Derive the simulator's config from the founding's **own** records. Nothing here
 is transcribed: every address comes out of `campaign-open.json`'s accounts map,
@@ -303,11 +323,43 @@ file and the table is the only thing that makes the admission packet fit.
 
 ### admissions
 
+**THE FIRST CENSUS CANNOT NAME WHAT THE FIRST CYCLE CREATES, AND THIS IS A
+FINDING, NOT AN EDIT** (COHORT-17C, 2026-09-06). `sim-config` blocks this row,
+so the config is derived before the admissions exist, and `build-sim-config.py`
+cannot name a Position PDA or a delegated token account before the admission
+creates it. Cycle 1 therefore censuses the founder alone and refuses
+`VIOLATED L1: … 201 atoms are in accounts this ledger does not name`; both of
+cohort-17's markets halted there. Re-deriving the config from the landed
+reports and running a second cycle makes L1, L2, L3, L4 and L6 hold — and then
+refuses `VIOLATED L5: tracked collateral moved 201 atoms … the stage declared
+0`, which is the SAME naming gap from the other side: the atoms did not move
+between the boundaries, they became visible between them. A conservation law
+taken over a changed account set is not a conservation law, and which boundary
+owns that difference is a design question this runbook does not get to answer by
+editing a row. Both cohort-17 markets recorded the two censuses in the stage's
+own `PROVENANCE.txt` and wrote GREEN by hand.
+
 Fund the participants so they pay their **own** PDA rent — a fee payer is
 writable unconditionally and a Position owner must sign readonly, so they can
 never be the same key.
 
 ### fill
+
+**NINE DURABLE STAGES, ONE PER PASS** (COHORT-17C, 2026-09-06).
+`devnet-direct-trade-v1 --session` advances the private session by exactly one
+journalled transaction and returns zero — token-setup, lookup-create, three
+extends, lookup-freeze, lookup-activation, capability-seal, hot — so under
+`once` the row drove the FIRST one, printed its exit-zero line and wrote GREEN
+over an unfilled market. Nothing was red. The row is a `journal` keyed on
+`producers/direct-trade-finalized.json`, which the producer writes only after
+the hot stage finalizes.
+
+**THE TWO VENUE TOKEN ACCOUNTS ARE PDAs.**
+`DirectTokenAccountSeedsV1` seeds them under Trading with
+`b"dclutch:direct-token:v1"`, the market, the generation, the owner and a
+one-byte role (Seller 0, Fee 1), and the setup stage refuses a "foreign token
+PDA". A manifest row that pastes them off a previous fill is a transcription of
+a derivation.
 
 The smallest fill whose fee does not floor to zero, taken on purpose and
 settled in a second transaction. The measured CU is recorded beside the
@@ -320,6 +372,13 @@ chain afterwards is the only thing that distinguishes a settled fee from a sent
 transaction.
 
 ### census
+
+**IT BLOCKS NOTHING** (COHORT-17C, 2026-09-06). It used to block
+`relay-capture`, which is legal only inside the market's own 1,800-second window
+and is bound by nothing else; a read in front of a deadline spends the deadline.
+Cohort-16.1 fired its capture before its admissions and its fill and was right
+to, cohort-17 wrote that down as a finding and left the edge standing, and
+cohort-17's second market is the one whose window it would have taken.
 
 The complete aperture is taken **before the first boundary**. An `INAPPLICABLE`
 is not a pass.

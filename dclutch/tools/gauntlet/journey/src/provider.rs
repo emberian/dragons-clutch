@@ -187,6 +187,7 @@ pub(crate) fn resolve_through_pyth(
     plan: &SuccessorPlan,
     addresses: &ResolutionAddressesV1,
     provider: &ProviderPlanV1,
+    capture_dir: &std::path::Path,
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
     let mut fees = 0_u64;
@@ -468,6 +469,15 @@ pub(crate) fn resolve_through_pyth(
     submitted += transactions.len().saturating_sub(before_tables);
     fees = fees.saturating_add(fees_since(transactions, before_tables));
     let mut table_lamports = table_rent(&submit_tables);
+    write_frame_capture_v1(
+        rpc,
+        &capture_dir.join("provider-submit.capture.json"),
+        "journey: Resolution submits one update through the real receiver ELF",
+        std::slice::from_ref(&submit.instruction),
+        payer.pubkey(),
+        submit_routing,
+        &submit_tables,
+    )?;
     let evidence = rpc.send_v0_with_signers(
         "journey: Resolution submits one update through the real receiver ELF",
         std::slice::from_ref(&submit.instruction),
@@ -859,6 +869,110 @@ fn execute_snapshot(
 /// mutably across every call site, which made a rent lookup inside an argument
 /// list a borrow error rather than a readability question.
 #[allow(clippy::too_many_arguments)]
+/// Write one frame as a `dclutch-devnet-frame-capture-v1` document.
+///
+/// THE WALL THIS EXISTS FOR IS A CHAIN THAT ONLY ANSWERS ONCE. A journey run is
+/// forty minutes and tears its validator down, so every question asked of a
+/// refusing frame cost another run -- and `ResolutionError::FinalizedRecord`
+/// 0x8004 is one wire code over twelve raise sites in this route alone. A
+/// capture turns that into an offline instrument:
+/// `programs/dclutch-trading-sbf/program-test/devnet-replay` replays exactly
+/// this document in `ProgramTest`, and `--set-account` moves ONE input at a
+/// time, which is how a coarse code is convicted
+/// (`docs/design/DEVNET_FRAME_REPLAY_V1.md`, step 5).
+///
+/// Written whether the frame refuses or lands: a capture of a frame that WORKED
+/// is the control every mutation is read against.
+///
+/// The packet is compiled the way `Rpc::send_v0_*` compiles it -- the same
+/// bounded instructions, the same tables, the same fee payer -- rather than
+/// intercepted from the send, because the replay rewrites the blockhash and
+/// verifies no signature. What must be identical is the message: its accounts,
+/// their privileges, and the instruction data.
+fn write_frame_capture_v1(
+    rpc: &mut Rpc,
+    path: &std::path::Path,
+    label: &str,
+    instructions: &[Instruction],
+    fee_payer: Pubkey,
+    observation: dclutch_resolution_core_v3_operator::Observation,
+    tables: &[ObservedAccount],
+) -> Result<()> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    let bounded = crate::rpc::bounded_instructions(instructions, None)?;
+    let (blockhash, _) = rpc.recent_blockhash_with_height_v1()?;
+    let plan = dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
+        fee_payer,
+        &bounded,
+        solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+        observation,
+        tables,
+    )
+    .map_err(|error| Error::new(format!("{label}: capture message compilation: {error:?}")))?;
+    let transaction = solana_sdk::transaction::VersionedTransaction {
+        signatures: vec![
+            solana_sdk::signature::Signature::default();
+            usize::from(plan.required_signatures.max(1))
+        ],
+        message: plan.message,
+    };
+    let packet = bincode::serialize(&transaction)
+        .map_err(|error| Error::new(format!("{label}: capture serialize: {error}")))?;
+    // Every address the packet can name: the frame's own, the programs it
+    // invokes, the fee payer, and the lookup tables the runtime resolves
+    // through. A table is an account too, and a replay that lacks one resolves
+    // no address at all.
+    let mut addresses = std::collections::BTreeSet::new();
+    addresses.insert(fee_payer);
+    for instruction in &bounded {
+        addresses.insert(instruction.program_id);
+        for meta in &instruction.accounts {
+            addresses.insert(meta.pubkey);
+        }
+    }
+    for table in tables {
+        addresses.insert(table.key);
+    }
+    let mut state = serde_json::Map::new();
+    for address in addresses {
+        // An absent account is simply absent, which is what the replay expects
+        // and what the chain itself presented.
+        if let Some(account) = rpc.account(address)? {
+            state.insert(
+                address.to_string(),
+                serde_json::json!({
+                    "lamports": account.lamports,
+                    "owner": account.owner.to_string(),
+                    "executable": account.executable,
+                    "rentEpoch": account.rent_epoch,
+                    "dataBase64": BASE64.encode(&account.data),
+                }),
+            );
+        }
+    }
+    let document = serde_json::json!({
+        "schema": "dclutch-devnet-frame-capture-v1",
+        "label": label,
+        "warpSlot": rpc.finalized_slot()?,
+        "transactionBase64": BASE64.encode(&packet),
+        "state": state,
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_vec_pretty(&document)?)?;
+    eprintln!(
+        "journey: frame capture written to {} ({} accounts, {} packet bytes)",
+        path.display(),
+        document
+            .get("state")
+            .and_then(serde_json::Value::as_object)
+            .map_or(0, serde_json::Map::len),
+        packet.len()
+    );
+    Ok(())
+}
+
 fn send(
     rpc: &mut Rpc,
     label: &str,

@@ -103,6 +103,13 @@ def main() -> int:
     gross = args.fill_gross_atoms
     required_buyer_collateral = gross + (gross * args.direct_fee_basis_points) // 10_000
     participants = args.participant or ["participant-1", "participant-2"]
+    # THE SIMULATOR WORK DIR IS ONE VALUE, AND THE ADMISSION REPORTS LIVE UNDER IT.
+    # This was `job / "sim"` in three places while `--work-dir` moved the fourth,
+    # so pointing the row at a second market wrote that market's config with the
+    # FIRST market's Position addresses -- read back out of the first market's
+    # landed admission reports -- and aimed its admissions at the paths that hold
+    # them. Measured 2026-09-06 by lane COHORT-17C, on cohort-17 market 2.
+    work_dir = Path(args.work_dir or os.environ.get("SIM_WORK_DIR", str(job / "sim")))
     evidence_path = job / args.market_dir / "campaign-open.json"
     evidence = json.loads(evidence_path.read_text())
     accounts = evidence["execution"]["market"]["accounts"]
@@ -143,7 +150,7 @@ def main() -> int:
             "fee_payer": payer,
             "fee_payer_keypair": str(job / "keys" / "campaign-payer.json"),
             "minimum_finalized_slot": slot,
-            "output": str(job / "sim" / "admissions" / f"{name}.json"),
+            "output": str(work_dir / "admissions" / f"{name}.json"),
             "collateral": None,
         }
         if name == participants[-1] and required_buyer_collateral:
@@ -168,7 +175,7 @@ def main() -> int:
     census_tokens = {"founder_collateral_wallet": address("collateral_wallet")}
     census_positions = {"founder": address("founder_position")}
     for name in participants:
-        report = job / "sim" / "admissions" / f"{name}.json"
+        report = work_dir / "admissions" / f"{name}.json"
         if not report.is_file():
             continue
         landed = json.loads(report.read_text())
@@ -201,7 +208,7 @@ def main() -> int:
         # A work dir belongs to ONE config: the journal recomputes the plan
         # digest and refuses to resume when the config changed. A rebuild that
         # changes the config gets its own dir.
-        "work_dir": args.work_dir or os.environ.get("SIM_WORK_DIR", str(job / "sim")),
+        "work_dir": str(work_dir),
         "market_address": market_address,
         "cadence": {"period_seconds": 20.0, "jitter_fraction": 0.25},
         "trade": {"mode": "none", "max_steps_per_session": 32, "step_pause_seconds": 5.0},

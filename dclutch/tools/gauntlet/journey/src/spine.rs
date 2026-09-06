@@ -27,9 +27,9 @@
 //! their crash-safety contract, not an inconvenience. `direct_trade` walks
 //! replay-setup, token-setup, four lookup acts, the capability seal and the
 //! Hot execution; `wallet_terminal_payout_exterior` walks four lookup acts and
-//! the payout; `terminal_sequence` walks CoreBeginRetiring, DirectBeginRetiring,
-//! ResolutionCloseFund, DirectCloseCapability, RetirementReplayHandoff and
-//! AggregateRetirement; `aggregate_retirement_exterior` walks the four
+//! the payout; `terminal_sequence` walks the six protocol mutations of
+//! [`dclutch_market_retirement_v1_operator::terminal_stage_order_v1::TerminalStageV1::ORDERED`];
+//! `aggregate_retirement_exterior` walks the four
 //! checkpoint packets. So each stage here is a BOUNDED loop with a stated
 //! ceiling, and a stage that hits its ceiling reports how far it got rather
 //! than looping forever or claiming completion.
@@ -46,10 +46,28 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 
+use dclutch_market_retirement_v1_operator::terminal_stage_order_v1::TerminalStageV1;
+
 use crate::model::TransactionEvidence;
 use crate::rpc::Rpc;
 use crate::stages::StageReportV1;
 use crate::{Error, Result};
+
+/// The terminal sequence's six protocol mutations, in the order the driver runs
+/// them, rendered for a transcript.
+///
+/// READ, NEVER RESTATED. This file used to print the six by hand, in three
+/// places, and printed the wrong order after PROGRAMS-18A reversed the pair a
+/// devnet market had already been retired against. The order has one author --
+/// `dclutch_market_retirement_v1_operator::terminal_stage_order_v1` -- and this
+/// tier calls the driver that reads it.
+fn terminal_stage_order_v1() -> String {
+    TerminalStageV1::ORDERED
+        .iter()
+        .map(|stage| stage.kebab())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// How many times a resumption loop may re-enter one driver.
 ///
@@ -60,6 +78,35 @@ use crate::{Error, Result};
 /// and small enough that a driver stuck on one action is REPORTED within a
 /// minute rather than spun on.
 const RESUMPTION_CEILING_V1: usize = 24;
+
+/// What role an account a spine stage created plays in the conservation laws.
+pub(crate) enum ApertureRoleV1 {
+    /// A collateral-Mint token account: it joins L1's partition.
+    Collateral,
+    /// A Claims Position: it joins L3's supply sum.
+    Position,
+}
+
+/// One account a spine stage brought into existence, read out of that stage's
+/// own report.
+///
+/// THE APERTURE IS DERIVED, NEVER LISTED. A conservation law is only as total
+/// as the set of accounts it names, and none of these accounts can be named
+/// before the act that creates them -- which is why the founding's aperture,
+/// discovered from the founding's own evidence, was complete and then was not.
+/// hbox `20260906T131304Z` is what the gap costs: the first admission that ever
+/// landed on a validator was met with `VIOLATED L1: tracked 1000000002 atoms
+/// across 9 accounts != Mint supply 1100000002; 100000000 atoms are in accounts
+/// this ledger does not name`, a true sentence about the ledger rather than
+/// about the chain. The devnet spine has read these back out of the landed
+/// admission reports since cohort-12 met the same wall
+/// (`tools/cohort/build-sim-config.py`); this is that read, for a stage that
+/// runs in-process.
+pub(crate) struct ApertureEntryV1 {
+    pub(crate) label: String,
+    pub(crate) address: Pubkey,
+    pub(crate) role: ApertureRoleV1,
+}
 
 /// What the spine did, in the shape the journey folds.
 pub(crate) struct SpineV1 {
@@ -72,6 +119,9 @@ pub(crate) struct SpineV1 {
     pub(crate) refusals: Vec<String>,
     /// One machine-readable row per stage, for the transcript.
     pub(crate) reports: serde_json::Map<String, Value>,
+    /// Accounts these stages created, for the conservation ledger to name
+    /// before the census that follows them.
+    pub(crate) aperture: Vec<ApertureEntryV1>,
 }
 
 impl SpineV1 {
@@ -81,6 +131,7 @@ impl SpineV1 {
             transactions: Vec::new(),
             refusals: Vec::new(),
             reports: serde_json::Map::new(),
+            aperture: Vec::new(),
         }
     }
 
@@ -92,6 +143,30 @@ impl SpineV1 {
             compute_units: compute,
             note,
         });
+    }
+
+    /// Name an account a stage created, from a key inside that stage's own
+    /// report. A document that does not carry the key, or carries something
+    /// that is not an address, adds nothing: the ledger's own L1 is what
+    /// reports the resulting gap, and it reports it as a number.
+    fn admit_account(
+        &mut self,
+        label: String,
+        document: &Value,
+        pointer: &str,
+        role: ApertureRoleV1,
+    ) {
+        if let Some(address) = document
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .and_then(|text| text.parse::<Pubkey>().ok())
+        {
+            self.aperture.push(ApertureEntryV1 {
+                label,
+                address,
+                role,
+            });
+        }
     }
 
     fn refused(&mut self, stage: &str, error: &str, note: String) {
@@ -433,6 +508,22 @@ pub(crate) fn admit_strangers(
                     harvest_document(rpc, &label, &document, &mut spine.transactions);
                 landed += count;
                 compute += units;
+                // The two accounts this admission created, named from the
+                // report it just wrote. The Position always; the delegated
+                // collateral account only for the stranger who carries the
+                // collateral leg.
+                spine.admit_account(
+                    format!("{}_position", stranger.label),
+                    &document,
+                    "/intent/position",
+                    ApertureRoleV1::Position,
+                );
+                spine.admit_account(
+                    format!("{}_delegated_collateral", stranger.label),
+                    &document,
+                    "/collateral/intent/participantTokenAccount",
+                    ApertureRoleV1::Collateral,
+                );
                 rows.insert(
                     stranger.label.clone(),
                     serde_json::json!({
@@ -649,6 +740,29 @@ pub(crate) fn fill(
             );
             return Ok(());
         }
+    }
+    // THE FILL'S TWO COLLATERAL DESTINATIONS, named before it runs. Its
+    // token-setup act creates the seller's Direct token account and the fee
+    // recipient's, and both hold collateral atoms the moment the Hot execution
+    // lands -- so a ledger that did not name them would report the buyer's
+    // debit as atoms nobody holds. They are read out of the producer's own
+    // public manifest, and naming them BEFORE the execute loop means a fill
+    // that refuses part way still leaves the census total over what it made.
+    let public_manifest = output_dir.join("direct-trade-public.json");
+    if public_manifest.exists() {
+        let document = read_json(&public_manifest)?;
+        spine.admit_account(
+            "direct_seller_token".into(),
+            &document,
+            "/tokenSetup/sellerToken",
+            ApertureRoleV1::Collateral,
+        );
+        spine.admit_account(
+            "direct_fee_token".into(),
+            &document,
+            "/tokenSetup/feeToken",
+            ApertureRoleV1::Collateral,
+        );
     }
     // One durable action per invocation: replay-setup, token-setup, the four
     // lookup acts, the capability seal, then the Hot execution. The driver
@@ -920,10 +1034,9 @@ pub(crate) fn redeem(
 /// 1. `local-private-validator-refresh-evidence-v1` re-reads the founding's own
 ///    accounts at the current slot and refuses a world in which any immutable
 ///    founding record moved. Its output is what the next two consume.
-/// 2. `local-private-validator-terminal-sequence-v1` walks CoreBeginRetiring,
-///    DirectBeginRetiring, ResolutionCloseFund, DirectCloseCapability,
-///    RetirementReplayHandoff and AggregateRetirement, one per invocation,
-///    creating its own exact-union routing table first.
+/// 2. `local-private-validator-terminal-sequence-v1` walks
+///    [`TerminalStageV1::ORDERED`], one stage per invocation, creating its own
+///    exact-union routing table first.
 /// 3. `local-private-validator-aggregate-retirement-v1` drives the four
 ///    checkpoint packets -- prepare, close-vault, close-replay, finish -- and
 ///    writes a conservation receipt that classifies every lamport they moved.
@@ -1035,48 +1148,23 @@ pub(crate) fn retire(
                 compute,
                 format!(
                     "`local-private-validator-terminal-sequence-v1 --execute`, {passes} \
-                     invocations, one durable stage each over the driver's own ordered six -- \
-                     CoreBeginRetiring, DirectBeginRetiring, ResolutionCloseFund, \
-                     DirectCloseCapability, RetirementReplayHandoff, AggregateRetirement -- with \
-                     an exact-union routing table built by the same journal machinery in front."
+                     invocations, one durable stage each over the ordered six -- {} -- with \
+                     an exact-union routing table built by the same journal machinery in front.",
+                    terminal_stage_order_v1()
                 ),
             );
             spine.reports.insert("terminal-sequence".into(), document);
         }
         Err((passes, error)) => {
-            // THE STAGE-FOUR REFUSAL IS ALREADY CONVICTED, and a run that meets
-            // it must read as that conviction rather than as a new mystery.
-            // Cohort-17 found it on devnet: `TerminalStageV1::ORDERED` runs
-            // `ResolutionCloseFund` third and `DirectCloseCapability` fourth,
-            // and stage three CLOSES the Resolution dependency funding ledger
-            // that stage four decodes to build its `CapabilityFundingHeaderV2`
-            // and preserve -- so stage four refuses `Capability(InvalidLength)`
-            // on every market that ran the shipped order. The ruling (the
-            // orchestrator, 2026-09-06) is that the Direct close preserves the
-            // dependency it names and its owner closes it afterwards:
-            // `DirectCloseCapability` runs BEFORE `ResolutionCloseFund`.
-            // PROGRAMS-18A owns making the shipped order and the harness's
-            // order one author; this tier CALLS that driver and does not carry
-            // a second copy of its ordering. So the stage stops here, named,
-            // and no ledger is fabricated past it.
-            let known = error.contains("InvalidLength")
-                && (error.contains("DirectCloseCapability") || error.contains("Capability"));
             spine.refused(
                 sequence_stage,
                 &error,
                 format!(
                     "The shipped terminal-sequence driver refused at invocation {passes}: \
-                     {error}. {landed} of its acts had already finalized.{}",
-                    if known {
-                        " This is the CONVICTED stage-four refusal: `TerminalStageV1::ORDERED` \
-                         closes the Resolution dependency funding ledger at stage three that \
-                         `DirectCloseCapability` decodes at stage four. The ruling is that the \
-                         Direct close runs FIRST and its owner closes the dependency afterwards; \
-                         PROGRAMS-18A owns the shipped order. Nothing past this stage is driven, \
-                         and no retirement ledger is written for a sequence that did not complete."
-                    } else {
-                        ""
-                    }
+                     {error}. {landed} of its acts had already finalized, over the ordered six \
+                     {}. Nothing past this stage is driven, and no retirement ledger is written \
+                     for a sequence that did not complete.",
+                    terminal_stage_order_v1()
                 ),
             );
             spine.reports.insert(
@@ -1196,6 +1284,63 @@ fn digest_of(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The aperture is a READ, and a read that finds nothing adds nothing.
+    ///
+    /// The three cases are the three a landed report can present: the buyer,
+    /// who carries the collateral leg and creates two accounts; the stranger,
+    /// whose report has no `collateral` object at all and must contribute one
+    /// entry rather than a placeholder; and a value that is present and is not
+    /// an address, which must not enter a conservation law as a default key.
+    /// L1 is what reports the resulting gap, in atoms, and this keeps a bad
+    /// read from becoming a wrong balance instead of a visible one.
+    #[test]
+    fn the_aperture_names_only_what_a_report_actually_carries() {
+        let position = Pubkey::new_unique();
+        let token = Pubkey::new_unique();
+        let mut spine = SpineV1::new();
+        let buyer = serde_json::json!({
+            "intent": {"position": position.to_string()},
+            "collateral": {"intent": {"participantTokenAccount": token.to_string()}},
+        });
+        spine.admit_account(
+            "buyer_position".into(),
+            &buyer,
+            "/intent/position",
+            ApertureRoleV1::Position,
+        );
+        spine.admit_account(
+            "buyer_delegated_collateral".into(),
+            &buyer,
+            "/collateral/intent/participantTokenAccount",
+            ApertureRoleV1::Collateral,
+        );
+        let stranger = serde_json::json!({"intent": {"position": "not an address"}});
+        spine.admit_account(
+            "stranger_position".into(),
+            &stranger,
+            "/intent/position",
+            ApertureRoleV1::Position,
+        );
+        spine.admit_account(
+            "stranger_delegated_collateral".into(),
+            &stranger,
+            "/collateral/intent/participantTokenAccount",
+            ApertureRoleV1::Collateral,
+        );
+        let named: Vec<(&str, Pubkey)> = spine
+            .aperture
+            .iter()
+            .map(|entry| (entry.label.as_str(), entry.address))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                ("buyer_position", position),
+                ("buyer_delegated_collateral", token)
+            ]
+        );
+    }
 
     /// The harvester walks for the KEY, so a driver that grows a journal array
     /// is harvested without this file learning its shape.

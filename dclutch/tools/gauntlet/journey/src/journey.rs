@@ -838,6 +838,21 @@ fn campaign(
         second.pubkey(),
         2_000_000_000,
     )?);
+    // THE ALLOWANCE IS THE TRADE'S, NOT THE FIXTURE'S. This delegated exactly
+    // the fixture's whole liquidity, and the first admission that ever landed
+    // on a validator then refused its own fill: *its delegated allowance
+    // 100000000 is not exactly the 50250000 atoms this trade debits -- the
+    // allowance authorizes one trade and is spent to zero, so more is as
+    // refused as less* (hbox `20260906T131304Z`). Two acts sized the same
+    // quantity independently, which is one author too many; the devnet spine
+    // has derived the allowance from the trade's own economics since
+    // cohort-16.1 (`tools/cohort/build-sim-config.py`) and this asks the
+    // producer that authors those terms rather than restating its arithmetic.
+    // The fixture keeps the remainder, which is what a source account is for.
+    let buyer_allowance_atoms = crate::direct_trade_producer::required_buyer_collateral_v1(
+        &crate::direct_trade_producer::owned_loopback_default_terms_v1(0),
+        crate::direct_trade_producer::EXPECTED_PRICE_SCALE_V1,
+    )?;
     let strangers = vec![
         spine::StrangerV1 {
             label: "buyer".into(),
@@ -847,7 +862,7 @@ fn campaign(
                 source_owner: participant,
                 source_owner_keypair: spine_key(&checked.report, "participant")?,
                 source_account: fixture_source,
-                quantity_atoms: crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1,
+                quantity_atoms: buyer_allowance_atoms,
             }),
             report: spine_work.join("admission-buyer.json"),
         },
@@ -937,6 +952,20 @@ fn campaign(
     progress.stages.append(&mut spine.stages);
     session.transactions.append(&mut spine.transactions);
     progress.unexpected_refusals.append(&mut spine.refusals);
+    // THE APERTURE FOLLOWS THE ACTS, and it has to: L1 totals over the accounts
+    // it names, and every account this stage created was named for the first
+    // time by the driver that created it. Folded here, before the census that
+    // closes the stage, so the laws are stated over the world the stage left.
+    for entry in spine.aperture.drain(..) {
+        match entry.role {
+            spine::ApertureRoleV1::Collateral => {
+                ledger.track_token_account(&entry.label, entry.address);
+            }
+            spine::ApertureRoleV1::Position => {
+                ledger.track_position(&entry.label, entry.address);
+            }
+        }
+    }
     ledger.observe(
         &mut session.rpc,
         "trading: admission, the Direct Hot fill, and the fee settlement",
@@ -979,6 +1008,10 @@ fn campaign(
     // error that discards the rest of the journey -- so the stage is recorded
     // either way and the run fails at the end, after the transcript exists.
     progress.entering("resolution: the Pyth transport carries the Market to Terminal");
+    // WHERE A REFUSING FRAME IS KEPT. A run tears its validator down, so a wall
+    // met here is unaskable afterwards unless the frame and the accounts it
+    // named are on disk. The captures live beside the transcript.
+    let capture_dir = request.work.join("captures");
     let (provider_report, provider_lamports, provider_classes) =
         match provider::resolve_through_pyth(
             &mut session.rpc,
@@ -986,6 +1019,7 @@ fn campaign(
             &session.plan,
             &resolution_addresses,
             &provider_plan,
+            &capture_dir,
             &mut session.transactions,
         ) {
             Ok((report, lamports)) => (report, lamports, ClassClaimV1::unchanged()),

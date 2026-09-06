@@ -113,12 +113,12 @@
     {
       "label": "2",
       "kind": "direct",
-      "address": "",
-      "window_record": "",
-      "window_start": "",
-      "mint": "",
-      "hoard": "",
-      "aggregate": "",
+      "address": "AvKSizb7j3VCzB41bKxYXntoXyRojDVM9UzyjgFvAadR",
+      "window_record": "9CLAg1X6hpQjGrEszWM59Dupn7zRkGkNBwJRNqWT1McX",
+      "window_start": "1788703359",
+      "mint": "9qJXBAcyeTJn3hq7sGb8mgh1dkXAp9m2UqLjiLtMipzg",
+      "hoard": "86ZYfCNMX5uwc9NFRbDk5oUBF8NU3bVYkQkPLHwzs6Ub",
+      "aggregate": "DbnUvBnHvJy1SuxCMnF6yewFWmB9JeBudFMXQyizzjso",
       "work_dir": "market-2",
       "collateral_mint_keypair": "keys/collateral-mint-2.json",
       "collateral_wallet_keypair": "keys/collateral-wallet-2.json",
@@ -131,23 +131,32 @@
       "band_plausible_half_widths": "3",
       "band_max_cell_share_bps": "9000",
       "window_lead_seconds": "2400",
-      "lookup_table": "",
+      "lookup_table": "EX5MafgFsroPVwV9aaNMqYdum4PnKPHYytPNrNsPnBdU",
       "source_receipt": "",
       "generation": "2",
       "census": {
-        "tokens": [],
-        "positions": [],
+        "tokens": [
+          "founder_collateral_wallet=GzTTkfV3a623Gi6viECTLTzNQ8B7Tmidi7sfxSmgaLp9",
+          "participant-2_delegated_collateral=Bq6vYHWDmrDMZ7Ser9KFrTsQXoDPtcHmGwCz51KusFzx",
+          "seller_collateral_destination=G72dgAqqouvynHNHXWpqrEvfHsQwK1JUHi8Lz5pKcwfx",
+          "venue_fee_token=7HUrvQfrPa1rGKb5nC7YCb3A99bHkyLA9C4z4rMJTiBN"
+        ],
+        "positions": [
+          "founder=GpEixFF6KEFfViSmFsx6RHZkQSjyBNAVasgvicbDXUVa",
+          "participant-1=9BuaLtXhkghHJGVY7g2RqcMNqCTLjRFLkcn2GdwduNPV",
+          "participant-2=CsLAmrDEGcjgfnoqAn1isi6ie9ThXgomYT1gdMG418T3"
+        ],
         "watches": []
       },
       "payout": {
         "owner_keypair": "keys/participant-2.json",
-        "recipient": "",
+        "recipient": "Bq6vYHWDmrDMZ7Ser9KFrTsQXoDPtcHmGwCz51KusFzx",
         "claim_index": "1"
       },
       "fill": {
         "outcome": "1",
-        "seller_collateral_account": "",
-        "buyer_collateral_account": "",
+        "seller_collateral_account": "G72dgAqqouvynHNHXWpqrEvfHsQwK1JUHi8Lz5pKcwfx",
+        "buyer_collateral_account": "Bq6vYHWDmrDMZ7Ser9KFrTsQXoDPtcHmGwCz51KusFzx",
         "buyer_participant_report": "market-2/sim/admissions/participant-2.json",
         "debtor_keypair": "keys/participant-2.json"
       }

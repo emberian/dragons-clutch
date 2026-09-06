@@ -103,7 +103,7 @@ const DEVNET_DIRECT_PRODUCER_JOURNAL_SCHEMA_V1: &str =
 const FILL_ATOMS_V1: u64 = 100_000_000;
 const EXECUTION_PRICE_V1: u64 = 500_000;
 const FEE_BASIS_POINTS_V1: u16 = 50;
-const EXPECTED_PRICE_SCALE_V1: u64 = 1_000_000;
+pub(crate) const EXPECTED_PRICE_SCALE_V1: u64 = 1_000_000;
 const INTENT_LIFETIME_SLOTS_V1: u64 = 432_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2506,17 +2506,8 @@ fn prepare_public_facts_v1(
             FILL_ATOMS_V1,
         )?,
     };
-    let terms = requested_terms.unwrap_or(DirectTradeTermsV1 {
-        outcome,
-        fill: FILL_ATOMS_V1,
-        execution_price: EXECUTION_PRICE_V1,
-        fee_basis_points: FEE_BASIS_POINTS_V1,
-    });
-    let gross = exact_quote_v1(terms.fill, terms.execution_price, config.price_scale())?;
-    let fee = fee_floor_v1(gross, terms.fee_basis_points)?;
-    let required_buyer_collateral = gross
-        .checked_add(fee)
-        .ok_or_else(|| refusal("Direct buyer reserve overflowed"))?;
+    let terms = requested_terms.unwrap_or(owned_loopback_default_terms_v1(outcome));
+    let required_buyer_collateral = required_buyer_collateral_v1(&terms, config.price_scale())?;
     let buyer_collateral_account = snapshot.account(participant.collateral_account)?;
     let refusing = refusing_buyer_collateral_clauses_v1(
         &buyer_collateral_account.data,
@@ -3585,6 +3576,43 @@ fn first_funded_outcome_v1(
     )))
 }
 
+/// The terms this producer trades on when a caller names none.
+///
+/// Stated once, so a reader who needs to know what a default owned-loopback
+/// fill costs does not have to reconstruct it from four constants.
+pub(crate) fn owned_loopback_default_terms_v1(outcome: u32) -> DirectTradeTermsV1 {
+    DirectTradeTermsV1 {
+        outcome,
+        fill: FILL_ATOMS_V1,
+        execution_price: EXECUTION_PRICE_V1,
+        fee_basis_points: FEE_BASIS_POINTS_V1,
+    }
+}
+
+/// Exactly what one fill debits the buyer's collateral account: the gross quote
+/// plus the floored fee.
+///
+/// ONE AUTHOR, and the reason is a wall. A Direct fill refuses unless the
+/// buyer's DELEGATED ALLOWANCE equals this number exactly -- the allowance
+/// authorizes one trade and is spent to zero, so more is as refused as less --
+/// and the allowance is set by a different act, the admission, run long before
+/// this arithmetic. The devnet spine has derived the one from the other since
+/// cohort-16.1 (`tools/cohort/build-sim-config.py`: "the buyer's delegated
+/// allowance is DERIVED, never stated"); the journey stated a fixture constant
+/// instead and the first admission that ever landed on a validator refused its
+/// own fill on the mismatch (hbox `20260906T131304Z`: an allowance of
+/// 100,000,000 against 50,250,000 debited). An admission that wants to fill
+/// asks this function what to delegate.
+pub(crate) fn required_buyer_collateral_v1(
+    terms: &DirectTradeTermsV1,
+    price_scale: u64,
+) -> Result<u64> {
+    let gross = exact_quote_v1(terms.fill, terms.execution_price, price_scale)?;
+    gross
+        .checked_add(fee_floor_v1(gross, terms.fee_basis_points)?)
+        .ok_or_else(|| refusal("Direct buyer reserve overflowed"))
+}
+
 fn exact_quote_v1(quantity: u64, price: u64, scale: u64) -> Result<u64> {
     let product = u128::from(quantity) * u128::from(price);
     let scale = u128::from(scale);
@@ -4249,7 +4277,8 @@ mod tests {
         DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1, DevnetDirectParticipantSourceV1,
         DevnetDirectSessionProducerJournalV1, DevnetDirectSessionProducerPhaseV1,
         DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenDestinationPrestateV1,
-        DirectTradeTermsV1, EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
+        DirectTradeTermsV1, EXECUTION_PRICE_V1, EXPECTED_PRICE_SCALE_V1, FEE_BASIS_POINTS_V1,
+        FILL_ATOMS_V1,
         FinalizedTicketExpectationV1, OwnedLoopbackDirectProducerReceiptV1,
         ProducedDirectTradePrivateSessionV1, ProducedReplaySetupV1, ProducedTokenSetupV1,
         SignedDirectIntentV3, authenticate_devnet_direct_participant_pair_v1,
@@ -4257,9 +4286,9 @@ mod tests {
         authenticate_direct_execution_root_shape_v1, classify_direct_token_destination_v1,
         derive_capability_seal_v1, devnet_direct_usage, devnet_session_producer_state_sha256_v1,
         devnet_session_usage, exact_quote_v1, exact_ticket_pair_terms_v1, fee_floor_v1,
-        parse_devnet_direct_arguments_v1, parse_devnet_session_arguments_v1,
-        private_session_sha256_v1, producer_receipt_sha256_v1, refusing_ticket_clauses_v1,
-        require_distinct_v1,
+        owned_loopback_default_terms_v1, parse_devnet_direct_arguments_v1,
+        parse_devnet_session_arguments_v1, private_session_sha256_v1, producer_receipt_sha256_v1,
+        refusing_ticket_clauses_v1, require_distinct_v1, required_buyer_collateral_v1,
     };
     use crate::{
         cluster::{DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
@@ -4278,6 +4307,31 @@ mod tests {
         assert_eq!(gross, 50_000_000);
         assert_eq!(fee_floor_v1(gross, FEE_BASIS_POINTS_V1)?, 250_000);
         assert!(exact_quote_v1(1, EXECUTION_PRICE_V1, 1_000_000).is_err());
+        Ok(())
+    }
+
+    /// The buyer's debit is the gross quote plus the floored fee, and it is NOT
+    /// the fixture's liquidity.
+    ///
+    /// The second half is the whole point. An admission that delegates the lab
+    /// fixture's whole supply and a fill that sizes its own trade are two
+    /// authors of one number, and on hbox `20260906T131304Z` -- the first
+    /// admission this tier ever landed on a validator -- they disagreed by a
+    /// factor of two and the fill refused. A future edit that makes either side
+    /// state a constant reintroduces exactly that, so this asserts they differ:
+    /// the fixture is the SOURCE an allowance is drawn from, never the
+    /// allowance.
+    #[test]
+    fn the_buyer_debit_is_the_trade_and_never_the_fixture() -> crate::Result<()> {
+        let terms = owned_loopback_default_terms_v1(0);
+        let gross = exact_quote_v1(terms.fill, terms.execution_price, EXPECTED_PRICE_SCALE_V1)?;
+        let debit = required_buyer_collateral_v1(&terms, EXPECTED_PRICE_SCALE_V1)?;
+        assert_eq!(debit, gross + fee_floor_v1(gross, terms.fee_basis_points)?);
+        assert_ne!(
+            debit,
+            crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+        );
+        assert!(debit < crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1);
         Ok(())
     }
 
