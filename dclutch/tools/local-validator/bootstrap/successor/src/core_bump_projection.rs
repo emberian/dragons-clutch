@@ -85,7 +85,18 @@ const UNRECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 1] = [
 /// ordering is the point: the refusal this list answers arrives at the FIRST
 /// founding, after the redeploy has spent, so a cohort whose row is written
 /// afterwards has already bought the discovery it was meant to avoid.
-const RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 3] = [
+const RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 4] = [
+    // cohort-17, 1,190,872 bytes, deployed to devnet as
+    // 2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM. The deploy commit is
+    // 932edc83fc5a108fa362be216c84a3b0f78f29b4 and the bytes are the NAMED
+    // RELEASE BUILDER's -- platform-tools v1.53 on Linux/x86_64, built on hbox
+    // through swarm-build, and reproduced from two independent repository roots
+    // and two --work roots on that builder. Core moves away from cohort-16.1's
+    // 29200c855bfe for the closure burn (7d45d6ba3): the checkpointed
+    // retirement frame goes 35 accounts to 38 so a refunding market can be
+    // retired at all. `git merge-base --is-ancestor b312ce3c4 932edc83f` is
+    // TRUE, so this Core fills all eight nibbles.
+    "2f28309fee8c8d2dde6c141ae65c16ad1a24a2bcdb5284b441984d9def01e0f0",
     // cohort-16.1, 1,186,488 bytes, upgraded in place at devnet
     // 4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe. The candidate commit is
     // 87eec1c3a6bf954a4350931af62ce8d4fcc48da2 and the bytes are the NAMED
