@@ -774,3 +774,164 @@ not a new gap.
 `getMultipleAccounts` at `finalized`. No devnet act. The redeploy that carries
 the repair is cohort-17's, because the repair is a program change and a Claims
 ELF that moves is a re-release plus a re-found under decision 0012.
+
+---
+
+# ADDENDUM, 2026-09-05, lane COHORT-16E: the General capability seal is on chain, and OpenBatch is two walls deep
+
+Devnet execution evidence. Not mainnet evidence. Written at
+`/Users/ember/dev/dclutch`; the job directory is
+`~/jobs/dclutch-cohort161-20260905/` and every artifact below lives in
+`seal-general/`, `openbatch/` and `logs/`. The market is the General market §10
+founded and activated: `65Yq3q6tgHArrJtZPhf5RAgNzpPAGcZSoBmT4D3As9n5`, root
+`4NcnH7ptihcAjYyNX2xbKypnkTCQCpLMBGscX7fduCsF`, release set `f533be49…`,
+activation cache `FCF1ggHcXoZaVx8PKS7YKnY166xL4E8N3ZaRsV29E11b`.
+
+**The accelerator `6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y` still has no
+witness on any chain.** It was reached for and not reached: the OpenBatch
+transaction refuses inside Trading, before any CPI, and the four `Program
+6v1c2Go2… invoke` lines the route would produce do not appear in any log.
+
+## 1. The seal: the first General capability seal on any chain
+
+`devnet-capability-seal-v1` composed the permissionless `DCLTSEL1` outer for
+the descriptor and action the `devnet-general-session` frame report states.
+
+| | |
+| --- | --- |
+| seal | `HH7c3zEH1VzfE8Jzs3yfrRpCirMYzJTqpjgAupxzyLhF`, bump 250, 968 bytes, owner Trading `ESQhDyV7…`, 5,567,680 lamports |
+| descriptor digest | `47a5303dd4ba2e24c4c8ce5f6a08289d21b8b2c004258580e43b9d8df064af60`, action 7 (`OpenBatch`) |
+| Trading semantic release | `79fad2f04f8d9ce07d76c809fe116db8ef9374adbeb15e62f603235c3a2b96b9` |
+| signature | `5tu23XBMS47p7YFVVnmKzDhGePo4zAV6wB1jVETvn8356yX27u2iHwcPrCDZy4qDXez6RhS545j2Lfn91HemifLT`, slot 493,837,946, **625,058 CU**, 41 accounts |
+| routing table | `2U6tDceJaVLme1TVgqFYZQSbGn6paL59BySEmJCJzqWB`, published in four transactions and frozen |
+
+The row's verifier holds: the seal exists at the address the builder derived
+from the four seeds, which is the address the frame report stated at fixed
+coordinate 38; it is Trading-owned and rent-exempt. One correction to the
+runbook's wording, which says the logs *"show Trading and ComputeBudget only"*:
+they show Trading, ComputeBudget **and System** — Trading CPIs System to create
+the seal account, so the third program is the account creation and not a second
+authority.
+
+## 2. THE FIRST WALL, AND IT IS OURS: the General plan never declared a compute limit
+
+The first OpenBatch attempt reached Trading and died:
+
+    Program ESQhDyV7… consumed 202842 of 202850 compute units
+    Program ESQhDyV7… failed: exceeded CUs meter at BPF instruction
+
+`compile_general_hot_v0` pushed `request_heap_frame` and nothing else, so every
+General successor transaction this tree has ever compiled carried the runtime's
+DEFAULT per-instruction allocation — 202,850 units against an action the
+harness measures at **654,000–677,000**. The harness could not see it:
+`programs/dclutch-trading-sbf/program-test/general-hot/tests/open_batch.rs`
+pushes its own `set_compute_unit_limit(waist::COMPUTE_LIMIT)` beside the heap
+frame, so the shipped builder and the only caller that exercised the route were
+two authors for one frame, and every General CU figure ever published was
+measured against a budget the operator never asked for. Direct has carried both
+instructions since `DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1`; General carried one.
+
+Repaired at `432d073393e14496ef6ed1973917d8392c18e1a0`:
+`GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3` declares the chain-profile ceiling, the
+serializer's shape check becomes limit-heap-hot, and the ALT packet witness
+moves +8 wire bytes on all seven N=258 actions with no account count moving —
+widest 940 of 1,232. No crate compiled into an SBF link is touched, so the
+deployed release set is unchanged and the candidate commit still stands.
+
+## 3. THE PROBE DIGEST: the route's caller authorities were never the real ones
+
+`devnet-general-session` derives the four admitted caller-authority PDAs from
+`accelerator_caller_authority_digest_v1(Admitted, parent_request_digest, index)`,
+and `--parent-request-digest` is OPTIONAL. Absent, it substitutes
+`sha256(b"dclutch:devnet-general-session:caller-authority-probe:v1")` and says
+so in the report — `parentRequestDigestIsProbe: true`. The `openbatch-refounded`
+runbook row passes no such flag, so the route it produces always names four
+addresses no execution can derive. The real digest is not knowable until
+`general-successor-plan-v5` has produced the plan, which needs the route: the
+composition is a two-pass loop and nothing in the runbook says so.
+
+Measured, both passes on chain:
+
+| | |
+| --- | --- |
+| probe digest | `5bc43870c202fcc7d1fa5a27e8afb2e21f41a022f3920faee1a0c2e8a40a581e` |
+| real family request digest | `6ac8255569a9086fc414c8bd5fab5d941ec1f8157af44d7ab754bac90bff05c9` |
+| span, probe | `DG7TaMXT…`, `6sttxgpp…`, `9C9t1V5Y…`, `4qZ4Nb4y…` |
+| span, real | `AedW15zt…`, `DS8PzhWg…`, `EWdzZVom…`, `HNeJ2rWj…` |
+
+**All four moved, and the refusal did not.** The second pass consumed
+**239,781 units to the unit**, identical to the first, and returned the same
+code. So the probe default is a real latent defect — a route that would refuse
+`TradingSbfError::Release` the moment execution reached the caller-authority
+derivation — and it is NOT the wall in front of OpenBatch. That is what an
+identical CU says: the refusal is upstream of any use of those four accounts.
+
+## 4. THE SECOND WALL: `TradingSbfError::Content` `0x4003`, and it could not be localized
+
+    InstructionError [2, Custom(16387)]
+    Program ESQhDyV7… consumed 239473 of 1399700 compute units
+    Program ESQhDyV7… failed: custom program error: 0x4003
+
+`Content` is *"Manifest, selected entry, descriptor, or config content refused"*
+and it has **1,686 sites** in `programs/dclutch-trading-sbf/src`. The
+transaction reaches Trading, spends 239,473 of the 1,399,700 units the repair
+now grants it, and refuses with no accelerator invoke in the log. Ruled out by
+measurement rather than by reading:
+
+- the compute ceiling (§2), which is repaired and moved the refusal from
+  203,000 to 239,473;
+- the caller-authority probe span (§3): all four addresses replaced, CU
+  identical to the unit;
+- the capability seal's absence: it is produced, 968 bytes, Trading-owned, and
+  its descriptor digest equals the plan's own `artifacts.descriptor`;
+- the sealed-execution alias shape: `SEALED_EXECUTION_ALIAS_FAMILIES_V3` holds
+  one row and it is Direct `InlineOrdinary`, so
+  `hot_frame_uses_sealed_execution_aliases_v3(General, OpenBatch)` is false, and
+  the frame carries ten distinct vacant staging cursors, so
+  `frame.uses_sealed_execution_aliases()` is false too. The `!=` holds.
+- the route's own conjuncts: the frame report names **no unsatisfiable conjunct
+  at any of the 55 top-level coordinates** (`walls: []`), on every pass.
+
+**The tree's own instrument cannot be pointed at this.** `hot_cu_checkpoint!`
+is `#[cfg(feature = "hot-cu-profile")]`, so naming the phase means running an
+instrumented Trading — and a release pins the ELF digest AND the deployment
+slot, so an instrumented build refuses `Release` before it can print a
+checkpoint. The instrument is usable in program-test and on no release-pinned
+chain, which is a gap of its own. The tree's nearest precedent is
+`docs/ledger/LETTER_TO_CLAUDE_2026_09_01.md`: a Dealer `Content` at 148,093 CU
+localized *"between Hot checkpoints `root-product` and
+`artifacts-strategy-effect`"* — the immutable-artifact authentication tranche.
+This refusal is the same code in the same executor and the bracket is the
+honest one to inherit; it is not measured here. **Could not be localized** is
+the output.
+
+## 5. CloseBatch has no producer at all
+
+`devnet-general-session` hardcodes `const SESSION_ACTION_V1: Action =
+Action::OpenBatch` and exposes no `--action`; it is the only command in the
+tree that emits a `GeneralSuccessorRouteV1`. `CloseBatch` appears in no driver
+source. So the sequence this lane was to run — OpenBatch, CloseBatch at the
+batch's own close slot, then a second OpenBatch exercising the per-batch
+selection — has one reachable step and two that no host can compose, whatever
+the chain answers. That is the producer-missing pattern one action wider than
+the seal was.
+
+## 6. What landed, and the ledger
+
+| act | result |
+| --- | --- |
+| GENERAL-SEAL routing table | `2U6tDceJ…`, 4 transactions, frozen; `5rk4sk3p…`, `2iKakFNu…`, `24CC3fWb…`, `rqohG27j…` |
+| capability seal | `5tu23XBM…` slot 493,837,946, **625,058 CU** |
+| GENERAL-HOT routing table (probe route) | `DK7DSu7U…`, 53 addresses, 5 transactions |
+| GENERAL-HOT routing table (real route) | `Bmehez4x…`, 53 addresses, 5 transactions |
+| OpenBatch | **NOT EXECUTED.** Two simulations, `ProgramFailedToComplete` then `0x4003`; nothing was signed or sent |
+
+    payer 9FNUxCr2CvvTNE47KWhoyBC4LcuYJnyzeQGypkf88KAP
+      1.417282684 -> 1.384214644  (0.033068040 SOL)
+      of which 0.005567680 is permanent seal rent and the rest is three frozen
+      routing tables and fourteen transaction fees
+    deployer 28.657732010, unchanged; no top-up was needed
+
+The batch-window state `CuW1791cAY1uqgtu1okAjEmY2iVHx8gsytQgs8WcayYQ` — the
+address the request's own seeds derive — is ABSENT, as it must be while
+OpenBatch has not executed. That is the row's verifier reading red, honestly.

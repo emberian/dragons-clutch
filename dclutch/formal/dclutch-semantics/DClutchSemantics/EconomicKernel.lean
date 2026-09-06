@@ -1615,4 +1615,260 @@ theorem both_terminal_arms_partition_the_same_scale
     exact sum_set_replicate_zero (outcomeWidth ordinaryCount) winner
       (ordinaryCount * unit) inRange
 
+/-! ### The closure boundary: burning a column no certificate pays
+
+Terminal settlement drains the ordinary claims and the Hoard with them and
+leaves the escrow's failure column standing.  Nothing open can reach it: no
+certificate pays it -- `the_failure_column_is_owed_nothing_under_every_certificate`
+below is `evaluate_categorical`'s `FailureCoordinateNotPayable` and the failure
+arm's "nothing to the failure coordinate" stated once over EVERY terminal
+phase -- its holder is an address with no key, so no redemption is authorized,
+and the refunding merge wants a Hoard that settlement has already paid out.
+`retireTerminal` demands `allZero supply`, so the Market cannot retire and its
+rent is stranded: `a_seated_failure_column_forecloses_retirement`.  Every
+market founded under decision 0025 sat exactly there.
+
+Decision 0025's addendum rules that closure BURNS the column, and this section
+is what that burn conserves.  It is not a new economic act: off the failure
+walk it IS the kernel's own terminal redemption at a payout of zero -- the arm
+the settlement program already carries -- and on the failure walk it differs
+from the categorical author only in the payout the refunding arm already says
+is zero.  The census reads it with no new compartment: the Hoard does not move,
+because a column owed nothing releases no collateral and strands none, and
+supply and the escrow's Position move together at exactly one coordinate.
+
+What the burn is FOR is outside this state: the escrow's Position and its
+admission carry rent, `protocol_position_v2`'s close refuses a Position with
+any nonzero balance, and a closure that merely tolerated the column would
+strand that rent rather than return it to the refund source (decision 0021).
+Lamports are not modelled here.  What is modelled is the conjunct that close
+refuses on, and `the_closure_burn_empties_the_escrow` is it. -/
+
+theorem valueAt_subAt_other
+    (values : List Nat) (outcome quantity index : Nat) (distinct : index ≠ outcome) :
+    valueAt (subAt values outcome quantity) index = valueAt values index := by
+  unfold valueAt subAt setAt
+  rw [List.getElem?_set_ne (Ne.symm distinct)]
+
+/-- NO CERTIFICATE PAYS THE FAILURE COLUMN.  Under the refunding payout arm the
+failure selector draws nothing whatever the terminal says: off the failure walk
+because it is not the winner, and on the failure walk because the refund goes
+to the ordinary claims and the escrow's own claims are excluded by name.  This
+is what makes the burn conserve nothing owed, and it is the reason shape A is a
+burn rather than a settlement nobody can authorize. -/
+theorem the_failure_column_is_owed_nothing_under_every_certificate
+    (ordinaryCount : Nat) (phase : Phase) (quantity multiplier : Nat) :
+    escrowedRedemptionPayout ordinaryCount phase (failureSelector ordinaryCount)
+      quantity multiplier = 0 := by
+  unfold escrowedRedemptionPayout
+  cases hit : terminalWinner? phase with
+  | none => simp
+  | some winner =>
+      by_cases failure : winner = failureSelector ordinaryCount
+      · simp [failure, failureSelector]
+      · simp [failure]
+
+/-- Off the failure walk the kernel's own categorical payout already says the
+same thing, so the burn's post-state and the kernel's redemption coincide. -/
+theorem the_honest_walk_leaves_the_failure_column_unpaid
+    (ordinaryCount : Nat) (phase : Phase) (quantity : Nat)
+    (honest : ∀ winner, terminalWinner? phase = some winner →
+      winner ≠ failureSelector ordinaryCount) :
+    redemptionPayout phase (failureSelector ordinaryCount) quantity = 0 := by
+  unfold redemptionPayout
+  cases hit : terminalWinner? phase with
+  | none => simp
+  | some winner => simp [honest winner hit]
+
+/-- What terminal settlement leaves behind on a refunding Market: the Hoard is
+paid out, every ordinary claim is redeemed and gone, and the escrow's failure
+column -- seated at founding and moved by nothing since -- is the whole of the
+outstanding supply. -/
+def terminalResidue (ordinaryCount : Nat) (state : State) (residue : Nat) : Prop :=
+  state.hoard = 0 ∧
+  (∀ outcome, outcome < ordinaryCount → valueAt state.supply outcome = 0) ∧
+  valueAt state.supply (failureSelector ordinaryCount) = residue ∧
+  escrowSeated ordinaryCount state
+
+/-- Closure's burn: the failure column written to zero in the escrow's Position
+and in the aggregate together, in one act, with the Hoard untouched. -/
+def closureBurnPost (ordinaryCount : Nat) (pre : State) (quantity : Nat) : State :=
+  { pre with
+    supply := subAt pre.supply (failureSelector ordinaryCount) quantity
+    nativeSupply := subAt pre.nativeSupply (failureSelector ordinaryCount) quantity
+    sourceNative := subAt pre.sourceNative (failureSelector ordinaryCount) quantity }
+
+/-- The burn is the kernel's own zero-payout terminal redemption of the
+escrow's Position.  Nothing is added to the economic slice: what the addendum
+found missing was never the arm -- the settlement program's `payout == 0` path
+is complete -- but a party who could authorize it. -/
+theorem the_closure_burn_is_the_kernels_zero_payout_redemption
+    (ordinaryCount : Nat) (pre : State) (quantity : Nat)
+    (unpaid : redemptionPayout pre.phase (failureSelector ordinaryCount) quantity = 0) :
+    closureBurnPost ordinaryCount pre quantity
+      = redeemPost pre .source .native (failureSelector ordinaryCount) quantity := by
+  simp [closureBurnPost, redeemPost, State.representationSupply, State.holderClaims,
+    State.withRepresentationSupply, State.withHolderClaims, unpaid]
+
+/-- L1 AND L3 AT THE CLOSURE BOUNDARY, stated the way the census states them.
+The Hoard does not move -- the burned column was owed nothing, so no collateral
+is released and none is stranded -- and at the failure coordinate the aggregate
+supply and the escrow's Position move by exactly the same amount, which is the
+equality L3 checks.  The founder's Position contributes zero to that sum, which
+is the whole difference between this boundary and the refunding merge. -/
+theorem the_closure_burn_conserves_L1_and_L3
+    (ordinaryCount : Nat) (pre : State) (quantity : Nat)
+    (supplyLength : failureSelector ordinaryCount < pre.supply.length)
+    (escrowLength : failureSelector ordinaryCount < pre.sourceNative.length)
+    (supplyHeld : quantity ≤ valueAt pre.supply (failureSelector ordinaryCount))
+    (escrowHeld : quantity ≤ valueAt pre.sourceNative (failureSelector ordinaryCount)) :
+    (closureBurnPost ordinaryCount pre quantity).hoard = pre.hoard ∧
+    valueAt pre.supply (failureSelector ordinaryCount)
+        - valueAt (closureBurnPost ordinaryCount pre quantity).supply
+            (failureSelector ordinaryCount) = quantity ∧
+    (valueAt pre.sourceNative (failureSelector ordinaryCount)
+        - valueAt (closureBurnPost ordinaryCount pre quantity).sourceNative
+            (failureSelector ordinaryCount))
+      + (valueAt pre.destinationNative (failureSelector ordinaryCount)
+        - valueAt (closureBurnPost ordinaryCount pre quantity).destinationNative
+            (failureSelector ordinaryCount))
+      = quantity := by
+  refine ⟨rfl, ?_, ?_⟩
+  · simp only [closureBurnPost]
+    rw [valueAt_subAt_eq pre.supply (failureSelector ordinaryCount) quantity supplyLength]
+    omega
+  · simp only [closureBurnPost]
+    rw [valueAt_subAt_eq pre.sourceNative (failureSelector ordinaryCount) quantity escrowLength]
+    omega
+
+/-- The burn touches ONE coordinate.  Every ordinary column, the founder's
+Position and the materialized partition are exactly where settlement left them,
+so a Market that was never refunding sees byte-identical behaviour. -/
+theorem the_closure_burn_touches_no_ordinary_coordinate
+    (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
+    (ordinary : outcome < ordinaryCount) :
+    valueAt (closureBurnPost ordinaryCount pre quantity).supply outcome
+      = valueAt pre.supply outcome ∧
+    valueAt (closureBurnPost ordinaryCount pre quantity).sourceNative outcome
+      = valueAt pre.sourceNative outcome ∧
+    (closureBurnPost ordinaryCount pre quantity).destinationNative
+      = pre.destinationNative ∧
+    (closureBurnPost ordinaryCount pre quantity).materializedSupply
+      = pre.materializedSupply := by
+  have distinct : outcome ≠ failureSelector ordinaryCount := by
+    simp only [failureSelector]
+    omega
+  refine ⟨?_, ?_, rfl, rfl⟩
+  · simpa [closureBurnPost] using
+      valueAt_subAt_other pre.supply (failureSelector ordinaryCount) quantity outcome distinct
+  · simpa [closureBurnPost] using
+      valueAt_subAt_other pre.sourceNative (failureSelector ordinaryCount) quantity outcome
+        distinct
+
+/-- The escrow's Position and the aggregate reach zero TOGETHER, which is the
+conjunct `protocol_position_v2`'s close refuses on.  A closure that merely
+admitted the residue would leave this false, strand the escrow's Position and
+its admission, and leak their rent -- which is why shape A is a burn. -/
+theorem the_closure_burn_empties_the_escrow
+    (ordinaryCount : Nat) (pre : State) (residue : Nat)
+    (supplyLength : failureSelector ordinaryCount < pre.supply.length)
+    (escrowLength : failureSelector ordinaryCount < pre.sourceNative.length)
+    (terminal : terminalResidue ordinaryCount pre residue) :
+    valueAt (closureBurnPost ordinaryCount pre residue).supply
+        (failureSelector ordinaryCount) = 0 ∧
+    valueAt (closureBurnPost ordinaryCount pre residue).sourceNative
+        (failureSelector ordinaryCount) = 0 := by
+  obtain ⟨_, _, outstanding, seated⟩ := terminal
+  unfold escrowSeated at seated
+  refine ⟨?_, ?_⟩
+  · simp only [closureBurnPost]
+    rw [valueAt_subAt_eq pre.supply (failureSelector ordinaryCount) residue supplyLength,
+      outstanding]
+    omega
+  · simp only [closureBurnPost]
+    rw [valueAt_subAt_eq pre.sourceNative (failureSelector ordinaryCount) residue escrowLength,
+      seated, outstanding]
+    omega
+
+theorem allZero_eq_false_of_nonzero_coordinate
+    (values : List Nat) (index : Nat) (present : index < values.length)
+    (outstanding : valueAt values index ≠ 0) :
+    allZero values = false := by
+  have nonzero : values[index] ≠ 0 := by
+    simpa [valueAt, List.getElem?_eq_getElem present] using outstanding
+  unfold allZero
+  refine Bool.eq_false_iff.mpr ?_
+  intro contra
+  have zero := (List.all_eq_true.mp contra) values[index] (List.getElem_mem present)
+  simp only [decide_eq_true_eq] at zero
+  exact nonzero zero
+
+theorem allZero_of_every_coordinate
+    (values : List Nat)
+    (zero : ∀ index, index < values.length → valueAt values index = 0) :
+    allZero values = true := by
+  unfold allZero
+  refine List.all_eq_true.mpr ?_
+  intro value member
+  obtain ⟨index, present, hit⟩ := List.getElem_of_mem member
+  have here := zero index present
+  simp only [valueAt, List.getElem?_eq_getElem present, Option.getD_some] at here
+  simp [← hit, here]
+
+/-- THE WALL.  `retireTerminal` demands zero supply at EVERY coordinate, so a
+refunding Market whose escrow still holds the failure column cannot retire.
+Instantiated against nothing but the residue itself, so it is a reachable
+refusal rather than a hypothesis nobody satisfies: cohort-16.1 is in this
+state on devnet. -/
+theorem a_seated_failure_column_forecloses_retirement
+    (ordinaryCount : Nat) (frame : Frame) (residue : Nat)
+    (command : frame.command = .retireTerminal)
+    (positive : 0 < residue)
+    (present : failureSelector ordinaryCount < frame.pre.supply.length)
+    (outstanding : valueAt frame.pre.supply (failureSelector ordinaryCount) = residue) :
+    accepts frame = false ∧ execute? frame = .error .notAdmissible := by
+  have missing : allZero frame.pre.supply = false :=
+    allZero_eq_false_of_nonzero_coordinate _ _ present (by omega)
+  have rejected : accepts frame = false := by
+    simp [accepts, commandAccepts, command, missing]
+  exact ⟨rejected, rejected_execute_refuses frame rejected⟩
+
+/-- THE WALL, DISSOLVED.  Burn the column and the same `retireTerminal` the
+seated residue foreclosed is admitted -- by the same predicate, with nothing
+relaxed in it.  That is the whole of decision 0025's shape A: the supply rule
+is not weakened, the supply is DISCHARGED. -/
+theorem the_closure_burn_admits_the_retirement_it_foreclosed
+    (ordinaryCount winner residue : Nat) (pre : State) (frame : Frame)
+    (command : frame.command = .retireTerminal)
+    (burned : frame.pre = closureBurnPost ordinaryCount pre residue)
+    (retiring : pre.phase = .retiring winner)
+    (drained : pre.hoard = 0)
+    (width : pre.supply.length = outcomeWidth ordinaryCount)
+    (terminal : terminalResidue ordinaryCount pre residue)
+    (settled : allZero pre.materializedSupply = true) :
+    commandAccepts frame = true := by
+  obtain ⟨_, ordinaryZero, outstanding, _⟩ := terminal
+  have supplyLength : failureSelector ordinaryCount < pre.supply.length := by
+    rw [width]
+    simp [failureSelector, outcomeWidth]
+  have empty : allZero (closureBurnPost ordinaryCount pre residue).supply = true := by
+    refine allZero_of_every_coordinate _ ?_
+    intro index present
+    have bound : index < outcomeWidth ordinaryCount := by
+      simpa [closureBurnPost, subAt, setAt, width] using present
+    by_cases failure : index = failureSelector ordinaryCount
+    · simp only [closureBurnPost, failure]
+      rw [valueAt_subAt_eq pre.supply (failureSelector ordinaryCount) residue supplyLength,
+        outstanding]
+      omega
+    · have ordinary : index < ordinaryCount := by
+        simp only [failureSelector] at failure
+        simp only [outcomeWidth] at bound
+        omega
+      simp only [closureBurnPost]
+      rw [valueAt_subAt_other pre.supply (failureSelector ordinaryCount) residue index failure]
+      exact ordinaryZero index ordinary
+  simp only [closureBurnPost] at empty
+  simp [commandAccepts, command, burned, closureBurnPost, retiring, drained, empty, settled]
+
 end DClutch.Economic
