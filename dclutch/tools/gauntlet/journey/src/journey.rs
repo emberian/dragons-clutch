@@ -32,6 +32,41 @@ const TRANSCRIPT_SCHEMA_V1: &str = "dclutch-journey-transcript-v1";
 /// better-conditioned reading from its second.
 const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:120";
 
+/// One account the chain was read at, at the instant a stage refused.
+///
+/// Deliberately shallow -- owner, lamports, width, executable, presence. A
+/// wall is diagnosed by which accounts EXIST and who owns them far more often
+/// than by their contents, and a transcript that tried to decode every watched
+/// account would fail to write exactly when the state is strange.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ChainAccountV1 {
+    pub(crate) label: String,
+    pub(crate) address: String,
+    pub(crate) present: bool,
+    pub(crate) owner: String,
+    pub(crate) lamports: u64,
+    pub(crate) data_len: usize,
+    pub(crate) executable: bool,
+}
+
+/// The stage a helper hard-errored in, its own sentence, and the chain under it.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct JourneyWallV1 {
+    /// The stage the campaign had entered. `entering` is called once per stage
+    /// and nowhere else, so this is a fact about control flow rather than a
+    /// guess read back off the error text.
+    pub(crate) stage: String,
+    /// The helper's own sentence, verbatim and unsummarised.
+    pub(crate) sentence: String,
+    /// The finalized slot the chain was read at, when a reader existed.
+    pub(crate) finalized_slot: Option<u64>,
+    /// Every account the conservation ledger watches, plus the Market, as the
+    /// chain held them at the wall. Empty when the wall came before any chain.
+    pub(crate) chain: Vec<ChainAccountV1>,
+    /// Why `chain` is empty, when it is.
+    pub(crate) chain_note: String,
+}
+
 /// A stage the journey could not run, and exactly what stands in the way.
 ///
 /// A gap is not a TODO. It names the route, the code that refuses, and the lane
@@ -80,6 +115,19 @@ pub(crate) struct JourneyTranscriptV1 {
     /// never traded for a green run.
     pub(crate) unexpected_refusals: Vec<String>,
     pub(crate) gaps: Vec<GapV1>,
+    /// The stage a helper HARD-ERRORED in, if one did, with that helper's own
+    /// sentence and what the chain held at that instant.
+    ///
+    /// A refusal the campaign can carry on past is an `unexpected_refusals`
+    /// row and a `refused` stage. This is the other kind: the stage whose
+    /// error stopped the run. Until 2026-09-06 there was no such field and no
+    /// transcript either -- `execute` propagated the first `Err` with `?`, so
+    /// the document was written only on the paths that reached the end. Three
+    /// consecutive hbox runs hard-errored, each after thirty-five minutes and
+    /// two hundred landed transactions, and each left one line of stderr and
+    /// no evidence. The ladder's `drive_crank` had already been repaired the
+    /// same way; this is that repair on this tier.
+    pub(crate) wall: Option<JourneyWallV1>,
     /// One machine-readable row per shipped-command stage: the admission, the
     /// fill, the fee settlement, the redemption and the three retirement
     /// drivers, each carrying the driver's OWN document rather than this
@@ -132,11 +180,277 @@ struct JourneySessionV1 {
     accounts: std::collections::BTreeMap<String, crate::model::AccountEvidence>,
 }
 
+/// Everything the transcript is built from, kept OUTSIDE the campaign.
+///
+/// The campaign body appends to this as it goes, so the document can be
+/// written from whatever the run reached -- including from a stage that
+/// refused. `execute` owns it; the body only ever borrows it.
+#[derive(Default)]
+struct JourneyProgressV1 {
+    holder_count: u32,
+    claim_unit_atoms: u64,
+    evidence: String,
+    markets: Vec<MarketPhaseV1>,
+    stages: Vec<StageReportV1>,
+    unexpected_refusals: Vec<String>,
+    gaps: Vec<GapV1>,
+    observations: Vec<ObservationV1>,
+    spine: serde_json::Map<String, Value>,
+    conservation_violations: Vec<String>,
+    transactions_total: usize,
+    compute_units_total: u64,
+    /// Accounts a wall reads that the conservation ledger deliberately does
+    /// not watch. The Core Market above all: its phase decides which laws
+    /// apply and it is kept OUT of the ledger's aperture on purpose (see
+    /// `ConservationLedgerV1::market`), so a wall that could not report it
+    /// would be missing the first thing a reader asks.
+    probe_accounts: Vec<(String, solana_sdk::pubkey::Pubkey)>,
+    /// The stage the campaign is inside RIGHT NOW. Set by `entering` and read
+    /// only when a wall is recorded.
+    stage_in_flight: String,
+    wall: Option<JourneyWallV1>,
+}
+
+impl JourneyProgressV1 {
+    fn new(holder_count: u32) -> Self {
+        Self {
+            holder_count,
+            stage_in_flight: "before the first stage".into(),
+            ..Self::default()
+        }
+    }
+
+    /// Name the stage the campaign is about to run.
+    fn entering(&mut self, stage: &str) {
+        self.stage_in_flight = stage.to_owned();
+    }
+
+    /// Take the running totals and the ledger's observations as they stand.
+    fn sync(&mut self, session: &JourneySessionV1, ledger: &ConservationLedgerV1) {
+        self.transactions_total = session.transactions.len();
+        self.compute_units_total = session
+            .transactions
+            .iter()
+            .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
+            .sum();
+        self.observations = ledger.observations().to_vec();
+        self.conservation_violations = ledger.violations();
+    }
+
+    /// Record a wall met before any chain reader existed.
+    fn wall_before_chain(&mut self, error: &Error) {
+        let sentence = error.to_string();
+        self.push_refusal(&sentence);
+        self.wall = Some(JourneyWallV1 {
+            stage: self.stage_in_flight.clone(),
+            sentence,
+            finalized_slot: None,
+            chain: Vec::new(),
+            chain_note: "the wall came before this campaign had a validator and a conservation \
+                         ledger to read one through, so there is no chain state to report"
+                .into(),
+        });
+    }
+
+    /// Record a wall met with a live validator under it.
+    fn wall_on_chain(
+        &mut self,
+        session: &mut JourneySessionV1,
+        ledger: &ConservationLedgerV1,
+        error: &Error,
+    ) {
+        let sentence = error.to_string();
+        self.push_refusal(&sentence);
+        self.sync(session, ledger);
+        let finalized_slot = session.rpc.finalized_slot().ok();
+        let chain = chain_state(&mut session.rpc, ledger, &self.probe_accounts);
+        self.wall = Some(JourneyWallV1 {
+            stage: self.stage_in_flight.clone(),
+            sentence,
+            finalized_slot,
+            chain,
+            chain_note: String::new(),
+        });
+    }
+
+    fn push_refusal(&mut self, sentence: &str) {
+        let stage = self.stage_in_flight.clone();
+        self.unexpected_refusals
+            .push(format!("{stage} -- {sentence}"));
+        self.stages.push(StageReportV1 {
+            stage,
+            outcome: "refused".into(),
+            transactions: 0,
+            compute_units: 0,
+            note: format!(
+                "REFUSED, and the refusal STOPPED the campaign: {sentence}. Every stage below \
+                 this one in the register was never entered."
+            ),
+        });
+    }
+
+    fn into_transcript(self) -> JourneyTranscriptV1 {
+        JourneyTranscriptV1 {
+            schema: TRANSCRIPT_SCHEMA_V1.into(),
+            holder_count: self.holder_count,
+            deterministic_keypairs: true,
+            evidence: self.evidence,
+            conservation_verdict: if self.conservation_violations.is_empty() {
+                "conserved".into()
+            } else {
+                "violated".into()
+            },
+            conservation_violations: self.conservation_violations,
+            claim_unit_atoms: self.claim_unit_atoms,
+            markets: self.markets,
+            stages: self.stages,
+            unexpected_refusals: self.unexpected_refusals,
+            gaps: self.gaps,
+            spine: Value::Object(self.spine),
+            observations: self.observations,
+            transactions_total: self.transactions_total,
+            compute_units_total: self.compute_units_total,
+            wall: self.wall,
+        }
+    }
+}
+
+/// Read the ledger's whole aperture, plus the Market, at one instant.
+///
+/// Every account is reported whether or not it is there: "the funding ledger
+/// this campaign derived does not exist" and "it exists and something else
+/// owns it" are different findings and a probe that skipped absent accounts
+/// would print the same thing for both.
+fn chain_state(
+    rpc: &mut crate::rpc::Rpc,
+    ledger: &ConservationLedgerV1,
+    extra: &[(String, solana_sdk::pubkey::Pubkey)],
+) -> Vec<ChainAccountV1> {
+    let mut probes: Vec<(String, solana_sdk::pubkey::Pubkey)> = ledger
+        .market()
+        .map(|market| ("core_market".to_owned(), market))
+        .into_iter()
+        .collect();
+    probes.extend(extra.iter().cloned());
+    probes.extend(
+        ledger
+            .watched()
+            .map(|(label, address)| (label.to_owned(), address)),
+    );
+    probes
+        .into_iter()
+        .map(|(label, address)| match rpc.account(address) {
+            Ok(Some(account)) => ChainAccountV1 {
+                label,
+                address: address.to_string(),
+                present: true,
+                owner: account.owner.to_string(),
+                lamports: account.lamports,
+                data_len: account.data.len(),
+                executable: account.executable,
+            },
+            Ok(None) => ChainAccountV1 {
+                label,
+                address: address.to_string(),
+                present: false,
+                owner: String::new(),
+                lamports: 0,
+                data_len: 0,
+                executable: false,
+            },
+            Err(error) => ChainAccountV1 {
+                label: format!("{label} (unread: {error})"),
+                address: address.to_string(),
+                present: false,
+                owner: String::new(),
+                lamports: 0,
+                data_len: 0,
+                executable: false,
+            },
+        })
+        .collect()
+}
+
 /// Live one Market's whole life, and account for every atom while doing it.
+///
+/// THE TRANSCRIPT IS WRITTEN ON EVERY PATH. `execute` owns the document and
+/// the campaign body only fills it, so a stage whose helper hard-errors ends
+/// the run with a transcript naming that stage, quoting the helper's own
+/// sentence and reporting what the chain held at that instant -- and then
+/// fails. This is not a softened refusal: the error still propagates and the
+/// run still fails.
 pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> {
     validate_new_path(&request.transcript, "--transcript")?;
     std::fs::create_dir_all(&request.work)?;
+    let mut progress = JourneyProgressV1::new(request.holder_count);
+    let outcome = run(&request, &mut progress);
+    let transcript = progress.into_transcript();
+    write_json(&request.transcript, &transcript)?;
+    if let Err(error) = outcome {
+        let stage = transcript
+            .wall
+            .as_ref()
+            .map_or("an unnamed stage", |wall| wall.stage.as_str());
+        return Err(Error::new(format!(
+            "the journey stopped at `{stage}`; the transcript names the stage, quotes the \
+             helper's own sentence and reports the chain under it, and the conservation ledger \
+             up to that boundary is in it, at {}:\n  {error}",
+            request.transcript.display()
+        )));
+    }
+    if !transcript.conservation_violations.is_empty() {
+        return Err(Error::new(format!(
+            "the conservation ledger reported {} violated law(s); the transcript is at {}:\n  {}",
+            transcript.conservation_violations.len(),
+            request.transcript.display(),
+            transcript.conservation_violations.join("\n  ")
+        )));
+    }
+    if !transcript.unexpected_refusals.is_empty() {
+        return Err(Error::new(format!(
+            "{} stage(s) that were supposed to execute refused; the transcript and the complete \
+             conservation ledger are at {}:\n  {}",
+            transcript.unexpected_refusals.len(),
+            request.transcript.display(),
+            transcript.unexpected_refusals.join("\n  ")
+        )));
+    }
+    Ok(transcript)
+}
+
+/// Run the campaign, and record the wall it met if it met one.
+///
+/// The session and the ledger live HERE rather than inside the body, so that
+/// the wall recorder can still read the chain through them -- the validator is
+/// the session's child, and a body that owned it would have killed it on the
+/// way out of the very error being diagnosed.
+fn run(request: &JourneyRequestV1, progress: &mut JourneyProgressV1) -> Result<()> {
+    let mut anchor: Option<(JourneySessionV1, ConservationLedgerV1)> = None;
+    let outcome = campaign(request, progress, &mut anchor);
+    match anchor.as_mut() {
+        Some((session, ledger)) => {
+            if let Err(error) = &outcome {
+                progress.wall_on_chain(session, ledger, error);
+            } else {
+                progress.sync(session, ledger);
+            }
+        }
+        None => {
+            if let Err(error) = &outcome {
+                progress.wall_before_chain(error);
+            }
+        }
+    }
+    outcome
+}
+
+fn campaign(
+    request: &JourneyRequestV1,
+    progress: &mut JourneyProgressV1,
+    anchor: &mut Option<(JourneySessionV1, ConservationLedgerV1)>,
+) -> Result<()> {
     let holder_count = request.holder_count;
+    progress.entering("checked-mutable substrate");
 
     // ---------------------------------------- 1. the checked-mutable substrate
     let substrate_dir = request.work.join("substrate");
@@ -151,6 +465,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         rpc_port: request.rpc_port,
     })?;
 
+    progress.entering("the Market, compiled against the deployment it stands on");
     // ------------------------------- 2. the Market, compiled against the chain
     //
     // The default shape is FOUR outcomes over two cuts, which at
@@ -186,20 +501,23 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         recovery: Some(rungs),
         ..crate::market::LocalMarketShapeV1::default()
     };
-    let market_input = crate::market::demo_market_input_shaped(registry, direct.compiler(), &shape)?;
+    let market_input =
+        crate::market::demo_market_input_shaped(registry, direct.compiler(), &shape)?;
     let market_path = request.work.join("market.json");
     std::fs::write(&market_path, serde_json::to_vec_pretty(&market_input)?)?;
 
+    progress.entering("founding through Open");
     // ------------------------------------------------------- 3. the founding
     let mut rpc = crate::rpc::Rpc::connect(&checked.rpc_url)?;
     let campaign_report = request.work.join("founding-evidence.json");
-    let founding = crate::substrate::found_market(&checked, &mut rpc, &market_path, &campaign_report)?;
+    let founding =
+        crate::substrate::found_market(&checked, &mut rpc, &market_path, &campaign_report)?;
     let authority = crate::substrate::authority_keypair(&checked)?;
     // The founder's collateral wallet answers to the founding's `campaign-payer`
     // role, not to the administration authority above; see
     // `distribute_collateral`.
     let collateral_owner = crate::substrate::campaign_payer_keypair(&checked)?;
-    let mut session = JourneySessionV1 {
+    let session = JourneySessionV1 {
         validator: checked.validator,
         rpc,
         rpc_url: checked.rpc_url.clone(),
@@ -211,31 +529,49 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         accounts: founding.market.accounts,
     };
     let addresses = MarketAddressesV1::from_evidence(&session.accounts)?;
+    let ledger = ConservationLedgerV1::new(addresses.mint, session.authority.pubkey());
+    // FROM HERE A WALL CAN BE READ OFF THE CHAIN. The session owns the
+    // validator's lifetime, so handing both to `run` is what keeps the
+    // validator alive while the refusal that killed the campaign is being
+    // written down; a body that owned the guard would have killed the chain on
+    // its way out of the very error being diagnosed.
+    progress.probe_accounts = vec![
+        ("founding_market".to_owned(), addresses.founding_market),
+        ("found31_market".to_owned(), addresses.found31_market),
+        ("claims_aggregate".to_owned(), addresses.aggregate),
+        ("collateral_mint".to_owned(), addresses.mint),
+        ("hoard".to_owned(), addresses.hoard),
+    ];
+    let anchored = anchor.insert((session, ledger));
+    let session = &mut anchored.0;
+    let ledger = &mut anchored.1;
 
-    let mut ledger = ConservationLedgerV1::new(addresses.mint, session.authority.pubkey());
+    progress.entering("admission: the founding really left an Open Market");
     let (claim_unit_atoms, decimals) = stages::admit_open_market(
         &mut session.rpc,
         &addresses,
         &session.accounts,
         crate::plan::pubkey(&session.plan.custody.program_id)?,
         crate::plan::pubkey(&session.plan.rent_credit.program_id)?,
-        &mut ledger,
+        &mut *ledger,
     )?;
     // The whole cast is registered with the ledger BEFORE the first census, so
     // that every account the journey later creates is first seen as a checked
     // vacancy rather than as a balance with no predecessor. That ordering is
     // what makes L7 applicable across the stages that spend the most lamports;
     // see `stages::plan_holders` and `resolution::watch`.
-    let mut holders = stages::plan_holders(holder_count, &mut ledger)?;
+    let mut holders = stages::plan_holders(holder_count, &mut *ledger)?;
+    progress.entering("resolution: derive this Market's funding coordinates");
     let resolution_addresses = resolution::derive(
         &mut session.rpc,
         &session.plan,
         &addresses,
         &session.accounts,
     )?;
-    resolution::watch(&mut ledger, &resolution_addresses);
+    resolution::watch(&mut *ledger, &resolution_addresses);
+    progress.entering("resolution: derive the provider transport's coordinates");
     let provider_plan = provider::ProviderPlanV1::derive(&mut session.rpc, &session.plan)?;
-    provider::watch(&mut ledger, &provider_plan);
+    provider::watch(&mut *ledger, &provider_plan);
 
     ledger.observe(
         &mut session.rpc,
@@ -261,7 +597,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         ),
     )?;
 
-    let mut stages = vec![
+    progress.stages.extend([
         StageReportV1 {
             stage: "checked-mutable substrate".into(),
             outcome: "executed".into(),
@@ -286,13 +622,15 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
                 .iter()
                 .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
                 .sum(),
-            note: "`campaign --founding-only` over the live checked substrate: the market compiled \
+            note:
+                "`campaign --founding-only` over the live checked substrate: the market compiled \
                    by `DirectMarketCompilerOwnedV1::load_local` against THIS deployment, four \
                    outcomes over two cuts, which is a refunding payout scale of three."
-                .into(),
+                    .into(),
         },
-    ];
+    ]);
 
+    progress.entering("post-open life: collateral distribution");
     let (distribution, distribution_fees) = stages::distribute_collateral(
         &mut session.rpc,
         &addresses,
@@ -303,7 +641,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         &mut session.transactions,
         &mut session.accounts,
     )?;
-    stages.push(distribution);
+    progress.stages.push(distribution);
     // Every transfer here is between two accounts the ledger already tracks, so
     // the tracked total must not move at all. Declaring zero is the strong
     // claim: it fails if a single atom went anywhere else.
@@ -324,7 +662,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         &holders,
         &mut session.transactions,
     )?;
-    stages.push(ring);
+    progress.stages.push(ring);
     ledger.observe(
         &mut session.rpc,
         "post-open life: holder-to-holder collateral",
@@ -334,8 +672,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         ClassClaimV1::unchanged(),
     )?;
 
-    let mut unexpected_refusals = Vec::new();
-
+    progress.entering("post-open life: holder-to-holder collateral");
     // ------------------------------------------- the spine: admission and fill
     //
     // Everything from here is a SHIPPED command, called in this process with
@@ -356,6 +693,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         founding_keypairs: &checked.report.campaign_founding_keypairs,
     };
     let mut spine = spine::SpineV1::new();
+    progress.entering("trading: admission, the Direct Hot fill, and the fee settlement");
 
     // TWO STRANGERS, and the second one is not decoration. The buyer carries
     // the collateral leg because the fill needs delegated collateral; the
@@ -401,17 +739,18 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         &payer_key,
         &[],
     )?;
-    spine::fill(
+    spine::fill(&mut session.rpc, &context, &mut spine, &strangers[0].report)?;
+    spine::settle_fee(
         &mut session.rpc,
         &context,
         &mut spine,
-        &strangers[0].report,
+        participant,
+        &payer_key,
     )?;
-    spine::settle_fee(&mut session.rpc, &context, &mut spine, participant, &payer_key)?;
     let spine_admission_stages = spine.stages.len();
-    stages.append(&mut spine.stages);
+    progress.stages.append(&mut spine.stages);
     session.transactions.append(&mut spine.transactions);
-    unexpected_refusals.append(&mut spine.refusals);
+    progress.unexpected_refusals.append(&mut spine.refusals);
     let _ = spine_admission_stages;
     ledger.observe(
         &mut session.rpc,
@@ -432,13 +771,14 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         ClassClaimV1::unchanged(),
     )?;
 
+    progress.entering("resolution: create and activate the Market's Resolution funding");
     let (resolution_report, resolution_lamports) = resolution::resolve(
         &mut session.rpc,
         &session.authority,
         &resolution_addresses,
         &mut session.transactions,
     )?;
-    stages.push(resolution_report);
+    progress.stages.push(resolution_report);
     ledger.observe(
         &mut session.rpc,
         "resolution: create and activate the Market's Resolution funding",
@@ -453,6 +793,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
     // is worth more written down beside a complete ledger than thrown as an
     // error that discards the rest of the journey -- so the stage is recorded
     // either way and the run fails at the end, after the transcript exists.
+    progress.entering("resolution: the Pyth transport carries the Market to Terminal");
     let (provider_report, provider_lamports, provider_classes) =
         match provider::resolve_through_pyth(
             &mut session.rpc,
@@ -464,7 +805,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         ) {
             Ok((report, lamports)) => (report, lamports, ClassClaimV1::unchanged()),
             Err(error) => {
-                unexpected_refusals.push(format!(
+                progress.unexpected_refusals.push(format!(
                     "resolution: the Pyth transport carries the Market to Terminal -- {error}"
                 ));
                 (
@@ -487,7 +828,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
                 )
             }
         };
-    stages.push(provider_report);
+    progress.stages.push(provider_report);
     ledger.observe(
         &mut session.rpc,
         "resolution: the Pyth transport carries the Market to Terminal",
@@ -499,6 +840,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
 
     // ---------------------------------------------- the spine: the redemption
     //
+    progress.entering("redemption: a holder redeems through wallet-signed terminal settlement");
     // The stranger is paid before anything retires, because retirement refuses
     // to compile at all while the Hoard holds an atom that belongs to a holder.
     spine::redeem(
@@ -512,9 +854,9 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         payer,
         &payer_key,
     )?;
-    stages.append(&mut spine.stages);
+    progress.stages.append(&mut spine.stages);
     session.transactions.append(&mut spine.transactions);
-    unexpected_refusals.append(&mut spine.refusals);
+    progress.unexpected_refusals.append(&mut spine.refusals);
     ledger.observe(
         &mut session.rpc,
         "redemption: a holder redeems through wallet-signed terminal settlement",
@@ -539,6 +881,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
     // Source closure refunds its rent into the Market's own beneficiary credit,
     // so sweeping first would sweep a surplus the retirement is about to add to
     // and leave the larger half sitting there.
+    progress.entering("retirement: begin retiring and close the Source subtree");
     let (retirement, retirement_lamports) = resolution::retire(
         &mut session.rpc,
         &session.authority,
@@ -546,7 +889,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         addresses.hoard,
         &mut session.transactions,
     )?;
-    stages.push(retirement);
+    progress.stages.push(retirement);
     ledger.observe(
         &mut session.rpc,
         "retirement: begin retiring and close the Source subtree",
@@ -566,6 +909,9 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
     // then the four checkpoint packets. Whichever of the two the chain accepts
     // first, the other reports what it met, and the transcript says which --
     // which is the shape a convergence needs before one of them is deleted.
+    progress.entering(
+        "retirement: the checkpointed packets close the Claims aggregate, the vault and the replay",
+    );
     let source_receipt = evidence_pubkey(&session.accounts, "source_closure_receipt")
         .or_else(|_| evidence_pubkey(&session.accounts, "founding_source_receipt"))
         .unwrap_or(addresses.founding_market);
@@ -577,9 +923,9 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         payer,
         &payer_key,
     )?;
-    stages.append(&mut spine.stages);
+    progress.stages.append(&mut spine.stages);
     session.transactions.append(&mut spine.transactions);
-    unexpected_refusals.append(&mut spine.refusals);
+    progress.unexpected_refusals.append(&mut spine.refusals);
     ledger.observe(
         &mut session.rpc,
         "retirement: the checkpointed packets close the Claims aggregate, the vault and the replay",
@@ -595,6 +941,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         ),
     )?;
 
+    progress.entering("rent recovery");
     let (rent, rent_fees) = stages::recover_rent(
         &mut session.rpc,
         &session.plan,
@@ -602,7 +949,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         &session.authority,
         &mut session.transactions,
     )?;
-    stages.push(rent);
+    progress.stages.push(rent);
     ledger.observe(
         &mut session.rpc,
         "rent recovery",
@@ -612,7 +959,8 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         ClassClaimV1::unchanged(),
     )?;
 
-    let markets = vec![
+    progress.entering("the campaign's own closing census");
+    progress.markets = vec![
         market_phase(
             &mut session.rpc,
             "founding_market",
@@ -620,9 +968,9 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         )?,
         market_phase(&mut session.rpc, "found31_market", addresses.found31_market)?,
     ];
-    let gaps = gap_register();
-    for gap in &gaps {
-        stages.push(StageReportV1 {
+    progress.gaps = gap_register();
+    for gap in &progress.gaps.clone() {
+        progress.stages.push(StageReportV1 {
             stage: gap.stage.clone(),
             outcome: "blocked".into(),
             transactions: 0,
@@ -640,52 +988,11 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         "accounts": serde_json::to_value(&session.accounts)?,
     });
     write_json(&evidence_path, &evidence)?;
-
-    let violations = ledger.violations();
-    let transcript = JourneyTranscriptV1 {
-        schema: TRANSCRIPT_SCHEMA_V1.into(),
-        holder_count,
-        deterministic_keypairs: true,
-        evidence: evidence_path.display().to_string(),
-        conservation_verdict: if violations.is_empty() {
-            "conserved".into()
-        } else {
-            "violated".into()
-        },
-        conservation_violations: violations.clone(),
-        claim_unit_atoms,
-        markets,
-        stages,
-        unexpected_refusals: unexpected_refusals.clone(),
-        gaps,
-        spine: Value::Object(spine.reports.clone()),
-        observations: ledger.observations().to_vec(),
-        transactions_total: session.transactions.len(),
-        compute_units_total: session
-            .transactions
-            .iter()
-            .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
-            .sum(),
-    };
-    write_json(&request.transcript, &transcript)?;
-    if !violations.is_empty() {
-        return Err(Error::new(format!(
-            "the conservation ledger reported {} violated law(s); the transcript is at {}:\n  {}",
-            violations.len(),
-            request.transcript.display(),
-            violations.join("\n  ")
-        )));
-    }
-    if !unexpected_refusals.is_empty() {
-        return Err(Error::new(format!(
-            "{} stage(s) that were supposed to execute refused; the transcript and the complete \
-             conservation ledger are at {}:\n  {}",
-            unexpected_refusals.len(),
-            request.transcript.display(),
-            unexpected_refusals.join("\n  ")
-        )));
-    }
-    Ok(transcript)
+    progress.evidence = evidence_path.display().to_string();
+    progress.claim_unit_atoms = claim_unit_atoms;
+    progress.spine = spine.reports.clone();
+    progress.sync(session, ledger);
+    Ok(())
 }
 
 /// One role key file out of the prepare report, founding roles first.
@@ -705,7 +1012,10 @@ fn spine_key(
         })
 }
 
-fn context_pubkey(context: &spine::SpineContextV1<'_>, role: &str) -> Result<solana_sdk::pubkey::Pubkey> {
+fn context_pubkey(
+    context: &spine::SpineContextV1<'_>,
+    role: &str,
+) -> Result<solana_sdk::pubkey::Pubkey> {
     let path = context
         .founding_keypairs
         .get(role)
@@ -718,9 +1028,11 @@ fn evidence_pubkey(
     accounts: &std::collections::BTreeMap<String, crate::model::AccountEvidence>,
     label: &str,
 ) -> Result<solana_sdk::pubkey::Pubkey> {
-    let evidence = accounts
-        .get(label)
-        .ok_or_else(|| Error::new(format!("the founding's evidence names no `{label}` account")))?;
+    let evidence = accounts.get(label).ok_or_else(|| {
+        Error::new(format!(
+            "the founding's evidence names no `{label}` account"
+        ))
+    })?;
     crate::plan::pubkey(&evidence.address)
 }
 
@@ -836,14 +1148,15 @@ fn gap_register() -> Vec<GapV1> {
                 "custody/process_instruction#CloseVault".into(),
             ],
             owner: "W2i (Trading Hot gate)".into(),
-            reason: "Custody's nine-account common prefix has the same shape: index 0 is a signing \
+            reason:
+                "Custody's nine-account common prefix has the same shape: index 0 is a signing \
                      CallerAuthority PDA and index 4 is the caller program, re-authenticated \
                      against the activation cache. A holder cannot open, deposit to, or withdraw \
                      from a vault directly; the operation has to arrive by CPI from an activated \
                      role. This campaign reaches Custody through the fill and through the \
                      retirement's close-vault packet, both of which are CPI from an activated \
                      role, and never as a holder's own vault cycle."
-                .into(),
+                    .into(),
         },
         GapV1 {
             stage: "trading: replay pressure and concurrent submission".into(),
@@ -916,4 +1229,110 @@ fn validate_new_path(path: &Path, label: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A HELPER THAT HARD-ERRORS STILL LEAVES A TRANSCRIPT NAMING IT.
+    ///
+    /// This is the property three hbox runs did not have. Each ran thirty-five
+    /// minutes, landed around two hundred transactions, hit one `?` and left a
+    /// single line of stderr: the campaign's own document was written only on
+    /// the paths that reached the end, so the evidence for every wall was
+    /// thrown away with the run that found it.
+    ///
+    /// The wall this test builds is the FIRST stage, and it is built by naming
+    /// a checked release gate that does not exist -- so it needs no validator,
+    /// no artifacts and no network, and it exercises the same `execute` the
+    /// runner calls. What it asserts is the shape a reader needs: the stage the
+    /// campaign was inside, the helper's own sentence rather than a summary of
+    /// it, and an explicit statement that there was no chain to read rather
+    /// than an empty list that could equally mean "read it and found nothing".
+    #[test]
+    fn a_stage_that_hard_errors_still_writes_a_transcript_naming_it() {
+        let work = std::env::temp_dir().join(format!(
+            "dclutch-journey-wall-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&work).expect("a scratch work directory");
+        let transcript = work.join("transcript.json");
+        let error = execute(JourneyRequestV1 {
+            transcript: transcript.clone(),
+            work: work.clone(),
+            rpc_port: 0,
+            checked_release_gate: work.join("no-such-checked-release-gate.json"),
+            expected_gate_sha256: "0".repeat(64),
+            expected_source_revision: "0".repeat(40),
+            expected_source_tree_sha256: "0".repeat(64),
+            seed: "journey-wall".into(),
+            holder_count: DEFAULT_HOLDER_COUNT,
+        })
+        .expect_err("a checked release gate that does not exist must stop the campaign");
+
+        assert!(
+            transcript.is_file(),
+            "the transcript must exist even though the first stage refused"
+        );
+        let document: Value =
+            serde_json::from_slice(&std::fs::read(&transcript).expect("read the transcript back"))
+                .expect("the transcript is JSON");
+        let wall = document
+            .get("wall")
+            .and_then(Value::as_object)
+            .expect("the transcript names the wall it met");
+        assert_eq!(
+            wall.get("stage").and_then(Value::as_str),
+            Some("checked-mutable substrate"),
+            "the wall names the stage the campaign had entered"
+        );
+        let sentence = wall
+            .get("sentence")
+            .and_then(Value::as_str)
+            .expect("the wall quotes the helper");
+        assert!(
+            !sentence.is_empty(),
+            "the wall carries the helper's own sentence"
+        );
+        assert!(
+            wall.get("chain")
+                .and_then(Value::as_array)
+                .expect("a chain list")
+                .is_empty(),
+            "there was no validator to read, and an empty list says so with `chain_note`"
+        );
+        assert!(
+            wall.get("chain_note")
+                .and_then(Value::as_str)
+                .is_some_and(|note| !note.is_empty()),
+            "an empty chain list must say WHY it is empty"
+        );
+        assert!(
+            document
+                .get("unexpected_refusals")
+                .and_then(Value::as_array)
+                .is_some_and(|refusals| refusals.len() == 1),
+            "the stopped stage is also an unexpected refusal"
+        );
+        assert!(
+            document
+                .get("stages")
+                .and_then(Value::as_array)
+                .is_some_and(|stages| stages
+                    .iter()
+                    .any(|stage| stage.get("outcome").and_then(Value::as_str) == Some("refused"))),
+            "the stage register carries the refusal"
+        );
+        assert!(
+            error.to_string().contains("checked-mutable substrate")
+                && error
+                    .to_string()
+                    .contains(&transcript.display().to_string()),
+            "the run still FAILS, and its failure points at the transcript: {error}"
+        );
+        let _ = std::fs::remove_dir_all(&work);
+    }
 }

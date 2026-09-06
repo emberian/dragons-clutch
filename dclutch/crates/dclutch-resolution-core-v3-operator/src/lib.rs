@@ -1027,6 +1027,155 @@ pub struct ResolutionRetirementReceiptFactsV3 {
     pub closed_at: u64,
 }
 
+/// Which conjunct of the `CreateFund` funding derivation refused, and what it
+/// compared.
+///
+/// `Funding` reads "funding state, manifest binding, or physical custody" and
+/// covers forty-odd returns across four builders. A `CreateFund` that refused
+/// with it told a reader only that ONE of them had fired, and the journey tier
+/// spent three thirty-five-minute runs on exactly that sentence. Decision
+/// 0007's rule for a code standing over many conjuncts is to split the
+/// discriminant rather than to rewrite the caller, so these are the CreateFund
+/// path's own conjuncts -- the compartment selection, the manifest scan, the
+/// entry mask, the vacant Source destination and the pending subset ledger --
+/// and each carries the comparison that failed rather than the fact that one
+/// did.
+///
+/// `VerifyFundReady` and `CloseFund` still return the coarse `Funding` from
+/// their own conjuncts. That is owed, and it is not this type's claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolutionFundingCauseV3 {
+    /// No Resolution entry is configured by recovery attempt 0's allocation.
+    RecoveryCompartmentUnfunded {
+        /// The funding-allocation identity attempt 0 names.
+        config: [u8; 32],
+        /// Manifest entries this Resolution controller released.
+        controller_entries: u16,
+        /// Manifest entries in total.
+        manifest_entries: u16,
+    },
+    /// No Resolution entry is configured by the recovery-policy record.
+    ExhaustionCompartmentUnfunded {
+        /// The recovery-policy record identity the material names.
+        config: [u8; 32],
+        /// Manifest entries this Resolution controller released.
+        controller_entries: u16,
+        /// Manifest entries in total.
+        manifest_entries: u16,
+    },
+    /// No Resolution entry is configured by this market's own Source material.
+    FailureCompartmentUnfunded {
+        /// The digest of the market's own Source material.
+        config: [u8; 32],
+        /// Manifest entries this Resolution controller released.
+        controller_entries: u16,
+        /// Manifest entries in total.
+        manifest_entries: u16,
+    },
+    /// Two Resolution entries carry one compartment's configuration.
+    CompartmentAmbiguous {
+        /// 0 recovery, 1 exhaustion, 2 failure.
+        slot: u8,
+        /// The entry already selected for that compartment.
+        held: u16,
+        /// The second entry claiming it.
+        second: u16,
+    },
+    /// One manifest entry was selected for two compartments.
+    CompartmentsNotDistinct {
+        /// The selection, in recovery/exhaustion/failure order.
+        entries: [u16; 3],
+    },
+    /// The no-ladder derivation needs exactly two non-material entries.
+    NoLadderCompartmentCount {
+        /// Resolution entries not configured by this market's own material.
+        others: u16,
+        /// Manifest entries in total.
+        manifest_entries: u16,
+    },
+    /// A compartment slot outside the recovery/exhaustion/failure triple.
+    SelectionSlotOutOfRange {
+        /// The offered slot.
+        slot: u8,
+    },
+    /// The manifest scan ran past the width its own index is counted in.
+    ManifestScanOverflow {
+        /// The index the scan stood on.
+        entry_index: u16,
+    },
+    /// The material and the authenticated policy disagree about the ladder.
+    LadderPresenceDisagrees {
+        /// Whether the Source material names a recovery-policy record.
+        material_names_policy: bool,
+        /// Whether a recovery policy was authenticated for it.
+        policy_authenticated: bool,
+    },
+    /// A selected entry index does not fit the sixteen-bit selection mask.
+    EntryIndexAboveMaskWidth {
+        /// The entry index the selection carried.
+        entry_index: u16,
+    },
+    /// The mask does not carry exactly three distinct compartments.
+    SelectionMaskWidth {
+        /// The mask that was folded or unfolded.
+        mask: u16,
+        /// Bits set in it.
+        selected: u32,
+    },
+    /// The Source destination is not the vacant System account it must be.
+    SourceDestinationNotVacant {
+        /// The PDA the market's own coordinates derive.
+        expected: [u8; 32],
+        /// The account the caller supplied.
+        observed: [u8; 32],
+        /// Its owner.
+        owner: [u8; 32],
+        /// Whether it is executable.
+        executable: bool,
+        /// Its data width.
+        data_len: u32,
+    },
+    /// The pending subset ledger is not this Resolution's, or not this width.
+    PendingLedgerShape {
+        /// The ledger account.
+        key: [u8; 32],
+        /// Its owner.
+        owner: [u8; 32],
+        /// The Resolution controller that must own it.
+        expected_owner: [u8; 32],
+        /// Whether it is executable.
+        executable: bool,
+        /// Its data width.
+        data_len: u32,
+        /// The width three selected compartments require.
+        expected_data_len: u32,
+    },
+    /// The pending ledger records a selection the records do not derive.
+    PendingLedgerMaskDiffers {
+        /// The mask the ledger's own header carries.
+        recorded: u16,
+        /// The mask the finalized records derive.
+        derived: u16,
+    },
+    /// A selected compartment is not in a pending-admissible state.
+    PendingLedgerEntryNotPending {
+        /// The compartment that is not pending.
+        entry_index: u16,
+    },
+    /// The pending ledger does not sit at the address its own bytes derive.
+    PendingLedgerAddressDiffers {
+        /// The address the ledger's own derivation computes.
+        derived: [u8; 32],
+        /// The account the caller supplied.
+        observed: [u8; 32],
+    },
+    /// The market's capability-manifest identity is not a content id.
+    ManifestIdentityMalformed {
+        /// The identity the Core state carries.
+        identity: [u8; 32],
+    },
+}
+
 /// Stable refusal from terminal-chain authentication or instruction assembly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolutionCoreOperatorErrorV3 {
@@ -1073,6 +1222,12 @@ pub enum ResolutionCoreOperatorErrorV3 {
     /// escrow. Building the instruction anyway would only move the refusal to
     /// the validator.
     RecoveryExceedsFundedCompartments,
+    /// One named conjunct of the `CreateFund` funding derivation refused.
+    ///
+    /// `Funding`'s CreateFund half, split under decision 0007's rule for a code
+    /// standing over many conjuncts. The payload says which return fired and
+    /// what it compared.
+    FundingConjunct(ResolutionFundingCauseV3),
     /// `dclutch_market` refused; the cause is its own.
     MarketCore(dclutch_market::Error),
     /// `dclutch_product::admission` refused; the cause is its own.
@@ -1140,7 +1295,11 @@ pub fn build_resolution_create_fund_v3(
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
         .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(|_| {
+            funding_conjunct(ResolutionFundingCauseV3::ManifestIdentityMalformed {
+                identity: market.identity.capability_manifest.to_bytes(),
+            })
+        })?;
 
     let (expected_source, _) = Pubkey::find_program_address(
         &[
@@ -2538,35 +2697,70 @@ fn select_resolution_funding_entries(
                 recovery_policy.to_bytes(),
                 hash(&material.to_bytes()).to_bytes(),
             ];
+            let manifest_entries = manifest.entry_count();
             let mut selected = [None; 3];
+            let mut controller_entries = 0_u16;
             let mut entry_index = 0_u16;
-            while entry_index < manifest.entry_count() {
+            while entry_index < manifest_entries {
                 let entry = manifest
                     .entry(entry_index)
                     .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
-                for (slot, expected_config) in expected.iter().enumerate() {
-                    if entry.config_id().to_bytes() == *expected_config
-                        && entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7
-                    {
-                        let selection = selected
-                            .get_mut(slot)
-                            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
-                        if selection.replace(entry_index).is_some() {
-                            return Err(ResolutionCoreOperatorErrorV3::Funding);
+                if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
+                    controller_entries = controller_entries.saturating_add(1);
+                    for (slot, expected_config) in expected.iter().enumerate() {
+                        if entry.config_id().to_bytes() != *expected_config {
+                            continue;
+                        }
+                        let slot_index = u8::try_from(slot).unwrap_or(u8::MAX);
+                        let selection = selected.get_mut(slot).ok_or_else(|| {
+                            funding_conjunct(ResolutionFundingCauseV3::SelectionSlotOutOfRange {
+                                slot: slot_index,
+                            })
+                        })?;
+                        if let Some(held) = selection.replace(entry_index) {
+                            return Err(funding_conjunct(
+                                ResolutionFundingCauseV3::CompartmentAmbiguous {
+                                    slot: slot_index,
+                                    held,
+                                    second: entry_index,
+                                },
+                            ));
                         }
                     }
                 }
-                entry_index = entry_index
-                    .checked_add(1)
-                    .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+                entry_index = entry_index.checked_add(1).ok_or_else(|| {
+                    funding_conjunct(ResolutionFundingCauseV3::ManifestScanOverflow { entry_index })
+                })?;
             }
+            let [recovery, exhaustion, failure] = selected;
+            let [recovery_config, exhaustion_config, failure_config] = expected;
             let result = [
-                selected[0].ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
-                selected[1].ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
-                selected[2].ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
+                recovery.ok_or_else(|| {
+                    funding_conjunct(ResolutionFundingCauseV3::RecoveryCompartmentUnfunded {
+                        config: recovery_config,
+                        controller_entries,
+                        manifest_entries,
+                    })
+                })?,
+                exhaustion.ok_or_else(|| {
+                    funding_conjunct(ResolutionFundingCauseV3::ExhaustionCompartmentUnfunded {
+                        config: exhaustion_config,
+                        controller_entries,
+                        manifest_entries,
+                    })
+                })?,
+                failure.ok_or_else(|| {
+                    funding_conjunct(ResolutionFundingCauseV3::FailureCompartmentUnfunded {
+                        config: failure_config,
+                        controller_entries,
+                        manifest_entries,
+                    })
+                })?,
             ];
             if !distinct_funding_entries(result) {
-                return Err(ResolutionCoreOperatorErrorV3::Funding);
+                return Err(funding_conjunct(
+                    ResolutionFundingCauseV3::CompartmentsNotDistinct { entries: result },
+                ));
             }
             Ok(result)
         }
@@ -2579,47 +2773,81 @@ fn select_resolution_funding_entries(
         // exactly two keeps the selection a derivation rather than a choice.
         (None, None) => {
             let material_id = hash(&material.to_bytes()).to_bytes();
+            let manifest_entries = manifest.entry_count();
             let mut failure = None;
             let mut others = [None; 2];
-            let mut other_count = 0_usize;
+            let mut controller_entries = 0_u16;
+            let mut other_count = 0_u16;
             let mut entry_index = 0_u16;
-            while entry_index < manifest.entry_count() {
+            while entry_index < manifest_entries {
                 let entry = manifest
                     .entry(entry_index)
                     .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
                 if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
+                    controller_entries = controller_entries.saturating_add(1);
                     if entry.config_id().to_bytes() == material_id {
-                        if failure.replace(entry_index).is_some() {
-                            return Err(ResolutionCoreOperatorErrorV3::Funding);
+                        if let Some(held) = failure.replace(entry_index) {
+                            return Err(funding_conjunct(
+                                ResolutionFundingCauseV3::CompartmentAmbiguous {
+                                    slot: 2,
+                                    held,
+                                    second: entry_index,
+                                },
+                            ));
                         }
                     } else {
-                        let slot = others
-                            .get_mut(other_count)
-                            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+                        let slot = others.get_mut(usize::from(other_count)).ok_or_else(|| {
+                            funding_conjunct(ResolutionFundingCauseV3::NoLadderCompartmentCount {
+                                others: other_count.saturating_add(1),
+                                manifest_entries,
+                            })
+                        })?;
                         *slot = Some(entry_index);
-                        other_count = other_count
-                            .checked_add(1)
-                            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+                        other_count = other_count.checked_add(1).ok_or_else(|| {
+                            funding_conjunct(ResolutionFundingCauseV3::ManifestScanOverflow {
+                                entry_index,
+                            })
+                        })?;
                     }
                 }
-                entry_index = entry_index
-                    .checked_add(1)
-                    .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+                entry_index = entry_index.checked_add(1).ok_or_else(|| {
+                    funding_conjunct(ResolutionFundingCauseV3::ManifestScanOverflow { entry_index })
+                })?;
             }
+            let short = || {
+                funding_conjunct(ResolutionFundingCauseV3::NoLadderCompartmentCount {
+                    others: other_count,
+                    manifest_entries,
+                })
+            };
             if other_count != 2 {
-                return Err(ResolutionCoreOperatorErrorV3::Funding);
+                return Err(short());
             }
+            let [recovery, exhaustion] = others;
             let result = [
-                others[0].ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
-                others[1].ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
-                failure.ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
+                recovery.ok_or_else(short)?,
+                exhaustion.ok_or_else(short)?,
+                failure.ok_or_else(|| {
+                    funding_conjunct(ResolutionFundingCauseV3::FailureCompartmentUnfunded {
+                        config: material_id,
+                        controller_entries,
+                        manifest_entries,
+                    })
+                })?,
             ];
             if !distinct_funding_entries(result) {
-                return Err(ResolutionCoreOperatorErrorV3::Funding);
+                return Err(funding_conjunct(
+                    ResolutionFundingCauseV3::CompartmentsNotDistinct { entries: result },
+                ));
             }
             Ok(result)
         }
-        _ => Err(ResolutionCoreOperatorErrorV3::Funding),
+        (material_policy, authenticated) => Err(funding_conjunct(
+            ResolutionFundingCauseV3::LadderPresenceDisagrees {
+                material_names_policy: material_policy.is_some(),
+                policy_authenticated: authenticated.is_some(),
+            },
+        )),
     }
 }
 
@@ -2632,24 +2860,41 @@ fn authenticate_vacant_destination(
         || destination.executable
         || !destination.data.is_empty()
     {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(funding_conjunct(
+            ResolutionFundingCauseV3::SourceDestinationNotVacant {
+                expected: expected_key.to_bytes(),
+                observed: destination.key.to_bytes(),
+                owner: destination.owner.to_bytes(),
+                executable: destination.executable,
+                data_len: u32::try_from(destination.data.len()).unwrap_or(u32::MAX),
+            },
+        ));
     }
     Ok(())
 }
 
 fn funding_entry_mask(entries: [u16; 3]) -> Result<u16, ResolutionCoreOperatorErrorV3> {
     if !distinct_funding_entries(entries) {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(funding_conjunct(
+            ResolutionFundingCauseV3::CompartmentsNotDistinct { entries },
+        ));
     }
     let mut mask = 0_u16;
     for entry_index in entries {
         if entry_index >= 16 {
-            return Err(ResolutionCoreOperatorErrorV3::Funding);
+            return Err(funding_conjunct(
+                ResolutionFundingCauseV3::EntryIndexAboveMaskWidth { entry_index },
+            ));
         }
         mask |= 1_u16 << entry_index;
     }
     if mask.count_ones() != 3 {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(funding_conjunct(
+            ResolutionFundingCauseV3::SelectionMaskWidth {
+                mask,
+                selected: mask.count_ones(),
+            },
+        ));
     }
     Ok(mask)
 }
@@ -2657,25 +2902,36 @@ fn funding_entry_mask(entries: [u16; 3]) -> Result<u16, ResolutionCoreOperatorEr
 fn funding_entries_from_mask(
     selected_mask: u16,
 ) -> Result<[u16; 3], ResolutionCoreOperatorErrorV3> {
+    let width = || {
+        funding_conjunct(ResolutionFundingCauseV3::SelectionMaskWidth {
+            mask: selected_mask,
+            selected: selected_mask.count_ones(),
+        })
+    };
     if selected_mask.count_ones() != 3 {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(width());
     }
     let mut entries = [0_u16; 3];
     let mut next = 0_usize;
     for entry_index in 0_u16..16 {
         if selected_mask & (1_u16 << entry_index) != 0 {
-            *entries
-                .get_mut(next)
-                .ok_or(ResolutionCoreOperatorErrorV3::Funding)? = entry_index;
-            next = next
-                .checked_add(1)
-                .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+            *entries.get_mut(next).ok_or_else(|| {
+                funding_conjunct(ResolutionFundingCauseV3::EntryIndexAboveMaskWidth { entry_index })
+            })? = entry_index;
+            next = next.checked_add(1).ok_or_else(|| {
+                funding_conjunct(ResolutionFundingCauseV3::EntryIndexAboveMaskWidth { entry_index })
+            })?;
         }
     }
     if next != entries.len() {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(width());
     }
     Ok(entries)
+}
+
+/// Name one conjunct of the funding derivation as this operator's refusal.
+const fn funding_conjunct(cause: ResolutionFundingCauseV3) -> ResolutionCoreOperatorErrorV3 {
+    ResolutionCoreOperatorErrorV3::FundingConjunct(cause)
 }
 
 const fn distinct_funding_entries(entries: [u16; 3]) -> bool {
@@ -2693,16 +2949,28 @@ fn authenticate_pending_funding(
     manifest: CapabilityManifestV1<'_>,
     selected_mask: u16,
 ) -> Result<Vec<u8>, ResolutionCoreOperatorErrorV3> {
+    let selected = selected_mask.count_ones();
+    let expected_data_len = funding_ledger_bytes_v2(u16::try_from(selected).map_err(|_| {
+        funding_conjunct(ResolutionFundingCauseV3::SelectionMaskWidth {
+            mask: selected_mask,
+            selected,
+        })
+    })?)
+    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     if account.owner != resolution_program
         || account.executable
-        || account.data.len()
-            != funding_ledger_bytes_v2(
-                u16::try_from(selected_mask.count_ones())
-                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?,
-            )
-            .map_err(ResolutionCoreOperatorErrorV3::Capability)?
+        || account.data.len() != expected_data_len
     {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(funding_conjunct(
+            ResolutionFundingCauseV3::PendingLedgerShape {
+                key: account.key.to_bytes(),
+                owner: account.owner.to_bytes(),
+                expected_owner: resolution_program.to_bytes(),
+                executable: account.executable,
+                data_len: u32::try_from(account.data.len()).unwrap_or(u32::MAX),
+                expected_data_len: u32::try_from(expected_data_len).unwrap_or(u32::MAX),
+            },
+        ));
     }
     // Same pre-cohort-16 recovery as the active path: the ledger records no
     // rate, so it is recovered from its own bytes and read from a spliced copy.
@@ -2718,7 +2986,12 @@ fn authenticate_pending_funding(
     let ledger = FundingLedgerV2::decode(&priced.bytes)
         .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     if ledger.selected_mask() != selected_mask {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(funding_conjunct(
+            ResolutionFundingCauseV3::PendingLedgerMaskDiffers {
+                recorded: ledger.selected_mask(),
+                derived: selected_mask,
+            },
+        ));
     }
     let authenticated = ledger
         .authenticate(manifest_id, manifest)
@@ -2732,7 +3005,9 @@ fn authenticate_pending_funding(
                     .status(),
             )
         {
-            return Err(ResolutionCoreOperatorErrorV3::Funding);
+            return Err(funding_conjunct(
+                ResolutionFundingCauseV3::PendingLedgerEntryNotPending { entry_index },
+            ));
         }
     }
     authenticated
@@ -2746,10 +3021,15 @@ fn authenticate_pending_funding(
         ledger,
     )
     .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
-    if Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0
-        != account.key
-    {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    let derived =
+        Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0;
+    if derived != account.key {
+        return Err(funding_conjunct(
+            ResolutionFundingCauseV3::PendingLedgerAddressDiffers {
+                derived: derived.to_bytes(),
+                observed: account.key.to_bytes(),
+            },
+        ));
     }
     Ok(account.data.clone())
 }

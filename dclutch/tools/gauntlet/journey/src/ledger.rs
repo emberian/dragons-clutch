@@ -494,6 +494,24 @@ impl ConservationLedgerV1 {
         self.watched.insert(label.into(), address);
     }
 
+    /// Every account this ledger watches, in label order.
+    ///
+    /// The censuses difference this set ACROSS boundaries. A reader that has
+    /// met a wall needs the other thing: what the chain held AT one instant,
+    /// with no successor to difference against. `journey::chain_state` reads
+    /// exactly this aperture, so the accounts a transcript's wall reports are
+    /// the accounts the laws were being stated about.
+    pub(crate) fn watched(&self) -> impl Iterator<Item = (&str, Pubkey)> {
+        self.watched
+            .iter()
+            .map(|(label, address)| (label.as_str(), *address))
+    }
+
+    /// The Core Market, once the founding has admitted one.
+    pub(crate) fn market(&self) -> Option<Pubkey> {
+        self.market
+    }
+
     /// Derive every Custody vault address under one namespace and record the
     /// compartment each one IS.
     ///
