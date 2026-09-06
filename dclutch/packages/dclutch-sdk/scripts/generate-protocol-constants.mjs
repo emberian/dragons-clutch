@@ -1,7 +1,7 @@
 /**
- * Emit `lib/generated/protocolConstantsV1.ts`: the record magics and PDA seed
- * domains the client used to state in its own words, read from the Rust
- * constant that owns each one.
+ * Emit `lib/generated/protocolConstantsV1.ts`: the record magics, PDA seed
+ * domains and digest domains the client used to state in its own words, read
+ * from the Rust constant that owns each one.
  *
  * One table, one scrape, one module. A row names the TypeScript export, the
  * Rust source file, the Rust constant and its KIND; the generator reads the
@@ -40,9 +40,19 @@ const outputUrl = new URL('../lib/generated/protocolConstantsV1.ts', import.meta
 /**
  * `[export name, Rust source (repo-relative), Rust constant, kind]`.
  *
- * `kind` is one of `record`, `instruction`, `seed` or `text`, and rows are
- * grouped by it: the emitted module carries one section comment per kind, in
- * this order.
+ * `kind` is one of `record`, `instruction`, `seed`, `digest` or `text`, and
+ * rows are grouped by it: the emitted module carries one section comment per
+ * kind, in this order.
+ *
+ * WHY `digest` IS NOT `seed`. Both emit bytes and both are a domain, so the
+ * temptation is to file a digest domain under the seed kind and be done. They
+ * are not the same fact: a seed domain is an argument to
+ * `findProgramAddress` and names an ACCOUNT; a digest domain is the prefix of
+ * a hash preimage and names a NUMBER. The kind column exists so a consumer
+ * classifies by the declaration rather than by the value -- which is the whole
+ * reason `record` and `instruction` are two kinds -- and a survey of "the
+ * addresses this client can derive" that swept in a digest domain would be
+ * wrong in exactly that way.
  */
 const ROWS = [
   // --- record magics -------------------------------------------------------
@@ -69,6 +79,8 @@ const ROWS = [
   ['RATIONAL_SHARD_MINT_SEED_V2', 'crates/dclutch-claims/src/rational/mod.rs', 'RATIONAL_SHARD_MINT_SEED_V2', 'seed'],
   ['RATIONAL_STRUCTURED_CUSTODY_SEED_V2', 'crates/dclutch-claims/src/rational/mod.rs', 'RATIONAL_STRUCTURED_CUSTODY_SEED_V2', 'seed'],
   ['RELEASE_LINEAGE_PDA_DOMAIN_V1', 'crates/dclutch-registry/src/lineage.rs', 'RELEASE_LINEAGE_PDA_DOMAIN_V1', 'seed'],
+  // --- digest domains, as the bytes a hash preimage is prefixed with -------
+  ['FAMILY_REQUEST_DIGEST_DOMAIN_V3', 'crates/dclutch-market/src/execution_strategy/shadow_digest_v3.rs', 'FAMILY_REQUEST_DIGEST_DOMAIN_V3', 'digest'],
   // --- envelope kinds and formats, as the text a JSON document carries -----
   ['DIRECT_TICKET_KIND_V1', 'crates/dclutch-direct-ticket/src/envelope.rs', 'PORTABLE_DIRECT_TICKET_KIND_V1', 'text'],
   ['GENERAL_SUCCESSOR_PLAN_FORMAT_V5', 'crates/dclutch-operator/src/general_successor.rs', 'PLAN_FORMAT_V5', 'text'],
@@ -97,8 +109,12 @@ const SECTIONS = new Map([
   ['record', 'Record magics: each identifies a persisted record.'],
   ['instruction', 'Instruction magics: each SELECTS a route and identifies no record.'],
   ['seed', 'PDA seed domains, as the bytes a derivation takes.'],
+  ['digest', 'Digest domains, as the bytes a hash preimage is prefixed with.'],
   ['text', 'Envelope kinds and formats, as the text a JSON document carries.'],
 ]);
+
+/** The kinds emitted as bytes rather than as a string. */
+const BYTE_KINDS = new Set(['seed', 'digest']);
 
 const seen = new Map();
 const instructionMagics = [];
@@ -124,7 +140,7 @@ for (const [name, path, rust, kind] of ROWS) {
   }
   if (kind === 'instruction') instructionMagics.push(name);
   const provenance = `${path}::${rust}`;
-  generated += kind === 'seed'
+  generated += BYTE_KINDS.has(kind)
     ? `export const ${name} = new TextEncoder().encode(${ts(value)}); // ${provenance}\n`
     : `export const ${name} = ${ts(value)} as const; // ${provenance}\n`;
 }

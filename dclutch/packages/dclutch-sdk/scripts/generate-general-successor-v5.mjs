@@ -25,6 +25,9 @@ const sources = Object.freeze({
   lib: readFileSync(new URL('crates/dclutch-trading/src/general/mod.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-operator/src/general_hot_v3.rs', root), 'utf8'),
   producer: readFileSync(new URL('crates/dclutch-operator/src/general_successor.rs', root), 'utf8'),
+  // The chain-profile ceiling `GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3` aliases; the
+  // assertion below pins the alias so this file stays its one author.
+  registry: readFileSync(new URL('crates/dclutch-operator/src/registry.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/generalSuccessorV5.ts', import.meta.url);
 const check = process.argv.includes('--check');
@@ -213,6 +216,13 @@ const assertions = [
   ['runtime', 'const VERIFIED_CANDIDATE_MAGIC: [u8; 8] = wire::VERIFIED_CANDIDATE_MAGIC_V2;'],
   ['hot', 'pub struct HotBumpHintsV1 {'],
   ['operator', 'pub const GENERAL_HOT_HEAP_FRAME_BYTES_V3: u32 = DIRECT_HOT_HEAP_FRAME_BYTES_V1;'],
+  ['operator', 'pub const GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3: u32 = TRANSACTION_COMPUTE_UNIT_LIMIT_V1;'],
+  // The plan carries THREE instructions, in this order, and the producer checks
+  // each of the first two byte-for-byte. It carried two until `432d07339`, when
+  // the compute limit was added because the program-test caller was pushing its
+  // own and the shipped builder pushed none; the browser's mirror is held to the
+  // same destructuring so a third change to the prologue cannot pass it again.
+  ['producer', 'let [compiled_limit, compiled_heap, compiled_hot] = compiled_message.instructions.as_slice()'],
 ];
 for (const [source, fragment] of assertions) {
   if (!sources[source].includes(fragment)) throw new Error(`canonical Rust semantics changed: ${source} lacks ${fragment}`);
@@ -274,6 +284,7 @@ for (const [name, value] of [
   ['GENERAL_VERIFIED_CANDIDATE_VERSION_V2', scalar('runtime', 'RUNTIME_WIDTH_VERSION_V2')],
   ['GENERAL_CUSTODY_RECEIPT_BYTES_V1', scalar('custody', 'CUSTODY_RECEIPT_BYTES_V1')],
   ['GENERAL_HOT_HEAP_FRAME_BYTES_V3', scalar('hot', 'DIRECT_HOT_HEAP_FRAME_BYTES_V1')],
+  ['GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3', scalar('registry', 'TRANSACTION_COMPUTE_UNIT_LIMIT_V1')],
   ['GENERAL_CANDIDATE_BYTES', scalar('controller', 'CANDIDATE_BYTES')],
   ['GENERAL_EXECUTION_BYTES', scalar('controller', 'EXECUTION_BYTES')],
   ['GENERAL_PAGE_BYTES', scalar('controller', 'PAGE_BYTES')],

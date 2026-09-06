@@ -4,6 +4,7 @@ import { fromHex, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, 
 import * as Abi from './generated/generalSuccessorV5';
 import { SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import { familyRequestDigestV3 } from './shadowDigestV3';
 import {
   acquireUnsignedTransactionDependenciesV1,
   inspectUnsignedTransactionV1,
@@ -112,6 +113,17 @@ export type GeneralPlanInspectionV5 = Readonly<{
   transaction: UnsignedTransactionInspectionV1;
   envelope: GeneralHotEnvelopeV3;
   request: GeneralDecodedRequestV3;
+  /**
+   * The BARE `sha256` of the exact request bytes — the number the Hot
+   * acknowledgement carries, not the one the plan publishes.
+   *
+   * It is computed here rather than in {@link decodeGeneralHotReceiptV3}
+   * because a receipt arrives from a wallet callback where nothing may await,
+   * and because the two digests should be derived once, side by side, by the
+   * code that holds the request bytes. See `shadowDigestV3.ts` for which
+   * author owns which.
+   */
+  ackRequestDigest: string;
 }>;
 
 export type GeneralSelectionStatusV2 = Readonly<{
@@ -289,6 +301,18 @@ export type GeneralHotReceiptV3 = Readonly<{
   rootPoststateDigest: string;
   executionDigest: string;
 }>;
+
+/**
+ * Where the Hot instruction sits in a plan's message, after the compute-budget
+ * prologue the producer emits ahead of it.
+ *
+ * Named because it is read in two places and only one of them checks the
+ * prologue: when the producer grew from `[heap, hot]` to `[limit, heap, hot]`
+ * at `432d07339`, a literal `1` in the second reader would have gone on
+ * pointing at the heap declaration and reported a lifecycle projection
+ * mismatch, which says nothing about lifecycle projections.
+ */
+const HOT_INSTRUCTION_INDEX_V5 = 2;
 
 type MessageView = Readonly<{
   header: Readonly<{ numRequiredSignatures: number }>;
@@ -562,13 +586,24 @@ function decodeEnvelope(bytes: Uint8Array): GeneralHotEnvelopeV3 {
 export async function inspectGeneralSuccessorPlanV5(plan: GeneralSuccessorPlanDocumentV5): Promise<GeneralPlanInspectionV5> {
   const transaction = await inspectUnsignedTransactionV1(plan.transactionBase64);
   const message = transaction.transaction.message as unknown as MessageView;
-  if (message.compiledInstructions.length !== 2) throw new Error('General plan must contain exactly one heap declaration followed by one Hot instruction');
+  if (message.compiledInstructions.length !== 3) throw new Error('General plan must contain exactly one compute limit and one heap declaration followed by one Hot instruction');
   if (message.addressTableLookups.length !== 1 || message.addressTableLookups[0]?.accountKey.toBase58() !== plan.lookupTable) throw new Error('General plan does not use its one exact canonical lookup table');
-  const heapCompiled = message.compiledInstructions[0];
-  const compiled = message.compiledInstructions[1];
-  if (heapCompiled === undefined || compiled === undefined) throw new Error('General instruction pair is incomplete');
-  const heapProgram = message.staticAccountKeys[heapCompiled.programIdIndex];
+  const limitCompiled = message.compiledInstructions[0];
+  const heapCompiled = message.compiledInstructions[1];
+  const compiled = message.compiledInstructions[HOT_INSTRUCTION_INDEX_V5];
+  if (limitCompiled === undefined || heapCompiled === undefined || compiled === undefined) throw new Error('General instruction triple is incomplete');
+  // The producer's own destructuring is `[compiled_limit, compiled_heap,
+  // compiled_hot]` (`general_successor.rs:909`), and it checks the first two
+  // byte-for-byte against these two builders. The limit was added at
+  // `432d07339`, after the first devnet attempt died `ProgramFailedToComplete`
+  // with the shipped builder declaring no limit at all.
+  const expectedLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: Abi.GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3 });
   const expectedHeap = ComputeBudgetProgram.requestHeapFrame({ bytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3 });
+  const limitProgram = message.staticAccountKeys[limitCompiled.programIdIndex];
+  const heapProgram = message.staticAccountKeys[heapCompiled.programIdIndex];
+  if (limitProgram === undefined || !limitProgram.equals(expectedLimit.programId)
+      || limitCompiled.accountKeyIndexes.length !== 0
+      || !same(new Uint8Array(limitCompiled.data), new Uint8Array(expectedLimit.data))) throw new Error('General compute limit or instruction order was substituted');
   if (heapProgram === undefined || !heapProgram.equals(expectedHeap.programId)
       || heapCompiled.accountKeyIndexes.length !== 0
       || !same(new Uint8Array(heapCompiled.data), new Uint8Array(expectedHeap.data))) throw new Error('General heap declaration or instruction order was substituted');
@@ -583,16 +618,22 @@ export async function inspectGeneralSuccessorPlanV5(plan: GeneralSuccessorPlanDo
   if (instruction.length !== Abi.GENERAL_HOT_ENVELOPE_BYTES_V3 + Abi.GENERAL_REQUEST_BYTES_V3) throw new Error('General Hot instruction has another exact width');
   const envelope = decodeEnvelope(slice(instruction, 0, Abi.GENERAL_HOT_ENVELOPE_BYTES_V3));
   const request = decodeGeneralControllerRequestV3(slice(instruction, Abi.GENERAL_HOT_ENVELOPE_BYTES_V3, Abi.GENERAL_REQUEST_BYTES_V3));
-  const requestDigest = hex(await sha256(request.bytes));
+  // The plan publishes the DOMAIN-SEPARATED family request digest — its author
+  // is `shadow_digest_v3.rs::family_request_digest_v3`, which the operator has
+  // reached since COHORT-16F. The bare hash below is a different fact with a
+  // different author, and it is carried for the acknowledgement, whose own
+  // field the chain fills with it. See `shadowDigestV3.ts`.
+  const familyRequestDigest = hex(await familyRequestDigestV3(request.bytes));
+  const ackRequestDigest = hex(await sha256(request.bytes));
   if (request.action !== plan.action || envelope.releaseSet !== plan.releaseSet || envelope.market !== plan.market || envelope.generation !== plan.generation
-      || envelope.rootPrestateDigest !== plan.rootPrestateDigest || requestDigest !== plan.familyRequestDigest
+      || envelope.rootPrestateDigest !== plan.rootPrestateDigest || familyRequestDigest !== plan.familyRequestDigest
       || request.primaryStateBump !== plan.lifecycle.primary.bump
       || (plan.lifecycle.secondary?.bump ?? 0) !== request.secondaryStateBump
       || (plan.lifecycle.conditionalResult?.bump ?? 0) !== request.resultStateBump) throw new Error('General operator report differs from the exact transaction request or Hot envelope');
   if (plan.action === 'close') {
     if (request.expectedRevision === MAX_U64 || plan.lifecycle.terminalCoordinate !== request.expectedRevision + 1n) throw new Error('General Close terminal coordinate is not the revision successor');
   }
-  return Object.freeze({ plan, transaction, envelope, request });
+  return Object.freeze({ plan, transaction, envelope, request, ackRequestDigest });
 }
 
 function decodeSelection(bytes: Uint8Array): GeneralSelectionStatusV2 {
@@ -1014,7 +1055,7 @@ export async function reacquireGeneralSuccessorStatusV5(client: SolanaRpcClient,
     if (!dependencyAddresses.has(addressValue)) throw new Error(`General transaction omits its ${field}`);
   }
   const message = inspection.transaction.transaction.message as unknown as MessageView;
-  const compiled = message.compiledInstructions[1];
+  const compiled = message.compiledInstructions[HOT_INSTRUCTION_INDEX_V5];
   if (compiled === undefined) throw new Error('General transaction lost its Hot instruction');
   for (const state of lifecycleStates) {
     const messageIndex = compiled.accountKeyIndexes[state.accountCoordinate];
@@ -1085,8 +1126,15 @@ export function decodeGeneralHotReceiptV3(base64: string, inspection: GeneralPla
     executionDigest: idHex(bytes, Abi.GENERAL_ACK_EXECUTION_DIGEST_OFFSET_V3, 'receipt execution digest'),
   });
   const plan = inspection.plan;
+  // The acknowledgement's `request_digest` is the BARE `sha256` of the request
+  // bytes, not the plan's domain-separated `familyRequestDigest`: the chain
+  // fills it from `prepared.request_digest` at
+  // `programs/dclutch-trading-sbf/src/hot_v3/execute.rs:1771`, which the Hot
+  // prelude computed bare at `programs/dclutch-trading-sbf/src/hot_v3.rs:1117`
+  // (`hash(family_request)`). Comparing it to the plan's digest was false for
+  // every valid receipt.
   if (receipt.releaseSet !== plan.releaseSet || receipt.market !== plan.market || receipt.generation !== plan.generation || receipt.root !== plan.root
-      || receipt.requestDigest !== plan.familyRequestDigest || receipt.selectedProgram !== plan.artifacts.descriptor || receipt.rootPrestateDigest !== plan.rootPrestateDigest) throw new Error('General Hot receipt belongs to another request, Market, root, release, or selected program');
+      || receipt.requestDigest !== inspection.ackRequestDigest || receipt.selectedProgram !== plan.artifacts.descriptor || receipt.rootPrestateDigest !== plan.rootPrestateDigest) throw new Error('General Hot receipt belongs to another request, Market, root, release, or selected program');
   return receipt;
 }
 

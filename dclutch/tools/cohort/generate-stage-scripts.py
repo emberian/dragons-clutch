@@ -111,6 +111,11 @@ def wrap(text: str, width: int = 74, prefix: str = "#   ") -> list[str]:
 PREAMBLE = """\
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+# A STAGE MUST NOT INHERIT THE CALLER'S WORKING DIRECTORY. Everything here is
+# rooted at $HERE already, but a `script` row shells into the repository and
+# cargo reads `rust-toolchain.toml` from the CWD, so a stage launched from a
+# sibling checkout builds with that checkout's toolchain. Measured 2026-09-06.
+cd "$HERE"
 STAGE=%(stage_literal)s
 OUT="$HERE/$STAGE"
 MODE="${1:---preflight}"

@@ -51,6 +51,7 @@ export const GENERAL_VERIFIED_CANDIDATE_HEADER_BYTES_V2 = 160 as const;
 export const GENERAL_VERIFIED_CANDIDATE_VERSION_V2 = 2 as const;
 export const GENERAL_CUSTODY_RECEIPT_BYTES_V1 = 384 as const;
 export const GENERAL_HOT_HEAP_FRAME_BYTES_V3 = 65536 as const;
+export const GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3 = 1400000 as const;
 export const GENERAL_CANDIDATE_BYTES = 256 as const;
 export const GENERAL_EXECUTION_BYTES = 368 as const;
 export const GENERAL_PAGE_BYTES = 11840 as const;

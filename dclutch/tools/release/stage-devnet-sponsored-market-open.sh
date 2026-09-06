@@ -279,7 +279,15 @@ fi
 # file at rest and did not close for the run. Measured 2026-09-03 by COHORT-14C:
 # staging market C put the live Helius key into its own log on line one. The
 # build carries no credential on its command line, so this split is the fix.
-cargo build --locked --manifest-path "$BOOT/Cargo.toml" >&2
+# BUILT FROM $REPO, NOT FROM WHEREVER THE CALLER STOOD. `--manifest-path` does
+# not move cargo: rustup resolves `rust-toolchain.toml` from the CURRENT
+# WORKING DIRECTORY, so a caller whose shell sat in another repository builds
+# this tree's driver with that repository's toolchain -- silently, and with a
+# cold target directory to prove it. Cohort-17 measured it: the Direct founding
+# was launched from a sibling checkout and spent forty minutes recompiling the
+# whole successor package under `nightly` while this tree pins 1.97.1. The
+# toolchain is a property of the repository being built.
+( cd "$REPO" && cargo build --locked --manifest-path "$BOOT/Cargo.toml" ) >&2
 BOOT_BIN="${CARGO_TARGET_DIR:-$REPO/target}/debug/dclutch-local-successor-bootstrap"
 [ -x "$BOOT_BIN" ] || { echo "the successor bootstrap binary is missing at $BOOT_BIN" >&2; exit 2; }
 
@@ -355,7 +363,7 @@ esac
 # from its own location. The job directory is then self-contained and, because
 # nothing in the wrapper is absolute, relocatable as one tree.
 mkdir -m 700 "$WORK/bin"
-cargo build --locked --manifest-path "$BOOT/Cargo.toml" >&2
+( cd "$REPO" && cargo build --locked --manifest-path "$BOOT/Cargo.toml" ) >&2
 DRIVER_BUILD="${CARGO_TARGET_DIR:-$REPO/target}/debug/dclutch-local-successor-bootstrap"
 cp "$DRIVER_BUILD" \
     "$WORK/bin/dclutch-local-successor-bootstrap"

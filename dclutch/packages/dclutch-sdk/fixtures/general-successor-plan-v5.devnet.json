@@ -1,0 +1,51 @@
+{
+  "format": "dclutch/general-successor-plan/v5",
+  "action": "open-batch",
+  "transactionBase64": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQACA3qL6ps0+oupcFBaNjPdAIZ7RhvaeovoFN5vyIjjN2MwAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAADHqj2YiHJPpvJqTqcMkDwpyHnsKqSwc/wgOhqXBFORABNE53Ui7upbP6PZj+35/+2wls73OllJUidW7CAeB96GAwEABQLAXBUAAQAFAQAAAQACNxQDKiQeERIiGik0DSUmMS4YMCwhFx0vECcCGxUJCAwKDiMLDxM1NjctIBwoHxYrGQczMgUABAbAAURDTFRIT1QzAwABAEAAAAD1M75JdT3U9wnE+lip9KwFxDmVwWi50WzV7iY/727YOUt0vxMe6yHtgBbQ/0fyCJ/P3rcRpagB3yBQWQLDWlR2AgAAAAAAAABabtzcFmZUszDcpNEvN7N8Fe4oL0XHq1apWJNCbtRdcv/5AAAAAAD+RENHUkVRMDMDAAcAAAAAAAEAAAAAAAAAJ9FOWoPOZMHuLQtc4VSiJvPTxzUupIrXxYpUUVps+ocAAAAAAP8AAAFZwdoD3RBzrUZCU9X8pw2cLm8/n2Fd6UUYtCWsE5lZJAMIECcyAAECAwQFBgcJCgsMDQ4PERITFBUWFxgZGhscHR4fICEiIyQlJigpKissLS4vMDEyMzQ=",
+  "observedSlot": "493889936",
+  "outcomeCount": 4,
+  "admittedInvocationCount": 4,
+  "heapFrameBytes": 65536,
+  "tradingProgram": "ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3",
+  "lookupTable": "73NjFXo4c836tWczvc11v4J8nMpjopVraQT8vCmbNEPm",
+  "payer": "9FNUxCr2CvvTNE47KWhoyBC4LcuYJnyzeQGypkf88KAP",
+  "requiredSigners": [
+    "9FNUxCr2CvvTNE47KWhoyBC4LcuYJnyzeQGypkf88KAP"
+  ],
+  "market": "65Yq3q6tgHArrJtZPhf5RAgNzpPAGcZSoBmT4D3As9n5",
+  "root": "4NcnH7ptihcAjYyNX2xbKypnkTCQCpLMBGscX7fduCsF",
+  "generation": "2",
+  "releaseSet": "f533be49753dd4f709c4fa58a9f4ac05c43995c168b9d16cd5ee263fef6ed839",
+  "rootPrestateDigest": "5a6edcdc166654b330dca4d12f37b37c15ee282f45c7ab56a95893426ed45d72",
+  "familyRequestDigest": "ff3ace4881df012e3b10e48cdb6a72ce119e184003561754d3cb9869f6c95856",
+  "checkedManifestDigest": "40b41010503d6860c994968438249ae7b92891250eb1e62ea7a794669953c989",
+  "tradingArtifactRelease": "f0de7f259ef067dc4b5d2be403a504e2c17eccfebef30eacaef0e523a681606a",
+  "generalArtifactRelease": "db3bbd607ed2794d3dcf045ca61c708bcef7162185372c91765a3a8a812a1e16",
+  "productRecord": "878d3954cf64e9c45821475f9ffa8b8022832f150c0a330c77a020166e3f6571",
+  "artifacts": {
+    "programSet": "e2ceb6c1f2218db34b3b0c26a9e1e4c0519ea9df81e0a8ca06dc9d5f92dc2e6f",
+    "descriptor": "47a5303dd4ba2e24c4c8ce5f6a08289d21b8b2c004258580e43b9d8df064af60",
+    "config": "7f67be58584cd168ff9f26dc418f573a4bdeb502f86b26b2e395f97bbb00cefd",
+    "accountProfile": "759af93526e24dcfe13eb3ef2d3b6a7f2b4c5b043c93ba23ea9b1d89a7a47333",
+    "lifecyclePolicy": "84c91c263669dd926fa3f37b5cf85c2944f1bcdbc2665a362231e9b6325533b1",
+    "requestProfile": "ed2604c9ade4c145d01fe7f1e67ec244e50f80725aef968a3d0a63a341fda8c0",
+    "strategy": "006b0d7c94989a4855a290d3f4c05665a717efda1fbfbcf2fb050044279fcd83",
+    "certificate": "b6ac733ca82c08c4f676375884df86a9d45cdc0b79717d3f14be11a72a35e3a3",
+    "admission": "4f9c95cb956c61d49c1804a766412dace4ee15943a20fb490e476ca46fe77c6a",
+    "transition": "09b338d302ce662668c1c596be62dc15226466767c0d86002e6bab0768526fa8",
+    "effect": "1e4db6feb1f8396a8b84aae0e6e77a96172871462e3ded8ad1c3c1ad17ecd003"
+  },
+  "lifecycle": {
+    "primary": {
+      "accountCoordinate": 5,
+      "account": "CuW1791cAY1uqgtu1okAjEmY2iVHx8gsytQgs8WcayYQ",
+      "bump": 255,
+      "isMaterialized": false
+    },
+    "secondary": null,
+    "conditionalResult": null,
+    "terminalCoordinate": null,
+    "childAccountStart": 8
+  },
+  "childRoutes": []
+}

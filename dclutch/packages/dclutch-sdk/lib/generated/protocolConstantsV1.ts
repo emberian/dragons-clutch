@@ -28,6 +28,9 @@ export const RATIONAL_SHARD_MINT_SEED_V2 = new TextEncoder().encode('dclutch:rat
 export const RATIONAL_STRUCTURED_CUSTODY_SEED_V2 = new TextEncoder().encode('dclutch:rational-structured:v2'); // crates/dclutch-claims/src/rational/mod.rs::RATIONAL_STRUCTURED_CUSTODY_SEED_V2
 export const RELEASE_LINEAGE_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:release-lineage:v1'); // crates/dclutch-registry/src/lineage.rs::RELEASE_LINEAGE_PDA_DOMAIN_V1
 
+// Digest domains, as the bytes a hash preimage is prefixed with.
+export const FAMILY_REQUEST_DIGEST_DOMAIN_V3 = new TextEncoder().encode('dclutch:shadow-family-request:v3'); // crates/dclutch-market/src/execution_strategy/shadow_digest_v3.rs::FAMILY_REQUEST_DIGEST_DOMAIN_V3
+
 // Envelope kinds and formats, as the text a JSON document carries.
 export const DIRECT_TICKET_KIND_V1 = 'dclutch/direct-intent-ticket/v1' as const; // crates/dclutch-direct-ticket/src/envelope.rs::PORTABLE_DIRECT_TICKET_KIND_V1
 export const GENERAL_SUCCESSOR_PLAN_FORMAT_V5 = 'dclutch/general-successor-plan/v5' as const; // crates/dclutch-operator/src/general_successor.rs::PLAN_FORMAT_V5

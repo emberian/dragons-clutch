@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 import { hex, sha256 } from './bytes';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 import * as Abi from './generated/generalSuccessorV5';
+import { familyRequestDigestV3 } from './shadowDigestV3';
+import devnetPlan from '../fixtures/general-successor-plan-v5.devnet.json';
 import {
   decodeGeneralCandidateV1,
   decodeGeneralHotReceiptV3,
@@ -103,13 +105,19 @@ async function fixture(action: GeneralSuccessorActionV5, outcomeCount = 1): Prom
   });
   const table = new AddressLookupTableAccount({ key: lookup, state: { deactivationSlot: MAX_U64, lastExtendedSlot: 1, lastExtendedSlotStartIndex: 0, authority: undefined, addresses } });
   const instruction = new TransactionInstruction({ programId: trading, keys: metas, data: data as Buffer });
+  const limit = ComputeBudgetProgram.setComputeUnitLimit({ units: Abi.GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3 });
   const heap = ComputeBudgetProgram.requestHeapFrame({ bytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3 });
-  const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: key(204).toBase58(), instructions: [heap, instruction] }).compileToV0Message([table]));
+  const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: key(204).toBase58(), instructions: [limit, heap, instruction] }).compileToV0Message([table]));
   const artifactNames = ['programSet', 'descriptor', 'config', 'accountProfile', 'lifecyclePolicy', 'requestProfile', 'strategy', 'certificate', 'admission', 'transition', 'effect'];
   const raw: Record<string, unknown> = {
     format: 'dclutch/general-successor-plan/v5', action, transactionBase64: base64(transaction.serialize()), observedSlot: '77', outcomeCount, admittedInvocationCount: 1, heapFrameBytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3,
     tradingProgram: trading.toBase58(), lookupTable: lookup.toBase58(), payer: payer.toBase58(), requiredSigners: [payer.toBase58()], market: market.toBase58(), root: root.toBase58(), generation: '7',
-    releaseSet: id(41), rootPrestateDigest: id(42), familyRequestDigest: hex(await sha256(requestBytes)), checkedManifestDigest: id(43), tradingArtifactRelease: id(44), generalArtifactRelease: id(45), productRecord: id(46),
+    // Through the SDK's own derivation, which is the operator's: a fixture that
+    // spells this hash itself is a second author for it, and the last one
+    // spelled `sha256(requestBytes)` -- agreeing with an inspector that
+    // recomputed the same wrong number, so both were green against a plan no
+    // operator has produced since COHORT-16F.
+    releaseSet: id(41), rootPrestateDigest: id(42), familyRequestDigest: hex(await familyRequestDigestV3(requestBytes)), checkedManifestDigest: id(43), tradingArtifactRelease: id(44), generalArtifactRelease: id(45), productRecord: id(46),
     artifacts: Object.fromEntries(artifactNames.map((name, index) => [name, id(80 + index)])),
     lifecycle: {
       primary: { accountCoordinate: 5, account: primary.toBase58(), bump: 7, isMaterialized: true },
@@ -238,7 +246,7 @@ describe('General V5 operator-plan browser boundary', () => {
     expect(() => decodeGeneralSuccessorPlanDocumentV5(JSON.stringify({ ...value.raw, childRoutes }))).toThrow(/dependency/);
     expect(() => decodeGeneralSuccessorPlanDocumentV5(JSON.stringify({ ...value.raw, heapFrameBytes: 32_768 }))).toThrow(/heap frame/);
     const substitutedHeap = VersionedTransaction.deserialize(Buffer.from(String(value.raw.transactionBase64), 'base64'));
-    substitutedHeap.message.compiledInstructions[0].data.set(ComputeBudgetProgram.requestHeapFrame({ bytes: 32_768 }).data);
+    substitutedHeap.message.compiledInstructions[1].data.set(ComputeBudgetProgram.requestHeapFrame({ bytes: 32_768 }).data);
     const substitutedPacket = decodeGeneralSuccessorPlanDocumentV5(JSON.stringify({ ...value.raw, transactionBase64: base64(substitutedHeap.serialize()) }));
     await expect(inspectGeneralSuccessorPlanV5(substitutedPacket)).rejects.toThrow(/heap declaration/);
   });
@@ -299,7 +307,7 @@ describe('General V5 operator-plan browser boundary', () => {
     const value = await fixture('collect'); const inspection = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(value.text));
     expect(inspection.request).toMatchObject({ manifestOrderIndex: 1, pageIndex: 2, executionIndex: 3 });
     const transaction = VersionedTransaction.deserialize(base64ToBytes(value.raw.transactionBase64 as string));
-    transaction.message.compiledInstructions[1].data[11 + Abi.GENERAL_HOT_ENVELOPE_BYTES_V3] = 0;
+    transaction.message.compiledInstructions[2].data[11 + Abi.GENERAL_HOT_ENVELOPE_BYTES_V3] = 0;
     const hostile = { ...value.raw, transactionBase64: base64(transaction.serialize()) };
     await expect(inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(JSON.stringify(hostile)))).rejects.toThrow(/differs/);
   });
@@ -392,7 +400,7 @@ describe('General V5 operator-plan browser boundary', () => {
     expect(absent.envelope.bumpHints).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
     const transaction = VersionedTransaction.deserialize(base64ToBytes(value.raw.transactionBase64 as string));
     const mined = [254, 253, 252, 0, 251, 0, 250, 0];
-    mined.forEach((bump, slot) => { transaction.message.compiledInstructions[1].data[Abi.GENERAL_ENVELOPE_BUMP_HINTS_OFFSET_V3 + slot] = bump; });
+    mined.forEach((bump, slot) => { transaction.message.compiledInstructions[2].data[Abi.GENERAL_ENVELOPE_BUMP_HINTS_OFFSET_V3 + slot] = bump; });
     const hinted = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(JSON.stringify({ ...value.raw, transactionBase64: base64(transaction.serialize()) })));
     expect(hinted.envelope.bumpHints).toEqual(mined);
     expect(hinted.plan.familyRequestDigest).toBe(absent.plan.familyRequestDigest);
@@ -403,8 +411,49 @@ describe('General V5 operator-plan browser boundary', () => {
     const receipt = new Uint8Array(Abi.GENERAL_HOT_ACK_BYTES_V3); receipt.set(Abi.GENERAL_HOT_ACK_MAGIC_V3); putU16(receipt, 8, 3); putU16(receipt, 10, 1);
     receipt.set(bytes(41), Abi.GENERAL_ACK_RELEASE_SET_OFFSET_V3); receipt.set(key(1).toBytes(), Abi.GENERAL_ACK_MARKET_OFFSET_V3); putU64(receipt, Abi.GENERAL_ACK_GENERATION_OFFSET_V3, 7n); receipt.set(key(2).toBytes(), Abi.GENERAL_ACK_ROOT_OFFSET_V3);
     receipt.set(await sha256(value.request), Abi.GENERAL_ACK_REQUEST_DIGEST_OFFSET_V3); receipt.set(bytes(81), Abi.GENERAL_ACK_SELECTED_PROGRAM_OFFSET_V3); receipt.set(bytes(42), Abi.GENERAL_ACK_ROOT_PRESTATE_DIGEST_OFFSET_V3); receipt.set(bytes(61), Abi.GENERAL_ACK_ROOT_POSTSTATE_DIGEST_OFFSET_V3); receipt.set(bytes(62), Abi.GENERAL_ACK_EXECUTION_DIGEST_OFFSET_V3);
-    expect(decodeGeneralHotReceiptV3(base64(receipt), inspection)).toMatchObject({ requestDigest: inspection.plan.familyRequestDigest, selectedProgram: inspection.plan.artifacts.descriptor });
+    // The acknowledgement carries the BARE hash -- the chain fills it from
+    // `prepared.request_digest`, computed as `hash(family_request)` at
+    // `programs/dclutch-trading-sbf/src/hot_v3.rs:1117` -- and the plan carries
+    // the domain-separated one. Asserting they DIFFER is what keeps this test
+    // from passing again under one author for both.
+    expect(inspection.ackRequestDigest).not.toBe(inspection.plan.familyRequestDigest);
+    expect(decodeGeneralHotReceiptV3(base64(receipt), inspection)).toMatchObject({ requestDigest: inspection.ackRequestDigest, selectedProgram: inspection.plan.artifacts.descriptor });
     receipt[Abi.GENERAL_ACK_REQUEST_DIGEST_OFFSET_V3] ^= 1; expect(() => decodeGeneralHotReceiptV3(base64(receipt), inspection)).toThrow(/another request/);
+  });
+
+  it('refuses a plan whose family request digest is the bare hash, and a receipt carrying the domain-separated one', async () => {
+    // The red-proof for both comparisons, in the exact shape they were wrong
+    // in: `inspectGeneralSuccessorPlanV5` recomputed the bare hash and compared
+    // it to the plan's digest (always false), and `decodeGeneralHotReceiptV3`
+    // compared the ack's bare digest to the plan's domain-separated one (also
+    // always false). Each arm below is the OLD behaviour presented as hostile
+    // input, so a regression to it is a named refusal rather than a green suite.
+    const value = await fixture('close');
+    const bare = hex(await sha256(value.request));
+    expect(bare).not.toBe(value.raw.familyRequestDigest);
+    await expect(inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(JSON.stringify({ ...value.raw, familyRequestDigest: bare }))))
+      .rejects.toThrow(/General operator report differs from the exact transaction request or Hot envelope/);
+
+    const inspection = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(value.text));
+    const receipt = new Uint8Array(Abi.GENERAL_HOT_ACK_BYTES_V3); receipt.set(Abi.GENERAL_HOT_ACK_MAGIC_V3); putU16(receipt, 8, 3); putU16(receipt, 10, 1);
+    receipt.set(bytes(41), Abi.GENERAL_ACK_RELEASE_SET_OFFSET_V3); receipt.set(key(1).toBytes(), Abi.GENERAL_ACK_MARKET_OFFSET_V3); putU64(receipt, Abi.GENERAL_ACK_GENERATION_OFFSET_V3, 7n); receipt.set(key(2).toBytes(), Abi.GENERAL_ACK_ROOT_OFFSET_V3);
+    receipt.set(await familyRequestDigestV3(value.request), Abi.GENERAL_ACK_REQUEST_DIGEST_OFFSET_V3); receipt.set(bytes(81), Abi.GENERAL_ACK_SELECTED_PROGRAM_OFFSET_V3); receipt.set(bytes(42), Abi.GENERAL_ACK_ROOT_PRESTATE_DIGEST_OFFSET_V3); receipt.set(bytes(61), Abi.GENERAL_ACK_ROOT_POSTSTATE_DIGEST_OFFSET_V3); receipt.set(bytes(62), Abi.GENERAL_ACK_EXECUTION_DIGEST_OFFSET_V3);
+    expect(() => decodeGeneralHotReceiptV3(base64(receipt), inspection)).toThrow(/another request/);
+  });
+
+  it('inspects the cohort-16.1 devnet plan the operator actually published', async () => {
+    // The live case, and the reason a synthetic fixture is not one: every
+    // fixture in this file is built by the same function the inspector is
+    // checked against, so a producer that moves takes both sides with it. This
+    // plan is COHORT-16F's exact `open-batch` report against the deployed
+    // cohort-16.1 General market -- the one whose digest 17D reproduced
+    // offline and the chain then published -- and nothing here derives it.
+    const inspection = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(JSON.stringify(devnetPlan)));
+    expect(inspection.plan.familyRequestDigest).toBe('ff3ace4881df012e3b10e48cdb6a72ce119e184003561754d3cb9869f6c95856');
+    expect(hex(await familyRequestDigestV3(inspection.request.bytes))).toBe(inspection.plan.familyRequestDigest);
+    expect(inspection.ackRequestDigest).toBe(hex(await sha256(inspection.request.bytes)));
+    expect(inspection.ackRequestDigest).not.toBe(inspection.plan.familyRequestDigest);
+    expect(inspection.request.action).toBe('open-batch');
   });
 });
 
