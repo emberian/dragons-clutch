@@ -939,10 +939,22 @@ fn general_product_id_v1() -> [u8; 32] {
     Sha256::digest(general_product_record_v1()).into()
 }
 
+/// The one semantic basis this campaign's General config and its bank both name.
+///
+/// It was two literals, `[2; 32]` in the config and `[5; 32]` in the register,
+/// and `require_market` compares exactly those two: this campaign reaches the
+/// real accelerator ELF, records whatever disposition comes back, and requires
+/// nothing of it, so a `ConfigMarket` refusal journaled as a string looked like
+/// a run. On the real route the register is projected out of the authenticated
+/// Portfolio's `liability_basis_id` @128 and the config field spelled
+/// `claim_basis_id` holds that same liability basis; this campaign hand-builds
+/// the bank and presents no Portfolio, so the two sides are one constant here.
+const GENERAL_SEMANTIC_BASIS_V1: [u8; 32] = [2; 32];
+
 fn general_config_v1(width: u32) -> Result<Vec<u8>> {
     Ok(GeneralConfigV3::new(GeneralConfigV3Input {
         capacity_profile_id: [1; 32],
-        claim_basis_id: [2; 32],
+        claim_basis_id: GENERAL_SEMANTIC_BASIS_V1,
         program_set_id: [3; 32],
         generation: 9,
         price_scale: u64::from(width),
@@ -1419,7 +1431,7 @@ fn general_input_bank_v1(
         (identity::RELEASE_SET, [2; 32]),
         (identity::MARKET, [3; 32]),
         (identity::PRODUCT_RECORD_DIGEST, general_product_id_v1()),
-        (identity::SEMANTIC_BASIS_ID, [5; 32]),
+        (identity::SEMANTIC_BASIS_ID, GENERAL_SEMANTIC_BASIS_V1),
         (identity::LINKED_BASIS_RECORD_DIGEST, [6; 32]),
         (identity::REALM, [7; 32]),
         (identity::TRADING_PROGRAM, caller.to_bytes()),

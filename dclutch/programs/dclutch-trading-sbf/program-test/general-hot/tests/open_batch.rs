@@ -72,8 +72,7 @@ use dclutch_operator::general_selected_release_v1::{
 use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
-        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
-        compile_basis_v3, semantic_basis_preimage_v3,
+        BasisInputV3, BasisKindV3, basis_record_bytes_v3, compile_basis_v3, semantic_basis_id_v3,
     },
 };
 use dclutch_product::{
@@ -127,6 +126,15 @@ const SOLVER: [u8; 32] = [0xc3; 32];
 const CANDIDATE_PAGE_REVISION: u64 = 11;
 /// Lamports one verification crank pays out of the candidate's work escrow.
 const CRANK_REWARD_LAMPORTS: u64 = 5_000;
+/// The Product's CLAIM basis, which is NOT what the General config binds.
+///
+/// It is a free identity here and it is deliberately not the liability basis:
+/// the Portfolio carries both, one field apart (`claim_basis_id` @96,
+/// `liability_basis_id` @128), and until 2026-09-06 the General AccountProfile
+/// projected @96 into `SEMANTIC_BASIS_ID` while the operator filled the config
+/// from `semantic_basis_id_v3(linked_basis)` @128. Every fixture agreed with
+/// itself because every fixture wrote BOTH sides from this one literal. Keeping
+/// the two distinct is what makes `require_market` say anything at all.
 const CLAIM_BASIS: [u8; 32] = [0x56; 32];
 
 #[derive(Clone)]
@@ -136,6 +144,9 @@ struct ProductRecords {
     domain: DerivedRecordV1,
     portfolio: DerivedRecordV1,
     basis: DerivedRecordV1,
+    /// The semantic basis this founding derived: the Portfolio's
+    /// `liability_basis_id` @128, and the value the General config binds.
+    semantic_basis: [u8; 32],
 }
 
 fn product_content(value: [u8; 32]) -> ProductContentId {
@@ -167,13 +178,12 @@ fn build_product(outcome_count: u32) -> ProductRecords {
         basis_record_bytes_v3(BasisKindV3::CategoricalQ1, outcomes, 0, 0).expect("basis width");
     let mut provisional = vec![0; basis_bytes];
     compile_basis_v3(provisional_input, &mut provisional).expect("provisional basis");
-    let semantic = semantic_basis_preimage_v3(&provisional).expect("semantic basis preimage");
-    let semantic_basis = solana_program::hash::hashv(&[
-        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-        semantic.prefix(),
-        semantic.suffix(),
-    ])
-    .to_bytes();
+    // ONE AUTHOR. `semantic_basis_id_v3` is the tree's sole spelling of this
+    // domain-separated hash; the operator's `general_market_derivation_v1`
+    // reaches the same function for the config's field, so the config and this
+    // Portfolio cannot disagree about what the semantic basis IS -- only about
+    // which record it was taken from, which is the join `require_market` makes.
+    let semantic_basis = semantic_basis_id_v3(&provisional).expect("semantic basis identity");
     let cut_count = outcome_count.checked_sub(2).expect("categorical width");
     let cuts = (0..i128::from(cut_count)).collect::<Vec<_>>();
     let coefficients = vec![1; outcomes];
@@ -220,6 +230,7 @@ fn build_product(outcome_count: u32) -> ProductRecords {
         domain,
         portfolio,
         basis,
+        semantic_basis,
     }
 }
 
@@ -270,10 +281,19 @@ fn selected_release(
     outcome_count: u32,
     product: &ProductRecords,
     accelerator_release: ArtifactReleaseIdV1,
+    config_basis: [u8; 32],
 ) -> GeneralSelectedReleaseV1 {
     general_selected_release_v1(GeneralSelectedReleaseInputV1 {
         capacity_profile: [0x41; 32],
-        claim_basis: CLAIM_BASIS,
+        // DERIVED FROM THE FOUNDING, not written beside it -- and a PARAMETER,
+        // so a hostile can found the same market on the other basis. The
+        // field's name is the misnomer devnet convicted on 2026-09-06: the
+        // operator fills it from `semantic_basis_id_v3(linked_basis)` -- the
+        // Portfolio's LIABILITY basis -- and `require_market` compares it
+        // against the register the General AccountProfile projects out of that
+        // same Portfolio. Spelling `CLAIM_BASIS` here made both sides one
+        // literal and made the join vacuous.
+        claim_basis: config_basis,
         selection_policy: [0x43; 32],
         quote_surplus_beneficiary: [0x44; 32],
         generation: GENERATION,
@@ -573,6 +593,7 @@ fn build_campaign(
         releases,
         accelerator_elf,
         None,
+        None,
     )
 }
 
@@ -592,6 +613,7 @@ fn build_campaign_with_entry(
     releases: waist::Releases,
     accelerator_elf: &[u8],
     foreign_entry: Option<Vec<u8>>,
+    config_basis: Option<[u8; 32]>,
 ) -> CampaignV1 {
     let product = build_product(outcome_count);
     let accelerator_artifact =
@@ -600,6 +622,12 @@ fn build_campaign_with_entry(
         outcome_count,
         &product,
         waist::artifact_id(accelerator_artifact),
+        // `None` is what a founding founds: the semantic basis this Product's
+        // own linked basis derives, which is the Portfolio's `liability_basis_id`
+        // @128. `Some` is a hostile founding a market whose config binds some
+        // other identity -- a choice made once, before any action exists, and
+        // therefore a parameter and not a mutation.
+        config_basis.unwrap_or(product.semantic_basis),
     );
     // THE ENTRY IS FOUNDED THE WAY A FOUNDING FOUNDS IT, not from whichever
     // action this harness happens to execute first.
@@ -2754,17 +2782,21 @@ async fn a_market_founded_on_a_foreign_entry_refuses_its_first_action_by_name() 
         &accelerator_elf,
         substrate,
     ));
+    let foreign_product = build_product(FOREIGN_WIDTH);
     let foreign_release = selected_release(
         FOREIGN_WIDTH,
-        &build_product(FOREIGN_WIDTH),
+        &foreign_product,
         accelerator_release,
+        foreign_product.semantic_basis,
     );
     let foreign_entry =
         general_selected_entry_descriptor_v1(&foreign_release).expect("foreign entry descriptor");
+    let native_product = build_product(OUTCOME_COUNT);
     let native_entry = general_selected_entry_descriptor_v1(&selected_release(
         OUTCOME_COUNT,
-        &build_product(OUTCOME_COUNT),
+        &native_product,
         accelerator_release,
+        native_product.semantic_basis,
     ))
     .expect("family entry descriptor");
     // THE TWO ENTRIES MUST REALLY DIFFER, or this founds the same market twice
@@ -2787,6 +2819,7 @@ async fn a_market_founded_on_a_foreign_entry_refuses_its_first_action_by_name() 
         releases,
         &accelerator_elf,
         Some(foreign_entry),
+        None,
     );
     let case = build_action_case(
         &campaign,
@@ -2829,6 +2862,133 @@ async fn a_market_founded_on_a_foreign_entry_refuses_its_first_action_by_name() 
     );
     eprintln!(
         "general-campaign foreign-entry cu={} code=0x{TRADING_DESCRIPTOR_MANIFEST_ENTRY:04X}",
+        refused.compute_units_consumed,
+    );
+}
+
+/// `TradingSbfError::Transition`, derived from its REGISTERED BAND.
+const TRADING_TRANSITION: u32 = dclutch_refusal_registry::TRADING_REFUSAL_BASE + 0x004;
+
+/// THE DEVNET WALL OF 2026-09-06, ON REAL ELFS, WITH THE BASIS AS THE ONLY
+/// VARIABLE.
+///
+/// Cohort-16F drove the first `OpenBatch` ever to reach the accelerator on any
+/// chain. It refused `0x4004 Transition` after 361,538 CU on the ack of a CPI
+/// that had itself succeeded, and the accelerator's own `sol_log_data` printed
+/// both sides of the conjunct it failed: `require_market` compared the config's
+/// `ed7bfc75...` against the bank's `48a66eee...`, which are one live
+/// Portfolio's `liability_basis_id` @128 and `claim_basis_id` @96. The General
+/// AccountProfile projected @96; the operator's config derivation is @128.
+///
+/// This founds a market whose config binds the Portfolio's CLAIM basis -- which
+/// is EXACTLY what every General fixture in this tree spelled before today,
+/// including this one -- and it must now refuse. It is therefore both the
+/// hostile and the standing red-proof: revert
+/// `general_account_profile_operation_v3`'s basis operation to
+/// `PORTFOLIO_CLAIM_BASIS_ID_OFFSET` and this test goes green while the
+/// campaign above goes red, which is the state devnet found.
+///
+/// THE POSITIVE CONTROL IS THE CAMPAIGN ITSELF: the identical code path with
+/// the config bound to the founding's semantic basis commits, four transactions
+/// deep, in `one_founded_market_opens_and_then_closes_its_batch_in_one_bank`.
+#[tokio::test]
+async fn a_config_bound_to_the_portfolios_claim_basis_refuses_the_accelerators_market_conjunct() {
+    const OUTCOME_COUNT: u32 = 2;
+    let substrate = waist::fixture_substrate();
+    let elves = waist::elves();
+    let accelerator_elf = load_accelerator_elf();
+    let rent = Rent::default();
+    let payer = Keypair::new_from_array([0x11; 32]);
+    let fee_payer = Keypair::new_from_array([0x12; 32]);
+    let mut test = waist::program_test_without_forced_budget(&elves);
+    let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
+    waist::add_program_v2(
+        &mut test,
+        "dclutch_accelerator_sbf",
+        ACCELERATOR_PROGRAM,
+        &accelerator_elf,
+        substrate,
+    );
+    // THE TWO FIELDS MUST REALLY DIFFER on this founding, or the hostile founds
+    // the market the campaign founds and refuses for some other reason.
+    let product = build_product(OUTCOME_COUNT);
+    assert_ne!(
+        product.semantic_basis, CLAIM_BASIS,
+        "this Product's liability and claim bases coincide, so nothing is under test"
+    );
+    let campaign = build_campaign_with_entry(
+        OUTCOME_COUNT,
+        payer.pubkey(),
+        rent,
+        substrate,
+        &elves,
+        releases,
+        &accelerator_elf,
+        None,
+        Some(CLAIM_BASIS),
+    );
+    let case = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &genesis_prestate(&campaign),
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
+    );
+    add_case_accounts(&mut test, &case, &payer, &fee_payer);
+    waist::add_lookup_table(&mut test, &case.lookup_addresses);
+    let mut context = waist::start_with_substrate(test, substrate).await;
+    assert_frame_control(&mut context, &case).await;
+    let refused = match waist::submit_v0_observed(
+        &mut context,
+        &case.instructions,
+        case.lookup_addresses.clone(),
+        Some(&fee_payer),
+        &[&payer],
+    )
+    .await
+    {
+        Ok(execution) => panic!(
+            "a config bound to the claim basis opened a batch, at {} CU",
+            execution.compute_units_consumed
+        ),
+        Err(value) => value,
+    };
+    assert_eq!(
+        refusal_code(&refused.error),
+        Some(TRADING_TRANSITION),
+        "the disagreeing basis refused with the wrong code: {:#?}",
+        refused.logs,
+    );
+    // THE CODE IS ONE ACCUSATION OVER MANY CONJUNCTS, so the code alone does
+    // not name this cause. The accelerator prints both sides before it refuses
+    // and the CPI itself SUCCEEDS -- Trading refuses on the ack -- which is the
+    // exact phase devnet reported. Both are asserted, or `0x4004` raised
+    // anywhere earlier in the transition would pass for this.
+    assert!(
+        refused
+            .logs
+            .iter()
+            .any(|line| line.contains("general: config/bank semantic basis")),
+        "the accelerator did not reach `require_market`: {:#?}",
+        refused.logs,
+    );
+    assert!(
+        refused
+            .logs
+            .iter()
+            .any(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} success"))),
+        "the refusal is not the accelerator's ack: {:#?}",
+        refused.logs,
+    );
+    assert!(
+        chain_account(&mut context, case.primary_state)
+            .await
+            .data
+            .is_empty(),
+        "a refused OpenBatch materializes no Batch"
+    );
+    eprintln!(
+        "general-campaign claim-basis-config cu={} code=0x{TRADING_TRANSITION:04X}",
         refused.compute_units_consumed,
     );
 }

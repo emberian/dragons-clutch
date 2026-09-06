@@ -685,14 +685,11 @@ pub(crate) fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> Narr
     }
 }
 
+/// ONE AUTHOR: `dclutch_product::payoff::runtime_v3::semantic_basis_id_v3`.
+/// This wrapper carries this crate's error type and nothing else.
 fn semantic_basis_id_v3(bytes: &[u8]) -> Result<[u8; 32]> {
-    let semantic = semantic_basis_preimage_v3(bytes).map_err(|_| NarrowFixtureError::Basis)?;
-    Ok(hashv(&[
-        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-        semantic.prefix(),
-        semantic.suffix(),
-    ])
-    .to_bytes())
+    dclutch_product::payoff::runtime_v3::semantic_basis_id_v3(bytes)
+        .map_err(|_| NarrowFixtureError::Basis)
 }
 
 fn encode_market(

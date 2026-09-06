@@ -475,6 +475,15 @@ fn input_bank(width: u32, action: Action) -> Vec<u8> {
         (identity::MARKET, [3; 32]),
         (identity::PRODUCT_RECORD_DIGEST, product_id()),
         (identity::GENERAL_CONFIG_ID, hash(&config(width)).to_bytes()),
+        // A STAND-IN, AND LABELLED AS ONE -- `freeze.rs` carries the long form.
+        // On the real route Trading's General AccountProfile projects this out
+        // of the authenticated Portfolio's `liability_basis_id` @128, and the
+        // config's `claim_basis_id` field holds that same liability basis. This
+        // fixture hand-builds the bank and presents no Portfolio, so the harness
+        // IS the producer and the value has to agree with `config` above by
+        // hand. It is not evidence about which Portfolio field is right; the
+        // real-ELF campaign in
+        // `programs/dclutch-trading-sbf/program-test/general-hot` is.
         (identity::SEMANTIC_BASIS_ID, [5; 32]),
         (identity::LINKED_BASIS_RECORD_DIGEST, [6; 32]),
         (identity::REALM, [7; 32]),

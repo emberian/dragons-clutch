@@ -357,6 +357,38 @@ wall, and OpenBatch refused `TradingSbfError::Content` on chain at 239,473 CU
 inside `authenticate_lifecycle_credit_v3`. The flag survives as an optional
 cross-check that refuses when it disagrees with the Market.
 
+### openbatch-frozen-tables
+
+*Replaces `openbatch-two-pass` from cohort-17.* The same two passes, plus the
+two frozen lookup tables they need, in the order cohort-16.1 measured.
+
+**A table per digest, and the route re-emitted onto it.** `openbatch-two-pass`
+ordered the lookup table AFTER its second session, and that cannot work: the
+four admitted caller-authority PDAs are IN the canonical address set the table
+must hold, so a route emitted against the founding's frozen table names a set
+that table does not contain and `general-successor-plan-v5` refuses it by name,
+`General v0 compilation: LookupTable`. Cohort-16.1 measured both halves --
+`devnet-general-lookup-table-v1`'s dry run over the probe route lists all four
+PDAs and the Market's own rent beneficiary among its 53 addresses -- and ran the
+five acts by hand. So each pass is: session against the founding table, freeze a
+table over that route, re-emit the session onto the frozen table, plan. The
+digest is invariant to the table and to the digest passed in, which is what
+makes the loop terminate at two passes rather than diverge.
+
+Both lookup-table acts are `?`: the driver refuses to overwrite its own
+evidence, so a resumed stage reuses the table it already paid rent for.
+
+**It needs the cohort-17 Trading link.** Cohort-16.1's `OpenBatch` reached the
+accelerator -- the first on any chain -- and refused `TradingSbfError::Transition`
+`0x4004` on the accelerator's ack, cause
+`GeneralAcceleratorSemanticErrorV3::ConfigMarket`: the General AccountProfile
+projected the Portfolio's `claim_basis_id` @96 into `SEMANTIC_BASIS_ID` while
+the config binds `semantic_basis_identity_v3(linked_basis)`, the liability basis
+@128. The rule now projects @128. It lives in `dclutch-trading`, which is
+compiled into the Trading SBF link, so this row cannot pass before a cohort that
+redeploys Trading -- and it needs no re-founding, because the live portfolio
+already carries the config's value at @128.
+
 ### close-batch
 
 *Cohort-17.* CloseBatch at the batch's own `collection_close_slot`, through the

@@ -2444,14 +2444,16 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
 /// The semantic preimage deliberately omits the Product and result-domain
 /// links, so this identity exists before the Product that will declare it.
 /// That omission is what makes the join acyclic rather than a fixed point.
+/// ONE AUTHOR: `dclutch_product::payoff::runtime_v3::semantic_basis_id_v3`.
+/// This is the host's error-typed wrapper and not a second spelling of the
+/// hash. It was a spelling until 2026-09-06, one of four; the General config
+/// this function fills is compared on chain against a register the Trading
+/// AccountProfile projects out of the Portfolio, so a host that hashed the
+/// preimage its own way would disagree with the program about the identity
+/// itself rather than about which record carries it.
 pub(crate) fn semantic_basis_identity_v3(bytes: &[u8]) -> Result<[u8; 32]> {
-    let preimage = semantic_basis_preimage_v3(bytes)
-        .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))?;
-    let mut hasher = Sha256::new();
-    hasher.update(SEMANTIC_BASIS_CONTENT_DOMAIN_V3);
-    hasher.update(preimage.prefix());
-    hasher.update(preimage.suffix());
-    Ok(hasher.finalize().into())
+    dclutch_product::payoff::runtime_v3::semantic_basis_id_v3(bytes)
+        .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))
 }
 
 /// The payout scale a categorical founding of this width compiles into its

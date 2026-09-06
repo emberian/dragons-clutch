@@ -29,8 +29,8 @@ use dclutch_market::capability_program::{
 };
 use dclutch_product::admission::{PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2};
 use dclutch_product::{
-    PORTFOLIO_CLAIM_BASIS_ID_OFFSET, PORTFOLIO_COEFFICIENT_BYTES,
-    PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
+    PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
+    PORTFOLIO_LIABILITY_BASIS_ID_OFFSET,
 };
 use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
@@ -1484,17 +1484,17 @@ pub fn general_account_profile_operation_v3(
                 destination: common_identity(identity::PRODUCT_RECORD_DIGEST)?,
             })
         }
-        // THE SEMANTIC BASIS, WHICH NOTHING SOURCED.
+        // THE SEMANTIC BASIS: THE PORTFOLIO'S LIABILITY BASIS, AT OFFSET 128.
         //
         // Every one of the fifteen actions crosses `authenticated_general_domain`
         // before it does anything else, and that function hands the config the
-        // bank's `SEMANTIC_BASIS_ID` for `require_market` to compare against its
-        // own `claim_basis_id`. No operation in this file ever wrote that
-        // register, so it arrived as thirty-two zero bytes and the conjunct could
-        // not be satisfied by ANY producer -- only by a harness writing the
-        // register by hand, which is what every General fixture here was doing.
-        // Measured 2026-09-01 through real Trading ELFs: config `0x56` x32,
-        // bank zero.
+        // bank's `SEMANTIC_BASIS_ID` for `require_market` to compare against the
+        // config field spelled `claim_basis_id`. No operation in this file ever
+        // wrote that register, so it arrived as thirty-two zero bytes and the
+        // conjunct could not be satisfied by ANY producer -- only by a harness
+        // writing the register by hand, which is what every General fixture here
+        // was doing. Measured 2026-09-01 through real Trading ELFs: config
+        // `0x56` x32, bank zero.
         //
         // The source is the authenticated PORTFOLIO record and MUST NOT be the
         // config. A register projected out of the config account would be
@@ -1504,11 +1504,27 @@ pub fn general_account_profile_operation_v3(
         // hole. Portfolio is the Product-side authority for the same value and
         // is already this profile's source for operation zero, so the comparison
         // joins two records written by different acts.
+        //
+        // WHICH PORTFOLIO FIELD, measured on devnet 2026-09-06 (COHORT-16F, the
+        // first OpenBatch ever to reach the accelerator on any chain): market
+        // `65Yq3q6t...` refused `GeneralAcceleratorSemanticErrorV3::ConfigMarket`
+        // with config `ed7bfc75...` against bank `48a66eee...`, which are that
+        // one portfolio's `liability_basis_id` @128 and `claim_basis_id` @96.
+        // The config field's NAME is the misnomer: the operator fills it from
+        // `semantic_basis_identity_v3(linked_basis)`, the LIABILITY basis, and
+        // everywhere else in this tree "semantic basis" means exactly that --
+        // `dclutch_product::payoff::registry_v3` requires
+        // `domain.liability_basis_id() == semantic_basis_id`, and Claims'
+        // founding request fills `semantic_basis_id` from `liability_basis_id`.
+        // This rule was the single site reading the CLAIM basis into a register
+        // named `SEMANTIC_BASIS_ID`; it followed the config field's name. Every
+        // General fixture wrote the register by hand, so until that transaction
+        // the two sides had never been produced by one real founding.
         basis if basis == general_semantic_basis_operation_index_v3(action) => {
             Ok(AccountOperationInputV2::ProjectDataIdentity {
                 account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)?),
                 destination: common_identity(identity::SEMANTIC_BASIS_ID)?,
-                data_offset: width(PORTFOLIO_CLAIM_BASIS_ID_OFFSET)?,
+                data_offset: width(PORTFOLIO_LIABILITY_BASIS_ID_OFFSET)?,
             })
         }
         // Every exact signer account Lifecycle may debit is anchored to the
@@ -2716,6 +2732,8 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use dclutch_product::PORTFOLIO_CLAIM_BASIS_ID_OFFSET;
+
     use crate::general::effect_artifacts_v3::{
         GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
@@ -3172,6 +3190,57 @@ mod tests {
                      environment reader reads before the action runs",
                 );
             }
+        }
+    }
+
+    /// THE SEMANTIC BASIS IS THE PORTFOLIO'S LIABILITY BASIS, AND THIS PINS THE
+    /// OFFSET RATHER THAN THE WRITER COUNT.
+    ///
+    /// `every_action_sources_the_domain_registers_its_environment_reads` proves
+    /// exactly one operation writes `SEMANTIC_BASIS_ID` and says nothing about
+    /// WHICH thirty-two bytes it reads. That is the gap devnet closed on
+    /// 2026-09-06: the rule projected `PORTFOLIO_CLAIM_BASIS_ID_OFFSET` (96)
+    /// while the config holds `semantic_basis_identity_v3(linked_basis)`, the
+    /// LIABILITY basis, and the two disagreed on the first market ever founded
+    /// by an operator rather than by a fixture -- one writer, wrong field, every
+    /// count green. The offset is a layout fact, so it is asserted against the
+    /// Lean-emitted constant and not against a number.
+    #[test]
+    fn the_semantic_basis_register_reads_the_portfolios_liability_basis() {
+        for action in ACTIONS {
+            let index = general_semantic_basis_operation_index_v3(action);
+            let operation =
+                general_account_profile_operation_v3(action, index).expect("basis operation");
+            let AccountOperationInputV2::ProjectDataIdentity {
+                account,
+                destination,
+                data_offset,
+            } = operation
+            else {
+                panic!("{action:?} sources the semantic basis with {operation:?}");
+            };
+            assert_eq!(
+                destination,
+                common_identity(identity::SEMANTIC_BASIS_ID).expect("register"),
+                "{action:?} projects the basis operation into another register",
+            );
+            assert_eq!(
+                account,
+                AccountCoordinateV2::fixed(
+                    u16::try_from(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3).expect("coordinate")
+                ),
+                "{action:?} reads the semantic basis out of an account that is not the Portfolio",
+            );
+            assert_eq!(
+                data_offset,
+                width(PORTFOLIO_LIABILITY_BASIS_ID_OFFSET).expect("layout offset"),
+                "{action:?} reads the wrong Portfolio field: the config compares this register \
+                 against `semantic_basis_identity_v3(linked_basis)`, the liability basis",
+            );
+            assert_ne!(
+                PORTFOLIO_LIABILITY_BASIS_ID_OFFSET, PORTFOLIO_CLAIM_BASIS_ID_OFFSET,
+                "the two Portfolio basis fields must stay distinct for this test to say anything",
+            );
         }
     }
 

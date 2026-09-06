@@ -73,6 +73,11 @@ const CANDIDATE: [u8; 32] = [0xb4; 32];
 // semantic basis against the config account's, and a literal repeated in two
 // places is how those two stop agreeing.
 const CONFIG_GENERATION: u64 = 9;
+/// The config's own semantic basis. The FIELD is spelled `claim_basis_id` and
+/// the value is the market's LIABILITY basis: the operator fills it from
+/// `semantic_basis_identity_v3(linked_basis)`, and the name is the misnomer
+/// that sent the General AccountProfile to the wrong Portfolio field until
+/// 2026-09-06.
 const CONFIG_CLAIM_BASIS_ID: [u8; 32] = [2; 32];
 // The batch whose selection this freeze closes, and the deadline it fixes.
 // `BATCH` used to be the literal `[0xb2; 32]` here, which was fine while
@@ -302,8 +307,12 @@ fn input_bank(outcome_count: u32, current_slot: u64) -> Vec<u8> {
         //
         // On the real route this register is projected by the General
         // AccountProfile out of the authenticated Portfolio record's
-        // `claim_basis_id` -- `account_rules_v3.rs`, the operation at
-        // `general_semantic_basis_operation_index_v3`. This fixture runs no
+        // `liability_basis_id` (@128) -- `account_rules_v3.rs`, the operation at
+        // `general_semantic_basis_operation_index_v3`. It read `claim_basis_id`
+        // (@96) until 2026-09-06, when devnet's first accelerator-reaching
+        // OpenBatch refused `ConfigMarket` because the config binds
+        // `semantic_basis_identity_v3(linked_basis)`, which is @128. This
+        // fixture runs no
         // profile: it hand-builds the bank, so here the harness IS the
         // producer, and the value has to be written.
         //
