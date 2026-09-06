@@ -155,8 +155,18 @@ pin_text="$(field general_accelerator.registry_pin_text)"
 # produces the fact, because "run it again after step N" is the difference
 # between a gate and a puzzle.
 accelerator_pending="; cohort-$cohort_number deploys its own accelerator, so this is RED until \`deploy-accelerator\` has run and its facts are recorded in $manifest_path. Deploying the seven roles and the accelerator is admitted with this RED; FOUNDING is not"
-if [ -n "$pin_text" ] && grep -q "$pin_text" "$pin_source"; then
+# THE SLOT IS THE FACT; the pin text is only where it is written down. Asking
+# only whether the source still contains the pin text passes GREEN on a manifest
+# whose slot is empty -- cohort-17 measured exactly that, and the line printed a
+# green verdict with nothing after it. So the slot must be present, the pin text
+# must NAME that slot, and the source must carry the pin text.
+accelerator_slot_pin="$(python3 -c 'import sys; print(format(int(sys.argv[1]), "_d") if sys.argv[1].isdigit() else sys.argv[1])' "${accelerator_slot:-0}")"
+if [ -n "$pin_text" ] && [ -n "$accelerator_slot" ] \
+   && printf '%s' "$pin_text" | grep -q "$accelerator_slot_pin" \
+   && grep -q "$pin_text" "$pin_source"; then
     pass "slot pinned by the Registry's own partition" "$accelerator_slot"
+elif [ -n "$pin_text" ] && [ -n "$accelerator_slot" ] && ! printf '%s' "$pin_text" | grep -q "$accelerator_slot_pin"; then
+    fail "slot" "the manifest's registry_pin_text does not name $accelerator_slot"
 elif [ -z "$pin_text" ] || [ -z "$accelerator_slot" ]; then
     fail "slot" "the manifest records no accelerator deployment slot$accelerator_pending"
 else

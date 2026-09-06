@@ -43,6 +43,9 @@ use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
     ADMITTED_STRATEGY_EVIDENCE_START_V3,
 };
+use dclutch_market::execution_strategy::shadow_digest_v3::{
+    ShadowDigestErrorV3, family_request_digest_v3,
+};
 use dclutch_market::execution_strategy::v2::{
     AcceleratorTransportProfileV2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
@@ -112,7 +115,9 @@ pub struct DealerLpHotReportV4 {
     pub action: MultiLpRequestActionV3,
     /// Exact descriptor schema/content pair selected from the global set.
     pub selected_descriptor: CapabilityDescriptorReferenceV2,
-    /// SHA-256 of the exact family request supplied to Hot.
+    /// [`family_request_digest_v3`] of the exact family request supplied to
+    /// Hot -- the value the chain seeds this route's admitted caller-authority
+    /// PDAs with, NOT a bare SHA-256.
     pub family_request_digest: [u8; 32],
 }
 
@@ -147,6 +152,8 @@ pub enum DealerLpHotOperatorErrorV4 {
     DealerRelease(dclutch_trading_sbf::dealer::release::DealerReleaseErrorV3),
     /// `dclutch_market::execution_strategy` refused; the cause is its own.
     ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ShadowDigest(ShadowDigestErrorV3),
     /// `dclutch_vm::account_profile` refused; the cause is its own.
     AccountProfile(dclutch_vm::account_profile::v2::Error),
 }
@@ -215,7 +222,17 @@ pub fn build_dealer_lp_hot_instruction_v4(
         observation,
         action: request.action,
         selected_descriptor: descriptor_reference,
-        family_request_digest: hash(family_request).to_bytes(),
+        // `family_request_digest_v3`, NOT `hash(family_request)`. The chain
+        // seeds this route's admitted caller-authority PDAs with
+        // `accelerator_caller_authority_digest_v1(Admitted, THIS value, index)`
+        // (`programs/dclutch-trading-sbf/src/admitted_composition_v3.rs:734`),
+        // over the domain-separated, length-prefixed derivation. The bare hash
+        // that stood here was never consumed, so it never refused anything --
+        // it was a number waiting to be wrong, and the same number published by
+        // the General route cost a devnet transaction on 2026-09-05.
+        family_request_digest: family_request_digest_v3(family_request)
+            .map_err(DealerLpHotOperatorErrorV4::ShadowDigest)?
+            .to_bytes(),
     })
 }
 

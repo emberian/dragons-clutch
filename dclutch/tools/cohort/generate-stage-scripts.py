@@ -635,6 +635,29 @@ def emit(row, view_step, document, prior, market, stages) -> str:
                         line = f'backup "{output.group(1)}"; rm -rf "{output.group(1)}"\n{line}'
                 plain.append(line)
 
+    # A ROW THAT WRITES OUTSIDE $OUT HAS TO BE ALLOWED TO. The preamble creates
+    # $OUT and the backup directory and nothing else, so `prepare` -- whose
+    # `--output-file $HERE/observed/<role>.programdata.bin` is the runbook's own
+    # words -- died on the FIRST role with "No such file or directory (os error
+    # 2)" and no name for what was missing.
+    #
+    # ONLY THE PARENT, NEVER THE DIRECTORY ITSELF. `prepare --account-dir
+    # $HERE/accounts` creates its own account directory and REFUSES one that
+    # already exists ("create fresh account directory ...: File exists"), so a
+    # generator that made the leaf would trade one refusal for another. The
+    # parents are derived from the row's own write flags rather than listed.
+    written = set()
+    for line, _ in acts + [(t, None) for t in plain]:
+        for value in re.findall(r"--[a-z-]*(?:output|evidence|completion|campaign|journal|account|dump|receipt)[a-z-]*\s+(\S+)", line):
+            if not (value.startswith("$HERE/") or value.startswith("$OUT/")):
+                continue
+            parent = value.rsplit("/", 1)[0]
+            if parent not in ("$HERE", "$OUT"):
+                written.add(parent)
+    if written:
+        body += "# Every directory this row's own write flags name, and no other.\n"
+        body += "mkdir -p " + " ".join(f'"{d}"' for d in sorted(written)) + "\n"
+
     if row["shape"] in ("once", "per-role"):
         body += "\n" + "\n".join(plain) + "\n"
     elif row["shape"] in ("attempts", "wait:capture", "wait:settle"):

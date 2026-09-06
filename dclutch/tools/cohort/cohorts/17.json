@@ -171,11 +171,11 @@
   ],
   "general_accelerator": {
     "program_id": "WMGVfhVuWuMRCkBDnR7nrqj6uY1XbnxQtShxdM4h7km",
-    "deployment_slot": "",
-    "elf_sha256": "",
-    "semantic_release_id": "",
+    "deployment_slot": "493942086",
+    "elf_sha256": "d2ff2b87ac79e5329b83f10e10a2f2d9b03ac16d445d070188f03946598da91a",
+    "semantic_release_id": "fcd0499970621e899f35d967a48c25a0d9d7289704ac25025ce7f1dc5973cb3e",
     "registry_pin_source": "programs/dclutch-registry-sbf/src/record_v1.rs",
-    "registry_pin_text": "DEPLOYMENT_SLOT: u64 = 493_639_473",
+    "registry_pin_text": "DEPLOYMENT_SLOT: u64 = 493_942_086",
     "elf": "candidate/elf/accelerator.so",
     "keypair": "keys/program-accelerator.json"
   },

@@ -131,3 +131,10 @@ pub mod user_position_close_v1;
 /// positive controls. Test-only; see the module's own documentation.
 #[cfg(test)]
 mod hot_bump_corpus_fixture_v1;
+
+/// Source census keeping `family_request_digest_v3` the only author of an
+/// accelerator family-request digest. Test-only; see the module's own
+/// documentation, which also records which request digests it deliberately
+/// leaves alone.
+#[cfg(test)]
+mod family_request_digest_one_author_v1;
