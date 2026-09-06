@@ -73,6 +73,7 @@ members = [
     "programs/dclutch-trading-sbf/dealer-program-test",
     "programs/dclutch-trading-sbf/program-test",
     "programs/dclutch-trading-sbf/program-test/bundle-builder",
+    "programs/dclutch-trading-sbf/program-test/devnet-replay",
     "programs/dclutch-trading-sbf/program-test/direct-hot",
     "programs/dclutch-trading-sbf/program-test/general-hot",
     "programs/dclutch-trading-sbf/program-test/test-programs/core-caller",

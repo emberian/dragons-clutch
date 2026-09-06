@@ -935,3 +935,109 @@ the seal was.
 The batch-window state `CuW1791cAY1uqgtu1okAjEmY2iVHx8gsytQgs8WcayYQ` — the
 address the request's own seeds derive — is ABSENT, as it must be while
 OpenBatch has not executed. That is the row's verifier reading red, honestly.
+
+---
+
+# ADDENDUM, 2026-09-06, lane PROGRAMS-17D: §4's "could not be localized" is REVERSED, and OpenBatch has two walls, both the host's
+
+Offline program-test evidence over devnet-captured accounts. Not devnet
+execution evidence and not mainnet evidence. Written at
+`/Users/ember/dev/dclutch`. The instrument and the recipe are
+`programs/dclutch-trading-sbf/program-test/devnet-replay` and
+`docs/design/DEVNET_FRAME_REPLAY_V1.md`.
+
+**§4 above states `Content 0x4003` "could not be localized" because
+`hot_cu_checkpoint!` is behind `--features hot-cu-profile` and a release pins
+the ELF digest and the deployment slot. The premise is wrong.** A hot route
+never hashes an ELF: `slot_pinned_release_elf_digest_v1`
+(`crates/dclutch-registry/src/immutable_registry.rs:439`) compares the
+ProgramData header's slot and authority and returns the release's own recorded
+digest, so the pins live in 45 bytes and the ELF behind them can be the profiled
+build. The exact transaction §6 recorded as NOT EXECUTED —
+`openbatch/executed-plan-c2-preflight.json`'s own `transactionBase64`, its 55
+accounts read back at finalized, its lookup table — replays in `ProgramTest`
+against the deployed ELFs and reproduces `Custom(16387)`.
+
+## WALL 1, and it is the one this cohort hit
+
+    dclutch-hot-cu:p5-sealed-ownership-arena
+    dclutch-hot-why:lifecycle-prepare case/ordinal/invocation/operand
+    0x1a, 0x0, 0x0, 0x7          (case 26, plan 0, invocation 0, coordinate 7)
+
+`programs/dclutch-trading-sbf/src/hot_v3/lifecycle.rs:1421`, the FIRST conjunct
+of `authenticate_lifecycle_credit_v3`:
+
+    account.key.to_bytes() != expected_key
+
+reached from `prepare_lifecycle_v4` at plan 0, invocation 0, over the RentCredit
+runtime coordinate 7. `expected_key` is `market.rent_beneficiary`.
+
+**The route named another market's RentCredit.** Read off chain:
+
+| | |
+| --- | --- |
+| the route's coordinate 53 | `CE3PC9fYBmsZSngbQYaZvnsBnXuF6gjZWWeJutp9tpnV` |
+| its `DCLRNTL2` body | market `8MSesLUsQ4VMJ9WCHCBWADhnksBp8gwWmtZi7g3GiCky`, generation **1**, bump 255 |
+| `8MSesLUs…` | a live `DCLTCOR3` Market account, 368 bytes — the PREVIOUS General market |
+| `65Yq3q6t…`'s own `rent_beneficiary` (`STATE_RENT_BENEFICIARY_OFFSET` 296) | **`6FGsfzP7iLwcf7ZbffX65rv9jLxSSDy5ZrUZbXaD976k`** |
+| that account | `DCLRNTL2`, 128 bytes, generation **2**, bump 255, Rent-owned, 13,192,766 lamports |
+
+Both PDAs reproduce from `[b"dclutch/rent-market/v2", market, generation_le]`
+under the Rent program, so the account supplied is exactly the credit of the
+market and generation the route is NOT for. `lifecycle.rs:1438-1440` would have
+refused the same account twice more, for its market and for its generation.
+
+**The author is the driver, not the program.** `devnet-general-session` took
+`--rent-credit` as a required address and copied it into the route without
+joining it to anything, and the `openbatch-refounded` runbook row filled it from
+a cohort variable. That is why §4's frame report could say `walls: []` while
+carrying an account no execution can accept.
+
+## WALL 2, which only appears once wall 1 is fixed
+
+Replace that one lookup-table entry with `6FGsfzP7…` and the same frame walks
+65,000 units further, through `request-lifecycle-preplan`,
+`candidate-transcript`, `cx-context-digest`, `cx-frame-validated`,
+`cx-request-built` and `cx-cpi-buffers`, and refuses `0x4001`
+`TradingSbfError::Release` at **319,075 CU**, still with no accelerator invoke:
+
+    dclutch-hot-why:caller-authority chunk/expected/seen/request-digest
+    0x0, 0x52972c42bfbc535b, 0x03919e5d67f15c8f, 0x2e01df8148ce3aff
+
+`programs/dclutch-trading-sbf/src/admitted_composition_v3.rs:749`. The seen
+address is the route's own `AedW15zt…`. The third word is the preimage, and it
+settles §3:
+
+| | |
+| --- | --- |
+| what the chain seeds the span with | `family_request_digest_v3(request)` = `ff3ace4881df012e…` |
+| what the plan published and the driver used | `sha256(request)` = `6ac8255569a90867…` |
+
+`family_request_digest_v3`
+(`crates/dclutch-market/src/execution_strategy/shadow_digest_v3.rs:384`) is
+`sha256("dclutch:shadow-family-request:v3" ‖ 0x00 ‖ len_le_u32 ‖ request)`.
+`crates/dclutch-operator/src/general_hot_v3.rs` published the bare SHA-256 and
+`general_successor.rs` re-joined against the same bare value, so the two agreed
+with each other and with nothing on chain. **§3's conclusion — "the probe
+default is a real latent defect and it is NOT the wall in front of OpenBatch" —
+is right about the ordering and wrong about the cause: the real digest was
+never the real digest.** All four addresses moved between passes and the
+refusal did not, because execution never reached them.
+
+## What is repaired, and what COHORT-16F can do
+
+Both walls are the host's. **The deployed Trading `e7f8e476…` at candidate
+`87eec1c3a` is unchanged and correct**; nothing on the program side of either
+wall moves. So COHORT-16F can drive OpenBatch against the release this cohort
+deployed, with no redeploy, once it runs the repaired driver:
+
+- the Market's `rent_beneficiary` is the RentCredit's one author, `--rent-credit`
+  is an optional cross-check that refuses when it disagrees, and the runbook row
+  no longer passes one;
+- the operator publishes `family_request_digest_v3`, so
+  `--parent-request-digest` names the address span execution derives;
+- the row is two passes, because the digest does not exist until a plan does.
+
+Wall 2 has not been shown green on any chain, and no third wall past
+`cx-cpi-buffers` has been ruled out: the replay refuses there, so everything
+after it is unmeasured. The batch-window state `CuW1791cAY…` is still absent.

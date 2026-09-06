@@ -7,6 +7,8 @@
 //! Upgradeable Loader V3 Program/ProgramData/complete-ELF observation. This
 //! module is read-only: it grants no accelerator state or effect write authority.
 
+use crate::hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint;
+use crate::hot_v3::hot_cu_watch_reason_macro as hot_cu_watch_reason;
 use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::capability_program::v4::{
@@ -378,6 +380,7 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
         capability_program_id,
         capability_program,
     )?;
+    hot_cu_checkpoint!("st-common-frame");
     authenticate_selected_execution_strategy_v2(
         context,
         capability_program_id,
@@ -416,6 +419,7 @@ fn authenticate_selected_execution_strategy_v2(
         return Err(TradingSbfError::Release);
     }
 
+    hot_cu_checkpoint!("st-persisted-selection");
     let strategy_program_id = capability_program.strategy().program();
     let (strategy, strategy_bumps) = authenticate_strategy_program(
         registry_program,
@@ -423,6 +427,7 @@ fn authenticate_selected_execution_strategy_v2(
         account(accounts, STRATEGY_STAGING)?,
         strategy_program_id,
     )?;
+    hot_cu_checkpoint!("st-strategy-record");
     let record_bumps = StrategyRecordBumpsV2 {
         capability: capability_bumps,
         strategy: strategy_bumps,
@@ -431,6 +436,7 @@ fn authenticate_selected_execution_strategy_v2(
     strategy
         .validate_descriptor_selection_v4(strategy_program_id, *capability_program)
         .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("st-descriptor-selection");
 
     match strategy.disposition() {
         StrategyDispositionV2::Interpreted => {
@@ -561,6 +567,7 @@ fn authenticate_admitted_aot(
     deployment_authentication: CurrentDeploymentAuthenticationV2,
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
     require_exact_account_count(accounts, ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2)?;
+    hot_cu_checkpoint!("aot-account-count");
     let certificate_program_id = strategy
         .certificate_program()
         .ok_or(TradingSbfError::Content)?;
@@ -570,6 +577,7 @@ fn authenticate_admitted_aot(
         account(accounts, CERTIFICATE_STAGING)?,
         certificate_program_id,
     )?;
+    hot_cu_checkpoint!("aot-certificate");
     let admission_program_id = strategy
         .admission_program()
         .ok_or(TradingSbfError::Content)?;
@@ -579,6 +587,7 @@ fn authenticate_admitted_aot(
         account(accounts, ADMITTED_ADMISSION_STAGING)?,
         admission_program_id,
     )?;
+    hot_cu_checkpoint!("aot-admission");
     // Admitted AOT takes the exact-release binding and nothing else. Admission
     // is a statement about one built artifact, so a semantically bound
     // Certificate is refused here rather than silently admitting every build of
@@ -586,6 +595,7 @@ fn authenticate_admitted_aot(
     let artifact_release_id = certificate
         .artifact_release()
         .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("aot-certificate-release");
     record_bumps.certificate = certificate_bumps;
     record_bumps.admission = admission_bumps;
     let (_, artifact_release, artifact_bumps) = authenticate_pinned_artifact(
@@ -597,6 +607,7 @@ fn authenticate_admitted_aot(
         account(accounts, ADMITTED_ACCELERATOR_PROGRAMDATA)?,
         deployment_authentication,
     )?;
+    hot_cu_checkpoint!("aot-pinned-artifact");
     let admitted_authorization = validate_admitted_aot_v4(
         strategy_program_id,
         strategy,
@@ -608,6 +619,7 @@ fn authenticate_admitted_aot(
         Some((admission_program_id, admission)),
     )
     .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("aot-validated");
     record_bumps.artifact = artifact_bumps;
     Ok(AuthenticatedExecutionStrategyV2 {
         record_bumps,
@@ -797,8 +809,10 @@ fn authenticate_pinned_artifact(
         digest,
         &data,
     )?;
+    hot_cu_checkpoint!("aot-artifact-record");
     let release = ArtifactReleaseV1::decode(&data).map_err(|_| TradingSbfError::Content)?;
     require_slot_pinned_release_v1(release).map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("aot-artifact-decoded");
     if let CertificateArtifactBindingV2::Semantic(_) = binding {
         certificate_semantic_join(binding, release)?;
     }
@@ -864,8 +878,11 @@ pub(crate) fn authenticate_slot_pinned_deployment(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<(), TradingSbfError> {
-    deployment::authenticate_activated_current_deployment(release, program, programdata)
-        .map_err(TradingSbfError::from)
+    hot_cu_watch_reason!(
+        deployment::authenticate_activated_current_deployment(release, program, programdata),
+        "slot-pinned-deployment"
+    )
+    .map_err(TradingSbfError::from)
 }
 
 /// Reauthenticate one activated role's current deployment without re-hashing.

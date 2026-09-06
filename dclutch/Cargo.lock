@@ -2118,6 +2118,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-devnet-frame-replay"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bincode",
+ "bs58",
+ "serde_json",
+ "solana-account 4.6.0",
+ "solana-clock",
+ "solana-program-test",
+ "solana-pubkey 4.3.0",
+ "solana-transaction 4.2.0",
+ "tokio",
+]
+
+[[package]]
 name = "dclutch-devnet-scenarios"
 version = "0.1.0"
 dependencies = [

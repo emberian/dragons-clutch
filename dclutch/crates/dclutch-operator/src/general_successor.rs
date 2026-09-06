@@ -29,6 +29,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_market::capability_program::hot_v3::{
     HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
+use dclutch_market::execution_strategy::shadow_digest_v3::family_request_digest_v3;
 use dclutch_trading::general::artifacts_v3::GeneralArtifactSelectionV3;
 use dclutch_trading::general_codec::Action;
 use dclutch_versioned_message_operator::{Finality, ObservedAccount};
@@ -858,7 +859,11 @@ fn serialize_plan_v5(
         .to_bytes()
         .map_err(|_| Error::new("General serializer could not encode the canonical request"))?;
     let root_digest: [u8; 32] = Sha256::digest(&root.account.data).into();
-    let request_digest: [u8; 32] = Sha256::digest(request_bytes).into();
+    // The chain's own author, not a bare SHA-256: this is the value the
+    // admitted caller-authority PDA is seeded with.
+    let request_digest: [u8; 32] = family_request_digest_v3(request_bytes)
+        .map_err(|_| Error::new("General serializer could not digest the family request"))?
+        .to_bytes();
     let VersionedMessage::V0(compiled_message) = &transaction_report.message.message else {
         return Err(Error::new("General serializer requires one v0 message"));
     };

@@ -127,6 +127,15 @@ backup() {
     cp -Rp "$1" "$HERE/backups/$STAGE/$(basename "$1").$(date -u +%%s)"
 }
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+# One JSON field, read with the interpreter the runbook already requires.
+#
+# The General session's admitted caller-authority span is seeded by the PLAN's
+# own familyRequestDigest, and the plan does not exist until a route has been
+# produced -- so the OpenBatch row is a two-pass loop and this is how the second
+# pass names the first pass's digest without a human transcribing 64 hex.
+field() {
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
+}
 # A ProgramData account is a 45-byte Loader header then the ELF; the ELF digest
 # is what the release gate and the chain both name.
 elfsha() { tail -c +46 "$1" | shasum -a 256 | awk '{print $1}'; }

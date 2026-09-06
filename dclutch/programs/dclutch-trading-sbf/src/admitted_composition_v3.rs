@@ -72,6 +72,7 @@ use solana_sdk_ids::sysvar;
 use crate::{
     TradingSbfError,
     execution_strategy_v2::{AuthenticatedExecutionStrategyV2, RecordPairBumpsV2},
+    hot_v3::hot_cu_caller_authority_macro as hot_cu_caller_authority,
     hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint,
     hot_v3::hot_heap_mark_macro as hot_heap_mark,
 };
@@ -751,6 +752,24 @@ fn invoke_admitted_accelerator_v3<'info>(
         || caller_authority.is_writable
         || caller_authority.executable
     {
+        hot_cu_caller_authority!(
+            u64::from(chunk_index),
+            u64::from_le_bytes(
+                expected_authority.to_bytes()[..8]
+                    .try_into()
+                    .unwrap_or([0; 8])
+            ),
+            u64::from_le_bytes(
+                caller_authority.key.to_bytes()[..8]
+                    .try_into()
+                    .unwrap_or([0; 8])
+            ),
+            u64::from_le_bytes(
+                context.family_request_digest.to_bytes()[..8]
+                    .try_into()
+                    .unwrap_or([0; 8])
+            )
+        );
         return Err(TradingSbfError::Release.into());
     }
     // The only two coordinates that move between chunks, overwritten in place.

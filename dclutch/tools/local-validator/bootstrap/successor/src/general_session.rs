@@ -74,7 +74,10 @@
 
 use std::path::PathBuf;
 
-use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_core_contract::ContentId;
+use dclutch_market::capability_manifest::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
+};
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{
@@ -94,11 +97,11 @@ use dclutch_market::capability_program::{
         HOT_TRANSITION_RAW_ACCOUNT_V3,
     },
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
-    v4::{CapabilityProgramV4, CapabilityRootAccountV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
+    v4::{
+        CapabilityProgramV4, CapabilityRootAccountV4,
+        SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    },
 };
-use dclutch_vm::account_profile::v2::AccountProfileV2;
-use dclutch_vm::capability_seal::CapabilitySealKeyV1;
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::{
     admitted_v3::{
         ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
@@ -110,6 +113,22 @@ use dclutch_market::execution_strategy::{
         StrategyDispositionV2, classify_bank_transport_v2,
     },
 };
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_market::{CoreState, Phase as CorePhase};
+use dclutch_operator::general_successor::{self as successor, ROUTE_FORMAT_V1};
+use dclutch_operator::resolution_core_v3::product_graph_observation_v3::{
+    FinalizedProductGraphAccountsV3, authenticate_product_graph_observation_v3,
+};
+use dclutch_operator::{Finality, Observation, ObservedAccount};
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+};
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_registry::ActivatedExecutionReleaseSetV1;
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_release_tool::CheckedExecutionReleaseSetV1;
 use dclutch_trading::general::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
@@ -132,26 +151,10 @@ use dclutch_trading::general::{
 };
 use dclutch_trading::general_codec::{Action, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2};
 use dclutch_trading::general_config::{
-    GENERAL_CAPABILITY_KIND_ID_V1,
-    root::GeneralRootV2,
-    v3::GeneralConfigV3,
+    GENERAL_CAPABILITY_KIND_ID_V1, root::GeneralRootV2, v3::GeneralConfigV3,
 };
-use dclutch_operator::general_successor::{self as successor, ROUTE_FORMAT_V1};
-use dclutch_market::{CoreState, Phase as CorePhase};
-use dclutch_operator::resolution_core_v3::product_graph_observation_v3::{
-    FinalizedProductGraphAccountsV3, authenticate_product_graph_observation_v3,
-};
-use dclutch_operator::{Finality, Observation, ObservedAccount};
-use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
-};
-use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_release_tool::CheckedExecutionReleaseSetV1;
-use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
-use dclutch_registry::ActivatedExecutionReleaseSetV1;
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_vm::capability_seal::CapabilitySealKeyV1;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use solana_program::pubkey::Pubkey;
@@ -168,12 +171,76 @@ use crate::{
 pub(crate) const DEVNET_GENERAL_SESSION_COMMAND_V1: &str = "devnet-general-session";
 /// The frame report's schema, and the only document `devnet-capability-seal-v1`
 /// will read a frame out of.
-pub(crate) const FRAME_REPORT_SCHEMA_V1: &str =
-    "dclutch-devnet-general-session-frame-report-v1";
+pub(crate) const FRAME_REPORT_SCHEMA_V1: &str = "dclutch-devnet-general-session-frame-report-v1";
 
 /// The action this command frames. `OpenBatch` is the first act of the General
 /// batch lifecycle, so it is the one whose reachability decides the family's.
-const SESSION_ACTION_V1: Action = Action::OpenBatch;
+/// The action this command composes when `--action` is absent.
+const DEFAULT_SESSION_ACTION_V1: Action = Action::OpenBatch;
+
+/// The actions whose FRAME this command can derive today.
+///
+/// Every other spelling parses -- `--action` is a real flag over the same
+/// fifteen names `parse_route_v1` accepts -- and then refuses HERE, naming the
+/// reading it would need, rather than being unsayable. That distinction is the
+/// whole point: `SESSION_ACTION_V1 = Action::OpenBatch` was a hardcode, so
+/// `CloseBatch` "appeared in no driver source" and the runbook's three-step
+/// sequence had one reachable step and two nobody could even ask for.
+///
+/// What each of the other thirteen needs is a READ this command does not do:
+/// its subject is a live state body (the open Batch, the selected candidate,
+/// the settlement cursor), and `open_batch_state_address_v1` below derives its
+/// subject from the ROOT alone. `CloseBatch` is the nearest: its occurrence is
+/// the batch the root's `next_batch_sequence` last opened, so it needs the
+/// Batch account read back and its terms authenticated, not a new derivation.
+const COMPOSABLE_ACTIONS_V1: &[Action] = &[Action::OpenBatch];
+
+fn action_v1(value: &str) -> Result<Action> {
+    let action = match value {
+        "consider" => Action::Consider,
+        "freeze" => Action::Freeze,
+        "initialize-settlement" => Action::InitializeSettlement,
+        "collect" => Action::Collect,
+        "materialize" => Action::Materialize,
+        "distribute" => Action::Distribute,
+        "close" => Action::Close,
+        "open-batch" => Action::OpenBatch,
+        "place-order" => Action::PlaceOrder,
+        "cancel-order" => Action::CancelOrder,
+        "close-batch" => Action::CloseBatch,
+        "submit-candidate" => Action::SubmitCandidate,
+        "verify-candidate-row" => Action::VerifyCandidateRow,
+        "release-order" => Action::ReleaseOrder,
+        "close-candidate" => Action::CloseCandidate,
+        other => {
+            return Err(refusal(
+                "input/unknown-action",
+                format!(
+                    "--action {other} is not one of the fifteen General actions; \
+                     `general-successor-plan-v5` accepts the same spellings"
+                ),
+            ));
+        }
+    };
+    if !COMPOSABLE_ACTIONS_V1.contains(&action) {
+        return Err(refusal(
+            "session/action-not-composable",
+            format!(
+                "--action {value} parses, and this command cannot derive its frame yet. \
+                 Its subject is a live state body and `open_batch_state_address_v1` derives \
+                 its subject from the capability root alone; CloseBatch additionally needs \
+                 the open Batch account read back and its occurrence terms authenticated. \
+                 Composable today: {}",
+                COMPOSABLE_ACTIONS_V1
+                    .iter()
+                    .map(|value| format!("{value:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    Ok(action)
+}
 
 /// The preimage of the stated probe family-request digest.
 ///
@@ -204,21 +271,27 @@ pub(crate) fn usage() -> &'static str {
      --result-domain-record ADDRESS --portfolio-record ADDRESS \
      --linked-basis-record ADDRESS \
      --payer PUBKEY --output ABSOLUTE_NEW_JSON \
-     [--parent-request-digest HEX64] \
+     [--action ACTION] [--parent-request-digest HEX64] [--rent-credit ADDRESS] \
      [--emit-route ABSOLUTE_NEW_JSON --lookup-table ADDRESS \
-     --rent-credit ADDRESS --checked-release ABSOLUTE_BIN]\n     \
-     Read-only. Derives the complete General OpenBatch hot frame from the \
-     Market's own records, recovers the published AccountProfile's external \
-     widths from the chain's bytes, and reports each account's producer. \
-     --parent-request-digest is the digest of the signed DCLTHOT3 family \
-     request; supplied, the admitted caller-authority span is reported at the \
-     exact addresses Trading will require. --emit-route additionally writes \
-     the GeneralSuccessorRouteV1 document `general-successor-plan-v5` \
-     consumes, from THIS derivation and only when the frame names no \
-     unsatisfiable conjunct; it needs the three coordinates the frame cannot \
-     observe -- the lookup table, the RentCredit account, and the checked \
-     multiprogram release set whose own release-set identity must equal the \
-     Market's."
+     --checked-release ABSOLUTE_BIN]\n     \
+     Read-only. Derives the complete General hot frame for --action (default \
+     open-batch) from the Market's own records, recovers the published \
+     AccountProfile's external widths from the chain's bytes, and reports each \
+     account's producer. --action takes the same fifteen spellings \
+     `general-successor-plan-v5` accepts and refuses by name the thirteen \
+     whose subject is a live state body this command does not read. \
+     --parent-request-digest is `family_request_digest_v3` of the signed \
+     DCLTHOT3 family request -- domain-separated and length-prefixed, NOT a \
+     bare SHA-256 -- and the plan document publishes it under \
+     familyRequestDigest, so the two-pass loop is: emit a route, produce the \
+     plan, then re-emit the route with the plan's digest. --rent-credit is an \
+     optional CROSS-CHECK: the Market's own rent_beneficiary is that \
+     account's one author and a disagreeing address refuses. --emit-route \
+     additionally writes the GeneralSuccessorRouteV1 document \
+     `general-successor-plan-v5` consumes, from THIS derivation and only when \
+     the frame names no unsatisfiable conjunct; it needs the two coordinates \
+     the frame cannot observe -- the lookup table and the checked multiprogram \
+     release set whose own release-set identity must equal the Market's."
 }
 
 struct ArgumentsV1 {
@@ -256,6 +329,7 @@ struct ArgumentsV1 {
     /// The frame report says of it that "nothing on chain names it", which is
     /// exactly why a route has to be told.
     rent_credit: Option<Pubkey>,
+    action: Action,
     /// The cohort's `CheckedExecutionReleaseSetV1` bytes. Its own release-set
     /// identity is required to equal the Market's `selected_release_set`, so
     /// the route's checked-manifest digest is authenticated against the chain
@@ -277,6 +351,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let mut emit_route = None;
     let mut lookup_table = None;
     let mut rent_credit = None;
+    let mut action = None;
     let mut checked_release = None;
     let mut iterator = arguments.into_iter();
     while let Some(flag) = iterator.next() {
@@ -297,6 +372,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--emit-route" => &mut emit_route,
             "--lookup-table" => &mut lookup_table,
             "--rent-credit" => &mut rent_credit,
+            "--action" => &mut action,
             "--checked-release" => &mut checked_release,
             other => return Err(refusal("input/unknown-flag", other)),
         };
@@ -309,13 +385,16 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     };
     // THE ROUTE FLAGS ARE ALL-OR-NOTHING, AND THE REFUSAL SAYS WHICH IS MISSING.
     //
-    // A route emitted with a defaulted lookup table or a defaulted RentCredit
-    // would parse, reach the producer, and refuse there against an address
-    // nobody chose -- one refusal further from its cause than it needs to be.
+    // A route emitted with a defaulted lookup table would parse, reach the
+    // producer, and refuse there against an address nobody chose -- one
+    // refusal further from its cause than it needs to be.
+    //
+    // `--rent-credit` is NOT in this group any more: the Market's own
+    // `rent_beneficiary` is that address's one author, so the flag is an
+    // optional cross-check rather than an input the caller has to supply.
     let route_flags = [
         ("--emit-route", emit_route.is_some()),
         ("--lookup-table", lookup_table.is_some()),
-        ("--rent-credit", rent_credit.is_some()),
         ("--checked-release", checked_release.is_some()),
     ];
     if route_flags.iter().any(|(_, present)| *present)
@@ -323,7 +402,10 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     {
         return Err(refusal(
             "input/partial-route",
-            format!("emitting a route needs {missing} as well; usage: {}", usage()),
+            format!(
+                "emitting a route needs {missing} as well; usage: {}",
+                usage()
+            ),
         ));
     }
     Ok(ArgumentsV1 {
@@ -342,6 +424,9 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
         emit_route: emit_route.map(PathBuf::from),
         lookup_table: lookup_table.as_deref().map(pubkey).transpose()?,
         rent_credit: rent_credit.as_deref().map(pubkey).transpose()?,
+        action: action
+            .as_deref()
+            .map_or(Ok(DEFAULT_SESSION_ACTION_V1), action_v1)?,
         checked_release: checked_release.map(PathBuf::from),
     })
 }
@@ -358,7 +443,10 @@ fn content_id_from_hex_v1(value: &str) -> Result<ContentId> {
             "--parent-request-digest takes exactly 64 hexadecimal characters",
         ));
     }
-    if value.chars().any(|character| character.is_ascii_uppercase()) {
+    if value
+        .chars()
+        .any(|character| character.is_ascii_uppercase())
+    {
         return Err(refusal(
             "input/parent-request-digest",
             "--parent-request-digest must be lowercase hexadecimal",
@@ -457,6 +545,7 @@ impl FrameRowV1 {
 /// assumption: the caller re-encodes with every recovered width and requires
 /// the result to equal the finalized record byte-for-byte.
 fn recover_width_v1(
+    session_action: Action,
     published: &[u8],
     base: GeneralExternalAccountWidthsV3,
     set: impl Fn(&mut GeneralExternalAccountWidthsV3, u32),
@@ -466,8 +555,8 @@ fn recover_width_v1(
     set(&mut low, 0x0101_0101);
     let mut high = base;
     set(&mut high, 0x0202_0202);
-    let low = encode_profile_v1(low)?;
-    let high = encode_profile_v1(high)?;
+    let low = encode_profile_v1(session_action, low)?;
+    let high = encode_profile_v1(session_action, high)?;
     if low.len() != published.len() || high.len() != published.len() {
         return Err(refusal(
             "session/profile-width",
@@ -519,12 +608,15 @@ fn recover_width_v1(
     Ok(u32::from_le_bytes(bytes))
 }
 
-fn encode_profile_v1(widths: GeneralExternalAccountWidthsV3) -> Result<Vec<u8>> {
-    let bytes = general_account_profile_bytes_v3(SESSION_ACTION_V1)
+fn encode_profile_v1(
+    session_action: Action,
+    widths: GeneralExternalAccountWidthsV3,
+) -> Result<Vec<u8>> {
+    let bytes = general_account_profile_bytes_v3(session_action)
         .map_err(|error| Error::new(format!("General AccountProfile width: {error:?}")))?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_general_account_profile_v3_atomic(SESSION_ACTION_V1, widths, &mut scratch, &mut output)
+    encode_general_account_profile_v3_atomic(session_action, widths, &mut scratch, &mut output)
         .map_err(|error| Error::new(format!("General AccountProfile encode: {error:?}")))?;
     Ok(output)
 }
@@ -551,6 +643,7 @@ const PROBE_WIDTHS_V1: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWi
 /// Derive and report the General OpenBatch frame on acknowledged devnet.
 pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     let arguments = parse_arguments(arguments)?;
+    let session_action = arguments.action;
     if arguments.output.exists() {
         return Err(refusal(
             "output/exists",
@@ -666,7 +759,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             usize::try_from(GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3).unwrap_or(usize::MAX),
         )
         .ok_or_else(|| Error::new("controller selector offset".to_string()))? =
-        SESSION_ACTION_V1 as u8;
+        session_action as u8;
     let descriptor_reference = set
         .select_descriptor(&selector_request)
         .map_err(|error| Error::new(format!("OpenBatch descriptor selection: {error:?}")))?;
@@ -869,7 +962,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     let seal_key = CapabilitySealKeyV1::new(
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         descriptor_reference.program().to_bytes(),
-        u32::from(SESSION_ACTION_V1 as u8),
+        u32::from(session_action as u8),
         trading_semantic_release,
         registry.to_bytes(),
     )
@@ -949,12 +1042,14 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         "General OpenBatch AccountProfile",
     )?;
     let linked_basis_prefix = recover_width_v1(
+        session_action,
         &published_profile,
         PROBE_WIDTHS_V1,
         |widths, value| widths.linked_basis_prefix = value,
         "linked_basis_prefix",
     )?;
     let rent_credit = recover_width_v1(
+        session_action,
         &published_profile,
         PROBE_WIDTHS_V1,
         |widths, value| widths.rent_credit = value,
@@ -965,7 +1060,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         rent_credit,
         ..PROBE_WIDTHS_V1
     };
-    if encode_profile_v1(recovered)? != published_profile {
+    if encode_profile_v1(session_action, recovered)? != published_profile {
         return Err(refusal(
             "session/width-recovery",
             "the recovered widths do not re-encode to the AccountProfile the chain holds",
@@ -974,10 +1069,10 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
 
     // ------------------------------------------------------- the frame report
     let fixed_count = usize::from(
-        general_account_profile_fixed_count_v3(SESSION_ACTION_V1)
+        general_account_profile_fixed_count_v3(session_action)
             .map_err(|error| Error::new(format!("General account geometry: {error:?}")))?,
     );
-    let invocation_count = admitted_invocation_count_v1(tail_count)?;
+    let invocation_count = admitted_invocation_count_v1(session_action, tail_count)?;
     let strategy_account_count = ADMITTED_STRATEGY_EVIDENCE_COUNT_V3 + invocation_count;
     let runtime_suffix_count = fixed_count
         .checked_sub(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)
@@ -1044,10 +1139,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             admission: admission_record,
             artifact: artifact_record_pair,
             invocation_count,
-            caller_authorities: caller_authority_span
-                .as_ref()
-                .cloned()
-                .unwrap_or_default(),
+            caller_authorities: caller_authority_span.as_ref().cloned().unwrap_or_default(),
             caller_authority_digest_is_probe,
         },
     );
@@ -1171,7 +1263,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         "cluster": "devnet",
         "rpcUrl": origin.redacted_url(),
         "market": arguments.market.to_string(),
-        "action": format!("{SESSION_ACTION_V1:?}"),
+        "action": format!("{session_action:?}"),
         "observedSlot": observed_slot,
         "releaseSet": hex(&release_set.to_bytes()),
         "generation": generation.to_string(),
@@ -1212,7 +1304,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
                 .unwrap_or_default()
                 .to_string(),
             "descriptorDigest": hex(&descriptor_reference.program().to_bytes()),
-            "action": u32::from(SESSION_ACTION_V1 as u8),
+            "action": u32::from(session_action as u8),
             "tradingSemanticRelease": hex(&trading_semantic_release),
             "tradingProgram": trading.to_string(),
             "registryProgram": registry.to_string(),
@@ -1223,9 +1315,9 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             "runtimeSuffixAccounts": runtime_suffix_count,
             "topLevelAccounts": top_level_count,
             "acceleratorCpiAccounts": ADMITTED_RUNTIME_ACCOUNTS_START_V3 + fixed_count,
-            "inlineBankBytes": general_hot_candidate_bank_len_v3(SESSION_ACTION_V1, tail_count)
+            "inlineBankBytes": general_hot_candidate_bank_len_v3(session_action, tail_count)
                 .map_err(|error| Error::new(format!("bank width: {error:?}")))?,
-            "scalarCount": general_hot_scalar_count_v3(SESSION_ACTION_V1, tail_count)
+            "scalarCount": general_hot_scalar_count_v3(session_action, tail_count)
                 .map_err(|error| Error::new(format!("scalar count: {error:?}")))?,
             "identityCount": GENERAL_HOT_COMMON_IDENTITIES_V3,
         },
@@ -1236,7 +1328,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         },
         "protocolRentCreditBytes": LIFECYCLE_RENT_CREDIT_BYTES_V2,
         "accounts": rows.iter().map(FrameRowV1::to_json).collect::<Vec<_>>(),
-        "runtimeVector": runtime_vector_json_v1(
+        "runtimeVector": runtime_vector_json_v1(session_action,
             fixed_count,
             rent_credit,
             arguments.payer,
@@ -1276,13 +1368,41 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         // `general-successor-plan-v5`, and refuse there against a conjunct this
         // command had already named in words.
         if let Some(path) = arguments.emit_route.as_deref() {
+            // THE MARKET IS THE RENT CREDIT'S ONE AUTHOR, and it took a devnet
+            // run to learn it. `--rent-credit` used to be a required address
+            // this command copied into the route without joining it to
+            // anything, and cohort-16.1's `openbatch-refounded` row filled it
+            // from a cohort variable that still named the PREVIOUS General
+            // market's credit. The frame reported `walls: []` and OpenBatch
+            // refused `TradingSbfError::Content` on chain at 239,473 CU, in
+            // `authenticate_lifecycle_credit_v3`
+            // (programs/dclutch-trading-sbf/src/hot_v3/lifecycle.rs:1421),
+            // whose FIRST conjunct is `account.key != market.rent_beneficiary`
+            // -- and whose next two would have refused the same account for
+            // naming another market and another generation.
+            //
+            // `CoreState.rent_beneficiary` (STATE_RENT_BENEFICIARY_OFFSET 296)
+            // is that account, written at founding. So the flag is optional and
+            // defaults to it, and a supplied address that disagrees is a
+            // refusal rather than a route.
+            let derived_rent_credit =
+                Pubkey::new_from_array(market_state.rent_beneficiary.to_bytes());
+            if let Some(supplied) = arguments.rent_credit
+                && supplied != derived_rent_credit
+            {
+                return Err(refusal(
+                    "route/rent-credit-not-the-markets",
+                    format!(
+                        "--rent-credit {supplied} is not this Market's own RentCredit.                          {} names {derived_rent_credit} at its rent_beneficiary coordinate, and                          `authenticate_lifecycle_credit_v3` compares the frame's account against                          exactly that key. Drop the flag and let the Market answer.",
+                        arguments.market
+                    ),
+                ));
+            }
             let (lookup_table, rent_credit, checked_release) = (
                 arguments
                     .lookup_table
                     .ok_or_else(|| refusal("route/lookup-table", "--lookup-table"))?,
-                arguments
-                    .rent_credit
-                    .ok_or_else(|| refusal("route/rent-credit", "--rent-credit"))?,
+                derived_rent_credit,
                 arguments
                     .checked_release
                     .as_deref()
@@ -1291,12 +1411,13 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             let checked_bytes = std::fs::read(checked_release).map_err(|error| {
                 refusal("input/unreadable", format!("checked release: {error}"))
             })?;
-            let checked = CheckedExecutionReleaseSetV1::decode(&checked_bytes).map_err(|error| {
-                refusal(
-                    "route/checked-release",
-                    format!("the checked multiprogram manifest did not decode: {error:?}"),
-                )
-            })?;
+            let checked =
+                CheckedExecutionReleaseSetV1::decode(&checked_bytes).map_err(|error| {
+                    refusal(
+                        "route/checked-release",
+                        format!("the checked multiprogram manifest did not decode: {error:?}"),
+                    )
+                })?;
             // THE ONLY CONJUNCT THAT MAKES THIS PROVENANCE AUTHENTICATED.
             //
             // `build_general_successor_instruction_v5` never re-derives the
@@ -1350,17 +1471,15 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
                 entry.config_id().to_bytes(),
                 "General config",
             )?;
-            let config = GeneralConfigV3::decode(&config_body).map_err(|error| {
-                refusal("route/config", format!("General config: {error:?}"))
-            })?;
+            let config = GeneralConfigV3::decode(&config_body)
+                .map_err(|error| refusal("route/config", format!("General config: {error:?}")))?;
             let root_data = by_key(&first_pass, root)?.data;
-            let composite = CapabilityRootAccountV4::decode(&root_data, descriptor)
-                .map_err(|error| {
+            let composite =
+                CapabilityRootAccountV4::decode(&root_data, descriptor).map_err(|error| {
                     refusal("route/root", format!("capability root account: {error:?}"))
                 })?;
-            let root_state = GeneralRootV2::decode(composite.state()).map_err(|error| {
-                refusal("route/root", format!("General root state: {error:?}"))
-            })?;
+            let root_state = GeneralRootV2::decode(composite.state())
+                .map_err(|error| refusal("route/root", format!("General root state: {error:?}")))?;
             let state = open_batch_state_address_v1(
                 trading,
                 root,
@@ -1372,7 +1491,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             )?;
             let runtime_suffix = runtime_suffix_accounts_v1(
                 &published_profile,
-                SESSION_ACTION_V1,
+                session_action,
                 tail_count,
                 state,
                 arguments.payer,
@@ -1415,7 +1534,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
                 ));
             }
             let document = route_document_v1(&RouteInputV1 {
-                action: SESSION_ACTION_V1,
+                action: session_action,
                 minimum_finalized_slot: observed_slot,
                 payer: arguments.payer,
                 lookup_table,
@@ -1453,7 +1572,10 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             write_new_route_v1(path, &document)?;
             println!(
                 "ROUTE: {} accounts to reacquire, batch state {}, written to {}",
-                parsed.snapshot_addresses().map_err(|error| Error::new(error.to_string()))?.len(),
+                parsed
+                    .snapshot_addresses()
+                    .map_err(|error| Error::new(error.to_string()))?
+                    .len(),
                 state,
                 path.display()
             );
@@ -1740,11 +1862,16 @@ fn frame_rows_v1(
     rows
 }
 
-fn runtime_vector_json_v1(fixed_count: usize, rent_credit: u32, payer: Pubkey) -> Result<Value> {
+fn runtime_vector_json_v1(
+    session_action: Action,
+    fixed_count: usize,
+    rent_credit: u32,
+    payer: Pubkey,
+) -> Result<Value> {
     let state = usize::from(GENERAL_PRIMARY_STATE_ACCOUNT_V3);
     let payer_coordinate = usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3);
     let credit = usize::from(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3);
-    let system = general_system_program_account_v3(SESSION_ACTION_V1).map(usize::from);
+    let system = general_system_program_account_v3(session_action).map(usize::from);
     let mut rows = Vec::with_capacity(fixed_count);
     for coordinate in 0..fixed_count {
         let (label, author) = match coordinate {
@@ -1789,7 +1916,6 @@ fn runtime_vector_json_v1(fixed_count: usize, rent_credit: u32, payer: Pubkey) -
         "coordinates": rows,
     }))
 }
-
 
 /// Everything one `GeneralSuccessorRouteV1` document states, and nothing else.
 ///
@@ -2044,16 +2170,19 @@ fn write_new_route_v1(path: &std::path::Path, document: &Value) -> Result<()> {
             format!("refusing to overwrite {}", path.display()),
         ));
     }
-    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(document)?))
-        .map_err(|error| Error::new(format!("route document: {error}")))
+    std::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(document)?),
+    )
+    .map_err(|error| Error::new(format!("route document: {error}")))
 }
 
 /// The accelerator invocation count the published effect selects.
 ///
 /// One caller authority per invocation, which is what makes the count part of
 /// the top-level account list rather than an internal detail.
-fn admitted_invocation_count_v1(tail_count: u32) -> Result<usize> {
-    let scalar_count = general_hot_scalar_count_v3(SESSION_ACTION_V1, tail_count)
+fn admitted_invocation_count_v1(session_action: Action, tail_count: u32) -> Result<usize> {
+    let scalar_count = general_hot_scalar_count_v3(session_action, tail_count)
         .map_err(|error| Error::new(format!("scalar count: {error:?}")))?;
     let transport = classify_bank_transport_v2(scalar_count, GENERAL_HOT_COMMON_IDENTITIES_V3)
         .map_err(|error| Error::new(format!("bank transport: {error:?}")))?;
@@ -2185,7 +2314,6 @@ mod tests {
     const MARKET: Pubkey = Pubkey::new_from_array([11_u8; 32]);
     const ROOT: Pubkey = Pubkey::new_from_array([13_u8; 32]);
 
-
     /// One synthetic frame whose only job is to be a well-formed route.
     ///
     /// Every address is a distinct nonzero key, which is what the parser's
@@ -2263,7 +2391,10 @@ mod tests {
     fn an_emitted_route_round_trips_through_the_parser_and_the_projection() {
         let input = route_input_v1();
         let document = route_document_v1(&input).expect("emit");
-        let encoded = format!("{}\n", serde_json::to_string_pretty(&document).expect("json"));
+        let encoded = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&document).expect("json")
+        );
         let route = successor::parse_route_v1(encoded.as_bytes()).expect("parse");
         assert_eq!(route.minimum_finalized_slot(), input.minimum_finalized_slot);
 
@@ -2275,8 +2406,7 @@ mod tests {
             .iter()
             .map(|key| observed_at(*key, input.minimum_finalized_slot))
             .collect::<Vec<_>>();
-        let (state, lookup_table) =
-            successor::acquire_route_v1(&route, observed).expect("acquire");
+        let (state, lookup_table) = successor::acquire_route_v1(&route, observed).expect("acquire");
 
         assert_eq!(lookup_table.key, input.lookup_table);
         assert_eq!(state.release_set, input.release_set);
@@ -2284,8 +2414,14 @@ mod tests {
         assert_eq!(state.minimum_finalized_slot, input.minimum_finalized_slot);
         let checked = state.checked_release.expect("checked release survives");
         assert_eq!(checked.trading_program, input.trading_program);
-        assert_eq!(checked.general_artifact_release, input.general_artifact_release);
-        assert_eq!(checked.checked_manifest_digest, input.checked_manifest_digest);
+        assert_eq!(
+            checked.general_artifact_release,
+            input.general_artifact_release
+        );
+        assert_eq!(
+            checked.checked_manifest_digest,
+            input.checked_manifest_digest
+        );
 
         for (index, value) in state.fixed_accounts.iter().enumerate() {
             assert_eq!(value.account.key, input.fixed[index]);
@@ -2375,7 +2511,10 @@ mod tests {
     fn the_old_slot_bound_seed_moves_between_slots_and_the_new_preimage_does_not() {
         let early = bank_at_slot(492_745_516);
         let late = bank_at_slot(492_745_563);
-        assert_ne!(early, late, "the two banks must differ, or this proves nothing");
+        assert_ne!(
+            early, late,
+            "the two banks must differ, or this proves nothing"
+        );
 
         // The old seed: one signed account list could not name both addresses.
         let old_early = old_slot_bound_authority(&early);
@@ -2417,7 +2556,11 @@ mod tests {
         let mut unique = base.clone();
         unique.sort_unstable();
         unique.dedup();
-        assert_eq!(unique.len(), 4, "each invocation ordinal names its own authority");
+        assert_eq!(
+            unique.len(),
+            4,
+            "each invocation ordinal names its own authority"
+        );
 
         let other_family = digest(b"another signed DCLTHOT3 family request");
         for (label, span) in [
@@ -2456,14 +2599,7 @@ mod tests {
             ),
             (
                 "release set",
-                admitted_caller_authority_span_v1(
-                    TRADING,
-                    [10_u8; 32],
-                    MARKET,
-                    ROOT,
-                    family,
-                    4,
-                ),
+                admitted_caller_authority_span_v1(TRADING, [10_u8; 32], MARKET, ROOT, family, 4),
             ),
             (
                 "composing program",
@@ -2500,7 +2636,9 @@ mod tests {
         );
         let error = refused.expect_err("a zero context is not a caller-authority coordinate");
         assert!(
-            error.to_string().contains("session/caller-authority-derivation"),
+            error
+                .to_string()
+                .contains("session/caller-authority-derivation"),
             "the refusal names the derivation that produced it, got: {error}"
         );
     }
@@ -2515,6 +2653,65 @@ mod tests {
             probe.to_bytes(),
             digest(b"dclutch:devnet-general-session:caller-authority-probe:v1").to_bytes(),
             "the probe preimage is the literal this test restates, not a moving value"
+        );
+    }
+
+    /// `--action` is a real flag over all fifteen names, and the ones this
+    /// command cannot frame refuse BY NAME rather than by absence.
+    ///
+    /// The value of the flag is exactly that distinction: while
+    /// `SESSION_ACTION_V1` was a constant, `CloseBatch` appeared in no driver
+    /// source at all, so the runbook's OpenBatch -> CloseBatch ->
+    /// second OpenBatch sequence had one reachable step and two nobody could
+    /// even ask for. Perturbing `COMPOSABLE_ACTIONS_V1` to hold `CloseBatch`
+    /// fails the second assertion and perturbing it to drop `OpenBatch` fails
+    /// the first, so this is red before it is green.
+    #[test]
+    fn every_general_action_parses_and_only_the_composable_ones_are_admitted() {
+        assert_eq!(
+            action_v1("open-batch").expect("OpenBatch"),
+            Action::OpenBatch
+        );
+
+        let close = action_v1("close-batch").expect_err("CloseBatch is not composable yet");
+        assert!(
+            close.to_string().contains("session/action-not-composable"),
+            "CloseBatch must refuse by name, not by absence: {close}"
+        );
+        assert!(
+            close
+                .to_string()
+                .contains("the open Batch account read back"),
+            "the refusal must name the reading it needs: {close}"
+        );
+
+        for spelling in [
+            "consider",
+            "freeze",
+            "initialize-settlement",
+            "collect",
+            "materialize",
+            "distribute",
+            "close",
+            "place-order",
+            "cancel-order",
+            "close-batch",
+            "submit-candidate",
+            "verify-candidate-row",
+            "release-order",
+            "close-candidate",
+        ] {
+            let error = action_v1(spelling).expect_err("not composable");
+            assert!(
+                error.to_string().contains("session/action-not-composable"),
+                "{spelling} parses and refuses as not-composable, never as unknown: {error}"
+            );
+        }
+
+        let unknown = action_v1("open_batch").expect_err("not a spelling");
+        assert!(
+            unknown.to_string().contains("input/unknown-action"),
+            "an unknown spelling is a different refusal from an uncomposable action: {unknown}"
         );
     }
 }

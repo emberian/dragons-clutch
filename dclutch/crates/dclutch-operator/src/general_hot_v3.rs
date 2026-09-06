@@ -28,6 +28,7 @@ use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_CERTIFICATE_RAW_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
     ADMITTED_STRATEGY_EVIDENCE_START_V3,
 };
+use dclutch_market::execution_strategy::shadow_digest_v3::family_request_digest_v3;
 use dclutch_market::execution_strategy::v2::{BankTransportV2, classify_bank_transport_v2};
 use dclutch_trading::general::artifacts_v3::{
     GeneralArtifactBytesV3, GeneralArtifactSelectionV3, GeneralDecodedRequestV3,
@@ -836,7 +837,22 @@ pub fn build_general_hot_instruction_decoded_v3(
         general_artifact_release: checked.general_artifact_release,
         artifacts: artifact_digests(artifact_bytes),
         product_record: product.product_record,
-        family_request_digest: hash(&request_bytes).to_bytes(),
+        // `family_request_digest_v3`, NOT `hash(request_bytes)`. The chain
+        // seeds every admitted caller-authority PDA with
+        // `accelerator_caller_authority_digest_v1(Admitted, THIS value, index)`
+        // (programs/dclutch-trading-sbf/src/admitted_composition_v3.rs:738),
+        // and `context.family_request_digest` is
+        // `family_request_digest_v3(family_request)` -- domain-separated and
+        // length-prefixed. This field published the bare SHA-256 instead, so
+        // `devnet-general-session --parent-request-digest` derived four
+        // addresses no execution can derive. Measured 2026-09-05 in the
+        // program-test replay of cohort-16.1's own OpenBatch frame: bare
+        // `6ac82555...`, the chain's `ff3ace48...`, refusing
+        // `TradingSbfError::Release` 0x4001 at 319,009 CU with no accelerator
+        // invoke in the log.
+        family_request_digest: family_request_digest_v3(&request_bytes)
+            .map_err(|_| GeneralHotOperatorErrorV3::ContentIdentity)?
+            .to_bytes(),
         lifecycle,
     })
 }

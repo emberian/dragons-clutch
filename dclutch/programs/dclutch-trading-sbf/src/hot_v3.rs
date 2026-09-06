@@ -872,6 +872,119 @@ macro_rules! hot_cu_custody_prepare {
 
 pub(crate) use hot_cu_custody_prepare as hot_cu_custody_prepare_macro;
 
+/// Name which conjunct of the lifecycle preplan refused.
+///
+/// `prepare_lifecycle_v4` has 44 `TradingSbfError::Content` exits inside one
+/// plan walk and the wire carries one code for all of them, so a route that
+/// refuses there is a 44-way guess over a loop that runs once per plan per
+/// invocation. The first logged word is the case, the second and third are the
+/// plan ordinal and the invocation, and the fourth is the case's own operand.
+/// Diagnostic-only.
+#[cfg(feature = "hot-cu-profile")]
+pub(crate) fn log_lifecycle_prepare_refusal_v1(
+    case: u64,
+    ordinal: u64,
+    invocation: u64,
+    operand: u64,
+) {
+    solana_program::log::sol_log(
+        "dclutch-hot-why:lifecycle-prepare case/ordinal/invocation/operand",
+    );
+    solana_program::log::sol_log_64(case, ordinal, invocation, operand, 0);
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_lifecycle_prepare {
+    ($case:expr, $ordinal:expr, $invocation:expr, $operand:expr) => {
+        crate::hot_v3::log_lifecycle_prepare_refusal_v1($case, $ordinal, $invocation, $operand)
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_lifecycle_prepare {
+    ($case:expr, $ordinal:expr, $invocation:expr, $operand:expr) => {};
+}
+
+pub(crate) use hot_cu_lifecycle_prepare as hot_cu_lifecycle_prepare_macro;
+
+/// Name which caller-authority coordinate disagreed, and with what.
+///
+/// `admitted_composition_v3` derives one PDA per accelerator invocation and
+/// refuses `TradingSbfError::Release` when the frame's account is not it. The
+/// wire cannot carry which ordinal, which address, or which preimage moved.
+/// Diagnostic-only.
+#[cfg(feature = "hot-cu-profile")]
+pub(crate) fn log_caller_authority_refusal_v1(chunk: u64, expected: u64, seen: u64, digest: u64) {
+    solana_program::log::sol_log(
+        "dclutch-hot-why:caller-authority chunk/expected/seen/request-digest",
+    );
+    solana_program::log::sol_log_64(chunk, expected, seen, digest, 0);
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_caller_authority {
+    ($chunk:expr, $expected:expr, $seen:expr, $digest:expr) => {
+        crate::hot_v3::log_caller_authority_refusal_v1($chunk, $expected, $seen, $digest)
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_caller_authority {
+    ($chunk:expr, $expected:expr, $seen:expr, $digest:expr) => {};
+}
+
+pub(crate) use hot_cu_caller_authority as hot_cu_caller_authority_macro;
+
+/// Wrap one fallible expression so its refusal names a case, for free.
+///
+/// The statement-form diagnostics above cost the shipped link nothing because
+/// `macro_rules!` never expands the arguments of an empty arm. A
+/// `.map_err(|_| { log(); Coarse })` does not have that property: the closure
+/// is real code whether or not the log is, and it moves the ELF. This form
+/// does -- WITHOUT the feature it expands to the expression itself, so a
+/// localization can be left in the tree permanently instead of being applied
+/// and reverted every time a coarse code has to be convicted.
+///
+/// Measured 2026-09-05: Trading at `87eec1c3a` builds
+/// `e7f8e476006ce1248994ae065bffd7ea0039c8681f85fed141368790e021931b` with and
+/// without every diagnostic in this file.
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_watch_lifecycle {
+    ($expr:expr, $case:expr, $ordinal:expr, $invocation:expr, $operand:expr) => {
+        $expr.inspect_err(|_| {
+            crate::hot_v3::log_lifecycle_prepare_refusal_v1($case, $ordinal, $invocation, $operand)
+        })
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_watch_lifecycle {
+    ($expr:expr, $case:expr, $ordinal:expr, $invocation:expr, $operand:expr) => {
+        $expr
+    };
+}
+
+pub(crate) use hot_cu_watch_lifecycle as hot_cu_watch_lifecycle_macro;
+
+/// The same wrapper for the Debug-form reason logger.
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_watch_reason {
+    ($expr:expr, $label:literal) => {
+        $expr.inspect_err(|error| {
+            crate::hot_v3::hot_reason(concat!("dclutch-hot-why:", $label), error)
+        })
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_watch_reason {
+    ($expr:expr, $label:literal) => {
+        $expr
+    };
+}
+
+pub(crate) use hot_cu_watch_reason as hot_cu_watch_reason_macro;
+
 /// The `Debug` formatting of a refused cause, kept out of the caller's frame.
 ///
 /// `msg!` with a `{:?}` argument expands to `format!` at the call site, and a
@@ -910,7 +1023,6 @@ pub(crate) use hot_heap_mark as hot_heap_mark_macro;
 // 41,492 and 48,871 CU on the partial equity Remove, larger than any
 // authentication the note prices.
 pub(crate) use hot_cu_checkpoint as hot_cu_checkpoint_macro;
-
 /// Shadow caller-authority PDA after six authenticated strategy extras.
 pub const HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3: usize = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3 + 6;
 /// First profile-defined runtime account for Shadow-AOT execution.

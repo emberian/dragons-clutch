@@ -330,10 +330,49 @@ is not a pass.
 
 ### openbatch-refounded
 
-Against the re-founded, activated General root. Run the read-only session
-report first: it signs nothing and exits non-zero naming **every** unsatisfiable
-conjunct, because an ordering that prints only the earliest refusal is how a
-second real wall becomes invisible.
+*Retired after cohort-15; see `openbatch-two-pass`.* Against the re-founded,
+activated General root. Run the read-only session report first: it signs
+nothing and exits non-zero naming **every** unsatisfiable conjunct, because an
+ordering that prints only the earliest refusal is how a second real wall
+becomes invisible.
+
+### openbatch-two-pass
+
+The same act, in the two passes the caller-authority span needs, without
+`--rent-credit`, and with `--action` said out loud.
+
+**Two sessions, one row.** Trading seeds every admitted caller-authority PDA
+with `accelerator_caller_authority_digest_v1(Admitted, family_request_digest,
+index)`, and that digest does not exist until a plan has been produced from a
+route. So the first pass emits a probe route, `general-successor-plan-v5` turns
+it into a plan, and the second pass re-emits the route at the plan's own
+`familyRequestDigest`. A route whose span came from the session's probe default
+names four addresses no execution can derive; cohort-16.1 ran both passes by
+hand and recorded the loop as undocumented.
+
+**No `--rent-credit`.** The Market's `rent_beneficiary` is that account's one
+author. Cohort-16.1 passed the PREVIOUS General market's credit, the session
+copied it into the route without joining it to anything, the frame reported no
+wall, and OpenBatch refused `TradingSbfError::Content` on chain at 239,473 CU
+inside `authenticate_lifecycle_credit_v3`. The flag survives as an optional
+cross-check that refuses when it disagrees with the Market.
+
+### close-batch
+
+*Cohort-17.* CloseBatch at the batch's own `collection_close_slot`, through the
+same two-pass session. **Owed before it can run**, and the refusal says so by
+name: `devnet-general-session --action close-batch` exits
+`session/action-not-composable`, because CloseBatch's subject is the open
+Batch's own body and the session derives its subject from the capability root
+alone. The bundle builder already composes CloseBatch, so the missing author is
+the devnet session and nothing deeper.
+
+### second-open-batch
+
+*Cohort-17.* The first transaction that exercises the per-batch selection: two
+Batch accounts at two addresses with two occurrence ids, which no single
+OpenBatch can show. It needs `close-batch` first, because the root admits one
+open batch at a time.
 
 ### relay-capture
 

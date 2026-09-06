@@ -265,6 +265,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
         record_bumps.manifest_staging(),
     )?;
     let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, context)?;
+    hot_cu_checkpoint!("cx-manifest-entry");
 
     let capability_release = context.selection().capability_release().to_bytes();
     let program_set_data = borrow_finalized_record_at(
@@ -296,6 +297,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
     }
     let selected_program = selected_descriptor.program();
     let selected_action = selected_entry.selector();
+    hot_cu_checkpoint!("cx-program-set-entry");
 
     // A family that spends the write-once artifact verdict authenticated below
     // carries its six sealed staging coordinates as the matching raw account
@@ -316,6 +318,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
     {
         return Err(TradingSbfError::Content.into());
     }
+    hot_cu_checkpoint!("cx-alias-shape");
 
     // Decision 0005: the validated-artifact seal for exactly this descriptor,
     // this action, this authenticated Trading interpreter release and this
@@ -336,6 +339,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
         root.trading_semantic_release,
         &seal_data,
     )?;
+    hot_cu_checkpoint!("cx-capability-seal");
 
     let descriptor_data = borrow_sealed_record(
         *frame,
@@ -351,6 +355,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
     }
     let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
     authenticate_descriptor_root_selection(&descriptor, context, &entry)?;
+    hot_cu_checkpoint!("cx-descriptor");
 
     let config_data = borrow_finalized_record_at(
         *frame,
@@ -390,6 +395,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
             .content_digest
             .to_bytes(),
     })?;
+    hot_cu_checkpoint!("cx-projection-bindings");
     let lifecycle_data = borrow_sealed_record(
         *frame,
         seal,
@@ -432,6 +438,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
     )?;
     let lifecycle = StateLifecyclePolicyV5::from_sealed(&lifecycle_data, lifecycle_token)
         .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("cx-lifecycle-policy");
 
     let account_profile_data = borrow_sealed_record(
         *frame,
@@ -481,6 +488,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
             )
             .map_err(|_| TradingSbfError::Content)?
     };
+    hot_cu_checkpoint!("cx-account-profile-join");
 
     let request_profile_data = borrow_sealed_record(
         *frame,
@@ -500,6 +508,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
     )?;
     let request_profile =
         decode_sealed_request_profile(*descriptor, &request_profile_data, request_profile_token)?;
+    hot_cu_checkpoint!("cx-request-profile");
 
     let (strategy, strategy_extras_end) = authenticate_strategy_from_sealed_boxed_v3(
         &frame,
@@ -509,6 +518,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
         descriptor.as_ref(),
         invocation.strategy_extras_start,
     )?;
+    hot_cu_checkpoint!("cx-strategy");
 
     let transition_data = borrow_sealed_record(
         *frame,
@@ -534,6 +544,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
     )?;
     let transition = TransitionProgramV3::from_sealed(&transition_data, transition_token)
         .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("cx-transition");
 
     let effect_data = borrow_sealed_record(
         *frame,

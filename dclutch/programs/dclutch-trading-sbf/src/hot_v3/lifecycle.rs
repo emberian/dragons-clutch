@@ -805,9 +805,9 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
     for (slot, observation) in planned_lamports.iter_mut().zip(observations) {
         *slot = observation.lamports();
     }
-    let plan_count = policy
-        .action_plan_count(action)
-        .map_err(|_| TradingSbfError::Content)?;
+    let plan_count =
+        hot_cu_watch_lifecycle!(policy.action_plan_count(action), 3, 0, 0, u64::from(action))
+            .map_err(|_| TradingSbfError::Content)?;
     let mut planned = 0_usize;
     let mut counted = 0_u16;
     while counted < plan_count {
@@ -832,34 +832,78 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
     let mut next_hint = 0_usize;
     let mut ordinal = 0_u16;
     while ordinal < plan_count {
-        let selected = policy
-            .action_plan(action, ordinal)
-            .map_err(|_| TradingSbfError::Content)?
-            .with_validated_join(profile_join);
-        let invocation_count = selected
-            .invocation_count(tail_count)
-            .map_err(|_| TradingSbfError::Content)?;
+        let selected = hot_cu_watch_lifecycle!(
+            policy.action_plan(action, ordinal),
+            4,
+            u64::from(ordinal),
+            0,
+            0
+        )
+        .map_err(|_| TradingSbfError::Content)?
+        .with_validated_join(profile_join);
+        let invocation_count = hot_cu_watch_lifecycle!(
+            selected.invocation_count(tail_count),
+            5,
+            u64::from(ordinal),
+            0,
+            u64::from(tail_count)
+        )
+        .map_err(|_| TradingSbfError::Content)?;
         let mut invocation = 0_u32;
         while invocation < invocation_count {
-            let item = selected
-                .invocation_item(tail_count, invocation)
-                .map_err(|_| TradingSbfError::Content)?;
+            let item = hot_cu_watch_lifecycle!(
+                selected.invocation_item(tail_count, invocation),
+                6,
+                u64::from(ordinal),
+                u64::from(invocation),
+                0
+            )
+            .map_err(|_| TradingSbfError::Content)?;
             let registers = LifecycleRegistersV3 {
                 scalars: &output_scalars,
                 identities: &output_identities,
             };
-            if !selected
-                .is_enabled(account_profile, tail_count, item, registers)
-                .map_err(|_| TradingSbfError::Content)?
+            if !hot_cu_watch_lifecycle!(
+                selected.is_enabled(account_profile, tail_count, item, registers),
+                70,
+                u64::from(ordinal),
+                u64::from(invocation),
+                0
+            )
+            .map_err(|_| TradingSbfError::Content)?
             {
+                hot_cu_lifecycle_prepare!(71, u64::from(ordinal), u64::from(invocation), 0);
                 return Err(TradingSbfError::Content.into());
             }
-            let prior = sink.expected()?;
-            let indices = selected
-                .project_account_indices(account_profile, tail_count, item)
-                .map_err(|_| TradingSbfError::Content)?;
-            let state = representative_v3(indices.state(), aliases)?;
-            reserve_lifecycle_state_v3(state, used_states)?;
+            let prior = hot_cu_watch_lifecycle!(
+                sink.expected(),
+                12,
+                u64::from(ordinal),
+                u64::from(invocation),
+                0
+            )?;
+            let indices = hot_cu_watch_lifecycle!(
+                selected.project_account_indices(account_profile, tail_count, item),
+                8,
+                u64::from(ordinal),
+                u64::from(invocation),
+                0
+            )
+            .map_err(|_| TradingSbfError::Content)?;
+            let state = hot_cu_watch_lifecycle!(
+                representative_v3(indices.state(), aliases),
+                15,
+                u64::from(ordinal),
+                u64::from(invocation),
+                indices.state() as u64
+            )?;
+            hot_cu_watch_lifecycle!(
+                reserve_lifecycle_state_v3(state, used_states),
+                16,
+                u64::from(ordinal),
+                u64::from(invocation),
+                state as u64
+            )?;
             let payer = indices
                 .payer()
                 .map(|index| representative_v3(index, aliases))
@@ -869,18 +913,34 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
                 .map(|index| representative_v3(index, aliases))
                 .transpose()?;
 
-            let seed_count = selected
-                .seed_count()
-                .map_err(|_| TradingSbfError::Content)?;
+            let seed_count = hot_cu_watch_lifecycle!(
+                selected.seed_count(),
+                10,
+                u64::from(ordinal),
+                u64::from(invocation),
+                0
+            )
+            .map_err(|_| TradingSbfError::Content)?;
             let mut seeds =
                 LifecycleSeedsV4::new(prior.map(|prior| prior.seeds.as_slice()), seed_count)?;
             let mut derived = None;
             let mut canonical_bump = None;
             let mut seed = 0_u8;
             while seed < seed_count {
-                match selected
-                    .materialize_seed_input(account_profile, tail_count, item, registers, seed)
-                    .map_err(|_| TradingSbfError::Content)?
+                match hot_cu_watch_lifecycle!(
+                    selected.materialize_seed_input(
+                        account_profile,
+                        tail_count,
+                        item,
+                        registers,
+                        seed
+                    ),
+                    11,
+                    u64::from(ordinal),
+                    u64::from(invocation),
+                    u64::from(seed)
+                )
+                .map_err(|_| TradingSbfError::Content)?
                 {
                     LifecycleSeedInputValueV3::Bytes(value) => {
                         if canonical_bump.is_some() {
@@ -894,7 +954,13 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
                         }
                         let hint = lifecycle_hints.get(next_hint).copied().unwrap_or(0);
                         next_hint = next_hint.checked_add(1).ok_or(TradingSbfError::Content)?;
-                        let bump = match seeds.pending_bump(program_id, hint)? {
+                        let bump = match hot_cu_watch_lifecycle!(
+                            seeds.pending_bump(program_id, hint),
+                            20,
+                            u64::from(ordinal),
+                            u64::from(invocation),
+                            u64::from(hint)
+                        )? {
                             LifecycleCanonicalBumpV4::Derived { address, bump } => {
                                 derived = Some(address);
                                 bump
@@ -921,21 +987,41 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
                 .get(state)
                 .is_none_or(|account| account.key != &derived)
             {
+                hot_cu_lifecycle_prepare!(
+                    14,
+                    u64::from(ordinal),
+                    u64::from(invocation),
+                    state as u64
+                );
+                hot_cu_lifecycle_prepare!(
+                    140,
+                    u64::from_le_bytes(derived.to_bytes()[..8].try_into().unwrap_or([0; 8])),
+                    accounts.get(state).map_or(0, |account| u64::from_le_bytes(
+                        account.key.to_bytes()[..8].try_into().unwrap_or([0; 8])
+                    )),
+                    u64::from(canonical_bump)
+                );
                 return Err(TradingSbfError::Content.into());
             }
             let authenticated_credit = rent_credit
                 .map(|index| {
-                    authenticate_lifecycle_credit_v3(
-                        accounts,
-                        lifecycle_owner_program,
-                        index,
-                        *planned_lamports
-                            .get(index)
-                            .ok_or(TradingSbfError::Content)?,
-                        expected_market,
-                        expected_release_set,
-                        expected_generation,
-                        expected_rent_credit,
+                    hot_cu_watch_lifecycle!(
+                        authenticate_lifecycle_credit_v3(
+                            accounts,
+                            lifecycle_owner_program,
+                            index,
+                            *planned_lamports
+                                .get(index)
+                                .ok_or(TradingSbfError::Content)?,
+                            expected_market,
+                            expected_release_set,
+                            expected_generation,
+                            expected_rent_credit,
+                        ),
+                        26,
+                        u64::from(ordinal),
+                        u64::from(invocation),
+                        index as u64
                     )
                 })
                 .transpose()?;
@@ -943,9 +1029,14 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
                 selected.operation(),
                 LifecycleOperationV3::Create | LifecycleOperationV3::AuthenticateOrCreate
             ) {
-                let data_bytes = selected
-                    .target_data_bytes(tail_count)
-                    .map_err(|_| TradingSbfError::Content)?;
+                let data_bytes = hot_cu_watch_lifecycle!(
+                    selected.target_data_bytes(tail_count),
+                    27,
+                    u64::from(ordinal),
+                    u64::from(invocation),
+                    0
+                )
+                .map_err(|_| TradingSbfError::Content)?;
                 Some(AuthenticatedRentMinimumV3 {
                     data_bytes,
                     lamports: rent.minimum_balance(
@@ -965,8 +1056,14 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
                     account_profile,
                     tail_count,
                     item_index: item,
-                    accounts: PlannedObservationsV3::planned(observations, planned_lamports)
-                        .map_err(|_| TradingSbfError::Content)?,
+                    accounts: hot_cu_watch_lifecycle!(
+                        PlannedObservationsV3::planned(observations, planned_lamports),
+                        29,
+                        u64::from(ordinal),
+                        u64::from(invocation),
+                        0
+                    )
+                    .map_err(|_| TradingSbfError::Content)?,
                     registers: LifecycleRegistersV3 {
                         scalars: &output_scalars,
                         identities: &output_identities,
@@ -984,25 +1081,45 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
                     output_scalars: next_scalars,
                     output_identities: next_identities,
                 },
+            );
+            let plan = hot_cu_watch_lifecycle!(
+                plan,
+                30,
+                u64::from(ordinal),
+                u64::from(invocation),
+                state as u64
             )
             .map_err(|_| TradingSbfError::Content)?;
             if state == 0 && !matches!(plan, StateLifecyclePlanV3::Close(_)) {
+                hot_cu_lifecycle_prepare!(31, u64::from(ordinal), u64::from(invocation), 0);
                 return Err(TradingSbfError::Content.into());
             }
-            let binding_count = selected
-                .immutable_identity_binding_count()
-                .map_err(|_| TradingSbfError::Content)?;
+            let binding_count = hot_cu_watch_lifecycle!(
+                selected.immutable_identity_binding_count(),
+                32,
+                u64::from(ordinal),
+                u64::from(invocation),
+                0
+            )
+            .map_err(|_| TradingSbfError::Content)?;
             let mut immutable_identity_bindings = LifecycleBindingsV4::new(
                 prior.map(|prior| prior.immutable_identity_bindings.as_slice()),
                 binding_count,
             )?;
-            absorb_immutable_identity_bindings_v4(
+            let absorbed = absorb_immutable_identity_bindings_v4(
                 selected,
                 account_profile,
                 item,
                 next_identities,
                 binding_count,
                 &mut immutable_identity_bindings,
+            );
+            hot_cu_watch_lifecycle!(
+                absorbed,
+                33,
+                u64::from(ordinal),
+                u64::from(invocation),
+                u64::from(binding_count)
             )?;
             match plan {
                 StateLifecyclePlanV3::Authenticate(_) => {}
