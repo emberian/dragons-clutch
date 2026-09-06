@@ -216,6 +216,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x5503, name: "ClaimsMarketClosureSbfErrorV1::Liability", meaning: "A nonzero aggregate supply prevented closure.", band: "claims" },
   { code: 0x5504, name: "ClaimsMarketClosureSbfErrorV1::Commit", meaning: "Checked refund accounting or commit-last closure refused.", band: "claims" },
   { code: 0x5505, name: "ClaimsMarketClosureSbfErrorV1::Receipt", meaning: "Typed receipt construction refused.", band: "claims" },
+  { code: 0x5506, name: "ClaimsMarketClosureSbfErrorV1::Basis", meaning: "The named linked basis record was not this Market's, or its Market does not refund on failure.", band: "claims" },
   { code: 0x5600, name: "ClaimCheckCompactionSbfErrorV1::Accounts", meaning: "The fixed account frame, ownership, or writability refused.", band: "claims" },
   { code: 0x5601, name: "ClaimCheckCompactionSbfErrorV1::Authority", meaning: "A signer the route does not admit was present.", band: "claims" },
   { code: 0x5602, name: "ClaimCheckCompactionSbfErrorV1::Identity", meaning: "Coordinates did not derive the passed account, or aliased, or were zero.", band: "claims" },

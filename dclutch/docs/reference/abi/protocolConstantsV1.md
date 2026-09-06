@@ -87,6 +87,11 @@ export const RATIONAL_STRUCTURED_CUSTODY_SEED_V2 = new TextEncoder().encode('dcl
 ```ts
 export const RELEASE_LINEAGE_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:release-lineage:v1'); // crates/dclutch-registry/src/lineage.rs::RELEASE_LINEAGE_PDA_DOMAIN_V1
 
+// Digest domains, as the bytes a hash preimage is prefixed with.
+```
+```ts
+export const FAMILY_REQUEST_DIGEST_DOMAIN_V3 = new TextEncoder().encode('dclutch:shadow-family-request:v3'); // crates/dclutch-market/src/execution_strategy/shadow_digest_v3.rs::FAMILY_REQUEST_DIGEST_DOMAIN_V3
+
 // Envelope kinds and formats, as the text a JSON document carries.
 ```
 ```ts

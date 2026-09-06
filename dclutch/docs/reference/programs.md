@@ -14,7 +14,7 @@ reachable inside an entry route's request.
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |
 | `accelerator` | `dclutch-accelerator-sbf` | 0xC | 2 | 3 | 39 | `process_instruction` (programs/dclutch-accelerator-sbf/src/lib.rs:71) |
-| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 24 | 149 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:96) |
+| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 24 | 150 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:96) |
 | `core` | `dclutch-core-sbf` | 0x3 | 21 | 15 | 32 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:325) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 4 | 9 | 18 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:225) |
 | `registry` | `dclutch-registry-sbf` | 0x1 | 7 | 4 | 22 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:244) |

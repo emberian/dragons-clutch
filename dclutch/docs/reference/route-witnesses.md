@@ -179,7 +179,7 @@ campaign passed this control on a sentence in its header.
 | `resolution-pre-market-funding-programtest` | program-test | yes | 3 | `tools/gauntlet/resolution-pre-market-funding/run-resolution-pre-market-funding.sh` | `8d301707583822e4` |
 | `resolution-relayed-programtest` | program-test | yes | 8 | `tools/gauntlet/resolution-relayed/run-resolution-relayed.sh` | `582bfeddcc7b7613` |
 | `resolution-sponsored-programtest` | program-test | yes | 7 | `tools/gauntlet/resolution-sponsored/run-resolution-sponsored.sh` | `161ab1a8e200521a` |
-| `retirement-checkpoint-programtest` | program-test | yes | 7 | `tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh` | `516e9705ccd6aaff` |
+| `retirement-checkpoint-programtest` | program-test | yes | 7 | `tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh` | `f355d69a11a17d2e` |
 | `retirement-replay-handoff-programtest` | program-test | yes | 2 | `tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh` | `950b33db1915d0c0` |
 | `source-abort-programtest` | program-test | yes | 7 | `tools/gauntlet/source-abort/run-source-abort.sh` | `eedde83f5554eea7` |
 | `structured-v2-programtest` | program-test | yes | 2 | `tools/gauntlet/structured/run-structured.sh` | `98937647cc92d70f` |

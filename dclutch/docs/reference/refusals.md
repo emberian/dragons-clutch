@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **351** codes, with meanings taken
+The tables below carry all **352** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**70 of 351** codes have been observed refusing a real
+**73 of 352** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,7 +54,7 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-351 codes belonging to the programs the route census enumerates.
+352 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -153,7 +153,7 @@ The 22 campaigns contributing:
 | `0x500D` | `ClaimsSbfError::PrincipalCapacity` | Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/lib.rs:258` |
 | `0x500E` | `ClaimsSbfError::ExposureNotIdentity` | The supplied Product-to-Claims exposure is not the identity embedding. | -- | `programs/dclutch-claims-sbf/src/lib.rs:281` |
 | `0x500F` | `ClaimsSbfError::ReceiptAlias` | An account presented at a representation coordinate is the receipt's own Mint or Account: a receipt backed by itself. | -- | `programs/dclutch-claims-sbf/src/lib.rs:302` |
-| `0x5010` | `ClaimsSbfError::FailureEscrow` | The Position offered as a refunding complete set's failure escrow is not the Market's own escrow. | -- | `programs/dclutch-claims-sbf/src/lib.rs:321` |
+| `0x5010` | `ClaimsSbfError::FailureEscrow` | The Position offered as a refunding complete set's failure escrow is not the Market's own escrow. | retirement-checkpoint-programtest | `programs/dclutch-claims-sbf/src/lib.rs:321` |
 | `0x5011` | `ClaimsSbfError::FailureEscrowUnseated` | The escrow account is the Market's own, and this Market's failure supply is not seated in it. | -- | `programs/dclutch-claims-sbf/src/lib.rs:339` |
 | `0x5100` | `LiabilityBasisSbfErrorV2::ClaimsState` | Claims aggregate or Position bytes/PDA/revision refused. | -- | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:82` |
 | `0x5140` | `ProtocolPositionSbfErrorV2::Instruction` | Instruction bytes did not decode as the canonical lifecycle ABI. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:111` |
@@ -223,12 +223,13 @@ The 22 campaigns contributing:
 | `0x5265` | `SparseNativeTransferSbfErrorV1::Candidate` | Debit, credit, revision, or conservation arithmetic refused. | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:90` |
 | `0x5266` | `SparseNativeTransferSbfErrorV1::Commit` | Candidate accounts could not all be borrowed and committed last. | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:92` |
 | `0x5267` | `SparseNativeTransferSbfErrorV1::Receipt` | Exact success receipt construction refused. | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:94` |
-| `0x5500` | `ClaimsMarketClosureSbfErrorV1::Accounts` | The fixed account frame or privileges refused. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:78` |
-| `0x5501` | `ClaimsMarketClosureSbfErrorV1::Authority` | Caller PDA or current Registry releases refused. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:80` |
-| `0x5502` | `ClaimsMarketClosureSbfErrorV1::Identity` | Core/aggregate/RentCredit identities or revisions refused. | retirement-checkpoint-programtest | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:82` |
-| `0x5503` | `ClaimsMarketClosureSbfErrorV1::Liability` | A nonzero aggregate supply prevented closure. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:84` |
-| `0x5504` | `ClaimsMarketClosureSbfErrorV1::Commit` | Checked refund accounting or commit-last closure refused. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:86` |
-| `0x5505` | `ClaimsMarketClosureSbfErrorV1::Receipt` | Typed receipt construction refused. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:88` |
+| `0x5500` | `ClaimsMarketClosureSbfErrorV1::Accounts` | The fixed account frame or privileges refused. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:101` |
+| `0x5501` | `ClaimsMarketClosureSbfErrorV1::Authority` | Caller PDA or current Registry releases refused. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:103` |
+| `0x5502` | `ClaimsMarketClosureSbfErrorV1::Identity` | Core/aggregate/RentCredit identities or revisions refused. | retirement-checkpoint-programtest | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:105` |
+| `0x5503` | `ClaimsMarketClosureSbfErrorV1::Liability` | A nonzero aggregate supply prevented closure. | retirement-checkpoint-programtest | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:107` |
+| `0x5504` | `ClaimsMarketClosureSbfErrorV1::Commit` | Checked refund accounting or commit-last closure refused. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:109` |
+| `0x5505` | `ClaimsMarketClosureSbfErrorV1::Receipt` | Typed receipt construction refused. | -- | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:111` |
+| `0x5506` | `ClaimsMarketClosureSbfErrorV1::Basis` | The named linked basis record was not this Market's, or its Market does not refund on failure. | retirement-checkpoint-programtest | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:124` |
 | `0x5600` | `ClaimCheckCompactionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | claims-claim-check-programtest | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:73` |
 | `0x5601` | `ClaimCheckCompactionSbfErrorV1::Authority` | A signer the route does not admit was present. | -- | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:75` |
 | `0x5602` | `ClaimCheckCompactionSbfErrorV1::Identity` | Coordinates did not derive the passed account, or aliased, or were zero. | claims-claim-check-programtest | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:77` |
