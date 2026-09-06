@@ -1053,14 +1053,36 @@ pub(crate) fn redeem(
     ) {
         Ok(input) => input,
         Err(error) => {
+            // A HOLDER WITH NO CLAIM AT AN INDEX IS NOT A WALL. The redemption
+            // walks every claim index because the retirement is gated on the
+            // aggregate's whole liability record, and a Position that holds
+            // nothing at index N makes the producer say so exactly: *payout
+            // quantity must be within 1..=0 atoms at claim index N*. That is an
+            // empty ledger row, not a refused act, and recording it as a
+            // refusal would fail the run for the arithmetic being right.
+            let sentence = error.to_string();
+            if sentence.contains("must be within 1..=0 atoms") {
+                spine.stages.push(StageReportV1 {
+                    stage: stage.into(),
+                    outcome: "not-driven".into(),
+                    transactions: 0,
+                    compute_units: 0,
+                    note: format!(
+                        "This holder's Position carries no claim at index {claim_index}, and the \
+                         producer said so before a key was opened: {sentence}. Nothing to \
+                         discharge, so nothing was sent."
+                    ),
+                });
+                return Ok(());
+            }
             spine.refused(
                 stage,
-                &error.to_string(),
+                &sentence,
                 format!(
-                    "`local-private-validator-wallet-terminal-payout-input-v1` refused: {error}. \
-                     It opens no key, sends nothing, and makes exactly two finalized RPC rounds, \
-                     so this refusal is about the Market's terminal state or its composition \
-                     records and about nothing else."
+                    "`local-private-validator-wallet-terminal-payout-input-v1` refused: \
+                     {sentence}. It opens no key, sends nothing, and makes exactly two finalized \
+                     RPC rounds, so this refusal is about the Market's terminal state or its \
+                     composition records and about nothing else."
                 ),
             );
             return Ok(());
@@ -1269,7 +1291,16 @@ pub(crate) fn retire(
     // replay and resume: the chain decides whether this act is needed, not a
     // flag here.
     if !completion.exists() {
-        close_direct_maker_replay(rpc, context, spine, fee_payer_keypair);
+        // ONE CLOSE PER MAKER. A Direct fill opens a maker replay on BOTH
+        // sides -- the manifest names `/seller/maker` and `/buyer/maker` and
+        // the root counts both -- and `require_closable` demands
+        // `open_maker_root_count == 0`, so closing one left the capability
+        // close refusing `Successor(MakerRootCountInvariant)` with the count at
+        // one (hbox `20260906T172418Z`, after the first close executed at
+        // 101,252 CU).
+        for side in ["seller", "buyer"] {
+            close_direct_maker_replay(rpc, context, spine, side, fee_payer_keypair);
+        }
         outcome = resume_until(
             |_| crate::terminal_sequence::run_terminal_sequence_owned_loopback_v1(sequence.clone()),
             || completion.exists(),
@@ -1440,10 +1471,13 @@ fn close_direct_maker_replay(
     rpc: &mut Rpc,
     context: &SpineContextV1<'_>,
     spine: &mut SpineV1,
+    side: &str,
     fee_payer_keypair: &Path,
 ) {
-    let stage = "retirement: the Direct maker replay is closed so the capability close can reach \
-                 its zero-count gate";
+    let stage = &format!(
+        "retirement: the {side}'s Direct maker replay is closed so the capability close can reach \
+         its zero-count gate"
+    ) as &str;
     let fill = context.work.join("fill");
     let public = fill.join("direct-trade-public.json");
     let finalized = fill.join("direct-trade-finalized.json");
@@ -1469,13 +1503,14 @@ fn close_direct_maker_replay(
             .and_then(Value::as_str)
             .and_then(|text| text.parse::<Pubkey>().ok())
     };
-    let Some(maker) = field("/replaySetup/maker") else {
+    let Some(maker) = field(&format!("/{side}/maker")) else {
         spine.refused(
             stage,
-            "the fill's public manifest names no maker",
-            "`/replaySetup/maker` is the producer's own record of whose replay it opened; a \
-             manifest without it is a finding about that document."
-                .into(),
+            "the fill's public manifest names no maker for this side",
+            format!(
+                "`/{side}/maker` is the producer's own record of whose replay it opened; a \
+                 manifest without it is a finding about that document."
+            ),
         );
         return;
     };
@@ -1507,11 +1542,13 @@ fn close_direct_maker_replay(
         "--execute".to_owned(),
     ];
     let outcome = crate::direct_close_maker::run_owned_loopback_v1(arguments);
-    let label = "journey retirement: Direct maker replay close";
+    let label = &format!("journey retirement: Direct maker replay close ({side})") as &str;
     let (landed, compute) = match read_json(&evidence) {
         Ok(document) => {
             let result = harvest_document(rpc, label, &document, &mut spine.transactions);
-            spine.reports.insert("close-maker".into(), document);
+            spine
+                .reports
+                .insert(format!("close-maker-{side}"), document);
             result
         }
         Err(_) => (0, 0),

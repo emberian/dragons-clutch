@@ -841,3 +841,180 @@ finalized in its journal. It is the first market ever to hold that state, and
 unlike `9e8fTH75…` **nothing about it is destroyed**: the one thing in front of
 `DirectCloseCapability` is which of two host authors owns the funding slice's
 order, and the refusal now names the conjunct and prints the three numbers.
+
+---
+
+# ADDENDUM, 2026-09-06 evening. Lane COHORT-17D.
+
+**Devnet evidence. Not mainnet evidence.** The deployed eight are UNCHANGED,
+the candidate commit is UNCHANGED at `932edc83f`, and the release gate is
+UNCHANGED at `a98ed988…`. Every commit below is host or runbook.
+
+## 1. THE FRAME'S LEDGER ORDER HAS ONE AUTHOR, AND THE CLOSE RAN
+
+`CloseFundingMasks(4, 15, [14, 1], InvalidDependency)` was two host authors on
+one market. `direct_native_close_discovery_from_chain_v1` TYPED its funding
+slice `[Resolution dependency, Trading selected]` as a literal, while the meta
+closure two thousand lines away DERIVED it from
+`selected_funding_ledger_leads_v1`. The caller preflight builds its masks by
+walking the discovery's slice, so the literal is the one that reached
+`validate_funding_ledger_masks_v2`, which orders a partition by each mask's
+lowest selected manifest index and refuses `[0b1110, 0b0001]`.
+
+`ordered_funding_ledger_slice_v1` is now the single declaration, beside the rule
+it reads, and all four frame authors call it: both capability activations, the
+close discovery, and the close's meta closure (`f3931362b`). A slice typed
+rather than derived is right only for a market nobody has founded.
+
+## 2. THREE MORE WALLS, EACH ONE STAGE FURTHER, EACH HOST
+
+**The close does not fit the default meter.** With the frame ordered the close
+reached a chain for the first time and Core consumed 200,000 of 200,000 at
+`exceeded CUs meter at BPF instruction`. That packet
+(`38XaHrUjwAgZQmfZjLmZ24yWyZr9BX11aEUSfdyNLdPqWTykvQfitQbttfrUNM9KpXTkte5Ni31gfrdES1VHgwLH`)
+was retired through the driver's own `--supersede-unlandable`: block height
+481,945,925 past its last valid 481,944,348, and absent from transaction
+history with `searchTransactionHistory` on. Its exact message, rebuilt with a
+ComputeBudget key appended to the static readonly-unsigned section and
+simulated with `sigVerify` off under a 1,400,000-CU probe, drew **500,929 three
+times out of three** — 500,779 inside Core, of which the Trading CPI is
+211,558, plus the ComputeBudget instruction's own 150. Band 0, tolerance at its
+15,000 floor, so `DirectCloseCapability` declares **515,929** and the route now
+MUST declare (`9de26202a`). That is the second row in a table whose `None` arm
+had promised "a new row with its own measured draw, not a blanket".
+
+**A live session may gain a measured row.** `authenticate_terminal_session_v1`
+held a session's ComputeBudget table and the driver's exactly equal, and market
+2's session was written before this stage had ever executed anywhere. Equality
+is stricter than the invariant it protects: a stage that has never been planned
+compiled nothing, and a packet planned and then retired as unlandable moves
+aside under its own signature, which is what frees the canonical path. A table
+that only GAINS such a stage is now amended in place with the addition printed;
+a changed value, a removed row, or an addition for a stage whose journal already
+exists stays refused.
+
+**The close's return data is an acknowledgement no plan authors.** Under the
+measured budget the close LANDED — and its journal refused "finalized terminal
+transaction carried unexpected return data". A Core-effect route always returns
+the role program's `CoreEffectAckV1`: 240 `DCLTCAK1` bytes under Trading's id.
+The stage declared none, and it cannot declare the bytes: every field of that
+acknowledgement is a coordinate the plan owns except `post_resource_digest`,
+which Trading frames inside `dclutch-trading-sbf` — a crate the driver does not
+link, whose own comment records that no consumer in the tree recomputes it.
+
+So the declaration is the acknowledgement's own authority (`001cd8c41`):
+`CoreEffectAckV1::validate_for`, run against the effect envelope the journal's
+instruction data already authenticates — action, target role, role program,
+release set, market, context, the full-effect digest over exactly the signed
+bytes, and both pre-revisions. `--reconcile-landed` gained the arm that writes
+that contract into an already-landed close, under a scope guard that for this
+route re-derives no poststate and so requires every declared account back
+identical.
+
+## 3. THREE STAGES CERTIFIED, AND THE DIRECT CAPABILITY IS CLOSED
+
+    DirectCloseCapability   JZ1pwcJqXkGj8cGQnhwhjVa6AiJiXcCCXcevaYaYwH9qPVwvd47NyFTpN9SYTba9de7xvTkbU41xMu3Si4dvjga
+                            slot 494,169,472, 500,929 CU, fee 5,000
+    Resolution prepay       vw9zdDn3TMioU3xti3SHJmkkc26Dnxqyw4XogdtZS3yUyQXR1Vyb6uAyaaRqkwmDeBwTazVYKoMB9CXNDRQE7vx
+                            slot 494,176,208, 150 CU
+    ResolutionCloseFund     ugKnUgZmpUT6nXNT7QmfdyFN3KwTxvoqZYzKMUk4V2fU2LfAMoGKLdpyFXnrvvAMqYyUhpLtXwaWC8Qk9ujgSNG
+                            slot 494,176,359, 256,399 CU
+
+Market `AvKSizb7…` reads `DCLTCOR3` phase 3 Retiring with
+**`outstanding_capabilities = 0`** — the count that has stood at 1 on every
+market this project has ever founded. The Direct capability root and the Trading
+selected funding ledger are closed with their rent to the market's RentCredit,
+and the Resolution dependency ledger is closed in the ruled order, AFTER the
+capability rather than before it. Cohort-17's market 1 died of the opposite
+order; this is the ruling running.
+
+## 4. THE WALL, AND IT IS ONE CONJUNCT CONVICTED BY ONE SIMULATED FIELD
+
+`RetirementReplayHandoff` — the fifth stage of six — refuses:
+
+    Program 2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM consumed 61946 of 200000
+    Program 2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM failed: custom program error: 0x3003
+
+`0x3003` is `CoreSbfError::Reference`, and in this route it is ONE code over ten
+sites in `programs/dclutch-core-sbf/src/retirement_replay_handoff_v1.rs` (186,
+188, 199, 328, 332, 333, 346, 351, 352, 363) plus `release.rs:486`'s `identity`
+helper. It is localized to one line, and not by reading:
+
+**The site.** `retirement_replay_handoff_v1.rs:326`, the last conjunct of
+`authenticate_prestate`'s single `Reference` block:
+
+    || accounts[PAYER].lamports() != request.payer_lamports()
+
+**The conviction.** The packet's own message was rebuilt with exactly eight
+bytes changed — the request's `payer_lamports` at offset 192, reduced by the
+5,000-lamport transaction fee — and simulated with `sigVerify` off:
+
+    control (the packet as signed)        err Custom 12291 (0x3003)   61,946 CU
+    payer_lamports minus the fee          err Custom 12297 (0x3009)   65,169 CU
+
+The prestate block passes and execution proceeds 3,223 CU further. `0x3009` is
+`CallerAuthority`, which is the patch's own shadow: the caller-authority PDA is
+seeded by `hash(request.to_bytes())`, so changing a request byte moves it. One
+field, one block, one line.
+
+**The cause, and Core is right.** Solana deducts the transaction fee from the
+fee payer while the transaction is loaded, so a program reads the fee payer's
+balance NET of the fee. The request declares the observed PRE-fee balance:
+1,673,324,417 against the 1,673,319,417 Core sees. The driver's own intent
+already distinguishes them — that journal carries `lamportsAfterProtocol
+1671211137` beside `lamportsAfterFee 1671206137` — and the request builder does
+not: `crates/dclutch-operator/src/terminal_retirement_v1.rs:1748` writes
+`payer_lamports: snapshot.payer.lamports`.
+
+Every other conjunct of every `Reference` block was excluded against the chain
+before the simulation, and each exclusion is a read anyone can repeat: the
+Claims aggregate `DbnUvBnH…` derives under `dclutch:lbv2:market ‖ market` at
+cohort-17's Claims and its seven identity fields all appear in the Market's own
+`CoreState`; `TRADING_REPLAY`, `CORE_REPLAY`, `HOARD` and `CUSTODY_AUTHORITY`
+re-derive byte-identically from the custody seed domains at bumps 254, 252, 3
+and 255; the trading replay's and the Hoard's data digests equal the request's;
+the replay's `caller_role` is Trading, `open_vault_count` 1, `next_revision` 1,
+`generation` 2 and `rent_refund` the frame's RentCredit; the Hoard is an
+Initialized Token-2022 account of the frame's mint owned by the custody
+authority with no delegate, no native reserve, no close authority; and the other
+three lamport conjuncts — trading replay 4,754,880, Hoard 1,488,440, RentCredit
+20,182,849 — hold exactly.
+
+**THE REPAIR IS NOT THIS LANE'S AND NOT THIS COHORT'S.**
+`crates/dclutch-operator` is compiled into the Claims, Core, Custody and
+Registry links, so subtracting the fee there moves four ELFs and decision 0012
+forbids upgrading a founded market's release set. Market `AvKSizb7…` cannot
+reach `Retired` on cohort-17's programs. **No market has been retired on any
+chain.**
+
+The packet that carried the refusal
+(`2ne4KgkvMLqgrVNAmne9Vfe8MoMTerg67gTNB9GANaLoSRH1B1uN9efzKStnvesh7XUjqxm5x83Vr6GxS8CQKxNb`)
+never landed and was retired: block height 481,958,041 past its last valid
+481,954,377, absent from history.
+
+## 5. THE LEDGER
+
+    payer    1.676102937 → 1.673324417   (-0.002778520: the close, the prepay,
+             the close-fund, the receipt's 2,763,520-lamport rent, and two
+             transaction fees for packets that never landed)
+    deployer 26.572399090   UNCHANGED. This lane deployed nothing.
+
+## 6. WHAT THE NEXT LANE INHERITS
+
+Market `AvKSizb7…`: phase 3 Retiring, **`outstanding_capabilities` 0**, Hoard 0,
+three ordinary columns discharged, the failure column seated at `68d1nDjN…`,
+zero open maker roots, BOTH funding ledgers closed, the terminal ALT frozen and
+five of its six stages settled — four finalized and the fifth retired unlanded.
+Nothing about it is destroyed and `33-retire-2.sh --execute` still resumes from
+the persisted session; what it will meet is the same conjunct until an operator
+that subtracts the fee is deployed.
+
+**Cohort-18 carries two operator facts now, not one**: which stage owns the
+Resolution funding ledger (COHORT-17B), and that a request committing the fee
+payer's balance must commit it net of the fee. Both are `dclutch-operator`, so
+both ride the same re-release, and after them the sixth stage —
+`AggregateRetirement`'s four checkpoint packets and the closure's burn — is the
+only thing between a fully spent refunding market and Retired.
+
+The site's featured market is UNCHANGED, for the third cohort running and for
+the same reason: there is no retired market to feature.

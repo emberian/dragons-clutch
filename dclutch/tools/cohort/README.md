@@ -642,6 +642,50 @@ The consequences for reading this file and cohort-17's evidence:
   A fixture with a live Direct capability child and both physical funding
   ledgers is OWED.
 
+**THE STAGE BEFORE THIS ROW HAS RUN, AND SO HAS THE ONE BEFORE THAT** (lane
+COHORT-17D, 2026-09-06, cohort-17 market 2 `AvKSizb7…`). `DirectCloseCapability`
+landed at slot 494,169,472 and took `outstanding_capabilities` to **0** — the
+count has been 1 on every market this project has founded — and
+`ResolutionCloseFund` then closed the dependency ledger in the ruled order,
+AFTER the capability rather than before it. Three host facts were paid for on
+the way and each is now in the driver:
+
+- the close frame's two funding ledgers are ordered by ONE author
+  (`ordered_funding_ledger_slice_v1`), which both activations, the close
+  discovery and the close's meta closure read;
+- **`DirectCloseCapability` does not fit the 200,000-CU default meter either.**
+  Measured 500,929 under a 1,400,000-CU probe against its own unlandable
+  message, three draws, so its declared budget is 515,929 under
+  `CU_BUDGETS.md`'s rule. It is the heaviest of the six stages by a factor of
+  five; the Trading CPI alone is 211,558;
+- **a Core-effect route returns a `CoreEffectAckV1` the plan cannot author.**
+  240 `DCLTCAK1` bytes under the ROLE program's id, whose `post_resource_digest`
+  is framed inside `dclutch-trading-sbf`. The stage declares the
+  acknowledgement's own authority — `CoreEffectAckV1::validate_for` against the
+  effect envelope its journal's instruction data carries — instead of bytes a
+  host would have to mirror.
+
+**AND THE ROW'S OWN PREDECESSOR NOW HAS A NAMED WALL OF ITS OWN.**
+`RetirementReplayHandoff` refuses `CoreSbfError::Reference` (`0x3003`) at
+`programs/dclutch-core-sbf/src/retirement_replay_handoff_v1.rs:326`:
+
+    || accounts[PAYER].lamports() != request.payer_lamports()
+
+Solana deducts the transaction fee from the fee payer while the transaction
+loads, so a program reads that balance NET of the fee. The request declares the
+observed PRE-fee balance, five thousand lamports high. Convicted by rebuilding
+the packet's own message with those eight bytes reduced by the fee and
+simulating with `sigVerify` off: the refusal moves from `0x3003` at 61,946 CU to
+`0x3009 CallerAuthority` at 65,169, which is the patch's own shadow because the
+caller-authority PDA is seeded by the request digest.
+
+The producer is `crates/dclutch-operator/src/terminal_retirement_v1.rs:1748`
+(`payer_lamports: snapshot.payer.lamports`), and `dclutch-operator` is compiled
+into the Claims, Core, Custody and Registry links. **Cohort-18 therefore carries
+TWO operator facts, not one**: which stage owns the Resolution funding ledger,
+and that a request committing the fee payer's balance commits it net of the fee.
+Market `AvKSizb7…` cannot reach `Retired` on cohort-17's programs.
+
 **A SECOND wall sits behind that one, and it is a program change rather than a
 founding input: a market founded REFUNDING cannot reach this row at all.**
 Decision 0025 seats the failure coordinate in an escrow Position whose owner is

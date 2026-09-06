@@ -1115,11 +1115,47 @@ fn aggregate_caller_authority(
 /// the semantic owner does not define transaction return data for that stage;
 /// it never weakens the exact account-poststate checks.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ExpectedReturnDataV1 {
-    pub(crate) producer: Pubkey,
-    pub(crate) body: Vec<u8>,
-    /// The one field of `body` the EXECUTION writes and no plan can bind.
-    pub(crate) execution_clock: Option<ExecutionClockFieldV1>,
+pub(crate) enum ExpectedReturnDataV1 {
+    /// Bytes the plan authors, because their producer's codec is a crate this
+    /// driver links and there is one author for them.
+    Body {
+        producer: Pubkey,
+        body: Vec<u8>,
+        /// The one field of `body` the EXECUTION writes and no plan can bind.
+        execution_clock: Option<ExecutionClockFieldV1>,
+    },
+    /// Core's effect acknowledgement, which the plan does NOT author.
+    ///
+    /// A Core-effect route's return data is the role program's
+    /// `CoreEffectAckV1`: 240 bytes derived from the effect envelope the
+    /// instruction carries, plus a `post_resource_digest` the role program
+    /// computes over its own poststate. That digest's framing lives inside
+    /// `dclutch-trading-sbf`, this driver does not link it, and the tree
+    /// documents that no consumer in it recomputes the field. A plan that typed
+    /// those bytes would be a second author of a wire, which is the failure
+    /// mode this file spends most of its guards on.
+    ///
+    /// So the declaration is the acknowledgement's OWN authority instead:
+    /// `CoreEffectAckV1::validate_for`, run against the effect envelope this
+    /// journal's instruction data already carries and authenticates. It
+    /// compares the action, target role, role program, release set, market,
+    /// context, full-effect digest and both pre-revisions -- everything the
+    /// plan does own -- and leaves exactly the one field nobody recomputes.
+    ///
+    /// Cohort-17's market 2 is why this exists: `DirectCloseCapability` landed
+    /// on devnet 2026-09-06 and its finalization refused "carried unexpected
+    /// return data", because the stage declared none for a route that always
+    /// returns one.
+    CoreEffectAcknowledgement { producer: Pubkey },
+}
+
+impl ExpectedReturnDataV1 {
+    /// The program whose `set_return_data` the transaction must show.
+    fn producer(&self) -> Pubkey {
+        match self {
+            Self::Body { producer, .. } | Self::CoreEffectAcknowledgement { producer } => *producer,
+        }
+    }
 }
 
 /// A poststate field the executing runtime stamps, and the interval it must
@@ -1331,10 +1367,71 @@ enum DurableLookupLastExtendedSlotV1 {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DurableReturnDataV1 {
     producer: String,
-    body_base64: String,
-    body_sha256: String,
+    /// The exact bytes, when the plan authors them. Absent for a route whose
+    /// return data is Core's effect acknowledgement, which no plan authors --
+    /// see `ExpectedReturnDataV1::CoreEffectAcknowledgement`. Absent from the
+    /// JSON rather than empty, so a journal written before any route declared
+    /// an acknowledgement still hashes to the digest it was written under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    body_base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    body_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     execution_clock: Option<DurableExecutionClockFieldV1>,
+    /// The return data is a `CoreEffectAckV1` this plan checks through
+    /// `validate_for` against its own instruction's effect envelope.
+    #[serde(default, skip_serializing_if = "is_not_declared_v1")]
+    core_effect_acknowledgement: bool,
+}
+
+/// `skip_serializing_if` for a bool that is absent when false.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_not_declared_v1(value: &bool) -> bool {
+    !*value
+}
+
+/// The one projection from what a semantic owner declares to what a journal
+/// persists. Both the writer and the replanning comparison read it, so a
+/// journal can never disagree with the rerun owner over a spelling.
+fn durable_return_data_v1(expected: &ExpectedReturnDataV1) -> DurableReturnDataV1 {
+    match expected {
+        ExpectedReturnDataV1::Body {
+            producer,
+            body,
+            execution_clock,
+        } => DurableReturnDataV1 {
+            producer: producer.to_string(),
+            body_base64: Some(BASE64.encode(body)),
+            body_sha256: Some(sha256_hex(body)),
+            execution_clock: execution_clock.map(durable_execution_clock_v1),
+            core_effect_acknowledgement: false,
+        },
+        ExpectedReturnDataV1::CoreEffectAcknowledgement { producer } => DurableReturnDataV1 {
+            producer: producer.to_string(),
+            body_base64: None,
+            body_sha256: None,
+            execution_clock: None,
+            core_effect_acknowledgement: true,
+        },
+    }
+}
+
+impl DurableReturnDataV1 {
+    /// The two shapes, stated positively: authored bytes, or the
+    /// acknowledgement route. Never both, never neither.
+    fn authenticate_shape_v1(&self) -> Result<()> {
+        let authored = self.body_base64.is_some() && self.body_sha256.is_some();
+        if authored == self.core_effect_acknowledgement
+            || self.body_base64.is_some() != self.body_sha256.is_some()
+            || (self.core_effect_acknowledgement && self.execution_clock.is_some())
+        {
+            return Err(refusal(
+                "terminal durable return data is neither exactly authored bytes nor exactly a \
+                 Core effect acknowledgement",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1772,14 +1869,10 @@ pub(crate) fn build_protocol_stage_journal_v1(
             .map(|(key, account)| (key.to_string(), durable_observed_state(account)))
             .collect(),
         expected_accounts,
-        expected_return_data: mutation.expected_return_data.as_ref().map(|expected| {
-            DurableReturnDataV1 {
-                producer: expected.producer.to_string(),
-                body_base64: BASE64.encode(&expected.body),
-                body_sha256: sha256_hex(&expected.body),
-                execution_clock: expected.execution_clock.map(durable_execution_clock_v1),
-            }
-        }),
+        expected_return_data: mutation
+            .expected_return_data
+            .as_ref()
+            .map(durable_return_data_v1),
         protocol_lamport_deltas: mutation
             .protocol_lamport_deltas
             .iter()
@@ -2042,12 +2135,7 @@ fn authenticate_planned_protocol_owner_v1(
     let expected_return = mutation
         .expected_return_data
         .as_ref()
-        .map(|value| DurableReturnDataV1 {
-            producer: value.producer.to_string(),
-            body_base64: BASE64.encode(&value.body),
-            body_sha256: sha256_hex(&value.body),
-            execution_clock: value.execution_clock.map(durable_execution_clock_v1),
-        });
+        .map(durable_return_data_v1);
     if journal.intent.expected_return_data != expected_return {
         return Err(refusal(
             "planned protocol return-data contract differed from the semantic owner",
@@ -2688,9 +2776,22 @@ struct DurableReconciledEvidenceV1 {
     reason: String,
     landed_signature: String,
     slot: u64,
-    /// The Resolution whose rule was applied, and the rule it names.
+    /// The deployment whose rule was applied.
     deployment_program_id: String,
     deployment_elf_sha256: String,
+    declared_return_data: bool,
+    /// The closure-receipt re-derivation's own numbers. Absent when the
+    /// reconciliation re-derived no account poststate -- the acknowledgement
+    /// route declares a return contract and touches nothing else -- rather
+    /// than carried as zeros, which would read as measurements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    closure_rent: Option<DurableReconciledClosureRentV1>,
+}
+
+/// The Resolution closure receipt's re-derived rent partition and its inputs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DurableReconciledClosureRentV1 {
     rule: String,
     /// The Rent sysvar the execution read, authenticated against this journal's
     /// own recorded prestate digest for that account.
@@ -2701,7 +2802,6 @@ struct DurableReconciledEvidenceV1 {
     ledger_rent_lamports: u64,
     ledger_lamport_surplus: u64,
     execution_clock_offset: usize,
-    declared_return_data: bool,
 }
 
 /// Re-derive one landed packet's predictions under the current model.
@@ -2802,6 +2902,16 @@ fn operate_terminal_reconcile_landed_v1(
     }
 
     let unchanged = journal.intent.clone();
+    if journal.intent.mutation
+        == (DurableTerminalMutationV1::Protocol {
+            stage: TerminalStageV1::DirectCloseCapability,
+        })
+        && journal.intent.expected_return_data.is_none()
+    {
+        return reconcile_landed_core_effect_acknowledgement_v1(
+            &path, journal, &unchanged, plan, landed, slot, meta,
+        );
+    }
     let resolution = Pubkey::from_str(&journal.intent.program_id)
         .map_err(|error| Error::new(format!("terminal journal program: {error}")))?;
     let rule =
@@ -2940,12 +3050,17 @@ fn operate_terminal_reconcile_landed_v1(
     expected.execution_clock = Some(durable_execution_clock_v1(execution_clock));
     journal.intent.expected_return_data = Some(DurableReturnDataV1 {
         producer: resolution.to_string(),
-        body_base64: BASE64.encode(&body),
-        body_sha256: sha256_hex(&body),
+        body_base64: Some(BASE64.encode(&body)),
+        body_sha256: Some(sha256_hex(&body)),
         execution_clock: Some(durable_execution_clock_v1(execution_clock)),
+        core_effect_acknowledgement: false,
     });
 
-    authenticate_terminal_reconciliation_scope_v1(&unchanged, &journal.intent, &receipt_address)?;
+    authenticate_terminal_reconciliation_scope_v1(
+        &unchanged,
+        &journal.intent,
+        Some(&receipt_address),
+    )?;
 
     journal.reconciled = Some(DurableReconciledEvidenceV1 {
         reason: format!(
@@ -2963,15 +3078,17 @@ fn operate_terminal_reconcile_landed_v1(
         slot,
         deployment_program_id: plan.resolution.program_id.clone(),
         deployment_elf_sha256: plan.resolution.checked_candidate_elf_sha256.clone(),
-        rule: format!("{rule:?}"),
-        rent_sysvar_sha256: recorded_rent.data_sha256.clone(),
-        receipt_account: receipt_address.clone(),
-        prior_ledger_rent_lamports: receipt.ledger_rent_lamports,
-        prior_ledger_lamport_surplus: receipt.ledger_lamport_surplus,
-        ledger_rent_lamports: partition.ledger_rent_lamports,
-        ledger_lamport_surplus: partition.ledger_lamport_surplus,
-        execution_clock_offset: execution_clock.offset,
         declared_return_data: unchanged.expected_return_data.is_none(),
+        closure_rent: Some(DurableReconciledClosureRentV1 {
+            rule: format!("{rule:?}"),
+            rent_sysvar_sha256: recorded_rent.data_sha256.clone(),
+            receipt_account: receipt_address.clone(),
+            prior_ledger_rent_lamports: receipt.ledger_rent_lamports,
+            prior_ledger_lamport_surplus: receipt.ledger_lamport_surplus,
+            ledger_rent_lamports: partition.ledger_rent_lamports,
+            ledger_lamport_surplus: partition.ledger_lamport_surplus,
+            execution_clock_offset: execution_clock.offset,
+        }),
     });
     // The writer refreshes the STATE digest and authenticates what it
     // publishes; the intent digest belongs to whoever changed the intent, which
@@ -2996,6 +3113,93 @@ fn operate_terminal_reconcile_landed_v1(
     }))
 }
 
+/// The acknowledgement route's reconciliation: a return CONTRACT is declared
+/// where a landed packet's plan declared none, and nothing else moves.
+///
+/// Cohort-17 market 2's `DirectCloseCapability` landed on devnet 2026-09-06 --
+/// the first ever to -- and its journal could not certify it, because the
+/// stage declared no return data for a Core-effect route that always returns
+/// the role program's `CoreEffectAckV1`. Superseding refuses that packet by
+/// name; this is where it goes instead.
+///
+/// It declares no bytes and re-derives no poststate. What it writes is the
+/// same contract a freshly planned close now carries, and it writes it only
+/// after the landed acknowledgement has been validated against the effect
+/// envelope THIS journal's own instruction data carries -- so a transaction
+/// whose return data did not answer this packet cannot be reconciled into it.
+fn reconcile_landed_core_effect_acknowledgement_v1(
+    path: &Path,
+    mut journal: DurableTerminalJournalV1,
+    unchanged: &DurableTerminalIntentV1,
+    plan: &SuccessorPlan,
+    landed: &str,
+    slot: u64,
+    meta: &Value,
+) -> Result<()> {
+    let trading = pubkey(&plan.trading.program_id)?;
+    let observed = meta
+        .get("returnData")
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| {
+            refusal(
+                "the landed close returned no data, so there is no acknowledgement to declare a \
+                 contract for",
+            )
+        })?;
+    let producer = observed
+        .get("programId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("terminal return data omitted producer"))?;
+    if producer != trading.to_string() {
+        return Err(refusal(&format!(
+            "the landed close acknowledgement names producer {producer}, which is not the \
+             Trading {trading} this plan pins"
+        )));
+    }
+    let body = observed
+        .get("data")
+        .and_then(Value::as_array)
+        .and_then(|tuple| tuple.first())
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("terminal return data omitted base64 body"))?;
+    let body = BASE64
+        .decode(body)
+        .map_err(|error| Error::new(format!("terminal return data base64: {error}")))?;
+    let instruction_data = BASE64
+        .decode(&journal.intent.instruction_data_base64)
+        .map_err(|error| Error::new(format!("terminal instruction data base64: {error}")))?;
+    authenticate_core_effect_acknowledgement_v1(&body, &instruction_data, producer)?;
+
+    journal.intent.expected_return_data = Some(durable_return_data_v1(
+        &ExpectedReturnDataV1::CoreEffectAcknowledgement { producer: trading },
+    ));
+    authenticate_terminal_reconciliation_scope_v1(unchanged, &journal.intent, None)?;
+    journal.reconciled = Some(DurableReconciledEvidenceV1 {
+        reason: "the packet landed and its plan declared no return data for a Core-effect route \
+                 that always returns the role program acknowledgement; the contract this journal \
+                 now carries is the one a freshly planned close carries, and the landed \
+                 acknowledgement validates against this packet's own effect envelope"
+            .into(),
+        landed_signature: landed.into(),
+        slot,
+        deployment_program_id: plan.trading.program_id.clone(),
+        deployment_elf_sha256: plan.trading.checked_candidate_elf_sha256.clone(),
+        declared_return_data: unchanged.expected_return_data.is_none(),
+        closure_rent: None,
+    });
+    journal.intent_sha256 = sha256_hex(&serde_json::to_vec(&journal.intent)?);
+    write_terminal_journal_v1(path, &mut journal, false)?;
+    terminal_stdout_v1(json!({
+        "status": "reconciled",
+        "landedSignature": landed,
+        "slot": slot,
+        "journal": path.display().to_string(),
+        "producer": producer,
+        "acknowledgementBytes": body.len(),
+        "message": "The landed acknowledgement was validated against this packet's own effect envelope and the stage now declares that contract; nothing signed moved. Resume the sequence to certify it."
+    }))
+}
+
 /// NOTHING ELSE MOVED, AND THIS IS THE PROOF RATHER THAN THE CLAIM.
 ///
 /// A journal's intent holds bytes the chain saw and predictions derived from
@@ -3009,20 +3213,25 @@ fn operate_terminal_reconcile_landed_v1(
 fn authenticate_terminal_reconciliation_scope_v1(
     unchanged: &DurableTerminalIntentV1,
     reconciled: &DurableTerminalIntentV1,
-    receipt_address: &str,
+    receipt_address: Option<&str>,
 ) -> Result<()> {
     let mut restored = reconciled.clone();
     restored.expected_return_data = unchanged.expected_return_data.clone();
-    let before = unchanged
-        .expected_accounts
-        .get(receipt_address)
-        .ok_or_else(|| {
-            refusal("a terminal reconciliation names a poststate its journal never declared")
-        })?
-        .clone();
-    restored
-        .expected_accounts
-        .insert(receipt_address.to_owned(), before);
+    // `None` is the stricter scope, not a looser one: the acknowledgement
+    // route re-derives NO poststate, so every declared account must come back
+    // identical along with everything else.
+    if let Some(receipt_address) = receipt_address {
+        let before = unchanged
+            .expected_accounts
+            .get(receipt_address)
+            .ok_or_else(|| {
+                refusal("a terminal reconciliation names a poststate its journal never declared")
+            })?
+            .clone();
+        restored
+            .expected_accounts
+            .insert(receipt_address.to_owned(), before);
+    }
     if restored != *unchanged {
         return Err(refusal(
             "a terminal reconciliation moved something other than the one poststate it \
@@ -3473,12 +3682,21 @@ fn authenticate_terminal_intent_arithmetic_v1(intent: &DurableTerminalIntentV1) 
         }
     }
     if let Some(expected) = &intent.expected_return_data {
-        let body = BASE64
-            .decode(&expected.body_base64)
-            .map_err(|error| Error::new(format!("terminal expected return base64: {error}")))?;
-        if sha256_hex(&body) != expected.body_sha256 {
-            return Err(refusal("terminal expected return-data digest changed"));
-        }
+        expected.authenticate_shape_v1()?;
+        let body = match (&expected.body_base64, &expected.body_sha256) {
+            (Some(encoded), Some(digest)) => {
+                let body = BASE64.decode(encoded).map_err(|error| {
+                    Error::new(format!("terminal expected return base64: {error}"))
+                })?;
+                if &sha256_hex(&body) != digest {
+                    return Err(refusal("terminal expected return-data digest changed"));
+                }
+                body
+            }
+            // The acknowledgement route authors no bytes; what it declares is
+            // checked against the instruction's own envelope at finalization.
+            _ => Vec::new(),
+        };
         if let Some(clock) = &expected.execution_clock {
             authenticate_execution_clock_shape_v1(
                 "terminal durable return data",
@@ -4018,7 +4236,13 @@ fn authenticate_finalized_terminal_history_v1(
         ));
     }
     authenticate_finalized_terminal_balance_vector_v1(meta, &signed, &journal.intent, fee)?;
-    authenticate_terminal_return_data_v1(meta, journal.intent.expected_return_data.as_ref())?;
+    authenticate_terminal_return_data_v1(
+        meta,
+        journal.intent.expected_return_data.as_ref(),
+        &BASE64
+            .decode(&journal.intent.instruction_data_base64)
+            .map_err(|error| Error::new(format!("terminal instruction data base64: {error}")))?,
+    )?;
     let slot = transaction
         .get("slot")
         .and_then(Value::as_u64)
@@ -4034,6 +4258,7 @@ fn authenticate_finalized_terminal_history_v1(
 fn authenticate_terminal_return_data_v1(
     meta: &Value,
     expected: Option<&DurableReturnDataV1>,
+    instruction_data: &[u8],
 ) -> Result<()> {
     let observed = meta.get("returnData").filter(|value| !value.is_null());
     match (expected, observed) {
@@ -4067,12 +4292,31 @@ fn authenticate_terminal_return_data_v1(
             let body = BASE64
                 .decode(encoded)
                 .map_err(|error| Error::new(format!("terminal return data base64: {error}")))?;
-            let planned = BASE64
-                .decode(&expected.body_base64)
-                .map_err(|error| Error::new(format!("terminal expected return base64: {error}")))?;
-            if producer != expected.producer || sha256_hex(&planned) != expected.body_sha256 {
+            expected.authenticate_shape_v1()?;
+            if producer != expected.producer {
                 return Err(refusal(
-                    "finalized terminal return producer or body differed from semantic prediction",
+                    "finalized terminal return producer differed from semantic prediction",
+                ));
+            }
+            if expected.core_effect_acknowledgement {
+                return authenticate_core_effect_acknowledgement_v1(
+                    &body,
+                    instruction_data,
+                    producer,
+                );
+            }
+            let (Some(encoded_plan), Some(digest)) = (&expected.body_base64, &expected.body_sha256)
+            else {
+                return Err(refusal(
+                    "terminal expected return data declared neither bytes nor an acknowledgement",
+                ));
+            };
+            let planned = BASE64
+                .decode(encoded_plan)
+                .map_err(|error| Error::new(format!("terminal expected return base64: {error}")))?;
+            if &sha256_hex(&planned) != digest {
+                return Err(refusal(
+                    "finalized terminal return body differed from semantic prediction",
                 ));
             }
             authenticate_execution_clock_bytes_v1(
@@ -4084,6 +4328,90 @@ fn authenticate_terminal_return_data_v1(
             .map(|_| ())
         }
     }
+}
+
+/// The acknowledgement is checked by its own authority, not by a second copy.
+///
+/// `dclutch-market` owns the wire on both sides: it decodes the effect envelope
+/// out of the instruction data this journal already authenticates by digest,
+/// decodes the returned acknowledgement, and compares them through
+/// `CoreEffectAckV1::validate_for` -- action, target role, role program,
+/// release set, market, context, the full-effect digest over exactly the bytes
+/// that were signed, and both pre-revisions.
+///
+/// The full-effect digest is this file's only restatement, and it restates a
+/// PUBLISHED framing rather than private code: `dclutch-market`'s
+/// `physical` module documents it as `CORE_EFFECT_DIGEST_DOMAIN_V1 ||
+/// u32_le(280) || envelope || u32_le(role_request_bytes) || role_request`, and
+/// the envelope's own `role_request_bytes` is what says where the request ends,
+/// so a data tail of any other width refuses here.
+///
+/// `post_resource_digest` is not compared, and that is a statement about the
+/// tree rather than about this check: the role program frames it inside
+/// `dclutch-trading-sbf`, which this driver does not link, and that framing's
+/// own comment records that no consumer in the tree recomputes it.
+fn authenticate_core_effect_acknowledgement_v1(
+    body: &[u8],
+    instruction_data: &[u8],
+    producer: &str,
+) -> Result<()> {
+    use dclutch_market::{
+        CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectAckV1,
+        CoreEffectEnvelopeV1, Identity, REQUEST_BYTES,
+    };
+
+    // A Core instruction is its own `REQUEST_BYTES` request, then the effect
+    // envelope, then the role request the envelope declares. Splitting at the
+    // published width is self-checking rather than assumed: a wrong split
+    // fails the envelope's own magic on the next line.
+    let envelope_bytes = instruction_data
+        .get(REQUEST_BYTES..REQUEST_BYTES + CORE_EFFECT_ENVELOPE_BYTES_V1)
+        .ok_or_else(|| {
+            refusal("a Core effect acknowledgement was declared for an instruction with no envelope")
+        })?;
+    let envelope = CoreEffectEnvelopeV1::decode(envelope_bytes)
+        .map_err(|error| Error::new(format!("terminal effect envelope: {error:?}")))?;
+    let role_request = &instruction_data[REQUEST_BYTES + CORE_EFFECT_ENVELOPE_BYTES_V1..];
+    if u32::try_from(role_request.len()) != Ok(envelope.role_request_bytes()) {
+        return Err(refusal(
+            "the signed instruction's role-request tail is not the width its effect envelope declares",
+        ));
+    }
+    let digest = {
+        let mut material = Vec::with_capacity(
+            CORE_EFFECT_DIGEST_DOMAIN_V1.len() + 8 + envelope_bytes.len() + role_request.len(),
+        );
+        material.extend_from_slice(&CORE_EFFECT_DIGEST_DOMAIN_V1);
+        material.extend_from_slice(
+            &u32::try_from(envelope_bytes.len())
+                .map_err(|_| refusal("terminal effect envelope width overflowed"))?
+                .to_le_bytes(),
+        );
+        material.extend_from_slice(envelope_bytes);
+        material.extend_from_slice(&envelope.role_request_bytes().to_le_bytes());
+        material.extend_from_slice(role_request);
+        Identity::new(hash(&material).to_bytes())
+            .map_err(|error| Error::new(format!("terminal full-effect digest: {error:?}")))?
+    };
+    let acknowledgement = CoreEffectAckV1::decode(body).map_err(|error| {
+        Error::new(format!(
+            "finalized terminal return data did not decode as a Core effect acknowledgement: {error:?}"
+        ))
+    })?;
+    let role_program = Identity::new(
+        Pubkey::from_str(producer)
+            .map_err(|error| Error::new(format!("terminal return producer: {error}")))?
+            .to_bytes(),
+    )
+    .map_err(|error| Error::new(format!("terminal return producer identity: {error:?}")))?;
+    acknowledgement
+        .validate_for(envelope, role_program, digest)
+        .map_err(|error| {
+            Error::new(format!(
+                "finalized Core effect acknowledgement did not validate against the effect \
+                 envelope this transaction signed: {error:?}"
+            ))
+        })
 }
 
 fn durable_execution_clock_v1(clock: ExecutionClockFieldV1) -> DurableExecutionClockFieldV1 {
@@ -5549,7 +5877,7 @@ pub(crate) fn plan_direct_begin_retiring_caller_v1(
                     stage: TerminalStageV1::DirectBeginRetiring,
                     observation: report.observation,
                     instruction: report.instruction.clone(),
-                    expected_return_data: Some(ExpectedReturnDataV1 {
+                    expected_return_data: Some(ExpectedReturnDataV1::Body {
                         producer: report.expected_receipt_producer,
                         body: report.expected_receipt_body.to_vec(),
                         execution_clock: None,
@@ -5603,7 +5931,7 @@ fn resolution_close_receipt_poststate_v1(
     execution_clock: ExecutionClockFieldV1,
 ) -> (ExpectedReturnDataV1, ExpectedAccountPoststateV1) {
     (
-        ExpectedReturnDataV1 {
+        ExpectedReturnDataV1::Body {
             producer: resolution_program,
             body: receipt.clone(),
             execution_clock: Some(execution_clock),
@@ -5923,7 +6251,13 @@ pub(crate) fn plan_direct_native_close_caller_v1(
         stage: TerminalStageV1::DirectCloseCapability,
         observation: report.observation,
         instruction: report.instruction,
-        expected_return_data: None,
+        // Trading acknowledges Core's effect and Core returns that
+        // acknowledgement verbatim, so the producer the chain shows is the
+        // ROLE program. Measured on devnet 2026-09-06: the first close to
+        // reach a chain returned 240 `DCLTCAK1` bytes under Trading's id.
+        expected_return_data: Some(ExpectedReturnDataV1::CoreEffectAcknowledgement {
+            producer: snapshot.trading_program.key,
+        }),
         expected_accounts,
         protocol_lamport_deltas: BTreeMap::from([
             (snapshot.market.key, 0),
@@ -6275,7 +6609,7 @@ pub(crate) fn plan_retirement_replay_handoff_caller_v1(
         stage: TerminalStageV1::RetirementReplayHandoff,
         observation: report.observation,
         instruction: report.instruction,
-        expected_return_data: Some(ExpectedReturnDataV1 {
+        expected_return_data: Some(ExpectedReturnDataV1::Body {
             producer: snapshot.custody_program.key,
             body: report.expected_receipt_body.to_vec(),
             execution_clock: None,
@@ -12129,13 +12463,21 @@ mod tests {
         };
         let (returned, account) =
             resolution_close_receipt_poststate_v1(program, &destination, receipt.clone(), clock);
+        let ExpectedReturnDataV1::Body {
+            producer: returned_producer,
+            body: returned_body,
+            execution_clock: returned_clock,
+        } = &returned
+        else {
+            panic!("the closure receipt is bytes the plan authors, not an acknowledgement");
+        };
         assert_eq!(
-            (returned.execution_clock, account.execution_clock),
+            (*returned_clock, account.execution_clock),
             (Some(clock), Some(clock)),
             "one statement of the unbindable field, spent in both halves"
         );
-        assert_eq!(returned.producer, program, "the producer is Resolution");
-        assert_eq!(returned.body, receipt);
+        assert_eq!(*returned_producer, program, "the producer is Resolution");
+        assert_eq!(*returned_body, receipt);
         assert_eq!(
             account.data, receipt,
             "the account and the return carry ONE statement of the receipt"
@@ -12151,18 +12493,106 @@ mod tests {
             "programId": program.to_string(),
             "data": [BASE64.encode(&receipt), "base64"],
         }});
-        authenticate_terminal_return_data_v1(&observed, None)
+        authenticate_terminal_return_data_v1(&observed, None, &[])
             .expect_err("an undeclared return is exactly what refused market 1");
         authenticate_terminal_return_data_v1(
             &observed,
             Some(&DurableReturnDataV1 {
                 producer: program.to_string(),
-                body_base64: BASE64.encode(&receipt),
-                body_sha256: sha256_hex(&receipt),
+                body_base64: Some(BASE64.encode(&receipt)),
+                body_sha256: Some(sha256_hex(&receipt)),
                 execution_clock: None,
+                core_effect_acknowledgement: false,
             }),
+            &[],
         )
         .expect("the declared receipt certifies");
+    }
+
+    /// THE ACKNOWLEDGEMENT ROUTE, AGAINST THE BYTES A CHAIN ACTUALLY PRODUCED.
+    ///
+    /// `JZ1pwcJqXkGj8cGQnhwhjVa6AiJiXcCCXcevaYaYwH9qPVwvd47NyFTpN9SYTba9de7xvTkbU41xMu3Si4dvjga`
+    /// -- cohort-17 market 2, devnet slot 494,169,472, 500,929 CU, no error --
+    /// is the first `DirectCloseCapability` ever to land, and its finalization
+    /// refused "carried unexpected return data" because the stage declared
+    /// none. These are its exact instruction data and its exact 240 returned
+    /// bytes, and they are what makes the full-effect digest recipe in
+    /// `authenticate_core_effect_acknowledgement_v1` a measurement rather than
+    /// a restatement checked against itself: nothing here recomputes the
+    /// acknowledgement, so a wrong domain, framing or split point cannot pass.
+    const LANDED_CLOSE_INSTRUCTION_DATA_V1: &str = concat!(
+        "RENMVENSUTIDAAkAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAJNh0cI5diB53tB49tF4KtJC",
+        "zVU7sT4xTjDLYmiBN8McRENMVENFRjEBAAsCAAAAABSJwy3goM5OXBjAGWOuN+dUkej0s5XAhOEy",
+        "uuka6s0UEUvQHtbdIv9GQBMv3yDr8Iwp8OYFHQuhzslYe3W0E4HWmmfH+8mKLI7P3bLTL1inuC/V",
+        "/GH+UB/zUPBrCdrp6pNh0cI5diB53tB49tF4KtJCzVU7sT4xTjDLYmiBN8McrnCBpZnB6Ck4qzCa",
+        "rVR1JFXwPAlJyxI3uPOHpjJzNqpRG24Llz+fCPz+lU4A1snwqIZ90IIrHPho1w9fergfWw8KQJ6U",
+        "6T4DVReIbU9uLOhBZlWYssIZA6a86MozOF7UAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAsAAAAAAA",
+        "AAAAAAAAAAAAAERDTFRDRVIxAQABAAAAAADrEMuszIKOfIVU5xkyrlqNmYJkrn8hfJ/Rzb23gT7B",
+        "li+c9QW9akF+iCLO4rQnJG17Ktglepq+9ahSxySPUzFHxtGF2OZ1xbxi8nCE4I3KqCNzOL59FYYG",
+        "6tgZyG+S+fJXdzeEt6LSGNAqY+0cF3/DfS+n6BoIW+5hcz+Dlc84lURDTFRDRkwyAgACBA8AAABE",
+        "Q0xURE5DMQEAAAAB////",
+    );
+    const LANDED_CLOSE_ACKNOWLEDGEMENT_V1: &str = concat!(
+        "RENMVENBSzEBAAsCAAAAABBmgIsnn8JNpJaik8b3PZDd7k5ZVIwLPG/3EUmWnkvG1ppnx/vJiiyO",
+        "z92y0y9Yp7gv1fxh/lAf81Dwawna6eqTYdHCOXYged7QePbReCrSQs1VO7E+MU4wy2JogTfDHK5w",
+        "gaWZwegpOKswmq1UdSRV8DwJScsSN7jzh6Yyczaq5cmeltSlv4zKHmmdREH8um40X+7QwCHORDBk",
+        "XG+TPBycftdwUMVExykn3PDLVHYKvFa6y05kL8DMXlExTDx8DAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAA",
+    );
+    #[test]
+    fn the_landed_close_acknowledgement_validates_against_its_own_envelope() {
+        let data = BASE64
+            .decode(LANDED_CLOSE_INSTRUCTION_DATA_V1)
+            .expect("instruction data");
+        let body = BASE64
+            .decode(LANDED_CLOSE_ACKNOWLEDGEMENT_V1)
+            .expect("acknowledgement");
+        let trading = "272BExJXWc7FSFh5PLps6DBWVWqoggmskoPbfbp21VNd";
+        assert_eq!(body.len(), 240, "a CoreEffectAckV1 is 240 bytes");
+        authenticate_core_effect_acknowledgement_v1(&body, &data, trading)
+            .expect("the landed acknowledgement validates for the envelope it was signed with");
+
+        // The producer is compared, so another role's id refuses.
+        authenticate_core_effect_acknowledgement_v1(
+            &body,
+            &data,
+            "2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM",
+        )
+        .expect_err("Core is not the role program this acknowledgement names");
+
+        // The digest is over the exact signed bytes, so one flipped byte of
+        // the role request refuses -- this is the arm that would pass if the
+        // recipe were wrong and only agreed with itself.
+        let mut tampered = data.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        authenticate_core_effect_acknowledgement_v1(&body, &tampered, trading)
+            .expect_err("a changed role request changes the full-effect digest");
+
+        // And a truncated tail is refused by the envelope's own declared width
+        // rather than by a hash that happens not to match.
+        let short = &data[..data.len() - 1];
+        let refusal = authenticate_core_effect_acknowledgement_v1(&body, short, trading)
+            .expect_err("a short role request is not the width the envelope declares");
+        assert!(
+            refusal.0.contains("role-request tail"),
+            "{}",
+            refusal.0
+        );
+
+        // The declaration this all hangs on: the stage says acknowledgement,
+        // never authored bytes.
+        let declared = durable_return_data_v1(&ExpectedReturnDataV1::CoreEffectAcknowledgement {
+            producer: Pubkey::from_str(trading).expect("trading"),
+        });
+        declared.authenticate_shape_v1().expect("the shape is one of two");
+        assert!(declared.body_base64.is_none() && declared.core_effect_acknowledgement);
+        let observed = json!({"returnData": {
+            "programId": trading,
+            "data": [LANDED_CLOSE_ACKNOWLEDGEMENT_V1, "base64"],
+        }});
+        authenticate_terminal_return_data_v1(&observed, Some(&declared), &data)
+            .expect("the declared acknowledgement certifies the landed return data");
     }
 
     /// A closure receipt whose only interesting field is its clock.
@@ -12372,11 +12802,12 @@ mod tests {
         entry.data_sha256 = sha256_hex(&body);
         reconciled.expected_return_data = Some(DurableReturnDataV1 {
             producer: key(9).to_string(),
-            body_base64: BASE64.encode(&body),
-            body_sha256: sha256_hex(&body),
+            body_base64: Some(BASE64.encode(&body)),
+            body_sha256: Some(sha256_hex(&body)),
             execution_clock: None,
+            core_effect_acknowledgement: false,
         });
-        authenticate_terminal_reconciliation_scope_v1(&unchanged, &reconciled, &receipt)
+        authenticate_terminal_reconciliation_scope_v1(&unchanged, &reconciled, Some(&receipt))
             .expect("re-deriving one poststate and its return is the whole permitted act");
 
         // A SECOND poststate moved, and it refuses -- this is the guard that
@@ -12387,7 +12818,7 @@ mod tests {
             .get_mut(&key(1).to_string())
             .expect("the fixture declares the payer poststate")
             .lamports_after_fee -= 1;
-        let error = authenticate_terminal_reconciliation_scope_v1(&unchanged, &widened, &receipt)
+        let error = authenticate_terminal_reconciliation_scope_v1(&unchanged, &widened, Some(&receipt))
             .expect_err("a second poststate is outside the act");
         assert!(
             error
@@ -12399,7 +12830,7 @@ mod tests {
         // And so does a message byte, which is the half that was signed.
         let mut resigned = reconciled;
         resigned.message_sha256 = sha256_hex(b"another message");
-        authenticate_terminal_reconciliation_scope_v1(&unchanged, &resigned, &receipt)
+        authenticate_terminal_reconciliation_scope_v1(&unchanged, &resigned, Some(&receipt))
             .expect_err("the signed message is never a prediction");
     }
 
@@ -12415,15 +12846,17 @@ mod tests {
             slot: 493_003_631,
             deployment_program_id: key(3).to_string(),
             deployment_elf_sha256: "24af8504".into(),
-            rule: "LiveRentSysvar".into(),
-            rent_sysvar_sha256: "f00d".into(),
-            receipt_account: key(4).to_string(),
-            prior_ledger_rent_lamports: 2_482_536,
-            prior_ledger_lamport_surplus: 0,
-            ledger_rent_lamports: 1_991_360,
-            ledger_lamport_surplus: 491_176,
-            execution_clock_offset: 400,
             declared_return_data: true,
+            closure_rent: Some(DurableReconciledClosureRentV1 {
+                rule: "LiveRentSysvar".into(),
+                rent_sysvar_sha256: "f00d".into(),
+                receipt_account: key(4).to_string(),
+                prior_ledger_rent_lamports: 2_482_536,
+                prior_ledger_lamport_surplus: 0,
+                ledger_rent_lamports: 1_991_360,
+                ledger_lamport_surplus: 491_176,
+                execution_clock_offset: 400,
+            }),
         };
         let own = signed
             .expected_signature

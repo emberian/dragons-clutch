@@ -36,6 +36,18 @@
     {
       "signature": "4dCjMyG4abKhHQVXzfjwfwk8GHcDvoGCBvv2nafu9PyR9rQPo6k6TFGMzAQa89sQUdTAsS61uDbn5CPdjLCDKcgM",
       "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "38XaHrUjwAgZQmfZjLmZ24yWyZr9BX11aEUSfdyNLdPqWTykvQfitQbttfrUNM9KpXTkte5Ni31gfrdES1VHgwLH",
+      "reason": "devnet has no finalized transaction with this signature"
+    },
+    {
+      "signature": "vw9zdDn3TMioU3xti3SHJmkkc26Dnxqyw4XogdtZS3yUyQXR1Vyb6uAyaaRqkwmDeBwTazVYKoMB9CXNDRQE7vx",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "2ne4KgkvMLqgrVNAmne9Vfe8MoMTerg67gTNB9GANaLoSRH1B1uN9efzKStnvesh7XUjqxm5x83Vr6GxS8CQKxNb",
+      "reason": "devnet has no finalized transaction with this signature"
     }
   ],
   "records": [
@@ -823,7 +835,104 @@
         "custody/process_instruction"
       ],
       "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-closecapability-494169472",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "JZ1pwcJqXkGj8cGQnhwhjVa6AiJiXcCCXcevaYaYwH9qPVwvd47NyFTpN9SYTba9de7xvTkbU41xMu3Si4dvjga",
+      "instruction_data_len": 528,
+      "routes": [
+        "core/capability::process#CloseCapability",
+        "core/process_instruction",
+        "core/process_instruction#CloseCapability",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 9 = `Action::CloseCapability`, which selects core/capability::process#CloseCapability, core/process_instruction#CloseCapability. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "CloseCapability",
+        "tag": 9,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/found::process#Found",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on `Action::Found`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/resolution::process#Retire",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on `Action::AdmitTerminal`, `Action::Retire`, `Action::VerifyReadiness`"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 9 = `Action::CloseCapability` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 494169472,
+      "compute_units": 500929,
+      "programs_invoked": [
+        "core",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "core/capability::process#CloseCapability",
+        "core/process_instruction",
+        "core/process_instruction#CloseCapability",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dclrfcq1-494176359",
+      "magic": "DCLRFCQ1",
+      "program": "resolution",
+      "outcome": "executed",
+      "signature": "ugKnUgZmpUT6nXNT7QmfdyFN3KwTxvoqZYzKMUk4V2fU2LfAMoGKLdpyFXnrvvAMqYyUhpLtXwaWC8Qk9ujgSNG",
+      "instruction_data_len": 472,
+      "routes": [
+        "resolution/core_effect::process_direct_funding_close_v1",
+        "resolution/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to resolution begins with DCLRFCQ1, and the tree dispatches resolution/core_effect::process_direct_funding_close_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 494176359,
+      "compute_units": 256399,
+      "programs_invoked": [
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "resolution/core_effect::process_direct_funding_close_v1",
+        "resolution/process_instruction"
+      ],
+      "not_corroborated": []
     }
   ],
-  "corroborated_route_count": 17
+  "corroborated_route_count": 18
 }
