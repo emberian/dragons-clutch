@@ -10050,14 +10050,19 @@ fn derive_founding_poststate_expectation_v1(
     // the SAME Position had no way to ask for it and reported `VIOLATED L3`
     // against cohort-16.1's correct founding
     // (`docs/evidence/COHORT161_UPGRADED_SEALED_2026_09_05.md`, the 2026-09-05
-    // PROGRAMS-17B addendum). `ledger::failure_escrow_v1` is now the sole host
-    // spelling and both callers ask it.
-    let escrow = crate::ledger::failure_escrow_v1(
+    // PROGRAMS-17B addendum).
+    //
+    // It calls the author directly rather than through `crate::ledger`: this
+    // file is compiled into THREE campaigns and only one of them has a `ledger`
+    // module, so the path through it was a build failure in the other two from
+    // the moment the derivation moved out of the journey census (`bc9f9b4d6`).
+    let escrow = dclutch_claims::protocol_position_v2::failure_escrow_v1(
         claims_program,
         coordinates.market.to_bytes(),
         aggregate,
         claim_count,
-    )?;
+    )
+    .map_err(|error| Error::new(format!("failure escrow: {error}")))?;
     let escrow_position = escrow.position;
     let escrow_admission = escrow.admission;
     let aggregate_width =

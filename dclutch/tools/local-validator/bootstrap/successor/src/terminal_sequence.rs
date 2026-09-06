@@ -4971,7 +4971,8 @@ pub(crate) fn plan_core_begin_retiring_from_chain_v1(
     // another Market's escrow, and it costs one bounded read on a path that runs
     // once per retirement.
     let aggregate_account = account(aggregate, "Claims aggregate")?;
-    let escrow_observation = failure_escrow_observation_v1(rpc, claims, aggregate, &aggregate_account)?;
+    let escrow_observation =
+        failure_escrow_observation_v1(rpc, claims, aggregate, &aggregate_account)?;
     authenticate_zero_claims(
         &aggregate_account,
         aggregate,
@@ -6732,6 +6733,20 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         rent_programdata: account(28, "aggregate Rent ProgramData")?,
         rent_sysvar: account(29, "aggregate Rent sysvar")?,
         refund_wallet: account(30, "aggregate refund wallet")?,
+        // OWED, and named rather than defaulted. Decision 0025's closure burn
+        // needs the escrow Position, its admission and the linked basis record
+        // in the retirement's frame, and this devnet path can derive the first
+        // two off the aggregate it already reads
+        // (`dclutch_claims::protocol_position_v2::failure_escrow_v1`) but has
+        // no route to the third: the linked basis record's address is carried
+        // by the founding producer, not by the terminal evidence this function
+        // is given. Until that argument is threaded, a devnet retirement of a
+        // refunding Market builds the thirty-five-account plan and the chain
+        // refuses it with `0x5503` -- which is exactly the wall this path had
+        // before, refused by name rather than mis-built. Cohort-17.
+        failure_escrow_position: None,
+        failure_escrow_admission: None,
+        linked_basis_record: None,
     };
     let mut prestate = snapshot.accounts.values().cloned().collect::<Vec<_>>();
     prestate.sort_unstable_by_key(|account| account.key);

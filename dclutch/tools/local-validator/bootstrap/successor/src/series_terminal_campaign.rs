@@ -40,12 +40,10 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-};
 use dclutch_core_contract::ContentId;
-use dclutch_market::execution_strategy::shadow_v3::ShadowRequestV3;
 use dclutch_market::CoreState;
+use dclutch_market::capability_program::{CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1};
+use dclutch_market::execution_strategy::shadow_v3::ShadowRequestV3;
 use dclutch_market::{SeriesCoreRequestV1, SeriesPermitExpiryRequestV1};
 use dclutch_market_retirement_v1_operator::{
     MarketRetirementSnapshotV1, build_checkpoint_market_retirement_v1,
@@ -2703,6 +2701,20 @@ fn market_retirement_snapshot_from_durable_v1(
             observation,
         )
     };
+    let optional_account =
+        |role: &str| -> Result<Option<dclutch_market_retirement_v1_operator::ObservedAccount>> {
+            let Some(address) = durable.role_addresses.get(role) else {
+                return Ok(None);
+            };
+            durable_retirement_observed_account_v1(
+                durable
+                    .accounts
+                    .get(address)
+                    .ok_or_else(|| refusal(format!("Series retirement omitted account {role}")))?,
+                observation,
+            )
+            .map(Some)
+        };
     Ok(MarketRetirementSnapshotV1 {
         market: account("market")?,
         rent_credit: account("rent-credit")?,
@@ -2735,6 +2747,13 @@ fn market_retirement_snapshot_from_durable_v1(
         rent_programdata: account("rent-programdata")?,
         rent_sysvar: account("rent-sysvar")?,
         refund_wallet: account("refund-wallet")?,
+        // The escrow tail decision 0025's closure burn needs. A durable Series
+        // capture taken before shape A shipped carries none of the three roles
+        // and retires exactly as it did; a refunding Market's capture carries
+        // all three and the closure discharges its failure column.
+        failure_escrow_position: optional_account("failure-escrow-position")?,
+        failure_escrow_admission: optional_account("failure-escrow-admission")?,
+        linked_basis_record: optional_account("linked-basis-record")?,
     })
 }
 

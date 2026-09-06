@@ -4,7 +4,10 @@
 #![deny(missing_docs)]
 
 use dclutch_claims::{
-    liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2, read_claim_v2,
+    },
     market_closure_v1::{
         CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
         CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1,
@@ -12,6 +15,7 @@ use dclutch_claims::{
         ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestInputV1,
         ClaimsMarketClosureRequestV1,
     },
+    protocol_position_v2::{ProtocolPositionAdmissionSeedsV2, ProtocolPositionSeedsV2},
     retirement_checkpoint_handoff_v1::{
         CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
         ClaimsRetirementCheckpointHandoffReceiptV1, ClaimsRetirementCheckpointHandoffRequestV1,
@@ -36,6 +40,8 @@ use dclutch_market::{
     RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1, RETIREMENT_ROLE_COUNT_V1, Request,
     RetirementBundleInputV1, RetirementBundleV1, STATE_BYTES,
 };
+use dclutch_product::economic_slice::refunding_failure_index;
+use dclutch_product::payoff::runtime_v3::{ProductBasisV3, semantic_basis_id_v3};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, ExecutionRoleBindingV1, ExecutionRoleV1,
@@ -156,6 +162,40 @@ pub struct MarketRetirementSnapshotV1 {
     pub rent_sysvar: ObservedAccount,
     /// Immutable lifecycle refund wallet.
     pub refund_wallet: ObservedAccount,
+    /// A refunding Market's failure-escrow Position, when it has one.
+    ///
+    /// Decision 0025 seats a refunding complete set's failure coordinate in a
+    /// Position derived from the Market and held by nobody, and no certificate
+    /// pays it -- so a Market carrying one cannot retire until the closure
+    /// burns it. These three are what the burn needs in frame, and the caller
+    /// finds them by deriving the escrow off the aggregate
+    /// (`dclutch_claims::protocol_position_v2::failure_escrow_v1`) and reading
+    /// the Market's linked basis record.
+    ///
+    /// `None` on all three is a categorical Market, or a refunding one whose
+    /// column was never seated, and the retirement built from it is the exact
+    /// thirty-five-account one that shipped. All three or none: half a tail is
+    /// a shape neither program accepts.
+    pub failure_escrow_position: Option<ObservedAccount>,
+    /// That Position's protocol-Position admission record.
+    pub failure_escrow_admission: Option<ObservedAccount>,
+    /// The Market's linked `ProductBasisV3` record.
+    pub linked_basis_record: Option<ObservedAccount>,
+}
+
+/// What a snapshot's escrow tail resolves to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FailureEscrowStateV1 {
+    /// No escrow tail: the retirement is the categorical one.
+    Vacant,
+    /// A live Claims-owned escrow holding this quantity at the failure
+    /// coordinate, with the record and the two accounts to discharge it.
+    Seated {
+        /// Failure-coordinate units the closure will burn.
+        residue: u64,
+        /// Rent the escrow pair surrenders to the aggregate at closure.
+        rent: u64,
+    },
 }
 
 /// Exact unsigned retirement transaction constructed solely from finalized state.
@@ -183,6 +223,16 @@ pub struct MarketRetirementReportV1 {
     pub expected_refund_delta: u64,
     /// Runtime Claims width; never assumed equal to a compile-time `N`.
     pub claim_count: u32,
+    /// Whether this Market's failure column sits in its derived escrow.
+    ///
+    /// TRUE means this instruction cannot be submitted. The one-shot route's
+    /// Core frame is fixed at thirty-five accounts, so it carries no escrow
+    /// tail and the Claims closure inside it reaches the supply loop with the
+    /// column still standing -- `ClaimsMarketClosureSbfErrorV1::Liability`,
+    /// `0x5503`. Decision 0025's shape A discharges the column in the
+    /// checkpointed route, and `build_checkpoint_market_retirement_v1` is where
+    /// a refunding Market retires.
+    pub failure_escrow_seated: bool,
     /// Exact Registry continuation header.
     pub continuation: RegistryContinuationRequestV1,
 }
@@ -202,6 +252,16 @@ pub struct CheckpointMarketRetirementReportV1 {
     pub observation: Observation,
     /// Exact terminal refund wallet delta.
     pub expected_refund_delta: u64,
+    /// Failure-coordinate units the `prepare` packet's closure burns.
+    ///
+    /// Zero on a categorical Market and on a refunding one whose column was
+    /// never seated, and those two retirements carry the exact thirty-five
+    /// accounts that shipped. Nonzero means the four packets carry the escrow
+    /// tail and the first one discharges a column no certificate pays
+    /// (decision 0025's shape A).
+    pub burned_failure_units: u64,
+    /// Rent the escrow pair surrenders to the checkpoint at closure.
+    pub failure_escrow_rent_lamports: u64,
 }
 
 /// Stable refusal from chain observation, semantic join, or instruction construction.
@@ -264,6 +324,7 @@ struct AuthenticatedRetirementV1 {
     source: ResolutionRetirementReceiptFactsV3,
     claims: LiabilityBasisMarketViewV2,
     replay: CustodyReplayV1,
+    escrow: FailureEscrowStateV1,
 }
 
 /// Construct the sole canonical aggregate-retirement transaction from one
@@ -488,6 +549,11 @@ pub fn build_market_retirement_v1(
             close_vault_authority,
             close_replay_authority,
             rent_close_authority,
+            // The one-shot route's frame is fixed at thirty-five in Core's own
+            // `parse`, so it carries no escrow tail and cannot discharge a
+            // seated failure column. `failure_escrow_seated` on the report is
+            // how a caller is told that before submitting.
+            FailureEscrowStateV1::Vacant,
         ),
         data,
     };
@@ -508,6 +574,7 @@ pub fn build_market_retirement_v1(
         resolution_facts: authenticated.source,
         expected_refund_delta,
         claim_count: authenticated.claims.claim_count,
+        failure_escrow_seated: authenticated.escrow.seated(),
         continuation,
     })
 }
@@ -605,10 +672,19 @@ pub fn build_checkpoint_market_retirement_v1(
         .lamports
         .checked_add(snapshot.custody_replay.lamports)
         .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
+    // Core hashes `checkpoint.claims_refund_lamports()` in this slot and it is
+    // the aggregate's rent PLUS whatever the closure's escrow pair surrendered
+    // to it, so the projection has to grow with it or the derived
+    // `rent_close_authority` stops being the PDA Core will authenticate.
+    let claims_refund = snapshot
+        .claims_aggregate
+        .lamports
+        .checked_add(authenticated.escrow.rent())
+        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
     let expected_refund_delta = snapshot
         .rent_credit
         .lamports
-        .checked_add(snapshot.claims_aggregate.lamports)
+        .checked_add(claims_refund)
         .and_then(|value| value.checked_add(custody_refund))
         .and_then(|value| value.checked_add(snapshot.market.lamports))
         .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
@@ -622,7 +698,7 @@ pub fn build_checkpoint_market_retirement_v1(
         &vault_receipt_digest,
         &replay_receipt_digest,
         &snapshot.market.lamports.to_le_bytes(),
-        &snapshot.claims_aggregate.lamports.to_le_bytes(),
+        &claims_refund.to_le_bytes(),
         &custody_refund.to_le_bytes(),
         &expected_refund_delta.to_le_bytes(),
     ])
@@ -667,6 +743,7 @@ pub fn build_checkpoint_market_retirement_v1(
         close_vault_authority,
         close_replay_authority,
         rent_close_authority,
+        authenticated.escrow,
     );
     let mut prepare_data = Vec::with_capacity(CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1);
     prepare_data.extend_from_slice(&core_bytes);
@@ -732,6 +809,8 @@ pub fn build_checkpoint_market_retirement_v1(
         finish: direct(finish_data),
         observation: authenticated.observation,
         expected_refund_delta,
+        burned_failure_units: authenticated.escrow.residue(),
+        failure_escrow_rent_lamports: authenticated.escrow.rent(),
     })
 }
 
@@ -786,6 +865,7 @@ fn authenticate_snapshot(
     authenticate_rent(snapshot, market)?;
     let source = authenticate_resolution(snapshot, market)?;
     let claims = authenticate_claims(snapshot, market)?;
+    let escrow = authenticate_failure_escrow(snapshot, claims)?;
     let (replay, _) = authenticate_custody(snapshot, market, source)?;
     Ok(AuthenticatedRetirementV1 {
         observation,
@@ -793,11 +873,12 @@ fn authenticate_snapshot(
         source,
         claims,
         replay,
+        escrow,
     })
 }
 
-fn snapshot_accounts(snapshot: &MarketRetirementSnapshotV1) -> [&ObservedAccount; 31] {
-    [
+fn snapshot_accounts(snapshot: &MarketRetirementSnapshotV1) -> Vec<&ObservedAccount> {
+    let mut accounts = vec![
         &snapshot.market,
         &snapshot.rent_credit,
         &snapshot.activation_cache,
@@ -829,7 +910,17 @@ fn snapshot_accounts(snapshot: &MarketRetirementSnapshotV1) -> [&ObservedAccount
         &snapshot.rent_programdata,
         &snapshot.rent_sysvar,
         &snapshot.refund_wallet,
-    ]
+    ];
+    accounts.extend(
+        [
+            snapshot.failure_escrow_position.as_ref(),
+            snapshot.failure_escrow_admission.as_ref(),
+            snapshot.linked_basis_record.as_ref(),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    accounts
 }
 
 fn authenticate_release_set(
@@ -1151,16 +1242,164 @@ fn authenticate_claims(
     {
         return Err(MarketRetirementOperatorErrorV1::Claims);
     }
+    Ok(claims)
+}
+
+/// Resolve the snapshot's escrow tail and prove every aggregate supply the
+/// closure will not discharge is already zero.
+///
+/// # Why the zero-supply sweep moved here
+///
+/// It used to be an unconditional "every coordinate is zero", and on a
+/// refunding Market that is the WALL rather than a check: the failure column
+/// is unpayable under every certificate and its holder has no key, so a
+/// retirement built against it never gets built and the operator's reader is
+/// sent looking for a payout to produce. Decision 0025's shape A discharges it
+/// in the closure instead, so the rule is now "every ordinary coordinate is
+/// zero, and the failure coordinate is zero UNLESS the escrow in frame holds
+/// exactly it".
+///
+/// # What this does and does not authenticate
+///
+/// It authenticates the tail against the AGGREGATE: the pair is the canonical
+/// protocol-Position pair under the Position's own recorded owner, the Position
+/// joins this Market's aggregate at this width, it holds the failure column and
+/// nothing else, and the linked basis record reproduces the aggregate's own
+/// `basis_id` and says the Market refunds on failure.
+///
+/// It does NOT re-derive the escrow OWNER, and that is deliberate: whether that
+/// owner is the capability PDA at the failure selector is the rule the Claims
+/// program authenticates with `FailureEscrowIdentityV1::derive`, and the host
+/// spelling of it has one author the CALLER uses
+/// (`dclutch_claims::protocol_position_v2::failure_escrow_v1`) to find these
+/// three accounts in the first place. A caller that hands this builder some
+/// other canonical Position gets a plan the chain refuses by name
+/// (`ClaimsSbfError::FailureEscrow`, `0x5010`), not a plan that succeeds.
+fn authenticate_failure_escrow(
+    snapshot: &MarketRetirementSnapshotV1,
+    claims: LiabilityBasisMarketViewV2,
+) -> Result<FailureEscrowStateV1, MarketRetirementOperatorErrorV1> {
+    let (position_account, admission_account, basis_account) = match (
+        snapshot.failure_escrow_position.as_ref(),
+        snapshot.failure_escrow_admission.as_ref(),
+        snapshot.linked_basis_record.as_ref(),
+    ) {
+        (Some(position), Some(admission), Some(basis)) => (position, admission, basis),
+        (None, None, None) => {
+            for claim in 0..claims.claim_count {
+                if claims
+                    .supply(&snapshot.claims_aggregate.data, claim)
+                    .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?
+                    != 0
+                {
+                    return Err(MarketRetirementOperatorErrorV1::Claims);
+                }
+            }
+            return Ok(FailureEscrowStateV1::Vacant);
+        }
+        // Half a tail is not a shape either program accepts, and refusing it
+        // here keeps "the frame is thirty-eight accounts" a property of the
+        // snapshot rather than of which of three reads happened to return.
+        _ => return Err(MarketRetirementOperatorErrorV1::Frame),
+    };
+    let failure_selector = u32::try_from(
+        refunding_failure_index(claims.claim_count)
+            .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?;
+    let basis = ProductBasisV3::decode(&basis_account.data)
+        .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?;
+    let semantic = semantic_basis_id_v3(&basis_account.data)
+        .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?;
+    if semantic != claims.basis_id
+        || basis.basis_width() != claims.claim_count
+        || !basis.refunds_on_failure()
+    {
+        return Err(MarketRetirementOperatorErrorV1::Claims);
+    }
+    let position = LiabilityBasisPositionViewV2::decode(&position_account.data)
+        .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?;
+    let expected_position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(snapshot.claims_aggregate.key.to_bytes(), position.owner)
+            .map_err(|_| MarketRetirementOperatorErrorV1::Frame)?
+            .as_slices(),
+        &snapshot.claims_program.key,
+    )
+    .0;
+    let expected_admission = Pubkey::find_program_address(
+        &ProtocolPositionAdmissionSeedsV2::new(
+            snapshot.claims_aggregate.key.to_bytes(),
+            position.owner,
+        )
+        .map_err(|_| MarketRetirementOperatorErrorV1::Frame)?
+        .as_slices(),
+        &snapshot.claims_program.key,
+    )
+    .0;
+    if position_account.owner != snapshot.claims_program.key
+        || admission_account.owner != snapshot.claims_program.key
+        || position_account.key != expected_position
+        || admission_account.key != expected_admission
+        || admission_account.data.is_empty()
+        || position.market_account != snapshot.claims_aggregate.key.to_bytes()
+        || position.basis_id != claims.basis_id
+        || position.claim_count != claims.claim_count
+    {
+        return Err(MarketRetirementOperatorErrorV1::Claims);
+    }
+    let mut residue = 0;
     for claim in 0..claims.claim_count {
-        if claims
+        let supply = claims
             .supply(&snapshot.claims_aggregate.data, claim)
-            .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?
-            != 0
-        {
+            .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?;
+        let held = read_claim_v2(
+            &position_account.data,
+            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+            claims.claim_count,
+            claim,
+        )
+        .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?;
+        if claim == failure_selector {
+            // The residue rule as an EQUALITY against the escrow's own balance.
+            // A Market whose failure column is only partly in the escrow has the
+            // rest of it in hands that can be paid, and that is an outstanding
+            // liability rather than a residue.
+            if supply == 0 || supply != held {
+                return Err(MarketRetirementOperatorErrorV1::Claims);
+            }
+            residue = supply;
+        } else if supply != 0 || held != 0 {
             return Err(MarketRetirementOperatorErrorV1::Claims);
         }
     }
-    Ok(claims)
+    let rent = position_account
+        .lamports
+        .checked_add(admission_account.lamports)
+        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
+    Ok(FailureEscrowStateV1::Seated { residue, rent })
+}
+
+impl FailureEscrowStateV1 {
+    /// What the escrow's own accounts surrender to the aggregate at closure.
+    const fn rent(self) -> u64 {
+        match self {
+            Self::Vacant => 0,
+            Self::Seated { rent, .. } => rent,
+        }
+    }
+
+    /// Failure-coordinate units this retirement's closure burns.
+    const fn residue(self) -> u64 {
+        match self {
+            Self::Vacant => 0,
+            Self::Seated { residue, .. } => residue,
+        }
+    }
+
+    /// Whether the retirement's frames carry the escrow tail.
+    const fn seated(self) -> bool {
+        matches!(self, Self::Seated { .. })
+    }
 }
 
 fn authenticate_custody(
@@ -1226,6 +1465,9 @@ fn authenticate_custody(
             claims: LiabilityBasisMarketViewV2::decode(&snapshot.claims_aggregate.data)
                 .map_err(MarketRetirementOperatorErrorV1::LiabilityBasisState)?,
             replay,
+            // `custody_request` reads no Claims coordinate, so this local
+            // reconstruction of the authenticated snapshot never consults it.
+            escrow: FailureEscrowStateV1::Vacant,
         },
         OperationV1::CloseVault,
         [1; 32],
@@ -1467,6 +1709,16 @@ fn projected_claims_handoff_receipt(
         &snapshot.claims_aggregate.data,
     ])
     .to_bytes();
+    // What the checkpoint account holds after the handoff. The closure hands
+    // the escrow pair's rent to the aggregate rather than to a fourth account,
+    // so on a refunding Market this is strictly more than the aggregate came in
+    // with -- and it is the ONE number Core asserts, the receipt carries and
+    // `Finish` eventually pays the refund wallet.
+    let refund_lamports = snapshot
+        .claims_aggregate
+        .lamports
+        .checked_add(authenticated.escrow.rent())
+        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
     let post_resource_digest = hashv(&[
         CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
         snapshot.claims_aggregate.key.as_ref(),
@@ -1474,7 +1726,7 @@ fn projected_claims_handoff_receipt(
         AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1
             .to_le_bytes()
             .as_slice(),
-        snapshot.claims_aggregate.lamports.to_le_bytes().as_slice(),
+        refund_lamports.to_le_bytes().as_slice(),
         snapshot.rent_credit.lamports.to_le_bytes().as_slice(),
     ])
     .to_bytes();
@@ -1495,7 +1747,7 @@ fn projected_claims_handoff_receipt(
         pre_revision: authenticated.claims.revision,
         post_revision,
         liability_units: 0,
-        refund_lamports: snapshot.claims_aggregate.lamports,
+        refund_lamports,
         claim_count: authenticated.claims.claim_count,
     })
     .map_err(MarketRetirementOperatorErrorV1::ClaimsMarketClosure)
@@ -1613,14 +1865,22 @@ fn caller_authority(
     Ok(Pubkey::find_program_address(&seeds.as_slices(), &core_program).0)
 }
 
+/// The Core retirement frame, and the escrow tail a refunding Market adds.
+///
+/// The tail is TRAILING and appended for the whole retirement rather than per
+/// packet: `aggregate_retirement_journal.rs` requires the four checkpoint
+/// operations to present an identical account frame, so the packets that never
+/// read the escrow carry it anyway. A categorical Market's retirement is the
+/// exact thirty-five metas that shipped, in the exact order.
 fn core_accounts(
     snapshot: &MarketRetirementSnapshotV1,
     claims_authority: Pubkey,
     close_vault_authority: Pubkey,
     close_replay_authority: Pubkey,
     rent_close_authority: Pubkey,
+    escrow: FailureEscrowStateV1,
 ) -> Vec<AccountMeta> {
-    vec![
+    let mut accounts = vec![
         AccountMeta::new(snapshot.market.key, false),
         AccountMeta::new(snapshot.rent_credit.key, false),
         AccountMeta::new_readonly(snapshot.activation_cache.key, false),
@@ -1656,7 +1916,20 @@ fn core_accounts(
         AccountMeta::new_readonly(snapshot.rent_sysvar.key, false),
         AccountMeta::new(snapshot.refund_wallet.key, false),
         AccountMeta::new_readonly(rent_close_authority, false),
-    ]
+    ];
+    if let (true, Some(position), Some(admission), Some(basis)) = (
+        escrow.seated(),
+        snapshot.failure_escrow_position.as_ref(),
+        snapshot.failure_escrow_admission.as_ref(),
+        snapshot.linked_basis_record.as_ref(),
+    ) {
+        accounts.extend_from_slice(&[
+            AccountMeta::new(position.key, false),
+            AccountMeta::new(admission.key, false),
+            AccountMeta::new_readonly(basis.key, false),
+        ]);
+    }
+    accounts
 }
 
 fn wrap_registry_continuation(

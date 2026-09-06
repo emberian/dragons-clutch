@@ -2508,6 +2508,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody",
  "dclutch-market",
+ "dclutch-product",
  "dclutch-registry",
  "dclutch-resolution-core-v3-operator",
  "dclutch-source",

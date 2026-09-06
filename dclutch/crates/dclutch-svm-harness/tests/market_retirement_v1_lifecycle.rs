@@ -4,14 +4,25 @@ include!("resolution_core_v3_lifecycle.rs");
 
 use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-    LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2,
-    encode_liability_basis_market_into_v2, liability_basis_vector_width_v2,
+    LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
+    LiabilityBasisMarketViewV2, LiabilityBasisPositionInputV2,
+    encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
+    liability_basis_vector_width_v2,
+};
+use dclutch_claims::protocol_position_v2::{
+    FailureEscrowV1, ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2,
+    ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
+    ProtocolPositionRequestV2, ProtocolPositionSeedsV2, failure_escrow_v1,
 };
 use dclutch_market_retirement_v1_operator::{
     CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, CHECKPOINT_RETIREMENT_FINISH_BYTES_V1,
     CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1, MarketRetirementOperatorErrorV1,
     MarketRetirementSnapshotV1, ResolutionRetirementReceiptFactsV3,
     build_checkpoint_market_retirement_v1, build_market_retirement_v1,
+};
+use dclutch_product::payoff::runtime_v3::{
+    BasisInputV3, BasisKindV3, ProductBasisV3, basis_record_bytes_v3, compile_basis_v3,
+    semantic_basis_id_v3,
 };
 use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
@@ -38,6 +49,9 @@ use spl_token_interface::state::{Account as SplAccount, AccountState};
 /// written: a band move must break this reading rather than relabel it.
 const CHECKPOINT_PREPARE_SEATED_RESIDUE_REFUSAL_V1: u32 =
     dclutch_claims_sbf::market_closure_v1::ClaimsMarketClosureSbfErrorV1::Liability as u32;
+
+/// Runtime width of this campaign's Claims aggregate.
+const RETIREMENT_CLAIM_COUNT: u32 = 5;
 
 /// This campaign's OWN Claims and Trading programs, and its own release set.
 ///
@@ -347,7 +361,6 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         &JOINED_CLAIMS_PROGRAM_ID,
     )
     .0;
-    const RETIREMENT_CLAIM_COUNT: u32 = 5;
     let mut aggregate_bytes = vec![
         0;
         liability_basis_vector_width_v2(
@@ -591,6 +604,13 @@ async fn retirement_operator_snapshot(
     context: &mut ProgramTestContext,
     fixture: &JoinedFixture,
 ) -> MarketRetirementSnapshotV1 {
+    let escrow = failure_escrow_v1(
+        JOINED_CLAIMS_PROGRAM_ID,
+        fixture.base.market.to_bytes(),
+        fixture.claims_aggregate,
+        RETIREMENT_CLAIM_COUNT,
+    )
+    .expect("this campaign's width seats a failure coordinate");
     MarketRetirementSnapshotV1 {
         market: required_observed(context, fixture.base.market).await,
         rent_credit: required_observed(context, fixture.base.rent_credit).await,
@@ -629,7 +649,44 @@ async fn retirement_operator_snapshot(
         rent_programdata: required_observed(context, fixture.rent_programdata).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
         refund_wallet: required_observed(context, fixture.refund_wallet).await,
+        // Derived rather than declared, and OBSERVED rather than assumed: on a
+        // categorical prestate the three addresses hold nothing, `observed`
+        // returns `None`, and the plan is the exact thirty-five-account one
+        // that shipped. On the refunding prestate below they are live and the
+        // plan grows the escrow tail decision 0025's burn needs.
+        failure_escrow_position: observed_or_none(context, escrow.position).await,
+        failure_escrow_admission: observed_or_none(context, escrow.admission).await,
+        linked_basis_record: observed_or_none(context, linked_basis_record(fixture.base.market))
+            .await,
     }
+}
+
+/// This campaign's linked `ProductBasisV3` record address.
+///
+/// Not a PDA of any program: the harness plants the record itself, and the
+/// closure's join to it is CONTENT-addressed -- the aggregate's `basis_id` is
+/// the record's own semantic identity -- so the address is free and the bytes
+/// are not.
+fn linked_basis_record(market: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[b"dclutch/harness/linked-basis/v1", market.as_ref()],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0
+}
+
+/// One observation, or `None` when the address holds nothing at all.
+///
+/// `observed_or_vacant` is the wrong shape for the escrow tail: a vacant
+/// observation still occupies a key in the snapshot's alias sweep and would
+/// claim the Market HAS an escrow whose accounts are empty. Absence is `None`.
+async fn observed_or_none(
+    context: &mut ProgramTestContext,
+    key: Pubkey,
+) -> Option<dclutch_market_retirement_v1_operator::ObservedAccount> {
+    observed(context, key)
+        .await
+        .map(|account| into_observed(key, account))
 }
 
 async fn retirement_instruction(
@@ -1374,6 +1431,793 @@ async fn a_seated_failure_column_refuses_the_claims_handoff_by_name() {
         before,
         "the refusal is byte and lamport atomic: no checkpoint, no handoff, no refund"
     );
+}
+
+/// Failure-coordinate units cohort-16.1's founding seated in its escrow.
+const SEATED_RESIDUE_V1: u64 = 166_666_667;
+
+/// Plant the state a REFUNDING Market is in when terminal settlement is done.
+///
+/// Every ordinary coordinate paid and gone; the failure column standing at the
+/// quantity the founding seated, in the Position the MARKET derives and nobody
+/// holds a key to; that Position's admission beside it; and the linked
+/// `ProductBasisV3` record that says the column is owed nothing under every
+/// certificate.
+///
+/// The aggregate's `basis_id` is rewritten to the record's own semantic
+/// identity rather than the record being built to match a declared id, because
+/// that is the direction the join runs: `semantic_basis_id_v3` is the content
+/// address a founding commits to, and the closure re-derives it from the bytes
+/// it is handed. A test that declared both independently would pass while
+/// proving nothing about the join.
+///
+/// Returns the escrow's addresses and the rent its pair holds.
+async fn seed_refunding_failure_escrow_v1(
+    context: &mut ProgramTestContext,
+    fixture: &JoinedFixture,
+) -> (FailureEscrowV1, u64) {
+    let escrow = failure_escrow_v1(
+        JOINED_CLAIMS_PROGRAM_ID,
+        fixture.base.market.to_bytes(),
+        fixture.claims_aggregate,
+        RETIREMENT_CLAIM_COUNT,
+    )
+    .expect("a width that seats a failure coordinate");
+    assert_eq!(
+        escrow.failure_selector,
+        RETIREMENT_CLAIM_COUNT - 1,
+        "the failure coordinate is the kernel's, not this test's"
+    );
+
+    // A categorical basis that refunds on failure: `payout_scale` is
+    // `basis_width - 1`, which is the sole author's rule and the only thing
+    // that distinguishes this record from the legacy `Q = 1` shape.
+    let mut basis_bytes = vec![
+        0;
+        basis_record_bytes_v3(
+            BasisKindV3::CategoricalQ1,
+            RETIREMENT_CLAIM_COUNT as usize,
+            0,
+            0
+        )
+        .expect("categorical record width")
+    ];
+    compile_basis_v3(
+        BasisInputV3 {
+            kind: BasisKindV3::CategoricalQ1,
+            product_id: [0xb1; 32],
+            result_domain_id: [0xb2; 32],
+            coordinate_domain_id: [0xb3; 32],
+            result_unit_id: [0xb4; 32],
+            evaluator_release_id: [0xb5; 32],
+            basis_width: RETIREMENT_CLAIM_COUNT,
+            payout_scale: u64::from(RETIREMENT_CLAIM_COUNT - 1),
+            knot_denominator: 1,
+            knots: &[],
+            terms: &[],
+            failure_payouts: &[],
+            price_gate_certificate_digest: [0; 32],
+        },
+        &mut basis_bytes,
+    )
+    .expect("a refunding categorical basis record");
+    let semantic_basis_id = semantic_basis_id_v3(&basis_bytes).expect("semantic basis identity");
+    assert!(
+        ProductBasisV3::decode(&basis_bytes)
+            .expect("record decodes")
+            .refunds_on_failure(),
+        "the fixture is only a fixture for this decision if the record refunds"
+    );
+    set_account(
+        context,
+        linked_basis_record(fixture.base.market),
+        protocol_account(REGISTRY_PROGRAM_ID, basis_bytes),
+    );
+
+    // The aggregate terminal settlement leaves behind.
+    let raw = observed(context, fixture.claims_aggregate)
+        .await
+        .expect("planted aggregate");
+    let view = LiabilityBasisMarketViewV2::decode(&raw.data).expect("aggregate decodes");
+    let mut supplies = vec![0_u64; RETIREMENT_CLAIM_COUNT as usize];
+    supplies[escrow.failure_selector as usize] = SEATED_RESIDUE_V1;
+    let mut aggregate_bytes = vec![
+        0;
+        liability_basis_vector_width_v2(
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            RETIREMENT_CLAIM_COUNT,
+        )
+        .expect("aggregate width")
+    ];
+    encode_liability_basis_market_into_v2(
+        LiabilityBasisMarketInputV2 {
+            revision: view.revision,
+            logical_market: view.logical_market,
+            release_set: view.release_set,
+            registry_program: view.registry_program,
+            product_instance_id: view.product_instance_id,
+            basis_id: semantic_basis_id,
+            realm_id: view.realm_id,
+            custody_context: view.custody_context,
+            generation: view.generation,
+        },
+        &supplies,
+        &mut aggregate_bytes,
+    )
+    .expect("aggregate carrying the seated residue");
+    set_account(
+        context,
+        fixture.claims_aggregate,
+        Account {
+            data: aggregate_bytes,
+            ..raw
+        },
+    );
+
+    // The escrow's own Position, holding the column and nothing else.
+    let mut position_bytes = vec![
+        0;
+        liability_basis_vector_width_v2(
+            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+            RETIREMENT_CLAIM_COUNT,
+        )
+        .expect("position width")
+    ];
+    encode_liability_basis_position_into_v2(
+        LiabilityBasisPositionInputV2 {
+            revision: 1,
+            market_account: fixture.claims_aggregate.to_bytes(),
+            owner: escrow.owner.to_bytes(),
+            basis_id: semantic_basis_id,
+        },
+        &supplies,
+        &mut position_bytes,
+    )
+    .expect("the escrow's seated Position");
+    set_account(
+        context,
+        escrow.position,
+        protocol_account(JOINED_CLAIMS_PROGRAM_ID, position_bytes),
+    );
+
+    // Its admission record, in the shape a founding writes: a ClaimsCapability
+    // owner at this Market's failure descriptor and coordinate.
+    let admission_request = ProtocolPositionRequestV2::new(ProtocolPositionRequestV2 {
+        action: ProtocolPositionActionV2::Admit,
+        owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
+        presence: ProtocolPositionPresenceV2::Vacant,
+        release_set: fixture.base.release_set,
+        market: fixture.base.market.to_bytes(),
+        position_owner: escrow.owner.to_bytes(),
+        parent_request_digest: [0xc1; 32],
+        rent_credit: fixture.base.rent_credit.to_bytes(),
+        rent_program: RENT_PROGRAM_ID.to_bytes(),
+        generation: GENERATION,
+        expected_market_revision: CLAIMS_REVISION,
+        expected_position_revision: 0,
+        observed_position_lamports: 1,
+        observed_admission_lamports: 1,
+        position_rent_principal: 1,
+        admission_rent_principal: 1,
+        capability_descriptor: fixture.base.market.to_bytes(),
+        capability_outcome: escrow.failure_selector,
+    })
+    .expect("escrow admission request");
+    let admission = ProtocolPositionAdmissionV2::new(
+        admission_request,
+        ProtocolPositionAdmissionEvidenceV2 {
+            product_record_digest: [0xc2; 32],
+            semantic_basis_id,
+            linked_basis_record_digest: [0xc3; 32],
+            request_digest: [0xc4; 32],
+            claims_program: JOINED_CLAIMS_PROGRAM_ID.to_bytes(),
+            trading_program: JOINED_TRADING_PROGRAM_ID.to_bytes(),
+            capability_descriptor: fixture.base.market.to_bytes(),
+            capability_outcome: escrow.failure_selector,
+            outcome_count: RETIREMENT_CLAIM_COUNT,
+        },
+    )
+    .expect("escrow admission");
+    set_account(
+        context,
+        escrow.admission,
+        protocol_account(
+            JOINED_CLAIMS_PROGRAM_ID,
+            admission
+                .to_state_bytes()
+                .expect("admission bytes")
+                .to_vec(),
+        ),
+    );
+    let rent = required_observed(context, escrow.position).await.lamports
+        + required_observed(context, escrow.admission).await.lamports;
+    (escrow, rent)
+}
+
+/// The four extents a refunding retirement's packets occupy.
+///
+/// Three more accounts than the categorical walk on every packet -- the escrow
+/// Position, its admission and the linked basis record -- and all four carry
+/// them, because `aggregate_retirement_journal.rs` requires the operations of
+/// one retirement to present an identical frame and the three suffix packets
+/// never read what they carry. The request bytes do not move at all: shape A is
+/// a FRAME change, not an ABI change, which is why a categorical retirement's
+/// four extents above are untouched.
+const REFUNDING_PREPARE_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_200,
+    v0_bytes: 1_089,
+    static_keys: 2,
+    loaded_addresses: 37,
+};
+
+const REFUNDING_CLOSE_VAULT_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_256,
+    v0_bytes: 1_145,
+    static_keys: 2,
+    loaded_addresses: 37,
+};
+
+const REFUNDING_CLOSE_REPLAY_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_256,
+    v0_bytes: 1_145,
+    static_keys: 2,
+    loaded_addresses: 37,
+};
+
+const REFUNDING_FINISH_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_136,
+    v0_bytes: 1_025,
+    static_keys: 2,
+    loaded_addresses: 37,
+};
+
+/// THE WALL, DISSOLVED: a refunding Market retires, on real ELFs, end to end.
+///
+/// This is the same fixture, the same four packets and the same assertions as
+/// `checkpointed_retirement_is_packet_bounded_resumable_and_conserving`, with
+/// ONE difference in the prestate: the failure column is standing in the escrow
+/// the founding seated, and the frame carries the three accounts that discharge
+/// it. Without them this exact state refuses `0x5503`
+/// (`a_seated_failure_column_refuses_the_claims_handoff_by_name`, which still
+/// builds the thirty-five-account plan against a zero aggregate and is the
+/// negative control for this test).
+///
+/// What it proves, in the order the chain proves it:
+///
+/// - the builder ADMITS a seated column now, where it refused `Claims`;
+/// - the four packets present one identical thirty-eight-account frame;
+/// - `prepare` burns the column, closes the escrow's Position and its
+///   admission, and hands their rent to the checkpoint -- so the aggregate's
+///   own supply loop, the conjunct that had been the wall, passes on the
+///   post-state of the burn rather than being relaxed;
+/// - the escrow's two accounts are GONE, not merely empty: a residue admitted
+///   without being burned would strand them and their rent forever;
+/// - the three remaining packets run unchanged and the Market reaches Retired;
+/// - and the refund wallet receives the escrow's rent along with everything
+///   else, to the lamport.
+#[tokio::test]
+async fn a_refunding_market_retires_once_the_closure_burns_its_failure_column() {
+    let (fixture, mut context) = joined_fixture().await;
+    seed_exact_retirement_prestate(&mut context, &fixture).await;
+    let (escrow, escrow_rent) = seed_refunding_failure_escrow_v1(&mut context, &fixture).await;
+
+    let snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    let plan = build_checkpoint_market_retirement_v1(&snapshot)
+        .expect("a seated failure column no longer forecloses the plan");
+    assert_eq!(
+        plan.burned_failure_units, SEATED_RESIDUE_V1,
+        "the plan says exactly what the closure will burn"
+    );
+    assert_eq!(plan.failure_escrow_rent_lamports, escrow_rent);
+    for instruction in [
+        &plan.prepare,
+        &plan.close_vault,
+        &plan.close_replay,
+        &plan.finish,
+    ] {
+        assert_eq!(
+            instruction.accounts.len(),
+            38,
+            "every packet of one retirement presents the same frame"
+        );
+    }
+    assert_eq!(
+        plan.prepare.accounts[35].pubkey, escrow.position,
+        "the escrow Position is the first trailing account"
+    );
+    assert_eq!(plan.prepare.accounts[36].pubkey, escrow.admission);
+    assert_eq!(
+        plan.prepare.accounts[37].pubkey,
+        linked_basis_record(fixture.base.market)
+    );
+    assert!(
+        plan.prepare.accounts[35].is_writable && plan.prepare.accounts[36].is_writable,
+        "the pair the closure closes is writable"
+    );
+    assert!(
+        !plan.prepare.accounts[37].is_writable,
+        "the record is read, never written"
+    );
+
+    let (table, addresses) = frozen_route_lookup_table(
+        &mut context,
+        &[
+            plan.prepare.clone(),
+            plan.close_vault.clone(),
+            plan.close_replay.clone(),
+            plan.finish.clone(),
+        ],
+    )
+    .await;
+    let census: Vec<usize> = [
+        &plan.prepare,
+        &plan.close_vault,
+        &plan.close_replay,
+        &plan.finish,
+    ]
+    .iter()
+    .map(|instruction| unique_account_locks(instruction, context.payer.pubkey()))
+    .collect();
+
+    let wallet_before = required_observed(&mut context, fixture.refund_wallet)
+        .await
+        .lamports;
+    let checkpoint_lamports_before = required_observed(&mut context, fixture.claims_aggregate)
+        .await
+        .lamports;
+
+    submit_recorded_over_table_v0(
+        &mut context,
+        std::slice::from_ref(&plan.prepare),
+        &[],
+        "refunding retirement: prepare burns the failure column",
+        table,
+        &addresses,
+        REFUNDING_PREPARE_EXTENT,
+    )
+    .await
+    .expect("the closure discharges the column it used to refuse");
+
+    let checkpoint = required_observed(&mut context, fixture.claims_aggregate).await;
+    assert_eq!(
+        checkpoint.owner, CORE_PROGRAM_ID,
+        "the aggregate became Core's retirement checkpoint"
+    );
+    assert_eq!(
+        checkpoint.lamports,
+        checkpoint_lamports_before + escrow_rent,
+        "the escrow's rent went to the checkpoint, not to a fourth account"
+    );
+    assert!(
+        observed(&mut context, escrow.position).await.is_none(),
+        "the escrow's Position is CLOSED, not merely emptied"
+    );
+    assert!(
+        observed(&mut context, escrow.admission).await.is_none(),
+        "the escrow's admission is closed with it"
+    );
+    assert!(
+        observed(&mut context, linked_basis_record(fixture.base.market))
+            .await
+            .is_some(),
+        "the record is evidence, not a resource this act consumes"
+    );
+
+    submit_recorded_over_table_v0(
+        &mut context,
+        std::slice::from_ref(&plan.close_vault),
+        &[],
+        "refunding retirement: close vault",
+        table,
+        &addresses,
+        REFUNDING_CLOSE_VAULT_EXTENT,
+    )
+    .await
+    .expect("the empty Hoard vault closes");
+    submit_recorded_over_table_v0(
+        &mut context,
+        std::slice::from_ref(&plan.close_replay),
+        &[],
+        "refunding retirement: close replay",
+        table,
+        &addresses,
+        REFUNDING_CLOSE_REPLAY_EXTENT,
+    )
+    .await
+    .expect("the Custody replay cursor closes");
+    submit_recorded_over_table_v0(
+        &mut context,
+        std::slice::from_ref(&plan.finish),
+        &[],
+        "refunding retirement: finish",
+        table,
+        &addresses,
+        REFUNDING_FINISH_EXTENT,
+    )
+    .await
+    .expect("Core, the checkpoint and the lifecycle credit close last");
+
+    let after = joined_snapshot(&mut context, &fixture).await;
+    assert!(after.market.is_none(), "Core Market is closed");
+    assert!(
+        after.rent_credit.is_none(),
+        "the lifecycle credit is closed"
+    );
+    assert!(
+        after.claims_aggregate.is_none(),
+        "the retirement checkpoint is closed"
+    );
+    assert!(after.custody_replay.is_none(), "Custody replay is closed");
+    assert!(after.hoard_vault.is_none(), "empty Hoard vault is closed");
+    assert_eq!(
+        after
+            .refund_wallet
+            .expect("immutable refund wallet")
+            .lamports,
+        wallet_before + plan.expected_refund_delta,
+        "the refund wallet receives the escrow's rent along with everything else, to the lamport"
+    );
+    assert!(
+        plan.expected_refund_delta > escrow_rent,
+        "and the escrow's rent is inside that number rather than beside it"
+    );
+    assert!(
+        census.iter().all(|keys| *keys <= 64),
+        "three more accounts per packet stays under the runtime lock wall: {census:?}"
+    );
+}
+
+/// A Position that is not this Market's escrow refuses by this discriminant.
+///
+/// `0x5010` is the code the complete-set gate, the signed-delta waist and the
+/// founding all already raise for "the named Position is not this Market's
+/// escrow". The closure's burn is the fourth route and it makes the same
+/// accusation, so an operator reading a failed retirement reaches one page.
+const CLOSURE_BURN_WRONG_ESCROW_REFUSAL_V1: u32 =
+    dclutch_claims_sbf::ClaimsSbfError::FailureEscrow as u32;
+
+/// A linked basis record that is not the one this Market was founded on, or one
+/// whose Market does not refund on failure.
+const CLOSURE_BURN_SUBSTITUTED_BASIS_REFUSAL_V1: u32 =
+    dclutch_claims_sbf::market_closure_v1::ClaimsMarketClosureSbfErrorV1::Basis as u32;
+
+/// The four hostiles decision 0025's fourth addendum names for the burn, on
+/// real ELFs, each by discriminant.
+///
+/// Every one of them is submitted against the SAME prestate the honest walk
+/// runs on, and the honest packet is submitted last from the same fixture as
+/// the positive control -- so a hostile that refused because the setup was
+/// broken would take the control down with it.
+///
+/// What each one is:
+///
+/// - **Not the derived escrow.** The frame's trailing Position is swapped for a
+///   canonical Position at another owner. The residue rule is an equality
+///   against THE escrow's balance and nothing else, so an index that merely
+///   holds the right number is not a licence.
+/// - **A substituted basis record.** A valid `ProductBasisV3` that this Market
+///   was not founded on. The join is content-addressed -- the aggregate's
+///   `basis_id` IS the record's semantic identity -- so a substitution cannot
+///   be made to agree. This is also the categorical case: a record that does
+///   not refund on failure licenses no burn.
+/// - **A stranger holding part of the column.** The aggregate carries one unit
+///   more at the failure coordinate than the escrow holds. That unit is in
+///   hands that can be paid, so it is an outstanding liability rather than a
+///   residue and the closure refuses the conjunct it always refused.
+/// - **An escrow holding a tradeable claim too.** Its holder is keyless but its
+///   claim is not worthless, and burning the whole Position would destroy a
+///   payable one.
+#[tokio::test]
+async fn the_closure_burn_refuses_its_four_hostiles_by_discriminant() {
+    let (fixture, mut context) = joined_fixture().await;
+    seed_exact_retirement_prestate(&mut context, &fixture).await;
+    let (escrow, _) = seed_refunding_failure_escrow_v1(&mut context, &fixture).await;
+    let snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    let plan = build_checkpoint_market_retirement_v1(&snapshot).expect("the honest plan");
+
+    // A canonical Position at another owner, planted so the hostile frame names
+    // a REAL Claims-owned Position rather than a vacant address -- otherwise the
+    // frame's privilege sweep would refuse before the escrow rule was reached.
+    let decoy_owner = Pubkey::new_unique();
+    let decoy = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(fixture.claims_aggregate.to_bytes(), decoy_owner.to_bytes())
+            .expect("decoy seeds")
+            .as_slices(),
+        &JOINED_CLAIMS_PROGRAM_ID,
+    )
+    .0;
+    let honest_position = required_observed(&mut context, escrow.position).await;
+    let mut decoy_bytes = honest_position.data.clone();
+    encode_liability_basis_position_into_v2(
+        LiabilityBasisPositionInputV2 {
+            revision: 1,
+            market_account: fixture.claims_aggregate.to_bytes(),
+            owner: decoy_owner.to_bytes(),
+            basis_id: LiabilityBasisMarketViewV2::decode(
+                &required_observed(&mut context, fixture.claims_aggregate)
+                    .await
+                    .data,
+            )
+            .expect("aggregate")
+            .basis_id,
+        },
+        &{
+            let mut balances = vec![0_u64; RETIREMENT_CLAIM_COUNT as usize];
+            balances[escrow.failure_selector as usize] = SEATED_RESIDUE_V1;
+            balances
+        },
+        &mut decoy_bytes,
+    )
+    .expect("a canonical Position at another owner");
+    set_account(
+        &mut context,
+        decoy,
+        protocol_account(JOINED_CLAIMS_PROGRAM_ID, decoy_bytes),
+    );
+
+    let mut wrong_escrow = plan.prepare.clone();
+    wrong_escrow.accounts[35].pubkey = decoy;
+    let (table, addresses) =
+        frozen_route_lookup_table(&mut context, &[plan.prepare.clone(), wrong_escrow.clone()])
+            .await;
+
+    let before = joined_snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        refused_burn_hostile(
+            &mut context,
+            &wrong_escrow,
+            "burn hostile: not the derived escrow",
+            table,
+            &addresses
+        )
+        .await,
+        CLOSURE_BURN_WRONG_ESCROW_REFUSAL_V1,
+        "a Position that is not this Market's escrow refuses 0x5010"
+    );
+
+    // A valid categorical record this Market was not founded on.
+    let mut foreign_basis = vec![
+        0;
+        basis_record_bytes_v3(
+            BasisKindV3::CategoricalQ1,
+            RETIREMENT_CLAIM_COUNT as usize,
+            0,
+            0
+        )
+        .expect("record width")
+    ];
+    compile_basis_v3(
+        BasisInputV3 {
+            kind: BasisKindV3::CategoricalQ1,
+            product_id: [0xe1; 32],
+            result_domain_id: [0xe2; 32],
+            coordinate_domain_id: [0xe3; 32],
+            result_unit_id: [0xe4; 32],
+            evaluator_release_id: [0xe5; 32],
+            basis_width: RETIREMENT_CLAIM_COUNT,
+            payout_scale: 1,
+            knot_denominator: 1,
+            knots: &[],
+            terms: &[],
+            failure_payouts: &[],
+            price_gate_certificate_digest: [0; 32],
+        },
+        &mut foreign_basis,
+    )
+    .expect("a NON-refunding categorical record");
+    let record_address = linked_basis_record(fixture.base.market);
+    let honest_record = required_observed(&mut context, record_address).await;
+    set_account(
+        &mut context,
+        record_address,
+        protocol_account(REGISTRY_PROGRAM_ID, foreign_basis),
+    );
+    assert_eq!(
+        refused_burn_hostile(
+            &mut context,
+            &plan.prepare,
+            "burn hostile: substituted basis record",
+            table,
+            &addresses,
+        )
+        .await,
+        CLOSURE_BURN_SUBSTITUTED_BASIS_REFUSAL_V1,
+        "a record this Market was not founded on licenses no burn"
+    );
+    set_account(
+        &mut context,
+        record_address,
+        Account {
+            lamports: honest_record.lamports,
+            data: honest_record.data.clone(),
+            owner: honest_record.owner,
+            executable: honest_record.executable,
+            rent_epoch: 0,
+        },
+    );
+
+    // A stranger holding one unit of the column.
+    let honest_aggregate = required_observed(&mut context, fixture.claims_aggregate).await;
+    let view = LiabilityBasisMarketViewV2::decode(&honest_aggregate.data).expect("aggregate");
+    let mut stranded = vec![0_u64; RETIREMENT_CLAIM_COUNT as usize];
+    stranded[escrow.failure_selector as usize] = SEATED_RESIDUE_V1 + 1;
+    let mut stranded_bytes = honest_aggregate.data.clone();
+    encode_liability_basis_market_into_v2(
+        LiabilityBasisMarketInputV2 {
+            revision: view.revision,
+            logical_market: view.logical_market,
+            release_set: view.release_set,
+            registry_program: view.registry_program,
+            product_instance_id: view.product_instance_id,
+            basis_id: view.basis_id,
+            realm_id: view.realm_id,
+            custody_context: view.custody_context,
+            generation: view.generation,
+        },
+        &stranded,
+        &mut stranded_bytes,
+    )
+    .expect("an aggregate a stranger holds part of");
+    set_account(
+        &mut context,
+        fixture.claims_aggregate,
+        Account {
+            lamports: honest_aggregate.lamports,
+            data: stranded_bytes,
+            owner: honest_aggregate.owner,
+            executable: honest_aggregate.executable,
+            rent_epoch: 0,
+        },
+    );
+    assert_eq!(
+        refused_burn_hostile(
+            &mut context,
+            &plan.prepare,
+            "burn hostile: a stranger holds part of the column",
+            table,
+            &addresses,
+        )
+        .await,
+        CHECKPOINT_PREPARE_SEATED_RESIDUE_REFUSAL_V1,
+        "a column only partly in the escrow is an outstanding liability"
+    );
+    set_account(
+        &mut context,
+        fixture.claims_aggregate,
+        Account {
+            lamports: honest_aggregate.lamports,
+            data: honest_aggregate.data.clone(),
+            owner: honest_aggregate.owner,
+            executable: honest_aggregate.executable,
+            rent_epoch: 0,
+        },
+    );
+
+    // An escrow holding a tradeable claim beside the residue.
+    let mut mixed = vec![0_u64; RETIREMENT_CLAIM_COUNT as usize];
+    mixed[0] = 7;
+    mixed[escrow.failure_selector as usize] = SEATED_RESIDUE_V1;
+    let mut mixed_bytes = honest_position.data.clone();
+    encode_liability_basis_position_into_v2(
+        LiabilityBasisPositionInputV2 {
+            revision: 1,
+            market_account: fixture.claims_aggregate.to_bytes(),
+            owner: escrow.owner.to_bytes(),
+            basis_id: view.basis_id,
+        },
+        &mixed,
+        &mut mixed_bytes,
+    )
+    .expect("an escrow holding an ordinary claim too");
+    set_account(
+        &mut context,
+        escrow.position,
+        Account {
+            lamports: honest_position.lamports,
+            data: mixed_bytes,
+            owner: honest_position.owner,
+            executable: honest_position.executable,
+            rent_epoch: 0,
+        },
+    );
+    assert_eq!(
+        refused_burn_hostile(
+            &mut context,
+            &plan.prepare,
+            "burn hostile: the escrow holds a tradeable claim",
+            table,
+            &addresses,
+        )
+        .await,
+        CHECKPOINT_PREPARE_SEATED_RESIDUE_REFUSAL_V1,
+        "an escrow holding a payable claim is not a pure residue"
+    );
+    set_account(
+        &mut context,
+        escrow.position,
+        Account {
+            lamports: honest_position.lamports,
+            data: honest_position.data.clone(),
+            owner: honest_position.owner,
+            executable: honest_position.executable,
+            rent_epoch: 0,
+        },
+    );
+
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        before,
+        "every hostile is byte and lamport atomic"
+    );
+
+    // THE POSITIVE CONTROL, from the same fixture and the same instruction: the
+    // four refusals above are the hostiles, not the setup.
+    submit_recorded_over_table_v0(
+        &mut context,
+        std::slice::from_ref(&plan.prepare),
+        &[],
+        "burn hostiles: the honest packet still burns",
+        table,
+        &addresses,
+        REFUNDING_PREPARE_EXTENT,
+    )
+    .await
+    .expect("the honest prepare packet burns the column");
+    assert!(
+        observed(&mut context, escrow.position).await.is_none(),
+        "and it closes the escrow it emptied"
+    );
+}
+
+/// Submit one hostile prepare packet and return the discriminant it refused
+/// with, insisting it refused at all.
+async fn refused_burn_hostile(
+    context: &mut ProgramTestContext,
+    instruction: &Instruction,
+    label: &'static str,
+    table: Pubkey,
+    addresses: &[Pubkey],
+) -> u32 {
+    // Three of these hostiles submit BYTE-IDENTICAL instructions against
+    // different account states, so without a fresh blockhash the second one
+    // returns `AlreadyProcessed` and the assertion below would be reading the
+    // runtime's dedup rather than the program's refusal.
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    context
+        .warp_to_slot(clock.slot.checked_add(1).expect("bounded fixture slot"))
+        .expect("advance the hostile's blockhash");
+    let refusal = submit_recorded_over_table_v0(
+        context,
+        std::slice::from_ref(instruction),
+        &[],
+        label,
+        table,
+        addresses,
+        REFUNDING_PREPARE_EXTENT,
+    )
+    .await
+    .expect_err(label);
+    custom_program_error_code(refusal)
+}
+
+/// The custom discriminant a refused transaction carries, or a panic naming
+/// what it carried instead.
+fn custom_program_error_code(error: BanksClientError) -> u32 {
+    match error {
+        BanksClientError::TransactionError(TransactionError::InstructionError(
+            _,
+            InstructionError::Custom(code),
+        ))
+        | BanksClientError::SimulationError {
+            err: TransactionError::InstructionError(_, InstructionError::Custom(code)),
+            ..
+        } => code,
+        other => panic!("expected a custom program error, got {other:?}"),
+    }
 }
 
 #[tokio::test]

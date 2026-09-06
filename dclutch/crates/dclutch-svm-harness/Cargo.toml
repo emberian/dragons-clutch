@@ -14,7 +14,7 @@ dclutch-resolution-proof-sbf = { path = "../../programs/dclutch-resolution-proof
 dclutch-resolution-receipt-test-caller-sbf = { path = "test-programs/resolution-receipt-caller", features = ["no-entrypoint"] }
 dclutch-pre-market-funding-test-caller-sbf = { path = "test-programs/pre-market-funding-caller", features = ["no-entrypoint"] }
 dclutch-market = { path = "../dclutch-market" }
-dclutch-claims = { path = "../dclutch-claims" }
+dclutch-claims = { path = "../dclutch-claims", features = ["svm"] }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody = { path = "../dclutch-custody" }
 dclutch-trading = { path = "../dclutch-trading" }
@@ -23,7 +23,7 @@ dclutch-market-retirement-v1-operator = { path = "../dclutch-market-retirement-v
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 dclutch-source = { path = "../dclutch-source", features = ["synthetic-local-fixture"] }
 dclutch-registry = { path = "../dclutch-registry" }
-dclutch-product = { path = "../dclutch-product" }
+dclutch-product = { path = "../dclutch-product", features = ["svm"] }
 dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-operator" }
 dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evidence" }
 dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator", default-features = false }

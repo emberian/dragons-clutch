@@ -1244,6 +1244,31 @@ pub fn semantic_basis_preimage_v3(bytes: &[u8]) -> Result<SemanticBasisPreimageV
     ProductBasisV3::decode(bytes)?.semantic_preimage_v3()
 }
 
+/// One record's semantic basis identity, from its own bytes and nothing else.
+///
+/// The domain-separated hash over [`semantic_basis_preimage_v3`] had four
+/// hand-spellings in this tree -- two admissions here, the SVM record walk, and
+/// (as of decision 0025's closure burn) a Claims program that has ONE basis
+/// account in frame and no room for the walk that would otherwise establish it.
+/// A reader who wants to know whether a record is the one a Market was founded
+/// on compares this against the aggregate's `basis_id`, and it is the same
+/// comparison `authenticate_product_basis_v3` makes against
+/// `runtime.liability_basis_id`.
+///
+/// The preimage omits the Product and result-domain links deliberately (see
+/// this module's head), and carries the kind, the width and the payout scale --
+/// which is exactly the triple `categorical_refunds_on_failure_v3` reads. So a
+/// record that reproduces a Market's `basis_id` cannot disagree with it about
+/// whether that Market refunds on failure.
+pub fn semantic_basis_id_v3(bytes: &[u8]) -> Result<[u8; 32]> {
+    let semantic = semantic_basis_preimage_v3(bytes)?;
+    Ok(dclutch_sha256_adapter::digestv(&[
+        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        semantic.prefix(),
+        semantic.suffix(),
+    ]))
+}
+
 fn validate_input(input: BasisInputV3<'_>) -> Result<()> {
     for id in [
         input.product_id,

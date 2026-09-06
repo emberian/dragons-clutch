@@ -43,18 +43,12 @@ use crate::payoff::registry_v3::PRICE_GATE_RECORD_SCHEMA_ID_V1;
 pub use crate::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
 use crate::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-    runtime_v3::{
-        BasisKindV3, Error as BasisError, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-    },
+    runtime_v3::{BasisKindV3, Error as BasisError, ProductBasisV3, semantic_basis_id_v3},
 };
 use crate::{ContentId, PortfolioV2, ResultDomainV2};
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use solana_program::{
-    account_info::AccountInfo,
-    hash::{hash, hashv},
-    pubkey::Pubkey,
-};
+use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 
 /// Product Runtime V2 SVM-reader refusal.
@@ -347,7 +341,11 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
         Error::ProductRecord,
         hints.at(ProductWalkRecordV3::Product),
     )?;
-    derived.set(ProductWalkRecordV3::Product, product_bumps.raw, product_bumps.staging);
+    derived.set(
+        ProductWalkRecordV3::Product,
+        product_bumps.raw,
+        product_bumps.staging,
+    );
     let product_data = frame
         .product
         .raw
@@ -362,7 +360,11 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
         Error::ResultDomainRecord,
         hints.at(ProductWalkRecordV3::ResultDomain),
     )?;
-    derived.set(ProductWalkRecordV3::ResultDomain, domain_bumps.raw, domain_bumps.staging);
+    derived.set(
+        ProductWalkRecordV3::ResultDomain,
+        domain_bumps.raw,
+        domain_bumps.staging,
+    );
     let (portfolio_record, portfolio_bumps) = authenticate_record_hinted(
         registry_program,
         frame.portfolio,
@@ -371,7 +373,11 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
         Error::PortfolioRecord,
         hints.at(ProductWalkRecordV3::Portfolio),
     )?;
-    derived.set(ProductWalkRecordV3::Portfolio, portfolio_bumps.raw, portfolio_bumps.staging);
+    derived.set(
+        ProductWalkRecordV3::Portfolio,
+        portfolio_bumps.raw,
+        portfolio_bumps.staging,
+    );
     let domain_data = frame
         .result_domain
         .raw
@@ -662,24 +668,19 @@ where
         Error::LinkedBasisRecord,
         hints.at(ProductWalkRecordV3::LinkedBasis),
     )?;
-    derived.set(ProductWalkRecordV3::LinkedBasis, basis_bumps.raw, basis_bumps.staging);
+    derived.set(
+        ProductWalkRecordV3::LinkedBasis,
+        basis_bumps.raw,
+        basis_bumps.staging,
+    );
     let basis_data = linked_basis
         .raw
         .try_borrow_data()
         .map_err(|_| Error::Borrow)?;
     let basis = ProductBasisV3::decode(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
     admission.admit(registry_program, basis)?;
-    let semantic = basis
-        .semantic_preimage_v3()
-        .map_err(|_| Error::LinkedBasisComposition)?;
-    let semantic_basis_id = content(
-        hashv(&[
-            SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-            semantic.prefix(),
-            semantic.suffix(),
-        ])
-        .to_bytes(),
-    )?;
+    let semantic_basis_id =
+        content(semantic_basis_id_v3(&basis_data).map_err(|_| Error::LinkedBasisComposition)?)?;
     let evaluator_release_id =
         content(basis.evaluator_release_id()).map_err(|_| Error::LinkedBasisComposition)?;
     if semantic_basis_id != runtime.liability_basis_id

@@ -1041,3 +1041,171 @@ deployed, with no redeploy, once it runs the repaired driver:
 Wall 2 has not been shown green on any chain, and no third wall past
 `cx-cpi-buffers` has been ruled out: the replay refuses there, so everything
 after it is unmeasured. The batch-window state `CuW1791cAY…` is still absent.
+
+---
+
+# ADDENDUM, 2026-09-06, lane COHORT-16F: both host walls fall, the accelerator runs, and the third wall is a name collision
+
+Devnet evidence, and one level below the strongest: the accelerator's execution
+below is an **RPC simulation against the deployed programs at finalized state**,
+not a committed transaction. Nothing landed and no fee was paid — the driver
+sends through preflight and devnet's own preflight refused the send, which is
+the correct behaviour and is why this reads as simulation.
+
+    driver     /Users/ember/jobs/dclutch-cohort161-20260905/bin/dclutch-local-successor-bootstrap
+               aa4e6de10ae85bb9042e82982c65c2d70a1e73f16bef39063cb07d030e43e977
+               built at 4fba7a8afce86d59d94bfc881448e706d2ef8e80, detached worktree, debug
+               the 432d07339 binary and its provenance are in backups/bin/
+    market     65Yq3q6tgHArrJtZPhf5RAgNzpPAGcZSoBmT4D3As9n5, root 4NcnH7pt…, release set f533be49…
+    no redeploy. The deployed Trading e7f8e476… is the one this ran against.
+
+## THE TWO HOST WALLS ARE GREEN, AND EACH HAS A POSITIVE CONTROL
+
+**Wall 1.** The repaired session refuses a disagreeing `--rent-credit` by name.
+Fed the previous General market's credit `CE3PC9fY…` it answers
+`route/rent-credit-not-the-markets`, naming `6FGsfzP7…` — read live from the
+Market at `STATE_RENT_BENEFICIARY_OFFSET` 296 — as the one author. Dropped, the
+route carries `6FGsfzP7…` and execution walks past `lifecycle.rs:1421`. The
+cross-check fires **only on the `--emit-route` path**: the same flag with no
+route emits a frame report and says nothing, which is right (the route is where
+the address is consumed) and worth knowing before someone reads a silent run as
+a pass.
+
+**Wall 2.** The plan now publishes
+`familyRequestDigest = ff3ace4881df012e3b10e48cdb6a72ce119e184003561754d3cb9869f6c95856`
+— exactly PROGRAMS-17D's `ff3ace4881df012e…`, measured offline, now reproduced
+by the host against the chain. The bare `6ac82555…` is gone. Passed back as
+`--parent-request-digest`, the caller-authority span moves off the probe:
+
+    probe (5bc43870…)  DG7TaMXT…  6sttxgpp…  9C9t1V5Y…  4qZ4Nb4y…
+    real  (ff3ace48…)  79WAB8Qc…  EEWR5CVK…  Gdcr37oq…  GGZzXYdC…
+
+and `parentRequestDigestIsProbe` reads false. The digest is **invariant to the
+lookup table and to the parent digest passed in** (measured: cohort-16.1's own
+plans published the same `6ac82555…` across two tables and two passes), so pass
+one's answer is pass two's input, which is what makes the loop terminate.
+
+## THE TWO-PASS ROW NEEDS A THIRD EMISSION, AND THE RUNBOOK DOES NOT SAY SO
+
+`openbatch-two-pass` orders the lookup table AFTER the second session, and that
+cannot work: `general-successor-plan-v5` refuses `General v0 compilation:
+LookupTable` against `{market.lookup_table}` (the founding's frozen
+`DfLj84Cz…`), and the four caller-authority PDAs **are in the table's canonical
+set** — measured, `devnet-general-lookup-table-v1` dry-run over the probe route
+lists all four of `DG7TaMXT…` and the market's own `6FGsfzP7…` among its 53
+addresses. So each digest needs its own table, and each table needs the route to
+be re-emitted onto it. What actually runs is five acts, not four:
+
+    session(probe) -> TABLE 1 -> session(probe, T1) -> plan -> digest
+    session(digest) -> TABLE 2 -> session(digest, T2) -> plan -> execute
+
+    T1  5jtjo4yb55JR5Ufp72uFTM1vH6p1opHgWjUoqosYbQTV  (53 addresses, frozen)
+    T2  73NjFXo4c836tWczvc11v4J8nMpjopVraQT8vCmbNEPm  (53 addresses, frozen)
+
+## THE ACCELERATOR RAN. `6v1c2Go2…`, FOR THE FIRST TIME ON ANY CHAIN
+
+    Program ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3 invoke [1]
+    Program 6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y invoke [2]
+    Program log: general: config/bank generation (config, bank)
+    Program log: 0x2, 0x2, 0x0, 0x0, 0x0
+    Program log: general: config/bank semantic basis (config, bank)
+    Program data: 7Xv8dfXdhsxAhuziX28VxHq/3OlRUWXxj+yZ3XRN3DI= SKZu7romHw5bbf5oWKIEQxDZyIneL8O8jpfMQmnrQPc=
+    Program log: general: refused, config rejects the bank's generation or basis
+    Program 6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y consumed 30771 of 1070848 compute units
+    Program 6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y success
+    Program ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3 consumed 361230 of 1399700 compute units
+    Program ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3 failed: custom program error: 0x4004
+
+**361,538 CU** for the transaction, against 239,473 at wall 1 and 319,075 at
+wall 2 — the route now reaches and crosses the CPI boundary. The harness's
+654,000–677,000 CU estimate for a completed OpenBatch is still unreached and
+therefore still unrefuted; 361,538 is a refusal's cost, not an action's.
+
+## WALL 3, AND IT IS NOT A COARSE CODE — THE PROGRAM PRINTED BOTH SIDES
+
+    code      TradingSbfError::Transition 0x4004 (Custom(16388))
+    site      programs/dclutch-trading-sbf/src/admitted_composition_v3.rs:370
+              `if ack.disposition() != AcceleratorDispositionV2::Accepted`
+    phase     POST-CPI, first admitted invocation, on the accelerator's own receipt
+              (return data DCLTAAK2, disposition byte 0x02)
+    cause     GeneralAcceleratorSemanticErrorV3::ConfigMarket, raised at
+              programs/dclutch-accelerator-sbf/src/general.rs:1705 inside
+              `authenticated_general_domain`, from
+              `config.require_market(environment.generation, environment.semantic_basis_id)`
+
+`require_market` is two conjuncts and only one failed:
+
+    generation      config 2, bank 2                       AGREE
+    semantic basis  config ed7bfc75f5dd86cc4086ece25f6f15c47abfdce9515165f18fec99dd744ddc32
+                    bank   48a66eeeba261f0e5b6dfe6858a2044310d9c889de2fc3bc8e97cc4269eb40f7   DISAGREE
+
+No replay was needed to localize this and none was run. The accelerator's own
+`sol_log_data` prints both sides — the reader PROGRAMS-17D's `hot_cu_watch_*`
+work is the same instinct, already shipped inside this program — so the
+instrument would have re-derived what the chain had already said.
+
+## THE TWO VALUES ARE THIS MARKET'S OWN, AND THE COLLISION IS THE WORD "BASIS"
+
+Read live off `65Yq3q6t…`'s portfolio record
+`2WPUBZAHSPk5SUJSBoQQCNLfZTF8hVKYA53AZMnv5Wd1` (`DCLTPRF2`, 240 bytes,
+Registry-owned):
+
+    @96   PORTFOLIO_CLAIM_BASIS_ID_OFFSET       48a66eee…   the bank's value
+    @128  PORTFOLIO_LIABILITY_BASIS_ID_OFFSET   ed7bfc75…   the config's value
+
+Both are the market's own, from its own founding, one field apart. The two
+authors:
+
+- **the bank register** is projected by
+  `crates/dclutch-trading/src/general/account_rules_v3.rs:1508-1512` —
+  `ProjectDataIdentity` from the portfolio at `PORTFOLIO_CLAIM_BASIS_ID_OFFSET`
+  into `identity::SEMANTIC_BASIS_ID`;
+- **the config field** is `semantic_basis_identity_v3(linked_basis_hex)`, from
+  `tools/local-validator/bootstrap/successor/src/general_market.rs:239` through
+  `general_selected_release_v1.rs:1143` into `GeneralConfigInputV3.claim_basis_id`.
+
+**Everywhere else in this tree, "semantic basis" is the LIABILITY basis.**
+`crates/dclutch-product/src/payoff/registry_v3.rs:416-432` computes
+`semantic_basis_id` from the linked-basis record and requires
+`domain.liability_basis_id() == semantic_basis_id`;
+`tools/local-validator/bootstrap/successor/src/market.rs:2428-2434` states it as
+a comment and checks it; `market.rs:10367` fills
+`ClaimsFoundingRequestInputV5.semantic_basis_id` from `liability_basis_id`. The
+account rule is the single site that reads the CLAIM basis into a register named
+`SEMANTIC_BASIS_ID`, and its own comment says why it chose the portfolio (a
+config-sourced register would be compared against the account it was read from)
+without saying why it chose that field: it followed the config field's NAME,
+`claim_basis_id`, which is the misnomer.
+
+**Which side moves decides whether this market survives.** The account rule is
+in `dclutch-trading`, which is compiled into the Trading SBF link, so moving it
+is a program change and a cohort-17 link — but it is the side that costs no
+re-founding: `PORTFOLIO_LIABILITY_BASIS_ID_OFFSET` already holds `ed7bfc75…` on
+this live portfolio, exactly the config's value, so `65Yq3q6t…` would satisfy
+the conjunct as it stands. Moving the host derivation instead requires a fresh
+~105-transaction General founding, because the config is hashed into
+`environment.general_config_id` and pinned by the root. **No program change was
+made here**; the owner decides, and the measurement above is what they need.
+
+This is the two-authorities pattern the tree already has a name for, in its
+purest form: every General fixture wrote `SEMANTIC_BASIS_ID` by hand (the rule's
+own comment records "config `0x56` ×32, bank zero" on 2026-09-01), so the first
+time the two sides were ever produced by a real founding was this transaction.
+
+## WHAT DID NOT RUN, AND WHY
+
+`close-batch` and `second-open-batch` are untouched: both need a Batch account
+this refusal did not create. `CuW1791cAY1uqgtu1okAjEmY2iVHx8gsytQgs8WcayYQ` is
+still ABSENT. The accelerator route is still **not corroborated** —
+`docs/evidence/witnesses/cohort-16-1-discovered.json` names
+`6v1c2Go2…` in its program roster and in no record, for the third cohort
+running, and `--discover` was not re-run because no new signature exists for it
+to read.
+
+## LEDGER
+
+    payer  1.384214644 -> 1.364363844   (0.019850800 SOL)
+           two frozen GENERAL-HOT routing tables at 0.009550400 rent each
+           (permanent), ten transaction fees at 75,000 lamports.
+           NOTHING was spent on the OpenBatch itself: preflight refused the send.
+    deployer 28.657732010, unchanged. No top-up.

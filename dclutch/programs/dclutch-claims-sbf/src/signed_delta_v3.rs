@@ -1125,6 +1125,93 @@ fn apply_coordinate(
     put_u64(bytes, offset, after)
 }
 
+/// Why the closure's burn refused, before any account byte moved.
+///
+/// Typed rather than a `ProgramError` because the burn is raised by a
+/// DIFFERENT route -- `market_closure_v1` -- and that route's reader must see
+/// the closure's own band, not this one's. The arm names the cause; the
+/// closure chooses the discriminant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ClosureBurnRefusalV3 {
+    /// The runtime width seats no failure coordinate, so there is nothing this
+    /// arm may debit at all.
+    Width,
+    /// The named coordinate is not this width's failure coordinate.
+    ///
+    /// The arm exists for exactly one column and refuses every other by name
+    /// rather than by trusting its caller's arithmetic.
+    Coordinate,
+    /// A zero burn, which is not a canonical debit.
+    Quantity,
+    /// The debit underflowed the aggregate's supply or the escrow's balance,
+    /// or a coordinate offset did not fit the candidate.
+    Debit,
+}
+
+/// The ONE debit arm the closure is allowed, and the whole of it.
+///
+/// # Why this is here rather than in the closure
+///
+/// [`apply_coordinate`] is the live writer of a claim on a live Market
+/// (decision 0025's fourth addendum: the economic slice's `execute_basket`
+/// decodes a `Market` family no founding writes, and this waist is what
+/// actually moves a coordinate). The closure's burn is the same arithmetic --
+/// one magnitude off the aggregate's supply and off one Position's balance at
+/// one coordinate -- so it is written once, here, beside the batch route that
+/// already spells it. A second `put_u64` pair in `market_closure_v1` would be a
+/// second author for one fact.
+///
+/// # The asymmetry this completes
+///
+/// [`admit_failure_coordinate_owners_v1`] gates CREDITS at the failure
+/// coordinate and admits every debit, because the hazard is worthless failure
+/// claims in somebody's hands and only a credit puts them there. That rule
+/// left the debit direction with no NAMED beneficiary: cohort-16's ordinary
+/// settlements, and this. This is the other one -- the escrow's own column,
+/// discharged at closure, on a Market whose linked basis record refunds on
+/// failure. The closure proves those three; this arm proves the coordinate.
+///
+/// # What it does not do
+///
+/// It does not touch accounts. Both arguments are candidate buffers, so a burn
+/// that underflows the escrow after debiting the aggregate leaves the chain
+/// untouched and the caller commits both or neither -- the same discipline
+/// [`commit_candidates`] applies to a batch.
+pub(crate) fn burn_failure_coordinate_v1(
+    aggregate: &mut [u8],
+    escrow_position: &mut [u8],
+    claim_count: u32,
+    outcome: u32,
+    quantity: u64,
+) -> Result<(), ClosureBurnRefusalV3> {
+    // `refunding_failure_index` is the sole author of which coordinate a
+    // refunding complete set seats where. This does not re-spell "the last one"
+    // any more than the founding, the complete-set gate or the escrow
+    // derivation do.
+    let failure = dclutch_product::economic_slice::refunding_failure_index(claim_count)
+        .map_err(|_| ClosureBurnRefusalV3::Width)?;
+    let failure = u32::try_from(failure).map_err(|_| ClosureBurnRefusalV3::Width)?;
+    if outcome != failure {
+        return Err(ClosureBurnRefusalV3::Coordinate);
+    }
+    let debit = SignedDeltaV3::new(DeltaDirectionV3::Debit, quantity)
+        .map_err(|_| ClosureBurnRefusalV3::Quantity)?;
+    apply_coordinate(
+        aggregate,
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+        failure,
+        debit,
+    )
+    .map_err(|_| ClosureBurnRefusalV3::Debit)?;
+    apply_coordinate(
+        escrow_position,
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        failure,
+        debit,
+    )
+    .map_err(|_| ClosureBurnRefusalV3::Debit)
+}
+
 fn resource_digest(market: &[u8], positions: &[Vec<u8>]) -> [u8; 32] {
     let mut resources: Vec<&[u8]> = Vec::with_capacity(positions.len().saturating_add(2));
     resources.push(SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3);
@@ -1597,6 +1684,138 @@ mod tests {
         assert_eq!(
             bytes.get(..SIGNED_DELTA_PLAN_MAGIC_V3.len()),
             Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice())
+        );
+    }
+
+    /// One aggregate and one escrow Position at a width that seats a failure
+    /// coordinate, both carrying `seated` at that coordinate and `ordinary` at
+    /// coordinate zero.
+    fn burn_fixture(seated: u64, ordinary: u64) -> (Vec<u8>, Vec<u8>) {
+        let mut aggregate = vec![0; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 3 * SCALAR_BYTES];
+        let mut escrow = vec![0; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 3 * SCALAR_BYTES];
+        put_u64(
+            &mut aggregate,
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            ordinary,
+        )
+        .expect("aggregate ordinary");
+        put_u64(
+            &mut aggregate,
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 2 * SCALAR_BYTES,
+            seated,
+        )
+        .expect("aggregate failure");
+        put_u64(
+            &mut escrow,
+            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 2 * SCALAR_BYTES,
+            seated,
+        )
+        .expect("escrow failure");
+        (aggregate, escrow)
+    }
+
+    /// The burn is one debit at one coordinate, in both resources at once, and
+    /// it leaves every ordinary coordinate exactly where it found it.
+    ///
+    /// This is `the_closure_burn_touches_no_ordinary_coordinate` and
+    /// `the_closure_burn_empties_the_escrow` at the byte level: the Lean law
+    /// says the post-state, this says the writer that produces it.
+    #[test]
+    fn the_closure_burn_is_one_debit_at_the_failure_coordinate() {
+        let (mut aggregate, mut escrow) = burn_fixture(166_666_667, 5);
+        burn_failure_coordinate_v1(&mut aggregate, &mut escrow, 3, FAILURE, 166_666_667)
+            .expect("the escrow's seated column burns");
+        assert_eq!(
+            read_u64(
+                &aggregate,
+                LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 2 * SCALAR_BYTES
+            ),
+            Ok(0)
+        );
+        assert_eq!(
+            read_u64(
+                &escrow,
+                LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 2 * SCALAR_BYTES
+            ),
+            Ok(0)
+        );
+        assert_eq!(
+            read_u64(&aggregate, LIABILITY_BASIS_MARKET_HEADER_BYTES_V2),
+            Ok(5),
+            "an ordinary coordinate is not this arm's business"
+        );
+    }
+
+    /// A debit of an ORDINARY coordinate through this arm refuses by name.
+    ///
+    /// The hostile decision 0025's fourth addendum names: the arm exists for
+    /// one column, and a caller that computed the wrong index does not get to
+    /// spend the closure's authority on a tradeable claim.
+    #[test]
+    fn an_ordinary_coordinate_refuses_the_closure_burn_by_name() {
+        let (mut aggregate, mut escrow) = burn_fixture(166_666_667, 5);
+        let before = (aggregate.clone(), escrow.clone());
+        for ordinary in [0, 1] {
+            assert_eq!(
+                burn_failure_coordinate_v1(&mut aggregate, &mut escrow, 3, ordinary, 5),
+                Err(ClosureBurnRefusalV3::Coordinate)
+            );
+        }
+        assert_eq!(
+            (aggregate, escrow),
+            before,
+            "a refused burn moves no candidate byte"
+        );
+    }
+
+    /// A width that seats no failure coordinate, a zero burn, and a burn wider
+    /// than the escrow holds each refuse by their own name, and none of them
+    /// leaves a half-applied candidate.
+    #[test]
+    fn the_closure_burn_refuses_width_quantity_and_underflow_without_mutation() {
+        let (mut aggregate, mut escrow) = burn_fixture(7, 5);
+        let before = (aggregate.clone(), escrow.clone());
+        for width in [0, 1] {
+            assert_eq!(
+                burn_failure_coordinate_v1(&mut aggregate, &mut escrow, width, 0, 7),
+                Err(ClosureBurnRefusalV3::Width)
+            );
+        }
+        assert_eq!(
+            burn_failure_coordinate_v1(&mut aggregate, &mut escrow, 3, FAILURE, 0),
+            Err(ClosureBurnRefusalV3::Quantity)
+        );
+        assert_eq!(
+            burn_failure_coordinate_v1(&mut aggregate, &mut escrow, 3, FAILURE, 8),
+            Err(ClosureBurnRefusalV3::Debit)
+        );
+        assert_eq!(
+            (aggregate, escrow),
+            before,
+            "no refusal leaves a partially burned pair"
+        );
+    }
+
+    /// The aggregate underflowing takes the escrow with it: the caller commits
+    /// both candidates or neither, so a burn that empties the escrow while the
+    /// aggregate cannot pay for it is refused rather than half-written.
+    #[test]
+    fn a_burn_the_aggregate_cannot_pay_for_leaves_the_escrow_alone_on_chain() {
+        let (mut aggregate, mut escrow) = burn_fixture(7, 5);
+        put_u64(
+            &mut aggregate,
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 2 * SCALAR_BYTES,
+            3,
+        )
+        .expect("an aggregate holding less than the escrow claims");
+        let escrow_before = escrow.clone();
+        assert_eq!(
+            burn_failure_coordinate_v1(&mut aggregate, &mut escrow, 3, FAILURE, 7),
+            Err(ClosureBurnRefusalV3::Debit)
+        );
+        assert_eq!(
+            escrow, escrow_before,
+            "the aggregate refuses first, so the escrow candidate is untouched"
         );
     }
 }

@@ -9,11 +9,9 @@
 use core::convert::TryInto;
 
 use crate::ResultDomainV2;
-use dclutch_sha256_adapter::{digest, digestv};
+use dclutch_sha256_adapter::digest;
 
-use crate::payoff::runtime_v3::{
-    BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
-};
+use crate::payoff::runtime_v3::{BasisKindV3, ProductBasisV3, semantic_basis_id_v3};
 
 #[allow(missing_docs)]
 mod generated {
@@ -411,13 +409,8 @@ pub fn admit_authenticated_graded_basis_v3(
     let result_domain_id = digest(result_domain_bytes);
     let linked_basis_record_id = digest(linked_basis_bytes);
     let certificate_digest = digest(certificate_bytes);
-    let semantic =
-        semantic_basis_preimage_v3(linked_basis_bytes).map_err(|_| Error::InvalidRecord)?;
-    let semantic_basis_id = digestv(&[
-        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-        semantic.prefix(),
-        semantic.suffix(),
-    ]);
+    let semantic_basis_id =
+        semantic_basis_id_v3(linked_basis_bytes).map_err(|_| Error::InvalidRecord)?;
     let product_id = domain.product_id().to_bytes();
     let coordinate_domain_id = domain.coordinate_domain_id().to_bytes();
     let result_unit_id = domain.result_unit_id().to_bytes();
@@ -464,18 +457,12 @@ pub fn derive_graded_basis_admission_v3(
     let domain = ResultDomainV2::decode(result_domain_bytes).map_err(|_| Error::InvalidRecord)?;
     let basis = ProductBasisV3::decode(linked_basis_bytes).map_err(|_| Error::InvalidRecord)?;
     let certificate = CategoricalApproximationCertificateV3::decode(certificate_bytes)?;
-    let semantic =
-        semantic_basis_preimage_v3(linked_basis_bytes).map_err(|_| Error::InvalidRecord)?;
     let record = GradedBasisAdmissionV3::new(
         digest(result_domain_bytes),
         domain.product_id().to_bytes(),
         domain.coordinate_domain_id().to_bytes(),
         domain.result_unit_id().to_bytes(),
-        digestv(&[
-            SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-            semantic.prefix(),
-            semantic.suffix(),
-        ]),
+        semantic_basis_id_v3(linked_basis_bytes).map_err(|_| Error::InvalidRecord)?,
         digest(linked_basis_bytes),
         compiler_release_id,
         toolchain_id,

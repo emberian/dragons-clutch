@@ -112,6 +112,28 @@ pub const RETIREMENT_CHECKPOINT_FINISH_BYTES_V1: usize =
 /// Exact joined retirement account count.
 pub const RETIREMENT_ACCOUNT_COUNT_V1: usize = 36;
 
+/// Accounts a refunding Market's checkpointed retirement adds after the frame.
+///
+/// The escrow's Position, its protocol-Position admission and the linked basis
+/// record: the exact three Claims' `market_closure_v1` needs to burn a failure
+/// column that no certificate pays and no key can move (decision 0025, fourth
+/// addendum). Core carries them because the closure runs as its child and a
+/// CPI cannot conjure an account its parent's frame does not hold.
+///
+/// TRAILING and OPTIONAL, and both matter. Trailing, so a categorical Market's
+/// retirement keeps its exact thirty-five and its exact behaviour. Optional at
+/// the frame rather than per packet, because
+/// `aggregate_retirement_journal.rs`'s stability assertion requires all four
+/// packets of ONE retirement to present an identical account frame -- so a
+/// refunding retirement presents thirty-eight on all four, including the three
+/// packets that never look at them.
+pub const RETIREMENT_ESCROW_ACCOUNT_COUNT_V1: usize = 3;
+/// Exact direct checkpointed retirement account count.
+pub const RETIREMENT_DIRECT_ACCOUNT_COUNT_V1: usize = RETIREMENT_ACCOUNT_COUNT_V1.saturating_sub(1);
+/// Exact direct checkpointed retirement account count with the closure burn.
+pub const RETIREMENT_DIRECT_BURN_ACCOUNT_COUNT_V1: usize =
+    RETIREMENT_DIRECT_ACCOUNT_COUNT_V1 + RETIREMENT_ESCROW_ACCOUNT_COUNT_V1;
+
 #[derive(Clone, Copy)]
 pub(crate) struct RetirementAccounts<'accounts, 'info> {
     market: &'accounts AccountInfo<'info>,
@@ -150,6 +172,22 @@ pub(crate) struct RetirementAccounts<'accounts, 'info> {
     refund_wallet: &'accounts AccountInfo<'info>,
     rent_close_authority: &'accounts AccountInfo<'info>,
     pub(crate) registry_admission: Option<&'accounts AccountInfo<'info>>,
+    escrow: Option<RetirementEscrowV1<'accounts, 'info>>,
+}
+
+/// The three accounts a refunding Market's closure burn needs, carried through
+/// Core untouched and handed to the Claims child.
+///
+/// Core authenticates none of them itself: their identity is derived inside
+/// Claims off the aggregate Core already joins, and duplicating that
+/// derivation here would put one rule in two programs. What Core owes them is
+/// the frame privileges and the alias sweep below, and the lamport arithmetic
+/// that expects their rent to arrive on the checkpoint.
+#[derive(Clone, Copy)]
+struct RetirementEscrowV1<'accounts, 'info> {
+    position: &'accounts AccountInfo<'info>,
+    admission: &'accounts AccountInfo<'info>,
+    basis_record: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> RetirementAccounts<'accounts, 'info> {
@@ -232,6 +270,7 @@ impl<'accounts, 'info> RetirementAccounts<'accounts, 'info> {
             refund_wallet,
             rent_close_authority,
             registry_admission: Some(registry_admission),
+            escrow: None,
         })
     }
 
@@ -239,8 +278,20 @@ impl<'accounts, 'info> RetirementAccounts<'accounts, 'info> {
         accounts: &'accounts [AccountInfo<'info>],
     ) -> Result<Self, CoreSbfError> {
         let frame = accounts
-            .get(..RETIREMENT_ACCOUNT_COUNT_V1.saturating_sub(1))
+            .get(..RETIREMENT_DIRECT_ACCOUNT_COUNT_V1)
             .ok_or(CoreSbfError::AccountFrame)?;
+        let escrow = match accounts
+            .get(RETIREMENT_DIRECT_ACCOUNT_COUNT_V1..)
+            .ok_or(CoreSbfError::AccountFrame)?
+        {
+            [] => None,
+            [position, admission, basis_record] => Some(RetirementEscrowV1 {
+                position,
+                admission,
+                basis_record,
+            }),
+            _ => return Err(CoreSbfError::AccountFrame),
+        };
         let [
             market,
             rent_credit,
@@ -318,6 +369,7 @@ impl<'accounts, 'info> RetirementAccounts<'accounts, 'info> {
             refund_wallet,
             rent_close_authority,
             registry_admission: None,
+            escrow,
         })
     }
 }
@@ -412,7 +464,10 @@ pub fn process_checkpoint_prepare(
     bundle_bytes: &[u8],
     claims_request_bytes: &[u8],
 ) -> ProgramResult {
-    if accounts.len() != RETIREMENT_ACCOUNT_COUNT_V1.saturating_sub(1) {
+    if !matches!(
+        accounts.len(),
+        RETIREMENT_DIRECT_ACCOUNT_COUNT_V1 | RETIREMENT_DIRECT_BURN_ACCOUNT_COUNT_V1
+    ) {
         return Err(CoreSbfError::AccountFrame.into());
     }
     let frame = RetirementAccounts::parse_direct(accounts)?;
@@ -558,8 +613,47 @@ fn execute_claims_checkpoint_handoff(
     ])
     .to_bytes();
     drop(pre_bytes);
-    let refund = frame.claims_aggregate.lamports();
+    // What the checkpoint account is owed after the child runs. On a
+    // categorical Market that is the aggregate's own rent, unchanged. On a
+    // refunding one the closure also empties the escrow's Position and its
+    // admission, and hands their rent to the aggregate rather than to a fourth
+    // account -- so the SAME number, read here, is what the checkpoint must
+    // carry and what `Finish` eventually pays the refund wallet.
+    let escrow_refund = match frame.escrow {
+        None => 0,
+        Some(escrow) => escrow
+            .position
+            .lamports()
+            .checked_add(escrow.admission.lamports())
+            .ok_or(CoreSbfError::ChildAck)?,
+    };
+    let refund = frame
+        .claims_aggregate
+        .lamports()
+        .checked_add(escrow_refund)
+        .ok_or(CoreSbfError::ChildAck)?;
     let rent_before = frame.rent_credit.lamports();
+    let mut projection = Vec::with_capacity(RETIREMENT_DIRECT_BURN_ACCOUNT_COUNT_V1);
+    projection.extend_from_slice(&[
+        (frame.claims_authority, false, true),
+        (frame.claims_aggregate, true, false),
+        (frame.rent_credit, true, false),
+        (frame.cache, false, false),
+        (frame.registry, false, false),
+        (frame.claims_program, false, false),
+        (frame.claims_programdata, false, false),
+        (frame.core_program, false, false),
+        (frame.core_programdata, false, false),
+        (frame.market, false, false),
+        (frame.rent_program, false, false),
+    ]);
+    if let Some(escrow) = frame.escrow {
+        projection.extend_from_slice(&[
+            (escrow.position, true, false),
+            (escrow.admission, true, false),
+            (escrow.basis_record, false, false),
+        ]);
+    }
     invoke_direct_child(
         program_id,
         frame.claims_program,
@@ -568,19 +662,7 @@ fn execute_claims_checkpoint_handoff(
         input.market,
         input.parent_request_digest,
         request_bytes,
-        &[
-            (frame.claims_authority, false, true),
-            (frame.claims_aggregate, true, false),
-            (frame.rent_credit, true, false),
-            (frame.cache, false, false),
-            (frame.registry, false, false),
-            (frame.claims_program, false, false),
-            (frame.claims_programdata, false, false),
-            (frame.core_program, false, false),
-            (frame.core_programdata, false, false),
-            (frame.market, false, false),
-            (frame.rent_program, false, false),
-        ],
+        &projection,
     )
     .map_err(|_| CoreSbfError::ChildCpi)?;
     let (producer, receipt_bytes) = get_return_data().ok_or(CoreSbfError::ChildAck)?;
@@ -597,6 +679,22 @@ fn execute_claims_checkpoint_handoff(
         || !checkpoint_zeroed
         || frame.claims_aggregate.lamports() != refund
         || frame.rent_credit.lamports() != rent_before
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    // A frame that CARRIED the escrow and came back with it still open would
+    // mean the child took the accounts and did not burn: the aggregate would be
+    // empty of supply and the escrow's rent would still be stranded in an
+    // account no key can close. Core does not re-derive the escrow's identity
+    // -- that rule has one author, inside Claims -- but it does insist the
+    // accounts it handed over came back closed.
+    if let Some(escrow) = frame.escrow
+        && (escrow.position.owner != &system_program::ID
+            || escrow.admission.owner != &system_program::ID
+            || !escrow.position.data_is_empty()
+            || !escrow.admission.data_is_empty()
+            || escrow.position.lamports() != 0
+            || escrow.admission.lamports() != 0)
     {
         return Err(CoreSbfError::ChildAck);
     }
@@ -651,7 +749,14 @@ pub fn process_checkpoint_suffix(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    if accounts.len() != RETIREMENT_ACCOUNT_COUNT_V1.saturating_sub(1) {
+    // The same two widths the prepare packet admits, and for the journal's
+    // reason rather than this packet's: a checkpointed retirement's four
+    // operations must present ONE account frame, and the suffix packets never
+    // read the escrow tail they carry.
+    if !matches!(
+        accounts.len(),
+        RETIREMENT_DIRECT_ACCOUNT_COUNT_V1 | RETIREMENT_DIRECT_BURN_ACCOUNT_COUNT_V1
+    ) {
         return Err(CoreSbfError::AccountFrame.into());
     }
     let prefix = instruction_data
@@ -1170,6 +1275,38 @@ fn authenticate_direct_privileges(
         || frame.rent.executable
     {
         return Err(CoreSbfError::AccountFrame.into());
+    }
+    if let Some(escrow) = frame.escrow {
+        if !escrow.position.is_writable
+            || escrow.position.is_signer
+            || escrow.position.executable
+            || !escrow.admission.is_writable
+            || escrow.admission.is_signer
+            || escrow.admission.executable
+            || escrow.basis_record.is_writable
+            || escrow.basis_record.is_signer
+            || escrow.basis_record.executable
+            || escrow.position.key == escrow.admission.key
+            || escrow.position.key == escrow.basis_record.key
+            || escrow.admission.key == escrow.basis_record.key
+        {
+            return Err(CoreSbfError::AccountFrame.into());
+        }
+        for named in [
+            frame.market,
+            frame.rent_credit,
+            frame.claims_aggregate,
+            frame.custody_replay,
+            frame.hoard_vault,
+            frame.refund_wallet,
+        ] {
+            if named.key == escrow.position.key
+                || named.key == escrow.admission.key
+                || named.key == escrow.basis_record.key
+            {
+                return Err(CoreSbfError::AccountFrame.into());
+            }
+        }
     }
     for account in [
         frame.cache,
