@@ -505,13 +505,45 @@ precede the escrow's close and the close must precede checkpoint 1's handoff,
 because the handoff reassigns the aggregate to Core and no Position of that
 market can be closed afterwards.
 
-Until it ships, **this row is reachable only by a CATEGORICAL market**, and a
-cohort that intends to retire a refunding one is founding a market it cannot
-retire. The route is a Claims and a Core program change, so cohort-17 carries it
-as a re-release plus a re-found under decision 0012 with frame-baseline rows for
-both links. The preflight now says so by name rather than instructing a payout
-nobody can produce (`crates/dclutch-operator/src/wallet_terminal_input.rs`,
-lane PROGRAMS-17C, 2026-09-05).
+**IT SHIPPED at `7d45d6ba3` (lane PROGRAMS-17E, 2026-09-06), and this row is
+reachable by a refunding market once the cohort carries both new links.** The
+closure's frame gains three TRAILING accounts -- the escrow's Position, its
+protocol-Position admission, and the Market's linked `ProductBasisV3` record --
+so 11 becomes 14 (12 becomes 15 with the Registry continuation); Core's
+checkpointed retirement frame goes 35 to 38 and carries them on ALL FOUR packets,
+because `aggregate_retirement_journal.rs` requires one frame per retirement. A
+CATEGORICAL retirement is byte-for-byte the thirty-five-account one that shipped
+and its four packet extents do not move: no request byte changed.
+
+What this row must supply, and where each address comes from:
+
+- the escrow Position and its admission:
+  `dclutch_claims::protocol_position_v2::failure_escrow_v1`, derived from the
+  Claims aggregate alone (its owner is the program, its header carries the
+  logical Market and the runtime width);
+- the linked basis record: the address the FOUNDING producer used. It is not
+  derivable from the aggregate, and the devnet retirement path
+  (`terminal_sequence.rs`, `aggregate_retirement_snapshot_from_chain_v1`) does
+  not yet receive it -- it passes `None`, builds the thirty-five-account plan and
+  the chain refuses `0x5503`, which is the same wall refused by name rather than
+  mis-built. **Threading that one address is what this row is still owed.**
+
+The cost, restated: two ELFs move, so cohort-17 is a full re-release of every
+program plus a re-found under decision 0012, with frame-baseline rows for both
+links (carried at `7d45d6ba3`, admitted at `b1fe0193d`). **Cohort-16.1 cannot be
+repaired in place** -- its Claims and Core are the old ELFs and decision 0012
+forbids upgrading a founded market's release set -- so its escrow Position
+`7FQCfc4Rrrs…` stays where it is and its market stays unretired. The evidence
+that the route works is `a_refunding_market_retires_once_the_closure_burns_its_
+failure_column` in `crates/dclutch-svm-harness/tests/market_retirement_v1_
+lifecycle.rs`, which is ProgramTest against real ELFs and not validator evidence
+(`tools/gauntlet/TIERS.md`).
+
+The preflight says the wall by name rather than instructing a payout nobody can
+produce (`crates/dclutch-operator/src/wallet_terminal_input.rs`, lane
+PROGRAMS-17C, 2026-09-05); its fifth arm's sentence is now a statement about
+which release set a market was founded on rather than about a route that does not
+exist.
 
 ### found-two-source
 

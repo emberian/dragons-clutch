@@ -1110,7 +1110,8 @@ mod tests {
         let custody_context = [13; 32];
         let zero = claims_aggregate(market, claims, custody_context, &[0, 0, 0]);
         assert!(
-            authenticate_zero_claims(&zero, zero.key, claims, market, custody_context, None).is_ok()
+            authenticate_zero_claims(&zero, zero.key, claims, market, custody_context, None)
+                .is_ok()
         );
 
         let live = claims_aggregate(market, claims, custody_context, &[0, 7, 0]);
@@ -1275,10 +1276,7 @@ mod tests {
             Some(&substituted),
         )
         .expect_err("a substituted escrow observation must refuse");
-        assert!(
-            error.to_string().contains("not the derived"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("not the derived"), "{error}");
 
         // THE WALL, stated as itself.
         let mut seated = escrow_position(&aggregate, derived.owner, &[0, 0, 0, residue]);
@@ -1298,9 +1296,10 @@ mod tests {
                 && text.contains(&derived.position.to_string())
                 && text.contains(&derived.owner.to_string())
                 && text.contains("closure's burn")
-                && text.contains("cohort-17"),
-            "the seated residue must name the escrow, its keyless owner and the burn that is \
-             owed, and must NOT instruct a payout: {text}"
+                && text.contains("decision 0012"),
+            "the seated residue must name the escrow, its keyless owner, the burn that \
+             discharges it and the rule that decides whether THIS Market can reach it, and must \
+             NOT instruct a payout: {text}"
         );
         assert!(
             !text.contains("wallet terminal payouts first"),

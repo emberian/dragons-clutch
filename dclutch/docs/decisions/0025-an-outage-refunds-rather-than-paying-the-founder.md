@@ -18,6 +18,10 @@ shape.**
 **A fourth section, 2026-09-05 (lane PROGRAMS-17C), records what shape A costs
 once you know that the economic slice is not the writer, and states the closure
 law in Lean; the preflight that instructed an impossible act is repaired.**
+**A fifth, 2026-09-06 (lane PROGRAMS-17E): shape A SHIPPED at `7d45d6ba3`, and a
+refunding market has retired end to end on real ELFs. The section carries the
+frames as built, the CU the burn costs, the four hostiles by discriminant, and
+the three things it did not close.**
 **Amended a third time on 2026-09-05 (lane PROGRAMS-17B): the escrow shipped
 with no way to DISCHARGE it, so no market founded under this record can retire
 — the failure column is unpayable under every certificate and its holder has no
@@ -616,3 +620,102 @@ L1/L3 conservation, and `the_closure_burn_admits_the_retirement_it_foreclosed`
 by the same predicate with nothing relaxed), and the `BeginRetiring` preflight,
 which stopped instructing an act no party can perform. **What is owed**: the
 route above. No devnet act was performed and no SBF crate was touched.
+
+## Addendum, 2026-09-06 (lane PROGRAMS-17E): shape A shipped, and a refunding market has retired
+
+The section above costed shape A once the writer was known. This one records
+what was built, what it measured, and the three things it did not close.
+
+### The debit has one author, and the gate gained the arm it always implied
+
+`signed_delta_v3::apply_coordinate` was private and stayed private.
+`burn_failure_coordinate_v1` (`programs/dclutch-claims-sbf/src/signed_delta_v3.rs`)
+is the arm beside it: it derives the failure index from
+`refunding_failure_index`, refuses every other coordinate by name
+(`ClosureBurnRefusalV3::Coordinate`), and applies one `Debit` to the aggregate's
+supply and one to the escrow's balance. It writes no account — both arguments
+are buffers its caller borrows — so a burn that could not complete leaves
+nothing behind whatever the caller's discipline is.
+
+The credits-only gate (`admit_failure_coordinate_owners_v1`, `fd2cb0905`) did
+not change. Its asymmetry always implied a licensed debit and never named one;
+this is the one it named: the escrow's own column, at closure, on a market whose
+linked record refunds on failure.
+
+### The record is proved by one account, content-addressed
+
+The addendum above required the linked basis record in frame because there is no
+Hoard in it. What it did not say is how a program with ONE basis account and no
+Product-graph walk authenticates that record. The answer was already in the tree
+and had four hand-spellings: the semantic basis identity is a domain-separated
+hash of the record's own bytes minus its Product links, and the aggregate's
+`basis_id` IS that hash, written at founding.
+`dclutch_product::payoff::runtime_v3::semantic_basis_id_v3` is now its one
+author; the closure recomputes it from the bytes it is handed and compares. The
+preimage carries the kind, the width and the payout scale, which is exactly the
+triple `categorical_refunds_on_failure_v3` reads, so a record that reproduces a
+Market's `basis_id` cannot disagree with that Market about whether it refunds.
+
+### The frames, as built
+
+| frame | categorical | refunding |
+| --- | --- | --- |
+| Claims `market_closure_v1` | 11 (12 with continuation) | 14 (15) |
+| Core checkpointed retirement, each of four packets | 35 | 38 |
+| Core one-shot retirement | 36 | *unreachable* |
+
+The one-shot route's frame is fixed at thirty-six in Core's own `parse`, so it
+carries no tail and cannot discharge a seated column.
+`MarketRetirementReportV1::failure_escrow_seated` tells a caller that before it
+submits rather than after the chain refuses.
+
+### What it measured
+
+On seven ELFs built on Linux with zero frame diagnostics,
+`a_refunding_market_retires_once_the_closure_burns_its_failure_column`
+(`crates/dclutch-svm-harness/tests/market_retirement_v1_lifecycle.rs`) is the
+first complete retirement of a refunding market anywhere. Prepare burns
+166,666,667 units, closes the escrow's Position AND its admission, and hands
+their rent to the checkpoint; the three remaining packets reach `Retired` and the
+refund wallet is paid to the lamport, the escrow's rent inside that number
+rather than beside it.
+
+CU per stage, categorical in parentheses: prepare 139,558 (123,398), close-vault
+128,956 (128,241), close-replay 112,226 (111,511), finish 91,698 (90,983). **The
+burn costs 16,160 CU** and each extra account costs about 715. The Claims
+closure's own stack frame goes 2,176 to 2,752 bytes of the 4,096 bound.
+
+The hostiles this section asked for, each by discriminant on real ELFs, with the
+honest packet submitted last from the same fixture as the control: a Position
+that is not the derived escrow refuses `ClaimsSbfError::FailureEscrow` (`0x5010`,
+the code three other routes already raise for that accusation); a substituted or
+non-refunding basis record refuses `ClaimsMarketClosureSbfErrorV1::Basis`
+(`0x5506`, split from `Identity` because it sends its reader to another
+program's record); a stranger holding one unit of the column refuses `Liability`
+(`0x5503`), because that unit is in hands that can be paid; and an escrow holding
+a tradeable claim beside the residue refuses `0x5503` for the same reason. The
+categorical retirement is byte-identical: its four packet extents did not move
+and no request byte changed.
+
+### What is owed
+
+1. **The devnet path does not carry the tail.**
+   `aggregate_retirement_snapshot_from_chain_v1` can derive the escrow pair off
+   the aggregate but has no route to the linked basis record's address, which
+   the founding producer holds and the terminal evidence does not. It passes
+   `None`, builds the thirty-five-account plan, and the chain refuses `0x5503` —
+   the same wall, refused by name rather than mis-built. Threading one address
+   is the whole of it.
+2. **The retirement builder does not re-derive the escrow OWNER.** It proves the
+   pair is the canonical protocol-Position pair under the Position's own
+   recorded owner, that the Position joins this aggregate at this width, and
+   that it holds the column and nothing else. Whether that owner is the
+   capability PDA at the failure selector is the Claims program's rule and the
+   host spelling the CALLER uses to find the accounts. A caller that hands the
+   builder some other canonical Position gets a plan the chain refuses by name.
+3. **This is ProgramTest evidence, not validator evidence.** Nothing deployed
+   through Loader V3 and no cluster was contacted. Cohort-17 carries both links
+   as a re-release plus a re-found under decision 0012, and **cohort-16.1 cannot
+   be repaired in place**: its release set is founded and 0012 forbids changing
+   it, so its escrow Position `7FQCfc4Rrrs…` stays and its market stays
+   unretired.

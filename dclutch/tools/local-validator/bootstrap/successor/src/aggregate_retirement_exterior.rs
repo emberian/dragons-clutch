@@ -1463,6 +1463,11 @@ mod tests {
                 finality: Finality::Finalized,
             },
             expected_refund_delta: 150,
+            // A CATEGORICAL fixture: this journal's assertion is that the four
+            // packets present one frame, and a refunding retirement's tail is
+            // three more accounts on all four rather than a different shape.
+            burned_failure_units: 0,
+            failure_escrow_rent_lamports: 0,
         };
         build_aggregate_retirement_campaign_v1(
             AggregateRetirementCampaignInputV1 {

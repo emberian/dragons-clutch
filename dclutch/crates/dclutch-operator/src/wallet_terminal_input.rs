@@ -443,9 +443,12 @@ pub fn decode_routed_market_v1(
 /// move it wants a Hoard terminal settlement has already drained. Telling an
 /// operator to produce a payout for it is instructing an act NO party can
 /// perform, and that is what this function said until the addendum to decision
-/// 0025 (2026-09-05) named the shape. It now says what is actually owed: the
-/// closure's burn of that column, which is a Claims program change and rides
-/// cohort-17 as a re-release plus a re-found under decision 0012.
+/// 0025 (2026-09-05) named the shape. The burn shipped at `7d45d6ba3`
+/// (2026-09-06), so the sentence stopped being "what is owed" and became a
+/// statement about WHICH RELEASE SET this Market was founded on: a Market whose
+/// Claims and Core carry the closure burn retires through the checkpointed
+/// route, and one founded before them cannot be repaired in place, because
+/// decision 0012 forbids upgrading a founded market's release set.
 ///
 /// `escrow` is the observation of the derived failure-escrow Position, which
 /// the caller finds with [`crate::failure_escrow_v1::failure_escrow_v1`] off
@@ -573,10 +576,12 @@ fn seated_failure_column_refusal_v1(
          {claim_index} is {supply}, seated in this Market's failure escrow {position} at aggregate \
          {}, whose owner {} is a program-derived address with no key. No certificate pays that \
          coordinate and the refunding merge needs a Hoard terminal settlement has drained, so \
-         there is no act any party can perform here. What is owed is the closure's burn of that \
-         column (decision 0025, addendum of 2026-09-05, shape A): a Claims program change that \
-         rides cohort-17 as a re-release plus a re-found under decision 0012. Until it ships this \
-         Market cannot retire and its rent stays locked",
+         there is no act any party can perform here. The act that discharges it is the closure's \
+         burn of that column (decision 0025, shape A), which ships in the Claims and Core pair \
+         from 7d45d6ba3 and reaches this Market only through the release set it was FOUNDED on -- \
+         decision 0012 forbids upgrading that, so a Market founded before the burn cannot retire \
+         and its rent stays locked, and one founded on a cohort carrying it retires through the \
+         checkpointed route with the escrow and its linked basis record in frame",
         account.key, derived.owner
     ))
 }
