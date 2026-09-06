@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "b653fecc955b09effc493af9b2fe24b67e11bde6",
+  "commit": "7d45d6ba3cd7c5055720af1828caccca50094e55",
   "link_count": 8,
   "links": [
     {
@@ -292,7 +292,7 @@
       "package": "dclutch-accelerator-sbf"
     },
     {
-      "frame_count": 283,
+      "frame_count": 288,
       "functions": [
         {
           "frames_bytes": [
@@ -662,6 +662,12 @@
         },
         {
           "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v326burn_failure_coordinate_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
             1344
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v328execute_parent_authenticated17h<hash>E"
@@ -728,6 +734,12 @@
         },
         {
           "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf17market_closure_v115ClosureAccounts5frame17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             64
           ],
           "symbol": "_ZN18dclutch_claims_sbf17market_closure_v115close_aggregate17h<hash>E"
@@ -758,9 +770,15 @@
         },
         {
           "frames_bytes": [
-            192
+            320
           ],
           "symbol": "_ZN18dclutch_claims_sbf17market_closure_v123authenticate_privileges17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf17market_closure_v123require_empty_aggregate17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -782,15 +800,21 @@
         },
         {
           "frames_bytes": [
-            2176
+            2752
           ],
           "symbol": "_ZN18dclutch_claims_sbf17market_closure_v126process_checkpoint_handoff17h<hash>E"
         },
         {
           "frames_bytes": [
-            640
+            704
           ],
-          "symbol": "_ZN18dclutch_claims_sbf17market_closure_v128authenticate_empty_aggregate17h<hash>E"
+          "symbol": "_ZN18dclutch_claims_sbf17market_closure_v129burn_failure_escrow_column_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            576
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf17market_closure_v131authenticate_aggregate_identity17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -800,7 +824,13 @@
         },
         {
           "frames_bytes": [
-            2176
+            64
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf17market_closure_v135close_escrow_pair_into_aggregate_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2752
           ],
           "symbol": "_ZN18dclutch_claims_sbf17market_closure_v17process17h<hash>E"
         },
@@ -1966,7 +1996,7 @@
       "package": "dclutch-claims-sbf"
     },
     {
-      "frame_count": 273,
+      "frame_count": 274,
       "functions": [
         {
           "frames_bytes": [
@@ -2018,6 +2048,7 @@
         },
         {
           "frames_bytes": [
+            0,
             0
           ],
           "symbol": "_ZN132_$LT$alloc..vec..Vec$LT$T$C$A$GT$$u20$as$u20$alloc..vec..spec_extend..SpecExtend$LT$$RF$T$C$core..slice..iter..Iter$LT$T$GT$$GT$$GT$11spec_extend17h<hash>E"
@@ -3347,7 +3378,7 @@
         },
         {
           "frames_bytes": [
-            768
+            832
           ],
           "symbol": "_ZN16dclutch_core_sbf9retire_v119invoke_direct_child17h<hash>E"
         },
@@ -3449,7 +3480,7 @@
         },
         {
           "frames_bytes": [
-            1024
+            1088
           ],
           "symbol": "_ZN16dclutch_core_sbf9retire_v133execute_claims_checkpoint_handoff17h<hash>E"
         },
@@ -9134,7 +9165,7 @@
         },
         {
           "frames_bytes": [
-            2176
+            2240
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v39lifecycle20prepare_lifecycle_v417h<hash>E"
         },
