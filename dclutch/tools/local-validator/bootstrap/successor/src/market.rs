@@ -10044,34 +10044,22 @@ fn derive_founding_poststate_expectation_v1(
     // for this width, and its Position and admission are the ordinary PDAs
     // under that owner. Nothing here is chosen -- a host that derived a
     // different escrow would be refused by `FailureEscrow` 0x5010.
-    let escrow_failure_selector = claim_count
-        .checked_sub(1)
-        .filter(|_| claim_count >= 2)
-        .ok_or_else(|| Error::new("no failure escrow is derivable at this runtime width"))?;
-    let escrow_owner = Pubkey::find_program_address(
-        &dclutch_claims::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
-            coordinates.market.to_bytes(),
-            escrow_failure_selector,
-        )
-        .map_err(|error| Error::new(format!("Claims escrow owner seeds: {error:?}")))?
-        .as_slices(),
-        &claims_program,
-    )
-    .0;
-    let escrow_position = Pubkey::find_program_address(
-        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), escrow_owner.to_bytes())
-            .map_err(|error| Error::new(format!("Claims escrow position seeds: {error:?}")))?
-            .as_slices(),
-        &claims_program,
-    )
-    .0;
-    let escrow_admission = Pubkey::find_program_address(
-        &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), escrow_owner.to_bytes())
-            .map_err(|error| Error::new(format!("Claims escrow admission seeds: {error:?}")))?
-            .as_slices(),
-        &claims_program,
-    )
-    .0;
+    //
+    // ONE HOST AUTHOR, and the census is why. This block used to spell the
+    // three derivations inline, so the conservation ledger that had to find
+    // the SAME Position had no way to ask for it and reported `VIOLATED L3`
+    // against cohort-16.1's correct founding
+    // (`docs/evidence/COHORT161_UPGRADED_SEALED_2026_09_05.md`, the 2026-09-05
+    // PROGRAMS-17B addendum). `ledger::failure_escrow_v1` is now the sole host
+    // spelling and both callers ask it.
+    let escrow = crate::ledger::failure_escrow_v1(
+        claims_program,
+        coordinates.market.to_bytes(),
+        aggregate,
+        claim_count,
+    )?;
+    let escrow_position = escrow.position;
+    let escrow_admission = escrow.admission;
     let aggregate_width =
         liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, claim_count)
             .map_err(|error| Error::new(format!("aggregate width: {error:?}")))?;

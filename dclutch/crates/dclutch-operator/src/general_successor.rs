@@ -19,11 +19,11 @@ use std::{
 };
 
 use crate::general_hot_v3::{
-    CheckedGeneralHotReleaseV3, GENERAL_HOT_HEAP_FRAME_BYTES_V3, GeneralHotArtifactDigestsV3,
-    GeneralHotStateV3, GeneralObservedAccountMetaV3, GeneralSuccessorInstructionV5,
-    GeneralSuccessorTransactionPlanV0, build_general_successor_instruction_v5,
-    canonical_general_lookup_addresses_v3, compile_general_successor_v0,
-    general_artifact_bytes_from_hot_state_v3,
+    CheckedGeneralHotReleaseV3, GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3, GENERAL_HOT_HEAP_FRAME_BYTES_V3,
+    GeneralHotArtifactDigestsV3, GeneralHotStateV3, GeneralObservedAccountMetaV3,
+    GeneralSuccessorInstructionV5, GeneralSuccessorTransactionPlanV0,
+    build_general_successor_instruction_v5, canonical_general_lookup_addresses_v3,
+    compile_general_successor_v0, general_artifact_bytes_from_hot_state_v3,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_market::capability_program::hot_v3::{
@@ -901,13 +901,21 @@ fn serialize_plan_v5(
             "General serializer refused a state/successor/transaction rejoin mismatch",
         ));
     }
-    let [compiled_heap, compiled_hot] = compiled_message.instructions.as_slice() else {
+    let [compiled_limit, compiled_heap, compiled_hot] = compiled_message.instructions.as_slice()
+    else {
         return Err(Error::new(
-            "General serializer requires exactly one heap declaration followed by one Hot instruction",
+            "General serializer requires exactly one compute limit and one heap declaration \
+             followed by one Hot instruction",
         ));
     };
+    let expected_limit =
+        ComputeBudgetInstruction::set_compute_unit_limit(GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3);
     let expected_heap =
         ComputeBudgetInstruction::request_heap_frame(GENERAL_HOT_HEAP_FRAME_BYTES_V3);
+    let limit_program = compiled_message
+        .account_keys
+        .get(usize::from(compiled_limit.program_id_index))
+        .ok_or_else(|| Error::new("General compute limit program index was out of bounds"))?;
     let heap_program = compiled_message
         .account_keys
         .get(usize::from(compiled_heap.program_id_index))
@@ -916,14 +924,18 @@ fn serialize_plan_v5(
         .account_keys
         .get(usize::from(compiled_hot.program_id_index))
         .ok_or_else(|| Error::new("General Hot instruction program index was out of bounds"))?;
-    if *heap_program != expected_heap.program_id
+    if *limit_program != expected_limit.program_id
+        || !compiled_limit.accounts.is_empty()
+        || compiled_limit.data != expected_limit.data
+        || *heap_program != expected_heap.program_id
         || !compiled_heap.accounts.is_empty()
         || compiled_heap.data != expected_heap.data
         || *hot_program != report.instruction.program_id
         || compiled_hot.data != report.instruction.data
     {
         return Err(Error::new(
-            "General serializer refused a substituted heap declaration or instruction order",
+            "General serializer refused a substituted compute limit or heap declaration, or an \
+             instruction order",
         ));
     }
     let unsigned = VersionedTransaction {
@@ -1443,11 +1455,13 @@ mod tests {
             admitted_invocation_count: 1,
             child_routes: Vec::new(),
         };
+        let compute_limit =
+            ComputeBudgetInstruction::set_compute_unit_limit(GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3);
         let heap_frame =
             ComputeBudgetInstruction::request_heap_frame(GENERAL_HOT_HEAP_FRAME_BYTES_V3);
         let compiled = v0::Message::try_compile(
             &payer,
-            &[heap_frame, instruction],
+            &[compute_limit, heap_frame, instruction],
             &[AddressLookupTableAccount {
                 key: lookup_key,
                 addresses: vec![market],

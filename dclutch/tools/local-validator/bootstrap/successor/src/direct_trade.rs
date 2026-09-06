@@ -3897,23 +3897,50 @@ fn direct_claim_balances_v1(
     Ok(balances)
 }
 
+/// The terminal claim schedule is EXACTLY the two Positions' own nonzero
+/// coordinates, and the Positions are what says so.
+///
+/// This used to assert `K+1` rows with a nonzero seller row at every outcome,
+/// which is a fact about a CATEGORICAL market rather than about a schedule. On
+/// a refunding market the failure coordinate is seated in the Market's escrow
+/// (decision 0025 §2 item 2), so the seller structurally holds `K-1` outcomes
+/// and cannot contribute a `K`th row it never held -- and the rule refused
+/// every refunding fill it was asked to certify, cohort-16.1's landed one
+/// included (`docs/evidence/COHORT161_UPGRADED_SEALED_2026_09_05.md`, the
+/// PROGRAMS-17B addendum).
+///
+/// The invariant the count was standing in for is that no coordinate the seller
+/// HOLDS is dropped from the schedule, so its zero-collateral burn cannot be
+/// silently skipped -- and that is a join against the seller's Position, not a
+/// number. Re-deriving both sides from `positions`, whose bytes the evidence
+/// digest already covers, states it directly: a substituted document that drops
+/// a row, zeroes one, reorders two or appends a row is refused because the
+/// Positions do not say that, and a refunding seller with a structural zero at
+/// its failure coordinate certifies because its Position does. It is strictly
+/// stronger than the count: a row at the right index carrying the wrong
+/// quantity used to pass.
 fn authenticate_direct_claim_schedule_v1(evidence: &DirectTradeFinalizedEvidenceV1) -> Result<()> {
-    let seller_claim_count = usize::try_from(evidence.outcome_count)
-        .map_err(|_| refusal("Direct outcome count does not fit this host"))?;
-    let expected_claim_count = seller_claim_count
-        .checked_add(1)
-        .ok_or_else(|| refusal("Direct claim schedule count overflowed"))?;
-    if evidence.claim_balances.len() != expected_claim_count {
+    let derived = direct_claim_balances_v1(
+        &evidence.positions,
+        &evidence.seller_collateral_destination,
+        &evidence.buyer_collateral_source,
+    )?;
+    if evidence.claim_balances != derived {
         return Err(refusal(
-            "Direct terminal claim schedule is not the exact K+1 partition",
+            "Direct terminal claim schedule is not the two Positions' own nonzero coordinates",
         ));
     }
-    for (claim_index, row) in evidence
+    let seller_rows = evidence
         .claim_balances
-        .iter()
-        .take(seller_claim_count)
-        .enumerate()
-    {
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| refusal("Direct terminal claim schedule omitted the buyer fill"))?;
+    if seller_rows == 0 {
+        return Err(refusal(
+            "Direct terminal seller claim schedule holds no outcome at all",
+        ));
+    }
+    for (claim_index, row) in evidence.claim_balances.iter().take(seller_rows).enumerate() {
         if row.owner != evidence.seller_owner
             || row.position != evidence.seller_position
             || row.recipient_token != evidence.seller_collateral_destination
@@ -3921,9 +3948,22 @@ fn authenticate_direct_claim_schedule_v1(evidence: &DirectTradeFinalizedEvidence
             || row.quantity_atoms == 0
         {
             return Err(refusal(
-                "Direct terminal seller claim schedule is not every outcome in canonical order",
+                "Direct terminal seller claim schedule is not its held outcomes in canonical order",
             ));
         }
+    }
+    // The seller's held coordinates are a canonical prefix, so the only outcome
+    // it may be missing is the last -- which is the one, and the only one, a
+    // refunding Market seats away from every holder.
+    let seller_claim_count = usize::try_from(evidence.outcome_count)
+        .map_err(|_| refusal("Direct outcome count does not fit this host"))?;
+    let ordinary_rows = seller_claim_count
+        .checked_sub(1)
+        .ok_or_else(|| refusal("Direct outcome count is too narrow to seat a claim"))?;
+    if seller_rows != seller_claim_count && seller_rows != ordinary_rows {
+        return Err(refusal(
+            "Direct terminal seller claim schedule skips an outcome before the failure coordinate",
+        ));
     }
     let buyer = evidence
         .claim_balances
@@ -7196,6 +7236,10 @@ mod tests {
         write_direct_journal_v1,
     };
     use crate::cluster::ExpectedClusterV1;
+    use dclutch_claims::liability_basis_state_v2::{
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisPositionInputV2,
+        encode_liability_basis_position_into_v2, liability_basis_vector_width_v2,
+    };
     use dclutch_operator::{Finality, Observation, ObservedAccount};
 
     /// The rate the deployed setup admits passes, and it is READ FROM THE
@@ -7320,6 +7364,34 @@ mod tests {
         }
     }
 
+    /// One canonical `LiabilityBasisV2` Position body, through the encoder the
+    /// chain writes with.
+    ///
+    /// The schedule authenticator joins against these bytes, so a fixture that
+    /// carried a placeholder blob would be testing nothing. Spelling the layout
+    /// by hand here would be a second author for it; `dclutch_claims` already
+    /// exports the one the program uses.
+    fn position_body(owner: &str, balances: &[u64]) -> String {
+        let width = liability_basis_vector_width_v2(
+            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+            u32::try_from(balances.len()).expect("claim count"),
+        )
+        .expect("Position width");
+        let mut bytes = vec![0_u8; width];
+        encode_liability_basis_position_into_v2(
+            LiabilityBasisPositionInputV2 {
+                revision: 1,
+                market_account: [7; 32],
+                owner: owner.parse::<Pubkey>().expect("owner").to_bytes(),
+                basis_id: [9; 32],
+            },
+            balances,
+            &mut bytes,
+        )
+        .expect("Position body");
+        BASE64.encode(&bytes)
+    }
+
     fn terminal_evidence() -> DirectTradeFinalizedEvidenceV1 {
         let seller_owner = Pubkey::new_unique().to_string();
         let seller_position = Pubkey::new_unique().to_string();
@@ -7417,14 +7489,14 @@ mod tests {
                 DirectPositionTransitionEvidenceV1 {
                     account: seller_position.clone(),
                     owner: seller_owner.clone(),
-                    pre_data_base64: BASE64.encode([3]),
-                    post_data_base64: BASE64.encode([4]),
+                    pre_data_base64: position_body(&seller_owner, &[10, 10, 10, 10]),
+                    post_data_base64: position_body(&seller_owner, &[9, 10, 10, 10]),
                 },
                 DirectPositionTransitionEvidenceV1 {
                     account: buyer_position.clone(),
                     owner: buyer_owner.clone(),
-                    pre_data_base64: BASE64.encode([5]),
-                    post_data_base64: BASE64.encode([6]),
+                    pre_data_base64: position_body(&buyer_owner, &[0, 0, 0, 0]),
+                    post_data_base64: position_body(&buyer_owner, &[1, 0, 0, 0]),
                 },
             ],
             claim_balances: vec![
@@ -7586,10 +7658,51 @@ mod tests {
         );
     }
 
+    /// A REFUNDING seller certifies, and it holds one outcome fewer.
+    ///
+    /// Decision 0025 seats the failure coordinate in the Market's escrow, so a
+    /// refunding seller holds `K-1` outcomes and can contribute no `K`th row.
+    /// The old `K+1` count refused exactly this shape and left cohort-16.1's
+    /// LANDED fill uncertified; the schedule is now joined against the seller's
+    /// own Position, which says the zero at the failure coordinate is a fact
+    /// about the market rather than a dropped burn.
     #[test]
-    fn terminal_claim_schedule_requires_canonical_k_plus_one_and_losing_burns() {
+    fn a_refunding_seller_without_the_failure_coordinate_certifies() {
+        let mut refunding = terminal_evidence();
+        let seller_owner = refunding.seller_owner.clone();
+        refunding.positions[0].post_data_base64 = position_body(&seller_owner, &[9, 10, 10, 0]);
+        refunding.claim_balances.remove(3);
+        refunding.evidence_sha256 = direct_evidence_digest_v1(&refunding).expect("digest");
+        assert_eq!(refunding.claim_balances.len(), 4);
+        authenticate_direct_claim_schedule_v1(&refunding).expect("refunding claim schedule");
+
+        // The relaxation is exactly one coordinate wide, and it is the last.
+        // A seller missing an ORDINARY outcome is a dropped burn and still
+        // refuses -- by the Position join first, and by the prefix rule even
+        // if a forger rewrote the Position to match.
+        let mut gapped = terminal_evidence();
+        gapped.positions[0].post_data_base64 = position_body(&seller_owner, &[9, 10, 0, 10]);
+        gapped.claim_balances.remove(2);
+        gapped.evidence_sha256 = direct_evidence_digest_v1(&gapped).expect("digest");
+        assert!(authenticate_direct_claim_schedule_v1(&gapped).is_err());
+    }
+
+    /// A schedule that agrees with itself and not with the Positions refuses.
+    ///
+    /// The count rule could not see this at all: every row sat at the right
+    /// index under the right owner, and only the quantity was a lie.
+    #[test]
+    fn a_schedule_quantity_the_position_does_not_carry_refuses() {
+        let mut inflated = terminal_evidence();
+        inflated.claim_balances[1].quantity_atoms = 11;
+        inflated.evidence_sha256 = direct_evidence_digest_v1(&inflated).expect("digest");
+        assert!(authenticate_direct_claim_schedule_v1(&inflated).is_err());
+    }
+
+    #[test]
+    fn terminal_claim_schedule_is_the_positions_own_nonzero_coordinates() {
         let exact = terminal_evidence();
-        authenticate_direct_claim_schedule_v1(&exact).expect("exact K+1 claim schedule");
+        authenticate_direct_claim_schedule_v1(&exact).expect("exact claim schedule");
         assert_eq!(exact.claim_balances.len(), 5);
         assert!(
             exact.claim_balances[..4]

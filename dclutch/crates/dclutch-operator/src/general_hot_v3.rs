@@ -109,6 +109,7 @@ use crate::{
         AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
         authenticate_product_graph_observation_v3,
     },
+    registry::TRANSACTION_COMPUTE_UNIT_LIMIT_V1,
     versioned::{VersionedMessagePlanV0, compile_v0_message},
 };
 
@@ -136,6 +137,26 @@ const ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3: usize =
 /// the existing protocol-wide Hot execution frame and is emitted explicitly
 /// before Trading rather than assumed by the accelerator.
 pub const GENERAL_HOT_HEAP_FRAME_BYTES_V3: u32 = DIRECT_HOT_HEAP_FRAME_BYTES_V1;
+
+/// General Hot cannot execute within Solana's default transaction CU
+/// allocation, and until cohort-16.1 nothing declared otherwise.
+///
+/// The heap frame above was emitted explicitly and the compute limit was not,
+/// so every General successor transaction this crate compiled carried the
+/// runtime's per-instruction default. On devnet at `65Yq3q6t…` that is 202,850
+/// units for the Trading instruction and `OpenBatch` at N=2 measures 654,000 to
+/// 677,000 in `tools/gauntlet/general-hot`: the transaction failed
+/// `ProgramFailedToComplete` — *"exceeded CUs meter at BPF instruction"* — at
+/// the first devnet attempt, having reached the program. The harness could not
+/// see it because the program-test caller pushes its own
+/// `set_compute_unit_limit(waist::COMPUTE_LIMIT)`, so the shipped builder and
+/// the only caller that exercised the route were two authors for one frame.
+///
+/// It declares the chain-profile ceiling rather than the measurement plus a
+/// margin, for `DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1`'s reason: a one-shot composed
+/// route whose limit is set too low is a transaction that can never be
+/// replayed.
+pub const GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3: u32 = TRANSACTION_COMPUTE_UNIT_LIMIT_V1;
 
 /// One exact finalized account plus its requested transaction privileges.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -820,8 +841,8 @@ pub fn build_general_hot_instruction_decoded_v3(
     })
 }
 
-/// Compile the required heap frame followed by one General instruction into an
-/// unsigned packet-safe v0 message.
+/// Compile the required compute limit and heap frame followed by one General
+/// instruction into an unsigned packet-safe v0 message.
 ///
 /// Exactly one finalized active LUT is accepted, and its address sequence must
 /// equal [`canonical_general_lookup_addresses_v3`]. Extra addresses, alternate
@@ -848,8 +869,10 @@ pub fn compile_general_hot_v0(
     if table.addresses.as_ref() != expected.as_slice() {
         return Err(GeneralHotOperatorErrorV3::LookupTable);
     }
+    let compute_limit =
+        ComputeBudgetInstruction::set_compute_unit_limit(GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3);
     let heap_frame = ComputeBudgetInstruction::request_heap_frame(GENERAL_HOT_HEAP_FRAME_BYTES_V3);
-    let instructions = [heap_frame, report.instruction.clone()];
+    let instructions = [compute_limit, heap_frame, report.instruction.clone()];
     let message = compile_v0_message(
         payer,
         &instructions,
@@ -4740,10 +4763,21 @@ mod tests {
             let solana_message::VersionedMessage::V0(message) = &plan.message.message else {
                 panic!("General compiles only v0 messages");
             };
-            assert_eq!(message.instructions.len(), 2);
+            assert_eq!(message.instructions.len(), 3);
+            let limit =
+                ComputeBudgetInstruction::set_compute_unit_limit(GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3);
+            let limit_compiled = message.instructions.first().expect("leading compute limit");
+            assert_eq!(
+                message
+                    .account_keys
+                    .get(usize::from(limit_compiled.program_id_index)),
+                Some(&limit.program_id)
+            );
+            assert_eq!(limit_compiled.data, limit.data);
+            assert!(limit_compiled.accounts.is_empty());
             let heap =
                 ComputeBudgetInstruction::request_heap_frame(GENERAL_HOT_HEAP_FRAME_BYTES_V3);
-            let heap_compiled = message.instructions.first().expect("leading heap frame");
+            let heap_compiled = message.instructions.get(1).expect("heap frame");
             assert_eq!(
                 message
                     .account_keys
@@ -4752,7 +4786,7 @@ mod tests {
             );
             assert_eq!(heap_compiled.data, heap.data);
             assert!(heap_compiled.accounts.is_empty());
-            let hot_compiled = message.instructions.get(1).expect("trailing Trading Hot");
+            let hot_compiled = message.instructions.get(2).expect("trailing Trading Hot");
             assert_eq!(
                 message
                     .account_keys
@@ -4811,14 +4845,21 @@ mod tests {
         // evidence account, so exactly the action that gained an account gained
         // a coordinate and two wire bytes. Nothing else in the seven declares a
         // new record.
+        // +8 WIRE BYTES ON EVERY ROW AND NO ACCOUNT, from cohort-16.1 giving
+        // this plan the `set_compute_unit_limit` it never carried. One
+        // instruction whose program is already a static key for the heap
+        // declaration beside it: one program index, one zero account count, one
+        // data length and five data bytes. Uniform across all seven, and no
+        // account count moves, which is what says a compute-budget declaration
+        // was added and nothing about the frame changed.
         for (action, accounts, wire) in [
-            (Action::Consider, 71, 674),
-            (Action::Freeze, 70, 672),
-            (Action::InitializeSettlement, 105, 932),
-            (Action::Collect, 99, 825),
-            (Action::Materialize, 97, 821),
-            (Action::Distribute, 99, 825),
-            (Action::Close, 98, 823),
+            (Action::Consider, 71, 682),
+            (Action::Freeze, 70, 680),
+            (Action::InitializeSettlement, 105, 940),
+            (Action::Collect, 99, 833),
+            (Action::Materialize, 97, 829),
+            (Action::Distribute, 99, 833),
+            (Action::Close, 98, 831),
         ] {
             let report = real_frame_report(action, 258);
             assert_eq!(report.instruction.accounts.len(), accounts, "{action:?}");

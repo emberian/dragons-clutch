@@ -613,3 +613,164 @@ to confirm the recorded `pid` is gone and then remove it.
    to say that the manifest they publish is Direct-shaped.
 5. OpenBatch N=2, which is still the only route that would put a transaction
    through the accelerator and give it its first witness on any chain.
+
+# Addendum, 2026-09-05 late evening (lane PROGRAMS-17B): §4 and §9 are REVERSED
+
+**The founding did not seat three of four outcomes. It seated four of four, and
+this document's §4 accused a correct founding because the census could not see
+the Position that holds the fourth.** The wall §9 found is real, it is upstream
+of nothing, and it is a different wall: a refunding market's failure coordinate
+is unpayable under every certificate and its holder is a keyless PDA, so
+`BeginRetiring`'s zero-supply conjunct can never be satisfied by any market
+founded under decision 0025.
+
+## 1. The escrow exists, and it has held the failure column since founding
+
+Cohort-16.1's basis is `CategoricalQ1` at width 4 with `payout_scale` 3 =
+`basis_width - 1`, so `categorical_refunds_on_failure_v3`
+(`crates/dclutch-product/src/payoff/runtime_v3.rs:69`) reads it REFUNDING. A
+refunding founding runs `refunding_founding_vectors_v1`
+(`programs/dclutch-claims-sbf/src/founding_v5.rs:1872`) and seats the failure
+coordinate in the Market's own `ClaimsCapability` escrow. The deployed candidate
+`87eec1c3a6bf954a4350931af62ce8d4fcc48da2` contains `ebbccbd4e` (*claims:
+founding seats the failure escrow*) — `git merge-base --is-ancestor` — so the
+Claims ELF on devnet is the seating one.
+
+Every address below is DERIVED from the aggregate's own header (owner, logical
+market, width) and then read off devnet at `finalized`. The derivation's control
+is the founder's Position: the same three seeds reproduce
+`EXYhY3YmHeB7AsDXqZed3Jy6LhUUku4c5MoxgsyZd4fa`, the account this document's
+census already watched.
+
+| | |
+| --- | --- |
+| logical Market | `3xoSXBVsAXENB1RPq4sqS8euCksT1qsnnz83eWQPEtgY` (the aggregate's `logical_market`; `BMK3BY41…` is the Found31 Market) |
+| Claims aggregate | `CBzv1hhtToxpCaExaA7QqES4bMu5UjxiAiBW9bMUrCdg` |
+| escrow owner | `Hq6sF5pv3i8CBkH46dsyN9fnzJi1jooS2gj6USCQmke3` — `ClaimsCapability` PDA at `(market, 3)` |
+| **escrow Position** | **`7FQCfc4RrrsATEe969eNVYoLjDukmBVKMAxM1yg7AzcQ`** — Claims-owned, 160 bytes, `DCLLBP02`, 1,463,040 lamports |
+| escrow admission | `4WUZ2qZKz7nkgGnnNejP8cLNHhjKCFCpHwNVDikE3T9b` — Claims-owned, 512 bytes, `DCLPPS02`, 3,251,200 lamports |
+
+The escrow Position's own header names the aggregate as its market and
+`Hq6sF5pv…` as its owner, and its vector reads
+
+    escrow  [0, 0, 0, 166666667]   revision 1
+    founder [0, 0, 0, 0]           revision 5
+    aggregate supply [0, 0, 0, 166666667]  revision 6
+
+**Revision 1 is the founding write.** The escrow has not moved since it was
+seated, which is what makes the first census reconstructible: at
+`post-admissions` the founder held `[q, q, q, 0]` and the escrow held
+`[0, 0, 0, q]`, so
+
+    [166666667, 166666667, 166666667, 0] + [0, 0, 0, 166666667]
+      = [166666667 x4] = the aggregate
+
+**L3 held.** That sum is `addFrom_addBelow_eq_addEvery` in bytes — the law
+`EconomicKernel.lean` proves and `the_two_founded_positions_sum_to_one_complete_set`
+(`founding_v5.rs:2528`) already asserted in Rust. Nothing was wrong with the
+founding, and §4's four "converging readings" converge because all four were
+taken through the same aperture.
+
+## 2. What was actually wrong: L3's aperture, not the founding
+
+`tools/gauntlet/journey/src/ledger.rs` states L3 as
+`now.position_totals == now.aggregate_supply`, and `position_totals` is summed
+over `self.positions` — a map an operator fills with `--position LABEL=PUBKEY`.
+The escrow is a PDA nobody types. So the law reported supply nobody owns, which
+is exactly what an unwatched holder looks like, and the census had no positive
+control that could tell "no Position holds this" from "I was not given the
+Position that does".
+
+The repair is a derivation, not a weaker law: the ledger now derives the failure
+escrow from coordinates the aggregate account itself carries
+(`ledger::failure_escrow_v1`) and joins it to L3 under the reserved label
+`failure-escrow`, so a census that reads the aggregate closes L3 without being
+told anything further. The founding frame builder
+(`tools/local-validator/bootstrap/successor/src/market.rs`) now asks the same
+function instead of spelling the three derivations inline; that inline spelling
+being unreachable from the census is the whole mechanism of this misreading.
+`the_derived_escrow_is_the_account_cohort_16_1_founded` pins the derivation to
+this market's real addresses.
+
+Two consequences of §4 inherit the reversal:
+
+* **The `K+1 partition` refusal is a categorical-only rule, not evidence of a
+  gap.** `authenticate_direct_claim_schedule_v1`
+  (`tools/local-validator/bootstrap/successor/src/direct_trade.rs:3900`) demands
+  the seller contribute a nonzero row at every outcome. On a refunding market
+  the seller structurally cannot hold the failure column — the escrow does — so
+  the rule refused every refunding fill it was asked to certify. The chain
+  accepted that trade correctly. **Repaired**: the schedule is now joined
+  against the two Positions' own nonzero coordinates, which the evidence already
+  carries and its digest already covers, so the count assertion is replaced by
+  the invariant it stood in for — no coordinate a Position HOLDS is dropped from
+  its zero-collateral burn. Strictly stronger than the count: a row at the right
+  index carrying a quantity the Position does not hold used to pass.
+* **`the_founder_is_issued_no_failure_claim_at_all`** (`founding_v5.rs:2554`) is
+  the ruling, not the defect. §4 read the ruling as the bug.
+
+## 3. THE WALL: a refunding market cannot retire, and no founding change fixes it
+
+**Where the conjunct actually lives.** Core's `BeginRetiring` and Trading's
+`DirectBeginRetiring` do not read Claims supply at all; the on-chain rule is the
+market closure's, `programs/dclutch-claims-sbf/src/market_closure_v1.rs:656-668`,
+which walks the aggregate and refuses `ClaimsMarketClosureSbfErrorV1::Liability`
+-- `CLAIMS_REFUSAL_BASE + 0x503` = `Custom(0x5503)` under decision 0007 -- on any
+nonzero coordinate. The operator hoists that same conjunct to the front of the
+chain (`crates/dclutch-operator/src/wallet_terminal_input.rs:456`), which is why
+cohort-16.1's refusal arrived as a host message and no `BeginRetiring`
+transaction was ever built. The wall is real either way: a market admitted into
+Retiring on this state would meet `0x5503` at closure instead.
+
+On a refunding market the failure coordinate's supply can never reach zero, and
+there are two independent reasons, either of which alone is fatal.
+
+**It is unpayable under every certificate.** `evaluate_categorical` refuses
+`FailureCoordinateNotPayable` when the selector IS the failure coordinate on a
+refunding record, and `evaluate_categorical_failure` pays "one collateral atom
+to every ordinary claim, nothing to the failure coordinate"
+(`crates/dclutch-product/src/payoff/runtime_v3.rs:972`, `:990`). So an ordinary
+resolution pays it nothing and an outage pays it nothing. There is no
+certificate under which a payout drains it.
+
+**Its holder cannot sign.** Terminal settlement under `CallerRole::Claims`
+requires coordinate 0 to be a signer and to equal the Position's owner
+(`programs/dclutch-claims-sbf/src/terminal_settlement_v3.rs:635`). The program
+says so in its own words at `:620`:
+
+> A Trading record owner and a Claims capability owner are both program-derived
+> addresses with no key, so neither can produce this proof
+
+The escrow's owner is exactly a Claims capability owner. The program's
+`payout == 0` arm exists and is complete (`terminal_settlement_v3.rs:506`,
+`:939`); what does not exist is anyone who can authorize it for this Position.
+
+**The one route that CAN move the escrow closes before it is needed.**
+`MergeRefundingCompleteSet`
+(`crates/dclutch-product/src/economic_slice/mod.rs:150`) burns the ordinary
+coordinates out of a holder and the failure coordinate out of the escrow — but
+it is a complete-set merge that returns collateral from the Hoard, and Terminal
+drains the Hoard to zero. By the time retirement is the question, merge is not
+available.
+
+So §9's sentence *"This market can never be retired, by any sequence of acts"*
+stands, and its scope is far larger than this market: **every market founded
+under decision 0025 is unretirable, on any chain, whatever the founding does.**
+The escrow was seated with no discharge. That is a fact decision 0025 did not
+have, in the same shape as the merge foreclosure the ESCROW lane found before
+it, and the choice of repair is recorded there for its owner.
+
+## 4. What this addendum does NOT claim
+
+The census outputs in `~/jobs/dclutch-cohort161-20260905/census/` are not
+withdrawn: every number in them was read off the chain and is correct. Only the
+L3 VERDICT is reversed, and only because the set it summed over was incomplete.
+L1, L2, L4, L5 and L6 are unaffected. L7 will read `inapplicable` at the first
+boundary after the derivation lands, naming `failure-escrow` as an admitted
+account — which is the ledger's own declared behaviour for a widened aperture,
+not a new gap.
+
+**Not re-run on chain.** This lane took reads only: `getAccountInfo` and one
+`getMultipleAccounts` at `finalized`. No devnet act. The redeploy that carries
+the repair is cohort-17's, because the repair is a program change and a Claims
+ELF that moves is a re-release plus a re-found under decision 0012.

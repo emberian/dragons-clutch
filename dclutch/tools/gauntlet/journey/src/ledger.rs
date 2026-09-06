@@ -28,6 +28,18 @@
 //! who it owes it to. A transfer that credits without debiting breaks this even
 //! when both accounts individually look well-formed.
 //!
+//! L3 is an equality over the Positions the ledger holds, so a Position the
+//! ledger does not hold reads as supply nobody owns, and the law ACCUSES a
+//! correct market. That is not hypothetical: cohort-16.1's first census
+//! reported `VIOLATED L3` over a founding that had seated its failure
+//! coordinate exactly as decision 0025 requires, because the escrow it seated
+//! it in is a PDA no caller passed (`docs/evidence/COHORT161_UPGRADED_SEALED_2026_09_05.md`,
+//! the 2026-09-05 PROGRAMS-17B addendum). So the failure escrow is DERIVED
+//! here from the aggregate account's own owner, logical market and width
+//! ([`failure_escrow_v1`]) and joins L3 under a reserved label. What remains
+//! caller-supplied is every Position a wallet holds, which no derivation can
+//! know; what can be closed by derivation now is.
+//!
 //! **L4 full collateralisation.** `hoard >= max_i supply(i) * unit`. dClutch's
 //! whole premise is that no outcome can be under-funded, so the worst outcome
 //! is the one that has to be covered. `unit` is read from the Registry's own
@@ -66,6 +78,10 @@ use std::collections::BTreeMap;
 
 use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+};
+use dclutch_claims::protocol_position_v2::{
+    ProtocolPositionAdmissionSeedsV2, ProtocolPositionClaimsCapabilitySeedsV2,
+    ProtocolPositionSeedsV2,
 };
 use dclutch_custody::{CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_market::{CoreState, Phase as CorePhase};
@@ -361,6 +377,84 @@ pub(crate) struct ObservationV1 {
     pub(crate) verdicts: Vec<VerdictV1>,
 }
 
+/// The label this census derives for a refunding Market's failure escrow.
+///
+/// Reserved: a caller may not declare a Position under it, because the whole
+/// point is that this row is a fact about an ADDRESS rather than a name an
+/// operator remembered to pass.
+pub(crate) const FAILURE_ESCROW_LABEL_V1: &str = "failure-escrow";
+
+/// The three accounts a refunding Market's failure coordinate is seated in.
+///
+/// **ONE HOST AUTHOR.** The founding frame builder in `market.rs` and this
+/// census ask the same question -- "which Position holds this Market's failure
+/// column" -- and the SBF program answers it a third time in
+/// `FailureEscrowIdentityV1::derive`, which is crate-private on purpose. Two
+/// host spellings of a PDA derivation is how a census comes to look for a
+/// Position at an address the founding never wrote, so there is one here and
+/// `market.rs` calls it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureEscrowV1 {
+    /// Coordinate a refunding complete set seats away from every holder.
+    pub(crate) failure_selector: u32,
+    /// `ClaimsCapability` owner PDA at `(logical market, failure selector)`.
+    pub(crate) owner: Pubkey,
+    /// The escrow's `LiabilityBasisV2` Position under that owner.
+    pub(crate) position: Pubkey,
+    /// The escrow's protocol-Position admission record under that owner.
+    pub(crate) admission: Pubkey,
+}
+
+/// Derive one Market's failure escrow from coordinates the chain itself holds.
+///
+/// Every input is read off the Claims aggregate account: the program is its
+/// `owner`, the logical Market and the runtime width are its own header fields.
+/// A caller therefore cannot point this at another Market's escrow, and a
+/// census that reads the aggregate at all can close L3 without being told
+/// anything further.
+///
+/// Errors at a width no escrow is derivable at, which is the same structural
+/// floor `refunding_failure_index` states: a refunding set needs one ordinary
+/// coordinate and one failure coordinate.
+pub(crate) fn failure_escrow_v1(
+    claims_program: Pubkey,
+    logical_market: [u8; 32],
+    aggregate: Pubkey,
+    claim_count: u32,
+) -> Result<FailureEscrowV1> {
+    let failure = dclutch_product::economic_slice::refunding_failure_index(claim_count)
+        .map_err(|error| Error::new(format!("failure escrow selector: {error:?}")))?;
+    let failure_selector = u32::try_from(failure)
+        .map_err(|_| Error::new("failure escrow selector does not fit this runtime width"))?;
+    let owner = Pubkey::find_program_address(
+        &ProtocolPositionClaimsCapabilitySeedsV2::new(logical_market, failure_selector)
+            .map_err(|error| Error::new(format!("failure escrow owner seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
+            .map_err(|error| Error::new(format!("failure escrow Position seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let admission = Pubkey::find_program_address(
+        &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
+            .map_err(|error| Error::new(format!("failure escrow admission seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    Ok(FailureEscrowV1 {
+        failure_selector,
+        owner,
+        position,
+        admission,
+    })
+}
+
 /// What the ledger watches, and the laws it evaluates over it.
 pub(crate) struct ConservationLedgerV1 {
     mint: Pubkey,
@@ -636,8 +730,8 @@ impl ConservationLedgerV1 {
             .and_then(|_| token_atoms.get("hoard").copied())
             .unwrap_or(0);
 
-        let (outcome_count, aggregate_supply) = match self.aggregate {
-            None => (0, Vec::new()),
+        let (outcome_count, aggregate_supply, escrow) = match self.aggregate {
+            None => (0, Vec::new(), None),
             Some(address) => {
                 let account = rpc.required_account(address, "Claims aggregate")?;
                 let view = LiabilityBasisMarketViewV2::decode(&account.data)
@@ -649,13 +743,50 @@ impl ConservationLedgerV1 {
                         Error::new(format!("aggregate supply {index}: {error:?}"))
                     })?);
                 }
-                (count, supply)
+                // EVERY coordinate the aggregate owes has a holder, and on a
+                // refunding Market the failure coordinate's holder is a PDA no
+                // operator has to remember to pass. Deriving it from the
+                // aggregate account the ledger already reads is what makes L3
+                // an equality over a set the LEDGER closes rather than one the
+                // caller assembles.
+                (
+                    count,
+                    supply,
+                    failure_escrow_v1(account.owner, view.logical_market, address, count).ok(),
+                )
             }
         };
 
+        // A derived Position joins L3 under a reserved label. It is added
+        // BEFORE the declared ones so a caller who also passed the address
+        // under their own label sees the collision refused rather than the
+        // supply counted twice.
+        let mut positions = BTreeMap::new();
+        if let Some(escrow) = &escrow {
+            positions.insert(FAILURE_ESCROW_LABEL_V1.to_owned(), escrow.position);
+        }
+        for (label, address) in &self.positions {
+            if label == FAILURE_ESCROW_LABEL_V1 {
+                return Err(Error::new(format!(
+                    "`{FAILURE_ESCROW_LABEL_V1}` is the label this census DERIVES for the \
+                     refunding failure escrow; a declared Position may not take it"
+                )));
+            }
+            if escrow
+                .as_ref()
+                .is_some_and(|escrow| &escrow.position == address)
+            {
+                return Err(Error::new(format!(
+                    "{label} is the derived failure escrow at {address}, which this census \
+                     already counts in L3; passing it again would sum one Position twice"
+                )));
+            }
+            positions.insert(label.clone(), *address);
+        }
+
         let mut position_balances = BTreeMap::new();
         let mut position_totals = vec![0_u64; outcome_count as usize];
-        for (label, address) in &self.positions {
+        for (label, address) in &positions {
             let Some(account) = rpc.account(*address)? else {
                 position_balances.insert(label.clone(), Vec::new());
                 continue;
@@ -687,8 +818,15 @@ impl ConservationLedgerV1 {
             position_balances.insert(label.clone(), balances);
         }
 
+        // The derived escrow is reported like any other watched account, so a
+        // census that finds it absent SAYS so instead of reporting the same
+        // silence a census that never looked would.
+        let mut watched = self.watched.clone();
+        if let Some(escrow) = &escrow {
+            watched.insert(FAILURE_ESCROW_LABEL_V1.to_owned(), escrow.position);
+        }
         let mut accounts = BTreeMap::new();
-        for (label, address) in &self.watched {
+        for (label, address) in &watched {
             let state = match rpc.account(*address)? {
                 None => AccountStateV1 {
                     address: address.to_string(),
@@ -2022,5 +2160,86 @@ mod tests {
         let l8 = verdict(&verdicts, "L8");
         assert_eq!(l8.status, "violated");
         assert!(l8.detail.contains("HoardPrincipal moved -500"));
+    }
+
+    /// The derived escrow is cohort-16.1's, to the byte.
+    ///
+    /// Every coordinate here is read off devnet: the Claims program that owns
+    /// the aggregate, the aggregate itself, the logical Market its header
+    /// carries and the width it owes over. What the derivation must reproduce
+    /// is the account the founding actually wrote --
+    /// `7FQCfc4RrrsATEe969eNVYoLjDukmBVKMAxM1yg7AzcQ`, a live 160-byte
+    /// `DCLLBP02` Position holding `[0, 0, 0, 166666667]` at revision 1 -- and
+    /// the market whose first census reported `VIOLATED L3` is therefore the
+    /// regression fixture. A derivation that drifts stops reproducing a real
+    /// address rather than stopping agreeing with itself.
+    #[test]
+    fn the_derived_escrow_is_the_account_cohort_16_1_founded() {
+        let claims: Pubkey = "8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk"
+            .parse()
+            .expect("Claims program");
+        let market: Pubkey = "3xoSXBVsAXENB1RPq4sqS8euCksT1qsnnz83eWQPEtgY"
+            .parse()
+            .expect("logical Market");
+        let aggregate: Pubkey = "CBzv1hhtToxpCaExaA7QqES4bMu5UjxiAiBW9bMUrCdg"
+            .parse()
+            .expect("Claims aggregate");
+        let escrow = failure_escrow_v1(claims, market.to_bytes(), aggregate, 4).expect("escrow");
+        assert_eq!(escrow.failure_selector, 3);
+        assert_eq!(
+            escrow.owner.to_string(),
+            "Hq6sF5pv3i8CBkH46dsyN9fnzJi1jooS2gj6USCQmke3",
+        );
+        assert_eq!(
+            escrow.position.to_string(),
+            "7FQCfc4RrrsATEe969eNVYoLjDukmBVKMAxM1yg7AzcQ",
+        );
+        assert_eq!(
+            escrow.admission.to_string(),
+            "4WUZ2qZKz7nkgGnnNejP8cLNHhjKCFCpHwNVDikE3T9b",
+        );
+    }
+
+    /// A width that can seat no escrow is not an escrow this census invents.
+    #[test]
+    fn a_width_below_the_structural_floor_derives_no_escrow() {
+        let claims: Pubkey = "8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk"
+            .parse()
+            .expect("Claims program");
+        let aggregate: Pubkey = "CBzv1hhtToxpCaExaA7QqES4bMu5UjxiAiBW9bMUrCdg"
+            .parse()
+            .expect("Claims aggregate");
+        assert!(failure_escrow_v1(claims, aggregate.to_bytes(), aggregate, 1).is_err());
+        assert!(failure_escrow_v1(claims, aggregate.to_bytes(), aggregate, 0).is_err());
+    }
+
+    /// L3 accuses a founding whose failure column is seated where no watched
+    /// Position stands -- which is cohort-16.1's reading, reproduced.
+    ///
+    /// Kept as a law test rather than deleted: the accusation is CORRECT about
+    /// the numbers it was given, and what was wrong was the aperture. The row
+    /// exists so the fix is visibly the derivation and not a weakened law.
+    #[test]
+    fn l3_accuses_a_supply_no_watched_position_holds() {
+        let ledger = new_ledger();
+        let mut now = census(&ledger, "post-admissions", 1_000, 500, 0, 100, undeclared());
+        now.outcome_count = 4;
+        now.aggregate_supply = vec![166_666_667; 4];
+        now.position_balances = BTreeMap::from([(
+            "founder".into(),
+            vec![166_666_667, 166_666_667, 166_666_667, 0],
+        )]);
+        now.position_totals = vec![166_666_667, 166_666_667, 166_666_667, 0];
+        let verdicts = ledger.evaluate(&now);
+        let l3 = verdict(&verdicts, "L3");
+        assert_eq!(l3.status, "violated");
+        assert!(l3.detail.contains("but the aggregate owes"));
+
+        // The same chain state with the escrow in the aperture: one Position
+        // more, and the law holds without one number changing.
+        now.position_balances
+            .insert(FAILURE_ESCROW_LABEL_V1.into(), vec![0, 0, 0, 166_666_667]);
+        now.position_totals = vec![166_666_667; 4];
+        assert_eq!(verdict(&ledger.evaluate(&now), "L3").status, "holds");
     }
 }

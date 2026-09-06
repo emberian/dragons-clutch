@@ -15,6 +15,11 @@ refunding market `MergeCompleteSet` is redefined over the ORDINARY coordinates
 — recorded in the amendment section at the end of this record; ESCROW-2 stated
 it in Lean at `e37116b03` and ember may reverse it to the immobile-coordinate
 shape.**
+**Amended a third time on 2026-09-05 (lane PROGRAMS-17B): the escrow shipped
+with no way to DISCHARGE it, so no market founded under this record can retire
+— the failure column is unpayable under every certificate and its holder has no
+key. The addendum at the end of this record states the two shapes and rules
+PROVISIONALLY for A.**
 
 **Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
 mechanism cohort page:
@@ -382,3 +387,111 @@ split and merge, `e37116b03`);
 `crates/dclutch-claims-svm/src/signed_delta_v3.rs`;
 `docs/decisions/0033-the-founder-bond-is-mandatory.md` (the bond that prices the
 oracle choice this record leaves at zero); `tools/gauntlet/journey/src/ledger.rs:1004-1012`.
+
+## Addendum, 2026-09-05 late evening: the escrow was seated with no discharge, and no refunding market can retire
+
+**PROVISIONAL, ruled by lane PROGRAMS-17B under the precedent §6 set, and
+reversible by ember or the orchestrator to shape B at the cost this section
+states.** The fact came from cohort-16.1's first walk to Terminal
+(`docs/evidence/COHORT161_UPGRADED_SEALED_2026_09_05.md`, the PROGRAMS-17B
+addendum), which convicted the founding and had to withdraw the conviction: the
+founding is correct and the escrow is seated exactly as §2 item 2 requires.
+
+**The fact this ruling did not have.** Seating the failure coordinate in an
+escrow changes who holds it for the market's whole life -- including after
+Terminal. Closure refuses on any nonzero aggregate coordinate
+(`programs/dclutch-claims-sbf/src/market_closure_v1.rs:656-668`,
+`ClaimsMarketClosureSbfErrorV1::Liability` = `Custom(0x5503)`), and the operator
+hoists the same conjunct to the `BeginRetiring` preflight
+(`crates/dclutch-operator/src/wallet_terminal_input.rs:456`). On a refunding
+market the failure coordinate's supply can never reach zero:
+
+* it is unpayable under EVERY certificate — `evaluate_categorical` refuses
+  `FailureCoordinateNotPayable` at that selector and `evaluate_categorical_failure`
+  pays "one collateral atom to every ordinary claim, nothing to the failure
+  coordinate" (`crates/dclutch-product/src/payoff/runtime_v3.rs:972`, `:990`),
+  so neither an honest walk nor an outage drains it;
+* its holder cannot sign — terminal settlement under `CallerRole::Claims`
+  binds coordinate 0's signature to the Position's owner
+  (`programs/dclutch-claims-sbf/src/terminal_settlement_v3.rs:635`), and the
+  program states at `:620` that "a Claims capability owner" is "a
+  program-derived address with no key", which is precisely what the escrow's
+  owner is; and
+* `MergeRefundingCompleteSet` — the one route that moves the escrow — returns
+  collateral from a Hoard that Terminal has already drained.
+
+The program's `payout == 0` arm exists and is complete
+(`terminal_settlement_v3.rs:506`, `:939`). What does not exist is anyone who can
+authorize it for this Position. **Every market founded under this decision is
+unretirable, on any chain, whatever the founding does**, and that is a founding
+fact in the same way the seating is: it cannot be repaired by re-founding under
+the same programs.
+
+This is the same shape as the merge foreclosure the ESCROW lane found before it:
+the escrow relocates a coordinate, and every route that assumed the coordinate
+was in a wallet has to be asked again. Merge was asked. Retirement was not.
+
+### The two shapes
+
+**A. Closure admits the seated escrow as the terminal residue.**
+`market_closure_v1`'s conjunct becomes, for a refunding market: supply is zero at
+every ORDINARY coordinate, and the failure coordinate's supply is exactly the
+derived escrow's balance at that coordinate. Retirement closes the escrow
+Position and its admission alongside the aggregate, and their rent reaches the
+declared beneficiary, which L6 already watches. The escrow's balance is not a
+free number the check has to trust: the Lean already proves
+`the_refunding_actions_keep_the_escrow_seated` and
+`the_seated_escrow_stands_against_exactly_the_ordinary_supply`, so at Terminal
+it is a function of the Market's own header.
+
+**B. A permissionless escrow settlement.** A crank entitled the way
+`ClaimCheckCrank` is — the market is Terminal, the recipient is derived —
+settles the escrow's failure column through the existing `payout == 0` arm,
+after which the universal zero-supply rule stands untouched.
+
+### The ruling: A
+
+**B adds a second exemption to the one conjunct that stands between a keyless
+PDA and every capability-owned Position in the system.** `terminal_settlement_v3`
+has exactly one today, the compaction crank, and it replaced the owner's
+signature with a persisted owner-kind tag and an elapsed deadline rather than
+dropping it. A second exemption for the escrow would have to be at least as
+careful, forever, and it buys a route whose entire correct behaviour is to move
+zero atoms. §2 item 2 preferred "a fact about who owns what" over "a refusal
+that has to stay correct forever"; the same instinct rules here, in the opposite
+direction from the merge amendment, and for the same reason.
+
+**What A actually has to do, because half of it is not obvious.** Admitting the
+residue is not enough: `protocol_position_v2.rs:608` refuses to close a Position
+with any nonzero balance, so a closure that merely tolerated the escrow's column
+would strand the escrow's Position, its admission and their rent, and L6 would
+be right to say so. So A is the closure BURNING the escrow's failure column --
+writing the escrow's vector and the aggregate's supply at that coordinate to
+zero in one program act, with the escrow in the frame -- and then closing both
+escrow accounts alongside the aggregate. That is the same mechanism the merge
+amendment above already ruled for, "the escrow's failure claims burned alongside
+by the program rather than by the merging holder", moved to the one boundary
+where nobody is merging. A repair that only relaxes the supply check is not this
+ruling; it is a rent leak wearing it.
+
+**What A costs, named.** Retirement learns the refunding shape — one derivation
+it can already make from the aggregate. The universal sentence "every claim's
+supply is zero" becomes "every claim's supply is discharged", and a reader has
+to be told that an unpayable column held by nobody IS discharged. The
+`authenticate_zero_claims_v1` host mirror moves with it, and so does its message,
+which today instructs an operator to "produce and execute wallet terminal
+payouts first" for a coordinate no wallet can hold — an instruction no party can
+follow. And it is a Claims program change, so the ELF moves and cohort-17
+carries it as a re-release plus a re-found under decision 0012.
+
+**What reversing to B costs.** The same re-found, plus the exemption above, plus
+a crank that somebody must run before any refunding market can retire.
+
+**Repaired alongside this record.** The `K+1 partition` rule in the Direct
+terminal certification demanded the seller hold a nonzero row at every outcome,
+which a refunding seller structurally cannot, so it refused every refunding fill
+it was asked to certify and left cohort-16.1's landed fill uncertified. The
+schedule is now joined against the two Positions' own nonzero coordinates
+(`tools/local-validator/bootstrap/successor/src/direct_trade.rs`,
+`a_refunding_seller_without_the_failure_coordinate_certifies`), which is the
+invariant the count stood in for and is strictly stronger than it.
