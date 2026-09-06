@@ -27,6 +27,14 @@ use dclutch_claims::{
     protocol_position_v2::ProtocolPositionAdmissionV2,
 };
 use dclutch_custody::CustodyAuthoritySeedsV1;
+use dclutch_custody::token_svm::{
+    ACCOUNT_BYTES, AccountState as TokenAccountState, COption, Mint, TOKEN_2022_PROGRAM_ID,
+    TokenAccount,
+    instruction::{InstructionSpec, approve_checked, initialize_account3, transfer_checked},
+};
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
+};
 use dclutch_market::{CoreState, Phase as CorePhase, StateBumpsV1};
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
@@ -35,27 +43,19 @@ use dclutch_operator::{
         plan_user_position_admission_v1,
     },
 };
-use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
-};
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
     require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
-use dclutch_registry::release_set::ExecutionRoleV1;
-use dclutch_custody::token_svm::{
-    ACCOUNT_BYTES, AccountState as TokenAccountState, COption, Mint, TOKEN_2022_PROGRAM_ID,
-    TokenAccount,
-    instruction::{InstructionSpec, approve_checked, initialize_account3, transfer_checked},
-};
 use dclutch_versioned_message_operator::compile_v0_message_with_optional_tables;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -3299,6 +3299,59 @@ fn complete_admission_message_prestate_v1(
     Ok(())
 }
 
+/// Give the admission's `PacketTooLarge` the two numbers it cannot carry.
+///
+/// `dclutch_versioned_message_operator::Error` is a payload-free enum, so
+/// `admission message compilation: PacketTooLarge` says the route does not fit
+/// and nothing about WHAT does not fit. A lane read that as an omission,
+/// published a frozen table over a founding's evidence account map, measured no
+/// change, and concluded from the negative that keys were not the problem --
+/// when what it had measured was a table that carried almost none of this
+/// route's own addresses. A refusal that reported its wire size and the size of
+/// the address set a table would have to carry could not have been read either
+/// way.
+///
+/// Both numbers come from authors that already exist and neither is a second
+/// opinion about the frame: `measure_v0_wire_bytes` compiles exactly this
+/// message without the cap, and `canonical_route_lookup_addresses_v1` reports
+/// the addresses THE COMPILER resolves through a probe table rather than a
+/// hand-written filter.
+fn sized_routing_refusal_v1(
+    fee_payer: Pubkey,
+    bounded: &[Instruction],
+    recent_blockhash: solana_sdk::hash::Hash,
+    observation: Observation,
+    routing_tables: &[ObservedAccount],
+    error: dclutch_versioned_message_operator::Error,
+) -> Error {
+    if error != dclutch_versioned_message_operator::Error::PacketTooLarge {
+        return Error::new(format!("admission message compilation: {error:?}"));
+    }
+    let blockhash = solana_hash::Hash::new_from_array(recent_blockhash.to_bytes());
+    let wire = dclutch_versioned_message_operator::measure_v0_wire_bytes(
+        fee_payer,
+        bounded,
+        blockhash,
+        observation,
+        routing_tables,
+    );
+    let carriable =
+        dclutch_versioned_message_operator::canonical_route_lookup_addresses_v1(fee_payer, bounded)
+            .map(|addresses| addresses.len());
+    let limit = dclutch_versioned_message_operator::PACKET_DATA_BYTES;
+    match (wire, carriable) {
+        (Ok(wire), Ok(carriable)) => Error::new(format!(
+            "admission message compilation: PacketTooLarge -- {wire} wire bytes over the {limit}              packet limit ({} too many) with {} routing table(s) declared; {carriable} of this              route's addresses can be carried by a table, at about 31 bytes each",
+            wire.saturating_sub(limit),
+            routing_tables.len(),
+        )),
+        (wire, carriable) => Error::new(format!(
+            "admission message compilation: PacketTooLarge over the {limit} packet limit with {}              routing table(s) declared; the size probe answered {wire:?} and the carriable-address              probe answered {carriable:?}",
+            routing_tables.len(),
+        )),
+    }
+}
+
 fn build_report(
     rpc: &mut Rpc,
     arguments: &ArgumentsV1,
@@ -3330,7 +3383,16 @@ fn build_report(
         unsigned.observation,
         &snapshot.routing_tables,
     )
-    .map_err(|error| Error::new(format!("admission message compilation: {error:?}")))?;
+    .map_err(|error| {
+        sized_routing_refusal_v1(
+            arguments.fee_payer,
+            &bounded,
+            recent_blockhash,
+            unsigned.observation,
+            &snapshot.routing_tables,
+            error,
+        )
+    })?;
     // The operator built every meta from `UserPositionAdmissionFrameV1`, and
     // the program re-checks that frame against what the RUNTIME presents. Those
     // are not the same thing: compiling into a transaction can promote an
@@ -5612,16 +5674,16 @@ mod tests {
         ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
     };
     use dclutch_core_contract::ContentId;
-    use dclutch_market::{Identity, MarketIdentity, Readiness};
+    use dclutch_custody::token_svm::MINT_BYTES;
     use dclutch_market::realm::RealmV1Input;
+    use dclutch_market::{Identity, MarketIdentity, Readiness};
+    use dclutch_registry::release_set::{
+        ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
+    };
     use dclutch_registry::{
         ArtifactActivationInputV1, ArtifactUpgradePolicyV1, ExecutionReleaseActivationInputsV1,
         activate_execution_release_set_v1,
     };
-    use dclutch_registry::release_set::{
-        ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
-    };
-    use dclutch_custody::token_svm::MINT_BYTES;
     use solana_program::hash::hash;
 
     fn base_args() -> Vec<String> {

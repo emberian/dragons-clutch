@@ -84,6 +84,20 @@ to close inside a lab run is one under which the frozen publication is already
 stale for every rung after it. A rung answered on a loopback needs a
 publication the lab can refresh — a fixture question, not a wiring one.
 
+**That arithmetic is what leaves one witness red, and the red is named here so
+nobody reads it as a regression.** `every-crank-frame-is-the-relay-contract-eighteen`
+reports *expected 18, chain says null* on every capture walk, because no
+AdvanceRecovery frame is ever BUILT: the crank records `not-yet-due` and the rung
+`unreachable`. Measured on hbox `20260906T112408Z`, 891 s, market `B3xW1XLRDi1c…`,
+founded to Open and funded through the shipped `--recovery-rungs 2500:120`
+parser: the primary leg is due at unix **1,818,967,680** and the chain clock read
+**1,788,694,735** — **30,272,945 seconds**, which is the local Pyth fixture's
+one-year shelf life to the second. The witness measures a frame's WIDTH and is
+right to be red about a frame that was never built; the way to turn it green is a
+publication the lab can refresh, and **not** a `terminal_max_age_seconds` threaded
+through to the market shape. One `max_age` governs both legs, so no value of it
+satisfies both against a frozen capture — a field cannot fix a fixture.
+
 The successor's flagship command is separately unable to *verify* such a
 terminal: `flagship_resolution.rs` pins `route == Primary` and
 `attempt_index == 0` in two places (`:7373-7376`, `:8216`/`:8237`). That is a

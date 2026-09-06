@@ -314,6 +314,15 @@ pub fn compile_v0_message_with_optional_tables(
 /// reported. This compiles exactly what `compile_v0_message` would have
 /// compiled, applying every other check, and returns the size instead of
 /// refusing on it. It is a diagnostic: it never yields a sendable message.
+///
+/// It does not require a lookup, and until 2026-09-06 it did — which made it
+/// unusable on the one route that most needs measuring. A caller reaches this
+/// because its route did not fit; the caller that has not published a table yet
+/// passes the empty slice, and `require_lookup` turned that into
+/// [`Error::NoLookupUsed`] instead of a number. A supplied table that
+/// contributes nothing still refuses, because `table_accounts` is then not
+/// empty; only the tableless measurement is admitted, and a tableless
+/// measurement is exactly the question "how far over is the bare route".
 pub fn measure_v0_wire_bytes(
     payer: Pubkey,
     instructions: &[Instruction],
@@ -327,7 +336,7 @@ pub fn measure_v0_wire_bytes(
         recent_blockhash,
         observation,
         table_accounts,
-        true,
+        false,
         false,
     )
     .map(|plan| plan.wire_bytes)

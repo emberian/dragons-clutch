@@ -1077,4 +1077,117 @@ mod tests {
         assert_ne!(first.claims_request_digest, second.claims_request_digest);
         assert_ne!(first.caller_authority, second.caller_authority);
     }
+
+    /// THE ADMISSION'S PACKET, SPLIT INTO ITS OWN BYTES.
+    ///
+    /// `admission message compilation: PacketTooLarge` is what the shipped
+    /// driver says and all it says: `Error::PacketTooLarge` carries no payload,
+    /// so a caller learns that the route does not fit and nothing about what
+    /// does not fit. A lane read that as a key-count problem, published a
+    /// frozen routing table over a founding's whole account set, and measured
+    /// no change. This is the measurement that reading needed: the SAME plan
+    /// this module builds, compiled as the driver compiles it, reported as
+    /// static keys, table-loaded keys and instruction data.
+    ///
+    /// It needs no chain. The frame's account list and the outer request's
+    /// width are constants of this file, so the compiled size is structural.
+    fn admission_message_split(table_addresses: &[Pubkey]) -> (usize, usize, usize, usize, usize) {
+        let (snapshot, market, product) = fixture(1, 0, u64::MAX);
+        let plan =
+            assemble_plan(&snapshot, OBSERVATION, Rent::default(), market, product).expect("plan");
+        // Exactly `crate::rpc::bounded_instructions`' two house declarations.
+        let mut bounded = vec![
+            solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_limit(
+                1_400_000,
+            ),
+            solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_price(0),
+        ];
+        bounded.extend(plan.instructions.iter().cloned());
+        let payer = key(99);
+        let tables = if table_addresses.is_empty() {
+            Vec::new()
+        } else {
+            let mut addresses = table_addresses.to_vec();
+            addresses.sort_unstable_by_key(Pubkey::to_bytes);
+            addresses.dedup();
+            vec![solana_message::AddressLookupTableAccount {
+                key: key(98),
+                addresses,
+            }]
+        };
+        let message = solana_message::v0::Message::try_compile(
+            &payer,
+            &bounded,
+            &tables,
+            solana_hash::Hash::new_from_array([7; 32]),
+        )
+        .expect("compile");
+        let loaded = message
+            .address_table_lookups
+            .iter()
+            .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+            .sum::<usize>();
+        let data_bytes = bounded
+            .iter()
+            .map(|instruction| instruction.data.len())
+            .sum::<usize>();
+        let static_keys = message.account_keys.len();
+        let signatures = usize::from(message.header.num_required_signatures);
+        let wire = 1 + signatures * 64 + message.serialize().len();
+        (wire, static_keys, loaded, data_bytes, signatures)
+    }
+
+    #[test]
+    fn the_admission_packet_is_keys_and_a_routing_table_makes_it_fit() {
+        let (inline_wire, inline_static, inline_loaded, data_bytes, signatures) =
+            admission_message_split(&[]);
+        assert_eq!(inline_loaded, 0);
+        assert_eq!(signatures, 2, "fee payer and the Position owner");
+        // The instruction DATA is not the problem and this is the number that
+        // says so: two ComputeBudget declarations and one outer request.
+        assert!(
+            data_bytes < 400,
+            "admission instruction data {data_bytes} bytes"
+        );
+        assert!(
+            inline_wire > dclutch_versioned_message_operator::PACKET_DATA_BYTES,
+            "inline admission wire {inline_wire} bytes over {inline_static} static keys"
+        );
+        // Every address the route names that a table may legally carry: not a
+        // program id (an instruction's program must resolve before tables
+        // load), not a signer (authenticated by header position).
+        let (snapshot, market, product) = fixture(1, 0, u64::MAX);
+        let plan =
+            assemble_plan(&snapshot, OBSERVATION, Rent::default(), market, product).expect("plan");
+        let carriable = dclutch_versioned_message_operator::canonical_route_lookup_addresses_v1(
+            key(99),
+            &plan.instructions,
+        )
+        .expect("carriable addresses");
+        let (table_wire, table_static, table_loaded, _, _) = admission_message_split(&carriable);
+        // MEASURED at this revision: inline 1,477 bytes over 28 static keys,
+        // 366 of instruction data, 2 signatures; routed 798 bytes over 5 static
+        // keys and 23 loaded. Keys are 897 of the inline message and data is
+        // 366, so a table is the whole remedy and a bigger request is not the
+        // whole problem. The assertions are structural rather than pinned to
+        // those numbers: what must not change is which side of the packet limit
+        // each lands on.
+        assert_eq!(carriable.len(), 23);
+        assert_eq!(
+            table_static, 5,
+            "fee payer, owner, ComputeBudget, System, Trading"
+        );
+        assert_eq!(table_loaded, carriable.len());
+        assert!(
+            table_wire <= dclutch_versioned_message_operator::PACKET_DATA_BYTES,
+            "routed admission wire {table_wire} bytes over {table_static} static keys and \
+             {table_loaded} loaded"
+        );
+        // The margin is what says the remedy is not marginal.
+        assert!(
+            inline_wire - table_wire > 600,
+            "a routing table saves {} bytes",
+            inline_wire - table_wire
+        );
+    }
 }

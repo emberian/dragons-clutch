@@ -26,13 +26,13 @@ use dclutch_provider_transport_v3_operator::{
     ProviderSubmitDeploymentV3, ProviderSubmitIntentV3, ProviderSubmitSnapshotV3,
     build_provider_execute_v3, build_provider_submit_v3,
 };
-use dclutch_source::pyth::FullPriceUpdateV2;
 use dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2;
+use dclutch_resolution_core_v3_operator::ObservedAccount;
+use dclutch_source::pyth::FullPriceUpdateV2;
 use dclutch_source::resolution::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_resolution_core_v3_operator::ObservedAccount;
 use dclutch_source::{
     PythAdapterConfigV1, SourceResolutionPhaseV1, SourceResolutionStateV2, WindowSpecV1,
 };
@@ -448,6 +448,13 @@ pub(crate) fn resolve_through_pyth(
         &mut submitted,
         transactions,
     )?;
+    // THE SUBMIT'S `0x8004`, LOCALIZED BEFORE IT COSTS A TRANSACTION.
+    let records = authenticate_frame_records_v1(
+        rpc,
+        pubkey(&plan.registry.program_id)?,
+        &submit.instruction,
+    )?;
+    eprintln!("journey: provider submit frame records: {records}");
     let before_tables = transactions.len();
     let (submit_routing, submit_tables) = crate::market::publish_routing_table(
         rpc,
@@ -874,4 +881,125 @@ fn send(
 /// their entrypoints dispatch.
 fn anchor_discriminator(name: &[u8]) -> Vec<u8> {
     hash(name).to_bytes()[..8].to_vec()
+}
+
+/// Say WHICH record the submit's `FinalizedRecord` is about, before sending.
+///
+/// `ResolutionError::FinalizedRecord` (`0x8004`) is one code over eleven
+/// disjuncts and six record pairs, and the operator's own client-side
+/// `authenticate_raw` tests four of the eleven -- so a submit that BUILDS and
+/// then refuses on chain says nothing about which record, and the journey's
+/// transcript recorded exactly that: `custom program error: 0x8004` on
+/// instruction 2, unlocalized.
+///
+/// This is the tree's own instrument first, as the refusal doctrine asks. It
+/// takes no account indices and no record widths -- a second copy of the frame
+/// layout is a second author for it. It takes the frame's own accounts and asks
+/// each one the question the program asks: a finalized raw record LIVES AT THE
+/// HASH OF ITS OWN BODY, so an account whose bytes reproduce its own address
+/// under one of the schemas this frame can carry is self-consistent, and the
+/// staging cursor paired with that same (schema, digest) must be vacant --
+/// System-owned, zero lamports, zero bytes -- which is the whole of what
+/// "finalized" means here.
+///
+/// Its verdict is a sentence either way. If every registry-owned account in the
+/// frame is self-consistent and every paired cursor is vacant, then no record
+/// in the frame is unfinalized, and the refusal is a DISAGREEMENT about which
+/// record was expected -- for which this frame has exactly one candidate, the
+/// artifact release whose expected digest the program reads out of the on-chain
+/// infrastructure profile rather than out of the frame.
+fn authenticate_frame_records_v1(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    instruction: &solana_sdk::instruction::Instruction,
+) -> Result<String> {
+    use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    let schemas: [(&str, [u8; 32]); 6] = [
+        (
+            "ArtifactReleaseV1",
+            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ),
+        (
+            "SourceMaterialV3",
+            dclutch_source::SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        ),
+        ("SourceSpecV1", dclutch_source::SOURCE_SPEC_SCHEMA_ID_V1),
+        (
+            "ProviderReleaseV1",
+            dclutch_source::PROVIDER_RELEASE_SCHEMA_ID_V1,
+        ),
+        (
+            "PythReleaseV1",
+            dclutch_source::resolution::PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+        ),
+        ("WindowSpecV1", dclutch_source::WINDOW_SPEC_SCHEMA_ID_V1),
+    ];
+    let mut consistent = Vec::new();
+    let mut unexplained = Vec::new();
+    let mut absent = Vec::new();
+    for meta in &instruction.accounts {
+        let Some(account) = rpc.account(meta.pubkey)? else {
+            // An ABSENCE is reported rather than skipped. Some of this frame's
+            // accounts are legitimately vacant before the transaction runs, so
+            // this is not a refusal; but a raw record that is simply not there
+            // reads to the program exactly like one that is wrong, and a probe
+            // that silently passed over it would have measured nothing.
+            absent.push(meta.pubkey.to_string());
+            continue;
+        };
+        if account.owner != registry || account.executable || account.data.is_empty() {
+            continue;
+        }
+        let digest = hash(&account.data).to_bytes();
+        let matched = schemas.iter().find(|(_, schema)| {
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, schema, &digest], &registry).0
+                == meta.pubkey
+        });
+        let Some((name, schema)) = matched else {
+            unexplained.push(format!(
+                "{} ({} bytes, registry-owned, and its own body's hash reproduces no address                  under any schema this frame carries)",
+                meta.pubkey,
+                account.data.len()
+            ));
+            continue;
+        };
+        let cursor =
+            Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, schema, &digest], &registry)
+                .0;
+        match rpc.account(cursor)? {
+            None => consistent.push(*name),
+            Some(staging)
+                if staging.owner == system_program::ID
+                    && staging.lamports == 0
+                    && staging.data.is_empty()
+                    && !staging.executable =>
+            {
+                consistent.push(*name);
+            }
+            Some(staging) => {
+                return Err(Error::new(format!(
+                    "the submit's {name} record {} is NOT finalized: its staging cursor {cursor}                      is still live ({} lamports, {} bytes, owner {}). That is one of the eleven                      disjuncts behind ResolutionError::FinalizedRecord and the operator's                      client-side check does not test it.",
+                    meta.pubkey,
+                    staging.lamports,
+                    staging.data.len(),
+                    staging.owner
+                )));
+            }
+        }
+    }
+    if !unexplained.is_empty() {
+        return Err(Error::new(format!(
+            "the submit names {} registry-owned account(s) that are not self-consistent finalized              records, and a record that does not live at the hash of its own body cannot satisfy              ResolutionError::FinalizedRecord: {}",
+            unexplained.len(),
+            unexplained.join("; ")
+        )));
+    }
+    Ok(format!(
+        "{} self-consistent finalized record(s) with vacant staging cursors ({}); {} frame \
+         account(s) vacant [{}]",
+        consistent.len(),
+        consistent.join(", "),
+        absent.len(),
+        absent.join(" ")
+    ))
 }

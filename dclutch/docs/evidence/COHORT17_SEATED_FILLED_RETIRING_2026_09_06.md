@@ -445,3 +445,199 @@ difference is the four links that grew.
 
 Nothing was spent on the General `OpenBatch` itself: devnet's preflight refused
 the send, so no fee was paid for a transaction that never landed.
+
+---
+
+# ADDENDUM, 2026-09-06 afternoon. Lane COHORT-17B. Devnet evidence, not mainnet evidence.
+
+The ruling on the zero-key conjunct was executed, the two maker replay roots are
+closed on chain, and **the retirement stopped at the NEXT stage, on the second
+fact `tools/cohort/README.md` had already named as a question**. This addendum
+does not edit anything above it; every line above stands as written.
+
+## 1. THE ZERO-KEY CONJUNCT IS DELETED, AND IT WAS RED-PROVEN BOTH WAYS
+
+`40f1cb703`. `authenticate_embedded_hot_journal_v1`'s lookup-closure guard was
+one sentence over three conjuncts; the first,
+`lookup_keys.iter().any(|key| *key == Pubkey::default())`, is gone. The
+remaining two are now separately named refusals behind
+`refusing_direct_hot_lookup_closure_clause_v1`, and three tests hold the line:
+
+| test | with the conjunct | without it | without the digest | without the distinctness |
+| --- | --- | --- | --- | --- |
+| `a_frame_naming_the_system_program_at_any_index_passes_the_lookup_closure` | **RED** | green | green | green |
+| `a_genuinely_unset_coordinate_still_refuses_through_the_digest` | RED (wrong clause) | green | **RED** | green |
+| `a_repeated_lookup_address_refuses_on_its_own_account` | green | green | green | **RED** |
+
+Four builds, four measured results; the whole `direct_trade::tests` module is 26
+green at the shipped shape. The first test walks the System Program through all
+57 indices, which is the geometry cohort-17's Hot frame actually has, and the
+second zeroes a coordinate AFTER the digest was taken -- the only thing that
+distinguishes a named System Program from a vacancy.
+
+The class had already been met once and exempted rather than deleted:
+`terminal_sequence.rs:8342` carries a comment saying that without its exemption
+"`ResolutionCloseFund` refuses at frame index 18 of 19 on its own System
+Program, which is why no market had ever reached the stage behind it."
+
+## 2. AND THE GUARD BEHIND IT WAS READING THE WRONG TWO ROWS
+
+`d7d09500e`. With the conjunct gone the same close refused
+
+    REFUSED: embedded Direct lookup activation was outside the freeze-to-seal interval
+
+`authenticate_embedded_direct_mutations_v1` took the freeze and seal slots from
+`evidence.mutations` using ACTION ordinals -- which are ordinals into
+`evidence.mutations[2..]`, because the two setup mutations (`replay-setup`,
+`token-setup`) sit in front of the action rows. For cohort-17's fill that read
+the third `lookup-extend` (493,995,350) and the `lookup-freeze` (493,995,433) as
+the freeze and the seal, and the activation at **493,995,464** is after the
+second of those. The true interval is freeze 493,995,433 to seal 493,995,546 and
+the activation sits inside it.
+
+The indices now come from `freeze_and_seal_mutation_indices_v1`, and
+`the_freeze_and_seal_slots_are_read_off_the_rows_that_carry_them` holds them
+against the ordinal ladder AND the `extension_count + 6` count guard at six
+extension counts. Red at the old offsets, green at the new.
+
+**Both defects are HOST ONLY.** Nothing under `crates/` or `programs/` moved,
+the candidate commit is still `932edc83f` and the release gate is still
+`a98ed988…`. Driver `da6bc96f52dc63b5344a25f20543678aad2937e1bbb1fb92e2415df59e61ba2c`
+at `d7d09500e`, staged with its provenance; the prior two are in `backups/bin/`.
+
+## 3. THE RUNBOOK HAS A `close-maker` ROW, AND BOTH MAKER ROOTS ARE CLOSED
+
+`tools/cohort/steps.tsv` gains `close-maker` (since 17, shape `once`, two
+invocations), documented at `### close-maker`. It carries NO `blocks` edge and
+the README says why: a close runs INSIDE `Retiring`, and the root only enters
+`Retiring` at the terminal sequence's stage two, so the row runs BETWEEN TWO
+PASSES of `retire`. An edge in either direction is a deadlock.
+
+    seller maker qBhAiQ43YNqrdsDmpz22FjZn611XBwUHsFPxrEk9oB6
+      replay 59rvxdSf4vzfin1pdhVidvDHEZSAAgURhaPo8GNkNZRu
+      771oHXjD5fXd9vx6rakDq48vk5hV485ydaFyJQ5XT75vapaKSjWnb8UVS2mAwXG4qj7wNSBGHafBM497oWk4oDD
+      slot 494,059,660, 98,248 CU, open maker roots 2 -> 1
+    buyer maker  FsujuPtjS2Q4RowfuF5D12cq71xhLUZ2B1jNHnnrugW3
+      replay VnQRqKSg3uHnQj8VdoqEX3vVv6PiwiRvMGJUGvM15kw
+      5NJTCZ3z2hhvzVCeWNWEEUyCCN2Z6T2HVBZ5uuQSfQQbk7cHg8wa2RbDxaDbHwb7SKCbHvTPi68BPjb1L5BR7WWk
+      slot 494,059,757, 98,248 CU, open maker roots 1 -> 0
+
+Each close credited exactly the 1,463,040 lamports its own replay recorded, to
+the beneficiary the replay itself names (`CuSvrfJ3rTEdkwNGW9EEWhTX9Y4db3iiy6RHDgcTDRdB`,
+2,926,080 after both), with donation 0 and closer carve 0 -- a stranger's close
+moved no lamport the fill had not already fixed. Both replays read back gone,
+from the chain, inside the driver. Read off the Direct capability root
+`3dgyRvrebvaXKL8Z1hqgYMWRewXXsgxBjbseERjep3xK` afterwards: `DCLTDRT1` phase byte
+1, **`open_maker_root_count = 0`**. `Successor(MakerRootCountInvariant)` is gone
+and cannot come back on this market.
+
+## 4. THE NEW WALL IS STAGE FOUR AGAIN, AND IT IS THE QUESTION THE RUNBOOK ASKED
+
+    Error: Direct close caller preflight: Capability(InvalidLength)
+
+`terminal_sequence.rs:5943` reporting `preflight_direct_native_close_caller_v1`
+(`crates/dclutch-operator/src/terminal_retirement_v1.rs:732`). Convicted, from
+the journal and the chain, in three reads and no replay:
+
+- **the account** is the Resolution dependency funding ledger
+  `GqyjjFmGzqL8ieqy3XPYoXVwBTpKgMxBhPnHH1BgpV9F`, 264 bytes at founding, one of
+  the snapshot's two `funding_ledgers`. On chain now: **AccountNotFound**. Its
+  sibling `GnD4k4JSjcxst3nDcofvJJfJF78mE7rWvMsrh4oUdYGw` is live, 120 bytes,
+  `DCLTFL02`, owned by Trading.
+- **who closed it**: stage THREE. `retire-1/terminal/journal/13-resolution-close-fund.json`
+  reads `phase: finalized` and carries that address at meta 12 as
+  `lookup-stable`, writable, with `expectedAccounts` owner
+  `11111111111111111111111111111111`, `lamportsAfterProtocol: 0`, empty data --
+  and its `finalized/poststate` says the same thing after the fact.
+  `ResolutionCloseFund` is `3L6ULNQN4S41wnYN9KuYH7pwoCFyexbgpJyACQfNCPtE`.
+- **who needs it**: stage FOUR. `DirectCloseCapability` decodes both funding
+  ledgers to build `CapabilityFundingHeaderV2` and to PRESERVE the dependency
+  one, and an empty account is `InvalidLength` before any frame is built.
+
+**That is the second fact `tools/cohort/README.md`'s `retire` section had
+already named**: "stage three closed the Resolution funding ledger that stage
+four decodes and preserves -- which is a question about which stage owns those
+lamports, not a typo." It is now measured, on a chain, with both stages
+executed.
+
+**It is not repairable on this market and not repairable by this lane.** The
+ledger is gone; recreating it would be fabricating protocol state. Every
+candidate repair -- reorder `ResolutionCloseFund` after `DirectCloseCapability`
+(`TerminalStageV1::ORDERED`, host), have stage three preserve the ledger, or
+have stage four tolerate its absence -- changes either the order a market
+already executed or `dclutch-operator`, which is compiled into the Claims, Core,
+Custody and Registry links. This lane changed no program.
+
+Market `9e8fTH75s82pjcEK8pY8PaLPoZW6W1am1qQ6J4JHjagQ` therefore stands at
+`DCLTCOR3` phase byte **3 (Retiring)** with `outstanding_capabilities = 1`, an
+empty Hoard, three discharged columns, its failure column seated in the escrow,
+and **zero open maker roots**. **No market has been retired on any chain.** What
+moved is the wall: it is no longer the maker roots, and the site's featured
+market is unchanged for the same reason as before.
+
+## 5. THE GENERAL `InvalidPlan`: EIGHT SITES ARE TWO CONJUNCTS, BY READING
+
+No replay was run. The eight `map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)`
+sites in `crates/dclutch-trading/src/general/hot_candidate_v3.rs` are not eight
+for THIS refusal:
+
+- the action is `OpenBatch`, so only
+  `project_general_open_batch_candidate_in_place_v3` runs. Sites 879, 881 and
+  929 belong to `CloseBatch` and 996, 998 to `SubmitCandidate`. **Five are
+  unreachable.**
+- the three that remain are `755` (`GeneralRootV2::decode(root_tail)`), `820`
+  (`GeneralBatchV1::open`) and `823` (`requested_batch_id != Some(batch.batch_id())
+  || state.status != Collecting`).
+- **the twenty-conjunct block between 755 and 820 returns `InvalidCoordinate`,
+  not `InvalidPlan`.** Its passage is evidence: the root's lifecycle, market,
+  config id, generation, revision, next batch sequence and open-batch count all
+  matched their independently projected observations, as did every config
+  scalar and the primary account's bump, owner and rent.
+- site **755 is excluded by the chain**. The composite root
+  `9edU3YfdbRWZYLoTw6v7PDLqm1x5UQRxSyvBhSCSZ93Z` is 360 bytes; `DCGROT02` sits
+  at offset 232 and the tail from there is exactly 128 =
+  `GENERAL_ROOT_BYTES_V2`, version 2, lifecycle 1, generation 2, revision 1,
+  next_batch_sequence 0, open_batches 0, both reserved spans zero.
+- inside site 820, `GeneralBatchV1::open`'s `Substitution` arm cannot fire
+  (sequence is taken from the root; market, config and generation were compared
+  above), `OutsideWindow` cannot fire and `validate_opening`'s window arm cannot
+  fire (`collection_slots 16`, `selection_slots 16`, `settlement_slots 64`,
+  `max_orders 32`, all from `general/policy.json`).
+
+**What is left is two conjuncts.** Either `root.open_batch(expected_revision, …)`
+refusing `CoordinateMismatch` -- which is reachable because the block above
+compares `expected_revision` and `root.revision()` against *two different*
+candidate scalars and never against each other -- or the batch identity at 823.
+`GeneralBatchOccurrenceTermsV1`'s preimage carries no slot fields, so
+`batch_id()` is slot-independent and a plan-time prediction of it is legitimate;
+that was checked and is not the defect.
+
+Splitting those last two needs the replay
+(`docs/design/DEVNET_FRAME_REPLAY_V1.md`) with a profiled Trading, and that is
+where the next lane starts rather than at eight sites.
+
+## 6. THE FRAMES DEBT AGAINST COHORT-17 IS OVER A TEST-ONLY MODULE
+
+`tools/gate frames owed` names one commit in `1dd18be9..c5ddf118`:
+`108f950f [lane COHORT-17]`, reaching `dclutch-registry-sbf` via
+`programs/dclutch-registry-sbf`. Its whole change to that link's sources is
+inside `#[cfg(test)] mod devnet_general_accelerator_observation`
+(`programs/dclutch-registry-sbf/src/record_v1.rs:2090`): the devnet observation
+fixture's program id, ProgramData, ELF digest and deployment slot, moved from
+cohort-16.1's accelerator to cohort-17's. Both hunks are inside that module and
+the attribute sits directly above it. **A release build never compiles it, so
+the shipped link's bytes cannot have moved**, and no recapture from two captures
+is owed on a linked crate that did not move. The ratchet is file-granular and
+stays RED until someone spends an hbox link build on `--capture` twice and
+`accept`; this addendum is the statement AGENTS.md admits in its place.
+
+## 7. THE LEDGER
+
+    deployer                                       26.572399090  unchanged
+    payer before this lane                          2.004939706
+    two permissionless maker closes, 75,000 each   -0.000150000
+    payer after                                     2.004789706
+
+    rent returned by the two closes                +2,926,080 lamports
+      to CuSvrfJ3rTEdkwNGW9EEWhTX9Y4db3iiy6RHDgcTDRdB, the beneficiary the
+      replays themselves name -- not to the payer, and not to this lane

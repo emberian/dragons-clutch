@@ -799,6 +799,12 @@ fn campaign(
     let mut spine = spine::SpineV1::new();
     progress.entering("trading: admission, the Direct Hot fill, and the fee settlement");
 
+    // THE ACTIVATION COMES FIRST, as it does on devnet: the Direct execution
+    // root is what the fill's root check reads and what the terminal sequence's
+    // Direct first-use pair is missing, and nothing else in this tree creates
+    // one. It is idempotent, so a resumed run converges.
+    spine::activate_direct_capability(&mut session.rpc, &context, &mut spine, payer, &payer_key)?;
+
     // TWO STRANGERS, and the second one is not decoration. The buyer carries
     // the collateral leg because the fill needs delegated collateral; the
     // second admission is a Position and nothing else, which is the ordinary
@@ -853,24 +859,63 @@ fn campaign(
             report: spine_work.join("admission-stranger.json"),
         },
     ];
-    // THE ADMISSION'S `PacketTooLarge` IS NOT A KEY-COUNT PROBLEM, and this
-    // empty slice is a measurement rather than an omission.
+    // THE ADMISSION ROUTES THROUGH THE FOUNDING'S OWN FROZEN TABLE, and the
+    // reason it did not is a measurement read backwards.
     //
     // `local-private-validator-user-position-admission-v1` compiles a v0
-    // message and takes `--routing-table`, and the spine has carried that
-    // argument since it was written, so the obvious reading of
-    // `admission message compilation: PacketTooLarge` (hbox
-    // `20260906T110501Z`) was that nobody had published a table. Measured, hbox
-    // `20260906T112833Z`: a frozen table over the FOUNDING'S WHOLE account set
-    // -- every address its evidence recorded, six transactions to create,
-    // extend and freeze -- was declared to the driver and the admission refused
-    // with the same `PacketTooLarge`. So the message does not exceed the packet
-    // by movable keys, and the next step is to read the compiled message's own
-    // key/data split rather than to publish a bigger table.
+    // message and takes `--routing-table`; this tier passed the empty slice and
+    // refused `admission message compilation: PacketTooLarge` (hbox
+    // `20260906T110501Z`). A frozen table over the FOUNDING'S EVIDENCE ACCOUNT
+    // MAP was then published and the admission refused identically (hbox
+    // `20260906T112833Z`), which was read as "not a key-count problem". It was
+    // a wrong-table result: that map holds about a dozen market coordinates and
+    // almost none of this route's own addresses, so the compiler moved a
+    // handful of keys against an overrun of roughly two hundred bytes.
     //
-    // The table is not kept: it cost six transactions per run and changed
-    // nothing, and unproven machinery in front of a wall is how a tier stops
-    // being able to say what its own numbers mean.
+    // MEASURED, host, no chain
+    // (`dclutch_operator::user_position_admission_v1::the_admission_packet_is_keys_and_a_routing_table_makes_it_fit`):
+    // the admission is **1,477 wire bytes over 28 static keys** with 366 bytes
+    // of instruction data and two signatures, against a 1,232 packet limit --
+    // keys are the overrun and the data is not -- and over the route's OWN
+    // canonical lookup addresses it compiles to **798 bytes, 5 static keys, 23
+    // loaded**. The devnet cohorts have routed this exact frame through the
+    // founding's own frozen DCLTGMF3 table since cohort-16.1 stopped dead
+    // without one; `recover_frozen_routing_table_v1` is that recovery for a
+    // loopback driver, and it publishes nothing, because the founding already
+    // paid for the table it reads.
+    //
+    // A RECOVERY THAT FAILS COSTS ONE STAGE, NEVER THE WALK. This is an
+    // optimization over an admission that would otherwise be compiled bare, and
+    // on hbox `20260906T120811Z` the first version of it read the create
+    // transaction through a JSON view it could not use and ended the run with a
+    // hard error -- after the founding, the ring, and the first Direct
+    // capability activation this tier has ever landed, and before the four
+    // stages that were the point of the run. The refusal is printed and the
+    // admission is compiled bare, which is what every previous run did.
+    let admission_routing = match crate::market::recover_frozen_routing_table_v1(
+        &mut session.rpc,
+        &session.transactions,
+        addresses.founding_market,
+    ) {
+        Ok(Some(table)) => {
+            eprintln!("journey: the admission routes through the founding's frozen table {table}");
+            vec![table]
+        }
+        Ok(None) => {
+            eprintln!(
+                "journey: the founding recorded no frozen routing table; the admission is \
+                 compiled bare and the driver's sized refusal will say by how much it misses"
+            );
+            Vec::new()
+        }
+        Err(error) => {
+            eprintln!(
+                "journey: the founding's frozen routing table could not be recovered ({error}); \
+                 the admission is compiled bare and the walk goes on"
+            );
+            Vec::new()
+        }
+    };
     spine::admit_strangers(
         &mut session.rpc,
         &context,
@@ -878,7 +923,7 @@ fn campaign(
         &strangers,
         payer,
         &payer_key,
-        &[],
+        &admission_routing,
     )?;
     spine::fill(&mut session.rpc, &context, &mut spine, &strangers[0].report)?;
     spine::settle_fee(

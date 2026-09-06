@@ -14,7 +14,7 @@
       "kind": "plan-jq",
       "query": "[.cranks[] | .frameAccounts] | unique | map(tostring) | join(\",\")",
       "expect": "18",
-      "provenance": "`dclutch-source`'s `relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery)` declares the frame's positions, and the AdvanceRecovery frame the deployed Resolution program parses is 18 accounts wide. The driver builds its metas FROM those roles and never from a typed list; this counts what it built and compares it against the contract's own width, so a frame that grew or shrank on either side is caught rather than assumed."
+      "provenance": "`dclutch-source`'s `relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery)` declares the frame's positions, and the AdvanceRecovery frame the deployed Resolution program parses is 18 accounts wide. The driver builds its metas FROM those roles and never from a typed list; this counts what it built and compares it against the contract's own width, so a frame that grew or shrank on either side is caught rather than assumed. RED ON PURPOSE ON THIS FIXTURE, and `README.md`'s \"What it does not reach\" is the register: no AdvanceRecovery frame is ever built here, so this reads `null` rather than a width. One `WindowSpecV1.max_age_seconds` governs both the crank's admissibility and the publication's freshness, and `window.end` IS the captured publication instant, so on hbox `20260906T112408Z` the primary leg was due at unix 1,818,967,680 against a chain clock of 1,788,694,735 -- 30,272,945 seconds, the fixture's one-year shelf life exactly. A refreshable publication turns this green; threading `terminal_max_age_seconds` cannot, because no value of one field satisfies both legs against a frozen capture."
     },
     {
       "id": "no-clock-was-warped",

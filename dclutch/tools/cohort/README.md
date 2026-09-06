@@ -600,6 +600,61 @@ PROGRAMS-17C, 2026-09-05); its fifth arm's sentence is now a statement about
 which release set a market was founded on rather than about a route that does not
 exist.
 
+### close-maker
+
+**A producer with no caller was the whole of wall 22's remainder.**
+`devnet-direct-close-maker-v1` -- "closes one Direct maker replay inside
+Retiring: wall 22's missing decrement" -- has existed since the maker replay got
+a close path, nothing in this table called it, and `retire`'s terminal sequence
+assumes the count is already drained. Cohort-17 found that out by running the
+row that is not there: its fill opened two maker replay roots, the Direct
+capability root `3dgyRvrebvaXKL8Z1hqgYMWRewXXsgxBjbseERjep3xK` read
+`open_maker_root_count = 2`, and the terminal sequence refused at stage four
+with `Direct close caller preflight: Successor(MakerRootCountInvariant)`
+(`require_closable`, `crates/dclutch-trading/src/successor.rs:706`).
+
+**This row runs BETWEEN TWO PASSES OF `retire`, and that is why it carries no
+`blocks` edge.** A close runs INSIDE `Retiring` -- `DirectCloseMakerPlanErrorV1::
+InvalidRootState` refuses one that is not -- and the root enters `Retiring` only
+when the terminal sequence lands `DirectBeginRetiring`, its stage two of six. So
+the order is: `retire` (stages zero to two land, stage three refuses), this row,
+`retire` again (the sequence's journal resumes at stage three). An edge in
+either direction would be a deadlock; the sequence's own durable journal is what
+makes the resume safe rather than a second transaction identity.
+
+It is permissionless and nothing economic is passed in: the beneficiary, the
+historical rent principal and the donation slice are read off the replay's own
+authenticated bytes, so the campaign payer closes roots it does not own and
+moves no lamport the fill did not already fix. A root that is already closed is
+the ordinary outcome of losing a permissionless race -- it reports
+`alreadyClosed`, writes its evidence and exits zero -- so the row is idempotent
+and safe to rerun. A replay that still owes its Direct fee, or still carries
+live intents, refuses BY NAME here with its remedy rather than on chain as
+`CloseMakerFeeOutstanding (0x4011)` or `CloseMakerLiveIntents (0x4012)`.
+
+**The host guard that stood in front of it, and the ruling that deleted it**
+(2026-09-06). Called by hand at cohort-17's driver the close refused
+
+    REFUSED: embedded Direct Hot journal lookup closure was not exact, ordered,
+             and distinct
+
+one sentence over three conjuncts in the host, and the failing one was
+`lookup_keys.iter().any(|key| *key == Pubkey::default())`. **The System
+Program's id IS the all-zero pubkey**, and a Direct Hot frame names it, because
+Trading CPIs System to create accounts: cohort-17's frozen table
+`H2QMjhby88h4mGAovFX8rwS3BJcgUXTMEnEfMAVLexox` carries it at index 36 of 57, all
+57 distinct and identical to the journal's own words. The conjunct was reading a
+named account as an unset slot. It sat beside `pubkey_list_sha256(&lookup_keys)
+!= journal.lookup_addresses_sha256`, which a genuinely unset coordinate cannot
+survive, so the vacancy test could only ever subtract. **It is deleted**
+(`direct_trade.rs`): the closure clause is now two separately named refusals
+rather than one sentence over three, and two tests hold the line -- a frame
+naming the System Program at ANY of its 57 indices passes, and a coordinate
+zeroed AFTER the journal authenticated its list still refuses, through the
+digest. This is the same class `terminal_sequence.rs:8342` had already met and
+exempted, where it was `ResolutionCloseFund` refusing at frame index 18 of 19 on
+its own System Program.
+
 ### found-two-source
 
 The first cohort market that buys a second answerer. Decision 0027's funded

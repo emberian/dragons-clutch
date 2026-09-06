@@ -161,10 +161,7 @@ fn harvest(rpc: &mut Rpc, label: &str, signature: &str, into: &mut Vec<Transacti
     let Ok(parsed) = signature.parse::<Signature>() else {
         return;
     };
-    if into
-        .iter()
-        .any(|evidence| evidence.signature == signature)
-    {
+    if into.iter().any(|evidence| evidence.signature == signature) {
         return;
     }
     if let Ok(Some(finalized)) = rpc.finalized_signed_packet(label, parsed, false) {
@@ -284,7 +281,10 @@ fn harvest_dir(
 /// `completed` is asked BEFORE each invocation as well as after, so a stage
 /// whose completion file already exists costs zero transactions and reports
 /// `already complete` rather than re-entering a driver that would refuse.
-fn resume_until<F, C>(mut invoke: F, mut completed: C) -> std::result::Result<usize, (usize, String)>
+fn resume_until<F, C>(
+    mut invoke: F,
+    mut completed: C,
+) -> std::result::Result<usize, (usize, String)>
 where
     F: FnMut(usize) -> Result<()>,
     C: FnMut() -> bool,
@@ -420,7 +420,8 @@ pub(crate) fn admit_strangers(
         match outcome {
             Ok(passes) => {
                 let document = read_json(&stranger.report)?;
-                let (count, units) = harvest_document(rpc, &label, &document, &mut spine.transactions);
+                let (count, units) =
+                    harvest_document(rpc, &label, &document, &mut spine.transactions);
                 landed += count;
                 compute += units;
                 rows.insert(
@@ -482,6 +483,99 @@ pub(crate) fn admit_strangers(
     spine
         .reports
         .insert("admission".into(), Value::Object(rows));
+    Ok(())
+}
+
+// ------------------------------------------------------ Direct activation
+
+/// Create the Direct capability root, which nothing else in this tree creates.
+///
+/// THE JOURNEY NEVER RAN THIS, and two of its walls are that absence.
+/// `direct_capability_activation` is the only author of the Direct execution
+/// root -- Core's `ActivateCapability` CPIs Trading's `process_activation` and
+/// only this frame reaches it -- so on a validator where it has not run:
+///
+///   * `direct_trade_producer` derives the root, finds nothing at it and
+///     refuses, which is the wall `SIMULATOR_POPULATION_DRIVEN_2026_08_30`
+///     recorded as twenty-one refused fills and read as a width problem; and
+///   * `evidence_refresh` emits `direct_capability_root` only where the account
+///     EXISTS while the founding emits `direct_trading_funding_ledger`
+///     unconditionally, so the refreshed evidence carries exactly half of the
+///     Direct first-use pair and `require_direct_first_use_evidence_v1` refuses
+///     the whole terminal sequence -- "it carries direct_trading_funding_ledger
+///     and omits direct_capability_root", which is the true sentence about a
+///     market that was never activated.
+///
+/// The devnet cohorts have run this immediately after the founding since the
+/// row existed (`tools/cohort/steps.tsv`, `activate-direct`, between
+/// `found-direct` and `arm-relay`) and with the same key: the campaign payer.
+/// It is idempotent by design -- a live Trading-owned root at the derived
+/// coordinate reports `already-active` and exits cleanly -- so a resumed run
+/// converges instead of double-submitting.
+pub(crate) fn activate_direct_capability(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    payer: Pubkey,
+    payer_keypair: &Path,
+) -> Result<()> {
+    let stage = "trading: the Direct capability root is activated";
+    let report = context.dir("activation")?.join("direct-activation.json");
+    let arguments = vec![
+        "--rpc-url".to_owned(),
+        context.rpc_url.to_owned(),
+        "--plan".to_owned(),
+        context.plan.display().to_string(),
+        "--expected-plan-sha256".to_owned(),
+        digest_of(context.plan)?,
+        "--market-input".to_owned(),
+        context.market_input.display().to_string(),
+        "--expected-market-input-sha256".to_owned(),
+        digest_of(context.market_input)?,
+        "--campaign-report".to_owned(),
+        context.campaign_report.display().to_string(),
+        "--expected-campaign-report-sha256".to_owned(),
+        digest_of(context.campaign_report)?,
+        "--payer".to_owned(),
+        payer.to_string(),
+        "--payer-keypair".to_owned(),
+        payer_keypair.display().to_string(),
+        "--output".to_owned(),
+        report.display().to_string(),
+        "--execute".to_owned(),
+    ];
+    match crate::direct_capability_activation::run_owned_loopback(arguments) {
+        Ok(()) => {
+            let document = read_json(&report)?;
+            let (landed, compute) = harvest_document(
+                rpc,
+                "journey: Direct capability activation",
+                &document,
+                &mut spine.transactions,
+            );
+            let verdict = document
+                .get("verdict")
+                .and_then(Value::as_str)
+                .unwrap_or("unstated")
+                .to_owned();
+            spine.executed(
+                stage,
+                landed,
+                compute,
+                format!(
+                    "`local-private-validator-direct-capability-activation-v1 --execute`, verdict                      {verdict}. One Core-signed permissionless transaction writes                      `CapabilityRootHeaderV1 || DirectRootStateV1` at the derived root and moves                      the funding ledger's parked rent quote into it. The fill's root check and                      the terminal sequence's Direct first-use pair both read what this creates."
+                ),
+            );
+            spine.reports.insert("direct-activation".into(), document);
+        }
+        Err(error) => spine.refused(
+            stage,
+            &error.to_string(),
+            format!(
+                "The shipped Direct capability activation refused: {error}. Nothing downstream of                  it can be read as a statement about Direct trading or about retirement evidence:                  the execution root does not exist and this tree has no other author for it."
+            ),
+        ),
+    }
     Ok(())
 }
 
@@ -669,9 +763,7 @@ pub(crate) fn settle_fee(
                  zero, which is the only thing that distinguishes a settled fee from a sent one."
                     .into(),
             );
-            spine
-                .reports
-                .insert("fee-settlement".into(), document);
+            spine.reports.insert("fee-settlement".into(), document);
         }
         Err(error) => spine.refused(
             stage,
@@ -884,8 +976,7 @@ pub(crate) fn retire(
     });
 
     // ---- 2. the terminal sequence: CloseFund, BeginRetiring and the handoff
-    let sequence_stage =
-        "retirement: CloseFund, BeginRetiring and the retirement replay handoff";
+    let sequence_stage = "retirement: CloseFund, BeginRetiring and the retirement replay handoff";
     let journal_dir = context.dir("terminal-journal")?;
     let session = context.work.join("terminal-session.json");
     let completion = context.work.join("terminal-completion.json");
@@ -941,9 +1032,7 @@ pub(crate) fn retire(
                      an exact-union routing table built by the same journal machinery in front."
                 ),
             );
-            spine
-                .reports
-                .insert("terminal-sequence".into(), document);
+            spine.reports.insert("terminal-sequence".into(), document);
         }
         Err((passes, error)) => {
             spine.refused(
@@ -1063,7 +1152,9 @@ pub(crate) fn retire(
 /// SHA-256 of a file, in the spelling the `--expected-*-sha256` flags take.
 fn digest_of(path: &Path) -> Result<String> {
     use sha2::Digest;
-    Ok(crate::plan::hex(&sha2::Sha256::digest(std::fs::read(path)?)))
+    Ok(crate::plan::hex(&sha2::Sha256::digest(std::fs::read(
+        path,
+    )?)))
 }
 
 #[cfg(test)]

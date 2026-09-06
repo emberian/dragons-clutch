@@ -19,23 +19,12 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_market::capability_program::hot_v3::HotExecutionAckV3;
 use dclutch_claims::{
     liability_basis_state_v2::LiabilityBasisPositionViewV2,
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_trading::{
-    intent_v2::CompactIntentV2,
-    ordinary_v3::DirectOrdinaryAuthenticatedContextV3,
-    replay_setup_v1::{DirectReplaySetupReceiptV1, DirectReplaySetupRequestV1},
-    successor::{
-        DIRECT_ROOT_STATE_BYTES_V1, DirectExecutionConfigV1, DirectRootStateV1, MakerReplayRootV1,
-    },
-    token_setup_v1::{
-        DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenSetupReceiptV1,
-        DirectTokenSetupRequestV1,
-    },
-};
+use dclutch_custody::token_svm::TokenAccount;
+use dclutch_market::capability_program::hot_v3::HotExecutionAckV3;
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
     direct_inline_route_v3::{
@@ -58,7 +47,18 @@ use dclutch_operator::{
     },
 };
 use dclutch_release_tool::CheckedExecutionReleaseSetV1;
-use dclutch_custody::token_svm::TokenAccount;
+use dclutch_trading::{
+    intent_v2::CompactIntentV2,
+    ordinary_v3::DirectOrdinaryAuthenticatedContextV3,
+    replay_setup_v1::{DirectReplaySetupReceiptV1, DirectReplaySetupRequestV1},
+    successor::{
+        DIRECT_ROOT_STATE_BYTES_V1, DirectExecutionConfigV1, DirectRootStateV1, MakerReplayRootV1,
+    },
+    token_setup_v1::{
+        DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenSetupReceiptV1,
+        DirectTokenSetupRequestV1,
+    },
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -5628,6 +5628,32 @@ fn decode_canonical_base64_v1(value: &str, label: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// The Hot frame's lookup closure: distinct, and byte for byte the list the
+/// journal authenticated. There is deliberately NO vacancy conjunct. The System
+/// Program's id IS `Pubkey::default()`, and a Hot frame names it -- Trading CPIs
+/// System to create accounts -- so a vacancy test cannot tell a legitimate
+/// System entry from a coordinate left unset. It does not need to: an unset
+/// coordinate changes the list, and the list is authenticated against
+/// `lookup_addresses_sha256`, which the finalized evidence pins.
+fn refusing_direct_hot_lookup_closure_clause_v1(
+    keys: &[Pubkey],
+    expected_sha256: &str,
+) -> Option<&'static str> {
+    if keys
+        .iter()
+        .enumerate()
+        .any(|(index, key)| keys.iter().take(index).any(|earlier| earlier == key))
+    {
+        return Some("embedded Direct Hot journal lookup closure repeated an address");
+    }
+    if pubkey_list_sha256(keys) != expected_sha256 {
+        return Some(
+            "embedded Direct Hot journal lookup closure did not reproduce its authenticated digest",
+        );
+    }
+    None
+}
+
 fn authenticate_embedded_hot_journal_v1(
     public: &DirectTradePublicManifestV1,
     evidence: &DirectTradeFinalizedEvidenceV1,
@@ -5754,16 +5780,10 @@ fn authenticate_embedded_hot_journal_v1(
         .iter()
         .map(|value| parse_key(value, "embedded Direct lookup address"))
         .collect::<Result<Vec<_>>>()?;
-    if lookup_keys.iter().any(|key| *key == Pubkey::default())
-        || lookup_keys
-            .iter()
-            .enumerate()
-            .any(|(index, key)| lookup_keys.iter().take(index).any(|earlier| earlier == key))
-        || pubkey_list_sha256(&lookup_keys) != journal.lookup_addresses_sha256
+    if let Some(clause) =
+        refusing_direct_hot_lookup_closure_clause_v1(&lookup_keys, &journal.lookup_addresses_sha256)
     {
-        return Err(refusal(
-            "embedded Direct Hot journal lookup closure was not exact, ordered, and distinct",
-        ));
+        return Err(refusal(clause));
     }
     let message = decode_canonical_base64_v1(
         journal
@@ -5946,14 +5966,15 @@ fn authenticate_embedded_direct_mutations_v1(
     let expected_activation_index = extension_count
         .checked_add(2)
         .ok_or_else(|| refusal("embedded Direct activation index overflowed"))?;
+    let (freeze_index, seal_index) = freeze_and_seal_mutation_indices_v1(extension_count);
     let freeze_slot = evidence
         .mutations
-        .get(extension_count + 2)
+        .get(freeze_index)
         .ok_or_else(|| refusal("embedded Direct lookup freeze mutation disappeared"))?
         .slot;
     let seal_slot = evidence
         .mutations
-        .get(extension_count + 3)
+        .get(seal_index)
         .ok_or_else(|| refusal("embedded Direct capability-seal mutation disappeared"))?
         .slot;
     authenticate_lookup_activation_slot_order_v1(
@@ -6003,6 +6024,27 @@ fn authenticate_embedded_direct_mutations_v1(
         ));
     }
     Ok(())
+}
+
+/// The two SETUP mutations the finalized evidence carries in front of its
+/// action rows: `replay-setup` and `token-setup`.
+const DIRECT_SETUP_MUTATION_COUNT_V1: usize = 2;
+
+/// Where the lookup freeze and the capability seal sit in `evidence.mutations`.
+///
+/// The action ordinals this function is derived from -- freeze at
+/// `extension_count + 1`, seal at `extension_count + 2` -- are ordinals into
+/// `evidence.mutations[2..]`, so reading them straight off `evidence.mutations`
+/// names the row BEFORE the one that was meant. It did: cohort-17's Direct fill
+/// authenticated against its own lookup activation at slot 493,995,464 and the
+/// close refused "embedded Direct lookup activation was outside the
+/// freeze-to-seal interval", having compared it to the third `lookup-extend`
+/// and the `lookup-freeze` instead of the freeze and the seal.
+const fn freeze_and_seal_mutation_indices_v1(extension_count: usize) -> (usize, usize) {
+    (
+        DIRECT_SETUP_MUTATION_COUNT_V1 + extension_count + 1,
+        DIRECT_SETUP_MUTATION_COUNT_V1 + extension_count + 2,
+    )
 }
 
 fn authenticate_lookup_activation_slot_order_v1(
@@ -7228,10 +7270,11 @@ mod tests {
         authenticate_embedded_direct_evidence_identity_v1,
         authenticate_lookup_activation_slot_order_v1, direct_chaos_mutation_v1,
         direct_evidence_digest_v1, direct_evidence_schema_v1, direct_journal_schema_v1,
-        direct_private_schema_v1, direct_public_schema_v1, expected_stage_v1, hex32,
-        journal_intent_sha256_v1, journal_state_sha256, parse_direct_return_data_v1,
-        publish_immutable_json_v1, refresh_direct_journal_digest_v1,
-        refusing_admitted_fee_rate_clause_v1, refusing_adopted_seal_journal_clause_v1,
+        direct_private_schema_v1, direct_public_schema_v1, expected_stage_v1,
+        freeze_and_seal_mutation_indices_v1, hex32, journal_intent_sha256_v1, journal_state_sha256,
+        parse_direct_return_data_v1, pubkey_list_sha256, publish_immutable_json_v1,
+        refresh_direct_journal_digest_v1, refusing_admitted_fee_rate_clause_v1,
+        refusing_adopted_seal_journal_clause_v1, refusing_direct_hot_lookup_closure_clause_v1,
         require_unique_json_v1, usage, verify_expected_direct_poststates_v1,
         write_direct_journal_v1,
     };
@@ -7241,6 +7284,104 @@ mod tests {
         encode_liability_basis_position_into_v2, liability_basis_vector_width_v2,
     };
     use dclutch_operator::{Finality, Observation, ObservedAccount};
+
+    /// The mutation list's shape is stated in two places -- the ordinal ladder
+    /// in `authenticate_embedded_direct_mutations_v1` and the count guard
+    /// `extension_count + 6` -- and this holds the freeze/seal indices against
+    /// both, at every extension count a 61-address frame can produce.
+    #[test]
+    fn the_freeze_and_seal_slots_are_read_off_the_rows_that_carry_them() {
+        for lookup_addresses in [1_usize, 20, 21, 40, 57, 61] {
+            let extension_count = lookup_addresses.div_ceil(20);
+            let mut kinds = vec!["replay-setup", "token-setup", "lookup-create"];
+            kinds.extend(std::iter::repeat_n("lookup-extend", extension_count));
+            kinds.push("lookup-freeze");
+            kinds.push("capability-seal");
+            kinds.push("hot");
+            assert_eq!(
+                kinds.len(),
+                extension_count + 6,
+                "the count guard and this ladder must describe one list"
+            );
+            let (freeze, seal) = freeze_and_seal_mutation_indices_v1(extension_count);
+            assert_eq!(
+                kinds[freeze], "lookup-freeze",
+                "{lookup_addresses} addresses: index {freeze} is not the freeze"
+            );
+            assert_eq!(
+                kinds[seal], "capability-seal",
+                "{lookup_addresses} addresses: index {seal} is not the seal"
+            );
+        }
+    }
+
+    /// A lookup closure of the Hot frame's exact width, every address distinct
+    /// and none of them the all-zero key.
+    fn lookup_closure_v1() -> Vec<Pubkey> {
+        (0..57u8)
+            .map(|index| {
+                let mut bytes = [0u8; 32];
+                bytes[0] = index + 1;
+                bytes[31] = 0xa5;
+                Pubkey::new_from_array(bytes)
+            })
+            .collect()
+    }
+
+    /// The System Program's id IS `Pubkey::default()`, and the Hot frame names
+    /// it: cohort-17's frozen table `H2QMjhby88h4mGAovFX8rwS3BJcgUXTMEnEfMAVLexox`
+    /// carries it at index 36 of 57 because Trading CPIs System to create
+    /// accounts. A frame that names it at ANY index is a frame the closure
+    /// clause must admit -- refusing it strands the retirement behind a
+    /// legitimate account.
+    #[test]
+    fn a_frame_naming_the_system_program_at_any_index_passes_the_lookup_closure() {
+        for index in 0..57 {
+            let mut keys = lookup_closure_v1();
+            keys[index] = Pubkey::default();
+            let authenticated = pubkey_list_sha256(&keys);
+            assert_eq!(
+                refusing_direct_hot_lookup_closure_clause_v1(&keys, &authenticated),
+                None,
+                "the System Program at index {index} is an address the journal named, not a \
+                 coordinate it left unset"
+            );
+        }
+    }
+
+    /// And what the vacancy conjunct was reaching for still holds, through the
+    /// only thing that can tell the two apart: a coordinate zeroed AFTER the
+    /// journal authenticated its list does not reproduce that list's digest.
+    #[test]
+    fn a_genuinely_unset_coordinate_still_refuses_through_the_digest() {
+        let authenticated = lookup_closure_v1();
+        let digest = pubkey_list_sha256(&authenticated);
+        for index in 0..authenticated.len() {
+            let mut vacated = authenticated.clone();
+            vacated[index] = Pubkey::default();
+            assert_eq!(
+                refusing_direct_hot_lookup_closure_clause_v1(&vacated, &digest),
+                Some(
+                    "embedded Direct Hot journal lookup closure did not reproduce its \
+                     authenticated digest"
+                ),
+                "an unset coordinate at {index} must refuse against the authenticated digest"
+            );
+        }
+    }
+
+    /// A duplicate survives its own digest, so distinctness is refused on its
+    /// own account and not through the hash.
+    #[test]
+    fn a_repeated_lookup_address_refuses_on_its_own_account() {
+        let mut keys = lookup_closure_v1();
+        keys[9] = keys[4];
+        assert_eq!(
+            refusing_direct_hot_lookup_closure_clause_v1(&keys, &pubkey_list_sha256(&keys)),
+            Some("embedded Direct Hot journal lookup closure repeated an address"),
+            "a repeated address is consistent with its own digest and must refuse anyway"
+        );
+    }
 
     /// The rate the deployed setup admits passes, and it is READ FROM THE
     /// CONSTANT the on-chain program uses rather than restated as a literal
