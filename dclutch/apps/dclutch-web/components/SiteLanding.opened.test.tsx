@@ -29,9 +29,9 @@ const { default: SiteLanding } = await import('./SiteLanding');
 describe('the front door, once a market is open', () => {
   const html = renderToStaticMarkup(<SiteLanding />);
 
-  it('stops saying the first markets are being set up, and links the one that is', () => {
-    expect(html).not.toContain('the first markets are being set up');
-    expect(html).toContain('the first market is');
+  it('does not call an unverified feature current, and links the record it names', () => {
+    expect(html).not.toContain('No featured market has been staged');
+    expect(html).toContain('This build names');
     expect(html).toContain(`/market?address=${MARKET}`);
   });
 
@@ -42,7 +42,7 @@ describe('the front door, once a market is open', () => {
     // the market's own Core account, so the SERVER-rendered face, which has
     // read nothing yet, must carry no phase word at all: it says where the
     // answer is read instead of guessing it.
-    expect(html).toContain('What state it is in is read on its own page');
+    expect(html).toContain('Its cohort link and state are read from the chain');
     for (const phase of ['open', 'resolved', 'winding down', 'finished', 'still being set up']) {
       expect(html.slice(html.indexOf('Where this stands'), html.indexOf('landing-key-art'))).not.toContain(phase);
     }

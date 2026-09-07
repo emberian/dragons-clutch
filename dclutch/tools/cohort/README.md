@@ -11,8 +11,8 @@ steps.tsv            every row any cohort has ever run, each carrying `since`,
                      `until`, its `shape` and its `args`; {field} resolves
                      against the manifest, {market.field} against each market
 check-steps.py       the gate. --cohort N selects; --delta shows what this
-                     cohort is the first to run; --prove-frozen shows the union
-                     lost nothing
+                     cohort is the first to run; --prove-frozen checks the
+                     historical row ids, stages and cost ledger
 preflight.sh         everything checkable before a lamport moves, for any cohort
 generate-stage-scripts.py   the job directory's stage scripts, one family, from
                      the shape and args columns — no hand-written script
@@ -21,9 +21,8 @@ semantic-release-ids.py     the cohort's eight semantic release ids, derived
                      which every emitted `prepare` reads through its own
                      `semantic` helper; `validate_prepare` re-derives each one
                      from the artifact beside it and refuses a mismatch
-frozen/              the exact tables cohort-14 and cohort-15 ran from, as
-                     fixtures; --prove-frozen proves this file still reproduces
-                     them
+frozen/              immutable evidence of the tables cohort-14 and cohort-15
+                     ran from; --prove-frozen checks their stable shape
 test.sh              the gate's own red proofs
 ```
 
@@ -89,15 +88,15 @@ replaced by `openbatch-refounded`.
 
 `tools/cohort14/` and `tools/cohort15/` are **gone**: their `steps.tsv` files
 are kept as fixtures under `frozen/cohort-14.tsv` and `frozen/cohort-15.tsv`,
-and `check-steps.py --prove-frozen` is the standing proof that this directory
-still reproduces exactly what those two cohorts ran — the cohort-14 view
-reproduces `frozen/cohort-14.tsv` and the cohort-15 **delta** view reproduces
-`frozen/cohort-15.tsv`, byte for byte in the six-column form the hand scripts
-were driven from. That proof is why the `shape` and `args` columns could be
-added and the two directories deleted in the same breath: adding a column, or a
-`since 16` row, is proved to have changed nothing about what already ran. The
-hazard stories those READMEs held are now the `### key` prose below, one author
-per row.
+and `check-steps.py --prove-frozen` is the standing proof that their historical
+row ids, stages and cost ledger still survive in the current selection. The
+fixtures remain immutable evidence; `steps.tsv` is the current canonical author
+for command and verifier prose and for blocking edges, which later cohorts have
+repaired after those runs. That separation is why the `shape` and `args` columns
+could be added and the two directories deleted in the same breath: a later
+documentation or dependency-edge repair does not rewrite history. The hazard
+stories those READMEs held are now the `### key` prose below, one author per
+row.
 
 ## What no preflight can answer
 
@@ -117,7 +116,9 @@ is the row's position in that selection, which is why nothing here is numbered.
 
 Close the previous cohort's programs and reclaim their rent, ids **derived from
 that cohort's own keypair files, never transcribed**. The accounts stay on
-chain; only the ProgramData holding the code goes away.
+chain; only the ProgramData holding the code goes away. This historical row is
+selected through cohort 17. Fresh cohorts leave the prior cohort abandoned in
+place; they do not close its accounts as part of redeployment.
 
 ### close-prior-accelerator
 
@@ -132,6 +133,16 @@ Closing it is also the fail-closed half. A Program account survives its
 ProgramData, so a market founded against the superseded accelerator meets an
 account that is not executable rather than an accelerator that quietly answers
 with pre-fold semantics.
+
+### abandon-prior
+
+Cohort 18's fresh deployment records `prior_cohort_policy` as
+`abandon-in-place` in `$OUT/abandon-prior.txt`. This is a job-local guard and
+evidence marker: it deliberately emits no `solana program close`, leaves every
+prior Program and ProgramData account untouched, and blocks the release builder
+until the operator has acknowledged that the fresh cohort will be founded under
+its own eight new identities. The prior cohort remains on devnet as abandoned
+state; its IDs are not copied into the new manifest.
 
 ### deploy
 
@@ -1084,14 +1095,17 @@ Cohort-16 is a full redeploy that founds a refunding market, buys a second
 source, and retires the first. Five rows are new and two of the old founding
 rows are replaced, and the change is one of ORDER: on a genesis cohort the
 checked candidate is installed directly, so `prepare` can run before the ladder
-rather than as a step of it. `--prove-frozen` proves cohort-14 and cohort-15 are
-untouched by any of it.
+rather than as a step of it. `--prove-frozen` checks that cohort-14 and
+cohort-15's historical row ids, stages and costs survive the repair; current
+command, verifier and dependency-edge prose remains owned by `steps.tsv`.
 
 ### deploy-roles
 
 `redeploy`'s content as an emitted stage: one `solana program deploy` per role
 from the candidate's `elf/`, each image dumped back and compared **before the
 next deploy starts** — a sequence that spends money stops at the first failure.
+The accelerator row is explicitly blocked by this row, so the eight fresh
+deployments remain serial even though they are separate emitted scripts.
 Replaces cohort-15's ladder-embedded deploy.
 
 ### prepare

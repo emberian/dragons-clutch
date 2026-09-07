@@ -11,7 +11,7 @@ import Nav from './Nav';
 describe('the site nav', () => {
   it('renders the canonical product set plus one Console entry, nothing else', () => {
     const html = renderToStaticMarkup(<Nav current="/markets" />);
-    for (const label of ['Live', 'Markets', 'Pulse', 'Activity', 'Design', 'Portfolio', 'Explorer', 'Docs', 'Console']) {
+    for (const label of ['Watch', 'Markets', 'Activity', 'Design', 'Portfolio', 'Explorer', 'Docs', 'Console']) {
       expect(html).toContain(`>${label}</a>`);
     }
     // The retired per-page item sets must not creep back in.
@@ -45,7 +45,7 @@ describe('the site nav', () => {
   it('keeps observer and redemption routes in their product journeys', () => {
     for (const path of ['/campaign', '/population', '/smoke', '/bounty']) {
       const html = renderToStaticMarkup(<Nav current={path} />);
-      expect(html).toContain('href="/live" class="active" aria-current="page"');
+      expect(html).toContain('href="/pulse" class="active" aria-current="page"');
       expect(html).not.toContain('href="/console" class="active"');
     }
     const redemption = renderToStaticMarkup(<Nav current="/redeem" />);

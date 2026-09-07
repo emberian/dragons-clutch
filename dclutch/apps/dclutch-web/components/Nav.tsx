@@ -15,13 +15,14 @@ import { docsIndexHrefV1 } from '@/lib/flags';
  * ends that class of drift: a page states which path it is and the rest is
  * decided here.
  *
- * The canonical set is the product: Live · Markets · Pulse · Activity ·
- * Design · Portfolio · Explorer · Docs — plus one Console entry for the
- * operator workspaces, which are indexed at /console instead of competing for
+ * The canonical set is the product: Watch · Markets · Activity · Design ·
+ * Portfolio · Explorer · Docs — plus one Console entry for the operator
+ * workspaces, which are indexed at /console instead of competing for
  * top-level slots. A console route lights the Console entry so the reader
- * always knows which side of the site they are on. Pulse and Activity are the
- * two aliveness surfaces; they earned their slots the day they became
- * reachable only by typing a URL.
+ * always knows which side of the site they are on. Watch is the public
+ * observation surface; the older launch story remains reachable at `/live`,
+ * but cannot be the primary entrance because its static cut can outlive a
+ * cohort.
  *
  * It renders the `<header>` and nothing else. It used to also emit a
  * zero-height `<span id="main-content">` for the skip link to land on, which
@@ -38,9 +39,8 @@ type ProductItem = Readonly<{
 }>;
 
 const PRODUCT_ITEMS: readonly ProductItem[] = [
-  { href: '/live', label: 'Live', aliases: ['/campaign', '/population', '/smoke', '/bounty'] },
+  { href: '/pulse', label: 'Watch', aliases: ['/live', '/campaign', '/population', '/smoke', '/bounty'] },
   { href: '/markets', label: 'Markets' },
-  { href: '/pulse', label: 'Pulse' },
   { href: '/activity', label: 'Activity' },
   { href: '/create', label: 'Design' },
   { href: '/portfolio', label: 'Portfolio', aliases: ['/redeem'] },

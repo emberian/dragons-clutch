@@ -976,7 +976,7 @@ pub fn build_report(
         Some(tail) => {
             let escrow = snapshot.required(tail.escrow_position, "failure escrow Position")?;
             let admission = snapshot.required(tail.escrow_admission, "failure escrow admission")?;
-            let bond_recipient = snapshot.required(tail.recipient, "founder bond recipient")?;
+            let recipient_lamports = founder_bond_recipient_lamports(snapshot, tail.recipient)?;
             if escrow.owner != selected.claims
                 || escrow.executable
                 || admission.owner != selected.claims
@@ -990,7 +990,7 @@ pub fn build_report(
             Some(WalletTerminalPayoutFounderBondInputV3 {
                 escrow_lamports: escrow.lamports,
                 escrow_admission_bytes: &admission.data,
-                recipient_lamports: bond_recipient.lamports,
+                recipient_lamports,
             })
         }
         None => None,
@@ -1035,6 +1035,23 @@ pub fn build_report(
     })
     .map_err(|error| Error::new(format!("wallet terminal payout builder: {error:?}")))?;
     Ok(report)
+}
+
+/// Read the pre-draw balance of the founder-bond recipient.
+///
+/// The terminal settlement is allowed to credit the holder's signing wallet
+/// even when that public key has no account yet. `FinalizedSnapshotV1` records
+/// that exact finalized state as a zero-lamport System account; the deployed
+/// Claims route accepts the writable credit target and creates its balance as
+/// part of the same atomic settlement. The escrow and its admission remain
+/// required accounts, because the route reads their bytes before it can plan a
+/// draw. The recipient, by contrast, contributes only its starting balance to
+/// that plan, so absence means zero rather than a missing route.
+fn founder_bond_recipient_lamports(
+    snapshot: &FinalizedSnapshotV1,
+    recipient: Pubkey,
+) -> Result<u64> {
+    Ok(snapshot.account(recipient)?.lamports)
 }
 
 pub fn build_manifest(
@@ -2147,6 +2164,42 @@ pub mod tests {
         json["lookupTable"] = serde_json::Value::Null;
         assert!(serde_json::from_value::<PlanInputV1>(json).is_err());
         assert!(FinalizedSnapshotV1::from_observed(0, 1, &[], Vec::new()).is_err());
+    }
+
+    /// A holder may sign a terminal settlement before their system wallet has
+    /// ever received lamports. The tail credits that wallet atomically, so its
+    /// finalized `None` observation is a zero balance to the bond plan rather
+    /// than a missing precondition. Omitting the address from the snapshot is
+    /// still a distinct refusal: the route must observe every frame member.
+    #[test]
+    fn vacant_founder_bond_recipient_is_a_zero_lamport_credit_prestate() {
+        let recipient = Pubkey::new_from_array([91; 32]);
+        let snapshot = FinalizedSnapshotV1::from_observed(44, 1, &[recipient], vec![None])
+            .expect("a finalized vacant recipient observation");
+        assert_eq!(
+            founder_bond_recipient_lamports(&snapshot, recipient)
+                .expect("the terminal settlement may credit a vacant wallet"),
+            0
+        );
+        assert_eq!(
+            snapshot
+                .required(recipient, "founder bond recipient")
+                .expect_err("the generic byte-reading guard rejects a vacant account")
+                .to_string(),
+            format!("wallet payout snapshot is missing founder bond recipient {recipient}")
+        );
+        assert_eq!(
+            founder_bond_recipient_lamports(
+                &FinalizedSnapshotV1 {
+                    observation: snapshot.observation,
+                    accounts: BTreeMap::new(),
+                },
+                recipient,
+            )
+            .expect_err("an omitted frame member is not an observed zero account")
+            .to_string(),
+            format!("wallet payout snapshot omitted {recipient}")
+        );
     }
 
     #[test]

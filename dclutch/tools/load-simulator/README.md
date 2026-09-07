@@ -1,5 +1,12 @@
 # dClutch load simulator
 
+For a fresh checked devnet cohort with several persistent, observable Direct
+markets, see [`docs/operators/AQUARIUM_V1.md`](../../docs/operators/AQUARIUM_V1.md).
+The aquarium is a bounded supervisor around the current devnet Direct driver:
+it precommits unique ticket epochs, preserves active inventory rather than
+retiring every market, and publishes credential-free status. Its actors are
+explicitly synthetic until a noncustodial public admission entrance exists.
+
 Sustained, rate-controlled, multi-wallet activity against a live cluster —
 the thing that makes a market look and be alive.  Participants join, run
 Direct trade sessions, churn, and a reconciliation loop proves conservation

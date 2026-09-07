@@ -166,22 +166,21 @@ elif [ ! -f "$WORK/stamps.archive" ] || [ "$(cat "$WORK/stamps.archive")" != "$G
     git -C "$REPO" archive "$GATE_REVISION" | tar -x -C "$SOURCE" \
         || die "the gate's revision is not in this repository: $GATE_REVISION"
     printf '%s\n' "$GATE_REVISION" > "$WORK/stamps.archive"
+else
+    echo "stage archive: up to date"
 fi
-# The tier's own files, which may not be in the gate's revision yet. Copied
-# rather than symlinked so the built binary names one directory.
-if [ "$WORKTREE" != 1 ]; then
-    rm -rf "$SOURCE/tools/gauntlet/ladder"
-    mkdir -p "$SOURCE/tools/gauntlet"
-    cp -R "$SCRIPT_DIR" "$SOURCE/tools/gauntlet/ladder"
-fi
+# The campaign stays inside the gate's exact archive. Overlaying this runner's
+# working-tree modules here would silently change what the source revision
+# names. Developing a newer host against an older gate uses --worktree, whose
+# evidence is explicitly diagnostic.
 
 # --------------------------------------------------------- 2. the campaign
 HOST_TARGET="$WORK/host-target"
 say "stage campaign binary"
-( cd "$SOURCE/tools/gauntlet/ladder" && CARGO_TARGET_DIR="$HOST_TARGET/ladder" \
-    run_build cargo build --release ) > "$LOGS/build-ladder.log" 2>&1 \
+( cd "$SOURCE" && CARGO_TARGET_DIR="$HOST_TARGET" \
+    run_build cargo build --release -p dclutch-ladder-campaign ) > "$LOGS/build-ladder.log" 2>&1 \
     || { tail -n 40 "$LOGS/build-ladder.log" >&2; die "campaign build failed"; }
-CAMPAIGN_BIN="$HOST_TARGET/ladder/release/dclutch-ladder-campaign"
+CAMPAIGN_BIN="$HOST_TARGET/release/dclutch-ladder-campaign"
 [ -x "$CAMPAIGN_BIN" ] || die "campaign binary missing: $CAMPAIGN_BIN"
 
 # -------------------------------------------------------- 3. the port block

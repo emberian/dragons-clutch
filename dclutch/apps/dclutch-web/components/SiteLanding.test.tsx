@@ -24,7 +24,7 @@ describe('the front door', () => {
 
   it('says plainly where this stands before it says anything else', () => {
     expect(html).toContain('On devnet — nothing for sale');
-    expect(html).toContain('the first markets are being set up');
+    expect(html).toContain('No featured market has been staged');
     expect(html).toContain('no value at risk anywhere');
   });
 

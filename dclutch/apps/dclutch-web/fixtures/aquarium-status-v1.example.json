@@ -1,0 +1,58 @@
+{
+  "schema": "dclutch-aquarium-status-v1",
+  "cohort": {
+    "number": 18,
+    "manifest_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "deployment_commit": "932edc83f",
+    "checked_at": "2026-09-07T18:00:00Z"
+  },
+  "state": "running",
+  "run": {
+    "started_at": "2026-09-07T18:00:00Z",
+    "updated_at": "2026-09-07T18:02:00Z",
+    "expected_next_update_by": "2026-09-07T18:05:00Z",
+    "planned_market_count": 4,
+    "active_market_target": 2,
+    "joined_wallet_target": 6,
+    "max_wallets": 8,
+    "max_lamports_spent": 20000000,
+    "lamports_spent_observed": 9410000
+  },
+  "activity": {
+    "synthetic_actors": true,
+    "last_event_at": "2026-09-07T18:01:55Z",
+    "last_event_kind": "fill",
+    "counts": {
+      "found": 2,
+      "admitted": 4,
+      "fill": 6,
+      "resolved": 0,
+      "deadline_failure": 0,
+      "redeemed": 0,
+      "retired": 0,
+      "census": 6,
+      "refused": 0,
+      "unattempted": 0,
+      "blocked": 0
+    },
+    "active_markets": [
+      {
+        "market_id": "sample-direct-1",
+        "address": "GtmpRvSL9y6RpqMth73VSdb9h1XRe7zqQZkhJkfgxKrA",
+        "state": "open",
+        "join_open": false,
+        "observed_at": "2026-09-07T18:01:55Z",
+        "epochs_completed": 2,
+        "epochs_precommitted": 3
+      }
+    ],
+    "join_note": "Synthetic actors only; no public noncustodial admission entrance is published."
+  },
+  "limits": { "max_active_markets": 4 },
+  "artifacts": {
+    "driver": "dclutch-aquarium-driver-v1",
+    "epoch_journal_schema": "dclutch-aquarium-epoch-journal-v1",
+    "child_journal_owner": "dclutch-aquarium-driver"
+  },
+  "failure": null
+}

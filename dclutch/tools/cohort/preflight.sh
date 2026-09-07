@@ -58,7 +58,10 @@ cohort_number="$(field cohort)"
 prior_cohort="$(field prior_cohort)"
 [ -n "$cohort_number" ] || { echo "cohort preflight: $manifest_path names no cohort" >&2; exit 2; }
 [ -n "$commit" ] || commit="$(field deploy_commit)"
-[ -n "$commit" ] || commit=HEAD
+[ -n "$commit" ] || {
+    echo "cohort preflight: deploy_commit is empty; a fresh cohort must name the exact committed source revision before any stage runs" >&2
+    exit 2
+}
 
 resolved="$(git rev-parse --verify "$commit^{commit}" 2>/dev/null)" || {
     echo "cohort preflight: $commit is not a commit in $repo_root" >&2
@@ -81,6 +84,28 @@ if steps_out="$(python3 "$here/check-steps.py" --cohort "$manifest_path" 2>&1)";
 else
     fail "steps.tsv + README + manifest" "the runbook does not render"
     printf '%s\n' "$steps_out" | sed 's/^/      /'
+fi
+echo
+
+# 0b. FRESH COHORTS ABANDON THE PRIOR COHORT IN PLACE.
+#
+# Closing the prior ProgramData was the old cohort sequence. A fresh identity
+# set leaves that cohort's accounts untouched, so this policy is a checked
+# manifest fact rather than an operator memory. The rendered view also proves
+# that no spend-bearing close row slipped back into the fresh sequence.
+if [ "$cohort_number" -ge 18 ]; then
+    prior_policy="$(field prior_cohort_policy)"
+    if [ "$prior_policy" = "abandon-in-place" ]; then
+        pass "prior cohort policy" "cohort-$prior_cohort is abandoned in place"
+    else
+        fail "prior cohort policy" "fresh cohort requires prior_cohort_policy=abandon-in-place"
+    fi
+    rendered_rows="$(python3 "$here/check-steps.py" --cohort "$manifest_path" --emit-legacy 2>/dev/null)"
+    if printf '%s\n' "$rendered_rows" | grep -qE $'\tclose-(cohort|accelerator)-'; then
+        fail "fresh close rows" "cohort-$cohort_number still renders a prior-cohort close stage"
+    else
+        pass "fresh close rows" "no prior-cohort close stage is in the rendered sequence"
+    fi
 fi
 echo
 
@@ -186,6 +211,26 @@ else
 fi
 echo "  expected ELF digest                                        $(field general_accelerator.elf_sha256)"
 echo
+
+# 3b. THE SEVEN PROGRAM IDS ARE POST-DEPLOY FACTS.
+#
+# The deploy stages use the job's fresh program keypairs, while seal and every
+# founding stage use the manifest's recorded public ids. A blank id renders as
+# an empty argument and can otherwise survive the offline first pass. Require
+# all seven when the bounded RPC pass is requested, after deployment and before
+# any founding stage is allowed to run.
+if [ -n "$rpc_url" ]; then
+    echo "the fresh cohort's seven program identities"
+    for role in $(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["roles"]))' "$manifest_path"); do
+        program_id="$(field "programs.$role")"
+        if [ -n "$program_id" ]; then
+            pass "program-$role id" "$program_id"
+        else
+            fail "program-$role id" "manifest records no fresh program id; fill it from the job keypair before sealing"
+        fi
+    done
+    echo
+fi
 
 # 4. THE PROVIDER RELEASE THE MARKET WILL PIN.
 #

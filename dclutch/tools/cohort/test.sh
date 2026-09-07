@@ -63,9 +63,9 @@ PY
 
 # --- 1. the union is green on the tree as it stands ------------------------
 if python3 "$here/check-steps.py" --prove-frozen >/dev/null 2>&1; then
-    ok "the union reproduces both frozen tables"
+    ok "the union preserves both frozen historical shapes"
 else
-    bad "the union reproduces both frozen tables" "it does not"
+    bad "the union preserves both frozen historical shapes" "it does not"
 fi
 for view in "--cohort 14" "--cohort 15" "--cohort 15 --delta"; do
     if python3 "$here/check-steps.py" $view >/dev/null 2>&1; then
@@ -75,19 +75,30 @@ for view in "--cohort 14" "--cohort 15" "--cohort 15 --delta"; do
     fi
 done
 
-# --- 2. a moved row breaks the reproduction --------------------------------
+# --- 2. a moved historical row breaks the frozen shape ---------------------
 # The whole reason the frozen tables stay is that this can go red.
 copy moved
 # THE POSITIVE CONTROL FIRST. "the mutation broke it" and "the copy was never a
 # working instrument" exit identically, and only this line tells them apart.
 if python3 "$work/moved/check-steps.py" --prove-frozen >/dev/null 2>&1; then
-    ok "the copy reproduces both frozen tables before it is mutated"
+    ok "the copy preserves both frozen historical shapes before it is mutated"
 else
-    bad "the copy reproduces both frozen tables before it is mutated" "the instrument was never connected"
+    bad "the copy preserves both frozen historical shapes before it is mutated" "the instrument was never connected"
 fi
-mutate moved census verifier "L1 through L8 each reported by name"   # drops the INAPPLICABLE sentence
-refuses_with "a changed verifier breaks --prove-frozen" "DOES NOT reproduce" \
+mutate moved census stage census-shifted
+refuses_with "a changed historical stage breaks --prove-frozen" "DOES NOT preserve" \
     python3 "$work/moved/check-steps.py" --prove-frozen
+
+# Current command/verifier prose is owned by steps.tsv and may be repaired after
+# a cohort ran; the immutable fixture must not become a second documentation
+# author. A verifier-only edit therefore leaves the historical shape green.
+copy prose-drift
+mutate prose-drift census verifier "L1 through L8 each reported by name"
+if python3 "$work/prose-drift/check-steps.py" --prove-frozen >/dev/null 2>&1; then
+    ok "current verifier prose may evolve without rewriting frozen evidence"
+else
+    bad "current verifier prose may evolve without rewriting frozen evidence" "the historical shape gate treated prose as immutable"
+fi
 
 # --- 3. an unresolved manifest field is a refusal, not a rendered brace -----
 copy unresolved
@@ -220,12 +231,41 @@ else
     bad "a per-market row fans out once per direct market (2)" "found $per_market"
 fi
 
-# --- 13. a row carrying no args refuses rather than running a partial ------
+# --- 13b. a fresh cohort abandons the prior cohort in place ----------------
+# The close rows remain historical evidence through cohort 17, but a fresh
+# redeploy must never emit their spend-bearing commands. The marker is the
+# explicit operator acknowledgement that replaces them.
+copy fresh-abandon
+fresh_view="$(python3 "$work/fresh-abandon/check-steps.py" --cohort "$work/fresh-abandon/cohorts/18.json" --emit-legacy)"
+if printf '%s\n' "$fresh_view" | grep -q $'\tclose-cohort-17\t\|\tclose-accelerator-17\t'; then
+    bad "cohort 18 does not emit prior-cohort close stages" "a close row is still selected"
+elif ! printf '%s\n' "$fresh_view" | grep -q $'\tabandon-cohort-17\t'; then
+    bad "cohort 18 records explicit in-place abandonment" "the abandon marker is missing"
+else
+    ok "cohort 18 records abandonment and emits no prior-cohort close"
+fi
+old_view="$(python3 "$work/fresh-abandon/check-steps.py" --cohort 17 --emit-legacy)"
+if printf '%s\n' "$old_view" | grep -q $'\tclose-cohort-16\t' &&
+   printf '%s\n' "$old_view" | grep -q $'\tclose-accelerator-16\t'; then
+    ok "cohort 17 retains the historical close stages"
+else
+    bad "cohort 17 retains the historical close stages" "historical close rows disappeared"
+fi
+python3 "$here/generate-stage-scripts.py" --cohort "$work/fresh-abandon/cohorts/18.json" \
+    --out "$work/fresh-stage" >/dev/null 2>&1
+if grep -q 'deploy-roles has not gone green' \
+   "$work/fresh-stage/03-deploy-accelerator.sh"; then
+    ok "cohort 18 serializes roles before the accelerator"
+else
+    bad "cohort 18 serializes roles before the accelerator" "accelerator has no role-deploy guard"
+fi
+
+# --- 14. a row carrying no args refuses rather than running a partial ------
 refuses_with "a row whose args the runbook does not carry refuses to run" \
     "carries no args yet" \
     bash "$(ls "$work/parse-out"/*-route-witness.sh)"
 
-# --- 14. THE PEER-CHAINING GUARD: nothing starts until what blocks it is green
+# --- 15. THE PEER-CHAINING GUARD: nothing starts until what blocks it is green
 # The old scripts grepped each other's logs for SETTLE_LANDED. Now a stage
 # refuses at its first line unless every blocker left a GREEN marker -- and it
 # refuses BEFORE asking for the endpoint, so this proof needs no credential.

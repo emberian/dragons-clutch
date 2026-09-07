@@ -30,11 +30,11 @@ What it checks:
      `args` starts with a driver the generator can emit. A `*` act is only
      legal under a shape that loops, and a looping shape needs one.
 
-`--prove-frozen` is the migration's own gate: the cohort-14 view must reproduce
-`frozen/cohort-14.tsv` and the cohort-15 delta view `frozen/cohort-15.tsv`, byte
-for byte in their six-column form. Those two files are the tables cohort-14 and
-cohort-15 actually ran from, kept as fixtures so that adding a column or a
-since-16 row can be proved to have changed nothing about what already ran.
+`--prove-frozen` is the migration's own gate: the cohort-14 view and cohort-15
+delta must retain the historical row ids, stages and cost ledger recorded in
+`frozen/`. The frozen files are immutable evidence of what those cohorts ran;
+the current `steps.tsv` is canonical for command/verifier prose and current
+blocking edges, which may be clarified or repaired after a cohort has run.
 
 It reads files and exits. No cargo, no chain, no keys.
 """
@@ -302,6 +302,14 @@ def legacy_text(view: list[dict]) -> str:
     return "".join("\t".join(step[field] for field in LEGACY) + "\n" for step in view)
 
 
+FROZEN_SHAPE_FIELDS = ("id", "stage", "cost")
+
+
+def historical_shape(view: list[dict]) -> list[tuple[str, str, str]]:
+    """The immutable facts a later runbook revision must retain."""
+    return [tuple(step[field] for field in FROZEN_SHAPE_FIELDS) for step in view]
+
+
 def frozen_text(path: pathlib.Path) -> str:
     keep = [line for line in path.read_text().splitlines()
             if line.strip() and not line.startswith("#")]
@@ -321,15 +329,22 @@ def prove_frozen() -> int:
             continue
         document = manifest(name)
         view = render(table, select(table, int(name), delta), document, problems)
-        ours, theirs = legacy_text(view), frozen_text(path)
+        ours = historical_shape(view)
+        frozen_rows = [line.split("\t") for line in frozen_text(path).splitlines()]
+        if any(len(row) != len(LEGACY) for row in frozen_rows):
+            raise Refusal(f"{path}: a frozen row does not have {len(LEGACY)} fields")
+        theirs = [tuple(row[LEGACY.index(field)] for field in FROZEN_SHAPE_FIELDS)
+                  for row in frozen_rows]
         label = f"cohort-{name}{' delta' if delta else ''}"
         if ours == theirs:
-            print(f"  {label}: {len(view)} rows reproduce {path.name} exactly")
+            print(f"  {label}: {len(view)} historical row ids, stages and costs match {path.name}")
             continue
         failures += 1
-        print(f"  {label}: DOES NOT reproduce {path.name}")
+        print(f"  {label}: DOES NOT preserve the historical shape in {path.name}")
         import difflib
-        for line in list(difflib.unified_diff(theirs.splitlines(), ours.splitlines(),
+        for line in list(difflib.unified_diff(
+                ["\t".join(row) for row in theirs],
+                ["\t".join(row) for row in ours],
                                               "frozen", "unified", lineterm=""))[:40]:
             print(f"    {line[:200]}")
     for problem in problems:
@@ -346,12 +361,12 @@ def main() -> int:
     parser.add_argument("--emit-legacy", action="store_true",
                         help="print the six-column form the frozen tables use")
     parser.add_argument("--prove-frozen", action="store_true",
-                        help="prove the union reproduces both frozen tables under frozen/")
+                        help="prove historical ids, stages and costs match frozen/")
     arguments = parser.parse_args()
 
     try:
         if arguments.prove_frozen:
-            print("cohort runbook: reproducing the frozen tables")
+            print("cohort runbook: checking frozen historical shapes")
             return prove_frozen()
         if not arguments.cohort:
             parser.error("--cohort is required (a number, or a path to a manifest)")

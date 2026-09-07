@@ -55,7 +55,7 @@ export default function SiteLanding() {
         <span>Where this stands</span>
         <strong>On devnet — nothing for sale</strong>
         <p>dClutch runs on Solana&apos;s devnet, a public test network whose
-        tokens are worthless by construction. The programs are deployed{' '}
+        tokens are worthless by construction. The programs are deployed.{' '}
         <FeaturedMarketStanding /> There
         is no token, nothing to buy, and no value at risk anywhere. If you want
         to try it, devnet SOL is free from the{' '}
@@ -96,7 +96,7 @@ export default function SiteLanding() {
         <Anchor className="secondary-action" href="/markets">Browse the markets →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">See what a wallet holds →</Anchor>
         <Anchor className="secondary-action" href="/create">Design a market →</Anchor>
-        <Anchor className="secondary-action" href="/live">Watch a market being built →</Anchor>
+        <Anchor className="secondary-action" href="/pulse">Watch published activity →</Anchor>
         <Anchor className="secondary-action" href="/explorer">Look up any account →</Anchor>
         <Anchor className="secondary-action" href="/console">Operator tools →</Anchor>
       </div>

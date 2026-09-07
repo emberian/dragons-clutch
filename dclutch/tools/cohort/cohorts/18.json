@@ -34,6 +34,7 @@
     "node_env": "DCLUTCH_NODE",
     "node_archive_env": "DCLUTCH_NODE_ARCHIVE"
   },
+  "prior_cohort_policy": "abandon-in-place",
   "upgrade_authority": "4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP",
   "payer": {
     "campaign_payer_keypair": "keys/campaign-payer.json",
