@@ -695,7 +695,9 @@ fn campaign(
     // protocol had done exactly what it should (hbox `20260906T174856Z`). A
     // reader, a schema and a refusal with no producer is the shape; this is the
     // producer.
-    ledger.track_market(addresses.market);
+    // The Core Market this campaign resolves and redeems is the founding's own;
+    // `found31_market` is Found37's hostile-control market and is never redeemed.
+    ledger.track_market(addresses.founding_market);
     progress.entering("admission: the founding really left an Open Market");
     let (claim_unit_atoms, decimals) = stages::admit_open_market(
         &mut session.rpc,
