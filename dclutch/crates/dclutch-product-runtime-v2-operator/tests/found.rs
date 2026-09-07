@@ -13,10 +13,18 @@ use dclutch_market::rent::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_market::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
-use dclutch_product::admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
+use dclutch_market::{
+    FOUND_ACCOUNT_ROLES_V3, FOUND_PARENT_A_MARKET_INDEX_V3, FOUND_PARENT_ACCOUNT_ROLES_V3,
+    FOUND_PARENT_B_MARKET_INDEX_V3, FOUND_PARENT_REFERENCE_RAW_INDEX_V3,
+    FOUND_PARENT_REFERENCE_STAGING_INDEX_V3, FOUND_PARENT_SLOT_COUNT_V3, Identity,
+    MarketCoreStateSeedsV2, MarketIdentity,
+};
+use dclutch_product::admission::{
+    FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product::payoff::{
-    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::{
         BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
         compile_basis_v3, semantic_basis_preimage_v3,
@@ -27,7 +35,8 @@ use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2, Error, FinalizedRecordObservationV2,
     ProductCompilationInputV2, compile_product_records_v2,
     found::{
-        FOUND_ACCOUNT_COUNT_V3, FinalizedReferenceObservationV2, FoundStateV2,
+        FOUND_ACCOUNT_COUNT_V3, FOUND_PARENT_ACCOUNT_COUNT_V3, FinalizedReferenceObservationV2,
+        FoundStateV2, ParentFoundSlotsObservationV2, ParentFoundTailObservationV2,
         build_found_instruction_v2, project_found_v2,
     },
     lifecycle_rent_v2::{
@@ -45,6 +54,9 @@ use dclutch_registry::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
+};
+use dclutch_source::parent_reference_v1::{
+    PARENT_REFERENCE_BYTES_V1, PARENT_REFERENCE_SCHEMA_ID_V1,
 };
 use dclutch_source::{
     CapacityEnvelope, ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
@@ -630,9 +642,77 @@ impl Fixture {
                 false,
                 &self.rent_programdata_data,
             ),
-            // The canonical 37-account frame: no certificate, so nothing
-            // is appended and every existing coordinate is unmoved.
+            // The canonical 37-account frame: no certificate and no parent
+            // tail, so nothing is appended and every existing coordinate is
+            // unmoved.
             price_gate: None,
+            parents: None,
+        }
+    }
+}
+
+/// One parent as a child founding presents it: its Core Market, and the Product
+/// and result-domain records the reference names. Core re-proves every slot
+/// against the reference, so the fixture is the coordinates and their order.
+struct ParentBacking {
+    market: Pubkey,
+    product: RecordBacking,
+    result_domain: RecordBacking,
+}
+
+impl ParentBacking {
+    fn new(seed: u8) -> Self {
+        Self {
+            market: Pubkey::new_from_array([seed; 32]),
+            product: RecordBacking::new(PRODUCT_RECORD_SCHEMA_ID_V2, vec![seed; 48]),
+            result_domain: RecordBacking::new(RESULT_DOMAIN_SCHEMA_ID_V2, vec![seed, 0x11]),
+        }
+    }
+
+    fn observation(&self) -> ParentFoundSlotsObservationV2<'_> {
+        ParentFoundSlotsObservationV2 {
+            market: account(self.market, CORE, 1_000_000, false, &[]),
+            product: self.product.observation(),
+            result_domain: self.result_domain.observation(),
+        }
+    }
+
+    fn keys(&self) -> [Pubkey; FOUND_PARENT_SLOT_COUNT_V3] {
+        [
+            self.market,
+            self.product.raw,
+            self.product.staging,
+            self.result_domain.raw,
+            self.result_domain.staging,
+        ]
+    }
+}
+
+/// The twelve accounts a child founding appends: the reference pair, then the
+/// two parents.
+struct ParentTailBacking {
+    reference: RecordBacking,
+    a: ParentBacking,
+    b: ParentBacking,
+}
+
+impl ParentTailBacking {
+    fn new() -> Self {
+        Self {
+            reference: RecordBacking::new(
+                PARENT_REFERENCE_SCHEMA_ID_V1,
+                vec![0x91; PARENT_REFERENCE_BYTES_V1],
+            ),
+            a: ParentBacking::new(0x92),
+            b: ParentBacking::new(0x93),
+        }
+    }
+
+    fn observation(&self) -> ParentFoundTailObservationV2<'_> {
+        ParentFoundTailObservationV2 {
+            reference: self.reference.observation(),
+            a: self.a.observation(),
+            b: self.b.observation(),
         }
     }
 }
@@ -1227,5 +1307,129 @@ fn wrong_source_product_and_late_payer_failure_refuse() {
             }
         ),
         Err(Error::InsufficientPayer)
+    );
+}
+
+#[test]
+fn the_child_found_frame_is_the_canonical_frame_and_a_twelve_slot_parent_tail() {
+    assert_eq!(FOUND_PARENT_ACCOUNT_COUNT_V3, 49);
+    // The tail is a SUFFIX of the canonical frame, with no gap and no
+    // certificate between: a child founding moves no coordinate an ordinary
+    // one already builds, and the privileges of those coordinates are the same
+    // table read twice.
+    assert_eq!(FOUND_PARENT_REFERENCE_RAW_INDEX_V3, FOUND_ACCOUNT_COUNT_V3);
+    assert_eq!(
+        FOUND_PARENT_ACCOUNT_ROLES_V3
+            .get(..FOUND_ACCOUNT_COUNT_V3)
+            .expect("child frame canonical prefix"),
+        FOUND_ACCOUNT_ROLES_V3
+            .get(..FOUND_ACCOUNT_COUNT_V3)
+            .expect("ordinary frame canonical prefix"),
+    );
+    assert_eq!(
+        FOUND_PARENT_REFERENCE_STAGING_INDEX_V3 + 1,
+        FOUND_PARENT_A_MARKET_INDEX_V3
+    );
+    assert_eq!(
+        FOUND_PARENT_A_MARKET_INDEX_V3 + FOUND_PARENT_SLOT_COUNT_V3,
+        FOUND_PARENT_B_MARKET_INDEX_V3
+    );
+}
+
+#[test]
+fn a_child_founding_appends_twelve_parent_slots_at_the_privileges_the_frame_declares() {
+    let fixture = Fixture::new();
+    let parents = ParentTailBacking::new();
+    let plan = build_found_instruction_v2(
+        GENERATION,
+        FoundStateV2 {
+            parents: Some(parents.observation()),
+            ..fixture.state()
+        },
+    )
+    .expect("child Found instruction plan");
+    assert_eq!(
+        plan.instruction.accounts.len(),
+        FOUND_PARENT_ACCOUNT_COUNT_V3
+    );
+    // The builder cannot disagree with the program about a single slot's
+    // authority: every meta it emits is the emitted table's row at that index.
+    for (index, role) in FOUND_PARENT_ACCOUNT_ROLES_V3.iter().copied().enumerate() {
+        let meta = plan
+            .instruction
+            .accounts
+            .get(index)
+            .expect("child frame meta");
+        assert_eq!(
+            (meta.is_writable, meta.is_signer),
+            role,
+            "child slot {index}"
+        );
+    }
+
+    // And each appended key is at the coordinate the frame names for it, so the
+    // twelve cannot be reordered inside their groups either.
+    for (index, key) in [
+        (FOUND_PARENT_REFERENCE_RAW_INDEX_V3, parents.reference.raw),
+        (
+            FOUND_PARENT_REFERENCE_STAGING_INDEX_V3,
+            parents.reference.staging,
+        ),
+    ] {
+        assert_eq!(
+            plan.instruction
+                .accounts
+                .get(index)
+                .expect("parent-reference meta")
+                .pubkey,
+            key,
+        );
+    }
+    for (base, parent) in [
+        (FOUND_PARENT_A_MARKET_INDEX_V3, &parents.a),
+        (FOUND_PARENT_B_MARKET_INDEX_V3, &parents.b),
+    ] {
+        for (offset, key) in parent.keys().into_iter().enumerate() {
+            assert_eq!(
+                plan.instruction
+                    .accounts
+                    .get(base + offset)
+                    .expect("parent slot meta")
+                    .pubkey,
+                key,
+                "parent slot {base} + {offset}",
+            );
+        }
+    }
+
+    let canonical =
+        build_found_instruction_v2(GENERATION, fixture.state()).expect("ordinary Found plan");
+    assert_eq!(
+        plan.instruction
+            .accounts
+            .get(..FOUND_ACCOUNT_COUNT_V3)
+            .expect("child frame canonical prefix"),
+        canonical.instruction.accounts.as_slice(),
+    );
+}
+
+#[test]
+fn a_price_gate_and_a_parent_tail_offered_together_refuse_as_no_market_at_all() {
+    let fixture = Fixture::new();
+    let parents = ParentTailBacking::new();
+    // Neither record is read: the combination names a market that cannot exist
+    // -- a categorical, refunding child basis that also declares degree >= 2 --
+    // and is refused before the snapshot is authenticated.
+    let certificate = RecordBacking::new(PRICE_GATE_RECORD_SCHEMA_ID_V1, vec![0x94; 96]);
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                price_gate: Some(certificate.observation()),
+                parents: Some(parents.observation()),
+                ..fixture.state()
+            }
+        ),
+        Err(Error::PriceGateAndParentTail)
     );
 }

@@ -53,6 +53,25 @@ verify EmitSourceMaterialV3AbiRust.lean generated_source_material_v3.rs 280
 
 (
   cd "$formal_dir"
+  lake build DClutchSemantics.ParentReferenceV1Abi >/dev/null
+  lake env lean --run EmitParentReferenceV1Rust.lean >"$candidate"
+)
+grep -q '^pub const PARENT_REFERENCE_BYTES_V1: usize = 200;$' "$candidate"
+grep -q '^pub const DERIVED_SETTLE_REQUEST_BYTES_V1: usize = 128;$' "$candidate"
+grep -q '^pub const DERIVED_ACCESS_PROFILE_V1: u8 = 5;$' "$candidate"
+# Both magics, byte for byte. A magic that drifts does not fail a width check
+# and does not fail a decode test written against the same emission -- it
+# silently re-letters a wire the census indexes by these eight bytes. The
+# candidate is raw emitter output at this point, so each magic is pinned as the
+# two lines the emitter prints; rustfmt joins them inside `verify`.
+grep -q '^pub const PARENT_REFERENCE_MAGIC_V1: \[u8; 8\] = \[$' "$candidate"
+grep -q '^    0x44, 0x43, 0x4c, 0x54, 0x50, 0x52, 0x46, 0x31,$' "$candidate"
+grep -q '^pub const DERIVED_SETTLE_MAGIC_V1: \[u8; 8\] = \[$' "$candidate"
+grep -q '^    0x44, 0x43, 0x4c, 0x54, 0x44, 0x52, 0x56, 0x31,$' "$candidate"
+verify EmitParentReferenceV1Rust.lean generated_parent_reference_v1.rs 300
+
+(
+  cd "$formal_dir"
   lake build DClutchSemantics.SourcePrincipalCapacityV1 >/dev/null
   lake env lean --run EmitSourcePrincipalCapacityV1Rust.lean >"$candidate"
 )

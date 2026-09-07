@@ -35,6 +35,10 @@ use solana_sdk_ids::{system_program, sysvar};
 
 /// Named market questions compiled into live V2 cuts, payoffs and identities.
 pub mod authoring;
+/// Chain-derived compilation of a child market's records over two parents.
+pub mod child_v1;
+/// The flagship conditional market's shape, as three founding inputs.
+pub mod flagship_v1;
 /// Chain-derived unsigned Core Found construction for Runtime V2 Products.
 pub mod found;
 /// Chain-derived Registry records for Product V3 graded-basis admission.
@@ -73,6 +77,14 @@ pub enum Error {
     SplineBasis,
     /// The offered DCLTPGT1 certificate did not admit the exact spline basis.
     PriceGate,
+    /// One founding offered both a DCLTPGT1 certificate and a parent-reference
+    /// tail.
+    ///
+    /// The two extensions are alternatives, never a sum: a child market's basis
+    /// is categorical and refunding by construction, so it never declares the
+    /// degree that requires a certificate, and the tail extends the CANONICAL
+    /// frame. There is no 51-account Found frame to build.
+    PriceGateAndParentTail,
     /// A founding belief was absent, mismatched, or outside its stated bounds.
     FoundingBand,
     /// A named question and the stated belief are different KINDS: a

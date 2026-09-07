@@ -43,6 +43,19 @@ pub const PROJECT_FOUND_ACCOUNT_COUNT_V2: usize = FOUND_ACCOUNT_COUNT_V3 - 1;
 /// Exact readonly `ProjectFound` V2 account count with a certificate: 38.
 pub const PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2: usize = FOUND_PRICE_GATE_ACCOUNT_COUNT_V3 - 1;
 
+/// Exact readonly `ProjectFound` V2 account count with the parent tail: 48.
+pub const PROJECT_FOUND_PARENT_ACCOUNT_COUNT_V2: usize = FOUND_PARENT_ACCOUNT_COUNT_V3 - 1;
+
+// The parent tail is strictly beyond the canonical frame and strictly inside
+// the child one; its two named indices are addressable whenever it is present;
+// and it sits after the Rent sysvar so the ProjectFound left-shift reaches it.
+const _: () = assert!(FOUND_PARENT_REFERENCE_RAW_INDEX_V3 >= FOUND_ACCOUNT_COUNT_V3);
+const _: () = assert!(
+    FOUND_PARENT_B_MARKET_INDEX_V3 + FOUND_PARENT_SLOT_COUNT_V3 == FOUND_PARENT_ACCOUNT_COUNT_V3
+);
+const _: () = assert!(FOUND_PARENT_REFERENCE_RAW_INDEX_V3 > FOUND_RENT_SYSVAR_INDEX_V3);
+const _: () = assert!(FOUND_PARENT_ACCOUNT_ROLES_V3.len() == FOUND_PARENT_ACCOUNT_COUNT_V3);
+
 const _: () = assert!(FOUND_CAPABILITY_MANIFEST_STAGING_INDEX_V3 < FOUND_ACCOUNT_COUNT_V3);
 const _: () = assert!(FOUND_RENT_SYSVAR_INDEX_V3 < FOUND_ACCOUNT_COUNT_V3);
 // The certificate pair is strictly beyond the canonical frame, so nothing

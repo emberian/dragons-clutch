@@ -2113,6 +2113,13 @@ fn authenticate_source_publication_v1(
         SourceAccessProfile::SharedObservationChild => Err(Error::new(
             "the source spec names an access profile this publisher has no adapter-config schema for: SharedObservationChild",
         )),
+        // A child market's adapter configuration is a `ParentReferenceV1`, and
+        // this publisher has no arm that lands one. The refusal names the
+        // profile rather than falling through a wildcard, so the day a child
+        // is founded from this bootstrap the compiler is not what discovers it.
+        SourceAccessProfile::DerivedFromParents => Err(Error::new(
+            "the source spec names an access profile this publisher has no adapter-config schema for: DerivedFromParents",
+        )),
     }
 }
 
@@ -5860,10 +5867,20 @@ fn authenticate_found_snapshot_coordinates_v3(
     capability_manifest_raw: Pubkey,
     price_gate: Option<(Pubkey, Pubkey)>,
 ) -> Result<()> {
-    let expected = if price_gate.is_some() {
-        FOUND_PRICE_GATE_ACCOUNT_COUNT_V3
-    } else {
-        FOUND_ACCOUNT_COUNT_V3
+    // Three admissible widths. The child frame is the CANONICAL frame plus a
+    // twelve-slot parent-reference tail, never the certificate frame plus one:
+    // a child market's basis is categorical and refunding, so it never carries
+    // a DCLTPGT1 certificate and 51 is not a width Core will parse.
+    let parents_offered = keys.len() == dclutch_market::FOUND_PARENT_ACCOUNT_COUNT_V3;
+    if price_gate.is_some() && parents_offered {
+        return Err(Error::new(
+            "Found offered a price-gate certificate and a parent-reference tail at once",
+        ));
+    }
+    let expected = match (price_gate.is_some(), parents_offered) {
+        (true, _) => FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+        (false, true) => dclutch_market::FOUND_PARENT_ACCOUNT_COUNT_V3,
+        (false, false) => FOUND_ACCOUNT_COUNT_V3,
     };
     if keys.len() != expected
         || keys.get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3) != Some(&capability_manifest_raw)
@@ -5875,6 +5892,18 @@ fn authenticate_found_snapshot_coordinates_v3(
     {
         return Err(Error::new(
             "ordinary Found capability-manifest or optional price-gate coordinate drifted",
+        ));
+    }
+    // Core addresses each parent by the emitted index of its Market slot and
+    // reads the four record coordinates that follow it, so a snapshot whose two
+    // parents are one Market indexes the same five slots twice and reaches
+    // `CoreSbfError::ParentSame` -- after the transaction was signed and sent.
+    if parents_offered
+        && keys.get(dclutch_market::FOUND_PARENT_A_MARKET_INDEX_V3)
+            == keys.get(dclutch_market::FOUND_PARENT_B_MARKET_INDEX_V3)
+    {
+        return Err(Error::new(
+            "child Found named one Market as both of its parents",
         ));
     }
     Ok(())
@@ -6068,6 +6097,7 @@ fn found_state<'a>(
     Ok(FoundStateV2 {
         payer: projection.payer,
         market: projection.market,
+        parents: None,
         price_gate: records
             .price_gate
             .map(|published| snapshot.finalized_record(rpc, published))
@@ -18555,7 +18585,8 @@ mod tests {
                 "entry {entry_index}: the close would write the dependency ledger"
             );
             assert_eq!(
-                slice[1 - position], dependency,
+                slice[1 - position],
+                dependency,
                 "entry {entry_index}: the close would preserve its own ledger"
             );
         }

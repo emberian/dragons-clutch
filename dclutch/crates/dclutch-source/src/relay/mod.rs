@@ -160,6 +160,19 @@ pub enum Error {
     IncoherentVenueBody,
     /// The observed venue deployment was not the release-pinned one.
     VenueDeploymentMismatch,
+    /// A `LoaderV3` row was interpreted with no pinned `ArtifactReleaseV1`.
+    ///
+    /// The cross-cluster deployment check IS the defense for a venue that can
+    /// be upgraded under a market, so a caller that omits the release has not
+    /// presented a weaker observation, it has presented an unauthenticated one.
+    VenueReleaseAbsent,
+    /// A `Native` row was handed a pinned `ArtifactReleaseV1`.
+    ///
+    /// A program the runtime itself implements has no `ProgramData`, no ELF
+    /// digest and no upgrade authority, so a release offered for it pins
+    /// nothing. Refused rather than ignored: a caller who believes it supplied
+    /// a deployment check must not be told the observation passed one.
+    VenueReleaseNotPinnable,
     /// The clock position did not carry the observed cluster's own `Clock`.
     ObservedClockMismatch,
     /// The observation was admissible but did not satisfy the window's own

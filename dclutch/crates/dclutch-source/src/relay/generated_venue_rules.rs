@@ -89,3 +89,39 @@ pub(crate) const MINT_AUTHORITY_ACCEPTANCE_TABLE_V1: [(u32, u8, u32, bool, i128)
     (2, 1, 1, false, 0),
     (255, 1, 1, false, 0),
 ];
+// Row 2: a Feature program account's `activated_at`, as activation by a slot.
+pub const RELAYED_OBSERVABLE_FEATURE_GATE_ACTIVATION_V1: u32 = 2;
+pub const RELAYED_OBSERVABLE_FEATURE_GATE_RAW_EXPONENT_V1: i32 = 0;
+pub const FEATURE_GATE_SET_CARDINALITY_V1: u16 = 2;
+pub const FEATURE_GATE_STATE_POSITION_V1: u16 = 0;
+pub const FEATURE_GATE_CLOCK_POSITION_V1: u16 = 1;
+#[rustfmt::skip]
+pub const FEATURE_PROGRAM_ID_V1: [u8; 32] = [
+    0x03, 0xc0, 0xa0, 0xcd, 0xcb, 0x06, 0xd2, 0xda, 0xef, 0xae, 0x82, 0xd1, 0x6f, 0xee, 0x7a, 0xcf, 0x61, 0xec, 0x73, 0x7b, 0x23, 0x48, 0x1b, 0x21, 0x94, 0x6a, 0x76, 0x70, 0x00, 0x00, 0x00, 0x00,
+];
+pub const FEATURE_ADMITTED_DATA_LENGTHS_V1: &[u32] = &[9];
+pub const FEATURE_TAG_OFFSET_V1: usize = 0;
+pub const FEATURE_ACTIVATED_AT_OFFSET_V1: usize = 1;
+pub const FEATURE_INLINE_BYTES_V1: usize = 9;
+pub const FEATURE_NONE_TAG_V1: u8 = 0;
+pub const FEATURE_SOME_TAG_V1: u8 = 1;
+pub const FEATURE_NOT_ACTIVATED_SENTINEL_V1: u64 = 18446744073709551615;
+// Row 3: mainnet's mean slot duration since the epoch began, in milliseconds.
+pub const RELAYED_OBSERVABLE_MEAN_SLOT_TIME_V1: u32 = 3;
+pub const RELAYED_OBSERVABLE_MEAN_SLOT_TIME_RAW_EXPONENT_V1: i32 = -3;
+pub const MEAN_SLOT_TIME_SET_CARDINALITY_V1: u16 = 2;
+pub const MEAN_SLOT_TIME_STATE_POSITION_V1: u16 = 0;
+pub const MEAN_SLOT_TIME_CLOCK_POSITION_V1: u16 = 1;
+#[rustfmt::skip]
+pub const OBSERVED_EPOCH_SCHEDULE_SYSVAR_KEY_V1: [u8; 32] = [
+    0x06, 0xa7, 0xd5, 0x17, 0x18, 0xdc, 0x3f, 0xee, 0x02, 0xd3, 0xe4, 0x7f, 0x01, 0x00, 0xf8, 0xb0, 0x54, 0xf7, 0x94, 0x2e, 0x60, 0x59, 0x1e, 0x3f, 0x50, 0x87, 0x19, 0xa8, 0x05, 0x00, 0x00, 0x00,
+];
+pub const EPOCH_SCHEDULE_ADMITTED_DATA_LENGTHS_V1: &[u32] = &[33];
+pub const EPOCH_SCHEDULE_SLOTS_PER_EPOCH_OFFSET_V1: usize = 0;
+pub const EPOCH_SCHEDULE_WARMUP_OFFSET_V1: usize = 16;
+pub const EPOCH_SCHEDULE_FIRST_NORMAL_EPOCH_OFFSET_V1: usize = 17;
+pub const EPOCH_SCHEDULE_FIRST_NORMAL_SLOT_OFFSET_V1: usize = 25;
+pub const EPOCH_SCHEDULE_INLINE_BYTES_V1: usize = 33;
+pub const OBSERVED_CLOCK_EPOCH_START_TIMESTAMP_OFFSET_V1: usize = 8;
+pub const OBSERVED_CLOCK_EPOCH_OFFSET_V1: usize = 16;
+pub const FLAGSHIP_SLOT_TIME_CUTS_MILLIS_V1: &[u32] = &[390, 410];

@@ -31,22 +31,22 @@ use dclutch_market::capability_manifest::{
     CompartmentFundingV1, ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1,
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_product::{portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product::{portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_operator::ProductCompilationInputV2;
 use dclutch_product_runtime_v2_operator::compile_product_records_v2;
+use dclutch_registry::release_set::ProgramIdentityV1;
 use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
 use dclutch_source::relay::{
-    RELAYED_FAMILY_RELEASE_ID_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1,
-    SOLANA_MAINNET_GENESIS_HASH_V1,
-    decode::RelayedObservableV1,
+    FEATURE_PROGRAM_ID_V1, OBSERVED_SYSVAR_OWNER_V1, RELAYED_FAMILY_RELEASE_ID_V1,
+    RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
+    decode::{RelayedObservableV1, RelayedVenueKindV1},
     identity::LOADER_V3_PROGRAM_ID,
     release::{
         AccountSetEntryV1, RelayedAdapterConfigV1, RelayerKeySetV1, account_set_id_preimage_len_v1,
         encode_account_set_id_preimage_v1,
     },
 };
-use dclutch_registry::release_set::ProgramIdentityV1;
 use dclutch_source::{
     BONDING_CURVE_FLOOR_DERIVATION_ID_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
     CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1, CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
@@ -84,8 +84,16 @@ pub(crate) const RELAYED_MAX_OUTCOME_SHARE_BPS_V1: u32 = 9_000;
 /// One arm per row of the decoding-rules table. Adding row 2 is adding an arm
 /// here; `relayed_market_input` reads this struct and names no venue.
 struct RelayedRowFactsV1 {
-    /// The venue program's semantic release identity.
-    venue_semantic_release: &'static str,
+    /// The venue program's semantic release identity, `None` on a
+    /// [`RelayedVenueKindV1::Native`] row.
+    ///
+    /// A native row's state account is owned by a program the validator itself
+    /// implements: there is no ELF, no upgrade authority and no deployment to
+    /// name, so there is no `ArtifactReleaseV1` to give a semantic identity to.
+    /// Carrying `Some("")` or a placeholder there would seed a Source's
+    /// `venue_release_id` with a body describing a deployment that does not
+    /// exist.
+    venue_semantic_release: Option<&'static str>,
     /// The Product's stable semantic identity, seeded by the account set.
     product: &'static str,
     /// The coordinate domain: this row's own discriminant.
@@ -106,20 +114,44 @@ impl RelayedRowFactsV1 {
     const fn for_observable(observable: RelayedObservableV1) -> Self {
         match observable {
             RelayedObservableV1::DbcMigrationProgressV1 => Self {
-                venue_semantic_release: "relayed/venue-semantic-release/meteora-dbc",
+                venue_semantic_release: Some("relayed/venue-semantic-release/meteora-dbc"),
                 product: "relayed/product/dbc-graduation",
                 coordinate_domain: "relayed/coordinate-domain/dbc-migration-progress",
                 result_unit: "relayed/result-unit/migration-progress-discriminant",
                 prior_bps: 3_500,
             },
             RelayedObservableV1::Token2022MintAuthorityRenouncedV1 => Self {
-                venue_semantic_release: "relayed/venue-semantic-release/spl-token-2022",
+                venue_semantic_release: Some("relayed/venue-semantic-release/spl-token-2022"),
                 product: "relayed/product/mint-authority-renounced",
                 coordinate_domain: "relayed/coordinate-domain/mint-authority-state",
                 result_unit: "relayed/result-unit/mint-authority-discriminant",
                 // A launch that has published a renunciation intention but not
                 // executed it. Stated, not derived.
                 prior_bps: 4_000,
+            },
+            RelayedObservableV1::FeatureGateActivationV1 => Self {
+                venue_semantic_release: None,
+                product: "relayed/product/feature-gate-activation",
+                coordinate_domain: "relayed/coordinate-domain/feature-activation-slot",
+                result_unit: "relayed/result-unit/activation-slot",
+                // A feature already staged on a published release train, with
+                // the market's deadline slot set an epoch past the announced
+                // activation: likelier to land than not, and far from settled,
+                // because the activation is a human decision made by validators
+                // who do not read this market. Stated, not derived.
+                prior_bps: 6_000,
+            },
+            RelayedObservableV1::MeanSlotTimeSinceEpochStartV1 => Self {
+                venue_semantic_release: None,
+                product: "relayed/product/mean-slot-time",
+                coordinate_domain: "relayed/coordinate-domain/mean-slot-time-since-epoch-start",
+                result_unit: "relayed/result-unit/milliseconds-per-slot",
+                // Mainnet's mean slot time is a live cluster measurement, not
+                // an event that either happens or does not: the author's stated
+                // belief is that the window's attested mean lands inside the
+                // ordinary cell rather than outside every cut. Stated, not
+                // derived.
+                prior_bps: 5_000,
             },
         }
     }
@@ -153,45 +185,166 @@ pub(crate) struct RelayedVenueFactsV1 {
     pub(crate) upgrade_authority: [u8; 32],
 }
 
+/// The one account a [`RelayedVenueKindV1::Native`] row pins beside the clock.
+///
+/// A native row has no venue program to authenticate, so there is nothing else
+/// for a caller to state: the owner is fixed by the row (the Feature program,
+/// or the sysvar owner) and the clock entry is the same on every row. The
+/// whole of "whose facts these are" for such a market is this address.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub(crate) struct RelayedNativeVenueFactsV1 {
+    /// The watched state account: the feature's own account for row 2, the
+    /// `EpochSchedule` sysvar for row 3.
+    pub(crate) state: [u8; 32],
+}
+
+/// The venue facts of EITHER kind, which is what a set builder can accept.
+///
+/// The two kinds are not a superset and a subset: a Loader V3 row needs a
+/// program, its ProgramData, an ELF digest, a deployment slot and an upgrade
+/// authority, and a native row needs none of them and cannot invent them. An
+/// enum says that; one struct with five `Option` fields would let a caller
+/// hand a native row an ELF digest and be believed.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub(crate) enum RelayedVenueSetFactsV1 {
+    /// An upgradeable venue program's deployment, pinned cross-cluster.
+    LoaderV3(RelayedVenueFactsV1),
+    /// One watched account owned by a program the validator implements.
+    Native(RelayedNativeVenueFactsV1),
+}
+
+impl From<&RelayedVenueFactsV1> for RelayedVenueSetFactsV1 {
+    fn from(venue: &RelayedVenueFactsV1) -> Self {
+        Self::LoaderV3(*venue)
+    }
+}
+
+impl From<&RelayedNativeVenueFactsV1> for RelayedVenueSetFactsV1 {
+    fn from(venue: &RelayedNativeVenueFactsV1) -> Self {
+        Self::Native(*venue)
+    }
+}
+
+/// Which program owns a [`RelayedVenueKindV1::Native`] row's state account.
+///
+/// The adapter authenticates a native row by this owner alone — there is no
+/// ELF to digest — so the founding-time pin and the interpretation-time check
+/// must name the same address, and both read it off the relay crate's own
+/// constants rather than a copy.
+fn native_state_owner(observable: RelayedObservableV1) -> Result<[u8; 32]> {
+    match observable {
+        RelayedObservableV1::FeatureGateActivationV1 => Ok(FEATURE_PROGRAM_ID_V1),
+        RelayedObservableV1::MeanSlotTimeSinceEpochStartV1 => Ok(OBSERVED_SYSVAR_OWNER_V1),
+        RelayedObservableV1::DbcMigrationProgressV1
+        | RelayedObservableV1::Token2022MintAuthorityRenouncedV1 => Err(Error::new(format!(
+            "relayed row {observable:?} is owned by its venue program, not by a native program"
+        ))),
+    }
+}
+
+/// The observed cluster's `Clock` sysvar, which every row of the table pins.
+fn clock_entry() -> AccountSetEntryV1 {
+    AccountSetEntryV1 {
+        key: sysvar::clock::ID.to_bytes(),
+        expected_owner: sysvar::ID.to_bytes(),
+        inline_len: 40,
+    }
+}
+
+/// The pinned ordered account set for one row, in the order its own
+/// `set_layout` states.
+///
+/// The width is the ROW's to say, not this file's: a Loader V3 row pins four
+/// positions and a native row pins two, and the entries are placed by the
+/// layout's own position numbers so that adding a row with a different order
+/// is data rather than an edit here. The count is checked against
+/// `set_cardinality` before the set leaves this function, because that number
+/// is what the on-chain adapter reads when it re-derives the same identity.
 pub(crate) fn account_set_entries(
     observable: RelayedObservableV1,
-    venue: &RelayedVenueFactsV1,
-) -> [AccountSetEntryV1; 4] {
+    venue: impl Into<RelayedVenueSetFactsV1>,
+) -> Result<Vec<AccountSetEntryV1>> {
+    let layout = observable.set_layout();
     // The state position's pinned width comes off the observable's own row
     // rather than out of this file: 424 for a DBC `VirtualPool`, 82 for a
     // base SPL Token-2022 `Mint`, and the decoding rules prove each equals the
     // only length that row admits. Typing it here would be a second author.
-    [
-        AccountSetEntryV1 {
-            key: venue.program,
-            expected_owner: LOADER_V3_PROGRAM_ID,
-            inline_len: 36,
-        },
-        AccountSetEntryV1 {
-            key: venue.programdata,
-            expected_owner: LOADER_V3_PROGRAM_ID,
-            inline_len: 45,
-        },
-        AccountSetEntryV1 {
-            key: venue.pool,
-            expected_owner: venue.program,
-            inline_len: observable.state_inline_bytes(),
-        },
-        AccountSetEntryV1 {
-            key: sysvar::clock::ID.to_bytes(),
-            expected_owner: sysvar::ID.to_bytes(),
-            inline_len: 40,
-        },
-    ]
+    let mut placed: Vec<(u16, AccountSetEntryV1)> = match (observable.venue_kind(), venue.into()) {
+        (RelayedVenueKindV1::LoaderV3, RelayedVenueSetFactsV1::LoaderV3(venue)) => {
+            let (Some(program), Some(programdata)) = (layout.program, layout.programdata) else {
+                return Err(Error::new(format!(
+                    "relayed row {observable:?} is a Loader V3 row whose layout names no \
+                     Program/ProgramData position"
+                )));
+            };
+            vec![
+                (
+                    program,
+                    AccountSetEntryV1 {
+                        key: venue.program,
+                        expected_owner: LOADER_V3_PROGRAM_ID,
+                        inline_len: 36,
+                    },
+                ),
+                (
+                    programdata,
+                    AccountSetEntryV1 {
+                        key: venue.programdata,
+                        expected_owner: LOADER_V3_PROGRAM_ID,
+                        inline_len: 45,
+                    },
+                ),
+                (
+                    layout.state,
+                    AccountSetEntryV1 {
+                        key: venue.pool,
+                        expected_owner: venue.program,
+                        inline_len: observable.state_inline_bytes(),
+                    },
+                ),
+                (layout.clock, clock_entry()),
+            ]
+        }
+        (RelayedVenueKindV1::Native, RelayedVenueSetFactsV1::Native(native)) => vec![
+            (
+                layout.state,
+                AccountSetEntryV1 {
+                    key: native.state,
+                    expected_owner: native_state_owner(observable)?,
+                    inline_len: observable.state_inline_bytes(),
+                },
+            ),
+            (layout.clock, clock_entry()),
+        ],
+        (kind, _) => {
+            return Err(Error::new(format!(
+                "relayed row {observable:?} is a {kind:?} venue and the supplied venue facts are \
+                 of the other kind"
+            )));
+        }
+    };
+    placed.sort_by_key(|(position, _)| *position);
+    let entries: Vec<AccountSetEntryV1> = placed.into_iter().map(|(_, entry)| entry).collect();
+    if entries.len() != usize::from(observable.set_cardinality()) {
+        return Err(Error::new(format!(
+            "relayed row {observable:?} states a set cardinality of {} and this set carries {} \
+             entries; the adapter re-derives the identity from the row's number",
+            observable.set_cardinality(),
+            entries.len()
+        )));
+    }
+    Ok(entries)
 }
 
 /// The founding-time pinned set identity, exactly as the adapter re-derives
 /// it: bound to the cluster the attestations CLAIM (mainnet), not to the twin.
 pub(crate) fn account_set_id(
     observable: RelayedObservableV1,
-    venue: &RelayedVenueFactsV1,
+    venue: impl Into<RelayedVenueSetFactsV1>,
 ) -> Result<[u8; 32]> {
-    let entries = account_set_entries(observable, venue);
+    let entries = account_set_entries(observable, venue)?;
     let width = account_set_id_preimage_len_v1(entries.len())
         .map_err(|error| Error::new(format!("account-set preimage width: {error:?}")))?;
     let mut preimage = vec![0u8; width];
@@ -290,6 +443,17 @@ pub(crate) fn relayed_market_input(
     venue: &RelayedVenueFactsV1,
     direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<RelayedMarketFactsV1> {
+    if matches!(observable.venue_kind(), RelayedVenueKindV1::Native) {
+        return Err(Error::new(format!(
+            "relayed row {observable:?} has a native venue and the bootstrap publisher does not \
+             yet found a native-venue relayed market: market.rs \
+             authenticate_source_publication_v1 carries a single RelayedObservationRecord arm, \
+             which publishes the source spec's adapter configuration under \
+             ARTIFACT_RELEASE_SCHEMA_ID_V1 -- the venue's ArtifactReleaseV1 -- and a row with no \
+             venue program has no such body to publish. The missing arm is the native-venue \
+             branch of that match."
+        )));
+    }
     let row = RelayedRowFactsV1::for_observable(observable);
     let set_id = account_set_id(observable, venue)?;
 
@@ -340,13 +504,19 @@ pub(crate) fn relayed_market_input(
     // 1. The venue's pinned deployment (P-B), from the caller's venue facts —
     //    the twin's synthetic-of-real set for the rehearsal, or a real mainnet
     //    read for the operated market.
+    let venue_semantic_release = row.venue_semantic_release.ok_or_else(|| {
+        Error::new(format!(
+            "relayed row {observable:?} names no venue semantic release, so no venue \
+             ArtifactReleaseV1 identity exists for its Source to pin"
+        ))
+    })?;
     let venue_release = ArtifactReleaseV1::new(
         ProgramIdentityV1::new(venue.program)
             .map_err(|error| Error::new(format!("venue program: {error:?}")))?,
         ProgramIdentityV1::new(LOADER_V3_PROGRAM_ID)
             .map_err(|error| Error::new(format!("loader: {error:?}")))?,
         venue.programdata,
-        dclutch_core_contract::ContentId::new(demo_id(row.venue_semantic_release, &[]))
+        dclutch_core_contract::ContentId::new(demo_id(venue_semantic_release, &[]))
             .map_err(|error| Error::new(format!("venue semantic release: {error:?}")))?,
         venue.elf_digest,
         venue.deployment_slot,
@@ -848,14 +1018,7 @@ mod the_founding_path {
                 max_age_seconds: 900,
             },
             observable,
-            &RelayedVenueFactsV1 {
-                program: [0x51; 32],
-                programdata: [0x52; 32],
-                pool: [0x53; 32],
-                elf_digest: [0x54; 32],
-                deployment_slot: 99,
-                upgrade_authority: [0x55; 32],
-            },
+            &loader_v3_venue_facts(),
             direct.compiler(),
         )
         .expect("relayed market input");
@@ -864,6 +1027,106 @@ mod the_founding_path {
 
     fn graduation_input() -> (Pubkey, MarketRunInput) {
         row_input(RelayedObservableV1::DbcMigrationProgressV1)
+    }
+
+    fn loader_v3_venue_facts() -> RelayedVenueFactsV1 {
+        RelayedVenueFactsV1 {
+            program: [0x51; 32],
+            programdata: [0x52; 32],
+            pool: [0x53; 32],
+            elf_digest: [0x54; 32],
+            deployment_slot: 99,
+            upgrade_authority: [0x55; 32],
+        }
+    }
+
+    /// THE ONE NUMBER TWO AUTHORS READ. The founding producer builds the
+    /// pinned set and the on-chain adapter re-derives its identity; both take
+    /// the width off `set_cardinality`, so every row of the shipped table must
+    /// produce exactly that many entries — four for the Loader V3 rows, two
+    /// for the native ones. A native row's entries carry no Loader V3 owner,
+    /// because a native row pins no upgradeable program at all.
+    #[test]
+    fn every_table_row_builds_a_set_as_wide_as_its_own_row_states() {
+        let loader = loader_v3_venue_facts();
+        let native = RelayedNativeVenueFactsV1 { state: [0x56; 32] };
+        for observable in dclutch_source::relay::decode::RELAYED_OBSERVABLE_TABLE_V1
+            .iter()
+            .copied()
+        {
+            let entries = match observable.venue_kind() {
+                RelayedVenueKindV1::LoaderV3 => account_set_entries(observable, &loader),
+                RelayedVenueKindV1::Native => account_set_entries(observable, &native),
+            }
+            .unwrap_or_else(|error| panic!("{observable:?} pins a set: {error}"));
+            assert_eq!(
+                entries.len(),
+                usize::from(observable.set_cardinality()),
+                "{observable:?} must pin exactly the set its row states"
+            );
+
+            let layout = observable.set_layout();
+            let state = entries[usize::from(layout.state)];
+            assert_eq!(
+                state.inline_len,
+                observable.state_inline_bytes(),
+                "{observable:?} pins its state width off its own row"
+            );
+            assert_eq!(entries[usize::from(layout.clock)], clock_entry());
+
+            if matches!(observable.venue_kind(), RelayedVenueKindV1::Native) {
+                assert_eq!(state.key, native.state);
+                assert_eq!(
+                    state.expected_owner,
+                    native_state_owner(observable)
+                        .expect("a native row names the program that owns its state account")
+                );
+                for entry in &entries {
+                    assert_ne!(
+                        entry.expected_owner, LOADER_V3_PROGRAM_ID,
+                        "{observable:?} pins no Loader V3 account"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The native rows compile a Product shape but cannot yet be FOUNDED: the
+    /// devnet publisher lands a relayed market's records through one arm that
+    /// publishes the venue's `ArtifactReleaseV1`, and a native row has none.
+    /// The refusal names that arm so the lane that writes it knows where.
+    #[test]
+    fn a_native_row_refuses_out_of_the_producer_naming_the_missing_publisher_arm() {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037).expect("widths"),
+        );
+        let Err(refusal) = relayed_market_input(
+            registry,
+            [0x42; 32],
+            &WindowChoiceV1 {
+                start_unix_seconds: 1_800_000_000,
+                end_unix_seconds: 1_800_003_600,
+                max_age_seconds: 900,
+            },
+            RelayedObservableV1::MeanSlotTimeSinceEpochStartV1,
+            &loader_v3_venue_facts(),
+            direct.compiler(),
+        ) else {
+            panic!("a native-venue row has no founding path yet");
+        };
+        let refusal = format!("{refusal}");
+        for expected in [
+            "MeanSlotTimeSinceEpochStartV1",
+            "authenticate_source_publication_v1",
+            "RelayedObservationRecord",
+        ] {
+            assert!(
+                refusal.contains(expected),
+                "the refusal must name {expected}: {refusal}"
+            );
+        }
     }
 
     /// THE CONTROL THIS UNIT WAS BUILT AROUND. `compile_market_bodies` is the

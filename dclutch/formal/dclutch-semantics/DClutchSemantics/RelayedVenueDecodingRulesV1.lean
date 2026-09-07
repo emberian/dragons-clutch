@@ -82,6 +82,15 @@ inductive Observable where
   | dbcMigrationProgress
   /-- SPL Token-2022 `Mint.mint_authority`, as a renunciation proposition. -/
   | token2022MintAuthorityRenounced
+  /-- A Feature program account's `activated_at`, as "activated by slot `S`":
+  the decision parent of the flagship conditional market (decision 0029, tenth
+  item).  Both branches are OBSERVED: `Some(a)` yields `a`, `None` yields a
+  sentinel above every slot, and the Product's cut at `S + 1` separates them. -/
+  | featureGateActivation
+  /-- Mainnet's mean slot duration since the current epoch began, in
+  milliseconds, from the `Clock` and `EpochSchedule` sysvars alone: the metric
+  parent of the flagship.  One attested record, one atom, no venue program. -/
+  | clockMeanSlotTimeSinceEpochStart
   deriving DecidableEq, Repr
 
 namespace Observable
@@ -89,24 +98,34 @@ namespace Observable
 /-- Every row of this release's table, for the properties that quantify over
 all of them.  Exhaustiveness is carried by the `cases` in the theorems below:
 a row added to `Observable` and not to this list fails `all_rows_is_complete`. -/
-def allRows : List Observable := [.dbcMigrationProgress, .token2022MintAuthorityRenounced]
+def allRows : List Observable :=
+  [.dbcMigrationProgress, .token2022MintAuthorityRenounced, .featureGateActivation,
+    .clockMeanSlotTimeSinceEpochStart]
 
 /-- The `RelayedAdapterConfigV1.observable_selector` value naming this row. -/
 def selector : Observable → Nat
   | .dbcMigrationProgress => 0
   | .token2022MintAuthorityRenounced => 1
+  | .featureGateActivation => 2
+  | .clockMeanSlotTimeSinceEpochStart => 3
 
 /-- The declared base-ten scale of the atom this row produces.  A discrete
 state is a count of states, so every row's scale is zero. -/
 def rawExponent : Observable → Int
   | .dbcMigrationProgress => 0
   | .token2022MintAuthorityRenounced => 0
+  -- a slot number is a count of slots
+  | .featureGateActivation => 0
+  -- milliseconds: the atom times ten to this power is seconds
+  | .clockMeanSlotTimeSinceEpochStart => -3
 
 /-- Hostile selection.  An unknown selector has no row and therefore no
 interpretation; it must not fall through to row zero. -/
 def ofSelector (value : Nat) : Option Observable :=
   if value = 0 then some .dbcMigrationProgress
   else if value = 1 then some .token2022MintAuthorityRenounced
+  else if value = 2 then some .featureGateActivation
+  else if value = 3 then some .clockMeanSlotTimeSinceEpochStart
   else none
 
 theorem all_rows_is_complete (row : Observable) : row ∈ allRows := by
@@ -119,10 +138,12 @@ theorem the_selectors_are_distinct :
     (allRows.map selector).eraseDups.length = allRows.length := by
   native_decide
 
-theorem an_unknown_selector_refuses (value : Nat) (h : 2 ≤ value) : ofSelector value = none := by
+theorem an_unknown_selector_refuses (value : Nat) (h : 4 ≤ value) : ofSelector value = none := by
   have h0 : value ≠ 0 := by omega
   have h1 : value ≠ 1 := by omega
-  simp [ofSelector, h0, h1]
+  have h2 : value ≠ 2 := by omega
+  have h3 : value ≠ 3 := by omega
+  simp [ofSelector, h0, h1, h2, h3]
 
 end Observable
 
@@ -134,34 +155,74 @@ cannot know is what each position *is for*; that is a decoding-rules fact and it
 lives here.
 -/
 
+/-- What owns the state account, and therefore how the cross-cluster
+deployment defense (`MAINNET_STATE_RELAY.md` §4.6) is discharged.
+
+* `loaderV3`: the state is owned by an upgradeable program.  The set carries
+  the program's `Program` and `ProgramData` bodies and the adapter rebuilds a
+  `DeploymentObservationV1` and authenticates it against the pinned release —
+  the Loopscale defense in full, because the venue can be upgraded under a
+  market.
+* `native`: the state is owned by a program the validator itself implements
+  (the Feature program, the sysvar owner).  There is no `ProgramData`, no ELF
+  digest and no upgrade authority: what the defense pins is the owner's
+  address, which the pinned account-set entry already binds byte for byte and
+  which no transaction on the observed cluster can move.  So the two program
+  positions are ABSENT from the set, and `require_pinned_venue` is replaced by
+  the entry's owner pin plus the address check below. -/
+inductive VenueKind where
+  | loaderV3
+  | native
+  deriving DecidableEq, Repr
+
+def Observable.venueKind : Observable → VenueKind
+  | .dbcMigrationProgress => .loaderV3
+  | .token2022MintAuthorityRenounced => .loaderV3
+  | .featureGateActivation => .native
+  | .clockMeanSlotTimeSinceEpochStart => .native
+
 /-- Cardinality of one row's ordered account set. -/
 def Observable.setCardinality : Observable → Nat
   | .dbcMigrationProgress => 4
   | .token2022MintAuthorityRenounced => 4
+  | .featureGateActivation => 2
+  | .clockMeanSlotTimeSinceEpochStart => 2
 
-/-- The venue program's `Program` account, for `DeploymentObservationV1`. -/
+/-- The venue program's `Program` account, for `DeploymentObservationV1`.
+Meaningless for a `native` row, whose set has no such position; the emitter
+prints it for Loader V3 rows only and `positions` omits it. -/
 def Observable.programPosition : Observable → Nat
   | .dbcMigrationProgress => 0
   | .token2022MintAuthorityRenounced => 0
+  | .featureGateActivation => 0
+  | .clockMeanSlotTimeSinceEpochStart => 0
 
 /-- The venue program's `ProgramData` account; its tail digest *is* the ELF digest. -/
 def Observable.programDataPosition : Observable → Nat
   | .dbcMigrationProgress => 1
   | .token2022MintAuthorityRenounced => 1
+  | .featureGateActivation => 1
+  | .clockMeanSlotTimeSinceEpochStart => 1
 
 /-- The observed account whose bytes carry this row's own state. -/
 def Observable.statePosition : Observable → Nat
   | .dbcMigrationProgress => 2
   | .token2022MintAuthorityRenounced => 2
+  | .featureGateActivation => 0
+  | .clockMeanSlotTimeSinceEpochStart => 0
 
 /-- The observed cluster's `Clock` sysvar: the only source of foreign time. -/
 def Observable.clockPosition : Observable → Nat
   | .dbcMigrationProgress => 3
   | .token2022MintAuthorityRenounced => 3
+  | .featureGateActivation => 1
+  | .clockMeanSlotTimeSinceEpochStart => 1
 
-/-- Every role of one row, in set order. -/
+/-- Every role of one row, in set order.  A `native` row has no program roles. -/
 def Observable.positions (row : Observable) : List Nat :=
-  [row.programPosition, row.programDataPosition, row.statePosition, row.clockPosition]
+  match row.venueKind with
+  | .loaderV3 => [row.programPosition, row.programDataPosition, row.statePosition, row.clockPosition]
+  | .native => [row.statePosition, row.clockPosition]
 
 /-- No row may put two roles on one position: two roles reading one body is
 the defect the Rust interpreter's `require_well_formed` refuses, and this is
@@ -678,5 +739,192 @@ terminal atom is 3 and row 1's is 1. -/
 theorem the_two_rows_terminal_atoms_differ :
     graduationAtoms 3 1 1_756_000_500 ≠ mintAuthorityAtoms 0 1 1 := by
   native_decide
+
+/-! ## Native venues: the Feature program and the sysvars
+
+Two rows whose state is owned by a program the validator implements.  Their
+grammars are *chain-derived* from `solana-feature-gate-interface` (a `Feature`
+is `bincode(Option<u64>)`, nine bytes: a tag byte then `activated_at`) and
+`solana-epoch-schedule` (`bincode(EpochSchedule)`, thirty-three bytes:
+`slots_per_epoch u64`, `leader_schedule_slot_offset u64`, `warmup bool`,
+`first_normal_epoch u64`, `first_normal_slot u64`).  Both are stable ABI of the
+runtime rather than of any deployable program, which is the property that
+makes a `native` venue kind honest.
+-/
+
+/-- `Feature111111111111111111111111111111111111`, the owner every feature-gate
+account reports. -/
+def featureProgramId : List UInt8 := [
+  0x03, 0xc0, 0xa0, 0xcd, 0xcb, 0x06, 0xd2, 0xda, 0xef, 0xae, 0x82, 0xd1, 0x6f, 0xee, 0x7a, 0xcf,
+  0x61, 0xec, 0x73, 0x7b, 0x23, 0x48, 0x1b, 0x21, 0x94, 0x6a, 0x76, 0x70, 0x00, 0x00, 0x00, 0x00]
+
+/-- `SysvarEpochSchedu1e111111111111111111111111`, as read on the observed
+cluster; owned by `sysvarOwner` like the clock. -/
+def epochScheduleSysvarKey : List UInt8 := [
+  0x06, 0xa7, 0xd5, 0x17, 0x18, 0xdc, 0x3f, 0xee, 0x02, 0xd3, 0xe4, 0x7f, 0x01, 0x00, 0xf8, 0xb0,
+  0x54, 0xf7, 0x94, 0x2e, 0x60, 0x59, 0x1e, 0x3f, 0x50, 0x87, 0x19, 0xa8, 0x05, 0x00, 0x00, 0x00]
+
+theorem the_native_addresses_are_addresses_and_distinct :
+    featureProgramId.length = 32 ∧ epochScheduleSysvarKey.length = 32 ∧
+    featureProgramId ≠ sysvarOwner ∧ epochScheduleSysvarKey ≠ clockSysvarKey ∧
+    epochScheduleSysvarKey ≠ sysvarOwner := by
+  native_decide
+
+/-- `bincode(Option<u64>)`: the tag byte then the slot. -/
+def featureTagOffset : Nat := 0
+def featureActivatedAtOffset : Nat := 1
+def featureInlineBytes : Nat := 9
+def featureAdmittedDataLengths : List Nat := [9]
+def featureNoneTag : Nat := 0
+def featureSomeTag : Nat := 1
+
+/-- The atom a not-yet-activated feature yields: above every slot a
+`u64` can name, so a cut at `S + 1` puts it in the "not activated by `S`"
+cell for every `S`.  Nine bytes cannot say WHEN it was observed not to be
+activated; the market's own window (which admits an attested mainnet
+`unix_timestamp` only inside `[start, end]`) is what makes "not activated
+by `S`" a proposition about a period after `S`.  The founder sets the window's
+start at or after mainnet's calendar for `S`; that residual is the founder's,
+and `BUILD_PRODUCT-SHAPES.md` §3 records it. -/
+def featureNotActivatedSentinel : Nat := 2 ^ 64 - 1
+
+theorem the_sentinel_is_above_every_slot (slot : Nat) (h : slot < 2 ^ 64 - 1) :
+    slot < featureNotActivatedSentinel := h
+
+/-- The feature-gate observable.  `none` is a refusal: a tag that is neither
+`0` nor `1` is not a `Feature` this program wrote, and a `None` with a
+nonzero payload is not canonical bincode. -/
+def featureActivationAtoms (tag activatedAt : Nat) : Option Int :=
+  if tag = featureSomeTag then some (Int.ofNat activatedAt)
+  else if tag = featureNoneTag then
+    if activatedAt = 0 then some (Int.ofNat featureNotActivatedSentinel) else none
+  else none
+
+theorem an_activated_feature_carries_its_slot (slot : Nat) :
+    featureActivationAtoms featureSomeTag slot = some (Int.ofNat slot) := by
+  simp [featureActivationAtoms, featureSomeTag]
+
+theorem a_dormant_feature_carries_the_sentinel :
+    featureActivationAtoms featureNoneTag 0 = some (Int.ofNat featureNotActivatedSentinel) := by
+  native_decide
+
+theorem a_noncanonical_none_refuses : featureActivationAtoms featureNoneTag 7 = none := by
+  native_decide
+
+theorem an_unenumerated_tag_refuses (tag : Nat) (h : 2 ≤ tag) (slot : Nat) :
+    featureActivationAtoms tag slot = none := by
+  have h0 : tag ≠ 0 := by omega
+  have h1 : tag ≠ 1 := by omega
+  simp [featureActivationAtoms, featureSomeTag, featureNoneTag, h0, h1]
+
+/-- With cuts `[S + 1]` over denominator one, the two cells are exactly
+"activated at or before `S`" and "not": a `Some(a)` lands in cell 0 iff
+`a ≤ S`, and the sentinel always lands in cell 1.  Stated over the atoms so the
+Rust interpreter's test can walk the same table. -/
+def activatedBy (atoms : Int) (deadlineSlot : Nat) : Bool := atoms ≤ Int.ofNat deadlineSlot
+
+theorem the_cut_separates_the_branches (a deadline : Nat) :
+    activatedBy (Int.ofNat a) deadline = decide (a ≤ deadline) ∧
+    activatedBy (Int.ofNat featureNotActivatedSentinel) deadline = decide (deadline ≥ 2 ^ 64 - 1) := by
+  constructor
+  · simp [activatedBy]
+  · simp [activatedBy, featureNotActivatedSentinel]
+
+/-- `bincode(EpochSchedule)`. -/
+def epochScheduleSlotsPerEpochOffset : Nat := 0
+def epochScheduleLeaderScheduleSlotOffsetOffset : Nat := 8
+def epochScheduleWarmupOffset : Nat := 16
+def epochScheduleFirstNormalEpochOffset : Nat := 17
+def epochScheduleFirstNormalSlotOffset : Nat := 25
+def epochScheduleInlineBytes : Nat := 33
+def epochScheduleAdmittedDataLengths : List Nat := [33]
+
+theorem every_epoch_schedule_read_lies_inside_the_sysvar :
+    epochScheduleSlotsPerEpochOffset + 8 ≤ epochScheduleInlineBytes ∧
+    epochScheduleWarmupOffset + 1 ≤ epochScheduleInlineBytes ∧
+    epochScheduleFirstNormalEpochOffset + 8 ≤ epochScheduleInlineBytes ∧
+    epochScheduleFirstNormalSlotOffset + 8 ≤ epochScheduleInlineBytes := by native_decide
+
+/-- `Clock.epoch_start_timestamp`, between `slot` and `epoch`. -/
+def clockEpochStartTimestampOffset : Nat := 8
+/-- `Clock.epoch`. -/
+def clockEpochOffset : Nat := 16
+
+theorem the_epoch_reads_lie_inside_the_clock :
+    clockEpochStartTimestampOffset + clockFieldBytes ≤ RelayedMainnetStateV1Abi.clockSysvarBytes ∧
+    clockEpochOffset + clockFieldBytes ≤ RelayedMainnetStateV1Abi.clockSysvarBytes := by
+  native_decide
+
+/-- The first slot of `epoch` under a schedule past its warmup.  An epoch
+inside the warmup is refused: mainnet's `first_normal_epoch` is zero and the
+arithmetic of a warmup epoch is a different function this row does not carry. -/
+def epochStartSlot (slotsPerEpoch firstNormalEpoch firstNormalSlot epoch : Nat) : Option Nat :=
+  if epoch < firstNormalEpoch then none
+  else some (firstNormalSlot + (epoch - firstNormalEpoch) * slotsPerEpoch)
+
+/-- Mean slot duration since the epoch began, in milliseconds, floored.
+`none` refuses a zero `slots_per_epoch`, a warmup epoch, an observation at
+the epoch's first slot (no elapsed slots, no mean), and a clock whose
+`unix_timestamp` precedes its own `epoch_start_timestamp`. -/
+def meanSlotTimeMillis (slotsPerEpoch firstNormalEpoch firstNormalSlot slot epoch
+    epochStartTimestamp unixTimestamp : Nat) : Option Int :=
+  if slotsPerEpoch = 0 then none
+  else match epochStartSlot slotsPerEpoch firstNormalEpoch firstNormalSlot epoch with
+    | none => none
+    | some start =>
+        if slot ≤ start ∨ unixTimestamp < epochStartTimestamp then none
+        else some (Int.ofNat ((unixTimestamp - epochStartTimestamp) * 1000 / (slot - start)))
+
+/-- Mainnet's schedule (432,000 slots, no warmup), epoch 800, 100,000 slots
+into the epoch, 40,000 seconds elapsed: 400 ms. -/
+theorem a_worked_mean : meanSlotTimeMillis 432000 0 0 345700000 800 1_700_000_000 1_700_040_000
+    = some 400 := by native_decide
+
+theorem the_epoch_boundary_refuses :
+    meanSlotTimeMillis 432000 0 0 345600000 800 1_700_000_000 1_700_040_000 = none := by
+  native_decide
+
+theorem a_warmup_epoch_refuses :
+    meanSlotTimeMillis 432000 5 100 3000 2 1_700_000_000 1_700_040_000 = none := by
+  native_decide
+
+theorem a_clock_before_its_epoch_refuses :
+    meanSlotTimeMillis 432000 0 0 345700000 800 1_700_040_000 1_700_000_000 = none := by
+  native_decide
+
+theorem a_zero_slot_rate_refuses :
+    meanSlotTimeMillis 0 0 0 345700000 800 1_700_000_000 1_700_040_000 = none := by
+  native_decide
+
+/-- The mean is exact-floored and nonnegative wherever it is defined, so a
+Product cut in milliseconds compares against it without a rounding boundary of
+its own. -/
+theorem the_mean_is_nonnegative (a b c d e f g : Nat) (v : Int)
+    (h : meanSlotTimeMillis a b c d e f g = some v) : 0 ≤ v := by
+  unfold meanSlotTimeMillis at h
+  split at h
+  · exact absurd h (by simp)
+  · split at h
+    · exact absurd h (by simp)
+    · split at h
+      · exact absurd h (by simp)
+      · simp only [Option.some.injEq] at h
+        subst h
+        exact Int.natCast_nonneg _
+
+/-- The flagship's parent B cuts, from the design note's example: `[390, 410]`
+milliseconds give three cells — faster, on-cadence, slower. -/
+def flagshipSlotTimeCutsMillis : List Nat := [390, 410]
+
+theorem the_flagship_cuts_are_strictly_increasing :
+    flagshipSlotTimeCutsMillis = [390, 410] ∧ 390 < 410 := by native_decide
+
+/-- The native rows read the roles the interpreter needs and nothing more:
+their sets are exactly `[state, clock]`. -/
+theorem native_rows_carry_state_and_clock_only :
+    Observable.featureGateActivation.positions = [0, 1] ∧
+    Observable.clockMeanSlotTimeSinceEpochStart.positions = [0, 1] ∧
+    Observable.featureGateActivation.setCardinality = 2 ∧
+    Observable.clockMeanSlotTimeSinceEpochStart.setCardinality = 2 := by native_decide
 
 end DClutch.RelayedVenueDecodingRulesV1

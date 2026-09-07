@@ -15,6 +15,7 @@ use dclutch_market::rent::lifecycle_v2::{
 };
 use dclutch_market::{
     Action, FOUND_ACCOUNT_ROLES_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
+    FOUND_PARENT_ACCOUNT_ROLES_V3, FOUND_PARENT_REFERENCE_RAW_INDEX_V3,
     FOUND_PRICE_GATE_RAW_INDEX_V3, Identity, MarketCoreStateSeedsV2, MarketIdentity, REQUEST_BYTES,
     Request, STATE_BYTES,
 };
@@ -58,8 +59,12 @@ use crate::{
     AccountObservationV2, Error, FinalizedRecordObservationV2, Result, coordinate, digest,
 };
 
-/// Exact number of accounts in the Runtime V2 ordinary Core Found V3 frame.
-pub use dclutch_market::{FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3};
+/// The three admissible Runtime V2 Core Found V3 widths: the canonical frame,
+/// that frame plus a certificate pair, and that frame plus a child's
+/// twelve-slot parent-reference tail.
+pub use dclutch_market::{
+    FOUND_ACCOUNT_COUNT_V3, FOUND_PARENT_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+};
 
 /// One non-Product finalized raw/staging record observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,6 +73,45 @@ pub struct FinalizedReferenceObservationV2<'a> {
     pub schema_id: [u8; 32],
     /// Registry-owned raw and System-owned vacant staging observations.
     pub record: FinalizedRecordObservationV2<'a>,
+}
+
+/// One parent's five appended slots, in the order the child frame states them:
+/// its Core Market, then its Product and result-domain raw/staging pairs.
+///
+/// The two records are finalized under the PARENT's own Registry, which is read
+/// off the parent's `CoreState`, not the child's. Core re-proves every one of
+/// them against the reference record at founding
+/// (`programs/dclutch-core-sbf/src/parents_v1.rs`), so what this observation
+/// carries is the coordinates and their order, nothing the host has judged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParentFoundSlotsObservationV2<'a> {
+    /// The parent's Core Market account at the referenced generation.
+    pub market: AccountObservationV2<'a>,
+    /// The parent's finalized Product record pair.
+    pub product: FinalizedRecordObservationV2<'a>,
+    /// The parent's finalized result-domain pair, reached through that Product.
+    pub result_domain: FinalizedRecordObservationV2<'a>,
+}
+
+/// The twelve accounts a CHILD founding appends to the canonical frame: the
+/// finalized `ParentReferenceV1` pair, then parent A's five slots and parent
+/// B's five.
+///
+/// A child market observes nothing itself; what its founding establishes is
+/// that the reference it settles against describes two real parents in a state
+/// a child may bind. Those parents are not derivable from the child's own
+/// records, so they are supplied here -- appended, and only appended, so that
+/// no coordinate an ordinary founding already builds moves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParentFoundTailObservationV2<'a> {
+    /// Finalized `ParentReferenceV1` raw/staging pair. Its content digest is
+    /// the child's own Source spec's adapter configuration, which is what binds
+    /// this tail to the Market identity the projection already selected.
+    pub reference: FinalizedRecordObservationV2<'a>,
+    /// Parent A, the major coordinate of the child's joint index.
+    pub a: ParentFoundSlotsObservationV2<'a>,
+    /// Parent B, the minor coordinate.
+    pub b: ParentFoundSlotsObservationV2<'a>,
 }
 
 /// One finalized pre-credit snapshot sufficient to derive the sole Market and
@@ -184,6 +228,20 @@ pub struct FoundStateV2<'a> {
     /// one, and supplying it appends the pair at the end of the frame -- so
     /// nothing an existing caller builds moves.
     pub price_gate: Option<FinalizedRecordObservationV2<'a>>,
+    /// The parent-reference tail, when this founding is a child's.
+    ///
+    /// `None` is the ordinary case. Supplying it appends the twelve child slots
+    /// to the CANONICAL frame and never to the certificate one: a child's basis
+    /// is categorical and refunding, so it never declares the degree a
+    /// certificate answers, and [`Error::PriceGateAndParentTail`] refuses the
+    /// pair rather than building a width Core cannot parse.
+    ///
+    /// The tail takes no part in [`FoundStateV2::projection_state`]. The
+    /// projection selects the Market, generation, release set and
+    /// lifecycle-credit PDA, and it reaches the parents already: the child's
+    /// own Source spec names the reference record's digest, and that spec is in
+    /// the Market identity the projection derives.
+    pub parents: Option<ParentFoundTailObservationV2<'a>>,
 }
 
 impl<'a> FoundStateV2<'a> {
@@ -266,6 +324,16 @@ pub fn build_found_instruction_v2(
     generation: u64,
     state: FoundStateV2<'_>,
 ) -> Result<FoundInstructionPlanV2> {
+    // Three admissible widths, selected by which extension the caller offered.
+    // Both at once is not a fourth: the certificate answers a basis of degree
+    // >= 2 and a child's basis is categorical, so the combination names no
+    // market that can exist and is refused before any account is read.
+    let expected = match (state.price_gate.is_some(), state.parents.is_some()) {
+        (false, false) => FOUND_ACCOUNT_COUNT_V3,
+        (true, false) => FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+        (false, true) => FOUND_PARENT_ACCOUNT_COUNT_V3,
+        (true, true) => return Err(Error::PriceGateAndParentTail),
+    };
     let projection = project_found_v2(generation, state.projection_state())?;
     if state.rent_credit.slot != projection.observation_slot {
         return Err(Error::ObservationMismatch);
@@ -294,11 +362,6 @@ pub fn build_found_instruction_v2(
         return Err(Error::InvalidRecord);
     }
     let accounts = found_metas(state);
-    let expected = if state.price_gate.is_some() {
-        FOUND_PRICE_GATE_ACCOUNT_COUNT_V3
-    } else {
-        FOUND_ACCOUNT_COUNT_V3
-    };
     if accounts.len() != expected {
         return Err(Error::AccountAuthority);
     }
@@ -912,6 +975,7 @@ fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
         })
         .collect();
     let accounts = extend_with_price_gate(accounts, state.price_gate);
+    let accounts = extend_with_parents(accounts, state.parents);
     debug_assert_eq!(
         accounts
             .get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
@@ -933,6 +997,45 @@ fn extend_with_price_gate(
             .into_iter()
             .zip(
                 FOUND_ACCOUNT_ROLES_V3[FOUND_PRICE_GATE_RAW_INDEX_V3..]
+                    .iter()
+                    .copied(),
+            )
+        {
+            accounts.push(if writable {
+                AccountMeta::new(key, signer)
+            } else {
+                AccountMeta::new_readonly(key, signer)
+            });
+        }
+    }
+    accounts
+}
+
+fn extend_with_parents(
+    mut accounts: Vec<AccountMeta>,
+    parents: Option<ParentFoundTailObservationV2<'_>>,
+) -> Vec<AccountMeta> {
+    if let Some(parents) = parents {
+        // The appended twelve take the last twelve entries of the CHILD frame's
+        // own emitted table, so the tail cannot acquire a privilege the frame
+        // does not declare for it -- and the table's first
+        // `FOUND_ACCOUNT_COUNT_V3` entries are the canonical frame, so the keys
+        // above are still privileged by the table they were zipped against.
+        let slots = |parent: ParentFoundSlotsObservationV2<'_>| {
+            [
+                parent.market.key,
+                parent.product.raw.key,
+                parent.product.staging.key,
+                parent.result_domain.raw.key,
+                parent.result_domain.staging.key,
+            ]
+        };
+        for (key, (writable, signer)) in [parents.reference.raw.key, parents.reference.staging.key]
+            .into_iter()
+            .chain(slots(parents.a))
+            .chain(slots(parents.b))
+            .zip(
+                FOUND_PARENT_ACCOUNT_ROLES_V3[FOUND_PARENT_REFERENCE_RAW_INDEX_V3..]
                     .iter()
                     .copied(),
             )

@@ -7,7 +7,8 @@ use crate::CoreSbfError;
 
 /// Exact ordinary mutating Found V3 and readonly ProjectFound V2 account counts.
 pub use dclutch_market::{
-    FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3, PROJECT_FOUND_ACCOUNT_COUNT_V2,
+    FOUND_ACCOUNT_COUNT_V3, FOUND_PARENT_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+    PROJECT_FOUND_ACCOUNT_COUNT_V2, PROJECT_FOUND_PARENT_ACCOUNT_COUNT_V2,
     PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2,
 };
 /// Exact projected generic-Found V2 prefix account count.
@@ -80,6 +81,36 @@ pub(crate) struct FoundAccounts<'accounts, 'info> {
     /// one was *required* is a property of the basis record, decided in
     /// `authenticate_references` once the basis has been authenticated.
     pub price_gate: Option<(&'accounts AccountInfo<'info>, &'accounts AccountInfo<'info>)>,
+    /// The parent-reference tail, present exactly when the caller offered the
+    /// child frame (`FOUND_PARENT_ACCOUNT_COUNT_V3`).
+    ///
+    /// The same discipline as `price_gate`: `None` is "none offered". Whether
+    /// one was REQUIRED is the Source spec's access profile
+    /// (`DerivedFromParents`), decided in `parents_v1` once the spec has been
+    /// authenticated -- a child without a tail and a tail without a child
+    /// both refuse there, by name.
+    pub parents: Option<ParentFoundTailV3<'accounts, 'info>>,
+}
+
+/// The twelve accounts a child founding appends: the finalized
+/// `ParentReferenceV1` pair, then per parent its Market, Product pair and
+/// result-domain pair (`CoreFoundFrameV3Abi.parentReferenceExtension`).
+#[derive(Clone, Copy)]
+pub(crate) struct ParentFoundTailV3<'accounts, 'info> {
+    pub reference_raw: &'accounts AccountInfo<'info>,
+    pub reference_staging: &'accounts AccountInfo<'info>,
+    pub a: ParentFoundSlotsV3<'accounts, 'info>,
+    pub b: ParentFoundSlotsV3<'accounts, 'info>,
+}
+
+/// One parent's five slots.
+#[derive(Clone, Copy)]
+pub(crate) struct ParentFoundSlotsV3<'accounts, 'info> {
+    pub market: &'accounts AccountInfo<'info>,
+    pub product_raw: &'accounts AccountInfo<'info>,
+    pub product_staging: &'accounts AccountInfo<'info>,
+    pub result_domain_raw: &'accounts AccountInfo<'info>,
+    pub result_domain_staging: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
@@ -122,16 +153,30 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         // canonical frame is unaffected -- and correspondingly cannot found a
         // curved basis, which `authenticate_references` refuses by name rather
         // than by a length mismatch.
-        let (bare, extended) = if rent_elided {
+        // **Three admissible widths.** The parent-reference tail is the child
+        // market's (decision 0029's product list; the CONDITIONAL design) and
+        // it is appended to the CANONICAL frame, never to the curved one: a
+        // child's basis is categorical and refunding by construction, so a
+        // certificate pair and a parent tail never coexist and 51 is not a
+        // width. `the_parent_tail_is_a_suffix_of_the_canonical_frame` states
+        // the three widths pairwise distinct, which is what lets this parser
+        // tell them apart by length alone.
+        let (bare, extended, child) = if rent_elided {
             (
                 PROJECT_FOUND_ACCOUNT_COUNT_V2,
                 PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2,
+                PROJECT_FOUND_PARENT_ACCOUNT_COUNT_V2,
             )
         } else {
-            (FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3)
+            (
+                FOUND_ACCOUNT_COUNT_V3,
+                FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+                FOUND_PARENT_ACCOUNT_COUNT_V3,
+            )
         };
         let price_gate_offered = accounts.len() == extended;
-        if accounts.len() != bare && !price_gate_offered {
+        let parents_offered = accounts.len() == child;
+        if accounts.len() != bare && !price_gate_offered && !parents_offered {
             return Err(CoreSbfError::AccountFrame);
         }
         let ordinary = |index: usize| {
@@ -188,6 +233,28 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
                 ordinary(dclutch_market::FOUND_PRICE_GATE_RAW_INDEX_V3)?,
                 ordinary(dclutch_market::FOUND_PRICE_GATE_STAGING_INDEX_V3)?,
             ))
+        } else {
+            None
+        };
+        let parents = if parents_offered {
+            let parent =
+                |base: usize| -> Result<ParentFoundSlotsV3<'accounts, 'info>, CoreSbfError> {
+                    Ok(ParentFoundSlotsV3 {
+                        market: ordinary(base)?,
+                        product_raw: ordinary(base + 1)?,
+                        product_staging: ordinary(base + 2)?,
+                        result_domain_raw: ordinary(base + 3)?,
+                        result_domain_staging: ordinary(base + 4)?,
+                    })
+                };
+            Some(ParentFoundTailV3 {
+                reference_raw: ordinary(dclutch_market::FOUND_PARENT_REFERENCE_RAW_INDEX_V3)?,
+                reference_staging: ordinary(
+                    dclutch_market::FOUND_PARENT_REFERENCE_STAGING_INDEX_V3,
+                )?,
+                a: parent(dclutch_market::FOUND_PARENT_A_MARKET_INDEX_V3)?,
+                b: parent(dclutch_market::FOUND_PARENT_B_MARKET_INDEX_V3)?,
+            })
         } else {
             None
         };
@@ -284,6 +351,29 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
                 }
             }
         }
+        // The parent tail is READ: `the_parent_tail_is_read_only`. A parent's
+        // Market is a Core-owned data account and its records are Registry
+        // records; none may sign, be written or be executable.
+        if let Some(tail) = parents {
+            for account in [
+                tail.reference_raw,
+                tail.reference_staging,
+                tail.a.market,
+                tail.a.product_raw,
+                tail.a.product_staging,
+                tail.a.result_domain_raw,
+                tail.a.result_domain_staging,
+                tail.b.market,
+                tail.b.product_raw,
+                tail.b.product_staging,
+                tail.b.result_domain_raw,
+                tail.b.result_domain_staging,
+            ] {
+                if account.is_signer || account.is_writable || account.executable {
+                    return Err(CoreSbfError::AccountFrame);
+                }
+            }
+        }
         Ok(Self {
             payer,
             market,
@@ -323,6 +413,7 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
             rent_artifact_staging,
             rent_programdata,
             price_gate,
+            parents,
         })
     }
 }
@@ -859,6 +950,150 @@ mod tests {
             Box::leak(Box::new(Pubkey::default())),
             executable,
         )
+    }
+
+    /// A privilege-correct Found frame of exactly `width` accounts.
+    ///
+    /// Privileges come off the emitted table
+    /// (`FOUND_PARENT_ACCOUNT_ROLES_V3`, whose first `FOUND_ACCOUNT_COUNT_V3`
+    /// entries are the canonical frame's), so this fixture cannot disagree
+    /// with the program about which slot signs or is written. Executability
+    /// and the two sysvar/program addresses are the parser's own separate
+    /// demands and are set here by index.
+    fn found_frame(program_id: Pubkey, width: usize) -> Vec<AccountInfo<'static>> {
+        let mut frame = Vec::new();
+        for index in 0..width {
+            let (writable, signer) = dclutch_market::FOUND_PARENT_ACCOUNT_ROLES_V3
+                .get(index)
+                .copied()
+                .unwrap_or((false, false));
+            let executable = matches!(index, 3 | 25 | 27 | 29);
+            let key = match index {
+                25 => program_id,
+                29 => system_program::ID,
+                _ if index == dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3 => sysvar::rent::ID,
+                _ => Pubkey::new_unique(),
+            };
+            frame.push(info(key, signer, writable, executable));
+        }
+        frame
+    }
+
+    /// The parser tells the three Found widths apart by length alone, and 51
+    /// is not one of them.
+    ///
+    /// This is ruling 3 of the conditional-market design enforced where it has
+    /// to be: a child's basis is categorical and refunding by construction, so
+    /// a `DCLTPGT1` certificate pair and a parent tail never coexist and there
+    /// is no 51-account frame to build. Until this existed the on-chain parser
+    /// had no test at all and only the operator's builder was measured.
+    #[test]
+    fn the_found_parser_admits_three_widths_and_no_fourth() {
+        let program_id = Pubkey::new_unique();
+
+        let canonical = found_frame(program_id, FOUND_ACCOUNT_COUNT_V3);
+        let parsed = FoundAccounts::parse(&program_id, &canonical).expect("canonical frame");
+        assert!(parsed.price_gate.is_none());
+        assert!(parsed.parents.is_none());
+
+        let curved = found_frame(program_id, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3);
+        let parsed = FoundAccounts::parse(&program_id, &curved).expect("price-gate frame");
+        assert!(parsed.price_gate.is_some());
+        assert!(parsed.parents.is_none());
+
+        let child = found_frame(program_id, FOUND_PARENT_ACCOUNT_COUNT_V3);
+        let parsed = FoundAccounts::parse(&program_id, &child).expect("child frame");
+        assert!(parsed.price_gate.is_none());
+        let tail = parsed
+            .parents
+            .expect("a child frame carries its parent tail");
+        // Each tail slot is the account at its own emitted coordinate, so a
+        // reordering inside the tail fails here rather than at settlement.
+        for (index, key) in [
+            (
+                dclutch_market::FOUND_PARENT_REFERENCE_RAW_INDEX_V3,
+                tail.reference_raw.key,
+            ),
+            (
+                dclutch_market::FOUND_PARENT_REFERENCE_STAGING_INDEX_V3,
+                tail.reference_staging.key,
+            ),
+            (
+                dclutch_market::FOUND_PARENT_A_MARKET_INDEX_V3,
+                tail.a.market.key,
+            ),
+            (
+                dclutch_market::FOUND_PARENT_A_MARKET_INDEX_V3 + 1,
+                tail.a.product_raw.key,
+            ),
+            (
+                dclutch_market::FOUND_PARENT_A_MARKET_INDEX_V3 + 2,
+                tail.a.product_staging.key,
+            ),
+            (
+                dclutch_market::FOUND_PARENT_A_MARKET_INDEX_V3 + 3,
+                tail.a.result_domain_raw.key,
+            ),
+            (
+                dclutch_market::FOUND_PARENT_A_MARKET_INDEX_V3 + 4,
+                tail.a.result_domain_staging.key,
+            ),
+            (
+                dclutch_market::FOUND_PARENT_B_MARKET_INDEX_V3,
+                tail.b.market.key,
+            ),
+            (
+                dclutch_market::FOUND_PARENT_B_MARKET_INDEX_V3 + 4,
+                tail.b.result_domain_staging.key,
+            ),
+        ] {
+            assert_eq!(child.get(index).map(|account| account.key), Some(key));
+        }
+
+        // The widths are pairwise distinct, which is what makes the length a
+        // discriminant at all.
+        assert_ne!(FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3);
+        assert_ne!(
+            FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+            FOUND_PARENT_ACCOUNT_COUNT_V3
+        );
+        assert_ne!(FOUND_ACCOUNT_COUNT_V3, FOUND_PARENT_ACCOUNT_COUNT_V3);
+
+        // A price gate AND a parent tail: the width that does not exist.
+        let both = found_frame(
+            program_id,
+            FOUND_PARENT_ACCOUNT_COUNT_V3 + dclutch_market::FOUND_PARENT_SLOT_COUNT_V3 - 3,
+        );
+        assert_eq!(both.len(), FOUND_PARENT_ACCOUNT_COUNT_V3 + 2);
+        assert_eq!(
+            FoundAccounts::parse(&program_id, &both).err(),
+            Some(CoreSbfError::AccountFrame),
+        );
+    }
+
+    /// The parent tail is READ. Every one of its twelve slots refuses on its
+    /// own if it arrives signing, writable or executable: a parent's Market is
+    /// a Core-owned data account and its records are Registry records, and a
+    /// child founding may not acquire authority over any of them.
+    #[test]
+    fn a_parent_tail_slot_that_signs_or_is_written_refuses() {
+        let program_id = Pubkey::new_unique();
+        for slot in FOUND_ACCOUNT_COUNT_V3..FOUND_PARENT_ACCOUNT_COUNT_V3 {
+            for (signer, writable, executable) in [
+                (true, false, false),
+                (false, true, false),
+                (false, false, true),
+            ] {
+                let mut frame = found_frame(program_id, FOUND_PARENT_ACCOUNT_COUNT_V3);
+                let key = *frame[slot].key;
+                frame[slot] = info(key, signer, writable, executable);
+                assert_eq!(
+                    FoundAccounts::parse(&program_id, &frame).err(),
+                    Some(CoreSbfError::AccountFrame),
+                    "tail slot {slot} must not sign, be written or be executable"
+                );
+            }
+        }
     }
 
     /// A privilege-correct fifteen-account initialization frame.

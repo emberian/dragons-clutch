@@ -22,6 +22,10 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 
 mod core_effect;
+mod derived_transport_v1;
+/// Current-ABI derived-family evidence composition: a child market settled
+/// from its parents' certificates.
+pub mod derived_v1;
 /// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
 /// compartment a deadline-driven terminal spends.
 pub mod funded;
@@ -236,6 +240,48 @@ pub enum ResolutionError {
     /// changes its rent-exempt rate under a live cohort refuses here and
     /// nowhere else (decision 0030).
     FundedRent = 0x801E,
+    /// A parent the child's branch depends on has no terminal certificate:
+    /// its Source is still live, or its seat is absent, or the seat's bytes
+    /// are not the certificate the parent's own state implies
+    /// (`parentNotTerminal`; `admit_refuses_a_live_parent`).
+    DerivedParentNotTerminal = 0x801F,
+    /// The account offered as a parent is not the Core Market the reference
+    /// names, or its Source state is not that Market's
+    /// (`wrongParent`; `admit_refuses_a_stranger`).
+    DerivedWrongParent = 0x8020,
+    /// The parent's certificate is of another generation: the parent was
+    /// replaced after the child founded
+    /// (`parentGenerationMismatch`; `admit_refuses_a_replaced_parent`).
+    DerivedParentGeneration = 0x8021,
+    /// The parent's certificate binds a Product record the reference does not
+    /// (`parentRecordMismatch`; `admit_refuses_a_moved_record`).
+    DerivedParentRecord = 0x8022,
+    /// The reference's ordinary count is not the width the parent's
+    /// certificate was admitted under (`parentWidthMismatch`).
+    DerivedParentWidth = 0x8023,
+    /// The parent's selector is past its own width (`selectorOutOfRange`).
+    DerivedSelectorOutOfRange = 0x8024,
+    /// The `ParentReferenceV1` record did not authenticate, is not the one
+    /// the child's spec names, or does not describe this child: its
+    /// `settle_by` is not the window's end, or its width is not the domain's.
+    DerivedReference = 0x8025,
+    /// The child's primary deadline has passed. Not a wrong answer: no answer,
+    /// and the funded deadline walk owns the market from here.
+    DerivedWindowClosed = 0x8026,
+    /// A parent resolved to its own failure coordinate, so the child's answer
+    /// is the child's failure coordinate -- which only the deadline walk may
+    /// select (design §4.3). The route refuses and the walk refunds.
+    DerivedParentFailed = 0x8027,
+    /// The consumption frame carried a venue-release pair the selected
+    /// decoding-rules row has no deployment to put in it, or omitted the pair
+    /// a row that pins one requires.
+    ///
+    /// Not `AccountFrame`: the frame's own count and privileges were exactly
+    /// one of the two admissible consumption shapes. What disagreed is the
+    /// shape and the ROW -- a founder pointed a native-venue market at the
+    /// Loader V3 frame, or the reverse -- and the fix is the market's
+    /// configuration, not the caller's account list.
+    RelayedVenueKind = 0x8028,
 }
 
 /// Split the recorded-rate conjuncts out of the generic funding refusal.
@@ -297,7 +343,17 @@ dclutch_refusal_registry::pin_refusal_band!(
         InfrastructureProfile,
         ProviderScale,
         SourceLadder,
-        FundedRent
+        FundedRent,
+        DerivedParentNotTerminal,
+        DerivedWrongParent,
+        DerivedParentGeneration,
+        DerivedParentRecord,
+        DerivedParentWidth,
+        DerivedSelectorOutOfRange,
+        DerivedReference,
+        DerivedWindowClosed,
+        DerivedParentFailed,
+        RelayedVenueKind
     ]
 );
 
@@ -375,6 +431,13 @@ pub fn process_instruction(
     }
     if sponsored_push_v1::is_sponsored_push_v1(instruction_data) {
         return sponsored_push_v1::process_sponsored_push_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if derived_transport_v1::is_derived_settle(instruction_data) {
+        return derived_transport_v1::process_derived_settle_v1(
             program_id,
             accounts,
             instruction_data,

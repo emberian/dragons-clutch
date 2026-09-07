@@ -19,15 +19,17 @@ use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_resolution_core_v3_operator::{
+    ObservedAccount, ResolutionAdmitTerminalSnapshotV3, build_resolution_admit_terminal_v3,
+    validate_resolution_admit_terminal_report_v3,
+};
 use dclutch_source::relay::{
     RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
     record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1},
 };
-use dclutch_source::resolution::{RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2};
-use dclutch_resolution_core_v3_operator::{
-    ObservedAccount, ResolutionAdmitTerminalSnapshotV3, build_resolution_admit_terminal_v3,
-    validate_resolution_admit_terminal_report_v3,
+use dclutch_source::resolution::{
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2,
 };
 use dclutch_source::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, PROVIDER_RELEASE_SCHEMA_ID_V1,
@@ -375,7 +377,8 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     // in more wallets than the founder's — the abort lane's refund wallet
     // held half the supply on the first executed walk).
     {
-        let token_program = Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID);
+        let token_program =
+            Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID);
         let recorded: Vec<(String, Pubkey)> = session
             .accounts
             .iter()
@@ -918,7 +921,7 @@ fn success_walk(
     ledger: &mut ConservationLedgerV1,
     stages: &mut Vec<StageV1>,
 ) -> Result<serde_json::Value> {
-    let entries = input::account_set_entries();
+    let entries = input::account_set_entries()?;
     let positions: Vec<(Pubkey, Pubkey, u16, Vec<u32>)> = entries
         .iter()
         .map(|entry| {

@@ -58,7 +58,7 @@ crates/dclutch-rational-open-wasm/src/wire.rs
 # The whole block is owed. It is the largest single debt in this file and it
 # should be the shortest-lived.
 
-# the successor and the gauntlet campaigns (tools/) -- 62 file(s)
+# the successor and the gauntlet campaigns (tools/) -- 54 file(s)
 tools/dclutch-cli/src/capability.rs
 tools/fractional-exterior/src/narrow_fixture.rs
 tools/fractional-exterior/src/stage.rs
@@ -72,10 +72,8 @@ tools/gauntlet/journey/src/resolution.rs
 tools/gauntlet/journey/src/stages.rs
 tools/gauntlet/ladder/src/ladder.rs
 tools/gauntlet/ladder/src/main.rs
-tools/gauntlet/relayed-vertical/src/input.rs
 tools/gauntlet/relayed-vertical/src/main.rs
 tools/gauntlet/relayed-vertical/src/substrate.rs
-tools/gauntlet/relayed-vertical/src/vertical.rs
 tools/lineage-loopback/src/main.rs
 tools/local-validator/bootstrap/successor/src/campaign.rs
 tools/local-validator/bootstrap/successor/src/capability_seal_close.rs
@@ -99,7 +97,6 @@ tools/local-validator/bootstrap/successor/src/general_session.rs
 tools/local-validator/bootstrap/successor/src/general_successor_plan.rs
 tools/local-validator/bootstrap/successor/src/infrastructure_succession.rs
 tools/local-validator/bootstrap/successor/src/plan.rs
-tools/local-validator/bootstrap/successor/src/relayed.rs
 tools/local-validator/bootstrap/successor/src/release_capture.rs
 tools/local-validator/bootstrap/successor/src/release_identity.rs
 tools/local-validator/bootstrap/successor/src/release_lineage.rs

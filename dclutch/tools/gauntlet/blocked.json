@@ -252,6 +252,12 @@
       "class": "status-report",
       "reason": "UpkeepOperationV1 -- the upkeep vault's own act, arrived with build/economics, and the one thing nothing has ever executed: the Direct close-maker CPIs into the credit arm with the donation remainder. Same shape as the GovernanceActV1 rows -- the operator builds the request (`crates/dclutch-operator/src/upkeep_vault_v1.rs`), the program answers it, and no successor command drives either, so there is no runbook row a `--help` would admit. The family's own close says it plainly: nothing anywhere has executed the vault credit, which is the one step that makes this family do something. The entry route `custody/upkeep_vault_v1::process` is invisible to the census for the same `selects()` reason recorded on the GovernanceActV1 rows.",
       "owner": "the economics family (a successor command), then S11/gauntlet (the runbook rows and bindings)"
+    },
+    {
+      "route": "resolution/derived_transport_v1::process_derived_settle_v1",
+      "class": "status-report",
+      "reason": "No campaign drives a derived settle yet and nothing structural is in the way: a child market must first be founded through the 49-account Found frame, which no runbook step does. The two rows that would (`found-child` in the founding phase, `settle-derived` after both parents terminate) are named in MERGE_NOTES_PRODUCT-SHAPES.md and unwritten. This entry says status-report rather than claiming a campaign for exactly that reason.",
+      "owner": "CONVERGE-PRODUCT-SHAPES"
     }
   ]
 }

@@ -50,6 +50,7 @@ mod generic_founding_v1;
 mod infrastructure;
 mod infrastructure_v2;
 mod open_market;
+mod parents_v1;
 mod product_runtime_v2;
 mod records;
 mod release;
@@ -264,6 +265,49 @@ pub enum CoreSbfError {
     /// its budgeted rent" are different accusations with different remedies,
     /// and only the second one can be cured by sending lamports.
     SeriesMarketVacancy = 0x301F,
+    /// The `ParentReferenceV1` record did not authenticate against the child's
+    /// own Source spec, or the frame and the spec disagree about whether this
+    /// is a child at all: a `DerivedFromParents` spec with no parent tail, or
+    /// a tail offered to a spec of another access profile.
+    ///
+    /// Also the child's own records disagreeing with the reference's shape --
+    /// a domain whose cuts are not `1 … n − 1` over denominator one, or a basis
+    /// that is not categorical and refunding at scale `n` -- because a child
+    /// whose cells are not the joint index is not the child the reference
+    /// describes (`ParentReferenceV1Abi.childCuts`).
+    ParentReference = 0x3020,
+    /// A parent is not Open or Terminal: still Founding (its Product record is
+    /// not yet authenticated) or already Retiring/Retired (its certificate
+    /// account may be gone before the child reads it; design §4.4).
+    ParentPhase = 0x3021,
+    /// A parent's own Market state -- generation, Product-record digest -- or
+    /// its own `ResultDomainV2` region count is not what the reference binds.
+    /// A founder who mis-stated a parent's width would either refund holders
+    /// on an ordinary parent outcome or mint against cells no parent selector
+    /// reaches; the reference is proved against the parent here, once.
+    ParentBinding = 0x3022,
+    /// Both parents are one market, or a parent is the child.
+    ParentSame = 0x3023,
+    /// A conditional child's condition names its parent's failure coordinate:
+    /// a market that pays on an outage, which decision 0025 forbids one level
+    /// down and this refuses one level up (`conditionOnFailure`).
+    ParentConditionOnFailure = 0x3024,
+    /// A conditional child's condition names an outcome past its parent's
+    /// width (`conditionOutOfRange`).
+    ParentConditionOutOfRange = 0x3025,
+    /// The child's width exceeds the General bank cap (`widthOverflow`).
+    ParentWidthOverflow = 0x3026,
+    /// The reference names a parent with no ordinary outcome (`emptyParent`).
+    ///
+    /// Its own name rather than `ParentBinding`, because the five founding
+    /// refusals of `ProductShape.found?` / `ConditionalShape.found?` map onto
+    /// this band BY NAME and a total map is what makes that checkable. No wire
+    /// can carry it: `ParentReferenceV1::decode` refuses a zero
+    /// `ordinary_count` as `ZeroIdentifier` before `admit_founding` reads one,
+    /// so on chain this is the arm proving the decoder already closed it. The
+    /// in-process callers of `admit_founding` -- the child compiler in
+    /// `dclutch-product-runtime-v2-operator` -- are what reach it.
+    ParentEmpty = 0x3027,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -301,7 +345,15 @@ dclutch_refusal_registry::pin_refusal_band!(
         UnsupportedAction,
         FundedRent,
         SeriesMarketRent,
-        SeriesMarketVacancy
+        SeriesMarketVacancy,
+        ParentReference,
+        ParentPhase,
+        ParentBinding,
+        ParentSame,
+        ParentConditionOnFailure,
+        ParentConditionOutOfRange,
+        ParentWidthOverflow,
+        ParentEmpty
     ]
 );
 

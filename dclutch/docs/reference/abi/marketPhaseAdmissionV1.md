@@ -18,7 +18,7 @@ Regenerate with: npm run abi:phase-admission
 
 | name | value |
 | --- | ---: |
-| `ROUTE_COUNT_V1` | 148 |
+| `ROUTE_COUNT_V1` | 149 |
 
 ## Functions (see the source module)
 
@@ -93,6 +93,7 @@ export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "custody/retirement_replay_handoff_v1::process", phases: ["Retiring"], prestates: [] },
   { route: "resolution/core_effect::process_direct_funding_activation_v1", phases: ["Founding", "Open"], prestates: [["Founding", "Prepaid"], ["Open", "Consumed"]] },
   { route: "resolution/core_effect::process_direct_funding_close_v1", phases: ["Retiring"], prestates: [["Retiring", "Consumed"]] },
+  { route: "resolution/derived_transport_v1::process_derived_settle_v1", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_admit#AdmitTerminal", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_advance_recovery#AdvanceRecovery", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_capture#Capture", phases: ["Open"], prestates: [["Open", "Consumed"]] },

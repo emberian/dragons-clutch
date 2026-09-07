@@ -102,3 +102,35 @@ def main : IO Unit := do
   IO.println s!"pub const MINT_AUTHORITY_HELD_V1: u8 = {MintAuthorityState.byte .held};"
   IO.println s!"pub const MINT_AUTHORITY_RENOUNCED_V1: u8 = {MintAuthorityState.byte .renounced};"
   emitMintAcceptanceTable "MINT_AUTHORITY_ACCEPTANCE_TABLE_V1" mintAcceptanceTable
+
+  IO.println "// Row 2: a Feature program account's `activated_at`, as activation by a slot."
+  IO.println s!"pub const RELAYED_OBSERVABLE_FEATURE_GATE_ACTIVATION_V1: u32 = {Observable.selector .featureGateActivation};"
+  IO.println s!"pub const RELAYED_OBSERVABLE_FEATURE_GATE_RAW_EXPONENT_V1: i32 = {rustInt (Observable.rawExponent .featureGateActivation)};"
+  IO.println s!"pub const FEATURE_GATE_SET_CARDINALITY_V1: u16 = {Observable.setCardinality .featureGateActivation};"
+  IO.println s!"pub const FEATURE_GATE_STATE_POSITION_V1: u16 = {Observable.statePosition .featureGateActivation};"
+  IO.println s!"pub const FEATURE_GATE_CLOCK_POSITION_V1: u16 = {Observable.clockPosition .featureGateActivation};"
+  emitBytes "pub" "FEATURE_PROGRAM_ID_V1" featureProgramId
+  emitLengths "FEATURE_ADMITTED_DATA_LENGTHS_V1" featureAdmittedDataLengths
+  IO.println s!"pub const FEATURE_TAG_OFFSET_V1: usize = {featureTagOffset};"
+  IO.println s!"pub const FEATURE_ACTIVATED_AT_OFFSET_V1: usize = {featureActivatedAtOffset};"
+  IO.println s!"pub const FEATURE_INLINE_BYTES_V1: usize = {featureInlineBytes};"
+  IO.println s!"pub const FEATURE_NONE_TAG_V1: u8 = {featureNoneTag};"
+  IO.println s!"pub const FEATURE_SOME_TAG_V1: u8 = {featureSomeTag};"
+  IO.println s!"pub const FEATURE_NOT_ACTIVATED_SENTINEL_V1: u64 = {featureNotActivatedSentinel};"
+
+  IO.println "// Row 3: mainnet's mean slot duration since the epoch began, in milliseconds."
+  IO.println s!"pub const RELAYED_OBSERVABLE_MEAN_SLOT_TIME_V1: u32 = {Observable.selector .clockMeanSlotTimeSinceEpochStart};"
+  IO.println s!"pub const RELAYED_OBSERVABLE_MEAN_SLOT_TIME_RAW_EXPONENT_V1: i32 = {rustInt (Observable.rawExponent .clockMeanSlotTimeSinceEpochStart)};"
+  IO.println s!"pub const MEAN_SLOT_TIME_SET_CARDINALITY_V1: u16 = {Observable.setCardinality .clockMeanSlotTimeSinceEpochStart};"
+  IO.println s!"pub const MEAN_SLOT_TIME_STATE_POSITION_V1: u16 = {Observable.statePosition .clockMeanSlotTimeSinceEpochStart};"
+  IO.println s!"pub const MEAN_SLOT_TIME_CLOCK_POSITION_V1: u16 = {Observable.clockPosition .clockMeanSlotTimeSinceEpochStart};"
+  emitBytes "pub" "OBSERVED_EPOCH_SCHEDULE_SYSVAR_KEY_V1" epochScheduleSysvarKey
+  emitLengths "EPOCH_SCHEDULE_ADMITTED_DATA_LENGTHS_V1" epochScheduleAdmittedDataLengths
+  IO.println s!"pub const EPOCH_SCHEDULE_SLOTS_PER_EPOCH_OFFSET_V1: usize = {epochScheduleSlotsPerEpochOffset};"
+  IO.println s!"pub const EPOCH_SCHEDULE_WARMUP_OFFSET_V1: usize = {epochScheduleWarmupOffset};"
+  IO.println s!"pub const EPOCH_SCHEDULE_FIRST_NORMAL_EPOCH_OFFSET_V1: usize = {epochScheduleFirstNormalEpochOffset};"
+  IO.println s!"pub const EPOCH_SCHEDULE_FIRST_NORMAL_SLOT_OFFSET_V1: usize = {epochScheduleFirstNormalSlotOffset};"
+  IO.println s!"pub const EPOCH_SCHEDULE_INLINE_BYTES_V1: usize = {epochScheduleInlineBytes};"
+  IO.println s!"pub const OBSERVED_CLOCK_EPOCH_START_TIMESTAMP_OFFSET_V1: usize = {clockEpochStartTimestampOffset};"
+  IO.println s!"pub const OBSERVED_CLOCK_EPOCH_OFFSET_V1: usize = {clockEpochOffset};"
+  emitLengths "FLAGSHIP_SLOT_TIME_CUTS_MILLIS_V1" flagshipSlotTimeCutsMillis

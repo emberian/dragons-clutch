@@ -48,4 +48,12 @@ verify EmitRelayedMainnetStateV1AbiRust.lean generated_relayed_abi.rs 900
   lake env lean --run EmitRelayedVenueDecodingRulesV1Rust.lean >"$candidate"
 )
 grep -q '^pub const DBC_VENUE_SET_CARDINALITY_V1: u16 = 4;$' "$candidate"
-verify EmitRelayedVenueDecodingRulesV1Rust.lean generated_venue_rules.rs 80
+# Rows 2 and 3 are the two native-venue observables, and what distinguishes
+# them from every earlier row is that their set has no Program/ProgramData
+# pair. The cardinality is therefore the fact a mis-emission would move first,
+# and the mean-slot-time row's exponent is the one number that decides whether
+# a millisecond is read as a second.
+grep -q '^pub const FEATURE_GATE_SET_CARDINALITY_V1: u16 = 2;$' "$candidate"
+grep -q '^pub const MEAN_SLOT_TIME_SET_CARDINALITY_V1: u16 = 2;$' "$candidate"
+grep -q '^pub const RELAYED_OBSERVABLE_MEAN_SLOT_TIME_RAW_EXPONENT_V1: i32 = -3;$' "$candidate"
+verify EmitRelayedVenueDecodingRulesV1Rust.lean generated_venue_rules.rs 120

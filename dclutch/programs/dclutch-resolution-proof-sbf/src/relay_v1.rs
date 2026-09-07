@@ -30,7 +30,10 @@ use dclutch_product::svm_reader::AuthenticatedProductRuntimeV2;
 use dclutch_registry::ArtifactReleaseV1;
 use dclutch_source::relay::{
     Error as RelayContractError,
-    decode::{RelayedObservationOutcomeV1, interpret_sealed_record_v1},
+    decode::{
+        RelayedObservableV1, RelayedObservationOutcomeV1, RelayedVenueKindV1,
+        interpret_sealed_record_v1,
+    },
     record::RelayedObservationRecordViewV1,
     release::{AccountSetEntryV1, RelayedAdapterConfigV1},
 };
@@ -111,10 +114,31 @@ pub struct AuthenticatedRelaySourceRecordsV1 {
     pub statistic_spec_id: SourceContentId,
     /// The authenticated statistic.
     pub statistic: StatisticSpecV1,
-    /// The venue's pinned deployment, named by `SourceSpecV1.adapter_config_id`.
-    pub venue_release_id: SourceContentId,
-    /// The authenticated venue artifact release.
-    pub venue_release: ArtifactReleaseV1,
+    /// The venue's pinned deployment and its identity, named by
+    /// `SourceSpecV1.adapter_config_id`.
+    ///
+    /// `None` for a [`RelayedVenueKindV1::Native`] row, whose frame carries no
+    /// venue-release pair: a program the runtime implements has no
+    /// `ProgramData`, no ELF digest and no upgrade authority, so there is no
+    /// deployment for a release to pin.  What
+    /// `SourceSpecV1.adapter_config_id` names on such a row is the pinned
+    /// ordered account set — the only thing a native venue does pin — and
+    /// [`authenticate_graph`] is where the two readings are told apart.
+    ///
+    /// The identity and the body are one field so that no caller can present
+    /// half of the pair.
+    ///
+    /// [`RelayedVenueKindV1::Native`]: dclutch_source::relay::decode::RelayedVenueKindV1::Native
+    pub venue_release: Option<AuthenticatedVenueReleaseV1>,
+}
+
+/// One authenticated venue artifact release and the identity that named it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedVenueReleaseV1 {
+    /// `ArtifactReleaseV1` content identity, from `SourceSpecV1.adapter_config_id`.
+    pub id: SourceContentId,
+    /// The authenticated release, carrying the deployment the row pins.
+    pub release: ArtifactReleaseV1,
 }
 
 /// The exact coordinates the outer authenticated before calling.
@@ -154,14 +178,38 @@ pub struct RelayResolutionPlanV1 {
 /// Each link is a digest a previous link already committed to, so a caller who
 /// swaps one record for another of the same schema is refused by the link rather
 /// than by the record's own contents.
-fn authenticate_graph(records: &AuthenticatedRelaySourceRecordsV1) -> Result<(), RelayJoinErrorV1> {
+fn authenticate_graph(
+    records: &AuthenticatedRelaySourceRecordsV1,
+    venue: RelayedVenueKindV1,
+) -> Result<(), RelayJoinErrorV1> {
     if records.material.primary_source_spec() != records.source_spec_id
         || records.material.window_spec() != records.window_spec_id
         || records.material.statistic_spec() != records.statistic_spec_id
         || records.source.provider_release_id() != records.provider_release_id
-        || records.source.adapter_config_id() != records.venue_release_id
         || records.provider_release.decoding_rules_id() != records.decoding_rules_id
     {
+        return Err(RelayJoinErrorV1::Source);
+    }
+    // The per-market adapter slot names what this market's venue is pinned to,
+    // and the two kinds pin different things.  A LoaderV3 row pins a
+    // deployment, so the slot names the `ArtifactReleaseV1` the frame carried.
+    // A native row has no deployment; what it pins is the ordered account set,
+    // and naming it here binds the Source spec to that set independently of the
+    // provider release — a second, differently rooted commitment to the same
+    // identity rather than a placeholder.
+    let pinned = match venue {
+        RelayedVenueKindV1::LoaderV3 => match records.venue_release {
+            Some(venue_release) => venue_release.id.to_bytes(),
+            None => return Err(RelayJoinErrorV1::Source),
+        },
+        RelayedVenueKindV1::Native => {
+            if records.venue_release.is_some() {
+                return Err(RelayJoinErrorV1::Source);
+            }
+            records.config.account_set_id()
+        }
+    };
+    if records.source.adapter_config_id().to_bytes() != pinned {
         return Err(RelayJoinErrorV1::Source);
     }
     records
@@ -246,7 +294,14 @@ pub fn plan_relayed_resolution_v1(
     {
         return Err(RelayJoinErrorV1::Request);
     }
-    authenticate_graph(records)?;
+    // The row the configuration selects is what decides the venue kind, and
+    // therefore which shape the authenticated graph must have. Read once, here,
+    // before anything is compared: `interpret_sealed_record_v1` reads it again
+    // for its own dispatch, and the two agree because it is the same selector.
+    let venue = RelayedObservableV1::from_selector(records.config.observable_selector())
+        .map_err(|_| RelayJoinErrorV1::Source)?
+        .venue_kind();
+    authenticate_graph(records, venue)?;
 
     let product_record_digest = records.material.product_record_digest();
     if product_runtime.product_record.content_digest.to_bytes() != product_record_digest.to_bytes()
@@ -306,7 +361,7 @@ pub fn plan_relayed_resolution_v1(
         records.config,
         entries,
         recomputed_account_set_id,
-        records.venue_release,
+        records.venue_release.map(|venue| venue.release),
         request.pinned_cluster_id,
         request.current_unix_seconds,
     )

@@ -26,6 +26,18 @@ def main : IO Unit := do
   IO.println s!"pub const FOUND_PRICE_GATE_STAGING_INDEX_V3: usize = {priceGateStagingIndex};"
   IO.println "/// Exact ordinary mutating `Found` V3 account count with a certificate."
   IO.println s!"pub const FOUND_PRICE_GATE_ACCOUNT_COUNT_V3: usize = {priceGateAccountCount};"
+  IO.println "/// Exact ordinary mutating `Found` V3 account count with the parent-reference tail."
+  IO.println s!"pub const FOUND_PARENT_ACCOUNT_COUNT_V3: usize = {parentAccountCount};"
+  IO.println "/// Parent-reference raw-record index, in the child Found frame."
+  IO.println s!"pub const FOUND_PARENT_REFERENCE_RAW_INDEX_V3: usize = {parentReferenceRawIndex};"
+  IO.println "/// Parent-reference staging-cursor index, in the child Found frame."
+  IO.println s!"pub const FOUND_PARENT_REFERENCE_STAGING_INDEX_V3: usize = {parentReferenceStagingIndex};"
+  IO.println "/// Parent A's Market index; its Product and result-domain pairs follow it."
+  IO.println s!"pub const FOUND_PARENT_A_MARKET_INDEX_V3: usize = {parentAMarketIndex};"
+  IO.println "/// Parent B's Market index; its Product and result-domain pairs follow it."
+  IO.println s!"pub const FOUND_PARENT_B_MARKET_INDEX_V3: usize = {parentBMarketIndex};"
+  IO.println "/// Slots one parent contributes to the tail."
+  IO.println s!"pub const FOUND_PARENT_SLOT_COUNT_V3: usize = {parentSlotCount};"
   IO.println "/// Writable and signer privilege of every slot in the extended frame, in"
   IO.println "/// order. The canonical frame is the first `FOUND_ACCOUNT_COUNT_V3` entries."
   IO.println s!"pub const FOUND_ACCOUNT_ROLES_V3: [(bool, bool); {priceGateAccountCount}] = ["
@@ -33,6 +45,14 @@ def main : IO Unit := do
   -- the trailing comments are aligned the way rustfmt aligns them: to one space
   -- past the widest entry, which is `(false, false),`.
   for slot in extendedFrame do
+    let entry := s!"({rustBool slot.writable}, {rustBool slot.signer}),"
+    let padding := String.ofList (List.replicate (15 - entry.length) ' ')
+    IO.println s!"    {entry}{padding} // {slot.field}"
+  IO.println "];"
+  IO.println "/// Writable and signer privilege of every slot in the child frame, in order."
+  IO.println "/// The canonical frame is the first `FOUND_ACCOUNT_COUNT_V3` entries."
+  IO.println s!"pub const FOUND_PARENT_ACCOUNT_ROLES_V3: [(bool, bool); {parentAccountCount}] = ["
+  for slot in parentFrame do
     let entry := s!"({rustBool slot.writable}, {rustBool slot.signer}),"
     let padding := String.ofList (List.replicate (15 - entry.length) ' ')
     IO.println s!"    {entry}{padding} // {slot.field}"

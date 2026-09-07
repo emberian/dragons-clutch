@@ -14,6 +14,7 @@
 //! set, neither of which is a Source concept, and it is dispatched behind this
 //! family's own magic rather than the Source instruction wire.
 
+use crate::relay::decode::RelayedVenueKindV1;
 use crate::relay::{ADDRESS_BYTES, Error, Result};
 
 /// Semantic role name in one ordered relay frame.
@@ -364,6 +365,97 @@ pub const CONSUME_RECORD_FRAME_V1: [RelayAccountRoleV1; 30] = [
     SYSTEM,
 ];
 
+/// Where the venue's `ArtifactReleaseV1` sits in [`CONSUME_RECORD_FRAME_V1`].
+pub const CONSUME_VENUE_RELEASE_INDEX_V1: usize = 19;
+
+/// How many positions the venue-release pair occupies.
+///
+/// The two consumption frames differ by exactly this pair and in no other way,
+/// which is what lets one index table serve both:
+/// [`consume_position_v1`] subtracts it from every position after the pair.
+/// `the_native_consume_frame_is_the_canonical_one_without_its_venue_release`
+/// is the assertion, and it walks both tables rather than trusting this
+/// sentence.
+pub const CONSUME_VENUE_RELEASE_SLOTS_V1: usize = 2;
+
+/// Exact consumption frame for a [`RelayedVenueKindV1::Native`] row.
+///
+/// [`CONSUME_RECORD_FRAME_V1`] without its venue-release pair, and nothing
+/// else moved.  A row whose state account is owned by a program the validator
+/// itself implements — the Feature program, the sysvar owner — has no
+/// upgradeable venue program: no `ProgramData`, no ELF digest, no upgrade
+/// authority, and therefore no `ArtifactReleaseV1` that could pin a
+/// deployment.  Demanding one anyway is not a stricter frame, it is a frame no
+/// honest caller can fill, which is why the two new observables had a decoder
+/// and no way onto a chain until this existed.
+///
+/// What replaces P-B for these rows is stated in
+/// [`RelayedVenueKindV1::Native`]'s own documentation: the pinned account-set
+/// entry's `expected_owner`, which the record commits to by digest and which
+/// no transaction on the observed cluster can move.
+///
+/// [`RelayedVenueKindV1::Native`]: crate::relay::decode::RelayedVenueKindV1::Native
+pub const CONSUME_RECORD_NATIVE_VENUE_FRAME_V1: [RelayAccountRoleV1; 28] = [
+    WORKER,
+    MARKET_READ,
+    CORE_PROGRAM,
+    ACTIVATION,
+    RECORD_CONSUME,
+    SOURCE_STATE,
+    CERTIFICATE,
+    MATERIAL,
+    MATERIAL_STAGE,
+    SPEC,
+    SPEC_STAGE,
+    PROVIDER,
+    PROVIDER_STAGE,
+    WINDOW,
+    WINDOW_STAGE,
+    STATISTIC,
+    STATISTIC_STAGE,
+    CONFIG,
+    CONFIG_STAGE,
+    PRODUCT,
+    PRODUCT_STAGE,
+    RESULT_DOMAIN,
+    RESULT_DOMAIN_STAGE,
+    PORTFOLIO,
+    PORTFOLIO_STAGE,
+    CLOCK,
+    RENT,
+    SYSTEM,
+];
+
+/// Which consumption frame one venue kind fills.
+pub const fn consume_frame_kind_v1(venue: RelayedVenueKindV1) -> RelayFrameKindV1 {
+    match venue {
+        RelayedVenueKindV1::LoaderV3 => RelayFrameKindV1::ConsumeRecord,
+        RelayedVenueKindV1::Native => RelayFrameKindV1::ConsumeRecordNativeVenue,
+    }
+}
+
+/// One [`CONSUME_RECORD_FRAME_V1`] position, in the frame the venue kind fills.
+///
+/// The canonical frame is the coordinate system: a route names the position it
+/// wants once, in the 30-slot table everyone already reads, and this moves it
+/// into the 28-slot table when the venue-release pair is absent.  A position
+/// before the pair is unmoved; the pair itself has no coordinate in the native
+/// frame and yields `None`.
+pub const fn consume_position_v1(venue: RelayedVenueKindV1, canonical: usize) -> Option<usize> {
+    match venue {
+        RelayedVenueKindV1::LoaderV3 => Some(canonical),
+        RelayedVenueKindV1::Native => {
+            if canonical < CONSUME_VENUE_RELEASE_INDEX_V1 {
+                Some(canonical)
+            } else if canonical < CONSUME_VENUE_RELEASE_INDEX_V1 + CONSUME_VENUE_RELEASE_SLOTS_V1 {
+                None
+            } else {
+                Some(canonical - CONSUME_VENUE_RELEASE_SLOTS_V1)
+            }
+        }
+    }
+}
+
 /// Exact deadline-failure frame: a silent market to its pre-disclosed outcome.
 ///
 /// Twenty-two positions, and the interesting fact about them is what is missing.
@@ -467,6 +559,8 @@ pub enum RelayFrameKindV1 {
     RetireRecord,
     /// [`CONSUME_RECORD_FRAME_V1`].
     ConsumeRecord,
+    /// [`CONSUME_RECORD_NATIVE_VENUE_FRAME_V1`].
+    ConsumeRecordNativeVenue,
     /// [`COMMIT_DEADLINE_FAILURE_FRAME_V1`].
     CommitDeadlineFailure,
     /// [`ADVANCE_RECOVERY_FRAME_V1`].
@@ -481,6 +575,7 @@ pub const fn relay_frame_roles_v1(kind: RelayFrameKindV1) -> &'static [RelayAcco
         RelayFrameKindV1::SealRecord => &SEAL_RECORD_FRAME_V1,
         RelayFrameKindV1::RetireRecord => &RETIRE_RECORD_FRAME_V1,
         RelayFrameKindV1::ConsumeRecord => &CONSUME_RECORD_FRAME_V1,
+        RelayFrameKindV1::ConsumeRecordNativeVenue => &CONSUME_RECORD_NATIVE_VENUE_FRAME_V1,
         RelayFrameKindV1::CommitDeadlineFailure => &COMMIT_DEADLINE_FAILURE_FRAME_V1,
         RelayFrameKindV1::AdvanceRecovery => &ADVANCE_RECOVERY_FRAME_V1,
     }
@@ -559,6 +654,7 @@ mod tests {
             RelayFrameKindV1::SealRecord,
             RelayFrameKindV1::RetireRecord,
             RelayFrameKindV1::ConsumeRecord,
+            RelayFrameKindV1::ConsumeRecordNativeVenue,
             RelayFrameKindV1::CommitDeadlineFailure,
         ] {
             let built = frame(kind);
@@ -573,6 +669,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The two consumption frames have ONE author: the canonical thirty, and
+    /// this walks the twenty-eight against it position by position.  A slot
+    /// added to either frame without the other is what this refuses, and it is
+    /// the assertion `consume_position_v1`'s arithmetic rests on.
+    #[test]
+    fn the_native_consume_frame_is_the_canonical_one_without_its_venue_release() {
+        let canonical = relay_frame_roles_v1(RelayFrameKindV1::ConsumeRecord);
+        let native = relay_frame_roles_v1(RelayFrameKindV1::ConsumeRecordNativeVenue);
+        assert_eq!(
+            native.len(),
+            canonical.len() - CONSUME_VENUE_RELEASE_SLOTS_V1
+        );
+        assert_eq!(
+            canonical
+                .get(CONSUME_VENUE_RELEASE_INDEX_V1)
+                .map(|role| role.name()),
+            Some(RelayAccountNameV1::VenueArtifactRelease),
+        );
+        assert_eq!(
+            canonical
+                .get(CONSUME_VENUE_RELEASE_INDEX_V1 + 1)
+                .map(|role| role.name()),
+            Some(RelayAccountNameV1::VenueArtifactReleaseStagingVacancy),
+        );
+        for (index, role) in canonical.iter().enumerate() {
+            match consume_position_v1(RelayedVenueKindV1::Native, index) {
+                Some(moved) => assert_eq!(native.get(moved), Some(role)),
+                None => assert!(
+                    index == CONSUME_VENUE_RELEASE_INDEX_V1
+                        || index == CONSUME_VENUE_RELEASE_INDEX_V1 + 1
+                ),
+            }
+        }
+        assert_eq!(
+            consume_frame_kind_v1(RelayedVenueKindV1::LoaderV3),
+            RelayFrameKindV1::ConsumeRecord
+        );
+        assert_eq!(
+            consume_frame_kind_v1(RelayedVenueKindV1::Native),
+            RelayFrameKindV1::ConsumeRecordNativeVenue
+        );
+    }
+
+    /// A native row's frame is not a shorter canonical one: the thirty-slot
+    /// frame presented as a native consumption refuses on its count.
+    #[test]
+    fn the_canonical_width_does_not_pass_as_a_native_consumption() {
+        let built = frame(RelayFrameKindV1::ConsumeRecord);
+        assert_eq!(
+            validate_relay_frame_v1(RelayFrameKindV1::ConsumeRecordNativeVenue, &built),
+            Err(Error::InvalidAccountFrame)
+        );
     }
 
     #[test]

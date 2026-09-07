@@ -77,7 +77,11 @@ use dclutch_source::relay::{
     RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYED_RECORD_PDA_DOMAIN_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, RELAYER_KEY_SET_BYTES,
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
-    frame::{RelayAccountPrivilegeV1, RelayFrameKindV1, validate_relay_frame_v1},
+    decode::{RelayedObservableV1, RelayedVenueKindV1},
+    frame::{
+        CONSUME_RECORD_FRAME_V1, CONSUME_RECORD_NATIVE_VENUE_FRAME_V1, RelayAccountPrivilegeV1,
+        RelayFrameKindV1, consume_frame_kind_v1, consume_position_v1, validate_relay_frame_v1,
+    },
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AdvanceRecoveryInstructionV1,
         AppendObservationInstructionV1, CommitDeadlineFailureInstructionV1,
@@ -138,8 +142,8 @@ use crate::{
     },
     provider_instruction_v3::authenticate_record,
     relay_v1::{
-        AuthenticatedRelaySourceRecordsV1, RelayJoinErrorV1, RelayResolutionRequestV1,
-        plan_relayed_resolution_v1,
+        AuthenticatedRelaySourceRecordsV1, AuthenticatedVenueReleaseV1, RelayJoinErrorV1,
+        RelayResolutionRequestV1, plan_relayed_resolution_v1,
     },
 };
 
@@ -216,6 +220,38 @@ pub(crate) fn account<'a, 'info>(
     accounts
         .get(index)
         .ok_or(ResolutionError::AccountFrame.into())
+}
+
+/// Which consumption frame this caller presented, read off its own width.
+///
+/// The two admissible consumption shapes differ by exactly the venue-release
+/// pair, so the count is the discriminant -- the same way Core's Found parser
+/// reads its three widths. What the count CANNOT say is whether the market's
+/// own decoding-rules row agrees; `consume_source_records` decides that against
+/// the configuration and refuses as `RelayedVenueKind`.
+fn consume_venue_kind(accounts: &[AccountInfo<'_>]) -> Result<RelayedVenueKindV1, ProgramError> {
+    if accounts.len() == CONSUME_RECORD_FRAME_V1.len() {
+        Ok(RelayedVenueKindV1::LoaderV3)
+    } else if accounts.len() == CONSUME_RECORD_NATIVE_VENUE_FRAME_V1.len() {
+        Ok(RelayedVenueKindV1::Native)
+    } else {
+        Err(ResolutionError::AccountFrame.into())
+    }
+}
+
+/// One canonical consumption position, in the frame this venue kind fills.
+///
+/// Every consumption index in this file is written once, in the thirty-slot
+/// coordinate system `CONSUME_RECORD_FRAME_V1` declares, and moved here. A
+/// position the native frame does not have is `AccountFrame` rather than a
+/// silent neighbour.
+fn consume_slot<'a, 'info>(
+    accounts: &'a [AccountInfo<'info>],
+    venue: RelayedVenueKindV1,
+    canonical: usize,
+) -> Result<&'a AccountInfo<'info>, ProgramError> {
+    let position = consume_position_v1(venue, canonical).ok_or(ResolutionError::AccountFrame)?;
+    account(accounts, position)
 }
 
 pub(crate) fn validate_frame(
@@ -891,7 +927,8 @@ fn process_consume(
     request: ConsumeRecordInstructionV1,
     entry_bytes: &[u8],
 ) -> ProgramResult {
-    validate_frame(RelayFrameKindV1::ConsumeRecord, accounts)?;
+    let venue = consume_venue_kind(accounts)?;
+    validate_frame(consume_frame_kind_v1(venue), accounts)?;
     let worker = account(accounts, 0)?;
     let market_account = account(accounts, 1)?;
     let core = account(accounts, 2)?;
@@ -899,9 +936,9 @@ fn process_consume(
     let record_account = account(accounts, 4)?;
     let source_state_account = account(accounts, 5)?;
     let certificate_account = account(accounts, 6)?;
-    let clock_account = account(accounts, 27)?;
-    let rent_sysvar = account(accounts, 28)?;
-    let system = account(accounts, 29)?;
+    let clock_account = consume_slot(accounts, venue, 27)?;
+    let rent_sysvar = consume_slot(accounts, venue, 28)?;
+    let system = consume_slot(accounts, venue, 29)?;
     require_system(system)?;
     let _ = worker;
     let rent = authenticate_rent(rent_sysvar)?;
@@ -918,6 +955,7 @@ fn process_consume(
     let records = boxed_consume_source_records(
         &market,
         accounts,
+        venue,
         request.source_material_id(),
         request.source_spec_id(),
     )?;
@@ -926,16 +964,16 @@ fn process_consume(
         ProductContentId::new(market.product_record).map_err(|_| ResolutionError::ProductDomain)?,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
-                raw: account(accounts, 21)?,
-                staging: account(accounts, 22)?,
+                raw: consume_slot(accounts, venue, 21)?,
+                staging: consume_slot(accounts, venue, 22)?,
             },
             result_domain: FinalizedRecordFrameV2 {
-                raw: account(accounts, 23)?,
-                staging: account(accounts, 24)?,
+                raw: consume_slot(accounts, venue, 23)?,
+                staging: consume_slot(accounts, venue, 24)?,
             },
             portfolio: FinalizedRecordFrameV2 {
-                raw: account(accounts, 25)?,
-                staging: account(accounts, 26)?,
+                raw: consume_slot(accounts, venue, 25)?,
+                staging: consume_slot(accounts, venue, 26)?,
             },
         },
     )?;
@@ -960,7 +998,7 @@ fn process_consume(
         .ok_or(ResolutionError::Instruction)?;
     let recomputed_account_set_id = recompute_account_set_id(entries)?;
 
-    let domain_data = account(accounts, 23)?
+    let domain_data = consume_slot(accounts, venue, 23)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::ProductDomain)?;
     let result_domain =
@@ -1792,12 +1830,14 @@ pub(crate) fn boxed_product_runtime(
 fn boxed_consume_source_records(
     market: &MarketFacts,
     accounts: &[AccountInfo<'_>],
+    venue: RelayedVenueKindV1,
     material_id: [u8; 32],
     source_spec_id: [u8; 32],
 ) -> Result<Box<AuthenticatedRelaySourceRecordsV1>, ProgramError> {
     Ok(Box::new(consume_source_records(
         market,
         accounts,
+        venue,
         material_id,
         source_spec_id,
     )?))
@@ -1807,17 +1847,18 @@ fn boxed_consume_source_records(
 fn consume_source_records(
     market: &MarketFacts,
     accounts: &[AccountInfo<'_>],
+    venue: RelayedVenueKindV1,
     material_id: [u8; 32],
     source_spec_id: [u8; 32],
 ) -> Result<AuthenticatedRelaySourceRecordsV1, ProgramError> {
     let registry = &market.registry_program;
-    let material_data = account(accounts, 7)?
+    let material_data = consume_slot(accounts, venue, 7)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_record(
         registry,
-        account(accounts, 7)?,
-        account(accounts, 8)?,
+        consume_slot(accounts, venue, 7)?,
+        consume_slot(accounts, venue, 8)?,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_id,
         &material_data,
@@ -1828,13 +1869,13 @@ fn consume_source_records(
     let window_spec_id = material.window_spec().to_bytes();
     drop(material_data);
 
-    let spec_data = account(accounts, 9)?
+    let spec_data = consume_slot(accounts, venue, 9)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_record(
         registry,
-        account(accounts, 9)?,
-        account(accounts, 10)?,
+        consume_slot(accounts, venue, 9)?,
+        consume_slot(accounts, venue, 10)?,
         SOURCE_SPEC_SCHEMA_ID_V1,
         source_spec_id,
         &spec_data,
@@ -1848,13 +1889,13 @@ fn consume_source_records(
     let venue_release_id = source.adapter_config_id().to_bytes();
     drop(spec_data);
 
-    let provider_data = account(accounts, 11)?
+    let provider_data = consume_slot(accounts, venue, 11)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_record(
         registry,
-        account(accounts, 11)?,
-        account(accounts, 12)?,
+        consume_slot(accounts, venue, 11)?,
+        consume_slot(accounts, venue, 12)?,
         PROVIDER_RELEASE_SCHEMA_ID_V1,
         provider_release_id,
         &provider_data,
@@ -1870,13 +1911,13 @@ fn consume_source_records(
     let decoding_rules_id = provider.decoding_rules_id().to_bytes();
     drop(provider_data);
 
-    let window_data = account(accounts, 13)?
+    let window_data = consume_slot(accounts, venue, 13)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_record(
         registry,
-        account(accounts, 13)?,
-        account(accounts, 14)?,
+        consume_slot(accounts, venue, 13)?,
+        consume_slot(accounts, venue, 14)?,
         WINDOW_SPEC_SCHEMA_ID_V1,
         window_spec_id,
         &window_data,
@@ -1890,13 +1931,13 @@ fn consume_source_records(
     // the Product's result unit relate; without it in this walk the route had
     // to guess that they were the same one.
     let statistic_spec_id = material.statistic_spec().to_bytes();
-    let statistic_data = account(accounts, 15)?
+    let statistic_data = consume_slot(accounts, venue, 15)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_record(
         registry,
-        account(accounts, 15)?,
-        account(accounts, 16)?,
+        consume_slot(accounts, venue, 15)?,
+        consume_slot(accounts, venue, 16)?,
         STATISTIC_SPEC_SCHEMA_ID_V1,
         statistic_spec_id,
         &statistic_data,
@@ -1906,13 +1947,13 @@ fn consume_source_records(
         StatisticSpecV1::decode(&statistic_data).map_err(|_| ResolutionError::SourceMaterial)?;
     drop(statistic_data);
 
-    let config_data = account(accounts, 17)?
+    let config_data = consume_slot(accounts, venue, 17)?
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_record(
         registry,
-        account(accounts, 17)?,
-        account(accounts, 18)?,
+        consume_slot(accounts, venue, 17)?,
+        consume_slot(accounts, venue, 18)?,
         RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
         decoding_rules_id,
         &config_data,
@@ -1925,24 +1966,47 @@ fn consume_source_records(
         .map_err(|_| ResolutionError::Transition)?;
     drop(config_data);
 
-    let venue_data = account(accounts, 19)?
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::FinalizedRecord)?;
-    authenticate_record(
-        registry,
-        account(accounts, 19)?,
-        account(accounts, 20)?,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
-        venue_release_id,
-        &venue_data,
-        ARTIFACT_RELEASE_BYTES_V1,
-    )?;
-    let venue_release =
-        ArtifactReleaseV1::decode(&venue_data).map_err(|_| ResolutionError::ProviderRelease)?;
-    drop(venue_data);
+    // The row the configuration selects decides whether this market HAS a venue
+    // deployment, and therefore which of the two consumption frames is the one
+    // it may be consumed through. The caller's width chose a frame; this is
+    // where the market's own configuration is asked whether that was the right
+    // one, and the disagreement is its own refusal rather than a missing
+    // account.
+    let observable = RelayedObservableV1::from_selector(config.observable_selector())
+        .map_err(|_| ResolutionError::ProviderConfiguration)?;
+    if observable.venue_kind() != venue {
+        return Err(ResolutionError::RelayedVenueKind.into());
+    }
 
     let id = |value: [u8; 32]| {
         dclutch_source::ContentId::new(value).map_err(|_| ResolutionError::SourceMaterial)
+    };
+    // A native row has no upgradeable venue program, so the pair is absent from
+    // its frame and there is nothing here to authenticate. `authenticate_graph`
+    // is what then binds `adapter_config_id` to the pinned account set instead.
+    let venue_release = match venue {
+        RelayedVenueKindV1::LoaderV3 => {
+            let venue_data = consume_slot(accounts, venue, 19)?
+                .try_borrow_data()
+                .map_err(|_| ResolutionError::FinalizedRecord)?;
+            authenticate_record(
+                registry,
+                consume_slot(accounts, venue, 19)?,
+                consume_slot(accounts, venue, 20)?,
+                ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                venue_release_id,
+                &venue_data,
+                ARTIFACT_RELEASE_BYTES_V1,
+            )?;
+            let release = ArtifactReleaseV1::decode(&venue_data)
+                .map_err(|_| ResolutionError::ProviderRelease)?;
+            drop(venue_data);
+            Some(AuthenticatedVenueReleaseV1 {
+                id: id(venue_release_id)?,
+                release,
+            })
+        }
+        RelayedVenueKindV1::Native => None,
     };
     Ok(AuthenticatedRelaySourceRecordsV1 {
         material_id: id(material_id)?,
@@ -1957,7 +2021,6 @@ fn consume_source_records(
         window,
         statistic_spec_id: id(statistic_spec_id)?,
         statistic,
-        venue_release_id: id(venue_release_id)?,
         venue_release,
     })
 }

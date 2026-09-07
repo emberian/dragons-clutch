@@ -604,6 +604,11 @@ fn authenticate_references(
         SOURCE_CAPACITY_PROFILE_BYTES,
         SourceCapacityProfileV1::decode,
     )?;
+    // A child market's founding arm, or the proof that this is not one: the
+    // spec's access profile and the frame's tail must agree, and if they say
+    // "child" the parents and the child's own records are proved against the
+    // reference before anything below reads the basis scale.
+    crate::parents_v1::authenticate_parent_reference_v1(frame, registry, source_spec, &runtime)?;
     let floor = match material.principal_policy() {
         SourcePrincipalPolicyV1::ExplicitlyUnbounded => {
             authenticate_absent_optional_record(

@@ -82,6 +82,7 @@ import DClutchSemantics.MarketCoreAbi
 import DClutchSemantics.MarketCoreExamples
 import DClutchSemantics.MarketCorePhysicalAbi
 import DClutchSemantics.MarketRetirementV1Abi
+import DClutchSemantics.ParentReferenceV1Abi
 import DClutchSemantics.Physical
 import DClutchSemantics.ProductAdmissionV2Abi
 import DClutchSemantics.ProductBasisV3

@@ -37,10 +37,14 @@ fn twin_venue_facts() -> RelayedVenueFactsV1 {
 }
 
 /// The twin exercises row 0; a row-1 twin would supply its own mint facts.
-pub(crate) const TWIN_OBSERVABLE: RelayedObservableV1 =
-    RelayedObservableV1::DbcMigrationProgressV1;
+pub(crate) const TWIN_OBSERVABLE: RelayedObservableV1 = RelayedObservableV1::DbcMigrationProgressV1;
 
-pub(crate) fn account_set_entries() -> [AccountSetEntryV1; 4] {
+/// The twin's pinned set, at whatever width its own row states.
+///
+/// The width used to be in this signature, which made the shim the second
+/// author of a number the decoding-rules row already carries -- and a row with
+/// no `Program`/`ProgramData` pair could not be named here at all.
+pub(crate) fn account_set_entries() -> Result<Vec<AccountSetEntryV1>> {
     relayed::account_set_entries(TWIN_OBSERVABLE, &twin_venue_facts())
 }
 

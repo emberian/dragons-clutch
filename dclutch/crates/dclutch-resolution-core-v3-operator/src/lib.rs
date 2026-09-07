@@ -8,6 +8,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+/// The unsigned derived-settle instruction for a child market.
+pub mod derived_settle_v1;
 /// Recovering the funded rent rate of a ledger written before the field existed.
 pub mod funded_rent_recovery_v1;
 /// Pre-Market Resolution-owned subset-ledger CPI builder.

@@ -95,8 +95,38 @@ def priceGateExtension : List Slot := [
 
 def extendedFrame : List Slot := canonicalFrame ++ priceGateExtension
 
+/-- The parent-reference tail, APPENDED to the canonical frame, for a child
+market (`MECHANISM_CONDITIONAL_MARKETS_2026_09_04.md` §2.1; the wire is
+`ParentReferenceV1Abi`).  It carries the finalized `ParentReferenceV1` pair
+and, per parent, the Market whose phase, generation and Product-record digest
+the reference must bind, plus that parent's Product record and result-domain
+record so the reference's `ordinary_count` is PROVED against the parent's own
+`ResultDomainV2` at founding rather than trusted from the founder.  A child's
+basis is categorical and refunding by construction, so this tail and the
+price-gate pair are never both present: the admissible widths are the
+canonical 37, the curved 39 and the child 49, and never 51. -/
+def parentReferenceExtension : List Slot := [
+  ro "parents.reference.raw" "parent reference raw",
+  ro "parents.reference.staging" "parent reference staging",
+  ro "parents.a.market" "parent A Market",
+  ro "parents.a.product.raw" "parent A Product raw",
+  ro "parents.a.product.staging" "parent A Product staging",
+  ro "parents.a.result_domain.raw" "parent A result domain raw",
+  ro "parents.a.result_domain.staging" "parent A result domain staging",
+  ro "parents.b.market" "parent B Market",
+  ro "parents.b.product.raw" "parent B Product raw",
+  ro "parents.b.product.staging" "parent B Product staging",
+  ro "parents.b.result_domain.raw" "parent B result domain raw",
+  ro "parents.b.result_domain.staging" "parent B result domain staging"
+]
+
+def parentFrame : List Slot := canonicalFrame ++ parentReferenceExtension
+
 def accountCount : Nat := canonicalFrame.length
 def priceGateAccountCount : Nat := extendedFrame.length
+def parentAccountCount : Nat := parentFrame.length
+/-- Slots one parent contributes to the tail: Market, Product pair, domain pair. -/
+def parentSlotCount : Nat := 5
 
 /-- Position of a slot by the operator's own field path. -/
 def indexOf? (field : String) : Option Nat :=
@@ -109,6 +139,14 @@ def priceGateRawIndex : Nat := (indexOf? "certificate.raw").getD 0
 def priceGateStagingIndex : Nat := (indexOf? "certificate.staging").getD 0
 def capabilityManifestStagingIndex : Nat :=
   (indexOf? "state.capability_manifest.record.staging").getD 0
+
+def parentIndexOf? (field : String) : Option Nat :=
+  parentFrame.findIdx? (fun slot => slot.field == field)
+
+def parentReferenceRawIndex : Nat := (parentIndexOf? "parents.reference.raw").getD 0
+def parentReferenceStagingIndex : Nat := (parentIndexOf? "parents.reference.staging").getD 0
+def parentAMarketIndex : Nat := (parentIndexOf? "parents.a.market").getD 0
+def parentBMarketIndex : Nat := (parentIndexOf? "parents.b.market").getD 0
 
 /-! ## What the frame says -/
 
@@ -169,6 +207,43 @@ founds curvature changes. -/
 theorem the_extension_is_a_suffix :
     extendedFrame.take accountCount = canonicalFrame ∧
     extendedFrame.drop accountCount = priceGateExtension := by
+  native_decide
+
+/-! ## The parent-reference tail -/
+
+theorem parent_named_indices_are_positions :
+    parentAccountCount = 49 ∧ parentReferenceRawIndex = 37 ∧
+    parentReferenceStagingIndex = 38 ∧ parentAMarketIndex = 39 ∧
+    parentBMarketIndex = 44 ∧ parentBMarketIndex = parentAMarketIndex + parentSlotCount ∧
+    parentReferenceExtension.length = 2 + 2 * parentSlotCount := by
+  native_decide
+
+/-- The tail is strictly appended to the CANONICAL frame, never to the curved
+one: a child founding presents no price-gate pair, and the two extensions never
+coexist.  The three admissible widths are pairwise distinct so the parser can
+tell them apart by length alone. -/
+theorem the_parent_tail_is_a_suffix_of_the_canonical_frame :
+    parentFrame.take accountCount = canonicalFrame ∧
+    parentFrame.drop accountCount = parentReferenceExtension ∧
+    accountCount ≠ priceGateAccountCount ∧ priceGateAccountCount ≠ parentAccountCount ∧
+    accountCount ≠ parentAccountCount := by
+  native_decide
+
+/-- Nothing in the tail is writable or signs.  A parent is READ at founding;
+the child cannot touch its lifecycle (the reference-count-on-the-parent
+design was refused for exactly this reason, note §4.4). -/
+theorem the_parent_tail_is_read_only :
+    parentReferenceExtension.all (fun slot => !slot.writable && !slot.signer) := by
+  native_decide
+
+theorem parent_slots_are_uniquely_named :
+    (parentFrame.map (fun slot => slot.field)).Nodup ∧
+    (parentFrame.map (fun slot => slot.label)).Nodup := by
+  native_decide
+
+/-- The parent tail sits after the Rent sysvar, so the ProjectFound left-shift
+reaches it exactly as it reaches the price-gate pair. -/
+theorem the_parent_tail_is_past_the_rent_sysvar : rentSysvarIndex < parentReferenceRawIndex := by
   native_decide
 
 end DClutch.CoreFoundFrameV3Abi

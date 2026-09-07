@@ -25,6 +25,8 @@ use dclutch_product::contract::{
 };
 
 #[allow(missing_docs)]
+mod generated_parent_reference_v1;
+#[allow(missing_docs)]
 mod generated_principal_capacity_v1;
 #[allow(missing_docs)]
 mod generated_scheduled_median_v1;
@@ -40,6 +42,9 @@ mod generated_source_resolution_state_v2;
 mod generated_statistic_spec_v1;
 #[allow(missing_docs)]
 mod generated_window_spec_v1;
+/// The parent reference a child market founds against and the derived
+/// provider's settle request (`DClutchSemantics.ParentReferenceV1Abi`).
+pub mod parent_reference_v1;
 mod principal_capacity_v1;
 mod provider_join_v2;
 mod scheduled_median_v1;
@@ -922,7 +927,19 @@ pub enum SourceAccessProfile {
     /// head selects the best valid submitted candidate; consumption occurs
     /// only after candidate admission has closed.
     PythSponsoredPushSnapshot = 4,
+    /// A child market: no observation of its own.  Its evidence is two
+    /// on-cluster `ResolutionCertificateV2` accounts of the parents named by
+    /// the `ParentReferenceV1` its `adapter_config_id` selects, read exactly
+    /// as Core's `AdmitTerminal` reads one, and its atom is the joint index
+    /// (`MECHANISM_CONDITIONAL_MARKETS_2026_09_04.md` §4.1).  The byte is
+    /// Lean's (`ParentReferenceV1Abi.derivedAccessProfile`), pinned below.
+    DerivedFromParents = 5,
 }
+
+const _: () = assert!(
+    SourceAccessProfile::DerivedFromParents as u8 == parent_reference_v1::DERIVED_ACCESS_PROFILE_V1,
+    "the derived access profile byte is Lean's, not this enum's"
+);
 
 impl SourceAccessProfile {
     fn decode(byte: u8) -> Result<Self> {
@@ -931,6 +948,7 @@ impl SourceAccessProfile {
             2 => Ok(Self::SharedObservationChild),
             3 => Ok(Self::RelayedObservationRecord),
             4 => Ok(Self::PythSponsoredPushSnapshot),
+            parent_reference_v1::DERIVED_ACCESS_PROFILE_V1 => Ok(Self::DerivedFromParents),
             _ => Err(Error::UnknownSourceAccess),
         }
     }
@@ -964,6 +982,9 @@ impl SourceAccessProfile {
             }
             Self::RelayedObservationRecord => RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1,
             Self::PythSponsoredPushSnapshot => PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_ID_V1,
+            Self::DerivedFromParents => {
+                parent_reference_v1::DERIVED_PROVIDER_EXTENSION_RELEASE_ID_V1
+            }
         }
     }
 }

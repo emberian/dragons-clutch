@@ -13,6 +13,18 @@ pub const FOUND_PRICE_GATE_RAW_INDEX_V3: usize = 37;
 pub const FOUND_PRICE_GATE_STAGING_INDEX_V3: usize = 38;
 /// Exact ordinary mutating `Found` V3 account count with a certificate.
 pub const FOUND_PRICE_GATE_ACCOUNT_COUNT_V3: usize = 39;
+/// Exact ordinary mutating `Found` V3 account count with the parent-reference tail.
+pub const FOUND_PARENT_ACCOUNT_COUNT_V3: usize = 49;
+/// Parent-reference raw-record index, in the child Found frame.
+pub const FOUND_PARENT_REFERENCE_RAW_INDEX_V3: usize = 37;
+/// Parent-reference staging-cursor index, in the child Found frame.
+pub const FOUND_PARENT_REFERENCE_STAGING_INDEX_V3: usize = 38;
+/// Parent A's Market index; its Product and result-domain pairs follow it.
+pub const FOUND_PARENT_A_MARKET_INDEX_V3: usize = 39;
+/// Parent B's Market index; its Product and result-domain pairs follow it.
+pub const FOUND_PARENT_B_MARKET_INDEX_V3: usize = 44;
+/// Slots one parent contributes to the tail.
+pub const FOUND_PARENT_SLOT_COUNT_V3: usize = 5;
 /// Writable and signer privilege of every slot in the extended frame, in
 /// order. The canonical frame is the first `FOUND_ACCOUNT_COUNT_V3` entries.
 pub const FOUND_ACCOUNT_ROLES_V3: [(bool, bool); 39] = [
@@ -55,4 +67,57 @@ pub const FOUND_ACCOUNT_ROLES_V3: [(bool, bool); 39] = [
     (false, false), // state.rent_programdata
     (false, false), // certificate.raw
     (false, false), // certificate.staging
+];
+/// Writable and signer privilege of every slot in the child frame, in order.
+/// The canonical frame is the first `FOUND_ACCOUNT_COUNT_V3` entries.
+pub const FOUND_PARENT_ACCOUNT_ROLES_V3: [(bool, bool); 49] = [
+    (true, true),   // state.payer
+    (true, false),  // state.market
+    (false, false), // state.rent_credit
+    (false, false), // state.rent_program
+    (false, false), // state.realm.record.raw
+    (false, false), // state.realm.record.staging
+    (false, false), // state.product.raw
+    (false, false), // state.product.staging
+    (false, false), // state.result_domain.raw
+    (false, false), // state.result_domain.staging
+    (false, false), // state.portfolio.raw
+    (false, false), // state.portfolio.staging
+    (false, false), // state.linked_basis.raw
+    (false, false), // state.linked_basis.staging
+    (false, false), // state.source_material.record.raw
+    (false, false), // state.source_material.record.staging
+    (false, false), // state.source_spec.record.raw
+    (false, false), // state.source_spec.record.staging
+    (false, false), // state.capacity_profile.record.raw
+    (false, false), // state.capacity_profile.record.staging
+    (false, false), // state.manipulation_floor.record.raw
+    (false, false), // state.manipulation_floor.record.staging
+    (false, false), // state.capability_manifest.record.raw
+    (false, false), // state.capability_manifest.record.staging
+    (false, false), // state.activation_cache
+    (false, false), // state.core_program
+    (false, false), // state.core_programdata
+    (false, false), // state.registry_program
+    (false, false), // state.rent
+    (false, false), // state.system_program
+    (false, false), // state.infrastructure_profile
+    (false, false), // state.registry_artifact.raw
+    (false, false), // state.registry_artifact.staging
+    (false, false), // state.registry_programdata
+    (false, false), // state.rent_artifact.raw
+    (false, false), // state.rent_artifact.staging
+    (false, false), // state.rent_programdata
+    (false, false), // parents.reference.raw
+    (false, false), // parents.reference.staging
+    (false, false), // parents.a.market
+    (false, false), // parents.a.product.raw
+    (false, false), // parents.a.product.staging
+    (false, false), // parents.a.result_domain.raw
+    (false, false), // parents.a.result_domain.staging
+    (false, false), // parents.b.market
+    (false, false), // parents.b.product.raw
+    (false, false), // parents.b.product.staging
+    (false, false), // parents.b.result_domain.raw
+    (false, false), // parents.b.result_domain.staging
 ];
