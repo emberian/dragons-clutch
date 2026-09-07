@@ -64,6 +64,12 @@
         "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
       ]
     },
+    "0eeebae32": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "100000000": {
       "class": "magnitude",
       "cited_by": [
@@ -147,6 +153,12 @@
         "docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md"
       ]
     },
+    "411e913fb": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "445988f2b": {
       "class": "compost-commit",
       "cited_by": [
@@ -225,6 +237,12 @@
         "docs/evidence/DCLTGMF3_CALLER_BUMPS_2026_08_29.md"
       ]
     },
+    "5ad100d1e": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "5c478de1": {
       "class": "artifact-digest",
       "cited_by": [
@@ -297,6 +315,12 @@
         "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
       ]
     },
+    "9284f45c6": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "969e7736cc455f0e": {
       "class": "schema-digest",
       "cited_by": [
@@ -313,6 +337,12 @@
       "class": "release-set-id",
       "cited_by": [
         "docs/evidence/RELEASE_SET_COHORT_LINEAGE_2026_08_31.md"
+      ]
+    },
+    "98b45714b": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
       ]
     },
     "99bd5ede85374adc7fc5c835c2432ecf4e123fd1": {
@@ -381,6 +411,12 @@
         "docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md"
       ]
     },
+    "abf3719d2": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "ace5d24e9": {
       "class": "compost-commit",
       "cited_by": [
@@ -411,6 +447,12 @@
         "docs/evidence/BRANCH_ADJUDICATION_2026_08_31.md"
       ]
     },
+    "bb26f05f5": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "c0802e81246782cc320104fd2a3598316ea493c2": {
       "class": "artifact-digest",
       "cited_by": [
@@ -435,6 +477,12 @@
         "docs/evidence/ASPIRATION_LEDGER_2026_08_27.md"
       ]
     },
+    "c88ed58d3": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "cab90b3f": {
       "class": "artifact-digest",
       "cited_by": [
@@ -451,6 +499,18 @@
       "class": "release-set-id",
       "cited_by": [
         "docs/evidence/RELEASE_SET_COHORT_LINEAGE_2026_08_31.md"
+      ]
+    },
+    "d2789cb9e": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
+    "d2dad1d52": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
       ]
     },
     "d862d3fd": {
