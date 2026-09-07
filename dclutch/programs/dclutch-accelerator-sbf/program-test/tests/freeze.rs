@@ -19,7 +19,7 @@ use dclutch_accelerator_sbf::general::GeneralAcceleratorSbfErrorV3;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_trading::general::{
     account_rules_v3::general_account_profile_fixed_count_v3,
-    collection_v1::{GeneralBatchOpeningV1, GeneralBatchV1},
+    collection_v1::{GeneralBatchOpeningV1, GeneralBatchV2},
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
         general_hot_scalar_count_v3, identity, scalar,
@@ -161,7 +161,7 @@ fn batch_opening(outcome_count: u32, sequence: u64) -> GeneralBatchOpeningV1 {
 }
 
 /// One batch opened against one real root, closed the way selection requires.
-fn opened_batch(outcome_count: u32, sequence: u64) -> GeneralBatchV1 {
+fn opened_batch(outcome_count: u32, sequence: u64) -> GeneralBatchV2 {
     let mut root = GeneralRootV2::active(MARKET, hash(&config()).to_bytes(), CONFIG_GENERATION)
         .expect("active General root");
     for _ in 0..sequence {
@@ -170,7 +170,7 @@ fn opened_batch(outcome_count: u32, sequence: u64) -> GeneralBatchV1 {
             .expect("advance the root to the sequence under test");
     }
     let revision = root.revision();
-    GeneralBatchV1::open(
+    GeneralBatchV2::open(
         &mut root,
         batch_opening(outcome_count, sequence),
         revision,
@@ -676,7 +676,7 @@ async fn real_sbf_freeze_accepts_runtime_widths_one_and_258() {
 /// compare the clock against `collection_close + selectionSlots`. That account
 /// is caller-supplied, and a deadline read out of an account nobody bound is
 /// not a deadline: present any batch whose window has long elapsed and the
-/// conjunct passes on a stranger's clock. `GeneralBatchV1::batch_id` recomputes
+/// conjunct passes on a stranger's clock. `GeneralBatchV2::batch_id` recomputes
 /// the occurrence identity from the batch's own immutable opening, so the join
 /// against the cursor's `batch_id` is the one place a substitution can be
 /// caught.

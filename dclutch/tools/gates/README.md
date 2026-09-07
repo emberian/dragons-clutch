@@ -26,7 +26,13 @@ every first-party source: a refusal code outside its registered band or claimed
 twice; an eight-byte magic claimed by two names without an adjudicated entry in
 `tools/gauntlet/magic-collisions.json`; a schema identity that is not the
 SHA-256 of the label it documents; a program directory absent from the census
-target list. `observe` folds a campaign's chain evidence into the shared ledger
+target list; and an unclassified dispatch position — an entry guard that hands
+the wire to a named handler and states no discriminant the walk can read, which
+is a live route the register neither contains nor reports missing. That last one
+is the census measuring itself, and it is a ratchet at zero: the walk reads a
+guard call's BODY rather than its name, so a recogniser is one whether or not it
+is called `is_`-anything, and any shape it still cannot read is a refusal.
+`observe` folds a campaign's chain evidence into the shared ledger
 under its lock, refusing any claimed route the finalized logs do not show
 invoked. Writes `<work>/out/{inventory.json,CENSUS.md}` (default
 `/private/tmp/dclutch-gauntlet`, the gauntlet's own).

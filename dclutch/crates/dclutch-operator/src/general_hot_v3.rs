@@ -42,8 +42,8 @@ use dclutch_trading::general::{
         candidate_verifier_len_v1, candidate_verify_manifest_orders_v1, verify_candidate_row_v1,
     },
     collection_v1::{
-        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1, GeneralBatchV1,
-        GeneralOrderPhaseV1, GeneralOrderV1, GeneralSignedOrderTermsV1,
+        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1, GeneralBatchV2,
+        GeneralOrderPhaseV1, GeneralOrderV2, GeneralSignedOrderTermsV2,
     },
     effect_artifacts_v3::{
         GeneralChildFrameV3, general_effect_route_count_v3, general_effect_route_frame_v3,
@@ -1148,7 +1148,7 @@ fn derive_front_request_from_root_v5(
         Action::CloseBatch => {
             let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Batch)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
-            let batch = GeneralBatchV1::decode(body)
+            let batch = GeneralBatchV2::decode(body)
                 .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
             if batch.state().status != BatchStatusV1::Collecting {
@@ -1159,7 +1159,7 @@ fn derive_front_request_from_root_v5(
         Action::PlaceOrder => {
             let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Batch)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
-            let batch = GeneralBatchV1::decode(body)
+            let batch = GeneralBatchV2::decode(body)
                 .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
             if batch.state().status != BatchStatusV1::Collecting {
@@ -1170,7 +1170,7 @@ fn derive_front_request_from_root_v5(
                 action,
                 GeneralReadonlyEvidenceKindV3::OrderTerms,
             )?;
-            let terms = GeneralSignedOrderTermsV1::decode(&evidence.account.data)
+            let terms = GeneralSignedOrderTermsV2::decode(&evidence.account.data)
                 .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             let header = terms.header();
             if header.outcome_count != outcome_count
@@ -1185,12 +1185,12 @@ fn derive_front_request_from_root_v5(
         Action::CancelOrder => {
             let batch_body = primary_state_body_v5(state, GeneralLocalStateKindV3::Batch)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
-            let batch = GeneralBatchV1::decode(batch_body)
+            let batch = GeneralBatchV2::decode(batch_body)
                 .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
             let order_body = secondary_state_body_v5(state, GeneralLocalStateKindV3::Order)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
-            let order = GeneralOrderV1::decode(order_body)
+            let order = GeneralOrderV2::decode(order_body)
                 .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_order_v5(order, root, outcome_count, Some(batch.batch_id()))?;
             if batch.state().status != BatchStatusV1::Collecting
@@ -1203,7 +1203,7 @@ fn derive_front_request_from_root_v5(
         Action::ReleaseOrder => {
             let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Order)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
-            let order = GeneralOrderV1::decode(body)
+            let order = GeneralOrderV2::decode(body)
                 .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_order_v5(order, root, outcome_count, None)?;
             if order.state().phase != GeneralOrderPhaseV1::Placed {
@@ -1226,7 +1226,7 @@ fn derive_front_request_from_root_v5(
                 GeneralReadonlyEvidenceKindV3::ClosedBatch,
                 GeneralLocalStateKindV3::Batch,
             )?;
-            let batch = GeneralBatchV1::decode(batch_body)
+            let batch = GeneralBatchV2::decode(batch_body)
                 .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
             let payer =
@@ -1327,7 +1327,7 @@ fn derive_submit_request_from_root_v5(
         GeneralLocalStateKindV3::Batch,
     )?;
     let batch =
-        GeneralBatchV1::decode(batch_body).map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
+        GeneralBatchV2::decode(batch_body).map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
     authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
     let batch_opening = batch.opening();
     let settlement_duration = config
@@ -1449,7 +1449,7 @@ fn derive_verify_request_from_root_v5(
         GeneralLocalStateKindV3::Batch,
     )?;
     let batch =
-        GeneralBatchV1::decode(batch_body).map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
+        GeneralBatchV2::decode(batch_body).map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
     authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
     if batch.opening().product_id != product_record
         || opening.batch_id != batch.batch_id()
@@ -1567,7 +1567,7 @@ fn derive_verify_request_from_root_v5(
 }
 
 fn authenticate_operator_batch_v5(
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     root: GeneralRootV2,
     outcome_count: u32,
     config_id: [u8; 32],
@@ -1584,7 +1584,7 @@ fn authenticate_operator_batch_v5(
 }
 
 fn authenticate_operator_order_v5(
-    order: GeneralOrderV1<'_>,
+    order: GeneralOrderV2<'_>,
     root: GeneralRootV2,
     outcome_count: u32,
     expected_batch: Option<[u8; 32]>,
@@ -2637,7 +2637,7 @@ fn project_general_lifecycle_seed_identities_v5(
             } else {
                 let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Batch)?
                     .ok_or(GeneralHotOperatorErrorV3::Lifecycle)?;
-                GeneralBatchV1::decode(body)
+                GeneralBatchV2::decode(body)
                     .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?
                     .batch_id()
             };
@@ -3033,13 +3033,14 @@ mod tests {
         general_account_profile_rule_v3,
     };
     use dclutch_trading::general::collection_v1::{
-        GeneralBatchOpeningV1, GeneralOrderHeaderV1, GeneralOrderStateV1, MakerFundingV1,
-        general_order_len_v1, general_signed_order_terms_len_v1,
+        GeneralBatchOpeningV1, GeneralOrderHeaderV2, GeneralOrderStateV1, MakerFundingV1,
+        general_batch_len_v2, general_order_len_v2, general_signed_order_terms_len_v2,
     };
     use dclutch_trading::general::hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_scalar_count_v3,
     };
     use dclutch_trading::general::release_v3::GENERAL_ACTIONS_V3;
+    use dclutch_trading::general::runtime_verify::OrderSideV2;
     use dclutch_trading::general::runtime_width::{
         CandidateHeaderV2, CandidateV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2,
         SettlementCursorHeaderV2, SettlementPhaseV2, VerifiedCandidateHeaderV2, candidate_len,
@@ -3469,6 +3470,17 @@ mod tests {
         .expect("General config")
     }
 
+    /// The whole `296 + 16N` batch record.
+    ///
+    /// `to_bytes()` is the 224-byte V1 prefix the OpenBatch and CloseBatch
+    /// effects write; the envelope wraps the whole account.
+    fn batch_record(batch: GeneralBatchV2) -> Vec<u8> {
+        let mut bytes =
+            vec![0_u8; general_batch_len_v2(batch.opening().outcome_count).expect("batch width")];
+        batch.encode_into(&mut bytes).expect("batch record");
+        bytes
+    }
+
     fn front_local_state(kind: GeneralLocalStateKindV3, body: &[u8]) -> Vec<u8> {
         let width = general_local_state_len_v3(kind, 1).expect("local-state width");
         let mut scratch = vec![0_u8; width];
@@ -3527,12 +3539,12 @@ mod tests {
         }
     }
 
-    fn front_records() -> (GeneralRootV2, GeneralBatchV1, Vec<u8>, Vec<u8>) {
+    fn front_records() -> (GeneralRootV2, GeneralBatchV2, Vec<u8>, Vec<u8>) {
         let market = [0x41; 32];
         let config_id = [0x42; 32];
         let mut root = GeneralRootV2::active(market, config_id, 7).expect("active root");
         let expected_revision = root.revision();
-        let batch = GeneralBatchV1::open(
+        let batch = GeneralBatchV2::open(
             &mut root,
             GeneralBatchOpeningV1 {
                 outcome_count: 1,
@@ -3550,9 +3562,9 @@ mod tests {
             10,
         )
         .expect("open batch");
-        let mut order_bytes = vec![0_u8; general_order_len_v1(1).expect("order width")];
-        GeneralOrderV1::encode_rows_into(
-            GeneralOrderHeaderV1 {
+        let mut order_bytes = vec![0_u8; general_order_len_v2(1).expect("order width")];
+        GeneralOrderV2::encode_rows_into(
+            GeneralOrderHeaderV2 {
                 outcome_count: 1,
                 nonce: 9,
                 owner_id: [0x44; 32],
@@ -3563,19 +3575,23 @@ mod tests {
                 max_quote_debit_per_lot: 3,
                 min_quote_credit_per_lot: 0,
                 valid_until_slot: 100,
+                side: OrderSideV2::Buy,
+                outcome_lo: 0,
+                outcome_hi: 0,
+                claims_per_lot: 1,
             },
             GeneralOrderStateV1 {
                 phase: GeneralOrderPhaseV1::Placed,
                 admitted_slot: 10,
                 released_slot: 0,
             },
-            |_| Ok((1, 2)),
+            |_| Ok((1, 0)),
             &mut order_bytes,
         )
         .expect("canonical order");
-        let order = GeneralOrderV1::decode(&order_bytes).expect("order");
+        let order = GeneralOrderV2::decode(&order_bytes).expect("order");
         let mut signed_terms =
-            vec![0_u8; general_signed_order_terms_len_v1(1).expect("signed width")];
+            vec![0_u8; general_signed_order_terms_len_v2(1).expect("signed width")];
         order
             .encode_signed_terms_into(&mut signed_terms)
             .expect("signed terms");
@@ -3584,7 +3600,7 @@ mod tests {
 
     struct VerifyRequestFixture {
         root: GeneralRootV2,
-        batch: GeneralBatchV1,
+        batch: GeneralBatchV2,
         orders: Vec<Vec<u8>>,
         candidate: Vec<u8>,
         page: Vec<u8>,
@@ -3604,7 +3620,7 @@ mod tests {
         let product_id = identity(3);
         let mut root = GeneralRootV2::active(market, config_id, 7).expect("active root");
         let revision = root.revision();
-        let mut batch = GeneralBatchV1::open(
+        let mut batch = GeneralBatchV2::open(
             &mut root,
             GeneralBatchOpeningV1 {
                 outcome_count: WIDTH,
@@ -3622,23 +3638,39 @@ mod tests {
             10,
         )
         .expect("open batch");
-        let mut place = |owner: u8, nonce: u64, receive: &[u64], deliver: &[u64]| {
-            let mut bytes = vec![0_u8; general_order_len_v1(WIDTH).expect("order width")];
-            GeneralOrderV1::encode_into(
-                GeneralOrderHeaderV1 {
-                    outcome_count: WIDTH,
-                    nonce,
-                    owner_id: identity(owner),
-                    market,
-                    batch_id: batch.batch_id(),
-                    generation: 7,
-                    max_lots: 10,
-                    max_quote_debit_per_lot: 5,
-                    min_quote_credit_per_lot: 0,
-                    valid_until_slot: 2_000,
-                },
-                receive,
-                deliver,
+        // Cohort-18 admits a SINGLE-OUTCOME order, and its rows are derived
+        // from the shape rather than authored beside it, so the closure names
+        // a side and an outcome and reads the rows back off the header.
+        let mut place = |owner: u8, nonce: u64, side: OrderSideV2, outcome: u32| {
+            let mut bytes = vec![0_u8; general_order_len_v2(WIDTH).expect("order width")];
+            let header = GeneralOrderHeaderV2 {
+                outcome_count: WIDTH,
+                nonce,
+                owner_id: identity(owner),
+                market,
+                batch_id: batch.batch_id(),
+                generation: 7,
+                // The row below fills FOUR lots, and the marginal conjunct
+                // refuses an order left short of its maximum while the price
+                // is strictly inside its limit, so four is the maximum.
+                max_lots: 4,
+                max_quote_debit_per_lot: 5,
+                min_quote_credit_per_lot: 0,
+                valid_until_slot: 2_000,
+                side,
+                outcome_lo: outcome,
+                outcome_hi: outcome,
+                claims_per_lot: 1,
+            };
+            let rows = (0..WIDTH)
+                .map(|index| header.derived_row(index))
+                .collect::<Vec<_>>();
+            let receive = rows.iter().map(|row| row.0).collect::<Vec<_>>();
+            let deliver = rows.iter().map(|row| row.1).collect::<Vec<_>>();
+            GeneralOrderV2::encode_into(
+                header,
+                &receive,
+                &deliver,
                 GeneralOrderStateV1 {
                     phase: GeneralOrderPhaseV1::Placed,
                     admitted_slot: 10,
@@ -3647,7 +3679,7 @@ mod tests {
                 &mut bytes,
             )
             .expect("order record");
-            let order = GeneralOrderV1::decode(&bytes).expect("order");
+            let order = GeneralOrderV2::decode(&bytes).expect("order");
             let claims = (0..WIDTH)
                 .map(|index| order.claim_reserve(index).expect("claim reserve"))
                 .collect::<Vec<_>>();
@@ -3664,8 +3696,8 @@ mod tests {
                 .expect("escrow order");
             bytes
         };
-        let first = place(9, 1, &[1, 0, 0], &[0, 1, 0]);
-        let second = place(8, 2, &[0, 1, 0], &[1, 0, 0]);
+        let first = place(9, 1, OrderSideV2::Buy, 0);
+        let second = place(8, 2, OrderSideV2::Sell, 0);
         let revision = root.revision();
         batch.close(&mut root, revision).expect("close batch");
 
@@ -3678,8 +3710,9 @@ mod tests {
             candidate_id: identity(0xff),
             product_id,
             batch_id: batch.batch_id(),
+            live_order_count: batch.live_order_count(),
         };
-        CandidateV2::encode_into(candidate_header, &[40, 60, 0], &mut candidate)
+        CandidateV2::encode_into(candidate_header, &[0, 0, 100], &mut candidate)
             .expect("draft candidate");
         let candidate_id = general_candidate_identity_v1(&candidate).expect("candidate identity");
         CandidateV2::encode_into(
@@ -3687,15 +3720,15 @@ mod tests {
                 candidate_id,
                 ..candidate_header
             },
-            &[40, 60, 0],
+            &[0, 0, 100],
             &mut candidate,
         )
         .expect("addressed candidate");
 
         let mut orders = vec![first, second];
         orders.sort_by(|left, right| {
-            let left = GeneralOrderV1::decode(left).expect("left order").order_id();
-            let right = GeneralOrderV1::decode(right)
+            let left = GeneralOrderV2::decode(left).expect("left order").order_id();
+            let right = GeneralOrderV2::decode(right)
                 .expect("right order")
                 .order_id();
             if left == right {
@@ -3712,7 +3745,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, bytes)| {
-                let order = GeneralOrderV1::decode(bytes).expect("order");
+                let order = GeneralOrderV2::decode(bytes).expect("order");
                 let header = order.header();
                 let receive = (0..WIDTH)
                     .map(|outcome| order.receive_per_lot(outcome).expect("receive"))
@@ -3883,7 +3916,7 @@ mod tests {
                 verify_local_state(
                     GeneralLocalStateKindV3::Batch,
                     WIDTH,
-                    &fixture.batch.to_bytes(),
+                    &batch_record(fixture.batch),
                 ),
             ),
             observed(0x86, fixture.candidate.clone()),
@@ -3962,7 +3995,7 @@ mod tests {
                 verify_local_state(
                     GeneralLocalStateKindV3::Batch,
                     WIDTH,
-                    &fixture.batch.to_bytes(),
+                    &batch_record(fixture.batch),
                 ),
             ),
             observed(key(0x84), fixture.candidate.clone()),
@@ -4056,14 +4089,14 @@ mod tests {
     fn front_requests_are_chain_derived_v3_wires_for_every_executable_action() {
         let (root, batch, order_bytes, signed_terms) = front_records();
         let config_id = root.config_id();
-        let order_id = GeneralOrderV1::decode(&order_bytes)
+        let order_id = GeneralOrderV2::decode(&order_bytes)
             .expect("order")
             .order_id();
         let cases = [
             (
                 Action::CloseBatch,
                 front_state(
-                    front_local_state(GeneralLocalStateKindV3::Batch, &batch.to_bytes()),
+                    front_local_state(GeneralLocalStateKindV3::Batch, &batch_record(batch)),
                     None,
                     None,
                 ),
@@ -4073,7 +4106,7 @@ mod tests {
             (
                 Action::PlaceOrder,
                 front_state(
-                    front_local_state(GeneralLocalStateKindV3::Batch, &batch.to_bytes()),
+                    front_local_state(GeneralLocalStateKindV3::Batch, &batch_record(batch)),
                     None,
                     Some(signed_terms),
                 ),
@@ -4083,7 +4116,7 @@ mod tests {
             (
                 Action::CancelOrder,
                 front_state(
-                    front_local_state(GeneralLocalStateKindV3::Batch, &batch.to_bytes()),
+                    front_local_state(GeneralLocalStateKindV3::Batch, &batch_record(batch)),
                     Some(front_local_state(
                         GeneralLocalStateKindV3::Order,
                         &order_bytes,
@@ -4156,7 +4189,11 @@ mod tests {
             observed(solver, Vec::new()),
             observed(
                 key(0x83),
-                verify_local_state(GeneralLocalStateKindV3::Batch, 3, &fixture.batch.to_bytes()),
+                verify_local_state(
+                    GeneralLocalStateKindV3::Batch,
+                    3,
+                    &batch_record(fixture.batch),
+                ),
             ),
         ];
         runtime_suffix_accounts[0].is_writable = true;
@@ -4224,9 +4261,9 @@ mod tests {
     #[test]
     fn front_request_derivation_refuses_cross_batch_signed_terms() {
         let (root, batch, _, _) = front_records();
-        let mut hostile_order = vec![0_u8; general_order_len_v1(1).expect("order width")];
-        GeneralOrderV1::encode_rows_into(
-            GeneralOrderHeaderV1 {
+        let mut hostile_order = vec![0_u8; general_order_len_v2(1).expect("order width")];
+        GeneralOrderV2::encode_rows_into(
+            GeneralOrderHeaderV2 {
                 outcome_count: 1,
                 nonce: 10,
                 owner_id: [0x44; 32],
@@ -4237,24 +4274,28 @@ mod tests {
                 max_quote_debit_per_lot: 3,
                 min_quote_credit_per_lot: 0,
                 valid_until_slot: 100,
+                side: OrderSideV2::Buy,
+                outcome_lo: 0,
+                outcome_hi: 0,
+                claims_per_lot: 1,
             },
             GeneralOrderStateV1 {
                 phase: GeneralOrderPhaseV1::Placed,
                 admitted_slot: 10,
                 released_slot: 0,
             },
-            |_| Ok((1, 2)),
+            |_| Ok((1, 0)),
             &mut hostile_order,
         )
         .expect("hostile canonical order");
-        let hostile = GeneralOrderV1::decode(&hostile_order).expect("hostile order");
+        let hostile = GeneralOrderV2::decode(&hostile_order).expect("hostile order");
         let mut signed_terms =
-            vec![0_u8; general_signed_order_terms_len_v1(1).expect("signed width")];
+            vec![0_u8; general_signed_order_terms_len_v2(1).expect("signed width")];
         hostile
             .encode_signed_terms_into(&mut signed_terms)
             .expect("hostile signed terms");
         let state = front_state(
-            front_local_state(GeneralLocalStateKindV3::Batch, &batch.to_bytes()),
+            front_local_state(GeneralLocalStateKindV3::Batch, &batch_record(batch)),
             None,
             Some(signed_terms),
         );
@@ -4470,6 +4511,10 @@ mod tests {
 
     fn verified_candidate(width: u32) -> Vec<u8> {
         let mut output = vec![0; verified_candidate_len(width).expect("verified width")];
+        // The certificate carries its own price vector, on the simplex of its
+        // own scale: this one prices outcome zero at the whole scale of 1.
+        let mut prices = vec![0_u64; usize::try_from(width).expect("width")];
+        prices[0] = 1;
         VerifiedCandidateV2::encode_into(
             VerifiedCandidateHeaderV2 {
                 outcome_count: width,
@@ -4484,6 +4529,7 @@ mod tests {
                 quote_credit: 0,
                 price_scale: 1,
             },
+            &prices,
             &vec![3; usize::try_from(width).expect("width")],
             &vec![3; usize::try_from(width).expect("width")],
             &mut output,

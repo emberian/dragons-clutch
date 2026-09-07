@@ -1169,6 +1169,13 @@ struct DispatchWalk<'a> {
     routes: Vec<Route>,
     unclassified: Vec<Unclassified>,
     visited: BTreeSet<String>,
+    /// How many ENTRY-level dispatch forwards have been declined for want of a
+    /// discriminant. The census's own blind-spot counter: a guarded region that
+    /// hands the wire to a named handler, under a condition this walk read no
+    /// wire bytes out of, is a route the register does not contain and does not
+    /// say it is missing. Only `depth == 0` increments it, so a handler's own
+    /// internal calls -- followed at `depth + 1` -- cannot be mistaken for one.
+    declined_entries: usize,
 }
 
 impl DispatchWalk<'_> {
@@ -1255,6 +1262,7 @@ impl DispatchWalk<'_> {
                 let mut selectors = inherited.to_vec();
                 selectors.extend(self.selectors_from(&branch.cond));
                 let before = self.routes.len();
+                let declined_before = self.declined_entries;
                 self.walk_block(
                     &branch.then_branch,
                     relative,
@@ -1264,6 +1272,27 @@ impl DispatchWalk<'_> {
                     &selectors,
                     &branch_cfg,
                 );
+                // THE BLIND SPOT, said out loud. A guard at the entry that
+                // forwards the wire to a named handler, and out of which this
+                // walk read no discriminant, is a live route the register does
+                // not contain. Until 2026-09-07 it was dropped in silence --
+                // `push_route` declined it and the denominator simply did not
+                // move -- so `custody/upkeep_vault_v1::process` and
+                // `custody/protocol_parameters_v1::process` were absent from a
+                // register that looked complete, and the only way anyone found
+                // out was planting a blocking entry and watching the census
+                // call it stale. A census that cannot enumerate its own blind
+                // spot is the defect; this is the enumeration.
+                if depth == 0 && self.declined_entries > declined_before {
+                    self.report(
+                        context,
+                        &branch.cond,
+                        relative,
+                        "entry dispatch guard forwards to a handler and states no wire \
+                         discriminant this census can read; the route behind it is NOT \
+                         enumerated. Teach `scan_condition` this shape",
+                    );
+                }
                 // A guarded region that names no handler is still a route: the
                 // guard is a wire discriminant and the body is the route body.
                 // Dropping it would make an inline-handled instruction shape
@@ -1555,6 +1584,9 @@ impl DispatchWalk<'_> {
         // public route. It is followed but not counted, so the census
         // denominator stays the set of things a client can actually select.
         if !selects_a_route(selectors, depth) {
+            if depth == 0 {
+                self.declined_entries += 1;
+            }
             return parent.map_or(base, str::to_owned);
         }
 
@@ -1707,11 +1739,28 @@ impl DispatchWalk<'_> {
                 if let Expr::Path(path) = call.func.as_ref() {
                     let target = render_path(&path.path);
                     let name = target.rsplit("::").next().unwrap_or(&target);
-                    if name.starts_with("is_") {
+                    // A guard call is a wire recogniser when its NAME says so
+                    // (`is_*`) or when its BODY does -- it states a magic or a
+                    // width. The name alone was the rule until 2026-09-07, and
+                    // Custody's `upkeep_vault_v1::selects` and
+                    // `protocol_parameters_v1::selects` are the two live wires
+                    // it could not see: both state an exact width and an
+                    // eight-byte magic, both forward to a named handler, and
+                    // neither is called `is_`-anything. Reading the body is the
+                    // criterion the wire actually has; the name is a habit.
+                    let stated = self.recogniser_constants(&target);
+                    if name.starts_with("is_") || !stated.is_empty() {
                         out.push(Selector::Predicate {
                             function: target.clone(),
                         });
-                        self.scan_predicate_body(&target, out);
+                        for selector in stated {
+                            if !out
+                                .iter()
+                                .any(|existing| existing.render() == selector.render())
+                            {
+                                out.push(selector);
+                            }
+                        }
                     }
                 }
                 for argument in &call.args {
@@ -1740,7 +1789,11 @@ impl DispatchWalk<'_> {
         }
     }
 
-    /// Read the wire discriminant OUT of an `is_*` guard, one hop deep.
+    /// The wire constants a guard's recogniser states, one hop deep.
+    ///
+    /// Empty when the call resolves to nothing, or to a body that names no
+    /// magic and no width -- which is also the test [`Self::scan_condition`]
+    /// uses to decide whether a guard call is a recogniser at all.
     ///
     /// A predicate is a real selector and naming it was right, but naming it
     /// was ALL the census did, so a route selected by one carried no bytes at
@@ -1771,7 +1824,7 @@ impl DispatchWalk<'_> {
     /// resolved to no route. The hop is taken only when the predicate's own
     /// body yielded nothing, and the callee's body is read the same way -- the
     /// constants only.
-    fn scan_predicate_body(&self, target: &str, out: &mut Vec<Selector>) {
+    fn recogniser_constants(&self, target: &str) -> Vec<Selector> {
         // A crate-qualified call names a CRATE, and a crate root's module path
         // is empty, so `resolve` cannot match `dclutch_x_contract` against it.
         // The bare name is the fallback and it is still cautious: `resolve`
@@ -1781,7 +1834,7 @@ impl DispatchWalk<'_> {
             self.predicates.resolve(name)
         });
         let Some(function) = resolved else {
-            return;
+            return Vec::new();
         };
         let mut found = Vec::new();
         self.scan_function_body(function, &mut found);
@@ -1793,17 +1846,19 @@ impl DispatchWalk<'_> {
         {
             self.scan_function_body(body, &mut found);
         }
+        let mut stated: Vec<Selector> = Vec::new();
         for selector in found {
             if !matches!(selector, Selector::Magic { .. } | Selector::Length { .. }) {
                 continue;
             }
-            if !out
+            if !stated
                 .iter()
                 .any(|existing| existing.render() == selector.render())
             {
-                out.push(selector);
+                stated.push(selector);
             }
         }
+        stated
     }
 
     /// Scan one function body's statements for wire discriminants.
@@ -2175,6 +2230,7 @@ pub fn enumerate(
             routes: Vec::new(),
             unclassified: Vec::new(),
             visited: BTreeSet::new(),
+            declined_entries: 0,
         };
 
         // The entrypoint does not have to live in `lib.rs`. `9abed0c` moved
@@ -2539,6 +2595,7 @@ mod predicate_body_tests {
             routes: Vec::new(),
             unclassified: Vec::new(),
             visited: BTreeSet::new(),
+            declined_entries: 0,
         };
         let condition: syn::Expr = syn::parse_str(guard).expect("guard parses");
         walk.selectors_from(&condition)
@@ -2696,6 +2753,7 @@ mod local_initialiser_tests {
             routes: Vec::new(),
             unclassified: Vec::new(),
             visited: BTreeSet::new(),
+            declined_entries: 0,
         };
         walk.walk_block(
             &block,
@@ -2989,5 +3047,196 @@ mod resolution_tests {
         );
         assert_eq!(index.field_type("StateV2", "inner"), Some("Inner"));
         assert_eq!(index.field_type("StateV2", "absent"), None);
+    }
+}
+
+/// The census's own blind spot, made enumerable.
+///
+/// Every test here is about ONE question: what happens when a program selects a
+/// route with a guard shape this walk has never been taught? Until 2026-09-07
+/// the answer was "nothing" -- `push_route` declined the forward, the route
+/// count did not move, and the register looked complete. Two live Custody
+/// wires sat outside it for as long as they existed, and the only instrument
+/// that ever noticed was a HUMAN planting a blocking entry for a route id they
+/// had guessed and watching the report call it stale.
+///
+/// So the shape rule is now the guard's CONTENT, not its name, and a guard
+/// whose content this walk cannot read is REPORTED rather than dropped. These
+/// tests pin both halves, and the third one is the one that matters: it feeds
+/// the walk a shape deliberately outside every rule it knows and requires it to
+/// say so.
+#[cfg(test)]
+mod dispatch_shape_tests {
+    use super::{ConstantIndex, CrateIndex, DispatchWalk, Selector, index_source};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    struct Walked {
+        routes: Vec<String>,
+        selectors: Vec<String>,
+        reported: Vec<String>,
+    }
+
+    /// Walk one entry function, with `helpers` as the resolvable first-party
+    /// namespace a guard call can be read out of.
+    fn walk(entry: &str, helpers: &str) -> Walked {
+        let constants = ConstantIndex {
+            facts: BTreeMap::new(),
+            crates: BTreeSet::new(),
+        };
+        let index = index_source("", entry);
+        let helper_index = index_source("selecting", helpers);
+        let mut walk = DispatchWalk {
+            label: "example",
+            index: &index,
+            predicates: &helper_index,
+            constants: &constants,
+            routes: Vec::new(),
+            unclassified: Vec::new(),
+            visited: BTreeSet::new(),
+            declined_entries: 0,
+        };
+        let entry_function = index
+            .resolve("process_instruction")
+            .expect("the entry function is indexed")
+            .clone();
+        walk.walk_function(&entry_function, 0, None, &[], &[]);
+        Walked {
+            routes: walk.routes.iter().map(|route| route.id.clone()).collect(),
+            selectors: walk
+                .routes
+                .iter()
+                .flat_map(|route| &route.selectors)
+                .map(Selector::render)
+                .collect(),
+            reported: walk
+                .unclassified
+                .iter()
+                .map(|entry| entry.reason.clone())
+                .collect(),
+        }
+    }
+
+    /// Custody's shape, verbatim in structure: a recogniser called `selects`.
+    const SELECTS_ENTRY: &str = r#"
+        pub fn process_instruction(program_id: &Pubkey, accounts: &[AccountInfo], instruction_data: &[u8]) -> ProgramResult {
+            if upkeep_vault_v1::selects(instruction_data) {
+                return upkeep_vault_v1::process(program_id, accounts, instruction_data);
+            }
+            Err(Error::Instruction.into())
+        }
+    "#;
+
+    const SELECTS_HELPER: &str = r#"
+        pub fn selects(instruction_data: &[u8]) -> bool {
+            instruction_data.len() == UPKEEP_VAULT_REQUEST_BYTES_V1
+                && instruction_data.get(..UPKEEP_VAULT_REQUEST_MAGIC_V1.len())
+                    == Some(UPKEEP_VAULT_REQUEST_MAGIC_V1.as_slice())
+        }
+    "#;
+
+    /// THE DEFECT this module exists for.
+    ///
+    /// `upkeep_vault_v1::selects` and `protocol_parameters_v1::selects` state
+    /// an exact width and an eight-byte magic and forward to a named handler,
+    /// and the census enumerated neither, because the recogniser rule was the
+    /// call's NAME. Both routes are live wires of a deployed program.
+    #[test]
+    fn a_recogniser_the_census_can_read_names_its_route_whatever_it_is_called() {
+        let walked = walk(SELECTS_ENTRY, SELECTS_HELPER);
+        assert_eq!(walked.routes, vec!["example/upkeep_vault_v1::process"]);
+        assert!(
+            walked.reported.is_empty(),
+            "a shape the walk can read is not a blind spot: {:?}",
+            walked.reported
+        );
+        assert!(
+            walked
+                .selectors
+                .iter()
+                .any(|rendered| rendered.contains("UPKEEP_VAULT_REQUEST_MAGIC_V1")),
+            "the route carries the magic its recogniser states: {:?}",
+            walked.selectors
+        );
+        assert!(
+            walked
+                .selectors
+                .iter()
+                .any(|rendered| rendered.contains("UPKEEP_VAULT_REQUEST_BYTES_V1")),
+            "the route carries the width its recogniser states: {:?}",
+            walked.selectors
+        );
+    }
+
+    /// THE SELF-TEST: a shape outside every rule the walk knows.
+    ///
+    /// `dispatch_table_hit` is a guard call whose body this walk cannot read --
+    /// it is not called `is_`-anything and it states no magic and no width, so
+    /// neither the name rule nor the content rule fires. The route behind it is
+    /// therefore NOT enumerated, which is exactly the condition that has to be
+    /// impossible to hold quietly. If a future dispatch shape lands and this
+    /// test still passes while the tree's own census reports zero unclassified
+    /// positions, the census has gone blind again.
+    #[test]
+    fn an_entry_guard_this_census_cannot_read_is_reported_instead_of_dropped() {
+        let walked = walk(
+            r#"
+                pub fn process_instruction(program_id: &Pubkey, accounts: &[AccountInfo], instruction_data: &[u8]) -> ProgramResult {
+                    if dispatch_table_hit(instruction_data) {
+                        return novel_family_v1::process(program_id, accounts, instruction_data);
+                    }
+                    Err(Error::Instruction.into())
+                }
+            "#,
+            r#"
+                pub fn dispatch_table_hit(instruction_data: &[u8]) -> bool {
+                    TABLE.iter().any(|row| row.matches(instruction_data))
+                }
+            "#,
+        );
+        assert!(
+            walked.routes.is_empty(),
+            "the shape is genuinely unreadable, so no route can be claimed: {:?}",
+            walked.routes
+        );
+        assert_eq!(
+            walked.reported.len(),
+            1,
+            "one unreadable entry guard, one report: {:?}",
+            walked.reported
+        );
+        assert!(
+            walked.reported[0].contains("states no wire discriminant"),
+            "the report says what is wrong and what to do: {}",
+            walked.reported[0]
+        );
+    }
+
+    /// The other half of the ratchet: it must not cry wolf.
+    ///
+    /// A guard that REFUSES is not a dispatch decision, and an unguarded call
+    /// is the handler's continuation rather than a public route. Both decline a
+    /// route today and both are correct to; neither is a blind spot, and a
+    /// detector that reported them would be turned off within a week.
+    #[test]
+    fn a_refusing_guard_and_an_unguarded_continuation_are_not_blind_spots() {
+        let walked = walk(
+            r#"
+                pub fn process_instruction(program_id: &Pubkey, accounts: &[AccountInfo], instruction_data: &[u8]) -> ProgramResult {
+                    if accounts.len() < REQUIRED_ACCOUNTS {
+                        return Err(Error::AccountFrame.into());
+                    }
+                    if !accounts[0].is_writable {
+                        return Err(Error::AccountFrame.into());
+                    }
+                    process_remaining_instruction(program_id, accounts, instruction_data)
+                }
+            "#,
+            "",
+        );
+        assert!(
+            walked.reported.is_empty(),
+            "neither shape hides a route, so neither is reported: {:?}",
+            walked.reported
+        );
     }
 }

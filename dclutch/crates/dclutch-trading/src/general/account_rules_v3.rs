@@ -53,9 +53,9 @@ use crate::general::{
     artifacts_v3::GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3,
     candidate_v1::{GENERAL_CANDIDATE_BYTES_V1, GeneralCandidateLayoutV1},
     collection_v1::{
-        GENERAL_BATCH_BYTES_V1, GENERAL_ORDER_HEADER_BYTES_V1, GENERAL_ORDER_ROW_BASE_V1,
-        GENERAL_ORDER_ROW_DELIVER_OFFSET_V1, GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
-        GENERAL_ORDER_ROW_STRIDE_V1, GeneralBatchLayoutV1, GeneralOrderLayoutV1,
+        GENERAL_BATCH_BYTES_V1, GENERAL_ORDER_HEADER_BYTES_V2, GENERAL_ORDER_ROW_BASE_V2,
+        GENERAL_ORDER_ROW_DELIVER_OFFSET_V2, GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2,
+        GENERAL_ORDER_ROW_STRIDE_V2, GeneralBatchLayoutV2, GeneralOrderLayoutV2,
     },
     effect_artifacts_v3::{
         GeneralChildFrameV3, general_custody_callee_account_count_v3,
@@ -572,7 +572,7 @@ pub fn general_account_profile_operation_v3(
         5 if action == Action::Freeze => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: evidence_account(action, 0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
             destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT)?,
         }),
         6 if action == Action::Freeze => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
@@ -678,7 +678,7 @@ pub fn general_account_profile_operation_v3(
         13 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: close_candidate_batch_account()?,
             destination: common_scalar(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::SETTLEMENT_CLOSE_SLOT)?,
         }),
         14 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
@@ -691,7 +691,7 @@ pub fn general_account_profile_operation_v3(
         16 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: close_candidate_batch_account()?,
             destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::STATUS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::STATUS)?,
         }),
         17 if action == Action::CloseCandidate => Ok(AccountOperationInputV2::RequireOwner {
             account: primary,
@@ -708,22 +708,22 @@ pub fn general_account_profile_operation_v3(
         5 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
             destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::STATUS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::STATUS)?,
         }),
         6 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
             destination: common_scalar(scalar::BATCH_POST_ORDER_COUNT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::OUTCOME_COUNT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::OUTCOME_COUNT)?,
         }),
         7 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
             destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT)?,
         }),
         8 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
             destination: common_scalar(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::SETTLEMENT_CLOSE_SLOT)?,
         }),
         9 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectKey {
             account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
@@ -753,7 +753,7 @@ pub fn general_account_profile_operation_v3(
         11 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
             destination: common_scalar(scalar::ORDER_MAX_LOTS)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::PRICE_SCALE)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::PRICE_SCALE)?,
         }),
         12 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
@@ -945,7 +945,7 @@ pub fn general_account_profile_operation_v3(
                 Ok(AccountOperationInputV2::ProjectDataU32 {
                     account: primary,
                     destination: common_scalar(scalar::ZERO)?,
-                    data_offset: batch_body_offset(GeneralBatchLayoutV1::OUTCOME_COUNT)?,
+                    data_offset: batch_body_offset(GeneralBatchLayoutV2::OUTCOME_COUNT)?,
                 })
             }
         }
@@ -1045,82 +1045,82 @@ pub fn general_account_profile_operation_v3(
         7 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
-            data_offset: width(GeneralOrderLayoutV1::OWNER_ID)?,
+            data_offset: width(GeneralOrderLayoutV2::OWNER_ID)?,
         }),
         8 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::ZERO)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::OUTCOME_COUNT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::OUTCOME_COUNT)?,
         }),
         9 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: primary,
             destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::STATUS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::STATUS)?,
         }),
         10 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT)?,
         }),
         11 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::SETTLEMENT_CLOSE_SLOT)?,
         }),
         12 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::CONFIG_MAX_ORDERS)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::MAX_ORDERS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::MAX_ORDERS)?,
         }),
         13 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::ORDER_COUNT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::ORDER_COUNT)?,
         }),
         14 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::COMMITTED_QUOTE_RESERVE)?,
         }),
         15 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::SCRATCH_A)?,
-            data_offset: width(GeneralOrderLayoutV1::OUTCOME_COUNT)?,
+            data_offset: width(GeneralOrderLayoutV2::OUTCOME_COUNT)?,
         }),
         16 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_NONCE)?,
-            data_offset: width(GeneralOrderLayoutV1::NONCE)?,
+            data_offset: width(GeneralOrderLayoutV2::NONCE)?,
         }),
         17 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_MAX_LOTS)?,
-            data_offset: width(GeneralOrderLayoutV1::MAX_LOTS)?,
+            data_offset: width(GeneralOrderLayoutV2::MAX_LOTS)?,
         }),
         18 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?,
-            data_offset: width(GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT)?,
+            data_offset: width(GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT)?,
         }),
         19 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_VALID_UNTIL_SLOT)?,
-            data_offset: width(GeneralOrderLayoutV1::VALID_UNTIL_SLOT)?,
+            data_offset: width(GeneralOrderLayoutV2::VALID_UNTIL_SLOT)?,
         }),
         20 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::OWNER)?,
-            data_offset: width(GeneralOrderLayoutV1::OWNER_ID)?,
+            data_offset: width(GeneralOrderLayoutV2::OWNER_ID)?,
         }),
         21 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::SELECTION_BATCH)?,
-            data_offset: width(GeneralOrderLayoutV1::BATCH_ID)?,
+            data_offset: width(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
         22 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::CANDIDATE)?,
-            data_offset: width(GeneralOrderLayoutV1::BATCH_ID)?,
+            data_offset: width(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
         23 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
@@ -1159,9 +1159,9 @@ pub fn general_account_profile_operation_v3(
                 account: order_terms_account(action)?,
                 destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::CURSOR_INVENTORY)?),
                 data_offset: width(
-                    GENERAL_ORDER_HEADER_BYTES_V1 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
+                    GENERAL_ORDER_HEADER_BYTES_V2 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2,
                 )?,
-                data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
+                data_stride: width(GENERAL_ORDER_ROW_STRIDE_V2)?,
             })
         }
         second_item
@@ -1174,9 +1174,9 @@ pub fn general_account_profile_operation_v3(
                 account: order_terms_account(action)?,
                 destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::QUANTITY)?),
                 data_offset: width(
-                    GENERAL_ORDER_HEADER_BYTES_V1 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
+                    GENERAL_ORDER_HEADER_BYTES_V2 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V2,
                 )?,
-                data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
+                data_stride: width(GENERAL_ORDER_ROW_STRIDE_V2)?,
             })
         }
         // CancelOrder's projections. The second derived state (the order, at
@@ -1206,67 +1206,67 @@ pub fn general_account_profile_operation_v3(
         8 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::ZERO)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::OUTCOME_COUNT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::OUTCOME_COUNT)?,
         }),
         9 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: primary,
             destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::STATUS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::STATUS)?,
         }),
         10 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT)?,
         }),
         11 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::ORDER_COUNT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::ORDER_COUNT)?,
         }),
         12 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::BATCH_CANCELLED_COUNT_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::CANCELLED_COUNT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::CANCELLED_COUNT)?,
         }),
         13 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::COMMITTED_QUOTE_RESERVE)?,
         }),
         14 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: terminal,
             destination: common_scalar(scalar::SCRATCH_A)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::OUTCOME_COUNT)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::OUTCOME_COUNT)?,
         }),
         15 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: terminal,
             destination: common_scalar(scalar::ORDER_PHASE_OBSERVATION)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::STATE_PHASE)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::STATE_PHASE)?,
         }),
         16 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: terminal,
             destination: common_scalar(scalar::ORDER_ADMITTED_SLOT_OBSERVATION)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::STATE_ADMITTED_SLOT)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::STATE_ADMITTED_SLOT)?,
         }),
         17 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: terminal,
             destination: common_scalar(scalar::ORDER_MAX_LOTS)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::MAX_LOTS)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::MAX_LOTS)?,
         }),
         18 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: terminal,
             destination: common_scalar(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT)?,
         }),
         19 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: terminal,
             destination: common_scalar(scalar::ORDER_NONCE)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::NONCE)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::NONCE)?,
         }),
         20 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: terminal,
             destination: common_identity(identity::OWNER)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::OWNER_ID)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::OWNER_ID)?,
         }),
         // The order's batch bytes are the register the batch address is
         // DERIVED from, and they ride the CANDIDATE register for the escrow
@@ -1274,12 +1274,12 @@ pub fn general_account_profile_operation_v3(
         21 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: terminal,
             destination: common_identity(identity::SELECTION_BATCH)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::BATCH_ID)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
         22 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: terminal,
             destination: common_identity(identity::CANDIDATE)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::BATCH_ID)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
         23 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
@@ -1318,42 +1318,42 @@ pub fn general_account_profile_operation_v3(
         5 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::ZERO)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::OUTCOME_COUNT)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::OUTCOME_COUNT)?,
         }),
         6 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: primary,
             destination: common_scalar(scalar::ORDER_PHASE_OBSERVATION)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::STATE_PHASE)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::STATE_PHASE)?,
         }),
         7 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::ORDER_ADMITTED_SLOT_OBSERVATION)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::STATE_ADMITTED_SLOT)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::STATE_ADMITTED_SLOT)?,
         }),
         8 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::ORDER_VALID_UNTIL_SLOT)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::VALID_UNTIL_SLOT)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::VALID_UNTIL_SLOT)?,
         }),
         9 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::ORDER_MAX_LOTS)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::MAX_LOTS)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::MAX_LOTS)?,
         }),
         10 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT)?,
         }),
         11 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::ORDER_NONCE)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::NONCE)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::NONCE)?,
         }),
         12 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: primary,
             destination: common_identity(identity::OWNER)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::OWNER_ID)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::OWNER_ID)?,
         }),
         // The batch identity rides the CANDIDATE register for every escrow
         // leg: an admission has no candidate, and the batch is the lifecycle
@@ -1361,7 +1361,7 @@ pub fn general_account_profile_operation_v3(
         13 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: primary,
             destination: common_identity(identity::CANDIDATE)?,
-            data_offset: order_body_offset(GeneralOrderLayoutV1::BATCH_ID)?,
+            data_offset: order_body_offset(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
         14 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
@@ -1373,22 +1373,22 @@ pub fn general_account_profile_operation_v3(
         12 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: primary,
             destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::STATUS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::STATUS)?,
         }),
         13 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::ORDER_COUNT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::ORDER_COUNT)?,
         }),
         14 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT)?,
         }),
         15 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::CONFIG_MAX_ORDERS)?,
-            data_offset: batch_body_offset(GeneralBatchLayoutV1::MAX_ORDERS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV2::MAX_ORDERS)?,
         }),
         // Every other action creates its primary state, so its lifecycle plan is
         // what proves the account's owner. Close destroys that account instead:
@@ -2217,7 +2217,7 @@ fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPr
         GENERAL_BATCH_BYTES_V1
     } else if action == Action::ReleaseOrder || cancel_order_state {
         // The order record's fixed span; the per-outcome rows are the stride.
-        GENERAL_ORDER_ROW_BASE_V1
+        GENERAL_ORDER_ROW_BASE_V2
     } else {
         SETTLEMENT_CURSOR_HEADER_BYTES_V2
     };
@@ -2255,7 +2255,7 @@ fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPr
             {
                 0
             } else if action == Action::ReleaseOrder || cancel_order_state {
-                u32::try_from(GENERAL_ORDER_ROW_STRIDE_V1)
+                u32::try_from(GENERAL_ORDER_ROW_STRIDE_V2)
                     .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?
             } else {
                 8
@@ -2277,9 +2277,9 @@ fn evidence_rule(kind: GeneralReadonlyEvidenceKindV3) -> Result<AccountRuleWithP
         // endorses the bytes.
         GeneralReadonlyEvidenceKindV3::OrderTerms => Ok(rule(
             AccountPrivilegesV2::new(false, false, false),
-            u32::try_from(GENERAL_ORDER_HEADER_BYTES_V1)
+            u32::try_from(GENERAL_ORDER_HEADER_BYTES_V2)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-            u32::try_from(GENERAL_ORDER_ROW_STRIDE_V1)
+            u32::try_from(GENERAL_ORDER_ROW_STRIDE_V2)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
             AccountPrestateV2::Exact,
         )),
@@ -2317,9 +2317,9 @@ fn evidence_rule(kind: GeneralReadonlyEvidenceKindV3) -> Result<AccountRuleWithP
             false,
             false,
             false,
-            u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_ORDER_ROW_BASE_V1)
+            u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_ORDER_ROW_BASE_V2)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-            u32::try_from(GENERAL_ORDER_ROW_STRIDE_V1)
+            u32::try_from(GENERAL_ORDER_ROW_STRIDE_V2)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
             no_effects(),
         )),

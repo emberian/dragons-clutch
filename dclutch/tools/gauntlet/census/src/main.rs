@@ -330,6 +330,30 @@ fn command_inventory(options: &Options) -> Result<(), String> {
     eprintln!(
         "census: {routes} routes, {refusals} refusal codes, {unclassified} unclassified positions"
     );
+    // An unclassified position is a dispatch the census READ and could not
+    // name, and until 2026-09-07 it was a number in a report and nothing else.
+    // The number was zero, so nobody noticed that it gated nothing -- while
+    // three live entry routes sat outside the register because the walk
+    // declined them in silence rather than reporting them here. It is a ratchet
+    // at zero now: the count is the census's own blind spot, and a census that
+    // will not fail on it is measuring the tree with an instrument it has
+    // exempted from measurement.
+    if options.contains_key("check-unique") && unclassified > 0 {
+        for program in &inventory.programs {
+            for entry in &program.unclassified {
+                eprintln!(
+                    "census UNCLASSIFIED: {} {} at {}: {} -- {}",
+                    program.label, entry.context, entry.provenance, entry.expression, entry.reason
+                );
+            }
+        }
+        return Err(format!(
+            "{unclassified} dispatch position(s) the census could not classify. Each is a \
+             route the register does not contain and does not say it is missing; teach \
+             `enumerate.rs::scan_condition` the shape, or state in the source why the \
+             position is not a route"
+        ));
+    }
     eprintln!(
         "census: {gated} routes carry a named phase gate, {} carry none",
         routes.saturating_sub(gated)

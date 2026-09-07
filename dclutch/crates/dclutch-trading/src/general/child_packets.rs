@@ -484,7 +484,29 @@ fn build_row_custody_packets_v2(
     })
 }
 
+/// The failure escrow of a REFUNDING market, for the in-batch mint or merge.
+///
+/// Decision 0025 item 2 redefines a refunding market's complete set over the
+/// ordinary coordinates and seats the failure coordinate in a Position the
+/// market derives (`dclutch_operator::failure_escrow_v1`). A joint clearing
+/// that mints `M` sets on such a market therefore mints `M` failure claims
+/// INTO THE ESCROW, never into the candidate's settlement Position, and a
+/// merge burns them out of it: `ClaimsAction::MintRefundingCompleteSet` and
+/// `MergeRefundingCompleteSet`, the escrow in the slot the categorical action
+/// leaves empty (source for a mint, destination for a merge).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RefundingEscrowV1 {
+    /// The escrow Position's owner: the `ClaimsCapability` PDA at
+    /// `(market, failure selector)`.
+    pub escrow_owner: [u8; 32],
+    /// Current escrow Position revision.
+    pub escrow_position_revision: u64,
+}
+
 /// Build the Claims and Custody packets for the sole complete-set operation.
+///
+/// `refunding` selects the refunding variant: the same aggregate move, the
+/// failure coordinate seated in the escrow rather than in settlement.
 #[allow(clippy::too_many_arguments)]
 pub fn build_materialize_packets_v2(
     mint: bool,
@@ -493,7 +515,13 @@ pub fn build_materialize_packets_v2(
     quantity: u64,
     claims: ClaimsResourcesV2,
     custody: CustodyResourcesV2,
+    refunding: Option<RefundingEscrowV1>,
 ) -> ChildPacketResult<GeneralChildPacketsV2> {
+    if let Some(escrow) = refunding
+        && escrow.escrow_owner.iter().all(|byte| *byte == 0)
+    {
+        return Err(ChildPacketError::Coordinate);
+    }
     let effect = if mint {
         GeneralChildEffectV1::MintCompleteSet
     } else {
@@ -528,35 +556,45 @@ pub fn build_materialize_packets_v2(
         page_index: 0,
         execution_index: 0,
     };
+    // THE SLOT RULE, stated once (FAILURE_ESCROW_SEATING §1): the escrow
+    // takes the slot the categorical action leaves empty -- source for a
+    // mint, destination for a merge -- so a merge's collateral still reaches
+    // the SOURCE owner, which is the settlement Position and not the escrow.
+    let (vacant_owner, vacant_revision) = match refunding {
+        Some(escrow) => (escrow.escrow_owner, escrow.escrow_position_revision),
+        None => ([0; 32], NO_POSITION_REVISION),
+    };
+    let action = match (mint, refunding.is_some()) {
+        (true, false) => ClaimsAction::MintCompleteSet,
+        (false, false) => ClaimsAction::MergeCompleteSet,
+        (true, true) => ClaimsAction::MintRefundingCompleteSet,
+        (false, true) => ClaimsAction::MergeRefundingCompleteSet,
+    };
     let claims_packet = build_claims_packet(
-        if mint {
-            ClaimsAction::MintCompleteSet
-        } else {
-            ClaimsAction::MergeCompleteSet
-        },
+        action,
         row,
         outcome_count,
         active_tail,
         if mint {
-            [0; 32]
+            vacant_owner
         } else {
             claims.settlement_owner
         },
         if mint {
             claims.settlement_owner
         } else {
-            [0; 32]
+            vacant_owner
         },
         claims.market_revision,
         if mint {
-            NO_POSITION_REVISION
+            vacant_revision
         } else {
             claims.settlement_position_revision
         },
         if mint {
             claims.settlement_position_revision
         } else {
-            NO_POSITION_REVISION
+            vacant_revision
         },
         parent,
     )?;
@@ -577,6 +615,63 @@ pub fn build_materialize_packets_v2(
     Ok(GeneralChildPacketsV2 {
         claims: Some(claims_packet),
         custody: Some(custody_packet),
+        parent_request_digest: parent,
+    })
+}
+
+/// Build the Claims packet that STRANDS the clearing's residual.
+///
+/// Decision 0032 §2a: the claims the batch minted at a zero-priced outcome and
+/// handed to nobody are burned out of the candidate's own settlement Position
+/// with no collateral movement. `residual` is one quantity per outcome, zero
+/// wherever the price was positive (`ClearingPriceV1Abi.tailAdmissible`), and
+/// this builder refuses an all-zero residual: a close that strands nothing
+/// carries no Claims leg, and the plan says so with `claims_active = false`.
+pub fn build_strand_packets_v1(
+    context: AggregateReplayContextV1,
+    outcome_count: u8,
+    residual: &[u64],
+    claims: ClaimsResourcesV2,
+) -> ChildPacketResult<GeneralChildPacketsV2> {
+    if residual.len() != usize::from(outcome_count) || residual.iter().all(|value| *value == 0) {
+        return Err(ChildPacketError::Coordinate);
+    }
+    let mut quantities = [0; MAX_OUTCOMES];
+    quantities[..usize::from(outcome_count)].copy_from_slice(residual);
+    let tail = encode_quantities(outcome_count, &quantities)?;
+    let active_tail = &tail[..usize::from(outcome_count) * 8];
+    let parent = GeneralChildPlanV2::new_aggregate(
+        GeneralChildEffectV1::StrandResidual,
+        context,
+        u32::from(outcome_count),
+        active_tail,
+    )?
+    .digest()?;
+    let row = RowReplayContextV1 {
+        execution: context.execution,
+        candidate_id: context.candidate_id,
+        owner_id: claims.settlement_owner,
+        order_id: context.candidate_id,
+        revision: context.revision,
+        order_nonce: 0,
+        page_index: 0,
+        execution_index: 0,
+    };
+    let claims_packet = build_claims_packet(
+        ClaimsAction::StrandResidual,
+        row,
+        outcome_count,
+        active_tail,
+        claims.settlement_owner,
+        [0; 32],
+        claims.market_revision,
+        claims.settlement_position_revision,
+        NO_POSITION_REVISION,
+        parent,
+    )?;
+    Ok(GeneralChildPacketsV2 {
+        claims: Some(claims_packet),
+        custody: None,
         parent_request_digest: parent,
     })
 }
@@ -923,7 +1018,7 @@ mod tests {
         };
         let mut resources = custody(false, false);
         resources.destination_vault_context = row().execution.market_id;
-        let packets = build_materialize_packets_v2(true, context, 2, 1, claims(), resources)
+        let packets = build_materialize_packets_v2(true, context, 2, 1, claims(), resources, None)
             .expect("materialize packets");
         let request = packets.custody.expect("custody").request();
         assert_eq!(request.source_compartment, CompartmentV1::Settlement);

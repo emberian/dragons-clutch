@@ -48,9 +48,9 @@ use dclutch_trading::general::{
         verify_candidate_row_v1,
     },
     collection_v1::{
-        GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1,
-        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, authenticate_batch_candidate_v1,
-        authenticate_order_execution_v1, general_order_len_v1,
+        GeneralBatchOpeningV1, GeneralBatchV2, GeneralOrderHeaderV2, GeneralOrderPhaseV1,
+        GeneralOrderStateV1, GeneralOrderV2, MakerFundingV1, authenticate_batch_candidate_v1,
+        authenticate_order_execution_v2, general_order_len_v2,
     },
     runtime_manifest::{SettlementManifestV2, settlement_manifest_len_v2},
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, freeze_selection_v2},
@@ -141,7 +141,7 @@ fn fixture_batch_opening_v1(width: u32, product_id: [u8; 32]) -> GeneralBatchOpe
 }
 
 /// Open one real batch against one real active root.
-fn opened_batch_v1(width: u32, product_id: [u8; 32]) -> Result<(GeneralRootV2, GeneralBatchV1)> {
+fn opened_batch_v1(width: u32, product_id: [u8; 32]) -> Result<(GeneralRootV2, GeneralBatchV2)> {
     let mut root = GeneralRootV2::active(
         FIXTURE_MARKET_V1,
         FIXTURE_CONFIG_IDENTITY_V1,
@@ -149,7 +149,7 @@ fn opened_batch_v1(width: u32, product_id: [u8; 32]) -> Result<(GeneralRootV2, G
     )
     .map_err(|error| Error::new(format!("active General root: {error:?}")))?;
     let revision = root.revision();
-    let batch = GeneralBatchV1::open(
+    let batch = GeneralBatchV2::open(
         &mut root,
         fixture_batch_opening_v1(width, product_id),
         revision,
@@ -163,11 +163,11 @@ fn opened_batch_v1(width: u32, product_id: [u8; 32]) -> Result<(GeneralRootV2, G
 fn order_record_v1(width: u32, batch_id: [u8; 32], spec: &OrderSpecV1) -> Result<Vec<u8>> {
     let mut bytes = vec![
         0_u8;
-        general_order_len_v1(width)
+        general_order_len_v2(width)
             .map_err(|error| Error::new(format!("order width: {error:?}")))?
     ];
-    GeneralOrderV1::encode_into(
-        GeneralOrderHeaderV1 {
+    GeneralOrderV2::encode_into(
+        GeneralOrderHeaderV2 {
             outcome_count: width,
             nonce: spec.nonce,
             owner_id: FIXTURE_OWNER_V1,
@@ -202,11 +202,11 @@ fn order_record_v1(width: u32, batch_id: [u8; 32], spec: &OrderSpecV1) -> Result
 fn execution_row_v1(
     width: u32,
     page_coordinate: u32,
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     order_bytes: &[u8],
     lots: u64,
 ) -> Result<Vec<u8>> {
-    let order = GeneralOrderV1::decode(order_bytes)
+    let order = GeneralOrderV2::decode(order_bytes)
         .map_err(|error| Error::new(format!("order record: {error:?}")))?;
     let header = order.header();
     let mut receive = Vec::with_capacity(usize::try_from(width).unwrap_or_default());
@@ -244,7 +244,7 @@ fn execution_row_v1(
         &mut bytes,
     )
     .map_err(|error| Error::new(format!("execution row: {error:?}")))?;
-    authenticate_order_execution_v1(
+    authenticate_order_execution_v2(
         batch,
         order,
         ExecutionV2::decode(&bytes)
@@ -296,7 +296,7 @@ pub(crate) fn terminal_fixture_v1(
     let mut placed: Vec<(Vec<u8>, u64)> = Vec::new();
     for spec in &specs {
         let bytes = order_record_v1(width, identity, spec)?;
-        let order = GeneralOrderV1::decode(&bytes)
+        let order = GeneralOrderV2::decode(&bytes)
             .map_err(|error| Error::new(format!("order record: {error:?}")))?;
         batch
             .admit(
@@ -326,8 +326,8 @@ pub(crate) fn terminal_fixture_v1(
     // to have zero high bytes could not tell the two apart.
     let mut sort_error = None;
     placed.sort_by(|left, right| {
-        let left_id = GeneralOrderV1::decode(&left.0).map(|order| order.order_id());
-        let right_id = GeneralOrderV1::decode(&right.0).map(|order| order.order_id());
+        let left_id = GeneralOrderV2::decode(&left.0).map(|order| order.order_id());
+        let right_id = GeneralOrderV2::decode(&right.0).map(|order| order.order_id());
         match (left_id, right_id) {
             (Ok(left_id), Ok(right_id)) => left_id.iter().rev().cmp(right_id.iter().rev()),
             _ => {

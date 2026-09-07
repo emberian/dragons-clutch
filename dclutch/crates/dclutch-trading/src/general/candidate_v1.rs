@@ -37,9 +37,9 @@
 use dclutch_sha256_adapter::{digest as sha256, digestv as sha256v};
 
 use crate::general::collection_v1::{
-    BatchStatusV1, GeneralBatchV1, GeneralCollectionErrorV1, GeneralOrderV1,
+    BatchStatusV1, GeneralBatchV2, GeneralCollectionErrorV1, GeneralOrderV2,
     authenticate_batch_candidate_v1, authenticate_batch_verified_candidate_v1,
-    authenticate_order_execution_v1,
+    authenticate_order_execution_v2,
 };
 use crate::general::runtime_verify::{
     RuntimeConsiderRowBuffersV2, RuntimeConsiderRowViewV2, RuntimeManifestBuffersV2,
@@ -351,7 +351,7 @@ impl GeneralCandidateV1 {
     /// authorized. Anyone may submit.
     #[allow(clippy::too_many_arguments)]
     pub fn submit(
-        batch: GeneralBatchV1,
+        batch: GeneralBatchV2,
         candidate: CandidateV2<'_>,
         page_revision: u64,
         row_count: u32,
@@ -669,7 +669,7 @@ impl GeneralCandidateV1 {
     /// the settlement half assumed and nothing supplied.
     pub fn record_verified(
         &mut self,
-        batch: GeneralBatchV1,
+        batch: GeneralBatchV2,
         verified_bytes: &[u8],
     ) -> GeneralCandidateResultV1<()> {
         if self.state.status != GeneralCandidateStatusV1::Submitted {
@@ -752,7 +752,7 @@ pub fn authenticate_candidate_identity_v1(
 /// Readonly inputs for one permissionless candidate verification step.
 pub struct CandidateVerifyRowViewV1<'a> {
     /// The closed batch this candidate settles.
-    pub batch: GeneralBatchV1,
+    pub batch: GeneralBatchV2,
     /// The submission record naming this candidate.
     pub submission: GeneralCandidateV1,
     /// Immutable runtime-width Candidate record.
@@ -827,6 +827,7 @@ pub fn candidate_verify_manifest_orders_v1(
     Ok(runtime_manifest_orders_for_row_v2(
         view.cursor_before,
         execution.header().order_id,
+        execution.header().lots,
         terminal_step,
     )?)
 }
@@ -841,7 +842,7 @@ pub fn candidate_verify_manifest_orders_v1(
 /// 1. The page belongs to THIS submission's candidate, at the revision the
 ///    submission pinned, so a solver cannot swap a page mid-stream.
 /// 2. The [`crate::general::runtime_verify::AuthenticatedOrderTermsV2`] the evaluator
-///    trusts comes from [`authenticate_order_execution_v1`] over a real,
+///    trusts comes from [`authenticate_order_execution_v2`] over a real,
 ///    ESCROWED order record -- not from a caller's assertion. Decision 0009 §1
 ///    called this hole B and named it the sharpest of the three: the verifier
 ///    enforced `ExcessLots` and `QuoteLimit` faithfully against limits the
@@ -901,13 +902,14 @@ fn verify_candidate_row_inner_v1(
     let manifest_order_count = runtime_manifest_orders_for_row_v2(
         view.cursor_before,
         execution.header().order_id,
+        execution.header().lots,
         terminal_step,
     )?;
 
     // The order record is the authority for the row's terms, and it must be an
     // order this batch actually admitted and still holds escrow for.
-    let order = GeneralOrderV1::decode(view.order)?;
-    let authenticated_order = authenticate_order_execution_v1(view.batch, order, execution)?;
+    let order = GeneralOrderV2::decode(view.order)?;
+    let authenticated_order = authenticate_order_execution_v2(view.batch, order, execution)?;
 
     let runtime_view = RuntimeConsiderRowViewV2 {
         candidate: view.candidate,

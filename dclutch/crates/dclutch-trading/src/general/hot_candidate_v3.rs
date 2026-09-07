@@ -28,9 +28,9 @@ use crate::general::{
     close_batch_clause_v3::CloseBatchClauseV3,
     close_candidate_clause_v3::CloseCandidateClauseV3,
     collection_v1::{
-        BatchStatusV1, EscrowDirectionV1, GeneralBatchLayoutV1, GeneralBatchOpeningV1,
-        GeneralBatchV1, GeneralCollectionErrorV1, GeneralOrderLayoutV1, GeneralOrderPhaseV1,
-        GeneralOrderV1, GeneralSignedOrderTermsV1, authenticate_order_residual_release_v1,
+        BatchStatusV1, EscrowDirectionV1, GeneralBatchLayoutV2, GeneralBatchOpeningV1,
+        GeneralBatchV2, GeneralCollectionErrorV1, GeneralOrderLayoutV2, GeneralOrderPhaseV1,
+        GeneralOrderV2, GeneralSignedOrderTermsV2, authenticate_order_residual_release_v1,
     },
     escrow_v1::{WorkEscrowClosePlanV1, WorkEscrowObservationV1},
     gen_seven_v1::{
@@ -55,8 +55,8 @@ use crate::general_config::root::RootError;
 
 #[cfg(test)]
 use crate::general::collection_v1::{
-    GeneralOrderHeaderV1, GeneralOrderStateV1, MakerFundingV1, general_order_len_v1,
-    general_signed_order_terms_len_v1,
+    GeneralOrderHeaderV2, GeneralOrderStateV1, MakerFundingV1, general_batch_len_v2,
+    general_order_len_v2, general_signed_order_terms_len_v2,
 };
 
 /// Exact common scalar-register count in the General Hot38 ABI.
@@ -753,7 +753,7 @@ pub fn general_hot_environment_from_bank_v3(
 /// `root_tail` is the hostile-decoded mutable tail of the real composite root,
 /// not a model of it.  The exact config and Product coordinates are joined to
 /// the independently projected register observations before
-/// [`GeneralBatchV1::open`] is allowed to advance the root.  Only the resulting
+/// [`GeneralBatchV2::open`] is allowed to advance the root.  Only the resulting
 /// root and batch facts are written; Trading remains the sole account writer.
 pub fn project_general_open_batch_candidate_in_place_v3(
     root_tail: &[u8],
@@ -885,7 +885,7 @@ pub fn project_general_open_batch_candidate_in_place_v3(
         .and_then(|slot| slot.checked_add(config.settlement_slots()))
         .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
     let sequence = root.next_batch_sequence();
-    let batch = GeneralBatchV1::open(
+    let batch = GeneralBatchV2::open(
         &mut root,
         GeneralBatchOpeningV1 {
             outcome_count,
@@ -934,12 +934,12 @@ pub fn project_general_open_batch_candidate_in_place_v3(
         (scalar::BATCH_POST_STATUS, u64::from(state.status.tag())),
         (
             scalar::ONE,
-            u64::from(GeneralBatchLayoutV1::version_value()),
+            u64::from(GeneralBatchLayoutV2::version_value()),
         ),
-        (scalar::SCRATCH_A, GeneralBatchLayoutV1::magic_u64()),
+        (scalar::SCRATCH_A, GeneralBatchLayoutV2::magic_u64()),
         (
             scalar::SCRATCH_B,
-            u64::from(GeneralBatchLayoutV1::phase_value()),
+            u64::from(GeneralBatchLayoutV2::phase_value()),
         ),
     ] {
         write_scalar(candidate, coordinate, value)?;
@@ -951,7 +951,7 @@ pub fn project_general_open_batch_candidate_in_place_v3(
 ///
 /// Both persisted inputs are hostile-decoded through their semantic owners.
 /// The batch is joined back to the live root, config, Product and request
-/// subject before [`GeneralBatchV1::close`] may consume the root revision.
+/// subject before [`GeneralBatchV2::close`] may consume the root revision.
 /// Closing early is admitted only when the persisted admission count proves
 /// the batch full; otherwise the config-derived collection window must have
 /// elapsed. Trading remains the sole writer of the root and batch accounts.
@@ -970,7 +970,7 @@ pub fn project_general_close_batch_candidate_in_place_v3(
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let mut root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
-    let mut batch = GeneralBatchV1::decode(batch_body)
+    let mut batch = GeneralBatchV2::decode(batch_body)
         .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Batch))?;
     let opening = batch.opening();
     let state = batch.state();
@@ -1239,7 +1239,7 @@ pub fn project_general_submit_candidate_in_place_v3(
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
-    let batch = GeneralBatchV1::decode(batch_body)
+    let batch = GeneralBatchV2::decode(batch_body)
         .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Batch))?;
     let candidate_record = CandidateV2::decode(candidate_body)
         .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::CandidateImage))?;
@@ -1632,7 +1632,7 @@ pub fn project_general_place_order_candidate_in_place_v3(
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
-    let mut batch = GeneralBatchV1::decode(batch_body)
+    let mut batch = GeneralBatchV2::decode(batch_body)
         .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Batch))?;
     let opening = batch.opening();
     let state = batch.state();
@@ -1645,7 +1645,7 @@ pub fn project_general_place_order_candidate_in_place_v3(
     let max_lots = read_scalar(candidate, scalar::ORDER_MAX_LOTS)?;
     let max_quote_debit_per_lot = read_scalar(candidate, scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?;
     let valid_until_slot = read_scalar(candidate, scalar::ORDER_VALID_UNTIL_SLOT)?;
-    let terms = GeneralSignedOrderTermsV1::decode(signed_order_terms)
+    let terms = GeneralSignedOrderTermsV2::decode(signed_order_terms)
         .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::SignedTerms))?;
     let header = terms.header();
     place_order_clause(
@@ -1934,9 +1934,9 @@ pub fn project_general_place_order_candidate_in_place_v3(
         ),
         (
             scalar::SCRATCH_B,
-            u64::from(GeneralOrderLayoutV1::phase_value()),
+            u64::from(GeneralOrderLayoutV2::phase_value()),
         ),
-        (scalar::SCRATCH_A, GeneralOrderLayoutV1::magic_u64()),
+        (scalar::SCRATCH_A, GeneralOrderLayoutV2::magic_u64()),
         (scalar::CUSTODY_ACTIVE, u64::from(quote_reserve != 0)),
         (
             scalar::CLAIMS_POST_MARKET_REVISION,
@@ -2015,9 +2015,9 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
-    let mut batch = GeneralBatchV1::decode(batch_body)
+    let mut batch = GeneralBatchV2::decode(batch_body)
         .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Batch))?;
-    let order = GeneralOrderV1::decode(order_body)
+    let order = GeneralOrderV2::decode(order_body)
         .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Order))?;
     let opening = batch.opening();
     let before = batch.state();
@@ -2401,7 +2401,7 @@ pub fn project_general_release_order_candidate_in_place_v3(
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
-    let order = GeneralOrderV1::decode(order_body)
+    let order = GeneralOrderV2::decode(order_body)
         .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Order))?;
     let header = order.header();
     let state = order.state();
@@ -2935,7 +2935,7 @@ pub type Result<T> = core::result::Result<T, GeneralHotCandidateErrorV3>;
 /// decoded Candidate and Batch before the admitted accelerator may accept.
 pub fn authenticate_general_close_candidate_v3(
     family_request: &[u8],
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     submission: GeneralCandidateV1,
     outcome_count: u32,
     environment: GeneralHotEnvironmentV3,
@@ -5139,6 +5139,7 @@ mod tests {
         },
         runtime_manifest::settlement_manifest_len_v2,
         runtime_settlement::RUNTIME_SETTLEMENT_EFFECT_HEADER_BYTES_V2,
+        runtime_verify::OrderSideV2,
         runtime_width::{
             CandidateHeaderV2, CandidateLayoutV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2,
             PageV2, SettlementCursorHeaderV2, SettlementPhaseV2, VerifiedCandidateV2,
@@ -5152,6 +5153,18 @@ mod tests {
 
     fn put_test(output: &mut [u8], offset: usize, value: &[u8]) {
         output[offset..offset + value.len()].copy_from_slice(value);
+    }
+
+    /// The whole `296 + 16N` batch account one projector hostile-decodes.
+    ///
+    /// `GeneralBatchV2::to_bytes` is the 224-byte V1 prefix the OpenBatch and
+    /// CloseBatch effects write into an account the runtime already sized; it
+    /// is not an account, and every projector below refuses it by length.
+    fn batch_record(batch: GeneralBatchV2) -> Vec<u8> {
+        let mut bytes =
+            vec![0_u8; general_batch_len_v2(batch.opening().outcome_count).expect("batch width")];
+        batch.encode_into(&mut bytes).expect("batch record");
+        bytes
     }
 
     fn materialize_plan(outcome_count: u32) -> Vec<u8> {
@@ -5400,7 +5413,7 @@ mod tests {
         let mut root = root;
         let revision = root.revision();
         let sequence = root.next_batch_sequence();
-        GeneralBatchV1::open(
+        GeneralBatchV2::open(
             &mut root,
             GeneralBatchOpeningV1 {
                 outcome_count,
@@ -5425,7 +5438,7 @@ mod tests {
         outcome_count: u32,
         environment: GeneralHotEnvironmentV3,
         config: GeneralConfigV3,
-    ) -> (GeneralRootV2, GeneralBatchV1) {
+    ) -> (GeneralRootV2, GeneralBatchV2) {
         let mut root = GeneralRootV2::active(
             environment.market,
             environment.general_config_id,
@@ -5434,7 +5447,7 @@ mod tests {
         .expect("active root");
         let revision = root.revision();
         let sequence = root.next_batch_sequence();
-        let batch = GeneralBatchV1::open(
+        let batch = GeneralBatchV2::open(
             &mut root,
             GeneralBatchOpeningV1 {
                 outcome_count,
@@ -5459,7 +5472,7 @@ mod tests {
         outcome_count: u32,
         environment: GeneralHotEnvironmentV3,
         root: GeneralRootV2,
-        batch: GeneralBatchV1,
+        batch: GeneralBatchV2,
         current_slot: u64,
     ) -> Vec<u8> {
         let mut input = authenticated_input(Action::CloseBatch, outcome_count, environment);
@@ -5508,29 +5521,84 @@ mod tests {
         input
     }
 
+    /// One buy of three claims at outcome zero, at a cap of three per lot.
+    ///
+    /// The magnitude and the cap are chosen together: at the full price the
+    /// order's own limit is exactly met, which is what lets a row fill short
+    /// of `max_lots` without sitting strictly inside its limit.
+    /// The buyer at outcome zero the candidate and verification fixtures price.
     fn placed_order_bytes(
         outcome_count: u32,
         environment: GeneralHotEnvironmentV3,
-        batch: GeneralBatchV1,
+        batch: GeneralBatchV2,
         current_slot: u64,
     ) -> Vec<u8> {
-        let count = usize::try_from(outcome_count).expect("test count");
-        let mut output = vec![0; general_order_len_v1(outcome_count).expect("order width")];
-        GeneralOrderV1::encode_into(
-            GeneralOrderHeaderV1 {
-                outcome_count,
-                nonce: 5,
-                owner_id: [0x70; 32],
-                market: environment.market,
-                batch_id: batch.batch_id(),
-                generation: environment.generation,
-                max_lots: 2,
-                max_quote_debit_per_lot: 3,
-                min_quote_credit_per_lot: 0,
-                valid_until_slot: batch.opening().settlement_close_slot,
-            },
-            &vec![1; count],
-            &vec![2; count],
+        placed_order_bytes_with_shape(
+            outcome_count,
+            environment,
+            batch,
+            current_slot,
+            (OrderSideV2::Buy, 0, 3),
+        )
+    }
+
+    /// The same maker, selling two claims per lot at the LAST outcome.
+    ///
+    /// The escrow legs are one-sided since the joint clearing: a buyer's claim
+    /// reserve is zero at every outcome, so only a seller gives the per-item
+    /// escrow and refund scalars content -- and putting it at the last outcome
+    /// is what makes the width-258 half of those tests separate a projector
+    /// that fills every item slot from one that fills none.
+    fn placed_seller_order_bytes(
+        outcome_count: u32,
+        environment: GeneralHotEnvironmentV3,
+        batch: GeneralBatchV2,
+        current_slot: u64,
+    ) -> Vec<u8> {
+        placed_order_bytes_with_shape(
+            outcome_count,
+            environment,
+            batch,
+            current_slot,
+            (OrderSideV2::Sell, outcome_count - 1, 2),
+        )
+    }
+
+    fn placed_order_bytes_with_shape(
+        outcome_count: u32,
+        environment: GeneralHotEnvironmentV3,
+        batch: GeneralBatchV2,
+        current_slot: u64,
+        shape: (OrderSideV2, u32, u64),
+    ) -> Vec<u8> {
+        let (side, outcome, claims_per_lot) = shape;
+        let header = GeneralOrderHeaderV2 {
+            outcome_count,
+            nonce: 5,
+            owner_id: [0x70; 32],
+            market: environment.market,
+            batch_id: batch.batch_id(),
+            generation: environment.generation,
+            max_lots: 2,
+            max_quote_debit_per_lot: 3,
+            min_quote_credit_per_lot: 0,
+            valid_until_slot: batch.opening().settlement_close_slot,
+            side,
+            outcome_lo: outcome,
+            outcome_hi: outcome,
+            claims_per_lot,
+        };
+        let receive: Vec<u64> = (0..outcome_count)
+            .map(|index| header.derived_row(index).0)
+            .collect();
+        let deliver: Vec<u64> = (0..outcome_count)
+            .map(|index| header.derived_row(index).1)
+            .collect();
+        let mut output = vec![0; general_order_len_v2(outcome_count).expect("order width")];
+        GeneralOrderV2::encode_into(
+            header,
+            &receive,
+            &deliver,
             GeneralOrderStateV1 {
                 phase: GeneralOrderPhaseV1::Placed,
                 admitted_slot: current_slot,
@@ -5546,8 +5614,8 @@ mod tests {
         outcome_count: u32,
         environment: GeneralHotEnvironmentV3,
         root: GeneralRootV2,
-        batch: GeneralBatchV1,
-        order: GeneralOrderV1<'_>,
+        batch: GeneralBatchV2,
+        order: GeneralOrderV2<'_>,
         current_slot: u64,
     ) -> Vec<u8> {
         let mut input = authenticated_input(Action::PlaceOrder, outcome_count, environment);
@@ -5660,10 +5728,10 @@ mod tests {
         outcome_count: u32,
         environment: GeneralHotEnvironmentV3,
         config: GeneralConfigV3,
-    ) -> (GeneralRootV2, GeneralBatchV1, Vec<u8>) {
+    ) -> (GeneralRootV2, GeneralBatchV2, Vec<u8>) {
         let (root, mut batch) = opened_batch(outcome_count, environment, config);
-        let order_bytes = placed_order_bytes(outcome_count, environment, batch, 101);
-        let order = GeneralOrderV1::decode(&order_bytes).expect("order");
+        let order_bytes = placed_seller_order_bytes(outcome_count, environment, batch, 101);
+        let order = GeneralOrderV2::decode(&order_bytes).expect("order");
         let claims = vec![4; usize::try_from(outcome_count).expect("test count")];
         batch
             .admit(
@@ -5683,8 +5751,8 @@ mod tests {
         outcome_count: u32,
         environment: GeneralHotEnvironmentV3,
         root: GeneralRootV2,
-        batch: GeneralBatchV1,
-        order: GeneralOrderV1<'_>,
+        batch: GeneralBatchV2,
+        order: GeneralOrderV2<'_>,
         current_slot: u64,
     ) -> Vec<u8> {
         let mut input = authenticated_input(Action::CancelOrder, outcome_count, environment);
@@ -5791,7 +5859,7 @@ mod tests {
         outcome_count: u32,
         environment: GeneralHotEnvironmentV3,
         root: GeneralRootV2,
-        order: GeneralOrderV1<'_>,
+        order: GeneralOrderV2<'_>,
         current_slot: u64,
         observed_quote: u64,
     ) -> Vec<u8> {
@@ -5874,7 +5942,7 @@ mod tests {
     #[derive(Clone)]
     struct SubmitCandidateFixture {
         root: GeneralRootV2,
-        batch: GeneralBatchV1,
+        batch: GeneralBatchV2,
         config: GeneralConfigV3,
         environment: GeneralHotEnvironmentV3,
         candidate_body: Vec<u8>,
@@ -5887,6 +5955,24 @@ mod tests {
         let mut environment = environment();
         let config = open_batch_config(environment);
         let (mut root, mut batch) = opened_batch(outcome_count, environment, config);
+        // A certificate enumerates the batch's live orders, so the batch holds
+        // one: a candidate header with a zero `live_order_count` cannot encode.
+        let order_bytes = placed_order_bytes(outcome_count, environment, batch, 101);
+        let order = GeneralOrderV2::decode(&order_bytes).expect("escrowed order");
+        batch
+            .admit(
+                order,
+                MakerFundingV1 {
+                    owner_id: order.header().owner_id,
+                    available_quote: 6,
+                    available_claims: &vec![
+                        0_u64;
+                        usize::try_from(outcome_count).expect("test count")
+                    ],
+                },
+                101,
+            )
+            .expect("admitted order");
         let root_revision = root.revision();
         batch
             .close(&mut root, root_revision)
@@ -5906,6 +5992,7 @@ mod tests {
             candidate_id: [0x71; 32],
             product_id: opening.product_id,
             batch_id: batch.batch_id(),
+            live_order_count: batch.live_order_count(),
         };
         CandidateV2::encode_into(header, &prices, &mut candidate_body).expect("candidate draft");
         header.candidate_id =
@@ -6056,7 +6143,7 @@ mod tests {
     fn project_submit(fixture: &mut SubmitCandidateFixture) -> Result<()> {
         project_general_submit_candidate_in_place_v3(
             &fixture.root.to_bytes(),
-            &fixture.batch.to_bytes(),
+            &batch_record(fixture.batch),
             fixture.config,
             &fixture.candidate_body,
             &fixture.submission_body,
@@ -6071,7 +6158,7 @@ mod tests {
         outcome_count: u32,
         current_slot: u64,
     ) -> (
-        GeneralBatchV1,
+        GeneralBatchV2,
         GeneralCandidateV1,
         GeneralHotEnvironmentV3,
         Vec<u8>,
@@ -6585,7 +6672,7 @@ mod tests {
         let config = open_batch_config(environment);
         let (mut root, mut batch) = opened_batch(outcome_count, environment, config);
         let order_bytes = placed_order_bytes(outcome_count, environment, batch, 101);
-        let order = GeneralOrderV1::decode(&order_bytes).expect("escrowed order");
+        let order = GeneralOrderV2::decode(&order_bytes).expect("escrowed order");
         batch
             .admit(
                 order,
@@ -6612,6 +6699,7 @@ mod tests {
             candidate_id: [0xf1; 32],
             product_id: batch.opening().product_id,
             batch_id: batch.batch_id(),
+            live_order_count: batch.live_order_count(),
         };
         CandidateV2::encode_into(
             candidate_header,
@@ -6923,7 +7011,7 @@ mod tests {
             );
             assert_eq!(
                 read_scalar(&candidate, scalar::SCRATCH_A),
-                Ok(GeneralBatchLayoutV1::magic_u64())
+                Ok(GeneralBatchLayoutV2::magic_u64())
             );
         }
     }
@@ -6943,7 +7031,7 @@ mod tests {
             );
             project_general_close_batch_candidate_in_place_v3(
                 &root.to_bytes(),
-                &batch.to_bytes(),
+                &batch_record(batch),
                 config,
                 outcome_count,
                 environment,
@@ -6987,7 +7075,7 @@ mod tests {
         assert_eq!(
             project_general_close_batch_candidate_in_place_v3(
                 &root.to_bytes(),
-                &batch.to_bytes(),
+                &batch_record(batch),
                 config,
                 outcome_count,
                 environment,
@@ -7012,8 +7100,9 @@ mod tests {
             let config = open_batch_config(environment);
             let (root, batch) = opened_batch(outcome_count, environment, config);
             let current_slot = 101;
-            let order_bytes = placed_order_bytes(outcome_count, environment, batch, current_slot);
-            let order = GeneralOrderV1::decode(&order_bytes).expect("order");
+            let order_bytes =
+                placed_seller_order_bytes(outcome_count, environment, batch, current_slot);
+            let order = GeneralOrderV2::decode(&order_bytes).expect("order");
             environment.destination_vault_context = order.order_id();
             environment.custody_source_owner = order.header().owner_id;
             environment.settlement_position_owner = order.order_id();
@@ -7021,13 +7110,13 @@ mod tests {
             let mut candidate =
                 place_order_input(outcome_count, environment, root, batch, order, current_slot);
             let mut signed_terms =
-                vec![0; general_signed_order_terms_len_v1(outcome_count).expect("signed width")];
+                vec![0; general_signed_order_terms_len_v2(outcome_count).expect("signed width")];
             order
                 .encode_signed_terms_into(&mut signed_terms)
                 .expect("signed immutable terms");
             project_general_place_order_candidate_in_place_v3(
                 &root.to_bytes(),
-                &batch.to_bytes(),
+                &batch_record(batch),
                 config,
                 outcome_count,
                 environment,
@@ -7037,7 +7126,7 @@ mod tests {
             )
             .expect("semantic admission");
             assert_eq!(
-                GeneralSignedOrderTermsV1::decode(&signed_terms)
+                GeneralSignedOrderTermsV2::decode(&signed_terms)
                     .expect("signed terms")
                     .order_id(),
                 order.order_id()
@@ -7077,7 +7166,7 @@ mod tests {
         let (root, batch) = opened_batch(outcome_count, environment, config);
         let current_slot = 101;
         let order_bytes = placed_order_bytes(outcome_count, environment, batch, current_slot);
-        let order = GeneralOrderV1::decode(&order_bytes).expect("order");
+        let order = GeneralOrderV2::decode(&order_bytes).expect("order");
         environment.destination_vault_context = order.order_id();
         environment.custody_source_owner = order.header().owner_id;
         environment.settlement_position_owner = order.order_id();
@@ -7088,14 +7177,14 @@ mod tests {
         write_scalar(&mut candidate, base + item_scalar::QUANTITY, 9).expect("hostile row");
         let before = candidate.clone();
         let mut signed_terms =
-            vec![0; general_signed_order_terms_len_v1(outcome_count).expect("signed width")];
+            vec![0; general_signed_order_terms_len_v2(outcome_count).expect("signed width")];
         order
             .encode_signed_terms_into(&mut signed_terms)
             .expect("signed immutable terms");
         assert_eq!(
             project_general_place_order_candidate_in_place_v3(
                 &root.to_bytes(),
-                &batch.to_bytes(),
+                &batch_record(batch),
                 config,
                 outcome_count,
                 environment,
@@ -7119,7 +7208,7 @@ mod tests {
             let config = open_batch_config(environment);
             let (root, batch, order_bytes) =
                 admitted_batch_and_order(outcome_count, environment, config);
-            let order = GeneralOrderV1::decode(&order_bytes).expect("order");
+            let order = GeneralOrderV2::decode(&order_bytes).expect("order");
             let owner = order.header().owner_id;
             environment.source_vault_context = order.order_id();
             environment.custody_destination_owner = owner;
@@ -7130,7 +7219,7 @@ mod tests {
                 cancel_order_input(outcome_count, environment, root, batch, order, 102);
             project_general_cancel_order_candidate_in_place_v3(
                 &root.to_bytes(),
-                &batch.to_bytes(),
+                &batch_record(batch),
                 order.as_bytes(),
                 config,
                 outcome_count,
@@ -7177,7 +7266,7 @@ mod tests {
         let config = open_batch_config(environment);
         let (root, batch, order_bytes) =
             admitted_batch_and_order(outcome_count, environment, config);
-        let order = GeneralOrderV1::decode(&order_bytes).expect("order");
+        let order = GeneralOrderV2::decode(&order_bytes).expect("order");
         let owner = order.header().owner_id;
         environment.source_vault_context = order.order_id();
         environment.custody_destination_owner = owner;
@@ -7193,7 +7282,7 @@ mod tests {
         assert_eq!(
             project_general_cancel_order_candidate_in_place_v3(
                 &root.to_bytes(),
-                &batch.to_bytes(),
+                &batch_record(batch),
                 order.as_bytes(),
                 config,
                 outcome_count,
@@ -7217,7 +7306,7 @@ mod tests {
             let config = open_batch_config(environment);
             let (root, _batch, order_bytes) =
                 admitted_batch_and_order(outcome_count, environment, config);
-            let order = GeneralOrderV1::decode(&order_bytes).expect("order");
+            let order = GeneralOrderV2::decode(&order_bytes).expect("order");
             let owner = order.header().owner_id;
             environment.source_vault_context = order.order_id();
             environment.custody_destination_owner = owner;
@@ -7272,7 +7361,7 @@ mod tests {
         let config = open_batch_config(environment);
         let (root, _batch, order_bytes) =
             admitted_batch_and_order(outcome_count, environment, config);
-        let order = GeneralOrderV1::decode(&order_bytes).expect("order");
+        let order = GeneralOrderV2::decode(&order_bytes).expect("order");
         let owner = order.header().owner_id;
         environment.source_vault_context = order.order_id();
         environment.custody_destination_owner = owner;

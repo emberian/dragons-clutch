@@ -66,6 +66,8 @@ fn canonical_policy() -> SelectionPolicyV1 {
 fn certificate(submission: &GeneralSelectionSubmissionV1, coordinate: u32) -> Vec<u8> {
     let width = u32::try_from(submission.claim_inputs.len()).expect("outcome width");
     let mut bytes = vec![0_u8; verified_candidate_len(width).expect("verified width")];
+    let mut prices = vec![0_u64; submission.claim_inputs.len()];
+    prices[0] = PRICE_SCALE;
     VerifiedCandidateV2::encode_into(
         VerifiedCandidateHeaderV2 {
             outcome_count: width,
@@ -80,6 +82,7 @@ fn certificate(submission: &GeneralSelectionSubmissionV1, coordinate: u32) -> Ve
             quote_credit: submission.quote_credit,
             price_scale: PRICE_SCALE,
         },
+        &prices,
         submission.claim_inputs,
         submission.claim_outputs,
         &mut bytes,

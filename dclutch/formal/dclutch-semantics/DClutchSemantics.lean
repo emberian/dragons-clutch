@@ -21,6 +21,7 @@ import DClutchSemantics.CapabilityProgramV3Abi
 import DClutchSemantics.CapabilityProgramV4Abi
 import DClutchSemantics.ClaimsConservationV1Abi
 import DClutchSemantics.ClaimsLiabilityBasisStateV2Abi
+import DClutchSemantics.ClearingPriceV1Abi
 import DClutchSemantics.Codec
 import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.ConditionalMarketV1
@@ -65,6 +66,7 @@ import DClutchSemantics.GeneralConfigV3Abi
 import DClutchSemantics.GeneralControllerAbi
 import DClutchSemantics.GeneralControllerRequestV2
 import DClutchSemantics.GeneralControllerRequestV3
+import DClutchSemantics.GeneralOrderV2Abi
 import DClutchSemantics.GeneralRequestProfilesV1
 import DClutchSemantics.GeneralRuntimeWireV2
 import DClutchSemantics.GeneralTransitionV3
