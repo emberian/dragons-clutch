@@ -843,7 +843,17 @@ function phaseGate(route, program) {
             return a ? `magic \`${a}\`` : `magic \`${s.bytes}\``;
           }
           if (s.kind === "variant") return `variant \`${s.path}\``;
-          return `${s.kind} \`${s.constant ?? s.path ?? ""}\``;
+          // Every selector carries its value under its OWN field name --
+          // `constant`, `path`, `function`, `text` -- and reading only the
+          // first two printed an empty pair of backticks for 50 of them:
+          // all 35 predicates (`function`) and all 15 tags (`text`). The page
+          // whose job is to say which bytes select which route said nothing
+          // there, in a cell that looked filled in. A selector kind this
+          // reader does not know now renders its KIND rather than a blank,
+          // because a name is a lead and a blank is a lie.
+          if (s.kind === "fallthrough") return "fallthrough";
+          const value = s.constant ?? s.path ?? s.function ?? s.text ?? null;
+          return value ? `${s.kind} \`${value}\`` : s.kind;
         })
         .join("; ");
       const st = routeStatus(r.id);

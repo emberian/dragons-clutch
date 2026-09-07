@@ -210,7 +210,9 @@ pub enum Selector {
         value: Option<i64>,
         provenance: Option<Provenance>,
     },
-    /// A `fn is_x(instruction_data) -> bool` recogniser.
+    /// A `fn(instruction_data) -> bool` recogniser, named for whatever it is
+    /// called: the walk reads the body, so `<module>::selects` is one exactly
+    /// as much as `is_x` is.
     Predicate { function: String },
     /// An enum action tag matched in a handler.
     Variant { path: String },
