@@ -1208,13 +1208,13 @@ fn evaluate_verify_candidate(
 /// later split cannot leave a stale sentence behind here.
 ///
 /// TWO LINES, NOT ONE, AND THEY HAVE DIFFERENT AUTHORS. The outer line names
-/// which of `GeneralHotCandidateErrorV3`'s ten arms refused -- a bank of the
-/// wrong width, a stride belonging to another action, an authenticated
-/// coordinate that disagrees, the row verifier -- and the inner line, present
-/// only where the verifier is the arm, names which of ITS sixteen conjuncts.
-/// Neither sentence is written here: each enum's own module says what its
-/// refusals mean, so a variant that is later split cannot leave a stale
-/// sentence behind in the program.
+/// which of `GeneralHotCandidateErrorV3`'s arms refused -- a bank of the wrong
+/// width, a stride belonging to another action, an OpenBatch coordinate, the
+/// row verifier -- and the inner line names which of THAT arm's clauses, or
+/// which persisted record would not yield its bytes. Neither sentence is
+/// written here: each enum's own module says what its refusals mean, so a
+/// variant that is later split cannot leave a stale sentence behind in the
+/// program.
 ///
 /// Every one of this program's ten candidate-projection sites goes through
 /// here. It was one site on 2026-09-04 and the other nine were still
@@ -1226,11 +1226,22 @@ fn candidate_cause(error: GeneralHotCandidateErrorV3) -> GeneralAcceleratorSeman
     if let GeneralHotCandidateErrorV3::Verify(GeneralCandidateErrorV1::Verify(cause)) = error {
         sol_log(cause.log_line());
     }
-    // The same two-line shape, for the other conjunct that has a word for its
-    // own clauses. `SubmitCandidate`'s coordinate join is fifty-eight
-    // accusations and published one of them; the inner line says which.
-    if let GeneralHotCandidateErrorV3::SubmitCoordinate(clause) = error {
-        sol_log(clause.log_line());
+    // The same two-line shape for every conjunct that has words for its own
+    // clauses -- which, since the lifecycle split, is all of them. The outer
+    // line says which arm refused; the inner says which of that arm's clauses,
+    // or which record would not yield its bytes.
+    match error {
+        GeneralHotCandidateErrorV3::Record(record) => sol_log(record.log_line()),
+        GeneralHotCandidateErrorV3::SubmitCoordinate(clause) => sol_log(clause.log_line()),
+        GeneralHotCandidateErrorV3::OpenBatchCoordinate(clause) => sol_log(clause.log_line()),
+        GeneralHotCandidateErrorV3::CloseBatchCoordinate(clause) => sol_log(clause.log_line()),
+        GeneralHotCandidateErrorV3::PlaceOrderCoordinate(clause) => sol_log(clause.log_line()),
+        GeneralHotCandidateErrorV3::CancelOrderCoordinate(clause) => sol_log(clause.log_line()),
+        GeneralHotCandidateErrorV3::ReleaseOrderCoordinate(clause) => sol_log(clause.log_line()),
+        GeneralHotCandidateErrorV3::CloseCandidateCoordinate(clause) => sol_log(clause.log_line()),
+        GeneralHotCandidateErrorV3::VerifyCoordinate(clause) => sol_log(clause.log_line()),
+        GeneralHotCandidateErrorV3::SettlementCoordinate(clause) => sol_log(clause.log_line()),
+        _ => {}
     }
     GeneralAcceleratorSemanticErrorV3::Candidate
 }

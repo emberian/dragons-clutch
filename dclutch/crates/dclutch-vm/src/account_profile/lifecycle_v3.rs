@@ -137,6 +137,11 @@ const SOURCE_ITEM: u8 = 1;
 
 const GUARD_ALWAYS: u8 = 0;
 const GUARD_SCALAR_EQ: u8 = 1;
+/// Always execute, and at close pay one scalar register's lamports out of the
+/// closing state to the plan's `payer` coordinate before the beneficiary is
+/// paid the rest. Close plans only; the one plan shape that has two lamport
+/// destinations (a permissionless cleanup crank and the state's owner).
+const GUARD_ALWAYS_WITH_CRANK_REWARD: u8 = 2;
 
 const REFUND_SOURCE_CREDIT: u8 = 0;
 const REFUND_SOURCE_PAYER: u8 = 1;
@@ -885,7 +890,7 @@ impl SelectedLifecycleV3<'_> {
         self.require_join(profile)?;
         validate_runtime_width(profile, tail_count, registers)?;
         match self.plan.guard {
-            PlanGuardV3::Always => Ok(true),
+            PlanGuardV3::Always | PlanGuardV3::AlwaysWithCrankReward { .. } => Ok(true),
             PlanGuardV3::ScalarEq { source, expected } => Ok(scalar_register(
                 profile, tail_count, item_index, registers, source,
             )? == expected),
@@ -930,6 +935,10 @@ enum PlanGuardV3 {
     ScalarEq {
         source: RegisterSourceV3,
         expected: u64,
+    },
+    /// Always, and the close pays `register` lamports to the plan's payer.
+    AlwaysWithCrankReward {
+        register: RegisterSourceV3,
     },
 }
 
@@ -2334,8 +2343,30 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                     expected,
                 }
             }
+            GUARD_ALWAYS_WITH_CRANK_REWARD => {
+                let source = match read_u8(self.bytes, offset + 25)? {
+                    SOURCE_COMMON => false,
+                    SOURCE_ITEM => true,
+                    _ => return Err(Error::UnknownTag),
+                };
+                let index = read_u16(self.bytes, offset + 26)?;
+                require_zero(self.bytes, offset + 28, 12)?;
+                PlanGuardV3::AlwaysWithCrankReward {
+                    register: RegisterSourceV3 {
+                        item: source,
+                        index,
+                    },
+                }
+            }
             _ => return Err(Error::UnknownTag),
         };
+        // The crank-reward guard is a CLOSE shape and nothing else's: it names
+        // the plan's payer as a lamport destination, and only a close has
+        // lamports to pay out of the state it names.
+        let crank = matches!(guard, PlanGuardV3::AlwaysWithCrankReward { .. });
+        if crank && operation != LifecycleOperationV3::Close {
+            return Err(Error::InvalidFunding);
+        }
         match operation {
             LifecycleOperationV3::Authenticate => {
                 // An Authenticate moves no rent and names no funding, so it has
@@ -2361,7 +2392,9 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                 }
             }
             LifecycleOperationV3::Close => {
-                if payer.is_some()
+                // A Close names a payer exactly when it pays a crank reward,
+                // and then the payer IS the crank's destination.
+                if payer.is_some() != crank
                     || rent_credit.is_none()
                     || principal.is_none()
                     || beneficiary.is_none()
@@ -3081,8 +3114,16 @@ pub struct CloseStatePlanV3 {
     pub source_after: u64,
     /// RentCredit balance before the close.
     pub rent_credit_before: u64,
-    /// RentCredit balance after receiving the entire source balance.
+    /// RentCredit balance after receiving the entire source balance less the
+    /// crank reward.
     pub rent_credit_after: u64,
+    /// The account the crank reward is paid to, where the plan declares one:
+    /// the plan's `payer` coordinate, which for a close is the permissionless
+    /// caller and never a create payer.
+    pub crank_destination: Option<[u8; 32]>,
+    /// Lamports paid out of the source to `crank_destination` before the
+    /// beneficiary is paid the remainder; zero without a crank guard.
+    pub crank_lamports: u64,
     /// Exact PDA bump encoded by the policy's final seed.
     pub bump: u8,
 }
@@ -3569,11 +3610,40 @@ fn plan_close(
         credit_coordinate,
         REQUIRED.rent_credit,
     )?;
-    let credit = authenticate_credit_account(context, credit_account)?;
-    let beneficiary = closing_refund_identity(selected, context, credit)?;
     if credit_account.key == state.key || !credit_account.writable || credit_account.executable {
         return Err(Error::InvalidFunding);
     }
+    // WHO A CLOSE PAYS IS THE PLAN'S DECLARATION, AND SO IS WHERE. Under
+    // `Credit` the destination is the market's permanent RentCredit record,
+    // authenticated as such, and the declared beneficiary must be that
+    // record's own wallet. Under `Payer` (decision 0021) the state belongs to
+    // one participant, the create recorded that participant as the
+    // beneficiary, and the destination is that participant's WALLET at the
+    // same coordinate -- authenticated by identity, `key == recorded
+    // beneficiary`, because there is no record to decode. Until 2026-09-06 a
+    // `Payer` close only relaxed the equality and still paid the market's
+    // credit, so a Dealer LP's or a General solver's rent went to the market's
+    // sponsor: the declaration moved the identity and not the lamports.
+    let (credit_key, credit_lamports, beneficiary) = match selected.refund_source {
+        LifecycleRefundSourceV3::Credit => {
+            let credit = authenticate_credit_account(context, credit_account)?;
+            let beneficiary = closing_refund_identity(selected, context, credit)?;
+            (credit.key, credit.lamports, beneficiary)
+        }
+        LifecycleRefundSourceV3::Payer => {
+            let declared = identity_register(
+                context.account_profile,
+                context.tail_count,
+                context.item_index,
+                context.registers,
+                selected.beneficiary.ok_or(Error::InvalidRent)?,
+            )?;
+            if declared == [0; 32] || *credit_account.key != declared {
+                return Err(Error::InvalidRent);
+            }
+            (*credit_account.key, credit_account.lamports, declared)
+        }
+    };
     let principal = scalar_register(
         context.account_profile,
         context.tail_count,
@@ -3581,24 +3651,62 @@ fn plan_close(
         context.registers,
         selected.principal.ok_or(Error::InvalidRent)?,
     )?;
-    if principal == 0 || state.lamports < principal {
+    // The crank reward, where the plan's guard names one: paid out of the
+    // source to the plan's payer coordinate, a permissionless caller the
+    // profile grants CREDIT_LAMPORTS. It is not a fee and not rent; it is the
+    // compartment the state's own record reserved for whoever cleans up.
+    let (crank_destination, crank_lamports) = match selected.guard {
+        PlanGuardV3::AlwaysWithCrankReward { register } => {
+            let crank_coordinate = selected.payer.ok_or(Error::InvalidFunding)?;
+            let crank_account = account_at(context, crank_coordinate)?;
+            require_permissions(
+                context.account_profile,
+                crank_coordinate,
+                REQUIRED.rent_credit,
+            )?;
+            if crank_account.key == state.key
+                || crank_account.key == credit_account.key
+                || !crank_account.writable
+                || crank_account.executable
+            {
+                return Err(Error::InvalidFunding);
+            }
+            (
+                Some(*crank_account.key),
+                scalar_register(
+                    context.account_profile,
+                    context.tail_count,
+                    context.item_index,
+                    context.registers,
+                    register,
+                )?,
+            )
+        }
+        PlanGuardV3::Always | PlanGuardV3::ScalarEq { .. } => (None, 0),
+    };
+    let owed = principal
+        .checked_add(crank_lamports)
+        .ok_or(Error::Arithmetic)?;
+    if principal == 0 || state.lamports < owed {
         return Err(Error::InvalidRent);
     }
-    let rent_credit_after = credit
-        .lamports
+    let rent_credit_after = credit_lamports
         .checked_add(state.lamports)
+        .and_then(|value| value.checked_sub(crank_lamports))
         .ok_or(Error::Arithmetic)?;
     Ok(StateLifecyclePlanV3::Close(CloseStatePlanV3 {
         state: *state.key,
-        rent_credit: credit.key,
+        rent_credit: credit_key,
         beneficiary,
         refund_source: selected.refund_source,
         source_data_bytes: data_bytes,
         historical_rent_principal: principal,
         source_before: state.lamports,
         source_after: 0,
-        rent_credit_before: credit.lamports,
+        rent_credit_before: credit_lamports,
         rent_credit_after,
+        crank_destination,
+        crank_lamports,
         bump,
     }))
 }
@@ -6100,12 +6208,18 @@ mod tests {
             )
         };
 
-        let close = |policy_bytes: &[u8], declared: [u8; 32]| {
+        // The account standing at the CREDIT COORDINATE is an argument, because
+        // the two arms put different things there. `Credit` puts the market's
+        // permanent RentCredit record; `Payer` puts the beneficiary's own
+        // wallet, and the kernel authenticates it by identity.
+        let close = |policy_bytes: &[u8], declared: [u8; 32], credit_key: &'static [u8; 32]| {
             let policy =
                 StateLifecyclePolicyV3::decode_selected(POLICY_ID, POLICY_ID, policy_bytes)
                     .expect("policy");
             let (scalars, identities) = registers_declaring(declared);
             let mut accounts = create_accounts();
+            accounts[3] =
+                AccountObservationV1::new(credit_key, &[7; 32], 7, &[], false, true, false);
             accounts[6] = AccountObservationV1::new(
                 &[0x52; 32],
                 &TRADING,
@@ -6184,27 +6298,41 @@ mod tests {
         assert_eq!(create(&owned, SPONSOR), Err(Error::InvalidRent));
         assert_eq!(create(&owned, STRANGER), Err(Error::InvalidRent));
 
-        // The close reads the create's recorded answer back out of the state.
-        // Under the market arm the kernel re-derives it from the credit, which
-        // it can still see; under the owned arm the payer is not an account of
-        // this invocation, so the stored identity is the authority and the
-        // kernel requires only that the create actually recorded one.
+        // The close pays the create's recorded answer, and WHERE it pays is the
+        // same declaration. Under the market arm the destination is the
+        // RentCredit record and the kernel re-derives the identity from it.
+        // Under the owned arm the destination is the beneficiary's own wallet,
+        // standing at that same coordinate and authenticated `key == declared`.
+        const CREDIT_RECORD: [u8; 32] = [0x43; 32];
         assert_eq!(
-            close(&market, SPONSOR).map(|plan| match plan {
+            close(&market, SPONSOR, &CREDIT_RECORD).map(|plan| match plan {
                 StateLifecyclePlanV3::Close(value) => value.beneficiary,
                 _ => panic!("close"),
             }),
             Ok(SPONSOR)
         );
-        assert_eq!(close(&market, PAYER), Err(Error::InvalidRent));
         assert_eq!(
-            close(&owned, PAYER).map(|plan| match plan {
-                StateLifecyclePlanV3::Close(value) => value.beneficiary,
-                _ => panic!("close"),
-            }),
-            Ok(PAYER)
+            close(&market, PAYER, &CREDIT_RECORD),
+            Err(Error::InvalidRent)
         );
-        assert_eq!(close(&owned, [0; 32]), Err(Error::InvalidRent));
+        let owned_close = close(&owned, PAYER, &PAYER).expect("payer-refunded close");
+        assert_eq!(
+            match owned_close {
+                StateLifecyclePlanV3::Close(value) => (value.beneficiary, value.rent_credit),
+                _ => panic!("close"),
+            },
+            (PAYER, PAYER)
+        );
+        // THE DEFECT DECISION 0021 LEFT STANDING, AND THE ONE ASSERTION THAT
+        // CONVICTS IT. A `Payer` close used to relax the beneficiary equality
+        // and still pay the market's RentCredit record, so a participant's rent
+        // went to the market's sponsor. With the record at the coordinate and
+        // the payer declared, that is now a refusal, not a silent redirection.
+        assert_eq!(
+            close(&owned, PAYER, &CREDIT_RECORD),
+            Err(Error::InvalidRent)
+        );
+        assert_eq!(close(&owned, [0; 32], &PAYER), Err(Error::InvalidRent));
 
         // The tag is wire, and the wire is exhaustive. An Authenticate moves no
         // rent and may not declare a refund identity at all; an unknown tag is
@@ -6278,6 +6406,8 @@ mod tests {
                 source_after: 0,
                 rent_credit_before: 7,
                 rent_credit_after: 142,
+                crank_destination: None,
+                crank_lamports: 0,
                 bump: 242,
             })
         );

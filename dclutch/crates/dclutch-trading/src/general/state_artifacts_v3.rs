@@ -1169,11 +1169,20 @@ fn close_candidate_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
         data_base,
         data_stride: 0,
     }];
+    // THE CANDIDATE'S WHOLE LAMPORT FLOW IS THIS ONE PLAN. The recipe declares
+    // `Payer`, so the close pays the recorded beneficiary -- the solver, whose
+    // wallet sits at the credit coordinate -- the state's balance less the
+    // cleanup compartment, and pays the cleanup compartment to the payer
+    // coordinate: the permissionless caller who cranked the close. The Effect
+    // used to move the same balance a second time out of a state this plan
+    // had already drained; it moves nothing now.
     let plans = [LifecyclePlanInputV3 {
         action: action as u32,
         operation: LifecycleOperationInputV3::Close,
         recipe: 0,
-        payer: general_create_payer_account_v3(action).map(LifecycleAccountCoordinateV3::fixed),
+        payer: Some(LifecycleAccountCoordinateV3::fixed(
+            GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
+        )),
         rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
             general_rent_credit_account_v3(action),
         )),
@@ -1184,7 +1193,11 @@ fn close_candidate_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
             identity::PRIMARY_BENEFICIARY_OBSERVATION,
         )?)),
         refund_source: general_state_refund_source_v3(recipe_kind),
-        guard: LifecycleGuardInputV3::Always,
+        guard: LifecycleGuardInputV3::AlwaysWithCrankReward {
+            register: LifecycleRegisterCoordinateV3::common(scalar_u16(
+                scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION,
+            )?),
+        },
     }];
     // A Close plan consumes authenticated observations and emits no lifecycle
     // protected outputs. Those outputs are canonical only for

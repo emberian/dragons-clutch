@@ -58,11 +58,13 @@ use dclutch_sha256_adapter::digest;
 use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
+    v3::AccountProfileV3,
 };
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
     v4::ProgramV4 as EffectProgramV4,
+    v5::ProgramV5 as EffectProgramV5,
 };
 use dclutch_vm::request_profile::{RequestProfileV1, validate_request};
 use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
@@ -324,8 +326,27 @@ pub fn authenticate_general_artifacts_v3<'a>(
         descriptor.account_profile().program().to_bytes(),
         artifacts.account_profile,
     )?;
-    let account_profile = AccountProfileV2::decode(artifacts.account_profile)
+    // The published record is a V3 funding envelope over the V2 profile the
+    // rules below are stated against. The envelope's bound table must be the
+    // one `general_funding_bounds_v3` authors for this action -- a profile
+    // that refined a coordinate the family does not fund, or failed to refine
+    // the one it does, is a different artifact wearing this action's name.
+    let funding_profile = AccountProfileV3::decode(artifacts.account_profile)
         .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?;
+    let expected_bounds =
+        crate::general::account_rules_v3::general_funding_bounds_v3(request.action);
+    if usize::from(funding_profile.funding_bound_count()) != expected_bounds.bounds().len() {
+        return Err(GeneralArtifactErrorV3::AccountProfile);
+    }
+    for (index, expected) in expected_bounds.bounds().iter().enumerate() {
+        let bound = funding_profile
+            .funding_bound(u16::try_from(index).map_err(|_| GeneralArtifactErrorV3::Geometry)?)
+            .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?;
+        if bound != *expected {
+            return Err(GeneralArtifactErrorV3::AccountProfile);
+        }
+    }
+    let account_profile: AccountProfileV2<'_> = funding_profile.base();
     require_content(
         descriptor.lifecycle().program().to_bytes(),
         artifacts.lifecycle_policy,
@@ -420,8 +441,30 @@ pub fn authenticate_general_artifacts_v3<'a>(
     // header and nothing else, and the two conjuncts here say so: a General
     // effect declares no dynamic span (its sole span is declared by the
     // ACCOUNT PROFILE) and no borrowed range.
-    let envelope =
-        EffectProgramV4::decode(artifacts.effect).map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    //
+    // Since the work escrow became a funding action the record is a V5
+    // funding envelope over that V4 envelope. Its table must be the one
+    // `general_funding_actions_v5` authors for this action, joined here the
+    // same way the profile's bounds are, so the two halves of "who funds what"
+    // cannot drift apart in a release.
+    let funding = EffectProgramV5::decode(artifacts.effect)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let expected_actions =
+        crate::general::effect_artifacts_v3::general_funding_actions_v5(request.action);
+    if usize::from(funding.funding_action_count()) != expected_actions.actions().len()
+        || funding.funding_seed_count() != 0
+    {
+        return Err(GeneralArtifactErrorV3::Effect);
+    }
+    for (index, expected) in expected_actions.actions().iter().enumerate() {
+        let action = funding
+            .funding_action(u16::try_from(index).map_err(|_| GeneralArtifactErrorV3::Geometry)?)
+            .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+        if action != *expected {
+            return Err(GeneralArtifactErrorV3::Effect);
+        }
+    }
+    let envelope: EffectProgramV4<'_> = funding.base();
     if envelope.span_count() != 0 || envelope.range_count() != 0 {
         return Err(GeneralArtifactErrorV3::Effect);
     }
@@ -526,13 +569,13 @@ fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
         || descriptor.root_schema().to_bytes() != GENERAL_ROOT_SCHEMA_ID_V2
         || descriptor.derivation_policy() != descriptor.lifecycle().program()
         || descriptor.account_profile().schema().to_bytes()
-            != dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID
+            != dclutch_vm::account_profile::v3::SCHEMA_RELEASE_ID_V3
         || descriptor.request_profile().schema().to_bytes()
             != dclutch_vm::request_profile::SCHEMA_RELEASE_ID
         || descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
         || descriptor.transition().schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID
-        || descriptor.effect().schema().to_bytes() != dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4
+        || descriptor.effect().schema().to_bytes() != dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5
         || usize::try_from(descriptor.root_state_bytes())
             .map_err(|_| GeneralArtifactErrorV3::Geometry)?
             != GENERAL_ROOT_BYTES_V2
@@ -1174,8 +1217,8 @@ mod tests {
     /// `encode_general_account_profile_v3_atomic` now.
     fn account_profile_for(action: Action) -> Vec<u8> {
         use crate::general::account_rules_v3::{
-            GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
-            general_account_profile_bytes_v3,
+            GeneralExternalAccountWidthsV3, encode_general_account_profile_funding_v3_atomic,
+            general_account_profile_bytes_v3, general_account_profile_funding_bytes_v3,
         };
 
         const WIDTHS: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWidthsV3 {
@@ -1191,11 +1234,21 @@ mod tests {
             realm_record: 112,
             rent_credit: 48,
         };
-        let bytes = general_account_profile_bytes_v3(action).expect("profile width");
+        let base = general_account_profile_bytes_v3(action).expect("profile width");
+        let mut base_scratch = vec![0_u8; base];
+        let mut base_output = vec![0_u8; base];
+        let bytes = general_account_profile_funding_bytes_v3(action).expect("V3 width");
         let mut scratch = vec![0_u8; bytes];
         let mut output = vec![0x55_u8; bytes];
-        encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut output)
-            .expect("Profile13 account artifact");
+        encode_general_account_profile_funding_v3_atomic(
+            action,
+            WIDTHS,
+            &mut base_scratch,
+            &mut base_output,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("Profile13 account artifact in its V3 envelope");
         output
     }
 
@@ -1243,9 +1296,9 @@ mod tests {
 
     fn effect_for(action: Action) -> Vec<u8> {
         use crate::general::effect_artifacts_v3::{
-            GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
-            general_effect_instruction_count_v3, general_effect_program_bytes_v3,
-            general_effect_program_bytes_v4, general_effect_template_bytes_v3,
+            GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, general_effect_instruction_count_v3,
+            general_effect_program_bytes_v3, general_effect_program_bytes_v4,
+            general_effect_template_bytes_v3,
         };
 
         let (fixed, item) = general_effect_instruction_count_v3(action);
@@ -1254,15 +1307,21 @@ mod tests {
         let base = general_effect_program_bytes_v3(action).expect("base width");
         let mut base_scratch = vec![0_u8; base];
         let mut base_output = vec![0x55_u8; base];
-        let bytes = general_effect_program_bytes_v4(action).expect("effect width");
+        let v4 = general_effect_program_bytes_v4(action).expect("V4 width");
+        let mut v4_scratch = vec![0_u8; v4];
+        let mut v4_output = vec![0_u8; v4];
+        let bytes = crate::general::effect_artifacts_v3::general_effect_program_bytes_v5(action)
+            .expect("effect width");
         let mut scratch = vec![0_u8; bytes];
         let mut output = vec![0x55_u8; bytes];
-        encode_general_effect_program_v4_atomic(
+        crate::general::effect_artifacts_v3::encode_general_effect_program_v5_atomic(
             action,
             &mut instructions,
             &mut templates,
             &mut base_scratch,
             &mut base_output,
+            &mut v4_scratch,
+            &mut v4_output,
             &mut scratch,
             &mut output,
         )
@@ -1347,7 +1406,7 @@ mod tests {
             id(capacity),
             CapabilityArtifactsV4 {
                 account_profile: ArtifactReferenceV4::new(
-                    id(dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID),
+                    id(dclutch_vm::account_profile::v3::SCHEMA_RELEASE_ID_V3),
                     id(digest(&account)),
                 ),
                 request_profile: ArtifactReferenceV4::new(
@@ -1367,7 +1426,7 @@ mod tests {
                     id(digest(&transition)),
                 ),
                 effect: ArtifactReferenceV4::new(
-                    id(dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4),
+                    id(dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5),
                     id(digest(&effect)),
                 ),
             },
@@ -1646,27 +1705,32 @@ mod tests {
         );
         let mut request = fixture.request;
         *request.get_mut(10).expect("action byte") = Action::Consider as u8;
-        assert!(
+        assert_eq!(
             authenticate_general_artifacts_v3(
                 fixture.selection(),
                 fixture.artifacts(),
                 &request,
                 258,
-            )
-            .is_err()
+            ),
+            Err(GeneralArtifactErrorV3::Request)
         );
 
         let mut hostile_profile = account_profile();
-        let fixed_accounts = usize::from(
-            AccountProfileV2::decode(&hostile_profile)
-                .expect("fixture profile")
-                .fixed_account_count(),
-        );
-        // The header, then one rule per fixed coordinate, then the operations.
-        // There is no span entry and no span rule template between them any
-        // more: General declares zero dynamic spans since the input bank went
-        // inline, and this offset is the encoded layout, not a derivation.
-        let operation = dclutch_vm::account_profile::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
+        let funding_profile = AccountProfileV3::decode(&hostile_profile).expect("fixture profile");
+        let fixed_accounts = usize::from(funding_profile.base().fixed_account_count());
+        // The published record is the V3 funding envelope: its header and its
+        // ordered bound table come first, and the V2 profile the offset below
+        // is stated against is the tail.
+        let base = dclutch_vm::account_profile::v3::HEADER_BYTES_V3
+            + usize::from(funding_profile.funding_bound_count())
+                * dclutch_vm::account_profile::v3::FUNDING_BOUND_BYTES_V3;
+        // Within that base: the header, then one rule per fixed coordinate,
+        // then the operations. There is no span entry and no span rule template
+        // between them any more: General declares zero dynamic spans since the
+        // input bank went inline, and this offset is the encoded layout, not a
+        // derivation.
+        let operation = base
+            + dclutch_vm::account_profile::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
             + fixed_accounts * dclutch_vm::account_profile::v2::RULE_BYTES;
         put(
             &mut hostile_profile,
@@ -1820,19 +1884,20 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_v3_effect_record_is_refused_and_the_v4_envelope_is_the_release() {
+    fn a_bare_v3_effect_record_is_refused_and_the_v5_envelope_is_the_release() {
         use crate::general::effect_artifacts_v3::{
             GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
             general_effect_instruction_count_v3, general_effect_program_bytes_v3,
-            general_effect_program_bytes_v4, general_effect_template_bytes_v3,
+            general_effect_program_bytes_v5, general_effect_template_bytes_v3,
         };
 
         // This is the regression witness for the generation gap GEN-HOT found:
         // `process_hot_execution_v3` decodes exactly one effect schema
-        // (`v4::SCHEMA_RELEASE_ID_V4`) and General published a bare V3 program,
-        // so no General release could enter the Hot executor for any action. It
-        // survived every fixture because the accelerator authenticated the same
-        // V3 shape it emitted -- two authors agreeing with each other.
+        // and General published a bare V3 program, so no General release could
+        // enter the Hot executor for any action. It survived every fixture
+        // because the accelerator authenticated the same V3 shape it emitted --
+        // two authors agreeing with each other. The published record is now a
+        // V5 funding envelope over the V4 envelope over that V3 body.
         for action in crate::general::release_v3::GENERAL_ACTIONS_V3 {
             let (fixed, item) = general_effect_instruction_count_v3(action);
             let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; fixed + item];
@@ -1852,21 +1917,27 @@ mod tests {
             let envelope = effect_for(action);
             assert_eq!(
                 envelope.len(),
-                general_effect_program_bytes_v4(action).expect("envelope width")
+                general_effect_program_bytes_v5(action).expect("envelope width")
             );
-            // The envelope adds a header and preserves the body byte for byte.
+            // Each envelope prepends a header and its table and preserves the
+            // body byte for byte, so the V3 base is still the tail of the V5
+            // record.
             assert_eq!(
                 &envelope[envelope.len() - base_len..],
                 bare_v3.as_slice(),
-                "the V4 envelope must not rewrite its V3 base"
+                "neither envelope may rewrite the V3 base"
             );
             // The digest MOVED, which is the whole cost of the migration: the
             // certificate, admission, strategy, descriptor, ProgramSet and
             // capability seal are content-addressed on it and regenerate with it.
             assert_ne!(digest(&envelope), digest(&bare_v3));
             // And the old shape is now refused where it is authenticated.
-            assert!(EffectProgramV4::decode(&bare_v3).is_err());
-            let decoded = EffectProgramV4::decode(&envelope).expect("envelope decodes");
+            assert_eq!(
+                EffectProgramV5::decode(&bare_v3),
+                Err(dclutch_vm::effect::v5::ErrorV5::Wire)
+            );
+            let funding = EffectProgramV5::decode(&envelope).expect("envelope decodes");
+            let decoded: EffectProgramV4<'_> = funding.base();
             assert_eq!(decoded.span_count(), 0);
             assert_eq!(decoded.range_count(), 0);
         }
@@ -1882,12 +1953,12 @@ mod tests {
             })
             .expect("canonical affine child request");
         *fake.get_mut(request_offset).expect("one-byte child fake") ^= 1;
-        // The published artifact is the V4 envelope; the rules are stated
-        // against its V3 base, so the fake is decoded the same way the
-        // authentication path decodes it.
-        let envelope = EffectProgramV4::decode(&fake).expect("structurally valid fake");
+        // The published artifact is the V5 funding envelope over the V4
+        // envelope; the rules are stated against the V3 base, so the fake is
+        // decoded the same way the authentication path decodes it.
+        let funding = EffectProgramV5::decode(&fake).expect("structurally valid fake");
         assert_eq!(
-            validate_routes(Action::Collect, envelope.base()),
+            validate_routes(Action::Collect, funding.base().base()),
             Err(GeneralArtifactErrorV3::Effect)
         );
     }

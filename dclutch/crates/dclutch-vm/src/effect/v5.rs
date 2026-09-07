@@ -4,7 +4,19 @@
 //! family discriminator. It hostile-decodes the exact funding actions, their
 //! bounded PDA seed sources, and an embedded byte-exact V4 effect program. The
 //! outer runtime must join every action to AccountProfile V3 before performing
-//! create or close, then preserve the ordinary V4 projection semantics.
+//! create, fund or close, then preserve the ordinary V4 projection semantics.
+//!
+//! THREE OPERATIONS, AND THE THIRD IS WHY A WORK ESCROW CAN BE FUNDED AT ALL.
+//! `Create` tops up, allocates and assigns a vacant System account; `Close`
+//! drains a Trading-owned one. Neither can put lamports INTO a state the
+//! lifecycle created in the same transaction: a local `transfer_lamports` out
+//! of a System-owned payer is `ExternalAccountLamportSpend` (measured on
+//! SubmitCandidate at 678,245 CU, 2026-09-04), and a Create refuses a state
+//! that already exists. `Fund` is that movement through the System program:
+//! the signing payer tops one live state up to an exact target register, and
+//! the state keeps its owner, its data and its lifecycle. General's candidate
+//! work escrow is the first consumer; it carries no seeds because it derives
+//! no address -- the state it funds is the lifecycle's, already authenticated.
 
 use crate::capability_seal::{SealedArtifactV1, SealedRoleV1};
 
@@ -37,6 +49,7 @@ pub const MAX_ACTION_SEEDS_V5: u8 = 16;
 
 const OPCODE_CREATE: u8 = 0;
 const OPCODE_CLOSE: u8 = 1;
+const OPCODE_FUND: u8 = 2;
 const SEED_LITERAL: u8 = 0;
 const SEED_COMMON_SCALAR: u8 = 1;
 const SEED_COMMON_IDENTITY: u8 = 2;
@@ -77,6 +90,10 @@ pub enum FundingOperationV5 {
     Create = OPCODE_CREATE,
     /// Drain, truncate, and assign one live Trading-owned account after children.
     Close = OPCODE_CLOSE,
+    /// Top one live Trading-owned account up to an exact target balance through
+    /// the System program, debiting the signing payer, after lifecycle creates
+    /// and before children. Owner, data and lifecycle are untouched.
+    Fund = OPCODE_FUND,
 }
 
 impl FundingOperationV5 {
@@ -84,6 +101,7 @@ impl FundingOperationV5 {
         match value {
             OPCODE_CREATE => Ok(Self::Create),
             OPCODE_CLOSE => Ok(Self::Close),
+            OPCODE_FUND => Ok(Self::Fund),
             _ => Err(ErrorV5::ActionTable),
         }
     }
@@ -153,6 +171,35 @@ impl FundingActionV5 {
         }
     }
 
+    /// Declare one funding-owned top-up of a live state to an exact target.
+    ///
+    /// `target_lamports_scalar` is the balance the state must hold AFTER the
+    /// movement; the runtime debits the payer by exactly the shortfall and
+    /// refuses a state already above its target, so an over-funded escrow is
+    /// not representable. `refund_owner_identity` names the party the state's
+    /// lifecycle refund is owed to, and must agree with the lifecycle's own
+    /// recorded beneficiary -- the runtime joins the two.
+    pub const fn fund(
+        state: u16,
+        payer: u16,
+        system_program: u16,
+        target_lamports_scalar: u16,
+        refund_owner_identity: u16,
+    ) -> Self {
+        Self {
+            operation: FundingOperationV5::Fund,
+            seed_count: 0,
+            state,
+            counterparty: payer,
+            refund_destination: UNUSED_COORDINATE,
+            system_program,
+            lamports_scalar: target_lamports_scalar,
+            refund_owner_identity,
+            seed_start: 0,
+            live_bytes: 0,
+        }
+    }
+
     /// Selected funding operation.
     pub const fn operation(self) -> FundingOperationV5 {
         self.operation
@@ -168,18 +215,18 @@ impl FundingActionV5 {
         self.counterparty
     }
 
-    /// Create payer coordinate, absent for Close.
+    /// Create or Fund payer coordinate, absent for Close.
     pub const fn payer(self) -> Option<u16> {
         match self.operation {
-            FundingOperationV5::Create => Some(self.counterparty),
+            FundingOperationV5::Create | FundingOperationV5::Fund => Some(self.counterparty),
             FundingOperationV5::Close => None,
         }
     }
 
-    /// Close RentCredit coordinate, absent for Create.
+    /// Close RentCredit coordinate, absent for Create and Fund.
     pub const fn rent_credit(self) -> Option<u16> {
         match self.operation {
-            FundingOperationV5::Create => None,
+            FundingOperationV5::Create | FundingOperationV5::Fund => None,
             FundingOperationV5::Close => Some(self.counterparty),
         }
     }
@@ -188,19 +235,19 @@ impl FundingActionV5 {
     pub const fn refund_destination(self) -> Option<u16> {
         match self.operation {
             FundingOperationV5::Create => Some(self.refund_destination),
-            FundingOperationV5::Close => None,
+            FundingOperationV5::Close | FundingOperationV5::Fund => None,
         }
     }
 
-    /// Create-only System Program coordinate.
+    /// Create or Fund System Program coordinate, absent for Close.
     pub const fn system_program(self) -> Option<u16> {
         match self.operation {
-            FundingOperationV5::Create => Some(self.system_program),
+            FundingOperationV5::Create | FundingOperationV5::Fund => Some(self.system_program),
             FundingOperationV5::Close => None,
         }
     }
 
-    /// Target lamports for Create or observed full balance for Close.
+    /// Target lamports for Create or Fund, or observed full balance for Close.
     pub const fn lamports_scalar(self) -> u16 {
         self.lamports_scalar
     }
@@ -684,6 +731,22 @@ impl<'a> ProgramV5<'a> {
                         return Err(ErrorV5::ActionTable);
                     }
                 }
+                FundingOperationV5::Fund => {
+                    // No seeds and no width: a Fund derives no address and
+                    // allocates nothing. It needs the System program, distinct
+                    // from both parties, because the movement is a CPI.
+                    if action.seed_count != 0
+                        || action.seed_start != 0
+                        || action.refund_destination != UNUSED_COORDINATE
+                        || action.system_program == UNUSED_COORDINATE
+                        || action.system_program == 0
+                        || action.system_program == action.state
+                        || action.system_program == action.counterparty
+                        || action.live_bytes != 0
+                    {
+                        return Err(ErrorV5::ActionTable);
+                    }
+                }
             }
             prior_state = Some(action.state);
             index = index.checked_add(1).ok_or(ErrorV5::Arithmetic)?;
@@ -1110,5 +1173,222 @@ mod tests {
         let base_start = HEADER_BYTES_V5 + FUNDING_SEED_BYTES_V5;
         orphan_seed[base_start..].copy_from_slice(&base);
         assert_eq!(ProgramV5::decode(&orphan_seed), Err(ErrorV5::ActionTable));
+    }
+}
+
+#[cfg(test)]
+mod fund_tests {
+    #![allow(clippy::indexing_slicing)]
+
+    extern crate alloc;
+
+    use alloc::vec;
+
+    use super::*;
+    use crate::effect::v3::encode::{EffectGeometryV3, encode_effect_program_v4_atomic};
+    use crate::effect::v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, encode_program_v4_atomic};
+
+    /// One V4 envelope over a zero-route V3 base with the stated register file.
+    ///
+    /// THE WIDTH IS AN ARGUMENT BECAUSE A NARROW BASE REFUSES A WIDE ACTION
+    /// FIRST. `validate_tables` checks `lamports_scalar >= common_scalars` and
+    /// `refund_owner_identity >= common_identities` before it reaches the
+    /// per-operation shape, so a base too narrow for the register a Fund names
+    /// refuses every Fund -- the canonical one and each hostile alike -- and a
+    /// test written over it measures the base, not the shape.
+    fn base_v4_with(common_scalars: u16, common_identities: u16) -> alloc::vec::Vec<u8> {
+        let base_bytes = crate::effect::v3::HEADER_BYTES;
+        let mut base_scratch = vec![0_u8; base_bytes];
+        let mut base = vec![0_u8; base_bytes];
+        encode_effect_program_v4_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 12,
+                item_account_stride: 0,
+                common_scalars,
+                item_scalar_stride: 0,
+                common_identities,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &[],
+            &[],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("zero-route base");
+        let mut scratch = vec![0_u8; HEADER_BYTES_V4 + base_bytes];
+        let mut output = vec![0_u8; HEADER_BYTES_V4 + base_bytes];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            64,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("V4 envelope");
+        output
+    }
+
+    /// The narrow base the shape tests use: two common scalars, one identity.
+    fn base_v4() -> alloc::vec::Vec<u8> {
+        base_v4_with(2, 1)
+    }
+
+    /// A base whose register file admits the ones `generalWorkEscrowFund`
+    /// names: `SCRATCH_B` (scalar 93) and `identity::PAYER` (18).
+    fn base_v4_general() -> alloc::vec::Vec<u8> {
+        base_v4_with(94, 19)
+    }
+
+    fn encode(actions: &[FundingActionV5]) -> ResultV5<alloc::vec::Vec<u8>> {
+        let base = base_v4();
+        let width = HEADER_BYTES_V5 + actions.len() * FUNDING_ACTION_BYTES_V5 + base.len();
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_program_v5_atomic(&base, actions, &[], &mut scratch, &mut output)?;
+        Ok(output)
+    }
+
+    #[test]
+    fn a_fund_round_trips_and_names_its_payer_and_system_but_no_refund() {
+        let bytes = encode(&[FundingActionV5::fund(5, 6, 8, 1, 0)]).expect("one Fund");
+        let program = ProgramV5::decode(&bytes).expect("decodes");
+        assert_eq!(program.funding_action_count(), 1);
+        assert_eq!(program.funding_seed_count(), 0);
+        let action = program.funding_action(0).expect("the Fund");
+        assert_eq!(action.operation(), FundingOperationV5::Fund);
+        assert_eq!(action.state(), 5);
+        assert_eq!(action.payer(), Some(6));
+        assert_eq!(action.rent_credit(), None);
+        assert_eq!(action.refund_destination(), None);
+        assert_eq!(action.system_program(), Some(8));
+        assert_eq!(action.lamports_scalar(), 1);
+        assert_eq!(action.refund_owner_identity(), 0);
+        assert_eq!(action.live_bytes(), 0);
+        assert_eq!(action.seed_count(), 0);
+        // A Fund resolves no seed: it derives no address.
+        assert_eq!(
+            program.resolve_funding_seed(0, 0, 0, &[0, 0], &[[0; 32]]),
+            Err(ErrorV5::SeedTable)
+        );
+    }
+
+    #[test]
+    fn a_fund_refuses_seeds_width_refund_and_a_missing_or_aliased_system() {
+        let good = encode(&[FundingActionV5::fund(5, 6, 8, 1, 0)]).expect("one Fund");
+        // Seeds: byte 1 of the action is `seed_count`.
+        let mut seeded = good.clone();
+        seeded[HEADER_BYTES_V5 + 1] = 1;
+        assert_eq!(ProgramV5::decode(&seeded), Err(ErrorV5::ActionTable));
+        // Width: bytes 16..20 are `live_bytes`.
+        let mut wide = good.clone();
+        wide[HEADER_BYTES_V5 + 16] = 1;
+        assert_eq!(ProgramV5::decode(&wide), Err(ErrorV5::ActionTable));
+        // A refund destination: bytes 6..8.
+        let mut refunded = good.clone();
+        refunded[HEADER_BYTES_V5 + 6..HEADER_BYTES_V5 + 8].copy_from_slice(&7_u16.to_le_bytes());
+        assert_eq!(ProgramV5::decode(&refunded), Err(ErrorV5::ActionTable));
+        // No System program, or one aliasing a party.
+        for system in [UNUSED_COORDINATE, 0, 5, 6] {
+            let mut aliased = good.clone();
+            aliased[HEADER_BYTES_V5 + 8..HEADER_BYTES_V5 + 10]
+                .copy_from_slice(&system.to_le_bytes());
+            assert_eq!(ProgramV5::decode(&aliased), Err(ErrorV5::ActionTable));
+        }
+        // The encoder refuses the same shapes before any byte is written.
+        let mut scratch = vec![0_u8; good.len()];
+        let mut output = vec![0xA5_u8; good.len()];
+        assert_eq!(
+            encode_program_v5_atomic(
+                &base_v4(),
+                &[FundingActionV5::fund(5, 6, 5, 1, 0)],
+                &[],
+                &mut scratch,
+                &mut output,
+            ),
+            Err(ErrorV5::ActionTable)
+        );
+        assert!(output.iter().all(|byte| *byte == 0xA5));
+    }
+
+    #[test]
+    fn a_fund_may_follow_a_create_on_a_lower_state_and_never_share_its_state() {
+        let base = base_v4();
+        let seeds = [
+            FundingSeedV5::literal(b"x").expect("literal"),
+            FundingSeedV5::CanonicalBump,
+        ];
+        let actions = [
+            FundingActionV5::create(3, 6, 7, 8, 0, 0, 64, 0, 2),
+            FundingActionV5::fund(5, 6, 8, 1, 0),
+        ];
+        let width = HEADER_BYTES_V5
+            + actions.len() * FUNDING_ACTION_BYTES_V5
+            + seeds.len() * FUNDING_SEED_BYTES_V5
+            + base.len();
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_program_v5_atomic(&base, &actions, &seeds, &mut scratch, &mut output)
+            .expect("a Create then a Fund");
+        assert_eq!(ProgramV5::decode(&output).map(|p| p.funding_action_count()), Ok(2));
+        let same_state = [
+            FundingActionV5::create(5, 6, 7, 8, 0, 0, 64, 0, 2),
+            FundingActionV5::fund(5, 6, 8, 1, 0),
+        ];
+        assert_eq!(
+            encode_program_v5_atomic(&base, &same_state, &seeds, &mut scratch, &mut output),
+            Err(ErrorV5::ActionTable)
+        );
+    }
+
+    #[test]
+    fn the_lean_constants_are_this_kernels() {
+        use crate::effect::generated_v5_abi::*;
+        assert_eq!(MAGIC_V5, EFFECT_V5_MAGIC_LEAN);
+        assert_eq!(VERSION_V5, EFFECT_V5_VERSION_LEAN);
+        assert_eq!(HEADER_BYTES_V5, EFFECT_V5_HEADER_BYTES_LEAN);
+        assert_eq!(FUNDING_ACTION_BYTES_V5, EFFECT_V5_FUNDING_ACTION_BYTES_LEAN);
+        assert_eq!(FUNDING_SEED_BYTES_V5, EFFECT_V5_FUNDING_SEED_BYTES_LEAN);
+        assert_eq!(MAX_FUNDING_ACTIONS_V5, EFFECT_V5_MAX_FUNDING_ACTIONS_LEAN);
+        assert_eq!(MAX_FUNDING_SEEDS_V5, EFFECT_V5_MAX_FUNDING_SEEDS_LEAN);
+        assert_eq!(MAX_ACTION_SEEDS_V5, EFFECT_V5_MAX_ACTION_SEEDS_LEAN);
+        assert_eq!(OPCODE_CREATE, EFFECT_V5_OPCODE_CREATE_LEAN);
+        assert_eq!(OPCODE_CLOSE, EFFECT_V5_OPCODE_CLOSE_LEAN);
+        assert_eq!(OPCODE_FUND, EFFECT_V5_OPCODE_FUND_LEAN);
+        assert_eq!(SEED_LITERAL, EFFECT_V5_SEED_LITERAL_LEAN);
+        assert_eq!(SEED_COMMON_SCALAR, EFFECT_V5_SEED_COMMON_SCALAR_LEAN);
+        assert_eq!(SEED_COMMON_IDENTITY, EFFECT_V5_SEED_COMMON_IDENTITY_LEAN);
+        assert_eq!(SEED_CANONICAL_BUMP, EFFECT_V5_SEED_CANONICAL_BUMP_LEAN);
+        assert_eq!(UNUSED_COORDINATE, EFFECT_V5_UNUSED_COORDINATE_LEAN);
+        assert_eq!(SCHEMA_RELEASE_PREIMAGE_V5, EFFECT_V5_SCHEMA_RELEASE_PREIMAGE_LEAN);
+        assert_eq!(SCHEMA_RELEASE_ID_V5, EFFECT_V5_SCHEMA_RELEASE_ID_LEAN);
+        // The Lean witness of a Fund is what this kernel decodes as one.
+        let base = base_v4_general();
+        let width = u32::try_from(base.len()).expect("width").to_le_bytes();
+        let mut bytes = alloc::vec::Vec::new();
+        bytes.extend_from_slice(&EFFECT_V5_ONE_FUND_HEADER_WITNESS);
+        bytes[12..16].copy_from_slice(&width);
+        bytes.extend_from_slice(&EFFECT_V5_FUND_ACTION_WITNESS);
+        bytes.extend_from_slice(&base);
+        let program = ProgramV5::decode(&bytes).expect("the Lean Fund witness decodes");
+        assert_eq!(
+            program.funding_action(0).map(FundingActionV5::operation),
+            Ok(FundingOperationV5::Fund)
+        );
+        for hostile in [
+            EFFECT_V5_FUND_WITH_SEEDS_REFUSAL,
+            EFFECT_V5_FUND_WITH_WIDTH_REFUSAL,
+            EFFECT_V5_FUND_WITH_REFUND_REFUSAL,
+        ] {
+            let mut bytes = alloc::vec::Vec::new();
+            bytes.extend_from_slice(&EFFECT_V5_ONE_FUND_HEADER_WITNESS);
+            bytes[12..16].copy_from_slice(&width);
+            bytes.extend_from_slice(&hostile);
+            bytes.extend_from_slice(&base);
+            assert_eq!(ProgramV5::decode(&bytes), Err(ErrorV5::ActionTable));
+        }
     }
 }

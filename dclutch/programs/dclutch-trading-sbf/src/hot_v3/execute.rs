@@ -1607,6 +1607,18 @@ fn commit_prepared_hot_result_v3(
         prepared.identities,
         prepared.runtime_accounts,
     )?;
+    // After both creates and before any child: a Fund tops a state the
+    // lifecycle just created up to the target the accelerator wrote, through
+    // System, out of the signing payer. It is the only lamport movement INTO a
+    // lifecycle state this commit makes, and it replaces the local transfer
+    // the runtime refused as `ExternalAccountLamportSpend`.
+    apply_funding_top_ups_v5(
+        prepared.program_id,
+        prepared.effect.funding(),
+        prepared.scalars,
+        prepared.identities,
+        prepared.runtime_accounts,
+    )?;
     hot_heap_mark!("lifecycle-creates");
     let child_execution_digest = execute_prepared_child_routes_v3(caller_bumps, prepared)?;
     hot_heap_mark!("children-executed");

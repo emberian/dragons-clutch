@@ -79,6 +79,9 @@ pub mod general_activation_v3;
 pub mod general_hot_v3;
 /// Compile the seven General actions into one publishable, selectable release.
 pub mod general_selected_release_v1;
+/// One author for the runtime frame of every General action: subject states,
+/// escrow children, evidence, and the physical runtime suffix a route states.
+pub mod general_session_v1;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
 /// Chain-derived unsigned Core infrastructure succession composition.

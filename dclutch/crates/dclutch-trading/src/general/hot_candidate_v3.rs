@@ -19,15 +19,18 @@ use dclutch_custody::OperationV1;
 use dclutch_market::execution_strategy::v2::{ExecutionCandidateV2, register_bank_bytes_v2};
 
 use crate::general::{
+    cancel_order_clause_v3::CancelOrderClauseV3,
     candidate_v1::{
         CandidateVerifyRowBuffersV1, CandidateVerifyRowSummaryV1, CandidateVerifyRowViewV1,
         GeneralCandidateErrorV1, GeneralCandidateLayoutV1, GeneralCandidateV1,
         candidate_certificate_len_v1, verify_candidate_row_v1, verify_candidate_row_workspace_v1,
     },
+    close_batch_clause_v3::CloseBatchClauseV3,
+    close_candidate_clause_v3::CloseCandidateClauseV3,
     collection_v1::{
         BatchStatusV1, EscrowDirectionV1, GeneralBatchLayoutV1, GeneralBatchOpeningV1,
-        GeneralBatchV1, GeneralOrderLayoutV1, GeneralOrderPhaseV1, GeneralOrderV1,
-        GeneralSignedOrderTermsV1, authenticate_order_residual_release_v1,
+        GeneralBatchV1, GeneralCollectionErrorV1, GeneralOrderLayoutV1, GeneralOrderPhaseV1,
+        GeneralOrderV1, GeneralSignedOrderTermsV1, authenticate_order_residual_release_v1,
     },
     escrow_v1::{WorkEscrowClosePlanV1, WorkEscrowObservationV1},
     gen_seven_v1::{
@@ -35,14 +38,20 @@ use crate::general::{
         plan_candidate_work_escrow_close_v1,
     },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateLayoutV3},
+    open_batch_clause_v3::OpenBatchClauseV3,
+    place_order_clause_v3::PlaceOrderClauseV3,
+    release_order_clause_v3::ReleaseOrderClauseV3,
     runtime_selection::{
         RuntimeSelectionCursorV2, RuntimeSelectionLayoutV2, RuntimeSelectionPhaseV2,
     },
     runtime_settlement::{RuntimeSettlementActionV2, RuntimeSettlementEffectPlanV2},
     runtime_verify::{RuntimeCandidateVerifierV2, RuntimeCompleteSetMoveV2},
     runtime_width::{CandidateV2, SettlementCursorLayoutV2, SettlementCursorV2},
+    settlement_clause_v3::SettlementClauseV3,
     submit_candidate_clause_v3::SubmitCandidateClauseV3,
+    verify_candidate_clause_v3::VerifyCandidateClauseV3,
 };
+use crate::general_config::root::RootError;
 
 #[cfg(test)]
 use crate::general::collection_v1::{
@@ -661,18 +670,19 @@ pub fn general_hot_environment_from_bank_v3(
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let scalar_count = general_hot_scalar_count_v3(action, outcome_count)?;
-    let scalar_u32 = |coordinate| {
+    // THE NARROWINGS CARRY THE COORDINATE'S OWN CLAUSE. A `u64` register that
+    // does not fit the ordinal it feeds is a different accusation per register,
+    // and the closure would otherwise publish one word for all three.
+    let scalar_u32 = |coordinate, clause| {
         u32::try_from(read_scalar(bank, coordinate)?)
-            .map_err(|_| GeneralHotCandidateErrorV3::InvalidCoordinate)
+            .map_err(|_| GeneralHotCandidateErrorV3::SettlementCoordinate(clause))
     };
-    let scalar_u16 = |coordinate| {
+    let scalar_u16 = |coordinate, clause| {
         u16::try_from(read_scalar(bank, coordinate)?)
-            .map_err(|_| GeneralHotCandidateErrorV3::InvalidCoordinate)
+            .map_err(|_| GeneralHotCandidateErrorV3::SettlementCoordinate(clause))
     };
     let present = read_scalar(bank, scalar::SETTLEMENT_POSITION_PRESENT)?;
-    if present > 1 {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    settlement_clause(present > 1, SettlementClauseV3::BankPositionPresent)?;
     Ok(GeneralHotEnvironmentV3 {
         general_root: read_identity(bank, scalar_count, identity::GENERAL_ROOT)?,
         parent_request_digest: read_identity(bank, scalar_count, identity::PARENT_REQUEST_DIGEST)?,
@@ -689,8 +699,11 @@ pub fn general_hot_environment_from_bank_v3(
         realm: read_identity(bank, scalar_count, identity::REALM)?,
         trading_program: read_identity(bank, scalar_count, identity::TRADING_PROGRAM)?,
         generation: read_scalar(bank, scalar::GENERATION)?,
-        page_index: scalar_u32(scalar::PAGE_INDEX)?,
-        execution_index: scalar_u32(scalar::EXECUTION_INDEX)?,
+        page_index: scalar_u32(scalar::PAGE_INDEX, SettlementClauseV3::BankPageIndex)?,
+        execution_index: scalar_u32(
+            scalar::EXECUTION_INDEX,
+            SettlementClauseV3::BankExecutionIndex,
+        )?,
         claims_market_revision: read_scalar(bank, scalar::CLAIMS_MARKET_REVISION)?,
         owner_position_revision: read_scalar(bank, scalar::OWNER_POSITION_REVISION)?,
         settlement_position_revision: read_scalar(bank, scalar::SETTLEMENT_POSITION_REVISION)?,
@@ -726,7 +739,10 @@ pub fn general_hot_environment_from_bank_v3(
         payer: read_identity(bank, scalar_count, identity::PAYER)?,
         rent_refund: read_identity(bank, scalar_count, identity::RENT_REFUND)?,
         custody_expected_revision: read_scalar(bank, scalar::CUSTODY_EXPECTED_REVISION)?,
-        transfer_index: scalar_u16(scalar::TRANSFER_INDEX)?,
+        transfer_index: scalar_u16(
+            scalar::TRANSFER_INDEX,
+            SettlementClauseV3::BankTransferIndex,
+        )?,
         custody_replay_rent_principal: read_scalar(bank, scalar::CUSTODY_REPLAY_RENT_LAMPORTS)?,
         custody_vault_rent_principal: read_scalar(bank, scalar::CUSTODY_VAULT_RENT_LAMPORTS)?,
     })
@@ -751,43 +767,116 @@ pub fn project_general_open_batch_candidate_in_place_v3(
     if candidate.len() != general_hot_candidate_bank_len_v3(Action::OpenBatch, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
-    let mut root =
-        GeneralRootV2::decode(root_tail).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let mut root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
     let scalar_count = general_hot_scalar_count_v3(Action::OpenBatch, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let product_id = read_identity(candidate, scalar_count, identity::SELECTION_PRODUCT)?;
-    if product_id == [0; 32]
-        || environment.general_config_id == [0; 32]
-        || root.lifecycle() != GeneralLifecycleV2::Active
-        || root.market() != environment.market
-        || root.config_id() != environment.general_config_id
-        || root.generation() != environment.generation
-        || root.revision() != read_scalar(candidate, scalar::ROOT_REVISION_OBSERVATION)?
-        || root.next_batch_sequence()
-            != read_scalar(candidate, scalar::ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION)?
-        || root.open_batches() != read_scalar(candidate, scalar::ROOT_OPEN_BATCHES_OBSERVATION)?
-        || expected_revision != read_scalar(candidate, scalar::ROOT_EXPECTED_REVISION)?
-        || read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
-            != u64::from(GeneralLifecycleV2::Active.tag())
-        || read_scalar(candidate, scalar::CONFIG_COLLECTION_SLOTS)? != config.collection_slots()
-        || read_scalar(candidate, scalar::CONFIG_SELECTION_SLOTS)? != config.selection_slots()
-        || read_scalar(candidate, scalar::CONFIG_SETTLEMENT_SLOTS)? != config.settlement_slots()
-        || read_scalar(candidate, scalar::CONFIG_MAX_ORDERS)?
-            != u64::from(config.max_orders_per_candidate())
-        || read_scalar(candidate, scalar::SELECTION_PRICE_SCALE)? != config.price_scale()
-        || read_scalar(candidate, scalar::GENERATION)? != config.generation()
-        || read_identity(candidate, scalar_count, identity::MARKET)? != root.market()
-        || read_identity(candidate, scalar_count, identity::GENERAL_CONFIG_ID)? != root.config_id()
-        || read_scalar(candidate, scalar::STATE_BUMP)?
-            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?
-        || read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
-            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
-        || read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    // THE LIVE ROOT'S REVISION FIRST, BY NAME. Two openers racing one root is
+    // the ordinary honest failure on a busy market, and it used to be decided
+    // inside `GeneralBatchV1::open` -- a coarse refusal several statements
+    // below, with the register comparison standing in for it up here.
+    open_batch_clause(
+        expected_revision != root.revision(),
+        OpenBatchClauseV3::RootRevision,
+    )?;
+    open_batch_clause(product_id == [0; 32], OpenBatchClauseV3::ProductIdentity)?;
+    open_batch_clause(
+        environment.general_config_id == [0; 32],
+        OpenBatchClauseV3::EnvironmentGeneralConfigId,
+    )?;
+    open_batch_clause(
+        root.lifecycle() != GeneralLifecycleV2::Active,
+        OpenBatchClauseV3::RootLifecycle,
+    )?;
+    open_batch_clause(
+        root.market() != environment.market,
+        OpenBatchClauseV3::RootMarket,
+    )?;
+    open_batch_clause(
+        root.config_id() != environment.general_config_id,
+        OpenBatchClauseV3::RootConfigId,
+    )?;
+    open_batch_clause(
+        root.generation() != environment.generation,
+        OpenBatchClauseV3::RootGeneration,
+    )?;
+    open_batch_clause(
+        root.revision() != read_scalar(candidate, scalar::ROOT_REVISION_OBSERVATION)?,
+        OpenBatchClauseV3::ScalarRootRevisionObservation,
+    )?;
+    open_batch_clause(
+        root.next_batch_sequence()
+            != read_scalar(candidate, scalar::ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION)?,
+        OpenBatchClauseV3::ScalarRootNextBatchSequence,
+    )?;
+    open_batch_clause(
+        root.open_batches() != read_scalar(candidate, scalar::ROOT_OPEN_BATCHES_OBSERVATION)?,
+        OpenBatchClauseV3::ScalarRootOpenBatches,
+    )?;
+    open_batch_clause(
+        expected_revision != read_scalar(candidate, scalar::ROOT_EXPECTED_REVISION)?,
+        OpenBatchClauseV3::ScalarRootExpectedRevision,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        OpenBatchClauseV3::ScalarOutcomeCount,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count),
+        OpenBatchClauseV3::ScalarZeroOutcomeCount,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
+            != u64::from(GeneralLifecycleV2::Active.tag()),
+        OpenBatchClauseV3::ScalarRootLifecycle,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::CONFIG_COLLECTION_SLOTS)? != config.collection_slots(),
+        OpenBatchClauseV3::ScalarConfigCollectionSlots,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::CONFIG_SELECTION_SLOTS)? != config.selection_slots(),
+        OpenBatchClauseV3::ScalarConfigSelectionSlots,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::CONFIG_SETTLEMENT_SLOTS)? != config.settlement_slots(),
+        OpenBatchClauseV3::ScalarConfigSettlementSlots,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::CONFIG_MAX_ORDERS)?
+            != u64::from(config.max_orders_per_candidate()),
+        OpenBatchClauseV3::ScalarConfigMaxOrders,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::SELECTION_PRICE_SCALE)? != config.price_scale(),
+        OpenBatchClauseV3::ScalarConfigPriceScale,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::GENERATION)? != config.generation(),
+        OpenBatchClauseV3::ScalarConfigGeneration,
+    )?;
+    open_batch_clause(
+        read_identity(candidate, scalar_count, identity::MARKET)? != root.market(),
+        OpenBatchClauseV3::IdentityMarket,
+    )?;
+    open_batch_clause(
+        read_identity(candidate, scalar_count, identity::GENERAL_CONFIG_ID)? != root.config_id(),
+        OpenBatchClauseV3::IdentityGeneralConfigId,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::STATE_BUMP)?
+            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?,
+        OpenBatchClauseV3::ScalarStateBump,
+    )?;
+    open_batch_clause(
+        read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?,
+        OpenBatchClauseV3::IdentityPrimaryOwner,
+    )?;
+    open_batch_clause(
+        read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0,
+        OpenBatchClauseV3::ScalarPrimaryRentPrincipal,
+    )?;
     let collection_close_slot = current_slot
         .checked_add(config.collection_slots())
         .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
@@ -813,12 +902,17 @@ pub fn project_general_open_batch_candidate_in_place_v3(
         expected_revision,
         current_slot,
     )
-    .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    .map_err(GeneralHotCandidateErrorV3::Collection)?;
     let opening = batch.opening();
     let state = batch.state();
-    if requested_batch_id != Some(batch.batch_id()) || state.status != BatchStatusV1::Collecting {
-        return Err(GeneralHotCandidateErrorV3::InvalidPlan);
-    }
+    open_batch_clause(
+        requested_batch_id != Some(batch.batch_id()),
+        OpenBatchClauseV3::RequestSubject,
+    )?;
+    open_batch_clause(
+        state.status != BatchStatusV1::Collecting,
+        OpenBatchClauseV3::BatchStatus,
+    )?;
     write_local_state_constants(candidate, GeneralLocalStateKindV3::Batch)?;
     for (coordinate, value) in [
         (scalar::ACTION, u64::from(Action::OpenBatch as u8)),
@@ -875,58 +969,146 @@ pub fn project_general_close_batch_candidate_in_place_v3(
     if candidate.len() != general_hot_candidate_bank_len_v3(Action::CloseBatch, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
-    let mut root =
-        GeneralRootV2::decode(root_tail).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    let mut batch =
-        GeneralBatchV1::decode(batch_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let mut root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
+    let mut batch = GeneralBatchV1::decode(batch_body)
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Batch))?;
     let opening = batch.opening();
     let state = batch.state();
     let scalar_count = general_hot_scalar_count_v3(Action::CloseBatch, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let product_id = read_identity(candidate, scalar_count, identity::SELECTION_PRODUCT)?;
-    if requested_batch_id != Some(batch.batch_id())
-        || product_id == [0; 32]
-        || environment.general_config_id == [0; 32]
-        || root.lifecycle() != GeneralLifecycleV2::Active
-        || root.market() != environment.market
-        || root.config_id() != environment.general_config_id
-        || root.generation() != environment.generation
-        || root.revision() != read_scalar(candidate, scalar::ROOT_REVISION_OBSERVATION)?
-        || root.open_batches() != read_scalar(candidate, scalar::ROOT_OPEN_BATCHES_OBSERVATION)?
-        || expected_revision != root.revision()
-        || expected_revision != read_scalar(candidate, scalar::ROOT_EXPECTED_REVISION)?
-        || read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
-            != u64::from(GeneralLifecycleV2::Active.tag())
-        || read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)?
-            != u64::from(state.status.tag())
-        || read_scalar(candidate, scalar::BATCH_ORDER_COUNT_OBSERVATION)?
-            != u64::from(state.order_count)
-        || read_scalar(candidate, scalar::BATCH_COLLECTION_CLOSE_SLOT)?
-            != opening.collection_close_slot
-        || read_scalar(candidate, scalar::CONFIG_MAX_ORDERS)? != u64::from(opening.max_orders)
-        || opening.outcome_count != outcome_count
-        || opening.market != root.market()
-        || opening.product_id != product_id
-        || opening.config_id != root.config_id()
-        || opening.generation != root.generation()
-        || opening.price_scale != config.price_scale()
-        || opening.max_orders != config.max_orders_per_candidate()
-        || read_identity(candidate, scalar_count, identity::MARKET)? != root.market()
-        || read_identity(candidate, scalar_count, identity::GENERAL_CONFIG_ID)? != root.config_id()
-        || read_scalar(candidate, scalar::STATE_BUMP)?
-            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?
-        || read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
-            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
-        || read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0
-        || !batch.close_is_permissionless(current_slot)
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    // THE LIVE ROOT'S REVISION FIRST, BY NAME, for the reason OpenBatch does
+    // it: a cranker who lost a race and a cranker with a substituted register
+    // are told apart before anything else is asked.
+    close_batch_clause(
+        expected_revision != root.revision(),
+        CloseBatchClauseV3::RootRevision,
+    )?;
+    close_batch_clause(
+        requested_batch_id != Some(batch.batch_id()),
+        CloseBatchClauseV3::RequestSubject,
+    )?;
+    close_batch_clause(product_id == [0; 32], CloseBatchClauseV3::ProductIdentity)?;
+    close_batch_clause(
+        environment.general_config_id == [0; 32],
+        CloseBatchClauseV3::EnvironmentGeneralConfigId,
+    )?;
+    close_batch_clause(
+        root.lifecycle() != GeneralLifecycleV2::Active,
+        CloseBatchClauseV3::RootLifecycle,
+    )?;
+    close_batch_clause(
+        root.market() != environment.market,
+        CloseBatchClauseV3::RootMarket,
+    )?;
+    close_batch_clause(
+        root.config_id() != environment.general_config_id,
+        CloseBatchClauseV3::RootConfigId,
+    )?;
+    close_batch_clause(
+        root.generation() != environment.generation,
+        CloseBatchClauseV3::RootGeneration,
+    )?;
+    close_batch_clause(
+        root.revision() != read_scalar(candidate, scalar::ROOT_REVISION_OBSERVATION)?,
+        CloseBatchClauseV3::ScalarRootRevisionObservation,
+    )?;
+    close_batch_clause(
+        root.open_batches() != read_scalar(candidate, scalar::ROOT_OPEN_BATCHES_OBSERVATION)?,
+        CloseBatchClauseV3::ScalarRootOpenBatches,
+    )?;
+    close_batch_clause(
+        expected_revision != read_scalar(candidate, scalar::ROOT_EXPECTED_REVISION)?,
+        CloseBatchClauseV3::ScalarRootExpectedRevision,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        CloseBatchClauseV3::ScalarOutcomeCount,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count),
+        CloseBatchClauseV3::ScalarZeroOutcomeCount,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
+            != u64::from(GeneralLifecycleV2::Active.tag()),
+        CloseBatchClauseV3::ScalarRootLifecycle,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)? != u64::from(state.status.tag()),
+        CloseBatchClauseV3::ScalarBatchStatus,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::BATCH_ORDER_COUNT_OBSERVATION)?
+            != u64::from(state.order_count),
+        CloseBatchClauseV3::ScalarBatchOrderCount,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::BATCH_COLLECTION_CLOSE_SLOT)?
+            != opening.collection_close_slot,
+        CloseBatchClauseV3::ScalarBatchCollectionClose,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::CONFIG_MAX_ORDERS)? != u64::from(opening.max_orders),
+        CloseBatchClauseV3::ScalarConfigMaxOrders,
+    )?;
+    close_batch_clause(
+        opening.outcome_count != outcome_count,
+        CloseBatchClauseV3::BatchOutcomeCount,
+    )?;
+    close_batch_clause(
+        opening.market != root.market(),
+        CloseBatchClauseV3::BatchMarket,
+    )?;
+    close_batch_clause(
+        opening.product_id != product_id,
+        CloseBatchClauseV3::BatchProduct,
+    )?;
+    close_batch_clause(
+        opening.config_id != root.config_id(),
+        CloseBatchClauseV3::BatchConfigId,
+    )?;
+    close_batch_clause(
+        opening.generation != root.generation(),
+        CloseBatchClauseV3::BatchGeneration,
+    )?;
+    close_batch_clause(
+        opening.price_scale != config.price_scale(),
+        CloseBatchClauseV3::BatchPriceScale,
+    )?;
+    close_batch_clause(
+        opening.max_orders != config.max_orders_per_candidate(),
+        CloseBatchClauseV3::BatchMaxOrders,
+    )?;
+    close_batch_clause(
+        read_identity(candidate, scalar_count, identity::MARKET)? != root.market(),
+        CloseBatchClauseV3::IdentityMarket,
+    )?;
+    close_batch_clause(
+        read_identity(candidate, scalar_count, identity::GENERAL_CONFIG_ID)? != root.config_id(),
+        CloseBatchClauseV3::IdentityGeneralConfigId,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::STATE_BUMP)?
+            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?,
+        CloseBatchClauseV3::ScalarStateBump,
+    )?;
+    close_batch_clause(
+        read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?,
+        CloseBatchClauseV3::IdentityPrimaryOwner,
+    )?;
+    close_batch_clause(
+        read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0,
+        CloseBatchClauseV3::ScalarPrimaryRentPrincipal,
+    )?;
+    close_batch_clause(
+        !batch.close_is_permissionless(current_slot),
+        CloseBatchClauseV3::CloseWindow,
+    )?;
     batch
         .close(&mut root, expected_revision)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(GeneralHotCandidateErrorV3::Collection)?;
     let state = batch.state();
     write_local_state_constants(candidate, GeneralLocalStateKindV3::Batch)?;
     for (coordinate, value) in [
@@ -955,6 +1137,70 @@ pub fn project_general_close_batch_candidate_in_place_v3(
 fn submit_clause(disagrees: bool, clause: SubmitCandidateClauseV3) -> Result<()> {
     if disagrees {
         return Err(GeneralHotCandidateErrorV3::SubmitCoordinate(clause));
+    }
+    Ok(())
+}
+
+/// Refuse one named clause of the OpenBatch conjunct.
+fn open_batch_clause(disagrees: bool, clause: OpenBatchClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::OpenBatchCoordinate(clause));
+    }
+    Ok(())
+}
+
+/// Refuse one named clause of the CloseBatch conjunct.
+fn close_batch_clause(disagrees: bool, clause: CloseBatchClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::CloseBatchCoordinate(clause));
+    }
+    Ok(())
+}
+
+/// Refuse one named clause of the PlaceOrder conjunct.
+fn place_order_clause(disagrees: bool, clause: PlaceOrderClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::PlaceOrderCoordinate(clause));
+    }
+    Ok(())
+}
+
+/// Refuse one named clause of the CancelOrder conjunct.
+fn cancel_order_clause(disagrees: bool, clause: CancelOrderClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::CancelOrderCoordinate(clause));
+    }
+    Ok(())
+}
+
+/// Refuse one named clause of the ReleaseOrder conjunct.
+fn release_order_clause(disagrees: bool, clause: ReleaseOrderClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::ReleaseOrderCoordinate(clause));
+    }
+    Ok(())
+}
+
+/// Refuse one named clause of the CloseCandidate conjunct.
+fn close_candidate_clause(disagrees: bool, clause: CloseCandidateClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::CloseCandidateCoordinate(clause));
+    }
+    Ok(())
+}
+
+/// Refuse one named clause of the VerifyCandidateRow bank join.
+fn verify_clause(disagrees: bool, clause: VerifyCandidateClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::VerifyCoordinate(clause));
+    }
+    Ok(())
+}
+
+/// Refuse one named clause of a settlement-side conjunct.
+fn settlement_clause(disagrees: bool, clause: SettlementClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::SettlementCoordinate(clause));
     }
     Ok(())
 }
@@ -992,14 +1238,13 @@ pub fn project_general_submit_candidate_in_place_v3(
     {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
-    let root =
-        GeneralRootV2::decode(root_tail).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    let batch =
-        GeneralBatchV1::decode(batch_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    let candidate_record =
-        CandidateV2::decode(candidate_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
+    let batch = GeneralBatchV1::decode(batch_body)
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Batch))?;
+    let candidate_record = CandidateV2::decode(candidate_body)
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::CandidateImage))?;
     let submitted = GeneralCandidateV1::decode(submission_body)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Submission))?;
     let batch_opening = batch.opening();
     let batch_state = batch.state();
     let candidate_header = candidate_record.header();
@@ -1028,7 +1273,7 @@ pub fn project_general_submit_candidate_in_place_v3(
         work_capacity,
         current_slot,
     )
-    .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    .map_err(GeneralHotCandidateErrorV3::Submission)?;
     let state_lamports = read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)?
         .checked_add(work_capacity)
         .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
@@ -1386,10 +1631,9 @@ pub fn project_general_place_order_candidate_in_place_v3(
     if candidate.len() != general_hot_candidate_bank_len_v3(Action::PlaceOrder, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
-    let root =
-        GeneralRootV2::decode(root_tail).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    let mut batch =
-        GeneralBatchV1::decode(batch_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
+    let mut batch = GeneralBatchV1::decode(batch_body)
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Batch))?;
     let opening = batch.opening();
     let state = batch.state();
     let scalar_count = general_hot_scalar_count_v3(Action::PlaceOrder, outcome_count)?;
@@ -1402,78 +1646,221 @@ pub fn project_general_place_order_candidate_in_place_v3(
     let max_quote_debit_per_lot = read_scalar(candidate, scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?;
     let valid_until_slot = read_scalar(candidate, scalar::ORDER_VALID_UNTIL_SLOT)?;
     let terms = GeneralSignedOrderTermsV1::decode(signed_order_terms)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::SignedTerms))?;
     let header = terms.header();
-    if requested_order_id != Some(terms.order_id())
-        || order_id != terms.order_id()
-        || header.outcome_count != outcome_count
-        || header.nonce != read_scalar(candidate, scalar::ORDER_NONCE)?
-        || header.owner_id != owner
-        || header.market != root.market()
-        || header.batch_id != batch_id
-        || header.generation != read_scalar(candidate, scalar::GENERATION)?
-        || header.max_lots != max_lots
-        || header.max_quote_debit_per_lot != max_quote_debit_per_lot
-        || header.valid_until_slot != valid_until_slot
-        || owner == [0; 32]
-        || product_id == [0; 32]
-        || batch_id != batch.batch_id()
-        || read_identity(candidate, scalar_count, identity::CANDIDATE)? != batch_id
-        || environment.general_config_id == [0; 32]
-        || root.lifecycle() != GeneralLifecycleV2::Active
-        || root.market() != environment.market
-        || root.config_id() != environment.general_config_id
-        || root.generation() != environment.generation
-        || read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::SCRATCH_A)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
-            != u64::from(GeneralLifecycleV2::Active.tag())
-        || read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)?
-            != u64::from(state.status.tag())
-        || read_scalar(candidate, scalar::BATCH_ORDER_COUNT_OBSERVATION)?
-            != u64::from(state.order_count)
-        || read_scalar(candidate, scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?
-            != state.committed_quote_reserve
-        || read_scalar(candidate, scalar::BATCH_COLLECTION_CLOSE_SLOT)?
-            != opening.collection_close_slot
-        || read_scalar(candidate, scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?
-            != opening.settlement_close_slot
-        || read_scalar(candidate, scalar::CONFIG_MAX_ORDERS)? != u64::from(opening.max_orders)
-        || valid_until_slot != opening.settlement_close_slot
-        || opening.outcome_count != outcome_count
-        || opening.market != root.market()
-        || opening.product_id != product_id
-        || opening.config_id != root.config_id()
-        || opening.generation != root.generation()
-        || opening.price_scale != config.price_scale()
-        || opening.max_orders != config.max_orders_per_candidate()
-        || read_identity(candidate, scalar_count, identity::MARKET)? != root.market()
-        || read_identity(candidate, scalar_count, identity::GENERAL_CONFIG_ID)? != root.config_id()
-        || read_identity(
+    place_order_clause(
+        requested_order_id != Some(terms.order_id()),
+        PlaceOrderClauseV3::RequestSubject,
+    )?;
+    place_order_clause(
+        order_id != terms.order_id(),
+        PlaceOrderClauseV3::IdentityOrder,
+    )?;
+    place_order_clause(
+        header.outcome_count != outcome_count,
+        PlaceOrderClauseV3::TermsOutcomeCount,
+    )?;
+    place_order_clause(
+        header.nonce != read_scalar(candidate, scalar::ORDER_NONCE)?,
+        PlaceOrderClauseV3::TermsNonce,
+    )?;
+    place_order_clause(header.owner_id != owner, PlaceOrderClauseV3::TermsOwner)?;
+    place_order_clause(
+        header.market != root.market(),
+        PlaceOrderClauseV3::TermsMarket,
+    )?;
+    place_order_clause(header.batch_id != batch_id, PlaceOrderClauseV3::TermsBatch)?;
+    place_order_clause(
+        header.generation != read_scalar(candidate, scalar::GENERATION)?,
+        PlaceOrderClauseV3::TermsGeneration,
+    )?;
+    place_order_clause(
+        header.max_lots != max_lots,
+        PlaceOrderClauseV3::TermsMaxLots,
+    )?;
+    place_order_clause(
+        header.max_quote_debit_per_lot != max_quote_debit_per_lot,
+        PlaceOrderClauseV3::TermsMaxQuoteDebit,
+    )?;
+    place_order_clause(
+        header.valid_until_slot != valid_until_slot,
+        PlaceOrderClauseV3::TermsValidUntil,
+    )?;
+    place_order_clause(owner == [0; 32], PlaceOrderClauseV3::OwnerIdentity)?;
+    place_order_clause(product_id == [0; 32], PlaceOrderClauseV3::ProductIdentity)?;
+    place_order_clause(
+        batch_id != batch.batch_id(),
+        PlaceOrderClauseV3::BatchSubject,
+    )?;
+    place_order_clause(
+        read_identity(candidate, scalar_count, identity::CANDIDATE)? != batch_id,
+        PlaceOrderClauseV3::IdentityCandidate,
+    )?;
+    place_order_clause(
+        environment.general_config_id == [0; 32],
+        PlaceOrderClauseV3::EnvironmentGeneralConfigId,
+    )?;
+    place_order_clause(
+        root.lifecycle() != GeneralLifecycleV2::Active,
+        PlaceOrderClauseV3::RootLifecycle,
+    )?;
+    place_order_clause(
+        root.market() != environment.market,
+        PlaceOrderClauseV3::RootMarket,
+    )?;
+    place_order_clause(
+        root.config_id() != environment.general_config_id,
+        PlaceOrderClauseV3::RootConfigId,
+    )?;
+    place_order_clause(
+        root.generation() != environment.generation,
+        PlaceOrderClauseV3::RootGeneration,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        PlaceOrderClauseV3::ScalarOutcomeCount,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count),
+        PlaceOrderClauseV3::ScalarZeroOutcomeCount,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::SCRATCH_A)? != u64::from(outcome_count),
+        PlaceOrderClauseV3::ScalarScratchOutcomeCount,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
+            != u64::from(GeneralLifecycleV2::Active.tag()),
+        PlaceOrderClauseV3::ScalarRootLifecycle,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)? != u64::from(state.status.tag()),
+        PlaceOrderClauseV3::ScalarBatchStatus,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::BATCH_ORDER_COUNT_OBSERVATION)?
+            != u64::from(state.order_count),
+        PlaceOrderClauseV3::ScalarBatchOrderCount,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?
+            != state.committed_quote_reserve,
+        PlaceOrderClauseV3::ScalarBatchQuoteReserve,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::BATCH_COLLECTION_CLOSE_SLOT)?
+            != opening.collection_close_slot,
+        PlaceOrderClauseV3::ScalarBatchCollectionClose,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?
+            != opening.settlement_close_slot,
+        PlaceOrderClauseV3::ScalarBatchSettlementClose,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::CONFIG_MAX_ORDERS)? != u64::from(opening.max_orders),
+        PlaceOrderClauseV3::ScalarConfigMaxOrders,
+    )?;
+    place_order_clause(
+        valid_until_slot != opening.settlement_close_slot,
+        PlaceOrderClauseV3::TermsSettlementHorizon,
+    )?;
+    place_order_clause(
+        opening.outcome_count != outcome_count,
+        PlaceOrderClauseV3::BatchOutcomeCount,
+    )?;
+    place_order_clause(
+        opening.market != root.market(),
+        PlaceOrderClauseV3::BatchMarket,
+    )?;
+    place_order_clause(
+        opening.product_id != product_id,
+        PlaceOrderClauseV3::BatchProduct,
+    )?;
+    place_order_clause(
+        opening.config_id != root.config_id(),
+        PlaceOrderClauseV3::BatchConfigId,
+    )?;
+    place_order_clause(
+        opening.generation != root.generation(),
+        PlaceOrderClauseV3::BatchGeneration,
+    )?;
+    place_order_clause(
+        opening.price_scale != config.price_scale(),
+        PlaceOrderClauseV3::BatchPriceScale,
+    )?;
+    place_order_clause(
+        opening.max_orders != config.max_orders_per_candidate(),
+        PlaceOrderClauseV3::BatchMaxOrders,
+    )?;
+    place_order_clause(
+        read_identity(candidate, scalar_count, identity::MARKET)? != root.market(),
+        PlaceOrderClauseV3::IdentityMarket,
+    )?;
+    place_order_clause(
+        read_identity(candidate, scalar_count, identity::GENERAL_CONFIG_ID)? != root.config_id(),
+        PlaceOrderClauseV3::IdentityGeneralConfigId,
+    )?;
+    place_order_clause(
+        read_identity(
             candidate,
             scalar_count,
             identity::TERMINAL_BENEFICIARY_OBSERVATION,
-        )? != owner
-        || read_scalar(candidate, scalar::STATE_BUMP)?
-            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?
-        || read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
-            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
-        || read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0
-        || read_scalar(candidate, scalar::TERMINAL_RECORD_BUMP)?
-            != read_scalar(candidate, scalar::TERMINAL_CANONICAL_BUMP)?
-        || read_identity(candidate, scalar_count, identity::TERMINAL_OWNER)?
-            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
-        || read_scalar(candidate, scalar::TERMINAL_RENT_PRINCIPAL)? == 0
-        || environment.destination_vault_context != terms.order_id()
-        || environment.custody_source_owner != owner
-        || read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)? != owner
-        || read_identity(candidate, scalar_count, identity::POSITION_ONE_OWNER)? != terms.order_id()
-        || environment.settlement_position_owner != terms.order_id()
-        || environment.rent_credit != owner
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+        )? != owner,
+        PlaceOrderClauseV3::IdentityTerminalBeneficiary,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::STATE_BUMP)?
+            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?,
+        PlaceOrderClauseV3::ScalarStateBump,
+    )?;
+    place_order_clause(
+        read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?,
+        PlaceOrderClauseV3::IdentityPrimaryOwner,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0,
+        PlaceOrderClauseV3::ScalarPrimaryRentPrincipal,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::TERMINAL_RECORD_BUMP)?
+            != read_scalar(candidate, scalar::TERMINAL_CANONICAL_BUMP)?,
+        PlaceOrderClauseV3::ScalarTerminalBump,
+    )?;
+    place_order_clause(
+        read_identity(candidate, scalar_count, identity::TERMINAL_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?,
+        PlaceOrderClauseV3::IdentityTerminalOwner,
+    )?;
+    place_order_clause(
+        read_scalar(candidate, scalar::TERMINAL_RENT_PRINCIPAL)? == 0,
+        PlaceOrderClauseV3::ScalarTerminalRentPrincipal,
+    )?;
+    place_order_clause(
+        environment.destination_vault_context != terms.order_id(),
+        PlaceOrderClauseV3::EnvironmentDestinationVault,
+    )?;
+    place_order_clause(
+        environment.custody_source_owner != owner,
+        PlaceOrderClauseV3::EnvironmentCustodySourceOwner,
+    )?;
+    place_order_clause(
+        read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)? != owner,
+        PlaceOrderClauseV3::IdentityPositionZeroOwner,
+    )?;
+    place_order_clause(
+        read_identity(candidate, scalar_count, identity::POSITION_ONE_OWNER)? != terms.order_id(),
+        PlaceOrderClauseV3::IdentityPositionOneOwner,
+    )?;
+    place_order_clause(
+        environment.settlement_position_owner != terms.order_id(),
+        PlaceOrderClauseV3::EnvironmentSettlementPositionOwner,
+    )?;
+    place_order_clause(
+        environment.rent_credit != owner,
+        PlaceOrderClauseV3::EnvironmentRentCredit,
+    )?;
     for item in 0..outcome_count {
         let base = GENERAL_HOT_COMMON_SCALARS_V3
             .checked_add(
@@ -1481,39 +1868,51 @@ pub fn project_general_place_order_candidate_in_place_v3(
                     .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             )
             .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
-        if read_scalar(
-            candidate,
-            base.checked_add(item_scalar::CURSOR_INVENTORY)
-                .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
-        )? != terms
-            .receive_per_lot(item)
-            .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?
-            || read_scalar(
+        place_order_clause(
+            read_scalar(
+                candidate,
+                base.checked_add(item_scalar::CURSOR_INVENTORY)
+                    .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            )? != terms
+                .receive_per_lot(item)
+                .map_err(GeneralHotCandidateErrorV3::Collection)?,
+            PlaceOrderClauseV3::ItemReceivePerLot,
+        )?;
+        place_order_clause(
+            read_scalar(
                 candidate,
                 base.checked_add(item_scalar::QUANTITY)
                     .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             )? != terms
                 .deliver_per_lot(item)
-                .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?
-        {
-            return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-        }
+                .map_err(GeneralHotCandidateErrorV3::Collection)?,
+            PlaceOrderClauseV3::ItemDeliverPerLot,
+        )?;
     }
     let quote_reserve = terms
         .quote_reserve()
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(GeneralHotCandidateErrorV3::Collection)?;
     let escrow = batch
         .admit_signed_for_atomic_physical_escrow(terms, current_slot)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(GeneralHotCandidateErrorV3::Collection)?;
     let state = batch.state();
-    if escrow.order_id != terms.order_id()
-        || escrow.owner_id != owner
-        || escrow.outcome_count != outcome_count
-        || escrow.quote_atoms != quote_reserve
-        || escrow.direction != EscrowDirectionV1::Deposit
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidPlan);
-    }
+    place_order_clause(
+        escrow.order_id != terms.order_id(),
+        PlaceOrderClauseV3::EscrowOrder,
+    )?;
+    place_order_clause(escrow.owner_id != owner, PlaceOrderClauseV3::EscrowOwner)?;
+    place_order_clause(
+        escrow.outcome_count != outcome_count,
+        PlaceOrderClauseV3::EscrowOutcomeCount,
+    )?;
+    place_order_clause(
+        escrow.quote_atoms != quote_reserve,
+        PlaceOrderClauseV3::EscrowQuoteAtoms,
+    )?;
+    place_order_clause(
+        escrow.direction != EscrowDirectionV1::Deposit,
+        PlaceOrderClauseV3::EscrowDirection,
+    )?;
     write_local_state_constants(candidate, GeneralLocalStateKindV3::Order)?;
     for (coordinate, value) in [
         (scalar::ACTION, u64::from(Action::PlaceOrder as u8)),
@@ -1576,7 +1975,7 @@ pub fn project_general_place_order_candidate_in_place_v3(
             .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
         let quantity = terms
             .claim_reserve(item)
-            .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+            .map_err(GeneralHotCandidateErrorV3::Collection)?;
         for (coordinate, value) in [
             (item_scalar::OUTCOME, u64::from(item)),
             (item_scalar::CLAIMS_AGGREGATE_MAGNITUDE, 0),
@@ -1615,12 +2014,11 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
     if candidate.len() != general_hot_candidate_bank_len_v3(Action::CancelOrder, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
-    let root =
-        GeneralRootV2::decode(root_tail).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    let mut batch =
-        GeneralBatchV1::decode(batch_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    let order =
-        GeneralOrderV1::decode(order_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
+    let mut batch = GeneralBatchV1::decode(batch_body)
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Batch))?;
+    let order = GeneralOrderV1::decode(order_body)
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Order))?;
     let opening = batch.opening();
     let before = batch.state();
     let header = order.header();
@@ -1628,85 +2026,229 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
     let scalar_count = general_hot_scalar_count_v3(Action::CancelOrder, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let owner = read_identity(candidate, scalar_count, identity::OWNER)?;
-    if requested_order_id != Some(order.order_id())
-        || read_identity(candidate, scalar_count, identity::ORDER)? != order.order_id()
-        || owner != header.owner_id
-        || owner == [0; 32]
-        || read_identity(candidate, scalar_count, identity::SELECTION_BATCH)? != header.batch_id
-        || read_identity(candidate, scalar_count, identity::CANDIDATE)? != header.batch_id
-        || environment.general_config_id == [0; 32]
-        || root.lifecycle() != GeneralLifecycleV2::Active
-        || root.market() != environment.market
-        || root.config_id() != environment.general_config_id
-        || root.generation() != environment.generation
-        || read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::SCRATCH_A)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
-            != u64::from(GeneralLifecycleV2::Active.tag())
-        || read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)?
-            != u64::from(before.status.tag())
-        || read_scalar(candidate, scalar::BATCH_ORDER_COUNT_OBSERVATION)?
-            != u64::from(before.order_count)
-        || read_scalar(candidate, scalar::BATCH_CANCELLED_COUNT_OBSERVATION)?
-            != u64::from(before.cancelled_count)
-        || read_scalar(candidate, scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?
-            != before.committed_quote_reserve
-        || read_scalar(candidate, scalar::BATCH_COLLECTION_CLOSE_SLOT)?
-            != opening.collection_close_slot
-        || read_scalar(candidate, scalar::ORDER_PHASE_OBSERVATION)?
-            != u64::from(order_state.phase.tag())
-        || read_scalar(candidate, scalar::ORDER_ADMITTED_SLOT_OBSERVATION)?
-            != order_state.admitted_slot
-        || read_scalar(candidate, scalar::ORDER_MAX_LOTS)? != header.max_lots
-        || read_scalar(candidate, scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?
-            != header.max_quote_debit_per_lot
-        || read_scalar(candidate, scalar::ORDER_NONCE)? != header.nonce
-        || opening.outcome_count != outcome_count
-        || opening.market != root.market()
-        || opening.product_id
-            != read_identity(candidate, scalar_count, identity::SELECTION_PRODUCT)?
-        || opening.config_id != root.config_id()
-        || opening.generation != root.generation()
-        || opening.price_scale != config.price_scale()
-        || opening.max_orders != config.max_orders_per_candidate()
-        || header.outcome_count != outcome_count
-        || header.market != root.market()
-        || header.generation != root.generation()
-        || read_identity(candidate, scalar_count, identity::MARKET)? != root.market()
-        || read_identity(candidate, scalar_count, identity::GENERAL_CONFIG_ID)? != root.config_id()
-        || read_scalar(candidate, scalar::STATE_BUMP)?
-            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?
-        || read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
-            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
-        || read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0
-        || read_scalar(candidate, scalar::TERMINAL_RECORD_BUMP)?
-            != read_scalar(candidate, scalar::TERMINAL_CANONICAL_BUMP)?
-        || read_identity(candidate, scalar_count, identity::TERMINAL_OWNER)?
-            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
-        || read_scalar(candidate, scalar::TERMINAL_RENT_PRINCIPAL)? == 0
-        || environment.source_vault_context != order.order_id()
-        || environment.custody_destination_owner != owner
-        || read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)?
-            != order.order_id()
-        || read_identity(candidate, scalar_count, identity::POSITION_ONE_OWNER)? != owner
-        || environment.settlement_position_owner != order.order_id()
-        || environment.rent_credit != owner
-        || environment.rent_refund != owner
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    cancel_order_clause(
+        requested_order_id != Some(order.order_id()),
+        CancelOrderClauseV3::RequestSubject,
+    )?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::ORDER)? != order.order_id(),
+        CancelOrderClauseV3::IdentityOrder,
+    )?;
+    cancel_order_clause(owner != header.owner_id, CancelOrderClauseV3::OwnerIsMaker)?;
+    cancel_order_clause(owner == [0; 32], CancelOrderClauseV3::OwnerIdentity)?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::SELECTION_BATCH)? != header.batch_id,
+        CancelOrderClauseV3::IdentitySelectionBatch,
+    )?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::CANDIDATE)? != header.batch_id,
+        CancelOrderClauseV3::IdentityCandidate,
+    )?;
+    cancel_order_clause(
+        environment.general_config_id == [0; 32],
+        CancelOrderClauseV3::EnvironmentGeneralConfigId,
+    )?;
+    cancel_order_clause(
+        root.lifecycle() != GeneralLifecycleV2::Active,
+        CancelOrderClauseV3::RootLifecycle,
+    )?;
+    cancel_order_clause(
+        root.market() != environment.market,
+        CancelOrderClauseV3::RootMarket,
+    )?;
+    cancel_order_clause(
+        root.config_id() != environment.general_config_id,
+        CancelOrderClauseV3::RootConfigId,
+    )?;
+    cancel_order_clause(
+        root.generation() != environment.generation,
+        CancelOrderClauseV3::RootGeneration,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        CancelOrderClauseV3::ScalarOutcomeCount,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count),
+        CancelOrderClauseV3::ScalarZeroOutcomeCount,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::SCRATCH_A)? != u64::from(outcome_count),
+        CancelOrderClauseV3::ScalarScratchOutcomeCount,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
+            != u64::from(GeneralLifecycleV2::Active.tag()),
+        CancelOrderClauseV3::ScalarRootLifecycle,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)? != u64::from(before.status.tag()),
+        CancelOrderClauseV3::ScalarBatchStatus,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::BATCH_ORDER_COUNT_OBSERVATION)?
+            != u64::from(before.order_count),
+        CancelOrderClauseV3::ScalarBatchOrderCount,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::BATCH_CANCELLED_COUNT_OBSERVATION)?
+            != u64::from(before.cancelled_count),
+        CancelOrderClauseV3::ScalarBatchCancelledCount,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?
+            != before.committed_quote_reserve,
+        CancelOrderClauseV3::ScalarBatchQuoteReserve,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::BATCH_COLLECTION_CLOSE_SLOT)?
+            != opening.collection_close_slot,
+        CancelOrderClauseV3::ScalarBatchCollectionClose,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::ORDER_PHASE_OBSERVATION)?
+            != u64::from(order_state.phase.tag()),
+        CancelOrderClauseV3::ScalarOrderPhase,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::ORDER_ADMITTED_SLOT_OBSERVATION)?
+            != order_state.admitted_slot,
+        CancelOrderClauseV3::ScalarOrderAdmittedSlot,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::ORDER_MAX_LOTS)? != header.max_lots,
+        CancelOrderClauseV3::ScalarOrderMaxLots,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?
+            != header.max_quote_debit_per_lot,
+        CancelOrderClauseV3::ScalarOrderMaxQuoteDebit,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::ORDER_NONCE)? != header.nonce,
+        CancelOrderClauseV3::ScalarOrderNonce,
+    )?;
+    cancel_order_clause(
+        opening.outcome_count != outcome_count,
+        CancelOrderClauseV3::BatchOutcomeCount,
+    )?;
+    cancel_order_clause(
+        opening.market != root.market(),
+        CancelOrderClauseV3::BatchMarket,
+    )?;
+    cancel_order_clause(
+        opening.product_id != read_identity(candidate, scalar_count, identity::SELECTION_PRODUCT)?,
+        CancelOrderClauseV3::BatchProduct,
+    )?;
+    cancel_order_clause(
+        opening.config_id != root.config_id(),
+        CancelOrderClauseV3::BatchConfigId,
+    )?;
+    cancel_order_clause(
+        opening.generation != root.generation(),
+        CancelOrderClauseV3::BatchGeneration,
+    )?;
+    cancel_order_clause(
+        opening.price_scale != config.price_scale(),
+        CancelOrderClauseV3::BatchPriceScale,
+    )?;
+    cancel_order_clause(
+        opening.max_orders != config.max_orders_per_candidate(),
+        CancelOrderClauseV3::BatchMaxOrders,
+    )?;
+    cancel_order_clause(
+        header.outcome_count != outcome_count,
+        CancelOrderClauseV3::OrderOutcomeCount,
+    )?;
+    cancel_order_clause(
+        header.market != root.market(),
+        CancelOrderClauseV3::OrderMarket,
+    )?;
+    cancel_order_clause(
+        header.generation != root.generation(),
+        CancelOrderClauseV3::OrderGeneration,
+    )?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::MARKET)? != root.market(),
+        CancelOrderClauseV3::IdentityMarket,
+    )?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::GENERAL_CONFIG_ID)? != root.config_id(),
+        CancelOrderClauseV3::IdentityGeneralConfigId,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::STATE_BUMP)?
+            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?,
+        CancelOrderClauseV3::ScalarStateBump,
+    )?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?,
+        CancelOrderClauseV3::IdentityPrimaryOwner,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0,
+        CancelOrderClauseV3::ScalarPrimaryRentPrincipal,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::TERMINAL_RECORD_BUMP)?
+            != read_scalar(candidate, scalar::TERMINAL_CANONICAL_BUMP)?,
+        CancelOrderClauseV3::ScalarTerminalBump,
+    )?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::TERMINAL_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?,
+        CancelOrderClauseV3::IdentityTerminalOwner,
+    )?;
+    cancel_order_clause(
+        read_scalar(candidate, scalar::TERMINAL_RENT_PRINCIPAL)? == 0,
+        CancelOrderClauseV3::ScalarTerminalRentPrincipal,
+    )?;
+    cancel_order_clause(
+        environment.source_vault_context != order.order_id(),
+        CancelOrderClauseV3::EnvironmentSourceVault,
+    )?;
+    cancel_order_clause(
+        environment.custody_destination_owner != owner,
+        CancelOrderClauseV3::EnvironmentCustodyDestinationOwner,
+    )?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)? != order.order_id(),
+        CancelOrderClauseV3::IdentityPositionZeroOwner,
+    )?;
+    cancel_order_clause(
+        read_identity(candidate, scalar_count, identity::POSITION_ONE_OWNER)? != owner,
+        CancelOrderClauseV3::IdentityPositionOneOwner,
+    )?;
+    cancel_order_clause(
+        environment.settlement_position_owner != order.order_id(),
+        CancelOrderClauseV3::EnvironmentSettlementPositionOwner,
+    )?;
+    cancel_order_clause(
+        environment.rent_credit != owner,
+        CancelOrderClauseV3::EnvironmentRentCredit,
+    )?;
+    cancel_order_clause(
+        environment.rent_refund != owner,
+        CancelOrderClauseV3::EnvironmentRentRefund,
+    )?;
     let escrow = batch
         .cancel(order, owner, current_slot)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(GeneralHotCandidateErrorV3::Collection)?;
     let after = batch.state();
-    if escrow.order_id != order.order_id()
-        || escrow.owner_id != owner
-        || escrow.outcome_count != outcome_count
-        || escrow.direction != EscrowDirectionV1::Refund
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidPlan);
-    }
+    cancel_order_clause(
+        escrow.order_id != order.order_id(),
+        CancelOrderClauseV3::EscrowOrder,
+    )?;
+    cancel_order_clause(escrow.owner_id != owner, CancelOrderClauseV3::EscrowOwner)?;
+    cancel_order_clause(
+        escrow.outcome_count != outcome_count,
+        CancelOrderClauseV3::EscrowOutcomeCount,
+    )?;
+    cancel_order_clause(
+        escrow.direction != EscrowDirectionV1::Refund,
+        CancelOrderClauseV3::EscrowDirection,
+    )?;
     let custody_resulting = environment
         .custody_expected_revision
         .checked_add(1)
@@ -1731,7 +2273,7 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
     for item in 0..outcome_count {
         claims_active |= order
             .claim_reserve(item)
-            .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?
+            .map_err(GeneralHotCandidateErrorV3::Collection)?
             != 0;
     }
     write_local_state_constants(candidate, GeneralLocalStateKindV3::Batch)?;
@@ -1819,7 +2361,7 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
             .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
         let quantity = order
             .claim_reserve(item)
-            .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+            .map_err(GeneralHotCandidateErrorV3::Collection)?;
         for (coordinate, value) in [
             (item_scalar::OUTCOME, u64::from(item)),
             (item_scalar::QUANTITY, quantity),
@@ -1858,70 +2400,179 @@ pub fn project_general_release_order_candidate_in_place_v3(
     if candidate.len() != general_hot_candidate_bank_len_v3(Action::ReleaseOrder, outcome_count)? {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
-    let root =
-        GeneralRootV2::decode(root_tail).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    let order =
-        GeneralOrderV1::decode(order_body).map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let root = GeneralRootV2::decode(root_tail).map_err(GeneralHotCandidateErrorV3::Root)?;
+    let order = GeneralOrderV1::decode(order_body)
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::Order))?;
     let header = order.header();
     let state = order.state();
     let scalar_count = general_hot_scalar_count_v3(Action::ReleaseOrder, outcome_count)?;
     let current_slot = read_scalar(candidate, scalar::CURRENT_SLOT)?;
     let owner = read_identity(candidate, scalar_count, identity::OWNER)?;
     let escrow = authenticate_order_residual_release_v1(order, current_slot)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(GeneralHotCandidateErrorV3::Collection)?;
     let quote_reserve = order
         .quote_reserve()
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(GeneralHotCandidateErrorV3::Collection)?;
     let observed_quote = read_scalar(candidate, scalar::ESCROW_BALANCE_OBSERVATION)?;
-    if requested_order_id != Some(order.order_id())
-        || read_identity(candidate, scalar_count, identity::ORDER)? != order.order_id()
-        || owner != header.owner_id
-        || owner == [0; 32]
-        || read_identity(candidate, scalar_count, identity::CANDIDATE)? != header.batch_id
-        || environment.general_config_id == [0; 32]
-        || root.lifecycle() != GeneralLifecycleV2::Active
-        || root.market() != environment.market
-        || root.config_id() != environment.general_config_id
-        || root.generation() != environment.generation
-        || read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
-            != u64::from(GeneralLifecycleV2::Active.tag())
-        || read_scalar(candidate, scalar::ORDER_PHASE_OBSERVATION)? != u64::from(state.phase.tag())
-        || read_scalar(candidate, scalar::ORDER_ADMITTED_SLOT_OBSERVATION)? != state.admitted_slot
-        || read_scalar(candidate, scalar::ORDER_VALID_UNTIL_SLOT)? != header.valid_until_slot
-        || read_scalar(candidate, scalar::ORDER_MAX_LOTS)? != header.max_lots
-        || read_scalar(candidate, scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?
-            != header.max_quote_debit_per_lot
-        || read_scalar(candidate, scalar::ORDER_NONCE)? != header.nonce
-        || observed_quote > quote_reserve
-        || header.outcome_count != outcome_count
-        || header.market != root.market()
-        || header.generation != root.generation()
-        || config.generation() != root.generation()
-        || read_identity(candidate, scalar_count, identity::MARKET)? != root.market()
-        || read_scalar(candidate, scalar::GENERATION)? != root.generation()
-        || read_scalar(candidate, scalar::STATE_BUMP)?
-            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?
-        || read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
-            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
-        || read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0
-        || environment.source_vault_context != order.order_id()
-        || environment.custody_destination_owner != owner
-        || read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)?
-            != order.order_id()
-        || read_identity(candidate, scalar_count, identity::POSITION_ONE_OWNER)? != owner
-        || environment.settlement_position_owner != order.order_id()
-        || environment.rent_credit != owner
-        || environment.rent_refund != owner
-        || escrow.order_id != order.order_id()
-        || escrow.owner_id != owner
-        || escrow.outcome_count != outcome_count
-        || escrow.quote_atoms != 0
-        || escrow.direction != EscrowDirectionV1::Residual
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    release_order_clause(
+        requested_order_id != Some(order.order_id()),
+        ReleaseOrderClauseV3::RequestSubject,
+    )?;
+    release_order_clause(
+        read_identity(candidate, scalar_count, identity::ORDER)? != order.order_id(),
+        ReleaseOrderClauseV3::IdentityOrder,
+    )?;
+    release_order_clause(owner != header.owner_id, ReleaseOrderClauseV3::OwnerIsMaker)?;
+    release_order_clause(owner == [0; 32], ReleaseOrderClauseV3::OwnerIdentity)?;
+    release_order_clause(
+        read_identity(candidate, scalar_count, identity::CANDIDATE)? != header.batch_id,
+        ReleaseOrderClauseV3::IdentityCandidate,
+    )?;
+    release_order_clause(
+        environment.general_config_id == [0; 32],
+        ReleaseOrderClauseV3::EnvironmentGeneralConfigId,
+    )?;
+    release_order_clause(
+        root.lifecycle() != GeneralLifecycleV2::Active,
+        ReleaseOrderClauseV3::RootLifecycle,
+    )?;
+    release_order_clause(
+        root.market() != environment.market,
+        ReleaseOrderClauseV3::RootMarket,
+    )?;
+    release_order_clause(
+        root.config_id() != environment.general_config_id,
+        ReleaseOrderClauseV3::RootConfigId,
+    )?;
+    release_order_clause(
+        root.generation() != environment.generation,
+        ReleaseOrderClauseV3::RootGeneration,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        ReleaseOrderClauseV3::ScalarOutcomeCount,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::ZERO)? != u64::from(outcome_count),
+        ReleaseOrderClauseV3::ScalarZeroOutcomeCount,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
+            != u64::from(GeneralLifecycleV2::Active.tag()),
+        ReleaseOrderClauseV3::ScalarRootLifecycle,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::ORDER_PHASE_OBSERVATION)? != u64::from(state.phase.tag()),
+        ReleaseOrderClauseV3::ScalarOrderPhase,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::ORDER_ADMITTED_SLOT_OBSERVATION)? != state.admitted_slot,
+        ReleaseOrderClauseV3::ScalarOrderAdmittedSlot,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::ORDER_VALID_UNTIL_SLOT)? != header.valid_until_slot,
+        ReleaseOrderClauseV3::ScalarOrderValidUntil,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::ORDER_MAX_LOTS)? != header.max_lots,
+        ReleaseOrderClauseV3::ScalarOrderMaxLots,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?
+            != header.max_quote_debit_per_lot,
+        ReleaseOrderClauseV3::ScalarOrderMaxQuoteDebit,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::ORDER_NONCE)? != header.nonce,
+        ReleaseOrderClauseV3::ScalarOrderNonce,
+    )?;
+    release_order_clause(
+        observed_quote > quote_reserve,
+        ReleaseOrderClauseV3::ObservedQuoteResidual,
+    )?;
+    release_order_clause(
+        header.outcome_count != outcome_count,
+        ReleaseOrderClauseV3::OrderOutcomeCount,
+    )?;
+    release_order_clause(
+        header.market != root.market(),
+        ReleaseOrderClauseV3::OrderMarket,
+    )?;
+    release_order_clause(
+        header.generation != root.generation(),
+        ReleaseOrderClauseV3::OrderGeneration,
+    )?;
+    release_order_clause(
+        config.generation() != root.generation(),
+        ReleaseOrderClauseV3::ConfigGeneration,
+    )?;
+    release_order_clause(
+        read_identity(candidate, scalar_count, identity::MARKET)? != root.market(),
+        ReleaseOrderClauseV3::IdentityMarket,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::GENERATION)? != root.generation(),
+        ReleaseOrderClauseV3::ScalarGeneration,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::STATE_BUMP)?
+            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?,
+        ReleaseOrderClauseV3::ScalarStateBump,
+    )?;
+    release_order_clause(
+        read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?,
+        ReleaseOrderClauseV3::IdentityPrimaryOwner,
+    )?;
+    release_order_clause(
+        read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0,
+        ReleaseOrderClauseV3::ScalarPrimaryRentPrincipal,
+    )?;
+    release_order_clause(
+        environment.source_vault_context != order.order_id(),
+        ReleaseOrderClauseV3::EnvironmentSourceVault,
+    )?;
+    release_order_clause(
+        environment.custody_destination_owner != owner,
+        ReleaseOrderClauseV3::EnvironmentCustodyDestinationOwner,
+    )?;
+    release_order_clause(
+        read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)? != order.order_id(),
+        ReleaseOrderClauseV3::IdentityPositionZeroOwner,
+    )?;
+    release_order_clause(
+        read_identity(candidate, scalar_count, identity::POSITION_ONE_OWNER)? != owner,
+        ReleaseOrderClauseV3::IdentityPositionOneOwner,
+    )?;
+    release_order_clause(
+        environment.settlement_position_owner != order.order_id(),
+        ReleaseOrderClauseV3::EnvironmentSettlementPositionOwner,
+    )?;
+    release_order_clause(
+        environment.rent_credit != owner,
+        ReleaseOrderClauseV3::EnvironmentRentCredit,
+    )?;
+    release_order_clause(
+        environment.rent_refund != owner,
+        ReleaseOrderClauseV3::EnvironmentRentRefund,
+    )?;
+    release_order_clause(
+        escrow.order_id != order.order_id(),
+        ReleaseOrderClauseV3::EscrowOrder,
+    )?;
+    release_order_clause(escrow.owner_id != owner, ReleaseOrderClauseV3::EscrowOwner)?;
+    release_order_clause(
+        escrow.outcome_count != outcome_count,
+        ReleaseOrderClauseV3::EscrowOutcomeCount,
+    )?;
+    release_order_clause(
+        escrow.quote_atoms != 0,
+        ReleaseOrderClauseV3::EscrowQuoteAtoms,
+    )?;
+    release_order_clause(
+        escrow.direction != EscrowDirectionV1::Residual,
+        ReleaseOrderClauseV3::EscrowDirection,
+    )?;
     let custody_resulting = environment
         .custody_expected_revision
         .checked_add(1)
@@ -2053,11 +2704,70 @@ pub fn project_general_release_order_candidate_in_place_v3(
     Ok(())
 }
 
+/// Which persisted record refused to yield the bytes a projection asked for.
+///
+/// `InvalidPlan`, "a record did not decode", stood for every one of these. It
+/// was raised at thirty-nine sites across eleven functions and named neither
+/// which record nor which of the eight kinds of record it was: a root tail
+/// short by a byte, a batch whose magic belongs to another layout, a maker's
+/// signed terms one row narrow, and a settlement cursor that will not yield an
+/// inventory column at the executing width all reached a reader identically.
+/// The remedy differs completely between them -- the root is written by the
+/// Market's own config transaction, the signed terms by a maker, the cursor by
+/// a keeper's previous crank -- so naming the record names the author.
+///
+/// This enum stops at the record. Where the record's OWN error is more
+/// informative than its name -- the capability root, the collection contract,
+/// the candidate contract -- `GeneralHotCandidateErrorV3` carries that enum
+/// instead, and this one is not used.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralRecordV3 {
+    /// The persisted batch record.
+    Batch,
+    /// The persisted order record.
+    Order,
+    /// The immutable runtime-width Candidate image.
+    CandidateImage,
+    /// The persisted candidate submission record.
+    Submission,
+    /// The maker's immutable signed order terms.
+    SignedTerms,
+    /// The persisted selection cursor.
+    SelectionCursor,
+    /// The persisted settlement cursor.
+    SettlementCursor,
+    /// The settlement effect plan.
+    EffectPlan,
+}
+
+impl GeneralRecordV3 {
+    /// The exact line a program writes to the validator log for this record.
+    #[must_use]
+    pub const fn log_line(self) -> &'static str {
+        match self {
+            Self::Batch => "general-record: the batch record",
+            Self::Order => "general-record: the order record",
+            Self::CandidateImage => "general-record: the immutable Candidate image",
+            Self::Submission => "general-record: the candidate submission",
+            Self::SignedTerms => "general-record: the signed order terms",
+            Self::SelectionCursor => "general-record: the selection cursor",
+            Self::SettlementCursor => "general-record: the settlement cursor",
+            Self::EffectPlan => "general-record: the settlement effect plan",
+        }
+    }
+}
+
 /// Stable refusal from General Hot candidate projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralHotCandidateErrorV3 {
-    /// Settlement effect bytes refused.
-    InvalidPlan,
+    /// A persisted record would not decode, or would not yield a column.
+    Record(GeneralRecordV3),
+    /// The capability root refused its own decode.
+    Root(RootError),
+    /// The batch collection contract refused a transition or a term.
+    Collection(GeneralCollectionErrorV1),
+    /// The candidate contract refused the submission it was asked to build.
+    Submission(GeneralCandidateErrorV1),
     /// Product width differed from the exact effect width.
     TailCountMismatch,
     /// Caller-owned banks were not one exact complete candidate width.
@@ -2078,16 +2788,30 @@ pub enum GeneralHotCandidateErrorV3 {
     /// the wrong offset and return a well-formed environment assembled from the
     /// wrong bytes. Fail-closed and named, not silently rebased.
     BankStrideMismatch,
-    /// An authenticated child coordinate was zero, aliased, or noncanonical.
+    /// WITHDRAWN. Nothing raises this, and nothing may.
+    ///
+    /// It was the unsplit fallback: hundreds of accusations joined with `||`
+    /// and published as one word, which is precisely the shape AGENTS.md calls
+    /// a search rather than a refusal. Every one of them now names its clause
+    /// through one of the carrying variants below.
+    ///
+    /// The DISCRIMINANT is held rather than renumbered because a deployed
+    /// Trading link has already published it, and decision 0007's bands are
+    /// append-only: a wire that carried this number must keep meaning what it
+    /// meant. That is the only reason the variant still exists.
+    ///
+    /// It is NOT a landing place. An author with a new accusation writes a
+    /// clause enum for it -- there are nine in this family already -- and
+    /// raises a carrying variant. Reaching for this one re-creates the search.
     InvalidCoordinate,
     /// One NAMED clause of the SubmitCandidate coordinate conjunct disagreed.
     ///
-    /// `InvalidCoordinate` above still covers the conjuncts that have not been
-    /// split; this one carries which of SubmitCandidate's fifty-eight. It is a
-    /// separate variant rather than a payload on `InvalidCoordinate` for the
-    /// reason `Verify` and `Close` are separate: the wrapped enum is its own
-    /// author, the outer line says which arm refused and the inner says which
-    /// clause, and a reader gets both without either enum flattening the other.
+    /// It is a separate variant rather than a payload on `InvalidCoordinate`
+    /// for the reason `Verify` and `Close` are separate: the wrapped enum is
+    /// its own author, the outer line says which arm refused and the inner says
+    /// which clause, and a reader gets both without either enum flattening the
+    /// other. The eight carrying variants at the end of this enum are the same
+    /// arrangement for the rest of the family.
     SubmitCoordinate(SubmitCandidateClauseV3),
     /// Position or Custody optimistic revision could not advance.
     RevisionOverflow,
@@ -2099,6 +2823,22 @@ pub enum GeneralHotCandidateErrorV3 {
     /// The exact CloseCandidate request, censorship guard, candidate state, or
     /// conserved work-escrow movement refused.
     Close(GeneralSevenPlanErrorV1),
+    /// One NAMED clause of the OpenBatch conjunct disagreed.
+    OpenBatchCoordinate(OpenBatchClauseV3),
+    /// One NAMED clause of the CloseBatch conjunct disagreed.
+    CloseBatchCoordinate(CloseBatchClauseV3),
+    /// One NAMED clause of the PlaceOrder conjunct disagreed.
+    PlaceOrderCoordinate(PlaceOrderClauseV3),
+    /// One NAMED clause of the CancelOrder conjunct disagreed.
+    CancelOrderCoordinate(CancelOrderClauseV3),
+    /// One NAMED clause of the ReleaseOrder conjunct disagreed.
+    ReleaseOrderCoordinate(ReleaseOrderClauseV3),
+    /// One NAMED clause of the CloseCandidate conjunct disagreed.
+    CloseCandidateCoordinate(CloseCandidateClauseV3),
+    /// One NAMED clause of the VerifyCandidateRow bank join disagreed.
+    VerifyCoordinate(VerifyCandidateClauseV3),
+    /// One NAMED clause of General's settlement-side conjuncts disagreed.
+    SettlementCoordinate(SettlementClauseV3),
 }
 
 impl GeneralHotCandidateErrorV3 {
@@ -2113,20 +2853,22 @@ impl GeneralHotCandidateErrorV3 {
     /// that carries no diagnostic -- which is exactly what this tree's most
     /// expensive idiom costs, and it cost a lane a measurement on 2026-09-04.
     ///
-    /// It does not name the WRAPPED causes: `Verify` and `Close` carry their own
+    /// It does not name the WRAPPED causes: the carrying variants hold their own
     /// enums, and a line that flattened them here would be a second author for
-    /// what those refusals mean. The caller logs the inner line beside this one
-    /// where it has it.
+    /// what those refusals mean. The caller logs the inner line beside this one.
     ///
     /// A `&'static str` per variant rather than a `{:?}`: the reader is a
     /// `no_std` program whose peak heap already binds at runtime width 258, and
     /// `sol_log` takes a `&str` with no allocation at all. The match is
-    /// exhaustive, so an eleventh variant does not compile until its author says
-    /// what a reader should see.
+    /// exhaustive, so a new variant does not compile until its author says what
+    /// a reader should see.
     #[must_use]
     pub const fn log_line(self) -> &'static str {
         match self {
-            Self::InvalidPlan => "general-candidate: refused, a record did not decode",
+            Self::Record(_) => "general-candidate: refused, a record would not yield its bytes",
+            Self::Root(_) => "general-candidate: refused, the capability root",
+            Self::Collection(_) => "general-candidate: refused, the batch collection contract",
+            Self::Submission(_) => "general-candidate: refused, the candidate contract",
             Self::TailCountMismatch => {
                 "general-candidate: refused, Product width is not the effect width"
             }
@@ -2137,7 +2879,7 @@ impl GeneralHotCandidateErrorV3 {
                 "general-candidate: refused, this bank belongs to another action"
             }
             Self::InvalidCoordinate => {
-                "general-candidate: refused, an authenticated coordinate disagrees"
+                "general-candidate: refused, a withdrawn code no author may raise"
             }
             Self::SubmitCoordinate(_) => {
                 "general-candidate: refused, a SubmitCandidate coordinate disagrees"
@@ -2148,6 +2890,30 @@ impl GeneralHotCandidateErrorV3 {
             Self::ArithmeticOverflow => "general-candidate: refused, checked arithmetic overflowed",
             Self::Verify(_) => "general-candidate: refused, the row verifier",
             Self::Close(_) => "general-candidate: refused, the CloseCandidate plan",
+            Self::OpenBatchCoordinate(_) => {
+                "general-candidate: refused, an OpenBatch coordinate disagrees"
+            }
+            Self::CloseBatchCoordinate(_) => {
+                "general-candidate: refused, a CloseBatch coordinate disagrees"
+            }
+            Self::PlaceOrderCoordinate(_) => {
+                "general-candidate: refused, a PlaceOrder coordinate disagrees"
+            }
+            Self::CancelOrderCoordinate(_) => {
+                "general-candidate: refused, a CancelOrder coordinate disagrees"
+            }
+            Self::ReleaseOrderCoordinate(_) => {
+                "general-candidate: refused, a ReleaseOrder coordinate disagrees"
+            }
+            Self::CloseCandidateCoordinate(_) => {
+                "general-candidate: refused, a CloseCandidate coordinate disagrees"
+            }
+            Self::VerifyCoordinate(_) => {
+                "general-candidate: refused, a VerifyCandidateRow coordinate disagrees"
+            }
+            Self::SettlementCoordinate(_) => {
+                "general-candidate: refused, a settlement coordinate disagrees"
+            }
         }
     }
 }
@@ -2193,52 +2959,137 @@ pub fn authenticate_general_close_candidate_v3(
         .checked_add(rent_principal)
         .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
 
-    if outcome_count == 0
-        || opening.outcome_count != outcome_count
-        || batch_opening.outcome_count != outcome_count
-        || opening.batch_id != batch.batch_id()
-        || environment.general_root == [0; 32]
-        || environment.trading_program == [0; 32]
-        || batch_opening.market != environment.market
-        || batch_opening.product_id != environment.product_record_digest
-        || batch_opening.config_id != environment.general_config_id
-        || batch_opening.generation != environment.generation
-        || batch_state.status != BatchStatusV1::Closed
-        || action_plan.subject_id() != opening.candidate_id
-        || read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
-            != u64::from(GeneralLifecycleV2::Active.tag())
-        || read_scalar(candidate, scalar::CANDIDATE_STATUS_OBSERVATION)?
-            != u64::from(state.status.tag())
-        || read_scalar(
+    close_candidate_clause(outcome_count == 0, CloseCandidateClauseV3::OutcomeCountZero)?;
+    close_candidate_clause(
+        opening.outcome_count != outcome_count,
+        CloseCandidateClauseV3::SubmissionOutcomeCount,
+    )?;
+    close_candidate_clause(
+        batch_opening.outcome_count != outcome_count,
+        CloseCandidateClauseV3::BatchOutcomeCount,
+    )?;
+    close_candidate_clause(
+        opening.batch_id != batch.batch_id(),
+        CloseCandidateClauseV3::SubmissionBatch,
+    )?;
+    close_candidate_clause(
+        environment.general_root == [0; 32],
+        CloseCandidateClauseV3::EnvironmentGeneralRoot,
+    )?;
+    close_candidate_clause(
+        environment.trading_program == [0; 32],
+        CloseCandidateClauseV3::EnvironmentTradingProgram,
+    )?;
+    close_candidate_clause(
+        batch_opening.market != environment.market,
+        CloseCandidateClauseV3::BatchMarket,
+    )?;
+    close_candidate_clause(
+        batch_opening.product_id != environment.product_record_digest,
+        CloseCandidateClauseV3::BatchProduct,
+    )?;
+    close_candidate_clause(
+        batch_opening.config_id != environment.general_config_id,
+        CloseCandidateClauseV3::BatchConfigId,
+    )?;
+    close_candidate_clause(
+        batch_opening.generation != environment.generation,
+        CloseCandidateClauseV3::BatchGeneration,
+    )?;
+    close_candidate_clause(
+        batch_state.status != BatchStatusV1::Closed,
+        CloseCandidateClauseV3::BatchStatus,
+    )?;
+    close_candidate_clause(
+        action_plan.subject_id() != opening.candidate_id,
+        CloseCandidateClauseV3::RequestSubject,
+    )?;
+    close_candidate_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        CloseCandidateClauseV3::ScalarOutcomeCount,
+    )?;
+    close_candidate_clause(
+        read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
+            != u64::from(GeneralLifecycleV2::Active.tag()),
+        CloseCandidateClauseV3::ScalarRootLifecycle,
+    )?;
+    close_candidate_clause(
+        read_scalar(candidate, scalar::CANDIDATE_STATUS_OBSERVATION)?
+            != u64::from(state.status.tag()),
+        CloseCandidateClauseV3::ScalarCandidateStatus,
+    )?;
+    close_candidate_clause(
+        read_scalar(
             candidate,
             scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION,
-        )? != verification
-        || read_scalar(candidate, scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)? != cleanup
-        || read_scalar(candidate, scalar::CANDIDATE_REWARD_RATE)? != opening.reward_rate_lamports
-        || read_scalar(candidate, scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?
-            != batch_opening.settlement_close_slot
-        || read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)?
-            != u64::from(batch_state.status.tag())
-        || read_scalar(candidate, scalar::PRIMARY_PRINCIPAL_OBSERVATION)? != rent_principal
-        || rent_principal == 0
-        || read_identity(candidate, scalar_count, identity::PARENT_REQUEST_DIGEST)?
-            != opening.candidate_id
-        || read_identity(candidate, scalar_count, identity::CANDIDATE)? != opening.candidate_id
-        || read_identity(candidate, scalar_count, identity::SELECTION_BATCH)? != opening.batch_id
-        || read_identity(candidate, scalar_count, identity::OWNER)? != opening.solver_id
-        || read_identity(candidate, scalar_count, identity::RENT_CREDIT)? != opening.solver_id
-        || read_identity(
+        )? != verification,
+        CloseCandidateClauseV3::ScalarVerificationRemaining,
+    )?;
+    close_candidate_clause(
+        read_scalar(candidate, scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)? != cleanup,
+        CloseCandidateClauseV3::ScalarCleanupRemaining,
+    )?;
+    close_candidate_clause(
+        read_scalar(candidate, scalar::CANDIDATE_REWARD_RATE)? != opening.reward_rate_lamports,
+        CloseCandidateClauseV3::ScalarRewardRate,
+    )?;
+    close_candidate_clause(
+        read_scalar(candidate, scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?
+            != batch_opening.settlement_close_slot,
+        CloseCandidateClauseV3::ScalarBatchSettlementClose,
+    )?;
+    close_candidate_clause(
+        read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)?
+            != u64::from(batch_state.status.tag()),
+        CloseCandidateClauseV3::ScalarBatchStatus,
+    )?;
+    close_candidate_clause(
+        read_scalar(candidate, scalar::PRIMARY_PRINCIPAL_OBSERVATION)? != rent_principal,
+        CloseCandidateClauseV3::ScalarPrincipalObservation,
+    )?;
+    close_candidate_clause(
+        rent_principal == 0,
+        CloseCandidateClauseV3::ScalarRentPrincipal,
+    )?;
+    close_candidate_clause(
+        read_identity(candidate, scalar_count, identity::PARENT_REQUEST_DIGEST)?
+            != opening.candidate_id,
+        CloseCandidateClauseV3::RequestDigest,
+    )?;
+    close_candidate_clause(
+        read_identity(candidate, scalar_count, identity::CANDIDATE)? != opening.candidate_id,
+        CloseCandidateClauseV3::IdentityCandidate,
+    )?;
+    close_candidate_clause(
+        read_identity(candidate, scalar_count, identity::SELECTION_BATCH)? != opening.batch_id,
+        CloseCandidateClauseV3::RecordedBatch,
+    )?;
+    close_candidate_clause(
+        read_identity(candidate, scalar_count, identity::OWNER)? != opening.solver_id,
+        CloseCandidateClauseV3::IdentityOwner,
+    )?;
+    close_candidate_clause(
+        read_identity(candidate, scalar_count, identity::RENT_CREDIT)? != opening.solver_id,
+        CloseCandidateClauseV3::SolverWallet,
+    )?;
+    // THE OBSERVATION, AND ONLY THE OBSERVATION. The conjunct that stood here
+    // also compared `PRIMARY_BENEFICIARY` -- the register a LIFECYCLE WRITE
+    // fills -- against the solver. A Close plan emits no lifecycle protected
+    // output, so on this route nothing ever writes it and the clause could only
+    // hold by accident of a zeroed bank. It was deleted rather than named: a
+    // conjunct nothing can satisfy is not a check.
+    close_candidate_clause(
+        read_identity(
             candidate,
             scalar_count,
             identity::PRIMARY_BENEFICIARY_OBSERVATION,
-        )? != opening.solver_id
-        || read_identity(candidate, scalar_count, identity::PRIMARY_BENEFICIARY)?
-            != opening.solver_id
-        || read_identity(candidate, scalar_count, identity::PAYER)? == [0; 32]
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+        )? != opening.solver_id,
+        CloseCandidateClauseV3::RecordedBeneficiary,
+    )?;
+    close_candidate_clause(
+        read_identity(candidate, scalar_count, identity::PAYER)? == [0; 32],
+        CloseCandidateClauseV3::IdentityPayer,
+    )?;
 
     let plan = plan_candidate_work_escrow_close_v1(
         action_plan,
@@ -2253,14 +3104,26 @@ pub fn authenticate_general_close_candidate_v3(
         read_scalar(candidate, scalar::ESCROW_BALANCE_OBSERVATION)?,
     )
     .map_err(GeneralHotCandidateErrorV3::Close)?;
-    if plan.escrow_before() != read_scalar(candidate, scalar::OBSERVED_POSITION_LAMPORTS)?
-        || plan.cranker_before() != read_scalar(candidate, scalar::OBSERVED_ADMISSION_LAMPORTS)?
-        || plan.solver_before() != read_scalar(candidate, scalar::ESCROW_BALANCE_OBSERVATION)?
-        || plan.cleanup_reward() != cleanup
-        || plan.solver_credit() != solver_credit
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    close_candidate_clause(
+        plan.escrow_before() != read_scalar(candidate, scalar::OBSERVED_POSITION_LAMPORTS)?,
+        CloseCandidateClauseV3::PlanEscrowBefore,
+    )?;
+    close_candidate_clause(
+        plan.cranker_before() != read_scalar(candidate, scalar::OBSERVED_ADMISSION_LAMPORTS)?,
+        CloseCandidateClauseV3::PlanCrankerBefore,
+    )?;
+    close_candidate_clause(
+        plan.solver_before() != read_scalar(candidate, scalar::ESCROW_BALANCE_OBSERVATION)?,
+        CloseCandidateClauseV3::PlanSolverBefore,
+    )?;
+    close_candidate_clause(
+        plan.cleanup_reward() != cleanup,
+        CloseCandidateClauseV3::PlanCleanupReward,
+    )?;
+    close_candidate_clause(
+        plan.solver_credit() != solver_credit,
+        CloseCandidateClauseV3::PlanSolverCredit,
+    )?;
     Ok(plan)
 }
 
@@ -2391,9 +3254,10 @@ pub fn project_general_verify_candidate_workspace_v3(
             manifest_workspace,
         )
         .map_err(GeneralHotCandidateErrorV3::Verify)?;
-        if manifest_workspace != expected_manifest {
-            return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-        }
+        verify_clause(
+            manifest_workspace != expected_manifest,
+            VerifyCandidateClauseV3::Manifest,
+        )?;
         let selection_magic = if summary.complete {
             read_data_u64(verified_workspace, 0)?
         } else {
@@ -2474,23 +3338,44 @@ fn authenticate_general_verify_candidate_bank_v3(
     if opening.outcome_count != outcome_count {
         return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
     }
-    if requested_candidate != opening.candidate_id
-        || read_scalar(authenticated_input, scalar::ROOT_EXPECTED_REVISION)? != expected_revision
-        || read_scalar(authenticated_input, scalar::COMPLETE_SET_MOVE)?
-            != u64::from(expected_page_index)
-        || read_scalar(authenticated_input, scalar::CLAIMS_AFFINE_ACTIVE)?
-            != u64::from(expected_row_index)
-        || read_scalar(authenticated_input, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_scalar(authenticated_input, scalar::ROOT_LIFECYCLE_OBSERVATION)?
-            != u64::from(GeneralLifecycleV2::Active.tag())
-        || read_scalar(authenticated_input, scalar::OBSERVED_POSITION_LAMPORTS)?
-            != expected_pre_lamports
-        || principal == 0
-        || payer == [0; 32]
-        || trading_program == [0; 32]
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    verify_clause(
+        requested_candidate != opening.candidate_id,
+        VerifyCandidateClauseV3::RequestSubject,
+    )?;
+    verify_clause(
+        read_scalar(authenticated_input, scalar::ROOT_EXPECTED_REVISION)? != expected_revision,
+        VerifyCandidateClauseV3::ScalarExpectedRevision,
+    )?;
+    verify_clause(
+        read_scalar(authenticated_input, scalar::COMPLETE_SET_MOVE)?
+            != u64::from(expected_page_index),
+        VerifyCandidateClauseV3::ScalarPageIndex,
+    )?;
+    verify_clause(
+        read_scalar(authenticated_input, scalar::CLAIMS_AFFINE_ACTIVE)?
+            != u64::from(expected_row_index),
+        VerifyCandidateClauseV3::ScalarRowIndex,
+    )?;
+    verify_clause(
+        read_scalar(authenticated_input, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        VerifyCandidateClauseV3::ScalarOutcomeCount,
+    )?;
+    verify_clause(
+        read_scalar(authenticated_input, scalar::ROOT_LIFECYCLE_OBSERVATION)?
+            != u64::from(GeneralLifecycleV2::Active.tag()),
+        VerifyCandidateClauseV3::ScalarRootLifecycle,
+    )?;
+    verify_clause(
+        read_scalar(authenticated_input, scalar::OBSERVED_POSITION_LAMPORTS)?
+            != expected_pre_lamports,
+        VerifyCandidateClauseV3::ScalarObservedLamports,
+    )?;
+    verify_clause(principal == 0, VerifyCandidateClauseV3::ScalarPrincipal)?;
+    verify_clause(payer == [0; 32], VerifyCandidateClauseV3::Payer)?;
+    verify_clause(
+        trading_program == [0; 32],
+        VerifyCandidateClauseV3::TradingProgram,
+    )?;
     Ok(GeneralVerifyCandidateBankV3 {
         candidate_id: opening.candidate_id,
         batch_id: opening.batch_id,
@@ -2595,15 +3480,30 @@ fn project_general_verify_candidate_summary_into_bank_v3(
         .checked_add(after.verification_remaining)
         .and_then(|value| value.checked_add(after.cleanup_remaining))
         .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
-    if summary.reward.lamports != authenticated.reward_rate_lamports
-        || cursor_header.outcome_count != outcome_count
-        || cursor_header.candidate_id != authenticated.candidate_id
-        || cursor_header.batch_id != authenticated.batch_id
-        || cursor_header.revision != summary.revision
-        || cursor_header.order_count != summary.order_count
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    verify_clause(
+        summary.reward.lamports != authenticated.reward_rate_lamports,
+        VerifyCandidateClauseV3::SummaryReward,
+    )?;
+    verify_clause(
+        cursor_header.outcome_count != outcome_count,
+        VerifyCandidateClauseV3::CursorOutcomeCount,
+    )?;
+    verify_clause(
+        cursor_header.candidate_id != authenticated.candidate_id,
+        VerifyCandidateClauseV3::CursorCandidate,
+    )?;
+    verify_clause(
+        cursor_header.batch_id != authenticated.batch_id,
+        VerifyCandidateClauseV3::CursorBatch,
+    )?;
+    verify_clause(
+        cursor_header.revision != summary.revision,
+        VerifyCandidateClauseV3::CursorRevision,
+    )?;
+    verify_clause(
+        cursor_header.order_count != summary.order_count,
+        VerifyCandidateClauseV3::CursorOrderCount,
+    )?;
     write_local_state_constants(candidate, GeneralLocalStateKindV3::Verifier)?;
     for (coordinate, value) in [
         (scalar::ACTION, u64::from(Action::VerifyCandidateRow as u8)),
@@ -2825,9 +3725,10 @@ pub fn project_general_selection_candidate_v3<'a>(
     scratch: &mut [u8],
     output: &'a mut [u8],
 ) -> Result<ExecutionCandidateV2<'a>> {
-    if !matches!(action, Action::Consider | Action::Freeze) {
-        return Err(GeneralHotCandidateErrorV3::InvalidPlan);
-    }
+    settlement_clause(
+        !matches!(action, Action::Consider | Action::Freeze),
+        SettlementClauseV3::SelectionAction,
+    )?;
     exact_candidate_capacities(action, outcome_count, authenticated_input, scratch, output)?;
     project_general_selection_candidate_scratch_v3(
         action,
@@ -2884,11 +3785,12 @@ fn apply_general_selection_candidate_v3(
     outcome_count: u32,
     candidate: &mut [u8],
 ) -> Result<()> {
-    if !matches!(action, Action::Consider | Action::Freeze) {
-        return Err(GeneralHotCandidateErrorV3::InvalidPlan);
-    }
+    settlement_clause(
+        !matches!(action, Action::Consider | Action::Freeze),
+        SettlementClauseV3::SelectionAction,
+    )?;
     let selection = RuntimeSelectionCursorV2::decode(selection_after)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::SelectionCursor))?;
     let header = selection.header();
     let expected_phase = if action == Action::Consider {
         RuntimeSelectionPhaseV2::Open
@@ -3026,53 +3928,132 @@ fn apply_general_initialize_candidate_v3(
     candidate: &mut [u8],
 ) -> Result<()> {
     let cursor = SettlementCursorV2::decode(cursor_after)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::SettlementCursor))?;
     let header = cursor.header();
-    if header.outcome_count != outcome_count
-        || header.phase != crate::general::runtime_width::SettlementPhaseV2::Collecting
-        || header.revision != 1
-        || environment.generation == 0
-        || environment.page_index != 0
-        || environment.execution_index != 0
-        || environment.custody_expected_revision != 0
-        || environment.custody_replay_rent_principal == 0
-        || environment.custody_vault_rent_principal == 0
-        || environment.claims_market_revision == u64::MAX
-        || environment.settlement_position_present
-        || environment.settlement_position_revision != 0
-        || environment.settlement_position_owner == [0; 32]
-        || environment.rent_credit == [0; 32]
-        || environment.rent_program == [0; 32]
-        || environment.position_rent_principal == 0
-        || environment.admission_rent_principal == 0
-        || environment.observed_position_lamports < environment.position_rent_principal
-        || environment.observed_admission_lamports < environment.admission_rent_principal
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    settlement_clause(
+        header.outcome_count != outcome_count,
+        SettlementClauseV3::InitializeCursorOutcomeCount,
+    )?;
+    settlement_clause(
+        header.phase != crate::general::runtime_width::SettlementPhaseV2::Collecting,
+        SettlementClauseV3::InitializeCursorPhase,
+    )?;
+    settlement_clause(
+        header.revision != 1,
+        SettlementClauseV3::InitializeCursorRevision,
+    )?;
+    settlement_clause(
+        environment.generation == 0,
+        SettlementClauseV3::InitializeGeneration,
+    )?;
+    settlement_clause(
+        environment.page_index != 0,
+        SettlementClauseV3::InitializePageIndex,
+    )?;
+    settlement_clause(
+        environment.execution_index != 0,
+        SettlementClauseV3::InitializeExecutionIndex,
+    )?;
+    settlement_clause(
+        environment.custody_expected_revision != 0,
+        SettlementClauseV3::InitializeCustodyRevision,
+    )?;
+    settlement_clause(
+        environment.custody_replay_rent_principal == 0,
+        SettlementClauseV3::InitializeCustodyReplayRent,
+    )?;
+    settlement_clause(
+        environment.custody_vault_rent_principal == 0,
+        SettlementClauseV3::InitializeCustodyVaultRent,
+    )?;
+    settlement_clause(
+        environment.claims_market_revision == u64::MAX,
+        SettlementClauseV3::InitializeClaimsMarketRevision,
+    )?;
+    settlement_clause(
+        environment.settlement_position_present,
+        SettlementClauseV3::InitializeSettlementPositionPresent,
+    )?;
+    settlement_clause(
+        environment.settlement_position_revision != 0,
+        SettlementClauseV3::InitializeSettlementPositionRevision,
+    )?;
+    settlement_clause(
+        environment.settlement_position_owner == [0; 32],
+        SettlementClauseV3::InitializeSettlementPositionOwner,
+    )?;
+    settlement_clause(
+        environment.rent_credit == [0; 32],
+        SettlementClauseV3::InitializeRentCredit,
+    )?;
+    settlement_clause(
+        environment.rent_program == [0; 32],
+        SettlementClauseV3::InitializeRentProgram,
+    )?;
+    settlement_clause(
+        environment.position_rent_principal == 0,
+        SettlementClauseV3::InitializePositionRentPrincipal,
+    )?;
+    settlement_clause(
+        environment.admission_rent_principal == 0,
+        SettlementClauseV3::InitializeAdmissionRentPrincipal,
+    )?;
+    settlement_clause(
+        environment.observed_position_lamports < environment.position_rent_principal,
+        SettlementClauseV3::InitializePositionLamports,
+    )?;
+    settlement_clause(
+        environment.observed_admission_lamports < environment.admission_rent_principal,
+        SettlementClauseV3::InitializeAdmissionLamports,
+    )?;
     let scalar_count = general_hot_scalar_count_v3(Action::InitializeSettlement, outcome_count)?;
-    if read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_identity(candidate, scalar_count, identity::PARENT_REQUEST_DIGEST)?
-            != environment.parent_request_digest
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
-    for value in [
-        environment.general_root,
-        environment.parent_request_digest,
-        environment.release_set,
-        environment.market,
-        environment.realm,
-        environment.trading_program,
-        environment.custody_destination,
-        environment.mint,
-        environment.token_program,
-        environment.payer,
-        environment.rent_refund,
+    settlement_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        SettlementClauseV3::InitializeScalarOutcomeCount,
+    )?;
+    settlement_clause(
+        read_identity(candidate, scalar_count, identity::PARENT_REQUEST_DIGEST)?
+            != environment.parent_request_digest,
+        SettlementClauseV3::InitializeRequestDigest,
+    )?;
+    // EACH IDENTITY CARRIES ITS OWN CLAUSE. The loop refused with one code for
+    // whichever of eleven accounts was absent, and the eleven are supplied by
+    // different parties.
+    for (value, clause) in [
+        (
+            environment.general_root,
+            SettlementClauseV3::InitializeGeneralRoot,
+        ),
+        (
+            environment.parent_request_digest,
+            SettlementClauseV3::InitializeParentRequestDigest,
+        ),
+        (
+            environment.release_set,
+            SettlementClauseV3::InitializeReleaseSet,
+        ),
+        (environment.market, SettlementClauseV3::InitializeMarket),
+        (environment.realm, SettlementClauseV3::InitializeRealm),
+        (
+            environment.trading_program,
+            SettlementClauseV3::InitializeTradingProgram,
+        ),
+        (
+            environment.custody_destination,
+            SettlementClauseV3::InitializeCustodyDestination,
+        ),
+        (environment.mint, SettlementClauseV3::InitializeMint),
+        (
+            environment.token_program,
+            SettlementClauseV3::InitializeTokenProgram,
+        ),
+        (environment.payer, SettlementClauseV3::InitializePayer),
+        (
+            environment.rent_refund,
+            SettlementClauseV3::InitializeRentRefund,
+        ),
     ] {
-        if value.iter().all(|byte| *byte == 0) {
-            return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-        }
+        settlement_clause(value.iter().all(|byte| *byte == 0), clause)?;
     }
     write_local_state_constants(candidate, GeneralLocalStateKindV3::Settlement)?;
     for (coordinate, value) in [
@@ -3153,9 +4134,9 @@ fn apply_general_initialize_candidate_v3(
             candidate,
             base.checked_add(item_scalar::CURSOR_INVENTORY)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
-            cursor
-                .inventory(item)
-                .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?,
+            cursor.inventory(item).map_err(|_| {
+                GeneralHotCandidateErrorV3::Record(GeneralRecordV3::SettlementCursor)
+            })?,
         )?;
     }
     for (coordinate, value) in [
@@ -3283,9 +4264,9 @@ fn apply_general_hot_candidate_v3(
     candidate: &mut [u8],
 ) -> Result<()> {
     let plan = RuntimeSettlementEffectPlanV2::decode(effect_plan)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::EffectPlan))?;
     let cursor = SettlementCursorV2::decode(cursor_after)
-        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::SettlementCursor))?;
     let cursor_header = cursor.header();
     if plan.header().outcome_count != outcome_count
         || cursor_header.outcome_count != outcome_count
@@ -3294,15 +4275,18 @@ fn apply_general_hot_candidate_v3(
         return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
     }
     let input_scalar_count = general_hot_scalar_count_v3(action, outcome_count)?;
-    if read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_identity(
+    settlement_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        SettlementClauseV3::EnvironmentScalarOutcomeCount,
+    )?;
+    settlement_clause(
+        read_identity(
             candidate,
             input_scalar_count,
             identity::PARENT_REQUEST_DIGEST,
-        )? != environment.parent_request_digest
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+        )? != environment.parent_request_digest,
+        SettlementClauseV3::EnvironmentRequestDigest,
+    )?;
     validate_environment(
         plan.header().action,
         plan.header().custody_active,
@@ -3533,7 +4517,7 @@ fn apply_general_hot_candidate_v3(
         )?;
         let quantity = plan
             .quantity(item)
-            .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+            .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::EffectPlan))?;
         write_scalar(
             candidate,
             base.checked_add(item_scalar::QUANTITY)
@@ -3544,9 +4528,9 @@ fn apply_general_hot_candidate_v3(
             candidate,
             base.checked_add(item_scalar::CURSOR_INVENTORY)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
-            cursor
-                .inventory(item)
-                .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?,
+            cursor.inventory(item).map_err(|_| {
+                GeneralHotCandidateErrorV3::Record(GeneralRecordV3::SettlementCursor)
+            })?,
         )?;
         for (coordinate, direction) in [
             (
@@ -3708,11 +4692,14 @@ fn position_geometry(
     }
     match action {
         RuntimeSettlementActionV2::Collect | RuntimeSettlementActionV2::Distribute => {
-            if !environment.settlement_position_present
-                || header.owner_id == environment.settlement_position_owner
-            {
-                return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-            }
+            settlement_clause(
+                !environment.settlement_position_present,
+                SettlementClauseV3::PositionSettlementAbsent,
+            )?;
+            settlement_clause(
+                header.owner_id == environment.settlement_position_owner,
+                SettlementClauseV3::PositionOwnerAliasesSettlement,
+            )?;
             let collect = action == RuntimeSettlementActionV2::Collect;
             let (source_owner, source_revision, destination_owner, destination_revision) =
                 if collect {
@@ -3764,15 +4751,18 @@ fn position_geometry(
             })
         }
         RuntimeSettlementActionV2::Materialize => {
-            if !environment.settlement_position_present {
-                return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-            }
+            settlement_clause(
+                !environment.settlement_position_present,
+                SettlementClauseV3::PositionMaterializeSettlementAbsent,
+            )?;
             let (source_present, destination_present, aggregate, source, destination) =
                 match header.complete_set_move {
                     RuntimeCompleteSetMoveV2::Mint => (false, true, 1, 0, 1),
                     RuntimeCompleteSetMoveV2::Merge => (true, false, 2, 2, 0),
                     RuntimeCompleteSetMoveV2::None => {
-                        return Err(GeneralHotCandidateErrorV3::InvalidPlan);
+                        return Err(GeneralHotCandidateErrorV3::SettlementCoordinate(
+                            SettlementClauseV3::PositionMaterializeMoveNone,
+                        ));
                     }
                 };
             Ok(PositionGeometryV3 {
@@ -3790,7 +4780,9 @@ fn position_geometry(
                 one_revision: 0,
             })
         }
-        RuntimeSettlementActionV2::Close => Err(GeneralHotCandidateErrorV3::InvalidPlan),
+        RuntimeSettlementActionV2::Close => Err(GeneralHotCandidateErrorV3::SettlementCoordinate(
+            SettlementClauseV3::PositionCloseGeometry,
+        )),
     }
 }
 
@@ -3831,57 +4823,134 @@ fn validate_environment(
     custody_active: bool,
     environment: GeneralHotEnvironmentV3,
 ) -> Result<()> {
-    for identity in [
-        environment.general_root,
-        environment.parent_request_digest,
-        environment.release_set,
-        environment.market,
-        environment.product_record_digest,
-        environment.semantic_basis_id,
-        environment.linked_basis_record_digest,
-        environment.realm,
-        environment.trading_program,
-        environment.settlement_position_owner,
-        environment.rent_credit,
-        environment.rent_program,
+    // EACH IDENTITY CARRIES ITS OWN CLAUSE, for the reason Initialize's loop
+    // does: twelve absent accounts with twelve different suppliers cannot share
+    // one word.
+    for (identity, clause) in [
+        (
+            environment.general_root,
+            SettlementClauseV3::EnvironmentGeneralRoot,
+        ),
+        (
+            environment.parent_request_digest,
+            SettlementClauseV3::EnvironmentParentRequestDigest,
+        ),
+        (
+            environment.release_set,
+            SettlementClauseV3::EnvironmentReleaseSet,
+        ),
+        (environment.market, SettlementClauseV3::EnvironmentMarket),
+        (
+            environment.product_record_digest,
+            SettlementClauseV3::EnvironmentProductRecordDigest,
+        ),
+        (
+            environment.semantic_basis_id,
+            SettlementClauseV3::EnvironmentSemanticBasisId,
+        ),
+        (
+            environment.linked_basis_record_digest,
+            SettlementClauseV3::EnvironmentLinkedBasisRecordDigest,
+        ),
+        (environment.realm, SettlementClauseV3::EnvironmentRealm),
+        (
+            environment.trading_program,
+            SettlementClauseV3::EnvironmentTradingProgram,
+        ),
+        (
+            environment.settlement_position_owner,
+            SettlementClauseV3::EnvironmentSettlementPositionOwner,
+        ),
+        (
+            environment.rent_credit,
+            SettlementClauseV3::EnvironmentRentCredit,
+        ),
+        (
+            environment.rent_program,
+            SettlementClauseV3::EnvironmentRentProgram,
+        ),
     ] {
-        if identity == [0; 32] {
-            return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-        }
+        settlement_clause(identity == [0; 32], clause)?;
     }
-    if environment.claims_market_revision == u64::MAX
-        || environment.owner_position_revision == u64::MAX
-        || environment.settlement_position_revision == u64::MAX
-        || environment.position_rent_principal == 0
-        || environment.admission_rent_principal == 0
-        || environment.custody_replay_rent_principal == 0
-        || environment.custody_vault_rent_principal == 0
-        || environment.observed_position_lamports < environment.position_rent_principal
-        || environment.observed_admission_lamports < environment.admission_rent_principal
-        || environment.payer != [0; 32]
-        || (action == RuntimeSettlementActionV2::Close && environment.rent_refund == [0; 32])
-        || (action == RuntimeSettlementActionV2::Close
-            && (!environment.settlement_position_present || !environment.close_settlement_position))
-        || (action != RuntimeSettlementActionV2::Close && !environment.settlement_position_present)
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+    settlement_clause(
+        environment.claims_market_revision == u64::MAX,
+        SettlementClauseV3::EnvironmentClaimsMarketRevision,
+    )?;
+    settlement_clause(
+        environment.owner_position_revision == u64::MAX,
+        SettlementClauseV3::EnvironmentOwnerPositionRevision,
+    )?;
+    settlement_clause(
+        environment.settlement_position_revision == u64::MAX,
+        SettlementClauseV3::EnvironmentSettlementPositionRevision,
+    )?;
+    settlement_clause(
+        environment.position_rent_principal == 0,
+        SettlementClauseV3::EnvironmentPositionRentPrincipal,
+    )?;
+    settlement_clause(
+        environment.admission_rent_principal == 0,
+        SettlementClauseV3::EnvironmentAdmissionRentPrincipal,
+    )?;
+    settlement_clause(
+        environment.custody_replay_rent_principal == 0,
+        SettlementClauseV3::EnvironmentCustodyReplayRent,
+    )?;
+    settlement_clause(
+        environment.custody_vault_rent_principal == 0,
+        SettlementClauseV3::EnvironmentCustodyVaultRent,
+    )?;
+    settlement_clause(
+        environment.observed_position_lamports < environment.position_rent_principal,
+        SettlementClauseV3::EnvironmentPositionLamports,
+    )?;
+    settlement_clause(
+        environment.observed_admission_lamports < environment.admission_rent_principal,
+        SettlementClauseV3::EnvironmentAdmissionLamports,
+    )?;
+    settlement_clause(
+        environment.payer != [0; 32],
+        SettlementClauseV3::EnvironmentPayer,
+    )?;
+    settlement_clause(
+        action == RuntimeSettlementActionV2::Close && environment.rent_refund == [0; 32],
+        SettlementClauseV3::EnvironmentCloseRentRefund,
+    )?;
+    settlement_clause(
+        action == RuntimeSettlementActionV2::Close
+            && (!environment.settlement_position_present || !environment.close_settlement_position),
+        SettlementClauseV3::EnvironmentClosePosition,
+    )?;
+    settlement_clause(
+        action != RuntimeSettlementActionV2::Close && !environment.settlement_position_present,
+        SettlementClauseV3::EnvironmentPositionAbsent,
+    )?;
     if custody_active {
-        for identity in [
-            environment.custody_source,
-            environment.custody_destination,
-            environment.mint,
-            environment.token_program,
+        for (identity, clause) in [
+            (
+                environment.custody_source,
+                SettlementClauseV3::CustodySource,
+            ),
+            (
+                environment.custody_destination,
+                SettlementClauseV3::CustodyDestination,
+            ),
+            (environment.mint, SettlementClauseV3::CustodyMint),
+            (
+                environment.token_program,
+                SettlementClauseV3::CustodyTokenProgram,
+            ),
         ] {
-            if identity == [0; 32] {
-                return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-            }
+            settlement_clause(identity == [0; 32], clause)?;
         }
-        if environment.custody_source == environment.custody_destination
-            || environment.custody_expected_revision == u64::MAX
-        {
-            return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-        }
+        settlement_clause(
+            environment.custody_source == environment.custody_destination,
+            SettlementClauseV3::CustodyAlias,
+        )?;
+        settlement_clause(
+            environment.custody_expected_revision == u64::MAX,
+            SettlementClauseV3::CustodyRevision,
+        )?;
         let source_external = action == RuntimeSettlementActionV2::Collect;
         let destination_external = matches!(
             action,
@@ -3901,9 +4970,11 @@ fn validate_environment(
             environment.destination_vault_context != [0; 32]
                 && environment.custody_destination_owner == [0; 32]
         };
-        if !source_shape || !destination_shape {
-            return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-        }
+        settlement_clause(!source_shape, SettlementClauseV3::CustodySourceShape)?;
+        settlement_clause(
+            !destination_shape,
+            SettlementClauseV3::CustodyDestinationShape,
+        )?;
     }
     Ok(())
 }
@@ -5156,7 +6227,11 @@ mod tests {
                 environment,
                 &substituted,
             ),
-            Err(GeneralHotCandidateErrorV3::InvalidCoordinate),
+            // The substitution moves SELECTION_BATCH, and that register is one
+            // clause: the recorded batch is not the one the submission names.
+            Err(GeneralHotCandidateErrorV3::CloseCandidateCoordinate(
+                CloseCandidateClauseV3::RecordedBatch
+            )),
         );
 
         let (_, _, _, mut unconserved, _) = close_candidate_fixture(outcome_count, 160);
@@ -5324,15 +6399,18 @@ mod tests {
             }
             // AND THIS ONE NEVER REACHES A CLAUSE AT ALL. A forged image
             // identity fails `authenticate_candidate_identity_v1` inside
-            // `GeneralCandidateV1::submit`, which is `InvalidPlan` -- two
-            // statements before the conjunct. A bare `is_err()` accepted that
-            // reading and the intended one alike for as long as it stood, which
-            // is the exact defect AGENTS.md records; it is visible here only
-            // because the clauses now have names to be distinguished from.
+            // `GeneralCandidateV1::submit` -- two statements before the
+            // conjunct -- and the candidate contract is now the named author of
+            // that refusal rather than a coarse "a record did not decode". A
+            // bare `is_err()` accepted that reading and the intended one alike
+            // for as long as it stood, which is the exact defect AGENTS.md
+            // records; it is visible here only because both halves have names.
             let before = forged_identity.bank.clone();
             assert_eq!(
                 project_submit(&mut forged_identity),
-                Err(GeneralHotCandidateErrorV3::InvalidPlan),
+                Err(GeneralHotCandidateErrorV3::Submission(
+                    GeneralCandidateErrorV1::NonCanonicalIdentity
+                )),
             );
             assert_eq!(forged_identity.bank, before);
 
@@ -5435,22 +6513,52 @@ mod tests {
             let mut at_collection_close = submit_candidate_fixture(outcome_count, 110);
             project_submit(&mut at_collection_close).expect("inclusive submission boundary");
 
+            // FIVE HOSTILES, FIVE DIFFERENT ANSWERS. This loop asserted
+            // `is_err()` until the conjuncts had names, and the window, the
+            // creation flag, the bump, the beneficiary and the candidate
+            // identity are five separate accusations that a bare `is_err()`
+            // could not tell apart -- one of them is not even a coordinate
+            // clause, it is the candidate contract's own window refusal.
             let fixture = submit_candidate_fixture(outcome_count, 159);
-            for (coordinate, hostile) in [
-                (scalar::CURRENT_SLOT, 160),
-                (scalar::PRIMARY_CREATED, 0),
-                (scalar::PRIMARY_CANONICAL_BUMP, 8),
+            for (coordinate, hostile, expected) in [
+                (
+                    scalar::CURRENT_SLOT,
+                    160,
+                    GeneralHotCandidateErrorV3::Submission(
+                        GeneralCandidateErrorV1::OutsideWindow,
+                    ),
+                ),
+                (
+                    scalar::PRIMARY_CREATED,
+                    0,
+                    GeneralHotCandidateErrorV3::SubmitCoordinate(
+                        SubmitCandidateClauseV3::LifecycleCreated,
+                    ),
+                ),
+                (
+                    scalar::PRIMARY_CANONICAL_BUMP,
+                    8,
+                    GeneralHotCandidateErrorV3::SubmitCoordinate(
+                        SubmitCandidateClauseV3::LifecycleBump,
+                    ),
+                ),
             ] {
                 let mut hostile_fixture = fixture.clone();
                 write_scalar(&mut hostile_fixture.bank, coordinate, hostile)
                     .expect("hostile lifecycle scalar");
                 let before = hostile_fixture.bank.clone();
-                assert!(project_submit(&mut hostile_fixture).is_err());
+                assert_eq!(project_submit(&mut hostile_fixture), Err(expected));
                 assert_eq!(hostile_fixture.bank, before);
             }
-            for coordinate in [
-                identity::PRIMARY_BENEFICIARY,
-                identity::RESULT_BENEFICIARY_OBSERVATION,
+            for (coordinate, expected) in [
+                (
+                    identity::PRIMARY_BENEFICIARY,
+                    SubmitCandidateClauseV3::LifecycleBeneficiary,
+                ),
+                (
+                    identity::RESULT_BENEFICIARY_OBSERVATION,
+                    SubmitCandidateClauseV3::IdentitySubmissionCandidate,
+                ),
             ] {
                 let mut hostile_fixture = fixture.clone();
                 write_identity(
@@ -5462,7 +6570,10 @@ mod tests {
                 )
                 .expect("hostile lifecycle identity");
                 let before = hostile_fixture.bank.clone();
-                assert!(project_submit(&mut hostile_fixture).is_err());
+                assert_eq!(
+                    project_submit(&mut hostile_fixture),
+                    Err(GeneralHotCandidateErrorV3::SubmitCoordinate(expected)),
+                );
                 assert_eq!(hostile_fixture.bank, before);
             }
         }
@@ -5755,7 +6866,11 @@ mod tests {
                 &mut hostile_candidate,
                 &mut hostile_scratch,
             ),
-            Err(GeneralHotCandidateErrorV3::InvalidCoordinate)
+            // The hostile zeroes PAYER, which is the ninth clause of the bank
+            // authentication and the last identity it reads.
+            Err(GeneralHotCandidateErrorV3::VerifyCoordinate(
+                VerifyCandidateClauseV3::Payer
+            ))
         );
         assert_eq!(hostile_candidate, hostile_before);
     }
@@ -5882,7 +6997,12 @@ mod tests {
                 Some(batch.batch_id()),
                 &mut candidate,
             ),
-            Err(GeneralHotCandidateErrorV3::InvalidCoordinate)
+            // Everything about this close agrees except the one thing it is
+            // about: the collection window has not elapsed and the batch is not
+            // full. That clause is last, and it is the one a cranker waits on.
+            Err(GeneralHotCandidateErrorV3::CloseBatchCoordinate(
+                CloseBatchClauseV3::CloseWindow
+            ))
         );
         assert_eq!(candidate, before);
     }
@@ -5985,7 +7105,11 @@ mod tests {
                 &signed_terms,
                 &mut candidate,
             ),
-            Err(GeneralHotCandidateErrorV3::InvalidCoordinate)
+            // The hostile moves the DELIVER row, not the receive row, and the
+            // two halves of a lot are separate clauses now.
+            Err(GeneralHotCandidateErrorV3::PlaceOrderCoordinate(
+                PlaceOrderClauseV3::ItemDeliverPerLot
+            ))
         );
         assert_eq!(candidate, before);
     }
@@ -6079,7 +7203,11 @@ mod tests {
                 Some(order.order_id()),
                 &mut candidate,
             ),
-            Err(GeneralHotCandidateErrorV3::InvalidCoordinate)
+            // The hostile substitutes OWNER, so the third clause refuses: the
+            // caller is not the maker who signed this order.
+            Err(GeneralHotCandidateErrorV3::CancelOrderCoordinate(
+                CancelOrderClauseV3::OwnerIsMaker
+            ))
         );
         assert_eq!(candidate, before);
     }
@@ -6172,7 +7300,11 @@ mod tests {
                 Some(order.order_id()),
                 &mut candidate,
             ),
-            Err(GeneralHotCandidateErrorV3::InvalidCoordinate)
+            // The fixture observes more escrow than the order ever reserved,
+            // which is the residual clause and nothing else.
+            Err(GeneralHotCandidateErrorV3::ReleaseOrderCoordinate(
+                ReleaseOrderClauseV3::ObservedQuoteResidual
+            ))
         );
         assert_eq!(candidate, before);
     }
@@ -6208,7 +7340,11 @@ mod tests {
                 Some(batch_id),
                 &mut candidate,
             ),
-            Err(GeneralHotCandidateErrorV3::InvalidCoordinate)
+            // The hostile moves the REGISTER, not the environment field, so the
+            // root/environment clauses hold and the register clause refuses.
+            Err(GeneralHotCandidateErrorV3::OpenBatchCoordinate(
+                OpenBatchClauseV3::IdentityGeneralConfigId
+            ))
         );
         assert_eq!(candidate, before);
     }
@@ -6366,11 +7502,20 @@ mod tests {
             [0x99; 32],
         )
         .expect("hostile parent");
-        for input in [hostile_tail, hostile_parent] {
+        // THE TWO SUBSTITUTIONS ARE NOT THE SAME ACCUSATION, and an `is_err()`
+        // here accepted either answer for either input. The tail names the
+        // environment's own outcome count; the parent names the request digest
+        // the settlement pipeline was invoked under. They are the only exact
+        // `SettlementClauseV3` assertions in this module, over the widest of
+        // the nine enums.
+        for (input, expected) in [
+            (hostile_tail, SettlementClauseV3::EnvironmentScalarOutcomeCount),
+            (hostile_parent, SettlementClauseV3::EnvironmentRequestDigest),
+        ] {
             let mut scratch = vec![0_u8; input.len()];
             let mut output = vec![0x55_u8; input.len()];
             let before = output.clone();
-            assert!(
+            assert_eq!(
                 project_general_hot_candidate_v3(
                     Action::Materialize,
                     &plan,
@@ -6380,8 +7525,8 @@ mod tests {
                     &input,
                     &mut scratch,
                     &mut output,
-                )
-                .is_err()
+                ),
+                Err(GeneralHotCandidateErrorV3::SettlementCoordinate(expected)),
             );
             assert_eq!(output, before);
         }

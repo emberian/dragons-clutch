@@ -32,6 +32,10 @@ use dclutch_product::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
     PORTFOLIO_LIABILITY_BASIS_ID_OFFSET,
 };
+use dclutch_vm::account_profile::v3::{
+    AccountProfileV3, FUNDING_BOUND_BYTES_V3, FundingActionMaskV3, FundingBoundV3,
+    HEADER_BYTES_V3 as ACCOUNT_PROFILE_HEADER_BYTES_V3, encode_account_profile_v3_atomic,
+};
 use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
     OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
@@ -1579,6 +1583,102 @@ pub fn general_account_profile_bytes_v3(action: Action) -> Result<usize> {
         .ok_or(GeneralAccountRuleErrorV3::Geometry)
 }
 
+/// The funding-owned coordinates one General action's profile refines.
+///
+/// ONE ROW, AND IT IS THE CANDIDATE'S WORK ESCROW. `SubmitCandidate` binds its
+/// primary state -- the Candidate the lifecycle creates in the same commit --
+/// as `FUND`-only: funding may top it up to the projector's target through
+/// System and may neither create nor close it. Every other action refines
+/// nothing, and the encoder still wraps its profile in the V3 header so the
+/// family has one profile schema. `general_funding_actions_v5` is the other
+/// half of the same declaration; Trading joins the two at
+/// `require_funding_profile_join_v5`.
+#[must_use]
+pub fn general_funding_bounds_v3(action: Action) -> GeneralFundingBoundsV3 {
+    match action {
+        Action::SubmitCandidate => GeneralFundingBoundsV3 {
+            bounds: [FundingBoundV3::new(
+                GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+                FundingActionMaskV3::FUND,
+                candidate_state_bytes_v3(),
+            )],
+            bound_count: 1,
+        },
+        _ => GeneralFundingBoundsV3::EMPTY,
+    }
+}
+
+/// The exact width of a Candidate state account: envelope plus record.
+const fn candidate_state_bytes_v3() -> u32 {
+    (GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_CANDIDATE_BYTES_V1) as u32
+}
+
+/// A bounded funding-bound table: at most one coordinate today.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralFundingBoundsV3 {
+    bounds: [FundingBoundV3; 1],
+    bound_count: usize,
+}
+
+impl GeneralFundingBoundsV3 {
+    const EMPTY: Self = Self {
+        bounds: [FundingBoundV3::new(1, FundingActionMaskV3::FUND, 1)],
+        bound_count: 0,
+    };
+
+    /// The declared bounds, in coordinate order.
+    #[must_use]
+    pub fn bounds(&self) -> &[FundingBoundV3] {
+        self.bounds.get(..self.bound_count).unwrap_or(&[])
+    }
+}
+
+/// Exact width of one action's funding-refined AccountProfile V3.
+pub fn general_account_profile_funding_bytes_v3(action: Action) -> Result<usize> {
+    ACCOUNT_PROFILE_HEADER_BYTES_V3
+        .checked_add(
+            general_funding_bounds_v3(action)
+                .bounds()
+                .len()
+                .checked_mul(FUNDING_BOUND_BYTES_V3)
+                .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
+        )
+        .and_then(|value| general_account_profile_bytes_v3(action).ok()?.checked_add(value))
+        .ok_or(GeneralAccountRuleErrorV3::Geometry)
+}
+
+/// Generate one action's AccountProfile in its V3 funding envelope.
+///
+/// The V2 base is exactly `encode_general_account_profile_v3_atomic`'s output;
+/// the envelope adds the header and the funding-bound table from
+/// `general_funding_bounds_v3`, and the hostile decode proves the base
+/// survived the wrap byte for byte.
+pub fn encode_general_account_profile_funding_v3_atomic(
+    action: Action,
+    widths: GeneralExternalAccountWidthsV3,
+    base_scratch: &mut [u8],
+    base_output: &mut [u8],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let expected = general_account_profile_funding_bytes_v3(action)?;
+    if scratch.len() != expected || output.len() != expected {
+        return Err(GeneralAccountRuleErrorV3::Geometry);
+    }
+    encode_general_account_profile_v3_atomic(action, widths, base_scratch, base_output)?;
+    let bounds = general_funding_bounds_v3(action);
+    encode_account_profile_v3_atomic(base_output, bounds.bounds(), scratch, output)
+        .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+    let decoded =
+        AccountProfileV3::decode(output).map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+    if decoded.base().bytes() != base_output
+        || usize::from(decoded.funding_bound_count()) != bounds.bounds().len()
+    {
+        return Err(GeneralAccountRuleErrorV3::Geometry);
+    }
+    Ok(())
+}
+
 /// Encode the action-selected General Profile13 artifact atomically.
 ///
 /// The rules and the operation list already have exactly one author, which is
@@ -1951,13 +2051,32 @@ pub fn general_account_profile_rule_v3(
         ));
     }
     if coordinate == rent_credit {
+        // CLOSECANDIDATE'S CREDIT COORDINATE IS THE SOLVER'S WALLET, NOT THE
+        // MARKET'S RENTCREDIT. The Candidate recipe declares `Payer` (decision
+        // 0021), so its close pays the beneficiary the create recorded -- the
+        // solver -- and `apply_lifecycle_closes_v3` authenticates a `Payer`
+        // close's credit coordinate by identity (`key == recorded
+        // beneficiary`) rather than as a 128-byte RentCredit record. One
+        // coordinate used to carry two required identities: the projector
+        // and the Effect wanted the solver here, the lifecycle wanted the
+        // market's credit, and no frame could satisfy both.
+        if action == Action::CloseCandidate {
+            return Ok(exact_rule(
+                false,
+                true,
+                false,
+                0,
+                0,
+                AccountEffectPermissionsV2::new(false, true, false),
+            ));
+        }
         return Ok(exact_rule(
             false,
             true,
             false,
             widths.rent_credit,
             0,
-            if matches!(action, Action::Close | Action::CloseCandidate) {
+            if action == Action::Close {
                 AccountEffectPermissionsV2::new(false, true, false)
             } else {
                 no_effects()

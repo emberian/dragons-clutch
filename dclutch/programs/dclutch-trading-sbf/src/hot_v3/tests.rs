@@ -3202,6 +3202,8 @@ fn root_close_plan_v3() -> PreparedLifecycleInvocationV3 {
             source_after: 0,
             rent_credit_before: 100,
             rent_credit_after: 137,
+            crank_destination: None,
+            crank_lamports: 0,
             bump: 9,
         }),
         state: 0,

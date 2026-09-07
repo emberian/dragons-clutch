@@ -56,6 +56,10 @@ use dclutch_vm::effect::{
         BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_HEADER_BYTES_V4, ProgramV4,
         encode_program_v4_atomic,
     },
+    v5::{
+        FUNDING_ACTION_BYTES_V5, FUNDING_SEED_BYTES_V5, FundingActionV5, FundingSeedV5,
+        HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5, encode_program_v5_atomic,
+    },
 };
 
 use crate::general::hot_candidate_v3::{
@@ -75,8 +79,8 @@ use crate::general::{
     runtime_verify::RuntimeVerifierLayoutV2,
     runtime_width::{SettlementCursorLayoutV2, VerifiedCandidateLayoutV2},
     state_artifacts_v3::{
-        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+        GENERAL_TERMINAL_STATE_ACCOUNT_V3,
         GENERAL_VERIFY_PAYER_ACCOUNT_V3, GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3,
         GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3, general_child_account_start_v3,
     },
@@ -363,12 +367,22 @@ pub const GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3: EffectInstructionV3 =
 /// Return `(fixed, repeated-item)` instruction counts for one action artifact.
 pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usize) {
     match action {
-        Action::SubmitCandidate => (23, 0),
+        // 21 since the work escrow became a funding action: the local
+        // `transfer_lamports` out of the System-owned solver and its equality
+        // left the Effect for the V5 funding table, where the movement is a
+        // System CPI. See `general_funding_actions_v5`.
+        Action::SubmitCandidate => (21, 0),
         // 54 since 2026-09-04: the verifier cursor's current-order window gained
         // the seller's floor at offset 280, and every field of that window is
         // written here out of the accelerator's register bank.
         Action::VerifyCandidateRow => (54, 7),
-        Action::CloseCandidate => (3, 0),
+        // 0 since the close's whole lamport flow moved into the lifecycle's
+        // `Payer` close plan (principal and verification to the solver, the
+        // cleanup crank to the caller). An Effect that moved lamports out of a
+        // state the lifecycle closes in the same commit was a second author
+        // for one balance, and the commit order (closes before the lamport
+        // landing) made the two irreconcilable.
+        Action::CloseCandidate => (0, 0),
         Action::OpenBatch => (24, 0),
         Action::CloseBatch => (4, 0),
         Action::PlaceOrder => (96, 13),
@@ -481,6 +495,151 @@ pub fn encode_general_effect_program_v4_atomic(
     // the wrap byte for byte: the envelope must add a header and change nothing.
     let decoded = ProgramV4::decode(output).map_err(|_| GeneralEffectArtifactErrorV3::Envelope)?;
     if decoded.base().bytes() != base_output || decoded.span_count() != 0 {
+        return Err(GeneralEffectArtifactErrorV3::Envelope);
+    }
+    Ok(())
+}
+
+/// The funding actions one General action declares, and their seeds.
+///
+/// ONE TABLE FOR FIFTEEN ACTIONS, and fourteen rows are empty on purpose: a
+/// General state is created and closed by the family lifecycle policy, never
+/// by a funding create or close. The one row is the candidate's work escrow.
+/// `SubmitCandidate` tops the Candidate it just created up to
+/// `scalar::SCRATCH_B` -- the rent principal plus the exact work capacity the
+/// projector derived from the submission's own compartments -- out of the
+/// solver at the primary payer coordinate, through the System program at the
+/// coordinate the profile declares for it, naming `identity::PAYER` as the
+/// party the refund is owed to, which is what the lifecycle's `Payer`
+/// declaration records at create. No seeds: a Fund derives no address.
+#[must_use]
+pub fn general_funding_actions_v5(action: Action) -> GeneralFundingTableV5 {
+    match action {
+        Action::SubmitCandidate => {
+            match crate::general::state_artifacts_v3::general_system_program_account_v3(action) {
+                Some(system) => GeneralFundingTableV5 {
+                    actions: [FundingActionV5::fund(
+                        GENERAL_STATE_ACCOUNT_COORDINATE_V3,
+                        GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
+                        system,
+                        narrow_register(scalar::SCRATCH_B),
+                        narrow_register(identity::PAYER),
+                    )],
+                    action_count: 1,
+                },
+                // A SubmitCandidate profile that declared no System account
+                // could not fund anything; the release validator refuses the
+                // pair rather than this function inventing a coordinate.
+                None => GeneralFundingTableV5::EMPTY,
+            }
+        }
+        _ => GeneralFundingTableV5::EMPTY,
+    }
+}
+
+/// A bounded funding table: at most one action today, no seeds ever.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralFundingTableV5 {
+    actions: [FundingActionV5; 1],
+    action_count: usize,
+}
+
+impl GeneralFundingTableV5 {
+    const EMPTY: Self = Self {
+        actions: [FundingActionV5::fund(1, 2, 3, 0, 0)],
+        action_count: 0,
+    };
+
+    /// The declared actions, in table order.
+    #[must_use]
+    pub fn actions(&self) -> &[FundingActionV5] {
+        self.actions.get(..self.action_count).unwrap_or(&[])
+    }
+
+    /// The declared seeds: none, because no General funding action derives.
+    #[must_use]
+    pub const fn seeds(&self) -> &'static [FundingSeedV5] {
+        &[]
+    }
+}
+
+/// `u32` register coordinates are `u16` on the funding wire; every General
+/// register fits, and one that did not would be a geometry defect rather than
+/// a runtime value, so the narrowing saturates to the unused coordinate and
+/// the encoder refuses it.
+const fn narrow_register(value: u32) -> u16 {
+    if value > u16::MAX as u32 {
+        u16::MAX
+    } else {
+        value as u16
+    }
+}
+
+/// Return the exact finalized V5-envelope EffectProgram width for one action.
+///
+/// V5 wraps the V4 envelope: header, the funding table, then the V4 bytes.
+pub fn general_effect_program_bytes_v5(action: Action) -> Result<usize> {
+    let table = general_funding_actions_v5(action);
+    EFFECT_HEADER_BYTES_V5
+        .checked_add(
+            table
+                .actions()
+                .len()
+                .checked_mul(FUNDING_ACTION_BYTES_V5)
+                .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
+        )
+        .and_then(|value| {
+            table
+                .seeds()
+                .len()
+                .checked_mul(FUNDING_SEED_BYTES_V5)
+                .and_then(|width| value.checked_add(width))
+        })
+        .and_then(|value| general_effect_program_bytes_v4(action).ok()?.checked_add(value))
+        .ok_or(GeneralEffectArtifactErrorV3::Geometry)
+}
+
+/// Emit one action-selected General EffectProgram in its V5 funding envelope.
+///
+/// EVERY ACTION SHIPS V5, fourteen of them with an empty funding table, so
+/// that the family has one effect schema and every reader of a General
+/// descriptor decodes one shape. The Trading executor joins the V5 table to
+/// the AccountProfile V3 funding bounds (`require_funding_profile_join_v5`),
+/// which `encode_general_account_profile_funding_v3_atomic` emits from the
+/// same author, `general_funding_bounds_v3`.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_general_effect_program_v5_atomic(
+    action: Action,
+    instruction_workspace: &mut [EffectInstructionV3],
+    template_workspace: &mut [u8],
+    base_scratch: &mut [u8],
+    base_output: &mut [u8],
+    v4_scratch: &mut [u8],
+    v4_output: &mut [u8],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let envelope = general_effect_program_bytes_v5(action)?;
+    if scratch.len() != envelope || output.len() != envelope {
+        return Err(GeneralEffectArtifactErrorV3::Geometry);
+    }
+    encode_general_effect_program_v4_atomic(
+        action,
+        instruction_workspace,
+        template_workspace,
+        base_scratch,
+        base_output,
+        v4_scratch,
+        v4_output,
+    )?;
+    let table = general_funding_actions_v5(action);
+    encode_program_v5_atomic(v4_output, table.actions(), table.seeds(), scratch, output)
+        .map_err(|_| GeneralEffectArtifactErrorV3::Envelope)?;
+    let decoded = ProgramV5::decode(output).map_err(|_| GeneralEffectArtifactErrorV3::Envelope)?;
+    if decoded.base().bytes() != v4_output
+        || usize::from(decoded.funding_action_count()) != table.actions().len()
+        || decoded.funding_seed_count() != 0
+    {
         return Err(GeneralEffectArtifactErrorV3::Envelope);
     }
     Ok(())
@@ -1233,33 +1392,15 @@ fn append_general_state_patches(
     item: &mut usize,
 ) -> Result<()> {
     if action == Action::CloseCandidate {
-        let candidate = AccountCoordinateV3::fixed(GENERAL_STATE_ACCOUNT_COORDINATE_V3);
-        push_fixed(
-            instructions,
-            fixed,
-            EffectInstructionV3::transfer_lamports(
-                candidate,
-                AccountCoordinateV3::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
-                scalar_common(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?,
-            ),
-        )?;
-        push_fixed(
-            instructions,
-            fixed,
-            EffectInstructionV3::transfer_lamports(
-                candidate,
-                AccountCoordinateV3::fixed(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3),
-                scalar_common(scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION)?,
-            ),
-        )?;
-        return push_fixed(
-            instructions,
-            fixed,
-            EffectInstructionV3::require_lamports_eq(
-                candidate,
-                scalar_common(scalar::PRIMARY_RENT_PRINCIPAL)?,
-            ),
-        );
+        // NOTHING. The Candidate's teardown is the lifecycle `Payer` close
+        // plan's alone: it pays the recorded beneficiary (the solver) the
+        // state's balance less the cleanup compartment, and the cleanup
+        // compartment to the caller through the plan's crank register
+        // (`LifecycleGuardInputV3::AlwaysWithCrankReward`). The three lamport
+        // instructions that used to live here moved the same balance a second
+        // time, out of a state the lifecycle had already drained by the time
+        // the Effect's lamports landed.
+        return Ok(());
     }
     if action == Action::VerifyCandidateRow {
         return append_verify_candidate_patches(instructions, fixed, item);
@@ -1377,20 +1518,14 @@ fn append_general_state_patches(
                 ),
             )?;
         }
-        push_fixed(
-            instructions,
-            fixed,
-            EffectInstructionV3::transfer_lamports(
-                AccountCoordinateV3::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
-                candidate,
-                scalar_common(scalar::SCRATCH_A)?,
-            ),
-        )?;
-        return push_fixed(
-            instructions,
-            fixed,
-            EffectInstructionV3::require_lamports_eq(candidate, scalar_common(scalar::SCRATCH_B)?),
-        );
+        // THE WORK ESCROW IS FUNDED BY THE V5 TABLE, NOT HERE. A local
+        // `transfer_lamports` out of the solver -- a System-owned signer -- is
+        // `ExternalAccountLamportSpend` on every cluster, measured at 678,245
+        // CU on 2026-09-04. `general_funding_actions_v5` declares one `Fund`
+        // over this state to the target in `scalar::SCRATCH_B`, and Trading's
+        // commit makes that movement a System CPI; the exact post-balance is
+        // the funding runtime's postcondition, so no equality is stated twice.
+        return Ok(());
     }
     if matches!(action, Action::OpenBatch | Action::CloseBatch) {
         return append_batch_action_patches(action, instructions, fixed);
@@ -3557,29 +3692,61 @@ mod tests {
                 .expect("identity width")
             ];
 
-            for operation in 0..23_u16 {
-                program
+            for operation in 0..program.fixed_operation_count() {
+                let resolved = program
                     .resolved_fixed_effect(operation, count, &scalars, &identities)
                     .expect("every fixed effect resolves at the authenticated runtime width");
+                // NO INSTRUCTION MOVES A LAMPORT ANY MORE. The Effect used to
+                // carry a `TransferLamports` out of the payer into the state
+                // and a `RequireLamportsEq` behind it; the runtime refused the
+                // pair with `ExternalAccountLamportSpend` because the payer is
+                // System-owned and a program may not debit what it does not
+                // own. Funding is the author now, and this is the assertion
+                // that keeps a future author from putting the spend back.
+                assert!(
+                    !matches!(
+                        resolved,
+                        dclutch_vm::effect::v3::ResolvedEffectV3::TransferLamports { .. }
+                    ),
+                    "SubmitCandidate operation {operation} moves lamports",
+                );
             }
             assert_eq!(
-                program.resolved_fixed_effect(21, count, &scalars, &identities),
-                Ok(dclutch_vm::effect::v3::ResolvedEffectV3::TransferLamports {
-                    source: usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
-                    destination: usize::from(GENERAL_STATE_ACCOUNT_COORDINATE_V3),
-                    amount: 777,
-                }),
-            );
-            assert_eq!(
-                program.resolved_fixed_effect(22, count, &scalars, &identities),
-                Ok(
-                    dclutch_vm::effect::v3::ResolvedEffectV3::RequireLamportsEq {
-                        account: usize::from(GENERAL_STATE_ACCOUNT_COORDINATE_V3),
-                        value: 1_777,
-                    }
+                program.resolved_fixed_effect(
+                    program.fixed_operation_count(),
+                    count,
+                    &scalars,
+                    &identities,
                 ),
+                Err(dclutch_vm::effect::v3::Error::InvalidCoordinate),
             );
         }
+
+        // THE WORK ESCROW, WHERE IT LIVES NOW. One Fund row, over the state the
+        // lifecycle creates in this same commit, debiting the signing payer
+        // through System up to the register the accelerator's projector wrote.
+        // The target is `SCRATCH_B` -- the same register the deleted
+        // `RequireLamportsEq` read -- so the amount still has one author and a
+        // caller still may not state it.
+        let funding = general_funding_actions_v5(Action::SubmitCandidate);
+        let system = crate::general::state_artifacts_v3::general_system_program_account_v3(
+            Action::SubmitCandidate,
+        )
+        .expect("SubmitCandidate names a System program");
+        assert_eq!(
+            funding.actions(),
+            &[FundingActionV5::fund(
+                GENERAL_STATE_ACCOUNT_COORDINATE_V3,
+                GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
+                system,
+                narrow_register(scalar::SCRATCH_B),
+                narrow_register(identity::PAYER),
+            )],
+        );
+        assert_eq!(
+            funding.actions()[0].operation(),
+            dclutch_vm::effect::v5::FundingOperationV5::Fund,
+        );
     }
 
     #[test]

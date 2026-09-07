@@ -22,6 +22,14 @@ pub mod v5;
 #[allow(dead_code, missing_docs)]
 mod generated_v4_abi;
 
+/// Lean-owned DCE6 fixed coordinates, opcodes, witnesses and hostile corpus.
+///
+/// `DClutchSemantics.EffectProgramV5Abi` authors every V5 constant and byte
+/// offset, including the third funding operation (`Fund`); `v5` derives its
+/// wire vocabulary from here rather than restating it.
+#[allow(dead_code, missing_docs)]
+pub(crate) mod generated_v5_abi;
+
 /// Canonical wire magic (`DCEF`).
 pub const MAGIC: [u8; 4] = *b"DCEF";
 /// Canonical Effect IR wire version.

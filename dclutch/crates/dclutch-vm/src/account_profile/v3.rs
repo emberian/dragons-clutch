@@ -4,8 +4,11 @@
 //! privileges, projections, and exact live data widths. This successor refines
 //! a bounded set of fixed `LifecycleBound` coordinates as funding-owned. A
 //! selected Effect successor must join every declaration before the runtime may
-//! create or close one of those accounts. StateLifecyclePolicy never acquires
-//! authority over a refined coordinate.
+//! create, fund or close one of those accounts. A `FUND` bound is the one case
+//! where the lifecycle keeps its authority: the state is the lifecycle's to
+//! create and close, and funding may only raise its balance to a declared
+//! target through the System program. For `CREATE` and `CLOSE` the
+//! StateLifecyclePolicy never acquires authority over the refined coordinate.
 
 use crate::capability_seal::{SealedArtifactV1, SealedRoleV1};
 
@@ -40,6 +43,10 @@ impl FundingActionMaskV3 {
     pub const CLOSE: Self = Self(2);
     /// Permit both funding-owned operations.
     pub const CREATE_AND_CLOSE: Self = Self(3);
+    /// Permit funding-owned top-up of a lifecycle-created state only.
+    pub const FUND: Self = Self(4);
+    /// Every funding-owned operation.
+    pub const ALL: Self = Self(7);
 
     /// Canonical bit representation.
     pub const fn bits(self) -> u8 {
@@ -56,8 +63,13 @@ impl FundingActionMaskV3 {
         self.0 & Self::CLOSE.0 != 0
     }
 
+    /// Whether a top-up through the System program is selected.
+    pub const fn permits_fund(self) -> bool {
+        self.0 & Self::FUND.0 != 0
+    }
+
     fn decode(value: u8) -> Result<Self, ErrorV3> {
-        if value == 0 || value & !Self::CREATE_AND_CLOSE.0 != 0 {
+        if value == 0 || value & !Self::ALL.0 != 0 {
             Err(ErrorV3::FundingTable)
         } else {
             Ok(Self(value))

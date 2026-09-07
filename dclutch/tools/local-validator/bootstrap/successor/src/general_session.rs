@@ -115,6 +115,10 @@ use dclutch_market::execution_strategy::{
 };
 use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use dclutch_market::{CoreState, Phase as CorePhase};
+use dclutch_operator::general_session_v1::{
+    GeneralFrameInputsV1, GeneralSubjectStatesV1, GeneralSubjectV1, general_runtime_suffix_v1,
+    general_subject_states_v1,
+};
 use dclutch_operator::general_successor::{self as successor, ROUTE_FORMAT_V1};
 use dclutch_operator::resolution_core_v3::product_graph_observation_v3::{
     FinalizedProductGraphAccountsV3, authenticate_product_graph_observation_v3,
@@ -131,8 +135,9 @@ use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_release_tool::CheckedExecutionReleaseSetV1;
 use dclutch_trading::general::{
     account_rules_v3::{
-        GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
+        GeneralExternalAccountWidthsV3, encode_general_account_profile_funding_v3_atomic,
         general_account_profile_bytes_v3, general_account_profile_fixed_count_v3,
+        general_account_profile_funding_bytes_v3,
     },
     artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3,
     hot_candidate_v3::{
@@ -145,15 +150,10 @@ use dclutch_trading::general::{
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, general_system_program_account_v3,
     },
 };
-use dclutch_trading::general::{
-    collection_v1::{GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1},
-    state_seeds_v3::GeneralStateAddressSeedsV3,
-};
 use dclutch_trading::general_codec::{Action, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2};
 use dclutch_trading::general_config::{
     GENERAL_CAPABILITY_KIND_ID_V1, root::GeneralRootV2, v3::GeneralConfigV3,
 };
-use dclutch_vm::account_profile::v2::AccountProfileV2;
 use dclutch_vm::capability_seal::CapabilitySealKeyV1;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -187,12 +187,19 @@ const DEFAULT_SESSION_ACTION_V1: Action = Action::OpenBatch;
 /// `CloseBatch` "appeared in no driver source" and the runbook's three-step
 /// sequence had one reachable step and two nobody could even ask for.
 ///
-/// What each of the other thirteen needs is a READ this command does not do:
-/// its subject is a live state body (the open Batch, the selected candidate,
-/// the settlement cursor), and `open_batch_state_address_v1` below derives its
-/// subject from the ROOT alone. `CloseBatch` is the nearest: its occurrence is
-/// the batch the root's `next_batch_sequence` last opened, so it needs the
-/// Batch account read back and its terms authenticated, not a new derivation.
+/// Two different walls stand behind the fourteen, and only one of them is a
+/// derivation. `general_subject_states_v1` derives the states of all fifteen
+/// and `general_runtime_suffix_v1` frames all fifteen, so for `CloseBatch` --
+/// whose subject is the batch the root's own `next_batch_sequence` last
+/// opened, needing no read -- the wall that remains is EVIDENCE, not code:
+/// this command has framed exactly one action against a chain, and every
+/// report, wall analysis and label below was written and observed for that
+/// one. The other thirteen face the derivation wall as well: their subject is
+/// an identity out of a live state body -- a selected candidate, a settlement
+/// cursor, an order -- that this command does not read.
+///
+/// Admitting `CloseBatch` is therefore a one-line change plus a devnet run,
+/// and must not be made without the run.
 const COMPOSABLE_ACTIONS_V1: &[Action] = &[Action::OpenBatch];
 
 fn action_v1(value: &str) -> Result<Action> {
@@ -226,10 +233,11 @@ fn action_v1(value: &str) -> Result<Action> {
         return Err(refusal(
             "session/action-not-composable",
             format!(
-                "--action {value} parses, and this command cannot derive its frame yet. \
-                 Its subject is a live state body and `open_batch_state_address_v1` derives \
-                 its subject from the capability root alone; CloseBatch additionally needs \
-                 the open Batch account read back and its occurrence terms authenticated. \
+                "--action {value} parses, and this command has no devnet evidence for it. \
+                 `general_subject_states_v1` derives the states of all fifteen and \
+                 `general_runtime_suffix_v1` frames all fifteen, so CloseBatch needs only a \
+                 devnet run to be admitted here; the other thirteen additionally name an \
+                 identity out of a live state body this command does not read. \
                  Composable today: {}",
                 COMPOSABLE_ACTIONS_V1
                     .iter()
@@ -608,16 +616,34 @@ fn recover_width_v1(
     Ok(u32::from_le_bytes(bytes))
 }
 
+/// Re-encode one action's AccountProfile in the envelope the chain publishes.
+///
+/// EVERY GENERAL ARTIFACT IS A V3 FUNDING ENVELOPE, the fourteen actions with
+/// no funding bound included, so the width recovery below compares like with
+/// like: a V2 base re-encoded here would differ from the published record in
+/// its header and its bound table and the recovery would report every width
+/// unlocatable, not a shorter record.
 fn encode_profile_v1(
     session_action: Action,
     widths: GeneralExternalAccountWidthsV3,
 ) -> Result<Vec<u8>> {
-    let bytes = general_account_profile_bytes_v3(session_action)
+    let base_bytes = general_account_profile_bytes_v3(session_action)
         .map_err(|error| Error::new(format!("General AccountProfile width: {error:?}")))?;
+    let bytes = general_account_profile_funding_bytes_v3(session_action)
+        .map_err(|error| Error::new(format!("General AccountProfile envelope width: {error:?}")))?;
+    let mut base_scratch = vec![0_u8; base_bytes];
+    let mut base_output = vec![0_u8; base_bytes];
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_general_account_profile_v3_atomic(session_action, widths, &mut scratch, &mut output)
-        .map_err(|error| Error::new(format!("General AccountProfile encode: {error:?}")))?;
+    encode_general_account_profile_funding_v3_atomic(
+        session_action,
+        widths,
+        &mut base_scratch,
+        &mut base_output,
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(|error| Error::new(format!("General AccountProfile encode: {error:?}")))?;
     Ok(output)
 }
 
@@ -1480,7 +1506,12 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
                 })?;
             let root_state = GeneralRootV2::decode(composite.state())
                 .map_err(|error| refusal("route/root", format!("General root state: {error:?}")))?;
-            let state = open_batch_state_address_v1(
+            // The states this action names, from the family's own seed
+            // recipes: one author for every General state address, and the
+            // subject an action needs and the caller did not state is refused
+            // by name rather than derived from a default.
+            let states = general_subject_states_v1(
+                session_action,
                 trading,
                 root,
                 root_state,
@@ -1488,14 +1519,23 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
                 entry.config_id().to_bytes(),
                 graph.product_record,
                 tail_count,
-            )?;
+                GeneralSubjectV1::default(),
+            )
+            .map_err(|error| {
+                refusal(
+                    "route/subject",
+                    format!("the states {session_action:?} names did not derive: {error:?}"),
+                )
+            })?;
+            let state = states.primary.0;
             let runtime_suffix = runtime_suffix_accounts_v1(
                 &published_profile,
                 session_action,
-                tail_count,
-                state,
+                &fixed,
+                states,
                 arguments.payer,
                 rent_credit,
+                release_set.to_bytes(),
             )?;
             if runtime_suffix.len() != runtime_suffix_count {
                 return Err(refusal(
@@ -2035,131 +2075,84 @@ fn route_document_v1(input: &RouteInputV1) -> Result<Value> {
     }))
 }
 
-/// The runtime suffix, with each account's privileges READ OFF the published
-/// AccountProfile rather than assumed.
+/// The runtime suffix, with every address and every privilege READ OFF the
+/// one author for a General frame.
 ///
-/// `validate_runtime_geometry` compares every physical runtime account's
-/// signer, writable and executable bits against
-/// `physical_account_geometry_with_dynamic_spans`, so a producer that typed
-/// `payer: signer+writable` by hand would be a second author for a vector the
-/// chain already publishes. The three addresses are the only inputs: the state
-/// PDA this instruction will create, the payer, and the RentCredit account
-/// nothing on chain names.
+/// THIS COMMAND USED TO BE THE SECOND AUTHOR. It knew four coordinates -- the
+/// state, the payer, the credit and the System program -- by an if-else chain
+/// written here, and refused every other coordinate as unmappable, which is
+/// why it could frame exactly one of General's fifteen actions.
+/// `general_runtime_suffix_v1` reads the coordinate list off the same
+/// `state_artifacts_v3` and `effect_artifacts_v3` the AccountProfile is
+/// emitted from, so a coordinate here cannot disagree with the profile the
+/// chain holds, and the privileges come from that profile's own rule.
+///
+/// The chain facts are read back out of the fixed frame this command already
+/// built and validated, not threaded in again: one author for the market, the
+/// programs and the graph records. `child_chain` is absent because the eight
+/// actions this command can frame invoke no Claims or Custody child; an action
+/// that does refuses by name rather than reading a placeholder.
 fn runtime_suffix_accounts_v1(
     published_profile: &[u8],
     action: Action,
-    tail_count: u32,
-    state: Pubkey,
+    fixed: &[Pubkey],
+    states: GeneralSubjectStatesV1,
     payer: Pubkey,
     rent_credit: Pubkey,
+    release_set: [u8; 32],
 ) -> Result<Vec<RouteRuntimeAccountV1>> {
-    let profile = AccountProfileV2::decode(published_profile).map_err(|error| {
-        refusal(
-            "route/account-profile",
-            format!("the published AccountProfile did not decode: {error:?}"),
-        )
-    })?;
-    let span_counts: [u32; 0] = [];
-    let physical_count = profile
-        .physical_account_count_with_dynamic_spans(tail_count, &span_counts)
-        .map_err(|error| {
+    let at = |index: usize| -> Result<Pubkey> {
+        fixed.get(index).copied().ok_or_else(|| {
             refusal(
-                "route/runtime-geometry",
-                format!("physical runtime width: {error:?}"),
+                "route/fixed-frame",
+                format!("the fixed frame has no coordinate {index}"),
             )
-        })?;
-    let state_coordinate = usize::from(GENERAL_PRIMARY_STATE_ACCOUNT_V3);
-    let payer_coordinate = usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3);
-    let credit_coordinate = usize::from(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3);
-    let system_coordinate = general_system_program_account_v3(action).map(usize::from);
-    let mut accounts = Vec::new();
-    for ordinal in HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3..physical_count {
-        let address = if ordinal == state_coordinate {
-            state
-        } else if ordinal == payer_coordinate {
-            payer
-        } else if ordinal == credit_coordinate {
-            rent_credit
-        } else if Some(ordinal) == system_coordinate {
-            system_program::ID
-        } else {
-            return Err(refusal(
-                "route/unmapped-runtime-coordinate",
-                format!(
-                    "physical runtime ordinal {ordinal} of {action:?} has no producer this \
-                     command can name; the frame report's runtimeVector says the same thing \
-                     and a route must not guess"
-                ),
-            ));
-        };
-        let geometry = profile
-            .physical_account_geometry_with_dynamic_spans(tail_count, &span_counts, ordinal)
-            .map_err(|error| {
-                refusal(
-                    "route/runtime-geometry",
-                    format!("physical runtime ordinal {ordinal}: {error:?}"),
-                )
-            })?;
-        let privileges = geometry.privileges();
-        accounts.push(RouteRuntimeAccountV1 {
-            address,
-            is_signer: privileges.signer(),
-            is_writable: privileges.writable(),
-        });
-    }
-    Ok(accounts)
-}
-
-/// Derive the batch-window state address this `OpenBatch` will create.
-///
-/// Every input is authenticated: the root's own body supplies the sequence,
-/// generation and Market it was activated against, the config record supplies
-/// the price scale and order bound, and the Product graph supplies the outcome
-/// count and record identity. The occurrence identity and the seed order both
-/// come from the same two types the operator calls, so this address and the
-/// one `derive_lifecycle_state_v3` re-derives cannot disagree unless one of
-/// those authors changed -- in which case this stops compiling or refuses.
-fn open_batch_state_address_v1(
-    trading: Pubkey,
-    root: Pubkey,
-    root_state: GeneralRootV2,
-    config: GeneralConfigV3,
-    config_id: [u8; 32],
-    product_record: [u8; 32],
-    outcome_count: u32,
-) -> Result<Pubkey> {
-    let occurrence = GeneralBatchOccurrenceTermsV1::new(GeneralBatchOpeningV1 {
-        outcome_count,
-        sequence: root_state.next_batch_sequence(),
-        generation: root_state.generation(),
-        market: root_state.market(),
-        product_id: product_record,
-        config_id,
-        price_scale: config.price_scale(),
-        collection_close_slot: 0,
-        settlement_close_slot: 0,
-        max_orders: config.max_orders_per_candidate(),
-    })
-    .map_err(|error| {
+        })
+    };
+    let pair = |index: usize| -> Result<(Pubkey, Pubkey)> { Ok((at(index)?, at(index + 1)?)) };
+    let inputs = GeneralFrameInputsV1 {
+        trading_program: at(HOT_TRADING_PROGRAM_ACCOUNT_V3)?,
+        trading_programdata: at(HOT_TRADING_PROGRAMDATA_ACCOUNT_V3)?,
+        core_program: at(HOT_CORE_PROGRAM_ACCOUNT_V3)?,
+        core_programdata: at(HOT_CORE_PROGRAMDATA_ACCOUNT_V3)?,
+        registry_program: at(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?,
+        activation_cache: at(HOT_ACTIVATION_CACHE_ACCOUNT_V3)?,
+        market: at(HOT_MARKET_ACCOUNT_V3)?,
+        rent_credit,
+        release_set,
+        product_record: pair(HOT_PRODUCT_RAW_ACCOUNT_V3)?,
+        result_domain_record: pair(HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?,
+        portfolio_record: pair(HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
+        linked_basis_record: pair(HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?,
+        child_chain: None,
+        payer,
+        states,
+        party: None,
+        order_children: None,
+        settlement_children: None,
+        position_owner_identity: None,
+        surplus_beneficiary: None,
+        solver: None,
+        evidence: Vec::new(),
+        child_callers: Vec::new(),
+    };
+    let suffix = general_runtime_suffix_v1(published_profile, action, &inputs).map_err(|error| {
         refusal(
-            "route/batch-occurrence",
-            format!("the next batch occurrence did not form: {error:?}"),
+            "route/runtime-frame",
+            format!(
+                "the runtime suffix of {action:?} did not resolve: {error:?}; the frame report's \
+                 runtimeVector says the same thing and a route must not guess"
+            ),
         )
     })?;
-    let seeds = GeneralStateAddressSeedsV3::batch(root.to_bytes(), occurrence.occurrence_id())
-        .map_err(|error| {
-            refusal(
-                "route/batch-seeds",
-                format!("the batch state coordinates did not form: {error:?}"),
-            )
-        })?;
-    let slices = seeds.as_slices().map_err(|error| {
-        refusal(
-            "route/batch-seeds",
-            format!("the batch state seed order did not form: {error:?}"),
-        )
-    })?;
-    Ok(Pubkey::find_program_address(slices.as_slice(), &trading).0)
+    Ok(suffix
+        .into_iter()
+        .map(|account| RouteRuntimeAccountV1 {
+            address: account.address,
+            is_signer: account.is_signer,
+            is_writable: account.is_writable,
+        })
+        .collect())
 }
 
 /// Write one route document to a path that must not already exist.
@@ -2679,10 +2672,9 @@ mod tests {
             "CloseBatch must refuse by name, not by absence: {close}"
         );
         assert!(
-            close
-                .to_string()
-                .contains("the open Batch account read back"),
-            "the refusal must name the reading it needs: {close}"
+            close.to_string().contains("no devnet evidence for it"),
+            "the refusal must name what CloseBatch actually lacks now that the module \
+             derives its subject and frames it: {close}"
         );
 
         for spelling in [

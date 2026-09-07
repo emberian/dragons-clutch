@@ -93,8 +93,8 @@ use dclutch_registry::release_set::{ArtifactReleaseIdV1, ExecutionRoleV1};
 use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
 use dclutch_trading::general::{
     account_rules_v3::{
-        GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
-        general_account_profile_bytes_v3,
+        GeneralExternalAccountWidthsV3, encode_general_account_profile_funding_v3_atomic,
+        general_account_profile_bytes_v3, general_account_profile_funding_bytes_v3,
     },
     activation_bundle_v1::{
         GeneralActivationBundleInputV1, build_general_activation_bundle_v1,
@@ -106,9 +106,10 @@ use dclutch_trading::general::{
         GeneralArtifactSelectionV3,
     },
     effect_artifacts_v3::{
-        GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
+        GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v5_atomic,
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
-        general_effect_program_bytes_v4, general_effect_template_bytes_v3,
+        general_effect_program_bytes_v4, general_effect_program_bytes_v5,
+        general_effect_template_bytes_v3,
     },
     release_v3::{
         GENERAL_ACTION_PROGRAM_COUNT_V5, GENERAL_ACTIONS_V5, GeneralActionArtifactsV3,
@@ -1214,7 +1215,7 @@ fn compile_bundle(
         content(input.capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: ArtifactReferenceV4::new(
-                content(dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID)?,
+                content(dclutch_vm::account_profile::v3::SCHEMA_RELEASE_ID_V3)?,
                 content(digest(&account_profile))?,
             ),
             request_profile: ArtifactReferenceV4::new(
@@ -1234,7 +1235,7 @@ fn compile_bundle(
                 content(digest(&transition))?,
             ),
             effect: ArtifactReferenceV4::new(
-                content(dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4)?,
+                content(dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5)?,
                 content(digest(&effect))?,
             ),
         },
@@ -1258,16 +1259,32 @@ fn compile_bundle(
     })
 }
 
+/// Encode one action's AccountProfile in its V3 funding envelope.
+///
+/// V3 for all fifteen, with an empty bound table on fourteen: the family has
+/// one profile schema, and the one refined coordinate -- SubmitCandidate's
+/// Candidate, `FUND`-only -- is authored by `general_funding_bounds_v3`.
 fn encode_account_profile(
     widths: GeneralExternalAccountWidthsV3,
     action: Action,
 ) -> Result<Vec<u8>> {
-    let bytes = general_account_profile_bytes_v3(action)
+    let base_bytes = general_account_profile_bytes_v3(action)
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralAccountRule)?;
+    let mut base_scratch = vec![0_u8; base_bytes];
+    let mut base_output = vec![0_u8; base_bytes];
+    let bytes = general_account_profile_funding_bytes_v3(action)
         .map_err(GeneralSelectedReleaseErrorV1::GeneralAccountRule)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_general_account_profile_v3_atomic(action, widths, &mut scratch, &mut output)
-        .map_err(GeneralSelectedReleaseErrorV1::GeneralAccountRule)?;
+    encode_general_account_profile_funding_v3_atomic(
+        action,
+        widths,
+        &mut base_scratch,
+        &mut base_output,
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(GeneralSelectedReleaseErrorV1::GeneralAccountRule)?;
     Ok(output)
 }
 
@@ -1319,11 +1336,12 @@ fn encode_transition(action: Action) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-/// Encode one action's EffectProgram as a V4 envelope.
+/// Encode one action's EffectProgram as a V5 funding envelope over V4.
 ///
-/// V4 is not a preference: `process_hot_execution_v3` decodes exactly one effect
-/// schema, so a release publishing the bare V3 record is refused by the Hot path
-/// before any caller matters.
+/// V5 is not a preference either: the work escrow is a funding action, and
+/// `process_hot_execution_v3` accepts a funding table only through the V5
+/// schema, joined to a V3 profile. Fourteen actions carry an empty table so
+/// the family has one effect schema.
 fn encode_effect(action: Action) -> Result<Vec<u8>> {
     let (fixed, item) = general_effect_instruction_count_v3(action);
     let count = fixed
@@ -1335,16 +1353,22 @@ fn encode_effect(action: Action) -> Result<Vec<u8>> {
         .map_err(GeneralSelectedReleaseErrorV1::GeneralEffectArtifact)?;
     let mut base_scratch = vec![0_u8; base];
     let mut base_output = vec![0_u8; base];
-    let bytes = general_effect_program_bytes_v4(action)
+    let v4 = general_effect_program_bytes_v4(action)
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralEffectArtifact)?;
+    let mut v4_scratch = vec![0_u8; v4];
+    let mut v4_output = vec![0_u8; v4];
+    let bytes = general_effect_program_bytes_v5(action)
         .map_err(GeneralSelectedReleaseErrorV1::GeneralEffectArtifact)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_general_effect_program_v4_atomic(
+    encode_general_effect_program_v5_atomic(
         action,
         &mut instructions,
         &mut templates,
         &mut base_scratch,
         &mut base_output,
+        &mut v4_scratch,
+        &mut v4_output,
         &mut scratch,
         &mut output,
     )

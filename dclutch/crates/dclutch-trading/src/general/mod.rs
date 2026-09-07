@@ -26,8 +26,14 @@ pub mod admitted_accelerator_v3;
 pub mod artifacts_v3;
 /// Candidate submission and streamed on-chain page verification.
 pub mod candidate_v1;
+/// Which clause of the CancelOrder coordinate conjunct disagreed.
+pub mod cancel_order_clause_v3;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
+/// Which clause of the CloseBatch coordinate conjunct disagreed.
+pub mod close_batch_clause_v3;
+/// Which clause of the CloseCandidate coordinate conjunct disagreed.
+pub mod close_candidate_clause_v3;
 /// Batch and signed-order records: the collection half settlement consumes.
 pub mod collection_v1;
 /// Generated exact-child EffectProgram artifacts for every General action.
@@ -43,8 +49,14 @@ pub mod invocation_v1;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
 pub mod lifecycle;
 pub mod local_state_v3;
+/// Which clause of the OpenBatch coordinate conjunct disagreed.
+pub mod open_batch_clause_v3;
+/// Which clause of the PlaceOrder coordinate conjunct disagreed.
+pub mod place_order_clause_v3;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.
 pub mod plan;
+/// Which clause of the ReleaseOrder coordinate conjunct disagreed.
+pub mod release_order_clause_v3;
 /// Exact admission of all seven action-selected General V3 artifact bundles.
 pub mod release_v3;
 #[cfg(test)]
@@ -64,6 +76,8 @@ pub mod runtime_width;
 #[allow(dead_code, missing_docs)]
 #[path = "generated_runtime_wire_v2.rs"]
 mod generated_runtime_wire_v2;
+/// Which clause of General's settlement-side conjuncts disagreed.
+pub mod settlement_clause_v3;
 /// Stateless General binding to generic Shadow-AOT and chunked accelerator transport.
 pub mod shadow_accelerator_v3;
 /// Lean-owned action-specific request projections for generic Trading.
@@ -76,6 +90,8 @@ pub mod state_seeds_v3;
 pub mod submit_candidate_clause_v3;
 /// Action-selected TransitionVM programs for admitted General execution.
 pub mod transition_artifacts_v3;
+/// Which clause of the VerifyCandidateRow bank join disagreed.
+pub mod verify_candidate_clause_v3;
 
 use crate::general_codec::{
     CandidateV1, ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_PAGES_PER_CANDIDATE,

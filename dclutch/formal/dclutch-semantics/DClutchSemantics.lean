@@ -48,6 +48,7 @@ import DClutchSemantics.EconomicCodec
 import DClutchSemantics.EconomicExamples
 import DClutchSemantics.EconomicKernel
 import DClutchSemantics.EffectProgramV4Abi
+import DClutchSemantics.EffectProgramV5Abi
 import DClutchSemantics.EnsembleResolutionV1
 import DClutchSemantics.Examples
 import DClutchSemantics.ExecutionRelease

@@ -20,6 +20,21 @@ def magic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x44, 0x50, 0x30, 0x33]
 def schemaVersion : Nat := 3
 def artifactProfile : Nat := 4
 def maxCurrentRentQuotes : Nat := 16
+
+/-! ### Plan guard tags (byte 24 of the 40-byte action plan)
+
+The action-plan record is a Rust-authored layout (`ACTION_PLAN_BYTES = 40` in
+`lifecycle_v3.rs`); these are its guard tags, stated here so a third tag is a
+Lean fact before it is a Rust one. `alwaysWithCrankReward` is a CLOSE-only
+shape: the close pays one scalar register's lamports to the plan's payer
+coordinate before the beneficiary receives the remainder. -/
+def guardAlways : Nat := 0
+def guardScalarEq : Nat := 1
+def guardAlwaysWithCrankReward : Nat := 2
+
+theorem guard_tags_are_distinct :
+    guardAlways ≠ guardScalarEq ∧ guardScalarEq ≠ guardAlwaysWithCrankReward ∧
+      guardAlways ≠ guardAlwaysWithCrankReward := by decide
 def schemaReleasePreimage : List UInt8 :=
   "dclutch/schema/state-lifecycle-policy-v5-current-rent-quotes-v1".toUTF8.toList
 def schemaReleaseId : List UInt8 := [

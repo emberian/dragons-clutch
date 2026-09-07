@@ -8,7 +8,8 @@
 use super::{
     ACTION_PLAN_BYTES, ARTIFACT_PROFILE, ARTIFACT_PROFILE_OFFSET,
     CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5, CURRENT_RENT_QUOTE_BYTES_V5,
-    CURRENT_RENT_QUOTE_COUNT_OFFSET, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES,
+    CURRENT_RENT_QUOTE_COUNT_OFFSET, Error, GUARD_ALWAYS, GUARD_ALWAYS_WITH_CRANK_REWARD,
+    GUARD_SCALAR_EQ, HEADER_BYTES,
     IMMUTABLE_IDENTITY_BINDING_BYTES, IMMUTABLE_IDENTITY_BINDING_COUNT_OFFSET, MAGIC, MAGIC_OFFSET,
     MAX_SEED_BYTES, PLAN_AUTHENTICATE, PLAN_AUTHENTICATE_OR_CREATE, PLAN_CLOSE, PLAN_COUNT_OFFSET,
     PLAN_CREATE, PROTECTED_OUTPUT_ARTIFACT_PROFILE, PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE,
@@ -160,6 +161,13 @@ pub enum LifecycleGuardInputV3 {
         /// Exact enabling value.
         expected: u64,
     },
+    /// Always execute this Close plan, paying `register` lamports out of the
+    /// closing state to the plan's `payer` coordinate before the beneficiary
+    /// receives the remainder. Close plans only, and then `payer` is required.
+    AlwaysWithCrankReward {
+        /// Scalar register holding the crank reward, in lamports.
+        register: LifecycleRegisterCoordinateV3,
+    },
 }
 
 /// One action-selected lifecycle plan.
@@ -171,7 +179,8 @@ pub struct LifecyclePlanInputV3 {
     pub operation: LifecycleOperationInputV3,
     /// Recipe table index.
     pub recipe: u16,
-    /// Create payer; absent for Authenticate and Close.
+    /// Create payer; absent for Authenticate, and for Close unless the guard
+    /// is `AlwaysWithCrankReward`, where it is the crank's destination.
     pub payer: Option<LifecycleAccountCoordinateV3>,
     /// Permanent RentCredit; required for Create and Close.
     pub rent_credit: Option<LifecycleAccountCoordinateV3>,
@@ -630,6 +639,11 @@ fn encode_plan(plan: LifecyclePlanInputV3, output: &mut [u8], offset: usize) -> 
             write_byte(output, add(offset, 25)?, source.space.tag())?;
             write(output, add(offset, 26)?, &source.index.to_le_bytes())?;
             write(output, add(offset, 28)?, &expected.to_le_bytes())
+        }
+        LifecycleGuardInputV3::AlwaysWithCrankReward { register } => {
+            write_byte(output, add(offset, 24)?, GUARD_ALWAYS_WITH_CRANK_REWARD)?;
+            write_byte(output, add(offset, 25)?, register.space.tag())?;
+            write(output, add(offset, 26)?, &register.index.to_le_bytes())
         }
     }
 }

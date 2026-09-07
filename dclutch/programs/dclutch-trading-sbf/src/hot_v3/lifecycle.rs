@@ -1636,6 +1636,27 @@ pub(super) fn apply_funding_candidates_v5(
                 state.lamports = 0;
                 state.data_len = 0;
             }
+            FundingOperationV5::Fund => {
+                let state_before = accounts
+                    .get(state)
+                    .ok_or(TradingSbfError::Transition)?
+                    .lamports;
+                if state_before > amount {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                let debit = amount
+                    .checked_sub(state_before)
+                    .ok_or(TradingSbfError::Transition)?;
+                let payer = accounts
+                    .get_mut(counterparty)
+                    .ok_or(TradingSbfError::Transition)?;
+                payer.lamports = payer
+                    .lamports
+                    .checked_sub(debit)
+                    .ok_or(TradingSbfError::Transition)?;
+                let state = accounts.get_mut(state).ok_or(TradingSbfError::Transition)?;
+                state.lamports = amount;
+            }
         }
         index = index.checked_add(1).ok_or(TradingSbfError::Transition)?;
     }
@@ -1938,16 +1959,32 @@ pub(super) fn apply_lifecycle_closes_v3(
             .get(prepared.rent_credit.ok_or(TradingSbfError::Commit)?)
             .copied()
             .ok_or(TradingSbfError::Commit)?;
-        let authenticated_credit = authenticate_lifecycle_credit_v3(
-            accounts,
-            lifecycle_owner_program,
-            prepared.rent_credit.ok_or(TradingSbfError::Commit)?,
-            credit.lamports(),
-            expected_market,
-            expected_release_set,
-            expected_generation,
-            expected_rent_credit,
-        )?;
+        // WHERE THE PRINCIPAL GOES IS THE PLAN'S DECLARATION. A `Credit` close
+        // pays the market's RentCredit record, authenticated as one; a `Payer`
+        // close pays the WALLET of the beneficiary the create recorded, at the
+        // same coordinate, authenticated by identity -- the kernel already
+        // required `credit.key == recorded beneficiary` when it planned this.
+        let refund_admitted = match plan.refund_source {
+            LifecycleRefundSourceV3::Credit => {
+                let authenticated_credit = authenticate_lifecycle_credit_v3(
+                    accounts,
+                    lifecycle_owner_program,
+                    prepared.rent_credit.ok_or(TradingSbfError::Commit)?,
+                    credit.lamports(),
+                    expected_market,
+                    expected_release_set,
+                    expected_generation,
+                    expected_rent_credit,
+                )?;
+                closing_refund_identity_admitted_v3(plan, authenticated_credit.beneficiary)
+            }
+            LifecycleRefundSourceV3::Payer => {
+                credit.key.to_bytes() == plan.beneficiary
+                    && credit.is_writable
+                    && !credit.executable
+                    && closing_refund_identity_admitted_v3(plan, [0; 32])
+            }
+        };
         if state.key.to_bytes() != plan.state
             || credit.key.to_bytes() != plan.rent_credit
             || state.owner != program_id
@@ -1955,10 +1992,32 @@ pub(super) fn apply_lifecycle_closes_v3(
                 != usize::try_from(plan.source_data_bytes).map_err(|_| TradingSbfError::Commit)?
             || state.lamports() != plan.source_before
             || credit.lamports() != plan.rent_credit_before
-            || !closing_refund_identity_admitted_v3(plan, authenticated_credit.beneficiary)
+            || !refund_admitted
         {
             return Err(TradingSbfError::Commit.into());
         }
+        // The crank reward, where the plan carries one: paid to the plan's
+        // payer coordinate out of the source, before the beneficiary. The
+        // kernel sized `rent_credit_after` net of it, so the three balances
+        // below sum to the source's, exactly.
+        let crank = match plan.crank_destination {
+            Some(destination) => {
+                let payer = accounts
+                    .get(prepared.payer.ok_or(TradingSbfError::Commit)?)
+                    .copied()
+                    .ok_or(TradingSbfError::Commit)?;
+                if payer.key.to_bytes() != destination
+                    || payer.key == state.key
+                    || payer.key == credit.key
+                    || !payer.is_writable
+                {
+                    return Err(TradingSbfError::Commit.into());
+                }
+                Some((payer, plan.crank_lamports))
+            }
+            None if plan.crank_lamports == 0 => None,
+            None => return Err(TradingSbfError::Commit.into()),
+        };
         state
             .try_borrow_mut_data()
             .map_err(|_| TradingSbfError::Commit)?
@@ -1969,6 +2028,15 @@ pub(super) fn apply_lifecycle_closes_v3(
         **credit
             .try_borrow_mut_lamports()
             .map_err(|_| TradingSbfError::Commit)? = plan.rent_credit_after;
+        if let Some((payer, lamports)) = crank {
+            let after = payer
+                .lamports()
+                .checked_add(lamports)
+                .ok_or(TradingSbfError::Commit)?;
+            **payer
+                .try_borrow_mut_lamports()
+                .map_err(|_| TradingSbfError::Commit)? = after;
+        }
         state.resize(0).map_err(|_| TradingSbfError::Commit)?;
         state.assign(&system_program::ID);
         if state.owner != &system_program::ID
@@ -2152,6 +2220,7 @@ pub(super) fn require_funding_profile_join_v5(
                 if bound.actions().permits_create()
                     && action.live_bytes() == bound.live_bytes() => {}
             FundingOperationV5::Close if bound.actions().permits_close() => {}
+            FundingOperationV5::Fund if bound.actions().permits_fund() => {}
             _ => return Err(TradingSbfError::Content.into()),
         }
         index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
@@ -2285,10 +2354,133 @@ pub(super) fn require_funding_runtime_v5(
                     return Err(TradingSbfError::Transition.into());
                 }
             }
+            FundingOperationV5::Fund => {
+                // THE STATE IS THE LIFECYCLE'S. At prepare time it is either
+                // the vacant System account the lifecycle is about to create
+                // (SubmitCandidate) or the live Trading-owned state it will
+                // authenticate; either way the profile's bound names its exact
+                // width and the funding never allocates. The payer signs and
+                // is the party the refund is owed to: `refund_owner` is the
+                // register the lifecycle's `Payer` declaration records, so the
+                // two authors of "whose escrow is this" are joined here.
+                let payer = counterparty;
+                let system_index =
+                    usize::from(action.system_program().ok_or(TradingSbfError::Transition)?);
+                require_funding_representative_v5(system_index, accounts, aliases)?;
+                let system = accounts
+                    .get(system_index)
+                    .copied()
+                    .ok_or(TradingSbfError::Transition)?;
+                let bound = profile
+                    .funding_bound_for(action.state())
+                    .map_err(|_| TradingSbfError::Transition)?
+                    .ok_or(TradingSbfError::Transition)?;
+                let live_bytes =
+                    usize::try_from(bound.live_bytes()).map_err(|_| TradingSbfError::Transition)?;
+                let vacant = state.owner == &system_program::ID && state.data_len() == 0;
+                let live = state.owner == program_id && state.data_len() == live_bytes;
+                if !(vacant || live)
+                    || !payer.is_signer
+                    || !payer.is_writable
+                    || payer.key == state.key
+                    || payer.key.to_bytes() != refund_owner
+                    || system.key != &system_program::ID
+                    || system.is_signer
+                    || system.is_writable
+                    || !system.executable
+                    || amount == 0
+                    || amount <= rent.minimum_balance(live_bytes)
+                {
+                    return Err(TradingSbfError::Transition.into());
+                }
+            }
         }
         index = index.checked_add(1).ok_or(TradingSbfError::Transition)?;
     }
     require_funding_child_separation_v5(effect, tail_count, scalars, identities)
+}
+
+/// Top every funding-declared state up to its exact target through System.
+///
+/// Runs AFTER `apply_lifecycle_creates_v3` and `apply_funding_creates_v5`, so
+/// the state exists and is Trading-owned, and BEFORE any child route, so a
+/// child that reads the escrow's balance reads the funded one. The debit is a
+/// System `transfer` signed by the payer -- the one movement a program may
+/// make out of an account it does not own -- and the target is the register
+/// the accelerator's projector wrote, so an escrow cannot be short or long by
+/// one lamport: `state_after == target`, exactly, or the commit refuses.
+pub(super) fn apply_funding_top_ups_v5(
+    program_id: &Pubkey,
+    effect: Option<EffectProgramV5<'_>>,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    accounts: &[&AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let Some(effect) = effect else {
+        return Ok(());
+    };
+    let mut index = 0_u16;
+    while index < effect.funding_action_count() {
+        let action = effect
+            .funding_action(index)
+            .map_err(|_| TradingSbfError::Commit)?;
+        if action.operation() != FundingOperationV5::Fund {
+            index = index.checked_add(1).ok_or(TradingSbfError::Commit)?;
+            continue;
+        }
+        let state = accounts
+            .get(usize::from(action.state()))
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let payer = accounts
+            .get(usize::from(action.payer().ok_or(TradingSbfError::Commit)?))
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let system = accounts
+            .get(usize::from(
+                action.system_program().ok_or(TradingSbfError::Commit)?,
+            ))
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let target = *scalars
+            .get(usize::from(action.lamports_scalar()))
+            .ok_or(TradingSbfError::Commit)?;
+        let refund_owner = *identities
+            .get(usize::from(action.refund_owner_identity()))
+            .ok_or(TradingSbfError::Commit)?;
+        let state_before = state.lamports();
+        let payer_before = payer.lamports();
+        if state.owner != program_id
+            || !state.is_writable
+            || state.is_signer
+            || !payer.is_signer
+            || !payer.is_writable
+            || payer.key.to_bytes() != refund_owner
+            || system.key != &system_program::ID
+            || !system.executable
+            || state_before > target
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        let debit = target
+            .checked_sub(state_before)
+            .ok_or(TradingSbfError::Commit)?;
+        let payer_after = payer_before
+            .checked_sub(debit)
+            .ok_or(TradingSbfError::Commit)?;
+        if debit != 0 {
+            invoke(
+                &system_transfer(payer.key, state.key, debit),
+                &[payer.clone(), state.clone(), system.clone()],
+            )
+            .map_err(|_| TradingSbfError::Commit)?;
+        }
+        if state.lamports() != target || payer.lamports() != payer_after {
+            return Err(TradingSbfError::Commit.into());
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Commit)?;
+    }
+    Ok(())
 }
 
 fn require_funding_representative_v5(
