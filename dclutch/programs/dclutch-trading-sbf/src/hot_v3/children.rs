@@ -92,6 +92,59 @@ fn decode_claims_composition_boxed_v3<'request>(
             )
             .map_err(|_| TradingSbfError::Content)?,
         )
+    } else if family_request.get(..8)
+        == Some(
+            dclutch_claims::rational_lifecycle::hot_v6::RATIONAL_LIFECYCLE_HOT_MAGIC_V6.as_slice(),
+        )
+    {
+        // V6 is a Trading family envelope, not the Claims wire.  Decode and
+        // specialize it before admitting the external route, so its fixed
+        // frame comes from the Claims lifecycle action rather than from a
+        // caller's account-count claim.
+        let family =
+            dclutch_claims::rational_lifecycle::hot_v6::RationalLifecycleHotRequestV6::decode(
+                family_request,
+            )
+            .map_err(|_| TradingSbfError::Content)?;
+        let family_digest = dclutch_sha256_adapter::digest(family_request);
+        let mut child_bytes = vec![0_u8; family_request.len()];
+        let child = family
+            .specialize_child_into(family_digest, &mut child_bytes)
+            .map_err(|_| TradingSbfError::Content)?;
+        let header = child.header();
+        let coordinate_count = match header.action {
+            dclutch_claims::rational_lifecycle::LifecycleActionV2::ActivateReceipt => 0,
+            dclutch_claims::rational_lifecycle::LifecycleActionV2::ActivateCoordinate => 1,
+            // This activation-only Structured closure never authorizes
+            // retirement.  RetireReceipt additionally needs its compact
+            // support-derived artifact path.
+            dclutch_claims::rational_lifecycle::LifecycleActionV2::RetireCoordinate
+            | dclutch_claims::rational_lifecycle::LifecycleActionV2::RetireReceipt => {
+                return Err(TradingSbfError::Content.into());
+            }
+        };
+        let fixed_account_count = match coordinate_count {
+            0 => dclutch_claims::rational_lifecycle::LIFECYCLE_COMMON_ACCOUNT_COUNT_V2,
+            1 => dclutch_claims::rational_lifecycle::LIFECYCLE_COMMON_ACCOUNT_COUNT_V2
+                .checked_add(
+                    dclutch_claims::rational_lifecycle::LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
+                )
+                .ok_or(TradingSbfError::Content)?,
+            _ => return Err(TradingSbfError::Content.into()),
+        };
+        if header.release_set != parent.release_set
+            || header.market != parent.market
+            || family_digest != parent.parent_request_digest
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        Some(
+            ClaimsExternalOnceV3::new(
+                family_request,
+                u16::try_from(fixed_account_count).map_err(|_| TradingSbfError::Content)?,
+            )
+            .map_err(|_| TradingSbfError::Content)?,
+        )
     } else {
         None
     };
@@ -521,6 +574,7 @@ pub(super) fn preflight_child_routes_v3<'accounts, 'info>(
             hot_cu_checkpoint!("pf-invocation-resolved");
             require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
+            hot_cu_checkpoint!("pf-common-separated");
             let allowed_local_overlap = if let Some(root) =
                 fractional_local_root_overlap_v3(invocation, request_bank, family_request, aliases)?
             {
@@ -547,12 +601,14 @@ pub(super) fn preflight_child_routes_v3<'accounts, 'info>(
                     },
                 )?
             };
+            hot_cu_checkpoint!("pf-overlap-classified");
             record_child_reach_and_require_disjoint_from_local(
                 invocation,
                 aliases,
                 participation,
                 allowed_local_overlap,
             )?;
+            hot_cu_checkpoint!("pf-local-disjoint");
             match invocation.role {
                 FixedRole::Core => {
                     caller_bumps.record(preflight_core_route_v3(
@@ -660,6 +716,7 @@ pub(super) fn preflight_child_routes_v3<'accounts, 'info>(
                         &mut preflight_frame,
                         custody_program.ok_or(TradingSbfError::Release)?,
                         CustodyCompositionParentV3 {
+                            capability_root: frame.root.key.to_bytes(),
                             release_set: envelope.release_set(),
                             market: custody_child_market.market,
                             generation: custody_child_market.generation,
@@ -1110,6 +1167,7 @@ pub(super) fn execute_child_routes_v3<'accounts, 'info>(
                             buffers,
                             custody_program.ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
+                                capability_root: frame.root.key.to_bytes(),
                                 release_set: envelope.release_set(),
                                 market: custody_child_market.market,
                                 generation: custody_child_market.generation,
@@ -1567,6 +1625,19 @@ pub(super) fn record_child_reach_and_require_disjoint_from_local(
                 .get_mut(representative)
                 .ok_or(TradingSbfError::Content)?;
             if slot.locally_mutated() && !allowed_local_overlap.permits(representative) {
+                #[cfg(feature = "hot-cu-profile")]
+                {
+                    solana_program::msg!(
+                        "dclutch-hot-why:child-local-overlap coordinate/representative"
+                    );
+                    solana_program::log::sol_log_64(
+                        coordinate as u64,
+                        representative as u64,
+                        0,
+                        0,
+                        0,
+                    );
+                }
                 return Err(TradingSbfError::Content.into());
             }
             // Marked for EVERY window this walk admits, the permitted overlaps

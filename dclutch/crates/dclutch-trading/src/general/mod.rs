@@ -51,6 +51,8 @@ pub mod lifecycle;
 pub mod local_state_v3;
 /// Which clause of the OpenBatch coordinate conjunct disagreed.
 pub mod open_batch_clause_v3;
+/// Canonical Claims affine wire for the typed General PlaceOrder child route.
+pub mod place_order_affine_v1;
 /// Which clause of the PlaceOrder coordinate conjunct disagreed.
 pub mod place_order_clause_v3;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.

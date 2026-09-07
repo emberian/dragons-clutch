@@ -17,6 +17,7 @@ use dclutch_market::capability_program::{
         HOT_RUNTIME_ROOT_COORDINATE_V3, HotExecutionEnvelopeV3,
     },
 };
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_market::{
     Identity, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesFoundingPermitSeedsV1,
     SeriesUnallocatedPermitExpiryRequestV1,
@@ -25,7 +26,6 @@ use dclutch_operator::registry::hot_continuation_v1::{
     REGISTRY_HOT_CONTINUATION_PREFIX_ACCOUNTS_V1, TRADING_HOT_CONTINUATION_ADMISSION_ACCOUNT_V1,
 };
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_trading_sbf::series::expire_funding_artifacts_v5::SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5;
 use dclutch_trading_sbf::series::instruction::{SeriesActionRequestV3, SeriesActionV3};
 use dclutch_trading_sbf::series::release_v5::{
@@ -539,6 +539,41 @@ pub fn assert_series_premarket_expiry_success_v1(
             || before_observed.account != expected.before
             || after_observed.account != expected.after
         {
+            for (phase, observed, declared) in [
+                ("before", &before_observed.account, &expected.before),
+                ("after", &after_observed.account, &expected.after),
+            ] {
+                if observed != declared {
+                    let shape = |account: &Option<Account>| {
+                        account.as_ref().map(|a| {
+                            (
+                                a.lamports,
+                                a.owner,
+                                a.executable,
+                                a.rent_epoch,
+                                a.data.len(),
+                            )
+                        })
+                    };
+                    std::eprintln!(
+                        "Series poststate {} {phase}: observed {:?}, declared {:?}",
+                        expected.key,
+                        shape(observed),
+                        shape(declared)
+                    );
+                    if let (Some(observed), Some(declared)) = (observed, declared) {
+                        let differences: Vec<_> = observed
+                            .data
+                            .iter()
+                            .zip(&declared.data)
+                            .enumerate()
+                            .filter(|(_, (a, b))| a != b)
+                            .take(16)
+                            .collect();
+                        std::eprintln!("Series poststate byte differences: {differences:?}");
+                    }
+                }
+            }
             return Err(SeriesPremarketExpirySupportErrorV1::Poststate);
         }
     }

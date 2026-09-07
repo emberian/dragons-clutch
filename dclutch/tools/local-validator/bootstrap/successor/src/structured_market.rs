@@ -36,8 +36,8 @@
 //! count here would compile a release that refuses at its first dispatch.
 
 use dclutch_operator::structured_selected_release_v1::{
-    STRUCTURED_MAXIMUM_REPRESENTATION_WIDTH_V1, StructuredSelectedReleaseInputV1,
-    structured_selected_release_v1,
+    STRUCTURED_MAXIMUM_REPRESENTATION_WIDTH_V1, STRUCTURED_SELECTED_ACTION_COUNT_V1,
+    StructuredSelectedReleaseInputV1, structured_selected_release_v1,
 };
 use sha2::{Digest as _, Sha256};
 use solana_sdk::pubkey::Pubkey;
@@ -59,10 +59,11 @@ pub(crate) struct StructuredSelectedRecordV1 {
 /// One compiled Structured closure in the byte shape the neutral seam consumes.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct StructuredSelectedClosureBytesV1 {
-    /// Exact five-entry `CapabilityProgramSetV2` bytes.
+    /// Exact seven-entry `CapabilityProgramSetV2` bytes: representation
+    /// selectors 1..=5 and normalized V6 lifecycle selectors 6 and 7.
     pub(crate) program_set: Vec<u8>,
-    /// The first bundle's descriptor; all five agree on every entry-authored
-    /// coordinate, which the release admission enforces before returning.
+    /// The denominate descriptor at selector 1. Every selected bundle agrees
+    /// on its entry-authored capability coordinates.
     pub(crate) selected_descriptor: Vec<u8>,
     /// Exact `TokenBehaviorSelectionV2` config bytes -- market-free.
     pub(crate) config: Vec<u8>,
@@ -375,7 +376,10 @@ mod tests {
         let closure =
             structured_selected_closure_v1(release_input([0x18; 32], &basis)).expect("closure");
         let payload = structured_selected_payload_v1(&closure, 1_000, 1_000_000);
-        assert_eq!(payload.records.len(), 2 + 7 * 5);
+        assert_eq!(
+            payload.records.len(),
+            2 + 7 * STRUCTURED_SELECTED_ACTION_COUNT_V1
+        );
 
         let mut seen = std::collections::BTreeSet::new();
         for record in &payload.records {

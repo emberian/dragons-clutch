@@ -7,6 +7,7 @@
 //! V2, keeps the permissionless resolver distinct, maps through Product's sole
 //! result domain, and emits both the terminal certificate and a typed receipt.
 
+use alloc::boxed::Box;
 use dclutch_product::ResultDomainV2;
 use dclutch_product::svm_reader::AuthenticatedProductRuntimeV2;
 use dclutch_source::pyth::{FullPriceUpdateV2, PythReleaseV1};
@@ -125,7 +126,7 @@ pub struct AuthenticatedProviderObservationV3<'a> {
 }
 
 /// Failure-atomic plan returned to the physical SBF outer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ProviderResolutionPlanV3 {
     pub(crate) next_source: SourceResolutionStateV2,
     pub(crate) certificate: ResolutionCertificateV2,
@@ -133,6 +134,17 @@ pub struct ProviderResolutionPlanV3 {
     /// Whether this provider result terminalizes the Source or is one
     /// independently captured ensemble fragment.
     pub(crate) capture: ProviderCaptureV3,
+}
+
+/// The Source transition reduced to the facts the certificate builder needs.
+///
+/// It crosses the provider join's member/policy boundary boxed: a recovery
+/// policy is four attempts wide, and holding its decoded decision beside the
+/// provider observation was the stack shape the SBF compiler refused.
+struct ResolvedProviderSourceV3 {
+    next_source: SourceResolutionStateV2,
+    selector: u32,
+    outcome_count: u32,
 }
 
 /// The destination semantics authenticated from the material and Source state.
@@ -157,7 +169,7 @@ pub fn plan_provider_resolution_v3(
     source_records: &AuthenticatedSourceRecordsV3,
     ladder: Option<&AuthenticatedRecoveryLadderV3>,
     observation: &AuthenticatedProviderObservationV3<'_>,
-) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
+) -> Result<Box<ProviderResolutionPlanV3>, ProviderJoinErrorV3> {
     let request = ProviderExecutionRequestV3::decode(request_bytes)
         .map_err(|_| ProviderJoinErrorV3::Request)?;
     let product_record_digest = source_records.material.product_record_digest().to_bytes();
@@ -202,51 +214,8 @@ pub fn plan_provider_resolution_v3(
         source_records.window,
         ladder,
     )?;
-    let obligation = match rung {
-        LadderRungV3::Primary => PythProviderAdapterObligationV2::from_authenticated_records(
-            source_records.material,
-            source_records.material.product_record_digest(),
-            source_records.source_spec_id,
-            source_records.source,
-            source_records.provider_release_id,
-            source_records.provider_release,
-            source_records.adapter_config_id,
-            source_records.adapter_config,
-            source_records.window_spec_id,
-            source_records.window,
-            source_records.statistic_spec_id,
-            source_records.statistic,
-            source_records.failure_policy_release,
-        )
-        .map_err(|_| ProviderJoinErrorV3::Source)?,
-        LadderRungV3::Recovery { attempt, ladder } => {
-            join_recovery_rung(source_records, ladder, attempt)?
-        }
-        LadderRungV3::Member {
-            attempt: Some(attempt),
-            ladder,
-            ..
-        } => join_recovery_rung(source_records, ladder, attempt)?,
-        LadderRungV3::Member { attempt: None, .. } => {
-            PythProviderAdapterObligationV2::from_authenticated_records(
-                source_records.material,
-                source_records.material.product_record_digest(),
-                source_records.source_spec_id,
-                source_records.source,
-                source_records.provider_release_id,
-                source_records.provider_release,
-                source_records.adapter_config_id,
-                source_records.adapter_config,
-                source_records.window_spec_id,
-                source_records.window,
-                source_records.statistic_spec_id,
-                source_records.statistic,
-                source_records.failure_policy_release,
-            )
-            .map_err(|_| ProviderJoinErrorV3::Source)?
-        }
-    };
-    authenticate_provider_release(obligation, source_records.provider_release, observation)?;
+    let obligation = boxed_rung_obligation(source_records, rung)?;
+    authenticate_provider_release(&obligation, source_records.provider_release, observation)?;
 
     let result_domain_digest = hash(observation.result_domain_bytes).to_bytes();
     if product_record_digest
@@ -336,69 +305,16 @@ pub fn plan_provider_resolution_v3(
     }
     .map_err(map_normalization_error)?;
 
-    let mut next_source = *source_state;
-    let decision = match rung {
-        // From the obligation, which read the exponent from the market's own
-        // StatisticSpec and has already refused a publication whose feed
-        // exponent the declaration does not admit. Never from the adapter
-        // account this instruction was handed.
-        LadderRungV3::Primary => next_source
-            .resolve_primary_from_authenticated_domain(
-                source_records.material_id,
-                source_records.material,
-                source_records.material.product_record_digest(),
-                observation.result_domain,
-                evidence,
-                normalized.atoms(),
-                1,
-                obligation.source_scale_exponent(),
-                request.generation,
-                observation.current_unix_seconds,
-                request.terminal_sequence,
-            )
-            .map_err(|_| ProviderJoinErrorV3::Transition)?,
-        LadderRungV3::Recovery { ladder, .. } => resolve_recovery_rung(
-            &mut next_source,
-            source_records,
-            ladder,
-            observation,
-            evidence,
-            normalized.atoms(),
-            obligation.source_scale_exponent(),
-            &request,
-        )?,
-        LadderRungV3::Member { .. } => {
-            // Reuse the Source-owned primary mapping on a private copy: it is
-            // the one authority for Product selection, but a member capture
-            // deliberately leaves the persisted Source at Primary.
-            let mut member_source = *source_state;
-            member_source
-                .resolve_primary_from_authenticated_domain(
-                    source_records.material_id,
-                    source_records.material,
-                    source_records.material.product_record_digest(),
-                    observation.result_domain,
-                    evidence,
-                    normalized.atoms(),
-                    1,
-                    obligation.source_scale_exponent(),
-                    request.generation,
-                    observation.current_unix_seconds,
-                    request.terminal_sequence,
-                )
-                .map_err(|_| ProviderJoinErrorV3::Transition)?
-        }
-    };
-    let outcome_count = observation
-        .result_domain
-        .outcome_count()
-        .map_err(|_| ProviderJoinErrorV3::Product)?;
-    if decision.selector() >= observation.result_domain.failure_selector()
-        || decision.outcome_count() != outcome_count
-        || observation.product_runtime.outcome_count != outcome_count
-    {
-        return Err(ProviderJoinErrorV3::Product);
-    }
+    let resolved = resolve_rung(
+        rung,
+        source_state,
+        source_records,
+        observation,
+        evidence,
+        normalized.atoms(),
+        obligation.source_scale_exponent(),
+        &request,
+    )?;
     let capture = match rung {
         LadderRungV3::Member { member, .. } => ProviderCaptureV3::Member(member),
         LadderRungV3::Primary | LadderRungV3::Recovery { .. } => ProviderCaptureV3::Terminal,
@@ -406,12 +322,12 @@ pub fn plan_provider_resolution_v3(
     finish_plan(
         request_bytes,
         &request,
-        next_source,
+        resolved.next_source,
         provider_evidence,
         update_digest,
         post_params_body_digest,
-        decision.selector(),
-        outcome_count,
+        resolved.selector,
+        resolved.outcome_count,
         normalized.atoms(),
         update.publish_time(),
         update.posted_slot(),
@@ -438,6 +354,142 @@ enum LadderRungV3<'a> {
         attempt: Option<RecoveryAttemptV2>,
         ladder: &'a AuthenticatedRecoveryLadderV3,
     },
+}
+
+/// Construct the provider obligation in the rung's own bounded frame.
+///
+/// The material records and a recovery attempt are both fixed-layout values.
+/// Keeping their joins out of `plan_provider_resolution_v3` prevents the
+/// member-policy arm from sharing its stack frame with observation parsing and
+/// certificate construction.
+#[inline(never)]
+fn boxed_rung_obligation(
+    source_records: &AuthenticatedSourceRecordsV3,
+    rung: LadderRungV3<'_>,
+) -> Result<Box<PythProviderAdapterObligationV2>, ProviderJoinErrorV3> {
+    match rung {
+        LadderRungV3::Primary | LadderRungV3::Member { attempt: None, .. } => {
+            boxed_primary_obligation(source_records)
+        }
+        LadderRungV3::Recovery { attempt, ladder }
+        | LadderRungV3::Member {
+            attempt: Some(attempt),
+            ladder,
+            ..
+        } => Ok(Box::new(join_recovery_rung(
+            source_records,
+            ladder,
+            attempt,
+        )?)),
+    }
+}
+
+#[inline(never)]
+fn boxed_primary_obligation(
+    source_records: &AuthenticatedSourceRecordsV3,
+) -> Result<Box<PythProviderAdapterObligationV2>, ProviderJoinErrorV3> {
+    Ok(Box::new(
+        PythProviderAdapterObligationV2::from_authenticated_records(
+            source_records.material,
+            source_records.material.product_record_digest(),
+            source_records.source_spec_id,
+            source_records.source,
+            source_records.provider_release_id,
+            source_records.provider_release,
+            source_records.adapter_config_id,
+            source_records.adapter_config,
+            source_records.window_spec_id,
+            source_records.window,
+            source_records.statistic_spec_id,
+            source_records.statistic,
+            source_records.failure_policy_release,
+        )
+        .map_err(|_| ProviderJoinErrorV3::Source)?,
+    ))
+}
+
+/// Resolve a selected rung without retaining its policy, decision and terminal
+/// plan in one SBF frame.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn resolve_rung(
+    rung: LadderRungV3<'_>,
+    source_state: &SourceResolutionStateV2,
+    source_records: &AuthenticatedSourceRecordsV3,
+    observation: &AuthenticatedProviderObservationV3<'_>,
+    evidence: SourceContentId,
+    atoms: i128,
+    source_scale_exponent: i32,
+    request: &ProviderExecutionRequestV3,
+) -> Result<Box<ResolvedProviderSourceV3>, ProviderJoinErrorV3> {
+    let mut next_source = *source_state;
+    let decision = match rung {
+        // From the obligation, which read the exponent from the market's own
+        // StatisticSpec and has already refused a publication whose feed
+        // exponent the declaration does not admit. Never from the adapter
+        // account this instruction was handed.
+        LadderRungV3::Primary => next_source
+            .resolve_primary_from_authenticated_domain(
+                source_records.material_id,
+                source_records.material,
+                source_records.material.product_record_digest(),
+                observation.result_domain,
+                evidence,
+                atoms,
+                1,
+                source_scale_exponent,
+                request.generation,
+                observation.current_unix_seconds,
+                request.terminal_sequence,
+            )
+            .map_err(|_| ProviderJoinErrorV3::Transition)?,
+        LadderRungV3::Recovery { ladder, .. } => resolve_recovery_rung(
+            &mut next_source,
+            source_records,
+            ladder,
+            observation,
+            evidence,
+            atoms,
+            source_scale_exponent,
+            request,
+        )?,
+        LadderRungV3::Member { .. } => {
+            // Reuse the Source-owned primary mapping on a private copy: it is
+            // the one authority for Product selection, but a member capture
+            // deliberately leaves the persisted Source at Primary.
+            let mut member_source = *source_state;
+            member_source
+                .resolve_primary_from_authenticated_domain(
+                    source_records.material_id,
+                    source_records.material,
+                    source_records.material.product_record_digest(),
+                    observation.result_domain,
+                    evidence,
+                    atoms,
+                    1,
+                    source_scale_exponent,
+                    request.generation,
+                    observation.current_unix_seconds,
+                    request.terminal_sequence,
+                )
+                .map_err(|_| ProviderJoinErrorV3::Transition)?
+        }
+    };
+    let outcome_count = observation
+        .result_domain
+        .outcome_count()
+        .map_err(|_| ProviderJoinErrorV3::Product)?;
+    if decision.selector() >= observation.result_domain.failure_selector()
+        || decision.outcome_count() != outcome_count
+        || observation.product_runtime.outcome_count != outcome_count
+    {
+        return Err(ProviderJoinErrorV3::Product);
+    }
+    Ok(Box::new(ResolvedProviderSourceV3 {
+        next_source,
+        selector: decision.selector(),
+        outcome_count,
+    }))
 }
 
 /// The recovery leg's join, in its own frame.
@@ -503,7 +555,7 @@ fn resolve_recovery_rung(
             source_records.provider_release_id,
             observation.result_domain,
             evidence,
-        atoms,
+            atoms,
             1,
             source_scale_exponent,
             request.generation,
@@ -602,7 +654,7 @@ fn finish_plan(
     posted_slot: u64,
     consumed_slot: u64,
     capture: ProviderCaptureV3,
-) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
+) -> Result<Box<ProviderResolutionPlanV3>, ProviderJoinErrorV3> {
     let observed_at = u64::try_from(publish_time).map_err(|_| ProviderJoinErrorV3::Arithmetic)?;
     let product_record_digest = request.product_record;
     let certificate = ResolutionCertificateV2 {
@@ -673,16 +725,16 @@ fn finish_plan(
     receipt
         .to_bytes()
         .map_err(|_| ProviderJoinErrorV3::Transition)?;
-    Ok(ProviderResolutionPlanV3 {
+    Ok(Box::new(ProviderResolutionPlanV3 {
         next_source,
         certificate,
         receipt,
         capture,
-    })
+    }))
 }
 
 fn authenticate_provider_release(
-    obligation: PythProviderAdapterObligationV2,
+    obligation: &PythProviderAdapterObligationV2,
     source_release: ProviderReleaseV1,
     observation: &AuthenticatedProviderObservationV3<'_>,
 ) -> Result<(), ProviderJoinErrorV3> {
@@ -866,17 +918,9 @@ mod tests {
 
     #[test]
     fn an_ensemble_fragment_names_its_resolver_as_captor() {
-        let source = SourceResolutionStateV2::fresh(
-            [14; 32],
-            7,
-            source_id(15),
-            [16; 32],
-            1,
-            0,
-            0,
-        )
-        .expect("primary source")
-        .state();
+        let source = SourceResolutionStateV2::fresh([14; 32], 7, source_id(15), [16; 32], 1, 0, 0)
+            .expect("primary source")
+            .state();
         let request = selection_request(2);
         let plan = finish_plan(
             b"ensemble-member-capture",
@@ -908,7 +952,7 @@ mod tests {
         }
     }
 
-    fn plan(case: Case) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
+    fn plan(case: Case) -> Result<Box<ProviderResolutionPlanV3>, ProviderJoinErrorV3> {
         plan_against(case, None)
     }
 
@@ -917,7 +961,7 @@ mod tests {
     fn plan_against(
         case: Case,
         prior: Option<SourceResolutionStateV2>,
-    ) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
+    ) -> Result<Box<ProviderResolutionPlanV3>, ProviderJoinErrorV3> {
         let post_body = POST_DATA.get(8..).ok_or(ProviderJoinErrorV3::Provider)?;
         let update = FullPriceUpdateV2::parse(UPDATE).expect("captured full Pyth update");
         let coordinate_domain = source_id(1);

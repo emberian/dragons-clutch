@@ -28,6 +28,7 @@
 
 use std::{env, fs, path::PathBuf};
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
@@ -36,18 +37,17 @@ use dclutch_market::capability_manifest::{
     FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     StateBumpsV1,
 };
-use dclutch_product::{
-    ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
-    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
-};
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
+};
+use dclutch_product::{
+    ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
+    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
 use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -67,6 +67,11 @@ use dclutch_registry::{
 // deployed IDL and a live mainnet pool account, and the 424-byte inline width is
 // that discriminator plus `PoolState::INIT_SPACE` for a program with no
 // `realloc`, so the admitted length set is the singleton `{424}`.
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    ProgramIdentityV1,
+};
+use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_source::relay::{
     DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1, DBC_IS_MIGRATED_OFFSET_V1,
     DBC_MIGRATION_PROGRESS_OFFSET_V1, DBC_VENUE_INLINE_BYTES_V1, DBC_VIRTUAL_POOL_DISCRIMINATOR_V1,
@@ -79,8 +84,9 @@ use dclutch_source::relay::{
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1,
         CONSUME_RECORD_PREFIX_BYTES, CommitDeadlineFailureInstructionV1,
-        ConsumeRecordInstructionV1, CreateRecordInstructionV1, RetireRecordInstructionV1,
-        SEAL_RECORD_PREFIX_BYTES, SealRecordInstructionV1,
+        ConsumeRecordInstructionV1, CreateRecordInstructionV1, EnsembleFoldInstructionV1,
+        ReclaimMemberSeatInstructionV1, RetireRecordInstructionV1, SEAL_RECORD_PREFIX_BYTES,
+        SealRecordInstructionV1,
     },
     record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1},
     release::{
@@ -91,23 +97,21 @@ use dclutch_source::relay::{
     signature::ED25519_PROGRAM_ID_3_0,
     wire::{AccountObservationV1, AttestationMessageV1, ObservationSetSealV1},
 };
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    ProgramIdentityV1,
-};
 use dclutch_source::resolution::{
-    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_source::{
     CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
-    PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1, RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1,
-    RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
-    SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2,
-    SourceSpecV1, StatisticKind, StatisticSpecV1, WINDOW_SPEC_SCHEMA_ID_V1, WindowKind,
-    WindowSpecV1,
+    ENSEMBLE_FOLD_RECEIPT_V1_BYTES, EnsembleFoldReceiptV1, EnsembleSpecV1,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
+    RECOVERY_POLICY_SCHEMA_ID_V2, RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1, RecoveryAttemptV2,
+    RecoveryPolicyV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
+    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1,
+    SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
+    WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
 };
 use solana_account::Account;
 use solana_program::clock::Clock;
@@ -451,6 +455,7 @@ fn protocol_account(owner: Pubkey, data: Vec<u8>) -> Account {
     }
 }
 
+#[derive(Clone, Copy)]
 struct RecordPair {
     raw: Pubkey,
     staging: Pubkey,
@@ -550,19 +555,25 @@ fn add_active_funding_ledger(
     test: &mut ProgramTest,
     market: Pubkey,
     manifest: CapabilityManifestV1<'_>,
-    entry_indices: [u16; 3],
+    entry_indices: &[u16],
 ) -> (Pubkey, Pubkey) {
     let manifest_id = manifest_identity(manifest);
     let selected_mask = entry_indices
-        .into_iter()
+        .iter()
         .fold(0_u16, |mask, entry_index| mask | (1_u16 << entry_index));
-    let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
-    assert_eq!(width, 264, "the live Resolution ledger width is exact");
+    let entry_count = u16::try_from(entry_indices.len()).expect("selected entry count fits u16");
+    let width =
+        funding_ledger_bytes_v2(entry_count).expect("one FundingLedgerV2 row per selected entry");
+    assert_eq!(
+        funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width"),
+        264,
+        "the live single-source Resolution ledger width is exact"
+    );
     let mut state = vec![0_u8; width];
     let rate = funded_rent_rate(width);
     FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask, rate)
         .expect("pending FundingLedgerV2");
-    for entry_index in entry_indices {
+    for entry_index in entry_indices.iter().copied() {
         FundingLedgerV2::activate_in_place(&mut state, manifest_id, manifest, entry_index, 1)
             .expect("active FundingLedgerV2 row");
     }
@@ -900,6 +911,114 @@ struct SourceGraph {
     provider: RecordPair,
     window: RecordPair,
     statistic: RecordPair,
+    /// The ensemble this material declares, or `None` for the single-source
+    /// market every test written before the ensemble existed means.
+    ensemble: Option<EnsembleGraph>,
+}
+
+/// The ensemble this campaign folds: three declared sources under a quorum of
+/// two, and no ladder rung after them.
+///
+/// Three-and-two rather than the smallest legal shape, because it is the only
+/// arrangement in which every arm of the fold executes in ONE accepted
+/// transaction: two members answer and are folded, the third stays a
+/// System-owned vacancy so the "this member did not answer" branch runs, and
+/// the quorum is met without the accepted case sitting on the refusal's own
+/// boundary.
+const ENSEMBLE_MEMBERS: u8 = 3;
+/// `q`: how many fragments the fold needs.
+const ENSEMBLE_QUORUM: u8 = 2;
+/// Which members answer in the accepted world: zero and one, leaving member
+/// two a System-owned vacancy.
+const ANSWERED_MEMBERS: u8 = 0b011;
+/// One ensemble world's founding shape: the spec, and which members answered
+/// inside the window.
+///
+/// Which members answered is not a founding fact -- it is what the window
+/// produced -- but it is fixed before the bank starts, because a seat is
+/// written by that member's own provider route long before any fold.
+#[derive(Clone, Copy)]
+struct EnsembleShapeV1 {
+    spec: EnsembleSpecV1,
+    /// Bit `m` set means member `m`'s seat holds a fragment.
+    answered: u8,
+}
+
+/// The records an ensemble world adds to the Source graph, and the spec that
+/// holds it.
+///
+/// The members live in the `RecoveryPolicyV2`'s leading `k - 1` slots -- member
+/// `m` is slot `m - 1` -- so an ensemble material is exactly a material that
+/// selects a policy and says how many of its slots are members. Member zero is
+/// the primary and has no slot: its route is the primary `SourceSpecV1`'s own
+/// provider release.
+#[derive(Clone, Copy)]
+struct EnsembleGraph {
+    spec: EnsembleSpecV1,
+    policy: RecordPair,
+    policy_id: [u8; 32],
+    policy_value: RecoveryPolicyV2,
+    /// Member zero's route, which is the primary spec's provider release.
+    primary_provider_release_id: [u8; 32],
+}
+
+impl EnsembleGraph {
+    /// The provider release a fragment in member `member`'s seat must name.
+    ///
+    /// This is `admit_fragment`'s own rule, restated where the fixture can be
+    /// held to it: member zero answers on the primary's release and every other
+    /// member on the one its own policy slot selects.
+    fn route_of(&self, member: u8) -> [u8; 32] {
+        if member == 0 {
+            self.primary_provider_release_id
+        } else {
+            self.policy_value
+                .member_attempt(self.spec, member)
+                .expect("the policy holds every declared member")
+                .provider_release_id()
+                .to_bytes()
+        }
+    }
+
+    /// The capability configuration whose Bounty compartment pays member
+    /// `member`'s captor. Member zero is never paid.
+    fn allocation_of(&self, member: u8) -> [u8; 32] {
+        self.policy_value
+            .member_attempt(self.spec, member)
+            .expect("a paid member has a policy slot")
+            .funding_allocation_id()
+            .to_bytes()
+    }
+}
+
+/// The window's own closed deadline: the first second at which a fold may run.
+fn window_deadline_unix() -> i64 {
+    CREATED_UNIX
+        .checked_add(i64::from(WINDOW_MAX_AGE_SECONDS))
+        .expect("the window's closed deadline")
+}
+
+/// One member's own provider release, as a real finalized record.
+///
+/// The fold never reads this record -- what it checks is the fragment's `route`
+/// against the POLICY's byte, and the policy is authenticated -- but a founding
+/// that gave a member a route naming no release would be a founding no provider
+/// could ever answer, so the fixture installs one per member rather than
+/// inventing thirty-two bytes.
+fn member_provider_release(test: &mut ProgramTest, member: u8) -> [u8; 32] {
+    let value = ProviderReleaseV1::new(
+        source_id(RELAYED_FAMILY_RELEASE_ID_V1),
+        source_id(RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1),
+        source_id(hashv(&[b"dclutch/relayed/ensemble-member-deployment/v1", &[member]]).to_bytes()),
+        source_id(hashv(&[b"dclutch/relayed/ensemble-member-rules/v1", &[member]]).to_bytes()),
+        source_id(RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1),
+    );
+    add_record(
+        test,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+        value.to_bytes().to_vec(),
+    )
+    .1
 }
 
 /// Which shape this world's `StatisticSpecV1` declares.
@@ -945,6 +1064,7 @@ fn source_graph(
     product: &ProductGraph,
     venue_release_digest: [u8; 32],
     shape: StatisticShapeV1,
+    ensemble: Option<EnsembleSpecV1>,
 ) -> SourceGraph {
     let capacity = SourceCapacityProfileV1::new(
         SourceCapacityEnvelope::Measured,
@@ -1054,14 +1174,74 @@ fn source_graph(
         statistic_value.to_bytes().to_vec(),
     );
 
+    // The members are the policy's leading slots, each naming its own provider
+    // release (which is what member m's fragment is admitted against) and its
+    // own funding allocation (which is the compartment its captor is paid
+    // from). The deadlines are the record's canonical one-second stagger off
+    // the window's closed deadline: no route reads them, and the policy's own
+    // shape rule refuses a list that is not strictly increasing, so they cannot
+    // all be the window's deadline.
+    let ensemble_graph = ensemble.map(|spec| {
+        let deadline = window_deadline_unix();
+        let mut attempts = [None; RECOVERY_POLICY_MAX_ATTEMPTS_V2];
+        let mut member = 1_u8;
+        while member <= spec.first_rung_index() {
+            let attempt = RecoveryAttemptV2::new(
+                source_id(spec_digest),
+                source_id(member_provider_release(test, member)),
+                deadline
+                    .checked_add(i64::from(member) - 1)
+                    .expect("the canonical member stagger"),
+                // The ensemble borrows the founded controller compartments in
+                // policy order: member one is the recovery row and member two
+                // the exhaustion row. Those are the two paid alternates the
+                // fixed three-row Resolution ledger already has; the primary
+                // has no member bounty and the failure row remains this
+                // material's own fallback.
+                source_id(if member == 1 { [0xa1; 32] } else { [0xa2; 32] }),
+            )
+            .expect("canonical member attempt");
+            *attempts
+                .get_mut(usize::from(member) - 1)
+                .expect("k - 1 members fit the policy") = Some(attempt);
+            member = member.checked_add(1).expect("small");
+        }
+        let policy_value = RecoveryPolicyV2::new(capacity_id, attempts, spec.first_rung_index())
+            .expect("canonical member-only recovery policy");
+        // The founding predicate, asserted here so a fixture that stopped being
+        // a legal ensemble fails by name rather than as a bank refusal.
+        policy_value
+            .validate_ensemble_membership(spec, 0, deadline)
+            .expect("the policy holds this ensemble's members at the window's deadline");
+        let (policy, policy_id) = add_record(
+            test,
+            RECOVERY_POLICY_SCHEMA_ID_V2,
+            policy_value.to_bytes().to_vec(),
+        );
+        EnsembleGraph {
+            spec,
+            policy,
+            policy_id,
+            policy_value,
+            primary_provider_release_id: provider_digest,
+        }
+    });
+    let recovery_policy = ensemble_graph.map(|graph| source_id(graph.policy_id));
+
     let material_value = SourceMaterialV3::explicitly_unbounded(
         source_id(product.product_record_digest),
         source_id(spec_digest),
         source_id(window_digest),
         source_id(statistic_digest),
-        None,
+        recovery_policy,
         source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );
+    let material_value = match ensemble_graph {
+        Some(graph) => material_value
+            .with_ensemble(graph.spec, 0)
+            .expect("the material declares this ensemble over its own policy"),
+        None => material_value,
+    };
     // The graph the material claims is the graph the records make. Asserting it
     // here turns a `SourceMaterial` refusal from the bank into a named fixture failure.
     material_value
@@ -1072,7 +1252,7 @@ fn source_graph(
             window_value,
             source_id(statistic_digest),
             statistic_value,
-            None,
+            recovery_policy,
             source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
         )
         .expect("the V2 material's own graph predicate holds");
@@ -1090,6 +1270,7 @@ fn source_graph(
         provider,
         window,
         statistic,
+        ensemble: ensemble_graph,
     }
 }
 
@@ -1120,6 +1301,76 @@ struct Fixture {
     recovery_entry_index: u16,
     exhaustion_entry_index: u16,
     failure_entry_index: u16,
+    /// The seats, captors and receipt an ensemble world adds; `None` for the
+    /// single-source market.
+    ensemble: Option<EnsembleWorldV1>,
+}
+
+/// The accounts an ensemble world adds to the frame, in member order.
+struct EnsembleWorldV1 {
+    graph: EnsembleGraph,
+    /// One seat per declared member. A seat is this Program's own PDA under the
+    /// Source state, and what it HOLDS is the whole difference between a member
+    /// that answered and one that did not: a Resolution-owned certificate, or a
+    /// System-owned account of length zero. `boxed_member_seats` refuses every
+    /// third thing by name.
+    seats: Vec<Pubkey>,
+    /// One captor per declared member. A member that did not answer still has a
+    /// captor position -- the frame's width is `k` alone -- and nothing is paid
+    /// to it.
+    captors: Vec<Pubkey>,
+    /// The fragment written into each seat, or `None` for the vacancy.
+    fragments: Vec<Option<ResolutionCertificateV2>>,
+    /// The fold's receipt seat. No founding prepays it: the receipt exists
+    /// because a fold happened, so the worker that folds pays its rent, and the
+    /// fixture leaves the address empty for the route to create.
+    receipt: Pubkey,
+    /// Which manifest entry pays which member's captor; `None` for the primary.
+    member_entry_indices: Vec<Option<u16>>,
+}
+
+/// One member's fragment: the kind-1 certificate that member's own provider
+/// route wrote into its seat instead of the market's terminal seat.
+///
+/// Every field below is one of `admit_fragment`'s conjuncts, and the campaign
+/// sets each to the honest value: a fixture that got one wrong would be refused
+/// with `EnsembleMember` and prove nothing about the fold.
+#[allow(clippy::too_many_arguments)]
+fn member_fragment(
+    market: Pubkey,
+    graph: &SourceGraph,
+    ensemble: &EnsembleGraph,
+    product_record_digest: [u8; 32],
+    member: u8,
+    reading: i128,
+    captor: Pubkey,
+) -> ResolutionCertificateV2 {
+    ResolutionCertificateV2 {
+        kind: ResolutionCertificateKindV2::ResolutionSuccess,
+        market: market.to_bytes(),
+        route: ensemble.route_of(member),
+        source_material: graph.material_id,
+        product_record_digest,
+        // Nonzero and per-member: the fold hashes the consumed members'
+        // evidences in order into the terminal's own `provider_evidence`, so
+        // two members sharing one would make two folds indistinguishable.
+        provider_evidence: hashv(&[b"dclutch/relayed/ensemble-member-evidence/v1", &[member]])
+            .to_bytes(),
+        funding_allocation: [0; 32],
+        // The captor: whoever captured this fragment is paid this member's
+        // bounty, and the fold pays the account the FRAGMENT names rather than
+        // one the folding caller supplies.
+        receipt_account: captor.to_bytes(),
+        generation: GENERATION,
+        attempt_index: u32::from(member),
+        schedule_index: 0,
+        selector: 0,
+        work_paid: 0,
+        funding_remaining: 0,
+        result_numerator: reading,
+        result_denominator: 1,
+        observed_at: u64::try_from(CREATED_UNIX).expect("the window's own clock is positive"),
+    }
 }
 
 /// Row 0's world, which is what every test written before row 1 existed means
@@ -1145,7 +1396,37 @@ fn fixture_with_statistic(
     seal_threshold: u8,
     shape: StatisticShapeV1,
 ) -> Fixture {
-    fixture_full(row, seal_threshold, &[], DEPLOYMENT_SLOT, ELF_DIGEST, shape)
+    fixture_full(
+        row,
+        seal_threshold,
+        &[],
+        DEPLOYMENT_SLOT,
+        ELF_DIGEST,
+        shape,
+        None,
+    )
+}
+
+/// The same world, founded as a three-source ensemble under a quorum of two.
+///
+/// Everything the single-source world has is unchanged -- the same Product, the
+/// same window, the same statistic, the same Market generation -- so the only
+/// difference between the two fixtures is the ensemble the material declares
+/// and the records and seats that declaration requires.
+fn ensemble_fixture(answered: u8) -> Fixture {
+    fixture_full(
+        dbc_row(),
+        1,
+        &[],
+        DEPLOYMENT_SLOT,
+        ELF_DIGEST,
+        StatisticShapeV1::NoConversion,
+        Some(EnsembleShapeV1 {
+            spec: EnsembleSpecV1::new(ENSEMBLE_MEMBERS, ENSEMBLE_QUORUM)
+                .expect("three sources under a quorum of two"),
+            answered,
+        }),
+    )
 }
 
 /// Build the whole world, with the venue's pinned deployment as a parameter.
@@ -1167,9 +1448,11 @@ fn fixture_with_venue(
         pinned_deployment_slot,
         pinned_elf_digest,
         StatisticShapeV1::NoConversion,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fixture_full(
     row: RowFixtureV1,
     seal_threshold: u8,
@@ -1177,6 +1460,7 @@ fn fixture_full(
     pinned_deployment_slot: u64,
     pinned_elf_digest: [u8; 32],
     statistic_shape: StatisticShapeV1,
+    ensemble: Option<EnsembleShapeV1>,
 ) -> Fixture {
     let elves = artifacts();
     let relayer = Keypair::new();
@@ -1246,6 +1530,7 @@ fn fixture_full(
         &product,
         venue_digest,
         statistic_shape,
+        ensemble.map(|shape| shape.spec),
     );
 
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
@@ -1303,7 +1588,7 @@ fn fixture_full(
     // config is a real identity here; the first two exist so the failure
     // compartment is not entry zero and a walk that read the wrong index would
     // be visible rather than accidentally correct.
-    let mut entries = [
+    let mut entries = vec![
         funding_entry([0xa1; 32]),
         funding_entry([0xa2; 32]),
         funding_entry(graph.material_id),
@@ -1314,8 +1599,10 @@ fn fixture_full(
     // discovered by asking which entry configures which identity, which is the
     // same question the route asks.
     entries.sort_unstable_by_key(|entry| entry.kind_id().to_bytes());
-    let mut manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
-    CapabilityManifestV1::encode_into(&entries, &mut manifest_bytes).expect("capability manifest");
+    let mut manifest_bytes =
+        vec![0; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(entries.as_slice(), &mut manifest_bytes)
+        .expect("capability manifest");
     let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest view");
     let entry_index_of = |config: [u8; 32]| {
         (0..manifest.entry_count())
@@ -1332,6 +1619,15 @@ fn fixture_full(
     let recovery_entry_index = entry_index_of([0xa1; 32]);
     let failure_entry_index = entry_index_of(graph.material_id);
     let exhaustion_entry_index = entry_index_of([0xa2; 32]);
+    // In member order, and `None` for the primary: which manifest entry pays
+    // which member's captor is discovered by asking the manifest which entry
+    // configures that member's allocation, exactly as the fold's own
+    // `selected_entry_for_config` does.
+    let member_entry_indices: Vec<Option<u16>> = graph.ensemble.map_or_else(Vec::new, |ensemble| {
+        (0..ensemble.spec.members())
+            .map(|member| (member != 0).then(|| entry_index_of(ensemble.allocation_of(member))))
+            .collect()
+    });
     let (capability_manifest, manifest_digest) = add_record(
         &mut test,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -1376,18 +1672,18 @@ fn fixture_full(
 
     // Resolution owns exactly one manifest-keyed subset ledger. Its sparse mask
     // selects all three controller-homogeneous entries and each row is Active.
-    // The failure walk derives the one row configuring this Market's Source
-    // material; the caller supplies neither an entry index nor a compartment.
-    let (funding_ledger, substituted_funding_ledger) = add_active_funding_ledger(
-        &mut test,
-        market,
-        manifest,
-        [
-            recovery_entry_index,
-            exhaustion_entry_index,
-            failure_entry_index,
-        ],
-    );
+    // The failure walk derives the row configuring this Market's Source
+    // material; ensemble members one and two select the already-funded
+    // recovery and exhaustion rows respectively. The fixed three-row ledger is
+    // the founding authority, so a fixture cannot widen it to manufacture a
+    // separate row for each member.
+    let selected_entries = [
+        recovery_entry_index,
+        exhaustion_entry_index,
+        failure_entry_index,
+    ];
+    let (funding_ledger, substituted_funding_ledger) =
+        add_active_funding_ledger(&mut test, market, manifest, &selected_entries);
     assert_ne!(funding_ledger, substituted_funding_ledger);
 
     let (record, record_bump) = Pubkey::find_program_address(
@@ -1463,6 +1759,104 @@ fn fixture_full(
         }
     }
 
+    // The seats, the captors and the receipt. Every member of the declared
+    // ensemble gets a seat at its own derived address whether or not it
+    // answered, because the frame's width is `k` and a caller cannot decide
+    // which members exist.
+    let answered = ensemble.map_or(0, |shape| shape.answered);
+    let ensemble_world = graph.ensemble.map(|ensemble| {
+        let members = usize::from(ensemble.spec.members());
+        let captors: Vec<Pubkey> = (0..members)
+            .map(|member| {
+                let captor = Pubkey::find_program_address(
+                    &[
+                        b"dclutch/test-ensemble-captor",
+                        &[u8::try_from(member).expect("small")],
+                    ],
+                    &RENT_PROGRAM_ID,
+                )
+                .0;
+                test.add_account(
+                    captor,
+                    Account::new(
+                        Rent::default().minimum_balance(0).max(1),
+                        0,
+                        &system_program::ID,
+                    ),
+                );
+                captor
+            })
+            .collect();
+        let mut seats = Vec::new();
+        let mut fragments = Vec::new();
+        for member in 0..u8::try_from(members).expect("k fits a byte") {
+            let seat = Pubkey::find_program_address(
+                &EnsembleFragmentSeatSeedsV1::new(
+                    source_state.to_bytes(),
+                    member,
+                    TERMINAL_SEQUENCE,
+                )
+                .seeds(),
+                &PROGRAM_ID,
+            )
+            .0;
+            if (answered >> member) & 1 == 0 {
+                // The member that did not answer. System-owned and empty is the
+                // ONLY shape the fold reads as a vacancy.
+                test.add_account(
+                    seat,
+                    Account::new(
+                        Rent::default()
+                            .minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2)
+                            .max(1),
+                        0,
+                        &system_program::ID,
+                    ),
+                );
+                fragments.push(None);
+            } else {
+                let captor = *captors
+                    .get(usize::from(member))
+                    .expect("a captor per member");
+                let fragment = member_fragment(
+                    market,
+                    &graph,
+                    &ensemble,
+                    product.product_record_digest,
+                    member,
+                    row.terminal_atom,
+                    captor,
+                );
+                test.add_account(
+                    seat,
+                    protocol_account(
+                        PROGRAM_ID,
+                        fragment
+                            .to_bytes()
+                            .expect("the fragment is a shape its own schema admits")
+                            .to_vec(),
+                    ),
+                );
+                fragments.push(Some(fragment));
+            }
+            seats.push(seat);
+        }
+        let receipt = Pubkey::find_program_address(
+            &EnsembleFoldReceiptSeatSeedsV1::new(source_state.to_bytes(), TERMINAL_SEQUENCE)
+                .seeds(),
+            &PROGRAM_ID,
+        )
+        .0;
+        EnsembleWorldV1 {
+            graph: ensemble,
+            seats,
+            captors,
+            fragments,
+            receipt,
+            member_entry_indices: member_entry_indices.clone(),
+        }
+    });
+
     Fixture {
         test: Some(test),
         relayer,
@@ -1489,6 +1883,7 @@ fn fixture_full(
         recovery_entry_index,
         exhaustion_entry_index,
         failure_entry_index,
+        ensemble: ensemble_world,
     }
 }
 
@@ -1760,6 +2155,112 @@ impl Fixture {
         }
     }
 
+    /// The ensemble fold: the failure walk's twenty-two positions, plus the
+    /// receipt seat, the primary spec pair, the statistic pair and the policy
+    /// pair, and then `k` member seats followed by `k` captors.
+    ///
+    /// The tail's width is the MATERIAL's `k` rather than anything the caller
+    /// says, which is why the frame is validated after the material is
+    /// authenticated rather than before.
+    fn ensemble_fold_instruction(&self, substitution: EnsembleSubstitution) -> Instruction {
+        let world = self.ensemble.as_ref().expect("an ensemble world");
+        let policy = world.graph.policy;
+        let mut accounts = vec![
+            AccountMeta::new(self.worker.pubkey(), true),
+            AccountMeta::new_readonly(self.market, false),
+            AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+            AccountMeta::new_readonly(self.activation, false),
+            AccountMeta::new(self.source_state, false),
+            AccountMeta::new(self.certificate_of(RESOLUTION_SUCCESS_KIND), false),
+            AccountMeta::new(world.receipt, false),
+            AccountMeta::new_readonly(self.graph.material.raw, false),
+            AccountMeta::new_readonly(self.graph.material.staging, false),
+            AccountMeta::new_readonly(self.graph.spec.raw, false),
+            AccountMeta::new_readonly(self.graph.spec.staging, false),
+            AccountMeta::new_readonly(self.graph.window.raw, false),
+            AccountMeta::new_readonly(self.graph.window.staging, false),
+            AccountMeta::new_readonly(self.graph.statistic.raw, false),
+            AccountMeta::new_readonly(self.graph.statistic.staging, false),
+            AccountMeta::new_readonly(policy.raw, false),
+            AccountMeta::new_readonly(policy.staging, false),
+            AccountMeta::new_readonly(self.product.product.raw, false),
+            AccountMeta::new_readonly(self.product.product.staging, false),
+            AccountMeta::new_readonly(self.product.result_domain.raw, false),
+            AccountMeta::new_readonly(self.product.result_domain.staging, false),
+            AccountMeta::new_readonly(self.product.portfolio.raw, false),
+            AccountMeta::new_readonly(self.product.portfolio.staging, false),
+            AccountMeta::new_readonly(self.capability_manifest.raw, false),
+            AccountMeta::new_readonly(self.capability_manifest.staging, false),
+            AccountMeta::new(substitution.funding.unwrap_or(self.funding_ledger), false),
+            AccountMeta::new_readonly(sysvar::clock::ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ];
+        assert_eq!(
+            accounts.len(),
+            ENSEMBLE_FOLD_FRAME_PREFIX_LEN,
+            "the fold's fixed prefix is the contract's, not this campaign's"
+        );
+        for (member, seat) in world.seats.iter().enumerate() {
+            let key = match substitution.seat {
+                Some((substituted, key)) if usize::from(substituted) == member => key,
+                _ => *seat,
+            };
+            accounts.push(AccountMeta::new_readonly(key, false));
+        }
+        for (member, captor) in world.captors.iter().enumerate() {
+            let key = match substitution.captor {
+                Some((substituted, key)) if usize::from(substituted) == member => key,
+                _ => *captor,
+            };
+            accounts.push(AccountMeta::new(key, false));
+        }
+        if substitution.drop_last_tail {
+            accounts.pop();
+        }
+        Instruction {
+            program_id: PROGRAM_ID,
+            accounts,
+            data: EnsembleFoldInstructionV1::new(
+                GENERATION,
+                substitution.terminal_sequence.unwrap_or(TERMINAL_SEQUENCE),
+            )
+            .expect("ensemble fold request")
+            .to_bytes()
+            .expect("ensemble fold bytes")
+            .to_vec(),
+        }
+    }
+
+    /// Return one never-written member seat's prepaid rent after the fold.
+    fn reclaim_member_seat_instruction(&self, member: u8) -> Instruction {
+        let world = self.ensemble.as_ref().expect("an ensemble world");
+        let seat = *world
+            .seats
+            .get(usize::from(member))
+            .expect("declared member seat");
+        Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(self.worker.pubkey(), true),
+                AccountMeta::new_readonly(self.market, false),
+                AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+                AccountMeta::new_readonly(self.activation, false),
+                AccountMeta::new_readonly(self.source_state, false),
+                AccountMeta::new_readonly(self.graph.material.raw, false),
+                AccountMeta::new_readonly(self.graph.material.staging, false),
+                AccountMeta::new(seat, false),
+                AccountMeta::new(self.rent_beneficiary, false),
+                AccountMeta::new_readonly(system_program::ID, false),
+            ],
+            data: ReclaimMemberSeatInstructionV1::new(GENERATION, TERMINAL_SEQUENCE, member)
+                .expect("reclaim request")
+                .to_bytes()
+                .expect("reclaim bytes")
+                .to_vec(),
+        }
+    }
+
     fn attestation(&self, index: usize, cluster: [u8; 32], slot: u64) -> Vec<u8> {
         let position = self.positions.get(index).expect("position");
         let message = AttestationMessageV1::new(
@@ -1804,6 +2305,31 @@ impl Fixture {
 struct DeadlineSubstitution {
     funding: Option<Pubkey>,
     terminal_sequence: Option<u64>,
+}
+
+/// The fixed prefix of the fold's frame, restated where the campaign can be
+/// held to it. `ENSEMBLE_FOLD_FRAME_PREFIX_V1.len()` is the authority; this
+/// harness asserts the two agree at fixture-build time.
+const ENSEMBLE_FOLD_FRAME_PREFIX_LEN: usize = 29;
+
+/// One substitution a hostile fold makes, and nothing else.
+///
+/// The fold's instruction names a generation and a terminal sequence and
+/// nothing else -- it cannot name a quorum, a member set or a reading, because
+/// a caller who could would be a caller choosing the outcome -- so what is left
+/// to lie about is which accounts stand in the frame.
+#[derive(Clone, Copy, Default)]
+struct EnsembleSubstitution {
+    /// A different ledger to debit.
+    funding: Option<Pubkey>,
+    /// A different terminal sequence than the one the seats were written at.
+    terminal_sequence: Option<u64>,
+    /// One member's seat, replaced by the account at this key.
+    seat: Option<(u8, Pubkey)>,
+    /// One member's captor, replaced by the account at this key.
+    captor: Option<(u8, Pubkey)>,
+    /// The frame one captor short of the `2k` the material's `k` requires.
+    drop_last_tail: bool,
 }
 
 /// One substitution a hostile consumption makes, and nothing else.
@@ -3976,6 +4502,178 @@ async fn walk_state(context: &mut ProgramTestContext, fixture: &Fixture) -> Walk
                 .expect("bank read"),
         ),
     }
+}
+
+#[tokio::test]
+async fn captured_ensemble_fragments_fold_then_reclaim_the_vacant_member_seat() {
+    // The ensemble fixture begins after the two provider routes have captured
+    // their independently authenticated fragments: members zero and one occupy
+    // their deterministic Resolution seats, and member two remains the
+    // System-owned prepaid vacancy. This executes the post-capture path that
+    // those producers must make reachable: the real Resolution ELF folds the
+    // quorum and then returns the unused seat rent through the separate reclaim
+    // action.
+    let mut fixture = ensemble_fixture(ANSWERED_MEMBERS);
+    let world = fixture.ensemble.as_ref().expect("ensemble world");
+    let seat_two = *world.seats.get(2).expect("third member seat");
+    let captor_zero = *world.captors.first().expect("primary captor");
+    let captor_one = *world.captors.get(1).expect("paid member captor");
+    let fragment_zero = world
+        .fragments
+        .first()
+        .copied()
+        .flatten()
+        .expect("member zero fragment");
+    let fragment_one = world
+        .fragments
+        .get(1)
+        .copied()
+        .flatten()
+        .expect("member one fragment");
+    assert!(world.fragments.get(2).expect("third member").is_none());
+    assert!(
+        world
+            .member_entry_indices
+            .first()
+            .expect("primary member")
+            .is_none()
+    );
+    assert!(
+        world
+            .member_entry_indices
+            .get(1)
+            .copied()
+            .flatten()
+            .is_some()
+    );
+    assert_eq!(
+        world.member_entry_indices[1],
+        Some(fixture.recovery_entry_index),
+        "member one consumes the founded recovery allocation"
+    );
+    assert_eq!(
+        world.member_entry_indices[2],
+        Some(fixture.exhaustion_entry_index),
+        "member two consumes the founded exhaustion allocation"
+    );
+
+    let mut context = start(&mut fixture).await;
+    let captured_source =
+        SourceResolutionStateV2::decode(&record_bytes(&mut context, fixture.source_state).await)
+            .expect("captured Source state decodes");
+    assert_eq!(
+        captured_source.phase(),
+        SourceResolutionPhaseV1::Primary,
+        "fragment capture leaves the Source available for the quorum fold"
+    );
+    let captured_zero = ResolutionCertificateV2::decode(
+        &record_bytes(
+            &mut context,
+            *fixture
+                .ensemble
+                .as_ref()
+                .expect("ensemble world")
+                .seats
+                .first()
+                .expect("primary member seat"),
+        )
+        .await,
+    )
+    .expect("primary fragment decodes");
+    let captured_one = ResolutionCertificateV2::decode(
+        &record_bytes(
+            &mut context,
+            *fixture
+                .ensemble
+                .as_ref()
+                .expect("ensemble world")
+                .seats
+                .get(1)
+                .expect("second member seat"),
+        )
+        .await,
+    )
+    .expect("member fragment decodes");
+    assert_eq!(captured_zero, fragment_zero);
+    assert_eq!(captured_one, fragment_one);
+    warp_past_the_deadline(&mut context).await;
+    let funding_before = lamports_of(&mut context, fixture.funding_ledger).await;
+    let captor_zero_before = lamports_of(&mut context, captor_zero).await;
+    let captor_one_before = lamports_of(&mut context, captor_one).await;
+    let seat_two_before = lamports_of(&mut context, seat_two).await;
+    let beneficiary_before = lamports_of(&mut context, fixture.rent_beneficiary).await;
+
+    submit_recorded(
+        &mut context,
+        &[fixture.ensemble_fold_instruction(EnsembleSubstitution::default())],
+        &[&fixture.worker],
+        "relayed ensemble: captured member fragments fold to the primary terminal",
+    )
+    .await
+    .expect("the captured quorum folds");
+
+    let source =
+        SourceResolutionStateV2::decode(&record_bytes(&mut context, fixture.source_state).await)
+            .expect("folded Source state decodes");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::Resolved);
+    let certificate = ResolutionCertificateV2::decode(
+        &record_bytes(
+            &mut context,
+            fixture.certificate_of(RESOLUTION_SUCCESS_KIND),
+        )
+        .await,
+    )
+    .expect("folded terminal certificate decodes");
+    assert_eq!(certificate.result_numerator, fixture.row.terminal_atom);
+    assert_eq!(certificate.receipt_account, fixture.certificate.to_bytes());
+
+    let receipt_bytes = record_bytes(
+        &mut context,
+        fixture.ensemble.as_ref().expect("ensemble world").receipt,
+    )
+    .await;
+    assert_eq!(receipt_bytes.len(), ENSEMBLE_FOLD_RECEIPT_V1_BYTES);
+    let receipt = EnsembleFoldReceiptV1::decode(&receipt_bytes).expect("fold receipt decodes");
+    assert_eq!(receipt.member_count, ENSEMBLE_MEMBERS);
+    assert_eq!(receipt.quorum, ENSEMBLE_QUORUM);
+    assert_eq!(receipt.consumed_count, 2);
+    assert_eq!(receipt.consumed_bitmap, ANSWERED_MEMBERS);
+    assert_eq!(
+        receipt.fragment_digests[0],
+        hash(&fragment_zero.to_bytes().expect("member zero bytes")).to_bytes()
+    );
+    assert_eq!(
+        receipt.fragment_digests[1],
+        hash(&fragment_one.to_bytes().expect("member one bytes")).to_bytes()
+    );
+    assert_eq!(receipt.fragment_digests[2], [0; 32]);
+
+    assert_eq!(
+        lamports_of(&mut context, captor_zero).await,
+        captor_zero_before
+    );
+    assert_eq!(
+        lamports_of(&mut context, captor_one).await - captor_one_before,
+        BOUNTY
+    );
+    assert_eq!(
+        funding_before - lamports_of(&mut context, fixture.funding_ledger).await,
+        BOUNTY
+    );
+
+    submit_recorded(
+        &mut context,
+        &[fixture.reclaim_member_seat_instruction(2)],
+        &[&fixture.worker],
+        "relayed ensemble: terminal reclaims the vacant member seat",
+    )
+    .await
+    .expect("the terminal reclaims only the vacant seat");
+    assert_eq!(lamports_of(&mut context, seat_two).await, 0);
+    assert_eq!(
+        lamports_of(&mut context, fixture.rent_beneficiary).await - beneficiary_before,
+        seat_two_before
+    );
 }
 
 #[tokio::test]

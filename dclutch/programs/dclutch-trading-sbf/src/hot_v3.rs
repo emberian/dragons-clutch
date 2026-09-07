@@ -14,6 +14,7 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use dclutch_claims::frame_spec_v1::{
     ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
 };
+use dclutch_claims::rational_lifecycle::hot_v6::structured_lifecycle_selector_v1;
 use dclutch_core_contract::ContentId;
 use dclutch_custody::token_svm::{COption as TokenCOption, TokenAccount};
 use dclutch_custody::{

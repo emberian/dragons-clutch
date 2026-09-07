@@ -2331,7 +2331,9 @@ name = "dclutch-general-hot-program-test"
 version = "0.1.0"
 dependencies = [
  "dclutch-chain-bundle-builder",
+ "dclutch-claims",
  "dclutch-core-contract",
+ "dclutch-custody",
  "dclutch-direct-hot-program-test-support",
  "dclutch-market",
  "dclutch-operator",

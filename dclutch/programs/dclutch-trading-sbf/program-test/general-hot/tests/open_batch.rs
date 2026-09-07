@@ -5,13 +5,13 @@
 use std::{env, fs, path::PathBuf};
 
 use dclutch_chain_bundle_builder::{
-    BuilderError, WaistFactsV1,
+    WaistFactsV1,
     admitted::AdmittedAotInputV1,
     artifacts::{ArtifactSetV1, DerivedRecordV1, derive_record, digest},
     bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1},
     frame::{
         BuiltAccountV1, SYSTEM_PROGRAM_BUILTIN_NAME_V1, data_account, external_with_view,
-        program_with_view, system_program_builtin, vacant,
+        program_with_view, rent_sysvar_bytes, system_program_builtin, vacant,
     },
     general::{
         GeneralActionPrestateV1, GeneralRequestEvidenceV1, GeneralRequestInputV1,
@@ -19,7 +19,21 @@ use dclutch_chain_bundle_builder::{
         general_action_prestate_shape_v1,
     },
 };
+use dclutch_claims::{
+    frame_spec_v1::ClaimsFrameRoleV1,
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        LiabilityBasisMarketInputV2, LiabilityBasisMarketSeedsV2, LiabilityBasisPositionInputV2,
+        encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
+        put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
+    },
+    protocol_position_v2::ProtocolPositionSeedsV2,
+};
 use dclutch_core_contract::ContentId;
+use dclutch_custody::{
+    CustodyAuthoritySeedsV1, CustodyFrameRoleV1,
+    token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID},
+};
 use dclutch_direct_hot_program_test_support::waist;
 use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
@@ -34,7 +48,9 @@ use dclutch_market::capability_program::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::CapabilityProgramV4,
 };
-use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1};
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
 use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
@@ -52,6 +68,9 @@ use dclutch_operator::general_selected_release_v1::{
     GeneralConfigWindowsV1, GeneralDeploymentFactsV1, GeneralSelectedReleaseInputV1,
     GeneralSelectedReleaseV1, general_external_account_widths_v3,
     general_selected_entry_descriptor_v1, general_selected_release_v1,
+};
+use dclutch_operator::general_session_v1::{
+    GeneralEscrowChildrenV1, GeneralFrameSourceV1, general_frame_sources_v1,
 };
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
@@ -84,9 +103,9 @@ use dclutch_trading::general::{
     runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len},
     state_artifacts_v3::{
         GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_STATE_ACCOUNT_V3,
-        GeneralReadonlyEvidenceKindV3, general_create_payer_account_v3,
-        general_readonly_evidence_v3, general_rent_credit_account_v3,
-        general_system_program_account_v3,
+        GENERAL_TERMINAL_STATE_ACCOUNT_V3, GeneralReadonlyEvidenceKindV3,
+        general_create_payer_account_v3, general_readonly_evidence_v3,
+        general_rent_credit_account_v3, general_system_program_account_v3,
     },
 };
 use dclutch_trading::general_codec::Action;
@@ -95,16 +114,9 @@ use dclutch_trading::general_config::{GENERAL_ROOT_BYTES_V2, GeneralRootV2};
 use dclutch_vm::capability_seal::{CAPABILITY_SEAL_BYTES_V1, SealedDescriptorClosureV1};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_program::{
-    hash::hash,
-    instruction::{Instruction, InstructionError},
-    pubkey::Pubkey,
-    rent::Rent,
-};
-use solana_program_test::BanksClientError;
+use solana_program::{hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent};
 use solana_sdk::signature::{Keypair, Signer};
-use solana_sdk::transaction::TransactionError;
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 const ACCELERATOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xa1; 32]);
 /// `TradingSbfError::Root`, derived from its REGISTERED BAND.
@@ -137,6 +149,8 @@ const CRANK_REWARD_LAMPORTS: u64 = 5_000;
 /// itself because every fixture wrote BOTH sides from this one literal. Keeping
 /// the two distinct is what makes `require_market` say anything at all.
 const CLAIM_BASIS: [u8; 32] = [0x56; 32];
+const GENERAL_TOKEN_PROGRAM: Pubkey = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+const GENERAL_COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0xd2; 32]);
 
 #[derive(Clone)]
 struct ProductRecords {
@@ -243,6 +257,11 @@ fn load_accelerator_elf() -> Vec<u8> {
     fs::read(path).expect("current General accelerator ELF")
 }
 
+fn load_token_2022_elf() -> Vec<u8> {
+    let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR"));
+    fs::read(directory.join("spl_token_2022.so")).expect("current Token-2022 ELF")
+}
+
 /// Both bumps derive through `RecordKeyV1`, the constructor the Record
 /// contract exports for exactly this, rather than respelling the seed tuple
 /// here. A test that spells the tuple becomes a second author for the address,
@@ -326,6 +345,41 @@ fn selected_release(
         },
     })
     .expect("current General release")
+}
+
+#[test]
+fn every_general_action_joins_its_own_funding_profile() {
+    use dclutch_vm::account_profile::{lifecycle_v3::StateLifecyclePolicyV5, v3::AccountProfileV3};
+    let product = build_product(2);
+    let release = selected_release(
+        2,
+        &product,
+        ArtifactReleaseIdV1::new([0x71; 32]).unwrap(),
+        product.semantic_basis,
+    );
+    assert_eq!(release.bundles.len(), 15);
+    let mut failures = Vec::new();
+    for bundle in &release.bundles {
+        let descriptor = CapabilityProgramV4::decode(&bundle.descriptor).unwrap();
+        let selected = descriptor.lifecycle().program().to_bytes();
+        let lifecycle =
+            StateLifecyclePolicyV5::decode_selected(selected, selected, &bundle.lifecycle_policy)
+                .unwrap();
+        let profile = AccountProfileV3::decode(&bundle.account_profile).unwrap();
+        if let Err(cause) = lifecycle
+            .validate_account_profile_with_external_funding_join_for_action(
+                profile,
+                u32::from(bundle.action as u8),
+            )
+        {
+            failures.push(format!("{:?}: {cause:?}", bundle.action));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "General action profile joins failed:\n{}",
+        failures.join("\n"),
+    );
 }
 
 struct ManifestSelection {
@@ -421,8 +475,8 @@ fn state_corpus(
     product: &ProductRecords,
     manifest: &ManifestSelection,
     release: &GeneralSelectedReleaseV1,
+    realm_id: [u8; 32],
 ) -> StateCorpus {
-    let realm_id = hash(&[0x77; REALM_BYTES]).to_bytes();
     let provisional = MarketIdentity {
         market_id: core_identity([0x61; 32]),
         realm_id: core_identity(realm_id),
@@ -532,12 +586,13 @@ struct CampaignV1 {
     product: ProductRecords,
     release: GeneralSelectedReleaseV1,
     manifest: ManifestSelection,
+    realm: DerivedRecordV1,
     state: StateCorpus,
     waist_facts: WaistFactsV1,
     accelerator_artifact: Vec<u8>,
     accelerator_program: BuiltAccountV1,
     accelerator_programdata_account: BuiltAccountV1,
-    externally_installed: [Pubkey; 2],
+    externally_installed: [Pubkey; 3],
 }
 
 /// The bank state one action reads.
@@ -696,6 +751,20 @@ fn build_campaign_with_entry(
     }
     let clock_slot = substrate.bank_slot();
     let manifest = manifest_selection(&release, entry_descriptor, clock_slot);
+    let realm = derive_record(
+        waist::REGISTRY_PROGRAM_ID,
+        REALM_SCHEMA_RELEASE_ID_V1,
+        &RealmV1::new(RealmV1Input {
+            token_program: GENERAL_TOKEN_PROGRAM.to_bytes(),
+            collateral_mint: GENERAL_COLLATERAL_MINT.to_bytes(),
+            collateral_adapter_release_id: hash(&PRODUCTION_ADAPTER_RELEASES[1].to_bytes())
+                .to_bytes(),
+            mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+            freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+        })
+        .expect("Token-2022 Realm")
+        .to_bytes(),
+    );
     let state = state_corpus(
         &rent,
         payer,
@@ -703,6 +772,7 @@ fn build_campaign_with_entry(
         &product,
         &manifest,
         &release,
+        realm.digest,
     );
     let trading_release =
         waist::release_v2(waist::TRADING_PROGRAM_ID, 0x33, &elves.trading, substrate);
@@ -726,6 +796,7 @@ fn build_campaign_with_entry(
         product,
         release,
         manifest,
+        realm,
         state,
         waist_facts,
         accelerator_artifact: accelerator_artifact.to_bytes().to_vec(),
@@ -735,7 +806,11 @@ fn build_campaign_with_entry(
             bpf_loader_upgradeable::ID,
             waist::programdata_v2(substrate, accelerator_elf),
         ),
-        externally_installed: [ACCELERATOR_PROGRAM, accelerator_programdata],
+        externally_installed: [
+            ACCELERATOR_PROGRAM,
+            accelerator_programdata,
+            GENERAL_TOKEN_PROGRAM,
+        ],
     }
 }
 
@@ -841,6 +916,308 @@ impl EvidenceCorpusV1 {
     }
 }
 
+/// Canonical, founded child state a live General order admission consumes.
+///
+/// The action owns four lifecycle-created children (the escrow Position and
+/// admission, plus the Custody replay and vault); they are therefore vacant at
+/// the exact PDAs below.  The maker Position, Claims aggregate, Realm, mint,
+/// and source token account predate the order and are installed as real
+/// records.  Filling this with width-only placeholders would get through the
+/// profile builder and fail at the first child CPI, so the corpus is assembled
+/// from the child contracts' own encoders and seed constructors.
+struct PlaceOrderCorpusV1 {
+    claims_market: BuiltAccountV1,
+    maker_position: BuiltAccountV1,
+    realm: BuiltAccountV1,
+    realm_staging: BuiltAccountV1,
+    mint: BuiltAccountV1,
+    maker_token: BuiltAccountV1,
+    escrow_position: BuiltAccountV1,
+    escrow_admission: BuiltAccountV1,
+    escrow_replay: BuiltAccountV1,
+    escrow_vault: BuiltAccountV1,
+    custody_authority: BuiltAccountV1,
+    order_identity: BuiltAccountV1,
+}
+
+fn token_mint_bytes(supply: u64) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 82];
+    bytes[36..44].copy_from_slice(&supply.to_le_bytes());
+    bytes[45] = 1;
+    bytes
+}
+
+fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 165];
+    bytes[..32].copy_from_slice(mint.as_ref());
+    bytes[32..64].copy_from_slice(owner.as_ref());
+    bytes[64..72].copy_from_slice(&amount.to_le_bytes());
+    bytes[108] = 1;
+    bytes
+}
+
+fn place_order_corpus(
+    campaign: &CampaignV1,
+    chain: &ChainPrestateV1,
+    order_id: [u8; 32],
+) -> PlaceOrderCorpusV1 {
+    let claims_market = Pubkey::find_program_address(
+        &LiabilityBasisMarketSeedsV2::new(chain.market.key.to_bytes())
+            .expect("General Claims aggregate seeds")
+            .as_slices(),
+        &waist::CLAIMS_PROGRAM_ID,
+    )
+    .0;
+    let mut claims_bytes =
+        vec![
+            0_u8;
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2
+                + usize::try_from(campaign.outcome_count).expect("outcome width") * 8
+        ];
+    encode_liability_basis_market_into_v2(
+        LiabilityBasisMarketInputV2 {
+            revision: 1,
+            logical_market: chain.market.key.to_bytes(),
+            release_set: campaign.releases.release_set,
+            registry_program: waist::REGISTRY_PROGRAM_ID.to_bytes(),
+            product_instance_id: campaign.product.product_id,
+            basis_id: campaign.product.semantic_basis,
+            realm_id: campaign.realm.digest,
+            custody_context: [0xd3; 32],
+            generation: GENERATION,
+        },
+        &vec![4_u64; usize::try_from(campaign.outcome_count).expect("outcome width")],
+        &mut claims_bytes,
+    )
+    .expect("founded General Claims aggregate");
+    let claims_bump = Pubkey::find_program_address(
+        &LiabilityBasisMarketSeedsV2::new(chain.market.key.to_bytes())
+            .expect("General Claims aggregate seeds")
+            .as_slices(),
+        &waist::CLAIMS_PROGRAM_ID,
+    )
+    .1;
+    put_liability_basis_market_bump_v2(&mut claims_bytes, claims_bump)
+        .expect("Claims aggregate bump");
+
+    let maker = chain.payer.key;
+    let maker_position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(claims_market.to_bytes(), maker.to_bytes())
+            .expect("maker Position seeds")
+            .as_slices(),
+        &waist::CLAIMS_PROGRAM_ID,
+    );
+    let mut maker_position_bytes =
+        vec![
+            0_u8;
+            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
+                + usize::try_from(campaign.outcome_count).expect("outcome width") * 8
+        ];
+    encode_liability_basis_position_into_v2(
+        LiabilityBasisPositionInputV2 {
+            revision: 1,
+            market_account: claims_market.to_bytes(),
+            owner: maker.to_bytes(),
+            basis_id: campaign.product.semantic_basis,
+        },
+        &vec![4_u64; usize::try_from(campaign.outcome_count).expect("outcome width")],
+        &mut maker_position_bytes,
+    )
+    .expect("maker Claims Position");
+    put_liability_basis_position_bump_v2(&mut maker_position_bytes, maker_position.1)
+        .expect("maker Position bump");
+
+    let children = GeneralEscrowChildrenV1::derive(
+        waist::CLAIMS_PROGRAM_ID,
+        waist::CUSTODY_PROGRAM_ID,
+        claims_market,
+        chain.market.key.to_bytes(),
+        campaign.releases.release_set,
+        order_id,
+    )
+    .expect("order escrow children");
+    let custody_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(chain.market.key.to_bytes(), campaign.releases.release_set)
+            .as_slices(),
+        &waist::CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let maker_token = Pubkey::find_program_address(
+        &[b"general-place-maker-token", maker.as_ref()],
+        &GENERAL_TOKEN_PROGRAM,
+    )
+    .0;
+    PlaceOrderCorpusV1 {
+        claims_market: data_account(
+            &campaign.rent,
+            claims_market,
+            waist::CLAIMS_PROGRAM_ID,
+            claims_bytes,
+        ),
+        maker_position: data_account(
+            &campaign.rent,
+            maker_position.0,
+            waist::CLAIMS_PROGRAM_ID,
+            maker_position_bytes,
+        ),
+        realm: data_account(
+            &campaign.rent,
+            campaign.realm.raw,
+            waist::REGISTRY_PROGRAM_ID,
+            campaign.realm.bytes.clone(),
+        ),
+        realm_staging: vacant(campaign.realm.staging),
+        mint: data_account(
+            &campaign.rent,
+            GENERAL_COLLATERAL_MINT,
+            GENERAL_TOKEN_PROGRAM,
+            token_mint_bytes(4),
+        ),
+        maker_token: data_account(
+            &campaign.rent,
+            maker_token,
+            GENERAL_TOKEN_PROGRAM,
+            token_account_bytes(GENERAL_COLLATERAL_MINT, maker, 4),
+        ),
+        escrow_position: vacant(children.position),
+        escrow_admission: vacant(children.admission),
+        escrow_replay: vacant(children.replay),
+        escrow_vault: vacant(children.vault),
+        custody_authority: vacant(custody_authority),
+        order_identity: vacant(Pubkey::new_from_array(order_id)),
+    }
+}
+
+fn place_order_child_bindings(
+    campaign: &CampaignV1,
+    chain: &ChainPrestateV1,
+    corpus: &PlaceOrderCorpusV1,
+    order_terms: &BuiltAccountV1,
+) -> Vec<(usize, BuiltAccountV1)> {
+    let program = |key| program_with_view(key, waist::programdata(key));
+    let rent_sysvar = || {
+        external_with_view(
+            sysvar::rent::ID,
+            sysvar::ID,
+            rent_sysvar_bytes(&campaign.rent),
+        )
+    };
+    let activation = || {
+        external_with_view(
+            campaign.releases.activation,
+            waist::REGISTRY_PROGRAM_ID,
+            campaign.releases.activation_data.to_vec(),
+        )
+    };
+    // The outer General Profile names the two affine positions by their
+    // semantic roles: maker, then the escrow Position that the immediately
+    // preceding Claims Admit creates.  Trading's typed Claims adapter rewrites
+    // that private child plan and gathers this pair in canonical PDA-key order
+    // just before its CPI; sorting here would make the outer escrow alias
+    // key-dependent and erase the lifecycle/create cross-check.
+    let semantic_positions = [
+        corpus.maker_position.clone(),
+        corpus.escrow_position.clone(),
+    ];
+    general_frame_sources_v1(Action::PlaceOrder)
+        .expect("PlaceOrder frame sources")
+        .into_iter()
+        .filter_map(|(coordinate, source)| {
+            let account = match source {
+                GeneralFrameSourceV1::Claims(_, role) => match role {
+                    ClaimsFrameRoleV1::CallerAuthority => return None,
+                    ClaimsFrameRoleV1::ClaimsMarket => corpus.claims_market.clone(),
+                    ClaimsFrameRoleV1::ProtocolPosition => corpus.escrow_position.clone(),
+                    ClaimsFrameRoleV1::ProtocolPositionAdmission => corpus.escrow_admission.clone(),
+                    ClaimsFrameRoleV1::BasisRecord
+                    | ClaimsFrameRoleV1::ProductRecord
+                    | ClaimsFrameRoleV1::PortfolioRecord => return None,
+                    ClaimsFrameRoleV1::BasisStaging => vacant(campaign.product.basis.staging),
+                    ClaimsFrameRoleV1::ProductStaging => vacant(campaign.product.product.staging),
+                    ClaimsFrameRoleV1::ResultDomainRecord => data_account(
+                        &campaign.rent,
+                        campaign.product.domain.raw,
+                        waist::REGISTRY_PROGRAM_ID,
+                        campaign.product.domain.bytes.clone(),
+                    ),
+                    ClaimsFrameRoleV1::ResultDomainStaging => {
+                        vacant(campaign.product.domain.staging)
+                    }
+                    ClaimsFrameRoleV1::PortfolioStaging => {
+                        vacant(campaign.product.portfolio.staging)
+                    }
+                    ClaimsFrameRoleV1::RentSysvar => rent_sysvar(),
+                    ClaimsFrameRoleV1::SystemProgram => system_program_builtin(),
+                    ClaimsFrameRoleV1::CoreMarket => chain.market.clone(),
+                    ClaimsFrameRoleV1::ActivationCache => activation(),
+                    ClaimsFrameRoleV1::RegistryProgram => program(waist::REGISTRY_PROGRAM_ID),
+                    ClaimsFrameRoleV1::TradingProgram | ClaimsFrameRoleV1::CallerProgram => {
+                        program(waist::TRADING_PROGRAM_ID)
+                    }
+                    ClaimsFrameRoleV1::TradingProgramData
+                    | ClaimsFrameRoleV1::CallerProgramData => external_with_view(
+                        campaign.releases.trading_programdata,
+                        bpf_loader_upgradeable::ID,
+                        waist::programdata_v2(campaign.substrate, &waist::elves().trading),
+                    ),
+                    ClaimsFrameRoleV1::ClaimsProgram => program(waist::CLAIMS_PROGRAM_ID),
+                    ClaimsFrameRoleV1::ClaimsProgramData => external_with_view(
+                        campaign.releases.claims_programdata,
+                        bpf_loader_upgradeable::ID,
+                        waist::programdata_v2(campaign.substrate, &waist::elves().claims),
+                    ),
+                    ClaimsFrameRoleV1::CoreProgram => program(waist::CORE_PROGRAM_ID),
+                    ClaimsFrameRoleV1::CoreProgramData => external_with_view(
+                        campaign.releases.core_programdata,
+                        bpf_loader_upgradeable::ID,
+                        waist::programdata_v2(campaign.substrate, &waist::elves().core),
+                    ),
+                    ClaimsFrameRoleV1::PositionOwnerIdentity => order_terms.clone(),
+                    ClaimsFrameRoleV1::RentCredit => chain.rent_credit.clone(),
+                    ClaimsFrameRoleV1::RentProgram => program(waist::RENT_PROGRAM_ID),
+                    ClaimsFrameRoleV1::AffinePosition(index) => semantic_positions
+                        .get(usize::from(index))
+                        .expect("PlaceOrder affine Position")
+                        .clone(),
+                    ClaimsFrameRoleV1::SignedDeltaPosition(_)
+                    | ClaimsFrameRoleV1::SparseSourcePosition
+                    | ClaimsFrameRoleV1::SparseDestinationPosition => {
+                        panic!("PlaceOrder has no sparse or signed-delta Claims route")
+                    }
+                },
+                GeneralFrameSourceV1::Custody(_, role) => match role {
+                    CustodyFrameRoleV1::CallerAuthority => return None,
+                    CustodyFrameRoleV1::CoreMarket => chain.market.clone(),
+                    CustodyFrameRoleV1::ActivationCache => activation(),
+                    CustodyFrameRoleV1::RegistryProgram => program(waist::REGISTRY_PROGRAM_ID),
+                    CustodyFrameRoleV1::CallerProgram => program(waist::TRADING_PROGRAM_ID),
+                    CustodyFrameRoleV1::CallerProgramData => external_with_view(
+                        campaign.releases.trading_programdata,
+                        bpf_loader_upgradeable::ID,
+                        waist::programdata_v2(campaign.substrate, &waist::elves().trading),
+                    ),
+                    CustodyFrameRoleV1::RealmRecord => corpus.realm.clone(),
+                    CustodyFrameRoleV1::RealmStaging => corpus.realm_staging.clone(),
+                    CustodyFrameRoleV1::Replay => corpus.escrow_replay.clone(),
+                    CustodyFrameRoleV1::Payer => chain.payer.clone(),
+                    CustodyFrameRoleV1::SystemProgram => system_program_builtin(),
+                    CustodyFrameRoleV1::RentSysvar => rent_sysvar(),
+                    CustodyFrameRoleV1::Mint => corpus.mint.clone(),
+                    CustodyFrameRoleV1::Vault => corpus.escrow_vault.clone(),
+                    CustodyFrameRoleV1::CustodyAuthority => corpus.custody_authority.clone(),
+                    CustodyFrameRoleV1::TokenProgram => program(GENERAL_TOKEN_PROGRAM),
+                    CustodyFrameRoleV1::TransferSource => corpus.maker_token.clone(),
+                    CustodyFrameRoleV1::TransferDestination => corpus.escrow_vault.clone(),
+                    CustodyFrameRoleV1::RentRefund => chain.payer.clone(),
+                },
+                GeneralFrameSourceV1::CustodyCallee => program(waist::CUSTODY_PROGRAM_ID),
+                _ => return None,
+            };
+            Some((usize::from(coordinate), account))
+        })
+        .collect()
+}
+
 /// One immutable evidence record, installed at the address of its own digest.
 ///
 /// CONTENT-ADDRESSED ON PURPOSE. The AccountProfile authenticates an evidence
@@ -908,6 +1285,27 @@ fn build_action_case_with_evidence(
     clock_slot: u64,
     fee_payer: Pubkey,
     evidence: &EvidenceCorpusV1,
+) -> Result<HostCase, dclutch_chain_bundle_builder::BuilderError> {
+    build_action_case_with_evidence_and_bindings(
+        campaign,
+        action,
+        chain,
+        clock_slot,
+        fee_payer,
+        evidence,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_action_case_with_evidence_and_bindings(
+    campaign: &CampaignV1,
+    action: Action,
+    chain: &ChainPrestateV1,
+    clock_slot: u64,
+    fee_payer: Pubkey,
+    evidence: &EvidenceCorpusV1,
+    additional_bindings: &[(usize, BuiltAccountV1)],
 ) -> Result<HostCase, dclutch_chain_bundle_builder::BuilderError> {
     let selected = campaign
         .release
@@ -991,6 +1389,7 @@ fn build_action_case_with_evidence(
             primary.clone(),
         ));
     }
+    bindings.extend(additional_bindings.iter().cloned());
     let set = ArtifactSetV1 {
         descriptor: &selected.descriptor,
         account_profile: &selected.account_profile,
@@ -1970,6 +2369,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let substrate = waist::fixture_substrate();
     let elves = waist::elves();
     let accelerator_elf = load_accelerator_elf();
+    let token_2022_elf = load_token_2022_elf();
     let rent = Rent::default();
     let payer = Keypair::new_from_array([0x11; 32]);
     let fee_payer = Keypair::new_from_array([0x12; 32]);
@@ -1986,6 +2386,13 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // distinguishes `Payer` from `Credit` instead of agreeing with both.
     let solver = Keypair::new_from_array([0x14; 32]);
     let mut test = waist::program_test_without_forced_budget(&elves);
+    waist::add_program_v2(
+        &mut test,
+        "spl_token_2022",
+        GENERAL_TOKEN_PROGRAM,
+        &token_2022_elf,
+        substrate,
+    );
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
         &mut test,
@@ -2051,7 +2458,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     assert_eq!(opened_batch.state().opened_root_revision, 1);
     assert_eq!(opened_batch.state().closed_root_revision, 0);
     let collection_close_slot = opened_batch.opening().collection_close_slot;
-    let chain = ChainPrestateV1 {
+    let mut chain = ChainPrestateV1 {
         market: observed_binding(&mut context, campaign.state.market.key).await,
         root: observed_binding(&mut context, open.root).await,
         rent_credit: observed_binding(&mut context, open.rent_credit).await,
@@ -2139,51 +2546,106 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     )
     .expect("the campaign's order corpus is the shape PlaceOrder reads");
 
-    // AND THE ESCROW HALF'S WALL, WHICH IS A CORPUS AND NOT A CONTRACT.
+    // ---- ACTION TWO: PlaceOrder -----------------------------------------
     //
-    // Everything this campaign owns is in place: the request derives, the
-    // prestate shape decodes, the payer and the credit sit at the coordinates
-    // `PlaceOrder` declares rather than the primary shape's, and the signed
-    // terms are bound at the evidence coordinate its own profile names. The
-    // build refuses in the ACCOUNT-PROJECTION pass, and the reporter this lane
-    // added to `registers.rs` says exactly why: FOURTEEN coordinates carry an
-    // `Exact` rule and hold nothing. Their widths name what they are -- 1,288
-    // and 368 and 240-byte records, a 272-byte `256 + 8N` request, two
-    // `128 + 8N` positions, a 112, a 17 and five 36-byte token-shaped accounts.
-    // They are the escrow children a placement admits: the Position pair, the
-    // Custody replay, the vault and its mint, and the admission record.
-    //
-    // NONE OF THAT IS GENERAL'S TO PRODUCE. The founding installs those
-    // accounts, and this campaign founds a market without them because until
-    // now no General action needed one. That is the corpus the escrow half
-    // owes, and it is named here with its measured coordinate list rather than
-    // left as `PlaceOrder` "not attempted": an action with no corpus and an
-    // action with no route look identical in a campaign that only runs what
-    // already works.
-    let place_attempt = build_action_case_with_evidence(
+    // The additional bindings are the canonical Claims and Custody corpus for
+    // this order.  They are not width-shaped stand-ins: the existing market
+    // aggregate, maker position, Realm, mint, and token account are encoded by
+    // their owners, while the escrow Position, admission, replay, and vault are
+    // vacant at the child contracts' PDAs.  The action therefore has to create
+    // the exact child state it later spends.
+    let place_corpus = place_order_corpus(&campaign, &chain, order_record.order_id());
+    assert_eq!(
+        place_corpus.order_identity.key.to_bytes(),
+        order_record.order_id(),
+        "the Claims escrow owner is the signed order identity"
+    );
+    let place_bindings = place_order_child_bindings(
+        &campaign,
+        &chain,
+        &place_corpus,
+        place_evidence
+            .order_terms
+            .as_ref()
+            .expect("signed order terms"),
+    );
+    let place = build_action_case_with_evidence_and_bindings(
         &campaign,
         Action::PlaceOrder,
         &chain,
         substrate.bank_slot(),
         fee_payer.pubkey(),
         &place_evidence,
+        &place_bindings,
+    )
+    .expect("PlaceOrder assembles against its Claims and Custody corpus");
+    let place_installed =
+        install_absent(&mut context, &place, &[place.built.bundle.artifacts.seal]).await;
+    let (place_seal, place_seal_cu) =
+        produce_seal(&mut context, &place, &seal_payer, &fee_payer).await;
+    assert_eq!(place_seal, place.built.bundle.artifacts.seal);
+    waist::set_lookup_table(&mut context, &place.lookup_addresses);
+    assert_frame_control(&mut context, &place).await;
+    let place_execution = waist::submit_v0_observed(
+        &mut context,
+        &place.instructions,
+        place.lookup_addresses.clone(),
+        Some(&fee_payer),
+        &[&payer],
+    )
+    .await
+    .expect("real Trading -> General accelerator PlaceOrder");
+    assert!(
+        place_execution
+            .logs
+            .iter()
+            .any(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke"))),
+        "the real accelerator CPI ran for PlaceOrder"
     );
-    assert_eq!(
-        place_attempt.as_ref().err(),
-        Some(&BuilderError::Projection("account-projection")),
-        "PlaceOrder no longer refuses at the account projection; the campaign owes its execution",
-    );
-    eprintln!(
-        "general-campaign place-order-corpus order={} batch={} refusal=account-projection \
-         missing=14-exact-coordinates",
-        hex32(order_record.order_id()),
-        hex32(opened_batch.batch_id()),
-    );
+    let placed_batch_account = chain_account(&mut context, open.primary_state).await;
+    let (_, placed_batch) = decode_batch(&placed_batch_account);
+    assert_eq!(placed_batch.state().status, BatchStatusV1::Collecting);
+    assert_eq!(placed_batch.state().order_count, 1);
+    assert_eq!(placed_batch.live_order_count(), 1);
+    let order_state = place
+        .built
+        .bundle
+        .logical
+        .get(usize::from(GENERAL_TERMINAL_STATE_ACCOUNT_V3))
+        .expect("PlaceOrder terminal state coordinate")
+        .key;
+    let placed_order_account = chain_account(&mut context, order_state).await;
+    let order_envelope = GeneralLocalStateV3::decode(&placed_order_account.data)
+        .expect("the Placement materialized its General Order");
+    assert_eq!(order_envelope.header().kind, GeneralLocalStateKindV3::Order);
+    let placed_order = GeneralOrderV2::decode(order_envelope.body())
+        .expect("the terminal local-state body is the signed General Order");
+    assert_eq!(placed_order.header(), order_record.header());
+    assert_eq!(placed_order.state(), order_record.state());
+    assert_eq!(placed_order.order_id(), order_record.order_id());
+    for (name, account) in [
+        ("Claims escrow Position", &place_corpus.escrow_position),
+        ("Claims escrow admission", &place_corpus.escrow_admission),
+        ("Custody replay", &place_corpus.escrow_replay),
+        ("Custody vault", &place_corpus.escrow_vault),
+    ] {
+        assert_ne!(
+            chain_account(&mut context, account.key).await,
+            absent_account(),
+            "PlaceOrder did not create {name}"
+        );
+    }
+    chain = ChainPrestateV1 {
+        market: observed_binding(&mut context, campaign.state.market.key).await,
+        root: observed_binding(&mut context, open.root).await,
+        rent_credit: observed_binding(&mut context, open.rent_credit).await,
+        payer: observed_binding(&mut context, payer.pubkey()).await,
+        primary_state: Some(observed_binding(&mut context, open.primary_state).await),
+    };
 
-    // THE WINDOW IS THE PROTOCOL'S, NOT THE HARNESS'S. `close_is_permissionless`
-    // admits an early close only for a FULL batch; this one holds zero orders,
-    // so the config-derived collection window has to elapse and the campaign
-    // warps to exactly the slot the Batch itself names.
+    // THE WINDOW IS THE PROTOCOL'S, NOT THE HARNESS'S. The order leaves this
+    // batch live but not full, so the config-derived collection window has to
+    // elapse and the campaign warps to exactly the slot the Batch itself names.
     assert!(collection_close_slot > substrate.bank_slot());
     context
         .warp_to_slot(collection_close_slot)
@@ -2199,7 +2661,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         "the warp is asserted through the executed Clock, not assumed"
     );
 
-    // ---- ACTION TWO: CloseBatch -----------------------------------------
+    // ---- ACTION THREE: CloseBatch ---------------------------------------
     let close = build_action_case(
         &campaign,
         Action::CloseBatch,
@@ -2244,7 +2706,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let closed_batch_account = chain_account(&mut context, open.primary_state).await;
     let (_, closed_batch) = decode_batch(&closed_batch_account);
     assert_eq!(closed_batch.state().status, BatchStatusV1::Closed);
-    assert_eq!(closed_batch.state().closed_root_revision, 3);
+    assert_eq!(closed_batch.state().closed_root_revision, 4);
     assert_eq!(closed_batch.state().opened_root_revision, 1);
     assert_eq!(closed_batch.batch_id(), opened_batch.batch_id());
     assert_eq!(closed_batch.opening(), opened_batch.opening());
@@ -2254,7 +2716,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     );
     assert_eq!(closed_batch_account.owner, waist::TRADING_PROGRAM_ID);
     let closed_root = root_tail_of(&chain_account(&mut context, open.root).await);
-    assert_eq!(closed_root.revision(), 3);
+    assert_eq!(closed_root.revision(), 4);
     assert_eq!(closed_root.open_batches(), 0);
     assert_eq!(
         closed_root.next_batch_sequence(),
@@ -2335,11 +2797,11 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     );
     assert_eq!(
         root_tail_of(&chain_account(&mut context, open.root).await).revision(),
-        3,
+        4,
         "a refused close leaves the root revision where it was"
     );
 
-    // ---- ACTION THREE: A SECOND BATCH ON THE SAME MARKET -----------------
+    // ---- ACTION FOUR: A SECOND BATCH ON THE SAME MARKET ------------------
     //
     // WHERE "ONE CALL AUCTION PER MARKET" IS TRUE AND WHERE IT IS NOT. The
     // BATCH half is already plural: `GENERAL_BATCH_STATE_RECIPE_V3` keys a
@@ -2416,10 +2878,10 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let (_, second_batch) = decode_batch(&second_batch_account);
     assert_eq!(second_batch.opening().sequence, 1);
     assert_eq!(second_batch.state().status, BatchStatusV1::Collecting);
-    assert_eq!(second_batch.state().opened_root_revision, 3);
+    assert_eq!(second_batch.state().opened_root_revision, 4);
     assert_ne!(second_batch.batch_id(), opened_batch.batch_id());
     let after_second = root_tail_of(&chain_account(&mut context, open.root).await);
-    assert_eq!(after_second.revision(), 4);
+    assert_eq!(after_second.revision(), 5);
     assert_eq!(after_second.open_batches(), 1);
     assert_eq!(after_second.next_batch_sequence(), 2);
     // THE FIRST BATCH IS UNTOUCHED, which is what "two auctions" has to mean:
@@ -2431,7 +2893,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         "opening a second batch leaves the closed one byte-for-byte"
     );
 
-    // ---- ACTION FOUR: A CANDIDATE SUBMITTED AGAINST THE CLOSED BATCH ----
+    // ---- ACTION FIVE: A CANDIDATE SUBMITTED AGAINST THE CLOSED BATCH ----
     //
     // THE FIRST GENERAL ACTION THAT READS A RECORD ITS PRIMARY STATE DOES NOT
     // CARRY. `OpenBatch` and `CloseBatch` are the two of the fifteen whose
@@ -2633,7 +3095,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     assert_frame_control(&mut context, &submit).await;
     let solver_before = chain_account(&mut context, solver.pubkey()).await.lamports;
     let sponsor_before_submit = chain_account(&mut context, payer.pubkey()).await.lamports;
-    let submit_refusal = waist::submit_v0_observed(
+    let submit_execution = waist::submit_v0_observed(
         &mut context,
         &submit.instructions,
         submit.lookup_addresses.clone(),
@@ -2641,75 +3103,38 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         &[&solver],
     )
     .await
-    .err()
-    .expect("the candidate escrow is funded by a local effect the runtime refuses");
+    .expect("real Trading -> General accelerator SubmitCandidate with funded work escrow");
+    assert!(
+        submit_execution
+            .logs
+            .iter()
+            .any(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke"))),
+        "the real accelerator CPI ran for SubmitCandidate"
+    );
 
-    // ---- THE WALL THAT IS LEFT, AND IT IS ONE EFFECT INSTRUCTION WIDE ----
-    //
-    // EVERYTHING THE PROGRAM OWNS ACCEPTED. The bundle assembles, the real
-    // accelerator CPI runs four times, the projector's fifty-seven coordinate
-    // clauses all hold, the transition folds, the lifecycle preplans and
-    // commits, and Trading returns its acknowledgement after 677,937 CU. The
-    // refusal is the RUNTIME's, raised after the instruction returned, and it
-    // is not about General's semantics at all.
-    //
-    // WHAT IT IS. `append_candidate_action_patches` gives SubmitCandidate a
-    // LOCAL `transfer_lamports(GENERAL_PRIMARY_PAYER_ACCOUNT_V3 -> candidate,
-    // SCRATCH_A)` to fund the work escrow -- `SCRATCH_A` is the candidate's
-    // `work_capacity`, and it is the one lamport movement a General action
-    // makes that is NOT the lifecycle's. A local effect is applied by writing
-    // the coordinate's lamports back at commit, and the payer is a
-    // System-owned account, so the runtime's post-instruction rule refuses:
-    // *"instruction spent from the balance of an account it does not own"*.
-    // The lifecycle's own rent debit of the same payer is legal for exactly the
-    // reason this is not -- it goes through a System CPI, which is the three
-    // `11111111111111111111111111111111 invoke [2]` lines in the log above.
-    //
-    // WHY NOTHING FOUND IT. The accelerator's program-test executes
-    // SubmitCandidate on a real ELF and stops at the accelerator: it never
-    // reaches Trading's commit, so the effect's transfer has never been
-    // APPLIED by anything. Its producer exists, its reader exists, and the
-    // instruction between them had never run -- the same shape as the two
-    // registers this commit gave producers to, one layer down.
-    //
-    // IT IS NOT REPAIRABLE INSIDE THIS ACTION'S ARTIFACTS. A program may only
-    // decrease lamports of an account it owns, so the escrow has to move
-    // through System, which means a funding action rather than a local effect
-    // (`EffectProgramV5`'s funding half, which `require_no_funding_local_
-    // mutation_v5` already keeps disjoint from local ones). That is Trading's
-    // commit and the Effect artifact, not the General profile, and it is the
-    // next thing this route owes.
-    assert!(
-        matches!(
-            submit_refusal.error,
-            BanksClientError::TransactionError(TransactionError::InstructionError(
-                2,
-                InstructionError::ExternalAccountLamportSpend
-            ))
-        ),
-        "SubmitCandidate refuses at the runtime lamport rule and nowhere else: {:?}",
-        submit_refusal.error,
-    );
-    assert!(
-        submit_refusal.invoked(ACCELERATOR_PROGRAM),
-        "the real accelerator CPI ran before the runtime refused the funding"
-    );
-    // NOTHING MOVED. A refused transaction leaves the bank exactly as it was,
-    // which is what makes the wall a wall rather than a partial write.
+    // The candidate is Trading-owned local state, created only after the
+    // funding plan transfers its exact work capacity through System. Decode the
+    // bank record rather than relying on the staged submission corpus: this is
+    // the poststate that later Consider and verification actions consume.
+    let candidate_account = chain_account(&mut context, submit.primary_state).await;
+    assert_eq!(candidate_account.owner, waist::TRADING_PROGRAM_ID);
+    let candidate_state = GeneralLocalStateV3::decode(&candidate_account.data)
+        .expect("SubmitCandidate materialized a local Candidate");
     assert_eq!(
-        chain_account(&mut context, submit.primary_state).await,
-        absent_account(),
-        "the refused submission leaves the candidate address vacant"
+        candidate_state.header().kind,
+        GeneralLocalStateKindV3::Candidate
     );
-    assert_eq!(
-        chain_account(&mut context, solver.pubkey()).await.lamports,
-        solver_before,
-        "the refused submission debits the solver nothing"
+    let observed_submission = GeneralCandidateV1::decode(candidate_state.body())
+        .expect("the Candidate local-state body is a submitted candidate");
+    assert_eq!(observed_submission, submission);
+    assert!(
+        chain_account(&mut context, solver.pubkey()).await.lamports < solver_before,
+        "SubmitCandidate funds the candidate work escrow from its solver"
     );
     assert_eq!(
         chain_account(&mut context, payer.pubkey()).await.lamports,
         sponsor_before_submit,
-        "the refused submission debits the market sponsor nothing"
+        "SubmitCandidate does not debit the market sponsor"
     );
 
     eprintln!(
@@ -2731,7 +3156,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         collection_close_slot,
     );
     eprintln!(
-        "general-campaign second-open-batch cu={} batch={} sequence={} root_revision=3=>4",
+        "general-campaign second-open-batch cu={} batch={} sequence={} root_revision=4=>5",
         second_execution.compute_units_consumed,
         second_open.primary_state,
         second_batch.opening().sequence,
@@ -2741,9 +3166,9 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         replay.compute_units_consumed,
     );
     eprintln!(
-        "general-campaign submit-candidate-assembled cu={} candidate={} batch={} solver={} \
-         installed_records={submit_installed} wall=ExternalAccountLamportSpend",
-        submit_refusal.compute_units_consumed,
+        "general-campaign submit-candidate cu={} candidate={} batch={} solver={} \
+         installed_records={submit_installed}",
+        submit_execution.compute_units_consumed,
         hex32(candidate_id),
         hex32(closed_batch.batch_id()),
         hex32(solver.pubkey().to_bytes()),

@@ -42,12 +42,13 @@ use solana_sdk::{
     signature::{Keypair, Signature, Signer as _},
     transaction::VersionedTransaction,
 };
+use solana_sdk_ids::system_program;
 
 use crate::wallet_terminal::snapshot_from_rpc;
 use crate::{
     Error, Result, campaign, chaos_fault,
     cluster::{ClusterOriginV1, ExpectedClusterV1},
-    rpc::{Rpc, WritePolicyV1},
+    rpc::{Rpc, RpcAccount, WritePolicyV1},
     wallet_terminal::{
         FinalizedSnapshotV1, LookupTableRequirementV1, PlanInputV1, SelectedInputV1, build_report,
     },
@@ -1204,7 +1205,25 @@ fn finalize_transaction(
                 coordinates.push(tail.escrow_position);
                 coordinates.push(tail.recipient);
             }
-            let accounts = finalized_accounts(rpc, &coordinates, authenticated.slot)?;
+            // An honest terminal leaves the founder bond in the escrow for
+            // retirement, so its per-redemption draw is exactly zero.  The
+            // recipient is still carried in the frame, but a wallet which has
+            // never held lamports remains a finalized `None` in RPC.  Model
+            // only that observed zero as the System account it represents.
+            // An exhausted draw is a credit and therefore MUST materialize;
+            // it keeps the ordinary exact-poststate refusal below.
+            let vacant_zero_credit_recipient = planning
+                .report
+                .route
+                .founder_bond
+                .filter(|_| planning.report.founder_bond_draw == 0)
+                .map(|tail| tail.recipient);
+            let accounts = finalized_accounts(
+                rpc,
+                &coordinates,
+                authenticated.slot,
+                vacant_zero_credit_recipient,
+            )?;
             verify_payout_poststates(planning, journal, &accounts)?;
             journal.finalized_poststates = accounts.iter().map(observed_account).collect();
         }
@@ -1428,13 +1447,18 @@ fn snapshot(rpc: &mut Rpc, selected: &SelectedInputV1) -> Result<FinalizedSnapsh
 }
 
 fn finalized_account(rpc: &mut Rpc, key: Pubkey, floor: u64) -> Result<ObservedAccount> {
-    finalized_accounts(rpc, &[key], floor)?
+    finalized_accounts(rpc, &[key], floor, None)?
         .into_iter()
         .next()
         .ok_or_else(|| refusal("finalized account result vanished"))
 }
 
-fn finalized_accounts(rpc: &mut Rpc, keys: &[Pubkey], floor: u64) -> Result<Vec<ObservedAccount>> {
+fn finalized_accounts(
+    rpc: &mut Rpc,
+    keys: &[Pubkey],
+    floor: u64,
+    vacant_zero_credit_recipient: Option<Pubkey>,
+) -> Result<Vec<ObservedAccount>> {
     let (slot, values) = rpc.finalized_accounts(keys, floor)?;
     let observation = dclutch_operator::Observation {
         slot,
@@ -1445,18 +1469,44 @@ fn finalized_accounts(rpc: &mut Rpc, keys: &[Pubkey], floor: u64) -> Result<Vec<
         .copied()
         .zip(values)
         .map(|(key, value)| {
-            let value = value
-                .ok_or_else(|| refusal(format!("finalized payout poststate {key} is absent")))?;
-            Ok(ObservedAccount {
-                observation,
-                key,
-                owner: value.owner,
-                lamports: value.lamports,
-                executable: value.executable,
-                data: value.data,
-            })
+            observed_finalized_payout_account(observation, key, value, vacant_zero_credit_recipient)
         })
         .collect()
+}
+
+/// Interpret the one permitted vacant payout poststate.
+///
+/// An honest terminal has no founder-bond draw. Its required tail recipient
+/// can therefore stay a non-materialized System address, whose finalized RPC
+/// encoding is `None`. All other final poststate coordinates, and the
+/// recipient of any nonzero draw, remain exact present-account requirements.
+fn observed_finalized_payout_account(
+    observation: dclutch_operator::Observation,
+    key: Pubkey,
+    value: Option<RpcAccount>,
+    vacant_zero_credit_recipient: Option<Pubkey>,
+) -> Result<ObservedAccount> {
+    match value {
+        Some(value) => Ok(ObservedAccount {
+            observation,
+            key,
+            owner: value.owner,
+            lamports: value.lamports,
+            executable: value.executable,
+            data: value.data,
+        }),
+        None if vacant_zero_credit_recipient == Some(key) => Ok(ObservedAccount {
+            observation,
+            key,
+            owner: system_program::ID,
+            lamports: 0,
+            executable: false,
+            data: Vec::new(),
+        }),
+        None => Err(refusal(format!(
+            "finalized payout poststate {key} is absent"
+        ))),
+    }
 }
 
 fn authenticate_lookup_prefix(
@@ -2244,7 +2294,6 @@ fn refusal(message: impl Into<String>) -> Error {
 mod tests {
     use super::*;
     use dclutch_operator::{Finality, Observation};
-    use solana_sdk_ids::system_program;
 
     fn journal() -> JournalV1 {
         let mut journal = JournalV1 {
@@ -2734,6 +2783,39 @@ mod tests {
                 }]
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn zero_draw_founder_bond_recipient_may_remain_a_vacant_system_poststate() {
+        let observation = Observation {
+            slot: 7,
+            unix_timestamp: 9,
+            finality: Finality::Finalized,
+        };
+        let recipient = Pubkey::new_unique();
+        let observed =
+            observed_finalized_payout_account(observation, recipient, None, Some(recipient))
+                .expect("the honest-terminal zero draw leaves a valid vacant recipient");
+        assert_eq!(observed.owner, system_program::ID);
+        assert_eq!(observed.lamports, 0);
+        assert!(!observed.executable);
+        assert!(observed.data.is_empty());
+    }
+
+    #[test]
+    fn nonzero_draw_founder_bond_recipient_must_materialize_exactly() {
+        let observation = Observation {
+            slot: 7,
+            unix_timestamp: 9,
+            finality: Finality::Finalized,
+        };
+        let recipient = Pubkey::new_unique();
+        assert_eq!(
+            observed_finalized_payout_account(observation, recipient, None, None)
+                .expect_err("a credited founder-bond recipient cannot remain absent")
+                .to_string(),
+            format!("REFUSED: finalized payout poststate {recipient} is absent")
         );
     }
 }

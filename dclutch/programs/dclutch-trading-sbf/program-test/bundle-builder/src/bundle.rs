@@ -23,6 +23,9 @@ use dclutch_market::capability_program::hot_v3::{
 };
 use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_operator::hot_bump_miner::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
+use dclutch_trading::{
+    general::artifacts_v3::decode_general_request_v3, general_codec::Action as GeneralAction,
+};
 use dclutch_vm::account_profile::{
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
     v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3},
@@ -50,7 +53,7 @@ use crate::{
         ObservedAccountV1, SpanWidthInputV1, derive_dynamic_span_geometry, run_engine,
         run_engine_with_admitted_candidate,
     },
-    routes::{DerivedAuthorityV1, derive_authority},
+    routes::{DerivedAuthorityV1, derive_authority, derive_general_place_order_affine_authority},
 };
 use dclutch_market::execution_strategy::{
     admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
@@ -288,6 +291,8 @@ fn build_bundle_with_admitted_candidate(
     let facts = derive_artifact_facts(input.set, input.waist, input.scenario.family_request)?;
     let profile =
         decode_execution_account_profile(facts.account_profile.schema, input.set.account_profile)?;
+    let general_place_order = decode_general_request_v3(input.scenario.family_request)
+        .is_ok_and(|request| request.action == GeneralAction::PlaceOrder);
     let tail_count = projected_tail_count_v1(profile, input.scenario.tail_count)?;
     // The span widths come before the frame exists: they *are* the frame's
     // width. Derived from the artifacts and the family request, exactly as the
@@ -427,11 +432,43 @@ fn build_bundle_with_admitted_candidate(
         }
         authorities.clear();
         for invocation in &output.invocations {
-            if let Some(authority) = derive_authority(
-                invocation,
-                input.waist.release_set,
-                input.waist.trading_program,
-            )? {
+            let authority = if general_place_order
+                && invocation.resolved.role == dclutch_vm::effect::v2::FixedRole::Claims
+                && invocation.resolved.kind == dclutch_vm::effect::v3::RouteKindV3::AffineOnce
+            {
+                let first_position = usize::from(invocation.resolved.fixed_account_start)
+                    .checked_add(usize::from(
+                        dclutch_claims::frame_spec_v1::AFFINE_FIXED_ACCOUNT_COUNT_V1,
+                    ))
+                    .ok_or(BuilderError::Arithmetic)?;
+                let maker = frame
+                    .get(first_position)
+                    .ok_or(BuilderError::Binding(line!()))?
+                    .key
+                    .to_bytes();
+                let escrow = frame
+                    .get(
+                        first_position
+                            .checked_add(1)
+                            .ok_or(BuilderError::Arithmetic)?,
+                    )
+                    .ok_or(BuilderError::Binding(line!()))?
+                    .key
+                    .to_bytes();
+                derive_general_place_order_affine_authority(
+                    invocation,
+                    input.waist.release_set,
+                    input.waist.trading_program,
+                    [maker, escrow],
+                )?
+            } else {
+                derive_authority(
+                    invocation,
+                    input.waist.release_set,
+                    input.waist.trading_program,
+                )?
+            };
+            if let Some(authority) = authority {
                 let current = frame
                     .get(authority.coordinate)
                     .ok_or(BuilderError::Binding(line!()))?

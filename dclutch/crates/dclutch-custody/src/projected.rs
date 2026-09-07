@@ -50,6 +50,27 @@ pub use crate::generated_projected_state_v2::PROJECTED_CUSTODY_STATE_MAGIC_V2;
 pub const PROJECTED_CUSTODY_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCR01";
 /// Exact request width.
 pub const PROJECTED_CUSTODY_REQUEST_BYTES_V1: usize = 768;
+/// Physical coordinates shared by the empty-projection cleanup callee and CPI composers.
+pub struct ProjectedCustodyAbortFrameV1;
+
+impl ProjectedCustodyAbortFrameV1 {
+    /// Exact physical account count.
+    pub const ACCOUNT_COUNT: usize = 11;
+    /// Typed Trading capability caller.
+    pub const CALLER: usize = 0;
+    /// Projection replay account closed by cleanup.
+    pub const STATE: usize = 1;
+    /// Permanent destination of the closed accounts' rent.
+    pub const RENT_CREDIT: usize = 6;
+    /// Empty Hoard vault closed by cleanup.
+    pub const VAULT: usize = 7;
+    /// Custody transfer authority.
+    pub const AUTHORITY: usize = 8;
+    /// Token program.
+    pub const TOKEN_PROGRAM: usize = 9;
+    /// Vacant future Market.
+    pub const MARKET: usize = 10;
+}
 /// Public fixed-layout coordinates for one projected-Custody request.
 ///
 /// Parent Effect emitters consume these semantic-owner coordinates when an

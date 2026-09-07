@@ -406,7 +406,7 @@ fn apply_precommit_caller_hostile_v1(
                 }
             }
             assert_eq!(replacements, 1, "one physical coord80 caller");
-            TradingSbfError::Release
+            TradingSbfError::SeriesPrecommitCallerKey
         }
         PrecommitCallerHostileV1::Writable => {
             let mut matches = 0;
@@ -417,7 +417,7 @@ fn apply_precommit_caller_hostile_v1(
                 }
             }
             assert_eq!(matches, 1, "one physical coord80 caller");
-            TradingSbfError::Content
+            TradingSbfError::SeriesPrecommitCallerPrivileges
         }
         PrecommitCallerHostileV1::ForeignOwner => {
             let caller = fixture
@@ -426,7 +426,7 @@ fn apply_precommit_caller_hostile_v1(
                 .find(|candidate| candidate.key == fixture.precommit_caller)
                 .expect("precommit caller install account");
             caller.account.owner = CORE_PROGRAM_ID;
-            TradingSbfError::Content
+            TradingSbfError::SeriesPrecommitCallerOwner
         }
         PrecommitCallerHostileV1::NonemptyBody => {
             let caller = fixture
@@ -436,7 +436,7 @@ fn apply_precommit_caller_hostile_v1(
                 .expect("precommit caller install account");
             caller.account.data = vec![0x80];
             caller.account.lamports = Rent::default().minimum_balance(caller.account.data.len());
-            TradingSbfError::Content
+            TradingSbfError::SeriesPrecommitCallerData
         }
     }
 }
@@ -798,28 +798,14 @@ async fn a_restated_config_identity_refuses_before_the_composition() {
 /// CPI may synthesize its signer privilege. The former funded-crank topology,
 /// a substituted key, and non-vacant account bodies all refuse atomically.
 ///
-/// # RE-BASED, AND EVERY LEG IS NOW REPORTED
-///
-/// This row used to `assert_eq!` inside the loop, so the first leg that
-/// disagreed ended the run and the other three never executed while one number
-/// was reported for a surface nobody had measured -- the exact accounting
-/// defect `run-postjoin-hostiles.sh` paid for. It now runs all four legs,
-/// records what each one refused and at what price, and asserts once at the
-/// end, so a rebasing lane reads four rows instead of one.
-///
-/// It also stopped being able to pass by accident. Three of the four legs
-/// declare `Content`, which is the code 2,124 sites of this program publish and
-/// which the SHARED pre-Market Expire wall publishes too, 200,000 CU upstream
-/// of anything coordinate 80 owns -- so a leg matching on the discriminant
-/// alone would have read as green while proving nothing (ledger `M-38`). Each
-/// leg therefore has to prove it REACHED its subject before its code is
-/// believed: every hostile here perturbs coordinate 80, which lives in route
-/// 4's Core window, and route 4 is preflighted after all four Custody routes,
-/// so a run that never invoked the Custody program never reached the seam. The
-/// log is the witness, and `RefusedExecution` already carries it.
+/// Each caller defect now has its own discriminant. Shape checks run before
+/// common profile projection and PDA equality runs in Core preflight; neither
+/// requires a child CPI. The old assertion that Custody must already have run
+/// confused the preflight walk with execution and could never pass. Every leg
+/// still runs, names its precise cause, and proves complete state rollback.
 #[tokio::test]
 async fn precommit_caller_substitutions_refuse_with_exact_state_reversion() {
-    let mut observed: Vec<(PrecommitCallerHostileV1, Option<u32>, u32, u64, bool)> = Vec::new();
+    let mut observed: Vec<(PrecommitCallerHostileV1, Option<u32>, u32, u64)> = Vec::new();
     for hostile in [
         PrecommitCallerHostileV1::Substitution,
         PrecommitCallerHostileV1::Writable,
@@ -854,16 +840,11 @@ async fn precommit_caller_substitutions_refuse_with_exact_state_reversion() {
                 Ok(_) => panic!("{hostile:?} unexpectedly executed"),
                 Err(refusal) => refusal,
             };
-        let reached_seam = refusal
-            .logs
-            .iter()
-            .any(|line| line.starts_with(&format!("Program {CUSTODY_PROGRAM_ID} invoke [")));
         observed.push((
             hostile,
             refusal_code(&refusal.error),
             expected as u32,
             refusal.compute_units_consumed,
-            reached_seam,
         ));
         let after =
             capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
@@ -874,10 +855,10 @@ async fn precommit_caller_substitutions_refuse_with_exact_state_reversion() {
     }
     let wrong = observed
         .iter()
-        .filter(|(_, code, expected, _, reached)| !reached || *code != Some(*expected))
+        .filter(|(_, code, expected, _)| *code != Some(*expected))
         .count();
     assert_eq!(
         wrong, 0,
-        "the exact caller seam must own every leg, and every leg must reach it: {observed:#?}",
+        "each caller defect must name its unique refusal: {observed:#?}",
     );
 }

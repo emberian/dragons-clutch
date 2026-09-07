@@ -30,7 +30,7 @@ use dclutch_vm::account_profile::{
 
 const POLICY_ID: [u8; 32] = [0x71; 32];
 
-fn funding_profile() -> Vec<u8> {
+fn funding_profile(actions: FundingActionMaskV3, secondary_prestate: AccountPrestateV2) -> Vec<u8> {
     let lifecycle_rule = AccountRuleInputV2 {
         privileges: AccountPrivilegesV2::new(false, true, false),
         effect_permissions: AccountEffectPermissionsV2::new(true, true, true),
@@ -56,7 +56,7 @@ fn funding_profile() -> Vec<u8> {
         },
         AccountRuleWithPrestateInputV2 {
             rule: lifecycle_rule,
-            prestate: AccountPrestateV2::LifecycleBound,
+            prestate: secondary_prestate,
         },
         // Coordinate 2 is every plan's payer and is debited to fund the create.
         AccountRuleWithPrestateInputV2 {
@@ -70,7 +70,7 @@ fn funding_profile() -> Vec<u8> {
             prestate: AccountPrestateV2::Exact,
         },
     ];
-    let operations = [
+    let mut operations = vec![
         // A debitable account that is not LifecycleBound must be anchored by a
         // RequireOwner naming it, or the V2 encoder refuses the profile with
         // EffectOwnerUnanchored. The payer acquired DEBIT_LAMPORTS above, so it
@@ -93,6 +93,17 @@ fn funding_profile() -> Vec<u8> {
             destination: IdentityCoordinateV2::common(0),
         },
     ];
+    if secondary_prestate == AccountPrestateV2::Exact {
+        // The FUND control makes coordinate 1 Exact. Its effect permissions
+        // therefore need the same explicit owner anchor as the exact payer.
+        operations.insert(
+            0,
+            AccountOperationInputV2::RequireOwner {
+                account: AccountCoordinateV2::fixed(1),
+                expected: IdentityCoordinateV2::common(1),
+            },
+        );
+    }
     let base_width = PROFILE_HEADER_BYTES
         + rules.len() * PROFILE_RULE_BYTES
         + operations.len() * PROFILE_OPERATION_BYTES;
@@ -114,11 +125,7 @@ fn funding_profile() -> Vec<u8> {
         &mut base,
     )
     .expect("base lifecycle profile");
-    let funding = [FundingBoundV3::new(
-        0,
-        FundingActionMaskV3::CREATE_AND_CLOSE,
-        64,
-    )];
+    let funding = [FundingBoundV3::new(0, actions, 64)];
     let width = HEADER_BYTES_V3 + FUNDING_BOUND_BYTES_V3 + base.len();
     let mut scratch = vec![0_u8; width];
     let mut output = vec![0_u8; width];
@@ -191,7 +198,10 @@ fn policy(recipe_states: &[u16], payer: u16, rent_credit: u16) -> Vec<u8> {
 
 #[test]
 fn funding_table_is_sole_create_close_authority() {
-    let profile_bytes = funding_profile();
+    let profile_bytes = funding_profile(
+        FundingActionMaskV3::CREATE_AND_CLOSE,
+        AccountPrestateV2::LifecycleBound,
+    );
     let profile = AccountProfileV3::decode(&profile_bytes).expect("V3 profile");
     let policy_bytes = policy(&[1], 2, 3);
     let owning_bytes = policy(&[0, 1], 2, 3);
@@ -216,7 +226,10 @@ fn funding_table_is_sole_create_close_authority() {
 
 #[test]
 fn lifecycle_state_payer_and_rent_credit_dual_coverage_are_refused() {
-    let profile_bytes = funding_profile();
+    let profile_bytes = funding_profile(
+        FundingActionMaskV3::CREATE_AND_CLOSE,
+        AccountPrestateV2::LifecycleBound,
+    );
     let profile = AccountProfileV3::decode(&profile_bytes).expect("V3 profile");
     for hostile in [
         policy(&[0, 1], 2, 3),
@@ -228,6 +241,62 @@ fn lifecycle_state_payer_and_rent_credit_dual_coverage_are_refused() {
         assert_eq!(
             policy.validate_account_profile_with_external_funding(profile),
             Err(Error::ProfileMismatch)
+        );
+        assert_eq!(
+            policy
+                .validate_account_profile_with_external_funding_join_for_action(profile, 1)
+                .err(),
+            Some(Error::ProfileMismatch),
+            "an action filter must not surrender funding authority separation",
+        );
+    }
+}
+
+#[test]
+fn a_funding_profile_cannot_join_an_action_the_policy_does_not_carry() {
+    let profile_bytes = funding_profile(
+        FundingActionMaskV3::CREATE_AND_CLOSE,
+        AccountPrestateV2::LifecycleBound,
+    );
+    let profile = AccountProfileV3::decode(&profile_bytes).unwrap();
+    let bytes = policy(&[1], 2, 3);
+    let policy = StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &bytes).unwrap();
+    policy
+        .validate_account_profile_with_external_funding_join_for_action(profile, 1)
+        .unwrap();
+    assert_eq!(
+        policy
+            .validate_account_profile_with_external_funding_join_for_action(profile, 2)
+            .err(),
+        Some(Error::ProfileMismatch)
+    );
+}
+
+#[test]
+fn fund_only_refinement_keeps_lifecycle_recipe_and_create_coverage() {
+    let profile_bytes = funding_profile(FundingActionMaskV3::FUND, AccountPrestateV2::Exact);
+    let profile = AccountProfileV3::decode(&profile_bytes).expect("V3 profile");
+    let bytes = policy(&[0], 2, 3);
+    let policy =
+        StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &bytes).expect("V5 policy");
+    policy
+        .validate_account_profile_with_external_funding_join_for_action(profile, 1)
+        .expect("FUND must leave Lifecycle its create authority");
+}
+
+#[test]
+fn fund_only_refinement_cannot_be_a_lifecycle_payer_or_rent_credit() {
+    let profile_bytes = funding_profile(FundingActionMaskV3::FUND, AccountPrestateV2::Exact);
+    let profile = AccountProfileV3::decode(&profile_bytes).expect("V3 profile");
+    for hostile in [policy(&[0], 0, 3), policy(&[0], 2, 0)] {
+        let policy = StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &hostile)
+            .expect("hostile remains a V5 artifact");
+        assert_eq!(
+            policy
+                .validate_account_profile_with_external_funding_join_for_action(profile, 1)
+                .err(),
+            Some(Error::ProfileMismatch),
+            "a FUND-only coordinate is never Lifecycle funding authority",
         );
     }
 }

@@ -31,7 +31,7 @@ use dclutch_source::resolution::{
 use dclutch_source::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_MATERIAL_V3_BYTES, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
-    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
+    SourceMaterialV3, SourceResolutionStateV2, SourceSpecV1,
     WINDOW_SPEC_BYTES, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 use solana_program::{

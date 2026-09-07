@@ -7,6 +7,48 @@
 
 use super::*;
 
+/// Reserved selectors in a unified Structured selected ProgramSet.
+pub const STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1: u32 = 6;
+/// Reserved selectors in a unified Structured selected ProgramSet.
+pub const STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1: u32 = 7;
+
+/// Map one typed lifecycle action under the authenticated Structured kind to
+/// its reserved selected-table selector.
+#[must_use]
+pub fn structured_lifecycle_action_selector_v1(
+    capability_kind: [u8; 32],
+    action: LifecycleActionV2,
+) -> Option<u32> {
+    if capability_kind != crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2 {
+        return None;
+    }
+    match action {
+        LifecycleActionV2::ActivateReceipt => Some(STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1),
+        LifecycleActionV2::ActivateCoordinate => Some(STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1),
+        LifecycleActionV2::RetireCoordinate | LifecycleActionV2::RetireReceipt => None,
+    }
+}
+
+/// Map only a typed V6 lifecycle creation request under the authenticated
+/// Structured capability kind to its ProgramSet selector.  The family and
+/// Claims wires retain their canonical action tags (zero and one).
+#[must_use]
+pub fn structured_lifecycle_selector_v1(
+    capability_kind: [u8; 32],
+    family_request: &[u8],
+) -> Option<u32> {
+    if capability_kind != crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2
+        || family_request.get(..8) != Some(RATIONAL_LIFECYCLE_HOT_MAGIC_V6.as_slice())
+    {
+        return None;
+    }
+    let request = RationalLifecycleHotRequestV6::decode(family_request).ok()?;
+    structured_lifecycle_action_selector_v1(
+        capability_kind,
+        LifecycleActionV2::decode(read_byte(request.bytes, ACTION_OFFSET).ok()?).ok()?,
+    )
+}
+
 /// Wallet-facing V6 family magic.
 pub const RATIONAL_LIFECYCLE_HOT_MAGIC_V6: [u8; 8] = *b"DCRLHT06";
 /// Wallet-facing V6 family version.
@@ -242,5 +284,59 @@ mod tests {
         let mut hostile = family_bytes;
         hostile[7] = hot_v3::RATIONAL_LIFECYCLE_HOT_MAGIC_V3[7];
         assert!(RationalLifecycleHotRequestV6::decode(&hostile).is_err());
+    }
+
+    #[test]
+    fn structured_selector_normalizes_only_authenticated_creation_wires() {
+        let child_bytes = child();
+        let child = LifecycleRequestV2::decode(&child_bytes).expect("child");
+        let mut receipt = [0_u8; LIFECYCLE_HEADER_BYTES_V2];
+        RationalLifecycleHotRequestV6::from_child_into(child, &mut receipt).expect("receipt");
+        assert_eq!(
+            structured_lifecycle_selector_v1(
+                crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
+                &receipt,
+            ),
+            Some(STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1)
+        );
+
+        let mut coordinate = receipt;
+        coordinate[ACTION_OFFSET] = LifecycleActionV2::ActivateCoordinate.tag();
+        assert_eq!(
+            structured_lifecycle_selector_v1(
+                crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
+                &coordinate,
+            ),
+            Some(STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1)
+        );
+
+        assert_eq!(structured_lifecycle_selector_v1(id(99), &receipt), None);
+        let mut wrong_magic = receipt;
+        wrong_magic[0] ^= 1;
+        assert_eq!(
+            structured_lifecycle_selector_v1(
+                crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
+                &wrong_magic,
+            ),
+            None
+        );
+        let mut retirement = receipt;
+        retirement[ACTION_OFFSET] = LifecycleActionV2::RetireReceipt.tag();
+        assert_eq!(
+            structured_lifecycle_selector_v1(
+                crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
+                &retirement,
+            ),
+            None
+        );
+        let mut unknown = receipt;
+        unknown[ACTION_OFFSET] = 255;
+        assert_eq!(
+            structured_lifecycle_selector_v1(
+                crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
+                &unknown,
+            ),
+            None
+        );
     }
 }

@@ -778,7 +778,11 @@ fn continue_to_the_refund(
         "--worker".to_owned(),
         worker.pubkey().to_string(),
         "--output".to_owned(),
-        request.work.join("deadline-failure.json").display().to_string(),
+        request
+            .work
+            .join("deadline-failure.json")
+            .display()
+            .to_string(),
         "--wait".to_owned(),
         "--max-wait-seconds".to_owned(),
         request.max_wait_seconds.to_string(),
@@ -821,7 +825,11 @@ fn continue_to_the_refund(
         "--fee-payer".to_owned(),
         worker.pubkey().to_string(),
         "--output".to_owned(),
-        request.work.join("admit-terminal.json").display().to_string(),
+        request
+            .work
+            .join("admit-terminal.json")
+            .display()
+            .to_string(),
         "--execute".to_owned(),
         "--fee-payer-keypair".to_owned(),
         worker_keypair.display().to_string(),
@@ -854,12 +862,7 @@ fn continue_to_the_refund(
     // The founding's collateral wallet answers to the campaign payer, not to
     // the founder role whose Position the payout debits, and the builder
     // refuses a recipient owned by anybody but the stated owner (JOURNEY-8).
-    let founder_keypair_path = checked
-        .report
-        .campaign_founding_keypairs
-        .get("founding-founder")
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::new("the prepare report names no key file for `founding-founder`"))?;
+    let founder_keypair_path = prepare_role_key(&checked.report, "founding-founder")?;
     let founder = substrate::load_keypair(&founder_keypair_path)?;
     let label_address = |label: &str| -> Result<Pubkey> {
         pubkey(
@@ -917,27 +920,32 @@ fn continue_to_the_refund(
     let mut refunds = Vec::new();
     let mut paid_total: u64 = 0;
     for claim_index in 0..ordinary_count {
-        let input = crate::terminal_lifecycle::produce_wallet_terminal_input_owned_loopback_v1(vec![
-            "--rpc-url".to_owned(),
-            checked.rpc_url.clone(),
-            "--plan".to_owned(),
-            checked.plan_path.display().to_string(),
-            "--evidence".to_owned(),
-            evidence_path.display().to_string(),
-            "--market".to_owned(),
-            market.to_string(),
-            "--owner".to_owned(),
-            founder.pubkey().to_string(),
-            "--recipient".to_owned(),
-            recipient.pubkey().to_string(),
-            "--claim-index".to_owned(),
-            claim_index.to_string(),
-        ])?;
-        let input_path = request.work.join(format!("refund-{claim_index}-input.json"));
+        let input =
+            crate::terminal_lifecycle::produce_wallet_terminal_input_owned_loopback_v1(vec![
+                "--rpc-url".to_owned(),
+                checked.rpc_url.clone(),
+                "--plan".to_owned(),
+                checked.plan_path.display().to_string(),
+                "--evidence".to_owned(),
+                evidence_path.display().to_string(),
+                "--market".to_owned(),
+                market.to_string(),
+                "--owner".to_owned(),
+                founder.pubkey().to_string(),
+                "--recipient".to_owned(),
+                recipient.pubkey().to_string(),
+                "--claim-index".to_owned(),
+                claim_index.to_string(),
+            ])?;
+        let input_path = request
+            .work
+            .join(format!("refund-{claim_index}-input.json"));
         std::fs::write(&input_path, serde_json::to_vec_pretty(&input)?)?;
         let journal_dir = request.work.join(format!("refund-{claim_index}-journal"));
         std::fs::create_dir_all(&journal_dir)?;
-        let evidence = request.work.join(format!("refund-{claim_index}-evidence.json"));
+        let evidence = request
+            .work
+            .join(format!("refund-{claim_index}-evidence.json"));
         let arguments = vec![
             "--rpc-url".to_owned(),
             checked.rpc_url.clone(),
@@ -1004,22 +1012,23 @@ fn continue_to_the_refund(
         admitted.outcome_count,
     )
     .map_err(|error| Error::new(format!("failure escrow: {error}")))?;
-    let escrow_refusal = crate::terminal_lifecycle::produce_wallet_terminal_input_owned_loopback_v1(vec![
-        "--rpc-url".to_owned(),
-        checked.rpc_url.clone(),
-        "--plan".to_owned(),
-        checked.plan_path.display().to_string(),
-        "--evidence".to_owned(),
-        evidence_path.display().to_string(),
-        "--market".to_owned(),
-        market.to_string(),
-        "--owner".to_owned(),
-        escrow.owner.to_string(),
-        "--recipient".to_owned(),
-        recipient.pubkey().to_string(),
-        "--claim-index".to_owned(),
-        escrow.failure_selector.to_string(),
-    ]);
+    let escrow_refusal =
+        crate::terminal_lifecycle::produce_wallet_terminal_input_owned_loopback_v1(vec![
+            "--rpc-url".to_owned(),
+            checked.rpc_url.clone(),
+            "--plan".to_owned(),
+            checked.plan_path.display().to_string(),
+            "--evidence".to_owned(),
+            evidence_path.display().to_string(),
+            "--market".to_owned(),
+            market.to_string(),
+            "--owner".to_owned(),
+            escrow.owner.to_string(),
+            "--recipient".to_owned(),
+            recipient.pubkey().to_string(),
+            "--claim-index".to_owned(),
+            escrow.failure_selector.to_string(),
+        ]);
     let escrow_outcome = match escrow_refusal {
         Err(error) if error.to_string().contains("own failure escrow") => {
             ("recorded-no-op", error.to_string())
@@ -1079,6 +1088,60 @@ fn continue_to_the_refund(
             "payout": escrow_outcome.0,
         },
     }))
+}
+
+/// Return the one durable local key path for a role that this tier must use.
+///
+/// The founding projection intentionally contains only the key files accepted
+/// by the founding command. `founding-founder` is instead a retained local
+/// identity: the command receives its public key but does not open its secret.
+/// A post-terminal refund does open that same retained signer, so it must take
+/// the general prepare projection as the other shipped campaign clients do.
+fn prepare_role_key(
+    report: &crate::local_mutable::LocalMutablePrepareReportV1,
+    role: &str,
+) -> Result<PathBuf> {
+    report
+        .campaign_founding_keypairs
+        .get(role)
+        .or_else(|| report.keypairs.get(role))
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::new(format!("the prepare report names no key file for `{role}`")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::local_mutable::LocalMutablePrepareReportV1;
+
+    use super::prepare_role_key;
+
+    #[test]
+    fn founding_founder_uses_the_retained_prepare_key() {
+        let report = LocalMutablePrepareReportV1 {
+            schema: "test".into(),
+            plan: "/tmp/plan.json".into(),
+            account_dir: "/tmp/accounts".into(),
+            checked_local_mutable_set_sha256: "test".into(),
+            retained_upgrade_authority: "test".into(),
+            programs: BTreeMap::new(),
+            keypairs: BTreeMap::from([(
+                "founding-founder".to_owned(),
+                "/tmp/founding-founder.json".to_owned(),
+            )]),
+            campaign_keypairs: BTreeMap::new(),
+            campaign_administration_keypairs: BTreeMap::new(),
+            campaign_founding_keypairs: BTreeMap::new(),
+            campaign_public_identities: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            prepare_role_key(&report, "founding-founder")
+                .expect("the retained founder must remain available to the refund tier"),
+            std::path::PathBuf::from("/tmp/founding-founder.json")
+        );
+    }
 }
 
 /// The terminal certificate sequence the failure walk writes, and the one the

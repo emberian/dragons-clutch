@@ -92,11 +92,17 @@ const REALIZE_AUTHORITY: usize = 9;
 const REALIZE_MINT: usize = 10;
 const REALIZE_TOKEN_PROGRAM: usize = 11;
 
-const ABORT_ACCOUNTS: usize = 11;
-const ABORT_VAULT: usize = 7;
-const ABORT_AUTHORITY: usize = 8;
-const ABORT_TOKEN_PROGRAM: usize = 9;
-const ABORT_MARKET: usize = 10;
+use dclutch_custody::ProjectedCustodyAbortFrameV1 as AbortFrame;
+const ABORT_ACCOUNTS: usize = AbortFrame::ACCOUNT_COUNT;
+const ABORT_VAULT: usize = AbortFrame::VAULT;
+const ABORT_AUTHORITY: usize = AbortFrame::AUTHORITY;
+const ABORT_TOKEN_PROGRAM: usize = AbortFrame::TOKEN_PROGRAM;
+const ABORT_MARKET: usize = AbortFrame::MARKET;
+const _: () = assert!(
+    CALLER == AbortFrame::CALLER
+        && STATE == AbortFrame::STATE
+        && RENT_CREDIT == AbortFrame::RENT_CREDIT
+);
 
 const OPEN_SOURCE_ACCOUNTS: usize = PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1;
 const OPEN_SOURCE_VAULT: usize = 7;

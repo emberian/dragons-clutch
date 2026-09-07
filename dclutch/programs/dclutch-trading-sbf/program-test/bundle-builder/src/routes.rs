@@ -27,6 +27,7 @@ use dclutch_custody::{
     ProjectedCustodyCallerSeedsV1, ProjectedCustodyRequestV1,
 };
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_trading::general::place_order_affine_v1::canonicalize_general_place_order_affine_v1;
 use dclutch_vm::effect::v2::FixedRole;
 use sha2::{Digest, Sha256};
 use solana_program::pubkey::Pubkey;
@@ -51,7 +52,43 @@ pub fn derive_authority(
     release_set: [u8; 32],
     trading_program: Pubkey,
 ) -> Result<Option<DerivedAuthorityV1>, BuilderError> {
-    let request = invocation.request.as_slice();
+    derive_authority_for_request(
+        invocation,
+        invocation.request.as_slice(),
+        release_set,
+        trading_program,
+    )
+}
+
+/// Derive the exact caller authority for General PlaceOrder's canonicalized
+/// Claims affine CPI while retaining its semantic outer frame order.
+pub fn derive_general_place_order_affine_authority(
+    invocation: &DerivedInvocationV1,
+    release_set: [u8; 32],
+    trading_program: Pubkey,
+    semantic_position_keys: [[u8; 32]; 2],
+) -> Result<Option<DerivedAuthorityV1>, BuilderError> {
+    if invocation.resolved.role != FixedRole::Claims
+        || invocation.resolved.kind != dclutch_vm::effect::v3::RouteKindV3::AffineOnce
+    {
+        return derive_authority(invocation, release_set, trading_program);
+    }
+    let mut canonical = Vec::new();
+    canonicalize_general_place_order_affine_v1(
+        &invocation.request,
+        semantic_position_keys,
+        &mut canonical,
+    )
+    .map_err(|_| BuilderError::UnsupportedRoute(line!()))?;
+    derive_authority_for_request(invocation, &canonical, release_set, trading_program)
+}
+
+fn derive_authority_for_request(
+    invocation: &DerivedInvocationV1,
+    request: &[u8],
+    release_set: [u8; 32],
+    trading_program: Pubkey,
+) -> Result<Option<DerivedAuthorityV1>, BuilderError> {
     let request_digest: [u8; 32] = Sha256::digest(request).into();
     if invocation.resolved.role == FixedRole::Custody
         && (request.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1

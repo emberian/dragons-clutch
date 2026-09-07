@@ -24,6 +24,7 @@ use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
+    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3},
 };
 use dclutch_vm::capability_seal::{
     CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1,
@@ -66,9 +67,10 @@ pub const SEAL_ACCOUNT_COUNT_V1: usize = SEAL_SYSTEM_PROGRAM_ACCOUNT_V1 + 1;
 /// Decision 0005. This is the hot path's own artifact prologue, run once and
 /// persisted. Every validator it calls is the very function the hot path calls
 /// without a seal -- `CapabilityProgramV4::decode`,
-/// `StateLifecyclePolicyV5::decode_selected`, `AccountProfileV2::decode`,
+/// `StateLifecyclePolicyV5::decode_selected`, `AccountProfileV2::decode` or
+/// `AccountProfileV3::decode`,
 /// `decode_request_profile`, `TransitionProgramV3::decode`,
-/// `decode_selected_effect_v4`, `validate_account_profile_join` and
+/// `decode_selected_effect_v4`, the action-scoped account-profile join and
 /// `require_static_register_ownership_v5` -- so the persisted verdict is a
 /// memoisation of this executable's own answer and not a second opinion.
 ///
@@ -615,11 +617,20 @@ fn validate_descriptor_closure_v1<'info>(
         descriptor.account_profile().schema().to_bytes(),
         descriptor.account_profile().program().to_bytes(),
     )?;
-    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let account_profile =
-        AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
+    let (account_profile, funding_profile) = match descriptor.account_profile().schema().to_bytes()
+    {
+        ACCOUNT_PROFILE_SCHEMA_ID_V2 => (
+            AccountProfileV2::decode(&account_profile_data)
+                .map_err(|_| TradingSbfError::Content)?,
+            None,
+        ),
+        ACCOUNT_PROFILE_SCHEMA_ID_V3 => {
+            let funding = AccountProfileV3::decode(&account_profile_data)
+                .map_err(|_| TradingSbfError::Content)?;
+            (funding.base(), Some(funding))
+        }
+        _ => return Err(TradingSbfError::UnsupportedContent.into()),
+    };
     // FOR THIS ACTION, on the generic Hot path every family crosses.
     //
     // A single lifecycle policy may carry plans for several actions whose
@@ -633,9 +644,15 @@ fn validate_descriptor_closure_v1<'info>(
     // The canonically empty policy still joins vacuously here, which is what
     // Dealer equity relies on: it carries no plans at all, so there is nothing
     // for any action to answer for.
-    lifecycle
-        .validate_account_profile_join_for_action(account_profile, action)
-        .map_err(|_| TradingSbfError::Content)?;
+    if let Some(funding) = funding_profile {
+        lifecycle
+            .validate_account_profile_with_external_funding_join_for_action(funding, action)
+            .map_err(|_| TradingSbfError::Content)?;
+    } else {
+        lifecycle
+            .validate_account_profile_join_for_action(account_profile, action)
+            .map_err(|_| TradingSbfError::Content)?;
+    }
 
     let request_profile_data = borrow_finalized_record(
         *frame,

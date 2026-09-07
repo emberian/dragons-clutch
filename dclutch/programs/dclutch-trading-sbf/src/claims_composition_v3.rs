@@ -161,8 +161,18 @@ pub(crate) fn execute_claims_route_v3<'info>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let request = invocation_request(invocation, request_bank, borrowed_ranges)?;
+    let raw_request = invocation_request(invocation, request_bank, borrowed_ranges)?;
+    let mut lifecycle_wire = Vec::new();
+    let request = canonical_lifecycle_child_wire_v6(raw_request, &mut lifecycle_wire)?;
     gather_invocation_accounts(&mut buffers.accounts, invocation, effect_accounts)?;
+    let mut general_place_order_wire = Vec::new();
+    let request = canonical_general_place_order_affine_child_wire_v1(
+        borrowed_ranges.family_request(),
+        invocation,
+        request,
+        &mut buffers.accounts,
+        &mut general_place_order_wire,
+    )?;
     // ONE counter, shared with the preflight walk, and ALIAS-AWARE. This used
     // to be a second hand-rolled filter over the gathered infos, and the two
     // copies of the predicate agreed with each other and disagreed with the
@@ -342,7 +352,9 @@ pub(crate) fn claims_child_wire_capacity_v3(
     request_bank: &[u8],
     borrowed_ranges: BorrowedRouteRangesV4<'_, '_, '_>,
 ) -> Result<usize, ProgramError> {
-    let request = invocation_request(invocation, request_bank, borrowed_ranges)?;
+    let raw_request = invocation_request(invocation, request_bank, borrowed_ranges)?;
+    let mut lifecycle_wire = Vec::new();
+    let request = canonical_lifecycle_child_wire_v6(raw_request, &mut lifecycle_wire)?;
     let receipt_bytes = receipt_dependency_width_v3(invocation);
     let (_, receipt_kind) = route_authority(request, invocation.kind)?;
     let bump_suffix = usize::from(carries_caller_bump_suffix_v4(receipt_kind));
@@ -524,6 +536,107 @@ fn invocation_request<'a>(
         }
     }
     Ok(request)
+}
+
+/// Turn a V6 lifecycle family envelope into the only Claims wire it can
+/// invoke.  All other routes retain their exact resolved bytes.
+///
+/// The family digest becomes the child header's parent context before caller
+/// authority derivation, child CPI, and receipt verification.  Using the
+/// family bytes for one of those stages and the specialized child bytes for
+/// another would authenticate a different instruction than Claims receives.
+fn canonical_lifecycle_child_wire_v6<'a>(
+    request: &'a [u8],
+    output: &'a mut Vec<u8>,
+) -> Result<&'a [u8], ProgramError> {
+    use dclutch_claims::rational_lifecycle::hot_v6::{
+        RATIONAL_LIFECYCLE_HOT_MAGIC_V6, RationalLifecycleHotRequestV6,
+    };
+
+    if request.get(..8) != Some(RATIONAL_LIFECYCLE_HOT_MAGIC_V6.as_slice()) {
+        return Ok(request);
+    }
+    let family =
+        RationalLifecycleHotRequestV6::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let length = request.len();
+    output.clear();
+    output
+        .try_reserve(length)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    output.resize(length, 0);
+    family
+        .specialize_child_into(hash(request).to_bytes(), output)
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(output.as_slice())
+}
+
+/// Canonicalize the private Claims affine leg of one typed General PlaceOrder.
+///
+/// General's outer Profile deliberately keeps this pair in semantic order:
+/// maker Position, then the escrow Position that the preceding Admit creates.
+/// That lets the outer Profile make the escrow's lifecycle alias static.  The
+/// Claims affine ABI instead commits its Position table and physical account
+/// tail in PDA-key order.  Rewrite both together here, before the caller
+/// authority is derived, so Claims authenticates precisely the packet and
+/// account pair it receives.
+fn canonical_general_place_order_affine_child_wire_v1<'a, 'info>(
+    family_request: &[u8],
+    invocation: ResolvedInvocationV3,
+    request: &'a [u8],
+    accounts: &mut Vec<AccountInfo<'info>>,
+    output: &'a mut Vec<u8>,
+) -> Result<&'a [u8], ProgramError> {
+    if invocation.kind != RouteKindV3::AffineOnce
+        || request.get(..8) != Some(AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
+    {
+        return Ok(request);
+    }
+    let is_general_request = matches!(
+        family_request.get(..8),
+        Some(b"DCGREQ02") | Some(b"DCGREQ03")
+    );
+    if !is_general_request {
+        return Ok(request);
+    }
+    let general = dclutch_trading::general::artifacts_v3::decode_general_request_v3(family_request)
+        .map_err(|_| TradingSbfError::Content)?;
+    if general.action != dclutch_trading::general_codec::Action::PlaceOrder {
+        return Ok(request);
+    }
+
+    let first_position = usize::from(dclutch_claims::frame_spec_v1::AFFINE_FIXED_ACCOUNT_COUNT_V1);
+    let second_position = first_position
+        .checked_add(1)
+        .ok_or(TradingSbfError::Content)?;
+    if accounts.len()
+        != second_position
+            .checked_add(1)
+            .ok_or(TradingSbfError::Content)?
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let maker = accounts
+        .get(first_position)
+        .ok_or(TradingSbfError::Content)?
+        .key
+        .to_bytes();
+    let escrow = accounts
+        .get(second_position)
+        .ok_or(TradingSbfError::Content)?
+        .key
+        .to_bytes();
+    let order = dclutch_trading::general::place_order_affine_v1::canonicalize_general_place_order_affine_v1(
+        request,
+        [maker, escrow],
+        output,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if order == [1, 0] {
+        accounts.swap(first_position, second_position);
+    } else if order != [0, 1] {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(output.as_slice())
 }
 
 /// Gather this invocation's account windows into a caller-owned buffer.

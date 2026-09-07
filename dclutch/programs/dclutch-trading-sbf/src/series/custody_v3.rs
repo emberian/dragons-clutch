@@ -51,6 +51,9 @@ pub struct SeriesCustodyPhysicalV3 {
     pub hoard_vault: [u8; 32],
     /// Refund-owner token account used only by Expire.
     pub refund_destination: [u8; 32],
+    /// Canonical lifecycle RentCredit receiving recovered account principal.
+    /// Its refund authority is the Ticket owner; it is not that owner's wallet.
+    pub rent_credit: [u8; 32],
     /// Exact replay-account lamports created and later recovered.
     pub replay_rent_lamports: u64,
     /// Exact SeriesEscrow Vault lamports created and later recovered.
@@ -153,13 +156,15 @@ fn project_effect(
     match effect.kind() {
         SeriesEscrowEffectKindV3::InitializeReplay => {
             require_identity(physical.payer)?;
+            require_identity(physical.rent_credit)?;
             require_rent(physical.replay_rent_lamports)?;
             request.payer = physical.payer;
-            request.rent_refund = refund_owner;
+            request.rent_refund = physical.rent_credit;
             request.rent_lamports = physical.replay_rent_lamports;
         }
         SeriesEscrowEffectKindV3::OpenEscrowVault => {
             require_token_profile(physical)?;
+            require_identity(physical.rent_credit)?;
             require_identity(physical.payer)?;
             require_identity(physical.escrow_vault)?;
             require_rent(physical.vault_rent_lamports)?;
@@ -170,7 +175,7 @@ fn project_effect(
             request.mint = physical.mint;
             request.token_program = physical.token_program;
             request.payer = physical.payer;
-            request.rent_refund = refund_owner;
+            request.rent_refund = physical.rent_credit;
             request.rent_lamports = physical.vault_rent_lamports;
         }
         SeriesEscrowEffectKindV3::Lock => {
@@ -203,6 +208,7 @@ fn project_effect(
         }
         SeriesEscrowEffectKindV3::CloseEscrowVault => {
             require_token_profile(physical)?;
+            require_identity(physical.rent_credit)?;
             require_identity(physical.escrow_vault)?;
             require_rent(physical.vault_rent_lamports)?;
             request.operation = OperationV1::CloseVault;
@@ -211,13 +217,14 @@ fn project_effect(
             request.source_vault_context = escrow_vault_context;
             request.mint = physical.mint;
             request.token_program = physical.token_program;
-            request.rent_refund = refund_owner;
+            request.rent_refund = physical.rent_credit;
             request.rent_lamports = physical.vault_rent_lamports;
         }
         SeriesEscrowEffectKindV3::CloseReplay => {
             require_rent(physical.replay_rent_lamports)?;
+            require_identity(physical.rent_credit)?;
             request.operation = OperationV1::CloseReplay;
-            request.rent_refund = refund_owner;
+            request.rent_refund = physical.rent_credit;
             request.rent_lamports = physical.replay_rent_lamports;
         }
     }
@@ -346,6 +353,7 @@ mod tests {
             escrow_vault: [7; 32],
             hoard_vault: [8; 32],
             refund_destination: [9; 32],
+            rent_credit: [12; 32],
             replay_rent_lamports: 10,
             vault_rent_lamports: 11,
         }
@@ -390,6 +398,31 @@ mod tests {
         assert_eq!(
             consume_series_escrow_v3(projection).source_replay_revision(),
             3
+        );
+    }
+
+    #[test]
+    fn collateral_refunds_its_owner_and_rent_returns_to_the_credit() {
+        let projection = escrow();
+        assert_ne!(projection.refund_owner().to_bytes(), physical().rent_credit);
+        let prepare = project_prepare_custody_v3(prepare_series_escrow_v3(projection), physical())
+            .expect("prepare");
+        let expire = project_terminal_custody_v3(expire_series_escrow_v3(projection), physical())
+            .expect("expire");
+        assert_eq!(
+            expire[0].semantic.destination_owner,
+            projection.refund_owner().to_bytes()
+        );
+        for request in [prepare[0], prepare[1], expire[1], expire[2]] {
+            assert_eq!(request.rent_refund, physical().rent_credit);
+        }
+        let missing = SeriesCustodyPhysicalV3 {
+            rent_credit: [0; 32],
+            ..physical()
+        };
+        assert_eq!(
+            project_terminal_custody_v3(expire_series_escrow_v3(projection), missing),
+            Err(SeriesCustodyProjectionErrorV3::MissingPhysicalIdentity)
         );
     }
 

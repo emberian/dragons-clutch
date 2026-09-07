@@ -8,18 +8,6 @@
 
 #![allow(dead_code)]
 
-use dclutch_vm::account_profile::{v2::AccountPrestateV2, v3::AccountProfileV3};
-use dclutch_market::capability_manifest::{
-    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-    CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1, EMPTY_MANIFEST_BYTES,
-    FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
-};
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
-    hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3},
-    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
-    v4::CapabilityProgramV4,
-};
 use dclutch_chain_bundle_builder::{
     WaistFactsV1,
     artifacts::{ArtifactSetV1, DerivedRecordV1, derive_record},
@@ -41,6 +29,10 @@ use dclutch_claims::{
         ProtocolPositionSeedsV2,
     },
 };
+use dclutch_custody::token_svm::{
+    ACCOUNT_BYTES, LEGACY_TOKEN_PROGRAM_ID, MINT_BYTES, Mint, PRODUCTION_ADAPTER_RELEASES,
+    TokenAccount,
+};
 use dclutch_custody::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1,
     CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1,
@@ -52,6 +44,24 @@ use dclutch_custody::{
 use dclutch_direct_hot_program_test_support::waist::{
     Elves, REGISTRY_PROGRAM_ID, Releases, fixture_substrate, programdata, programdata_v2,
     registry_hot_instruction, release_v2,
+};
+use dclutch_market::capability_manifest::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1, EMPTY_MANIFEST_BYTES,
+    FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+};
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+    hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3},
+    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+    v4::CapabilityProgramV4,
+};
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
+use dclutch_market::rent::{
+    RefundAuthority,
+    lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleAccountIdV2, LifecycleRentCreditV2},
 };
 use dclutch_market::{
     Action as CoreAction, CoreState, FoundingIntentV5, Identity, MarketCoreStateSeedsV2,
@@ -69,6 +79,10 @@ use dclutch_operator::{
     },
     series_lifecycle_v3::{SeriesCurrentOccurrenceV3, SeriesLifecycleSnapshotV3},
 };
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
@@ -80,30 +94,16 @@ use dclutch_product::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
-};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
-use dclutch_market::rent::{
-    RefundAuthority,
-    lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleAccountIdV2, LifecycleRentCreditV2},
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
 };
-use dclutch_custody::token_svm::{
-    ACCOUNT_BYTES, LEGACY_TOKEN_PROGRAM_ID, MINT_BYTES, Mint, PRODUCTION_ADAPTER_RELEASES,
-    TokenAccount,
-};
+use dclutch_vm::account_profile::{v2::AccountPrestateV2, v3::AccountProfileV3};
 /// Occurrence count of the Template this chain stages: exactly one.
 ///
 /// `series_proof_count_v3(1) == 0`, so the canonical family request for every
@@ -1882,7 +1882,7 @@ fn build_expire_bundle_v1(
         externally_installed_extra: &external,
         payer: normal.rent_refund,
     };
-    let bundle = build_bundle(&BundleInputV1 {
+    let mut bundle = build_bundle(&BundleInputV1 {
         set,
         waist,
         scenario,
@@ -1894,6 +1894,28 @@ fn build_expire_bundle_v1(
         std::eprintln!("Series Expire bundle refused: {error:?}");
         SeriesPremarketExpiryChainErrorV1::Physical
     })?;
+    // The generic bundle mines controller hints. This Series corpus knows the
+    // independently authenticated future Market that its Custody legs use.
+    // Derive from those seeds, then compare the whole packet with the operator
+    // below; the parent Market/root hints and the family request stay intact.
+    let (envelope, request) =
+        dclutch_market::capability_program::hot_v3::HotExecutionEnvelopeV3::split_instruction(
+            &bundle.hot_instruction.data,
+        )
+        .map_err(|_| SeriesPremarketExpiryChainErrorV1::Physical)?;
+    let mut hints = envelope.bump_hints();
+    hints.child_relay[1] = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(
+            substrate.future_market.key.to_bytes(),
+            input.releases.release_set,
+        )
+        .as_slices(),
+        &input.custody_program,
+    )
+    .1;
+    let mut data = envelope.with_bump_hints(hints).to_bytes().to_vec();
+    data.extend_from_slice(request);
+    bundle.hot_instruction.data = data;
     Ok((bundle, precommit_caller))
 }
 
@@ -2163,6 +2185,17 @@ fn build_success_transitions_v1(
             after: Some(precommit_caller.account.clone()),
         },
     ]);
+    // Agave 4.3's account loader stamps every modified rent-exempt account
+    // with RENT_EXEMPT_RENT_EPOCH (Epoch::MAX). The fixture starts with epoch
+    // zero; this bank-owned metadata transition is independent of the exact
+    // protocol bytes/lamports/owner asserted alongside it.
+    for transition in &mut transitions {
+        if transition.before != transition.after {
+            if let Some(after) = &mut transition.after {
+                after.rent_epoch = u64::MAX;
+            }
+        }
+    }
     let mut keys = Vec::with_capacity(transitions.len());
     if transitions.iter().any(|transition| {
         !keys.contains(&transition.key) && {
@@ -2585,6 +2618,7 @@ fn build_root_independent_substrate_v1(
         product,
         series,
         collateral_mint_key,
+        rent_credit_key,
     )?;
     for account in &normal_custody.install_accounts {
         install_accounts.push(install_account(account.clone(), true));
@@ -2646,6 +2680,7 @@ fn build_normal_custody_corpus_v1(
     product: &ProductRecordCorpusV1,
     series: &SeriesRecordCorpusV1,
     collateral_mint: Pubkey,
+    rent_credit: Pubkey,
 ) -> Result<NormalCustodyCorpusV1, SeriesPremarketExpiryChainErrorV1> {
     let family_request = encode_series_action_header_v3(
         SeriesActionV3::Expire,
@@ -2741,6 +2776,7 @@ fn build_normal_custody_corpus_v1(
         escrow_vault: escrow_vault.to_bytes(),
         hoard_vault: [0; 32],
         refund_destination: refund_destination.to_bytes(),
+        rent_credit: rent_credit.to_bytes(),
         replay_rent_lamports,
         vault_rent_lamports,
     };
@@ -2938,8 +2974,14 @@ fn legacy_mint_bytes_v1(
     if parsed.supply != supply
         || parsed.decimals != 0
         || !parsed.is_initialized
-        || !matches!(parsed.mint_authority, dclutch_custody::token_svm::COption::None)
-        || !matches!(parsed.freeze_authority, dclutch_custody::token_svm::COption::None)
+        || !matches!(
+            parsed.mint_authority,
+            dclutch_custody::token_svm::COption::None
+        )
+        || !matches!(
+            parsed.freeze_authority,
+            dclutch_custody::token_svm::COption::None
+        )
     {
         return Err(SeriesPremarketExpiryChainErrorV1::Record);
     }

@@ -599,6 +599,14 @@ pub enum TradingSbfError {
     /// not a plain System wallet, or aliased another coordinate
     /// (`FUNDED_CRANK_V1.md` section 6: signs only to own the reward).
     CloseMakerCloser = 0x402E,
+    /// Series precommit observation names another Trading caller PDA.
+    SeriesPrecommitCallerKey = 0x402F,
+    /// Series precommit caller carries forbidden outer privileges.
+    SeriesPrecommitCallerPrivileges = 0x4030,
+    /// Series precommit caller is not System-owned.
+    SeriesPrecommitCallerOwner = 0x4031,
+    /// Series precommit caller has a nonempty account body.
+    SeriesPrecommitCallerData = 0x4032,
 }
 
 impl TradingSbfError {
@@ -608,7 +616,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 51] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -656,6 +664,10 @@ impl TradingSbfError {
         Self::CloseMakerParameters,
         Self::CloseMakerUpkeepVault,
         Self::CloseMakerCloser,
+        Self::SeriesPrecommitCallerKey,
+        Self::SeriesPrecommitCallerPrivileges,
+        Self::SeriesPrecommitCallerOwner,
+        Self::SeriesPrecommitCallerData,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -712,6 +724,10 @@ impl TradingSbfError {
             Self::CloseMakerParameters => 44,
             Self::CloseMakerUpkeepVault => 45,
             Self::CloseMakerCloser => 46,
+            Self::SeriesPrecommitCallerKey => 47,
+            Self::SeriesPrecommitCallerPrivileges => 48,
+            Self::SeriesPrecommitCallerOwner => 49,
+            Self::SeriesPrecommitCallerData => 50,
         }
     }
 }

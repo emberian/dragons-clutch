@@ -43,6 +43,8 @@ pub mod representation_composition;
 pub mod source_readiness;
 /// Effect planning for shard-backed Structured receipts.
 pub mod structured;
+/// Market-free lifecycle activation artifacts for Structured representations.
+pub mod structured_lifecycle_selected_v1;
 /// Wallet-terminal payout input derivation, callable from a browser.
 pub mod wallet_terminal_input;
 /// Wallet-terminal payout derivation, callable from a browser.

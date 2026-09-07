@@ -288,9 +288,30 @@ pub(super) fn authenticate_and_execute_hot_v3(
         &program_set_data,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    let selected_entry = program_set
-        .select_entry(family_request)
-        .map_err(|_| TradingSbfError::Content)?;
+    // The authenticated Structured capability is the only family allowed to
+    // normalize its V6 creation wire tags 0/1 to selected-table selectors 6/7.
+    // RequestProfile and the Claims child continue to receive the original wire.
+    let selected_kind = context.selection().kind().to_bytes();
+    let selected_entry =
+        if let Some(selector) = structured_lifecycle_selector_v1(selected_kind, family_request) {
+            let mut index = 0_u16;
+            let mut matched = None;
+            while index < program_set.entry_count() {
+                let entry = program_set
+                    .entry(index)
+                    .map_err(|_| TradingSbfError::Content)?;
+                if entry.selector() == selector {
+                    matched = Some(entry);
+                    break;
+                }
+                index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+            }
+            matched.ok_or(TradingSbfError::Content)?
+        } else {
+            program_set
+                .select_entry(family_request)
+                .map_err(|_| TradingSbfError::Content)?
+        };
     let selected_descriptor = selected_entry.descriptor();
     if selected_descriptor.schema().to_bytes() != PROGRAM_SCHEMA_ID_V4 {
         return Err(TradingSbfError::UnsupportedContent.into());
@@ -312,7 +333,6 @@ pub(super) fn authenticate_and_execute_hot_v3(
     // the rule again. `!=` and not `||`: the wrong shape for the family refuses
     // in either direction, so the shape is the family's and never the
     // submitter's choice.
-    let selected_kind = context.selection().kind().to_bytes();
     if frame.uses_sealed_execution_aliases()
         != hot_frame_uses_sealed_execution_aliases_v3(selected_kind, selected_action)
     {
@@ -470,6 +490,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
     } else {
         return Err(TradingSbfError::UnsupportedContent.into());
     };
+    hot_cu_checkpoint!("cx-account-profile");
     // One validated join for the whole execution: the lifecycle preplan runs a
     // batch of plans over these same two immutable artifacts, twice, and the
     // planner otherwise re-derives this join for every planned state. The join
@@ -477,8 +498,16 @@ pub(super) fn authenticate_and_execute_hot_v3(
     // two tokens.
     let profile_join = if let Some(funding) = funding_profile {
         lifecycle
-            .validate_account_profile_with_external_funding_join(funding)
-            .map_err(|_| TradingSbfError::Content)?
+            .validate_account_profile_with_external_funding_join_for_action(
+                funding,
+                selected_action,
+            )
+            .map_err(|cause| {
+                #[cfg(feature = "hot-cu-profile")]
+                solana_program::msg!("dclutch-hot-why:lifecycle-funded-profile {:?}", cause);
+                let _ = cause;
+                TradingSbfError::Content
+            })?
     } else {
         lifecycle
             .sealed_account_profile_join(
@@ -486,7 +515,12 @@ pub(super) fn authenticate_and_execute_hot_v3(
                 seal.authenticate_profile_join(lifecycle_token, account_profile_token)
                     .map_err(|_| TradingSbfError::Content)?,
             )
-            .map_err(|_| TradingSbfError::Content)?
+            .map_err(|cause| {
+                #[cfg(feature = "hot-cu-profile")]
+                solana_program::msg!("dclutch-hot-why:lifecycle-sealed-profile {:?}", cause);
+                let _ = cause;
+                TradingSbfError::Content
+            })?
     };
     hot_cu_checkpoint!("cx-account-profile-join");
 
@@ -1501,7 +1535,7 @@ fn observe_series_expiry_replay_prestate_v1(
     runtime_accounts: &[&AccountInfo<'_>],
     root_prestate: [u8; 32],
     is_premarket: bool,
-) -> Result<Option<SeriesExpiryReplayPrestateV1>, ProgramError> {
+) -> Result<Option<Box<SeriesExpiryReplayPrestateV1>>, ProgramError> {
     if is_premarket {
         let replay_root = runtime_accounts
             .first()
@@ -1517,12 +1551,12 @@ fn observe_series_expiry_replay_prestate_v1(
                 .map_err(|_| TradingSbfError::Content)?,
         )
         .to_bytes();
-        Ok(Some(SeriesExpiryReplayPrestateV1::authenticated(
+        Ok(Some(Box::new(SeriesExpiryReplayPrestateV1::authenticated(
             replay_root,
             root_prestate,
             replay_ticket,
             ticket_digest,
-        )?))
+        )?)))
     } else {
         Ok(None)
     }
@@ -1570,7 +1604,7 @@ pub(super) struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     // registers and the same activation cache; see `ChildWalkResolutionV3`.
     child_walk: &'a ChildWalkResolutionV3<'a, 'info>,
     pub(super) direct_crosscheck: Option<HeapBoxV3<DirectHotCrosscheckV3>>,
-    pub(super) series_expiry_replay_prestate: Option<SeriesExpiryReplayPrestateV1>,
+    pub(super) series_expiry_replay_prestate: Option<Box<SeriesExpiryReplayPrestateV1>>,
     /// The Market and generation every Custody child of this action binds to;
     /// the preflight walk derived the same value from the same facts.
     pub(super) custody_child_market: ChildMarketAuthorityV3,

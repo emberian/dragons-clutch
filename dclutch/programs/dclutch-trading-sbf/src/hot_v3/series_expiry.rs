@@ -114,16 +114,22 @@ const _: () = {
 /// `None` is intentionally the only negative result: classifier failure is not
 /// a protocol refusal. The caller must continue through ordinary Hot so short,
 /// malformed, or merely Series-looking bytes retain its historical outcome.
-pub(super) fn classify_selected_series_expiry_v1(
-    family_request: &[u8],
+pub(super) fn classify_selected_series_expiry_v1<'request>(
+    family_request: &'request [u8],
     selected_action: u32,
-    selected_config: ContentId,
+    selected_config_record: &[u8],
     descriptor: CapabilityProgramV4,
-) -> Option<SeriesActionRequestV3<'_>> {
+) -> Option<SeriesActionRequestV3<'request>> {
     let request = SeriesActionRequestV3::decode(family_request).ok()?;
+    // The Registry coordinate is hash(record bytes), while Series requests
+    // carry the kernel's domain-separated Template identity. Derive the latter
+    // from the authenticated selected config; the raw record digest cannot
+    // stand in for it, even when both name these same bytes.
+    let selected_template =
+        dclutch_trading::series::template_content_id(selected_config_record).ok()?;
     if request.action() != SeriesActionV3::Expire
         || selected_action != SeriesActionV3::Expire as u32
-        || request.template() != selected_config
+        || request.template() != selected_template
         || !is_exact_series_expiry_descriptor_v1(descriptor)
     {
         return None;
@@ -206,13 +212,49 @@ mod tests {
     }
 
     #[test]
+    fn registry_config_digest_is_not_the_series_template_identity() {
+        let bytes = dclutch_trading::series::generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let template = dclutch_trading::series::template_content_id(&bytes).unwrap();
+        let record_digest = ContentId::new(hash(&bytes).to_bytes()).unwrap();
+        assert_ne!(record_digest, template);
+        let family = request(SeriesActionV3::Expire, template);
+        assert!(
+            classify_selected_series_expiry_v1(
+                &family,
+                SeriesActionV3::Expire as u32,
+                &bytes,
+                exact_descriptor(),
+            )
+            .is_some(),
+            "a valid selected config must derive its semantic Template identity"
+        );
+    }
+
+    #[test]
+    fn a_request_using_the_registry_digest_cannot_select_series_expiry() {
+        let bytes = dclutch_trading::series::generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let record_digest = ContentId::new(hash(&bytes).to_bytes()).unwrap();
+        let family = request(SeriesActionV3::Expire, record_digest);
+        assert!(
+            classify_selected_series_expiry_v1(
+                &family,
+                SeriesActionV3::Expire as u32,
+                &bytes,
+                exact_descriptor(),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn exact_hostile_decode_and_descriptor_are_both_required() {
-        let template = id(0x30);
+        let bytes = dclutch_trading::series::generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let template = dclutch_trading::series::template_content_id(&bytes).unwrap();
         let family = request(SeriesActionV3::Expire, template);
         let selected = classify_selected_series_expiry_v1(
             &family,
             SeriesActionV3::Expire as u32,
-            template,
+            &bytes,
             exact_descriptor(),
         )
         .expect("exact pre-Market Series expiry");
@@ -222,13 +264,14 @@ mod tests {
 
     #[test]
     fn malformed_and_series_lookalike_requests_do_not_select() {
-        let template = id(0x30);
+        let bytes = dclutch_trading::series::generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let template = dclutch_trading::series::template_content_id(&bytes).unwrap();
         let exact = request(SeriesActionV3::Expire, template);
         assert!(
             classify_selected_series_expiry_v1(
                 exact.get(..exact.len() - 1).expect("short request"),
                 SeriesActionV3::Expire as u32,
-                template,
+                &bytes,
                 exact_descriptor(),
             )
             .is_none()
@@ -239,7 +282,7 @@ mod tests {
             classify_selected_series_expiry_v1(
                 &consume,
                 SeriesActionV3::Consume as u32,
-                template,
+                &bytes,
                 exact_descriptor(),
             )
             .is_none()
@@ -249,7 +292,7 @@ mod tests {
             classify_selected_series_expiry_v1(
                 &exact,
                 SeriesActionV3::Expire as u32,
-                id(0x77),
+                &[0; dclutch_trading::series::generated::SERIES_TEMPLATE_BYTES_V3],
                 exact_descriptor(),
             )
             .is_none()
@@ -258,21 +301,23 @@ mod tests {
 
     #[test]
     fn schema_substitution_does_not_earn_the_exception() {
-        let template = id(0x30);
+        let bytes = dclutch_trading::series::generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let template = dclutch_trading::series::template_content_id(&bytes).unwrap();
         let family = request(SeriesActionV3::Expire, template);
         let mut descriptor = exact_descriptor();
-        let mut bytes = descriptor.encode();
+        let mut descriptor_bytes = descriptor.encode();
         // Hostile-decode a different but individually valid account-profile
         // schema. It must not be enough that the descriptor is still V4.
         let replacement = [0x7a; 32];
         let offset = dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_SCHEMA_OFFSET;
-        bytes[offset..offset + 32].copy_from_slice(&replacement);
-        descriptor = CapabilityProgramV4::decode(&bytes).expect("valid substituted descriptor");
+        descriptor_bytes[offset..offset + 32].copy_from_slice(&replacement);
+        descriptor =
+            CapabilityProgramV4::decode(&descriptor_bytes).expect("valid substituted descriptor");
         assert!(
             classify_selected_series_expiry_v1(
                 &family,
                 SeriesActionV3::Expire as u32,
-                template,
+                &bytes,
                 descriptor,
             )
             .is_none()
@@ -688,6 +733,11 @@ fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
         &ticket_bytes,
     )?;
     authenticate_series_expiry_core_template_v1(core_template)?;
+    crate::core_composition_v3::require_series_precommit_caller_shape_v1(
+        runtime_accounts
+            .get(usize::from(dclutch_trading::series::generated_expire_frame_v5::SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5))
+            .ok_or(TradingSbfError::Content)?,
+    )?;
     let facts = authenticate_series_expiry_vacant_permit_request_v1(
         program_id,
         frame,
@@ -831,10 +881,19 @@ fn authenticate_series_expiry_selection_v1(
     let descriptor =
         CapabilityProgramV4::decode(&descriptor_data).map_err(|_| TradingSbfError::Content)?;
     authenticate_descriptor_root_selection(&descriptor, &context, &entry)?;
+    let config_data = borrow_finalized_record_at(
+        *frame,
+        frame.config_raw,
+        frame.config_staging,
+        descriptor.config_schema().to_bytes(),
+        context.selection().config().to_bytes(),
+        bumps.config_raw(),
+        bumps.config_staging(),
+    )?;
     if series_expiry::classify_selected_series_expiry_v1(
         family_request,
         selected_action,
-        context.selection().config(),
+        &config_data,
         descriptor,
     )
     .is_none()
@@ -1176,6 +1235,10 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
             parent,
         )?
     {
+        #[cfg(feature = "hot-cu-profile")]
+        if invocation.role == dclutch_vm::effect::v2::FixedRole::Core {
+            solana_program::msg!("dclutch-hot-why:series-overlap selection");
+        }
         return Ok(AllowedLocalOverlapV3::None);
     }
     let ranges = BorrowedRouteRangesV4::new(
@@ -1204,6 +1267,8 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
         _ => false,
     };
     if !borrowed_proof_matches {
+        #[cfg(feature = "hot-cu-profile")]
+        solana_program::msg!("dclutch-hot-why:series-overlap proof");
         return Ok(AllowedLocalOverlapV3::None);
     }
     let request_end = invocation
@@ -1223,6 +1288,8 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
         .to_bytes()
         != premarket.rent_credit
     {
+        #[cfg(feature = "hot-cu-profile")]
+        solana_program::msg!("dclutch-hot-why:series-overlap transport-or-rent");
         return Ok(AllowedLocalOverlapV3::None);
     }
 
@@ -1243,19 +1310,19 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
             .unwrap_or_default()
             .locally_mutated()
     {
+        #[cfg(feature = "hot-cu-profile")]
+        solana_program::msg!("dclutch-hot-why:series-overlap alias-or-participation");
         return Ok(AllowedLocalOverlapV3::None);
     }
-    let root = effect_accounts.view(logical_root)?;
-    let ticket = effect_accounts.view(logical_ticket)?;
-    if root.is_signer
-        || root.is_writable
-        || root.executable
-        || ticket.is_signer
-        || ticket.is_writable
-        || ticket.executable
-    {
-        return Ok(AllowedLocalOverlapV3::None);
-    }
+    // Aliases inherit the parent's writable representative. The exact typed
+    // Core branch identified above applies this same downgrade when gathering
+    // its CPI frame; the generic alias path remains unchanged for other routes.
+    crate::core_composition_v3::series_precommit_replay_observation_v1(
+        effect_accounts.view(logical_root)?,
+    )?;
+    crate::core_composition_v3::series_precommit_replay_observation_v1(
+        effect_accounts.view(logical_ticket)?,
+    )?;
     let mut coordinate = SERIES_EXPIRE_CORE_ROUTE_START_V1;
     let end = coordinate
         .checked_add(SERIES_EXPIRE_CORE_ROUTE_COUNT_V1)
@@ -1269,6 +1336,8 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
             || (representative == SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1
                 && coordinate != logical_ticket)
         {
+            #[cfg(feature = "hot-cu-profile")]
+            solana_program::msg!("dclutch-hot-why:series-overlap duplicate");
             return Ok(AllowedLocalOverlapV3::None);
         }
         coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
@@ -1286,7 +1355,7 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
 pub(super) fn verify_series_expiry_replay_unchanged_after_children_v1(
     prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<(), ProgramError> {
-    let Some(expected) = prepared.series_expiry_replay_prestate else {
+    let Some(expected) = prepared.series_expiry_replay_prestate.as_deref() else {
         return Ok(());
     };
     let root = prepared
@@ -1299,7 +1368,7 @@ pub(super) fn verify_series_expiry_replay_unchanged_after_children_v1(
         .get(series_expiry::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
         .copied()
         .ok_or(TradingSbfError::Commit)?;
-    require_series_expiry_replay_prestate_v1(root, ticket, expected)
+    require_series_expiry_replay_prestate_v1(root, ticket, *expected)
 }
 
 pub(super) fn require_series_expiry_replay_prestate_v1(

@@ -2,6 +2,8 @@
 
 extern crate alloc;
 
+mod projected;
+
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
@@ -39,6 +41,8 @@ pub(crate) const CUSTODY_REPLAY_FRAME_COORDINATE_V1: usize = 8;
 /// Immutable parent facts every projected Custody request must reproduce.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CustodyCompositionParentV3 {
+    /// The immutable capability root that selected the child Effect.
+    pub capability_root: [u8; 32],
     /// Current immutable release set.
     pub release_set: [u8; 32],
     /// Logical Core Market.
@@ -78,6 +82,19 @@ pub fn preflight_custody_route_v3<'info>(
     // `HotBumpHintsV1`.
     hint: PreflightedCallerBumpV4,
 ) -> Result<u8, ProgramError> {
+    if projected::selected(invocation_request(invocation, request_bank)?) {
+        return projected::preflight(
+            program_id,
+            successor_account_count,
+            invocation,
+            effect_accounts,
+            request_bank,
+            frame,
+            custody_program,
+            parent,
+            hint,
+        );
+    }
     let prepared = prepare(
         program_id,
         successor_account_count,
@@ -110,6 +127,22 @@ pub fn execute_custody_route_v3<'info>(
     // seeds; see `crate::child_authority_v4`.
     preflighted_bump: PreflightedCallerBumpV4,
 ) -> Result<[u8; 32], ProgramError> {
+    if projected::selected(invocation_request(invocation, request_bank)?) {
+        return projected::execute(
+            program_id,
+            successor_account_count,
+            route_index,
+            invocation_index,
+            invocation,
+            effect_accounts,
+            request_bank,
+            prior_receipt,
+            buffers,
+            custody_program,
+            parent,
+            preflighted_bump,
+        );
+    }
     // `prepare` leaves the authenticated frame IN the walk's buffer. It used to
     // build a frame of its own for the shape check and then be handed a second,
     // identical one here -- 727 bytes plus 728, on a heap that never gives
@@ -678,6 +711,7 @@ mod tests {
     fn parent_binding_refuses_program_or_request_substitution() {
         let program = Pubkey::new_from_array([5; 32]);
         let canonical = CustodyCompositionParentV3 {
+            capability_root: [6; 32],
             release_set: [1; 32],
             market: [2; 32],
             generation: 3,

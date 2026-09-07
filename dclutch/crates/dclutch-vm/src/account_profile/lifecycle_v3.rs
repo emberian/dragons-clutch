@@ -1224,6 +1224,33 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         })
     }
 
+    /// Join one selected action's frame while preserving V3 funding authority
+    /// separation.
+    ///
+    /// Sibling actions may name different accounts at the same coordinate, so
+    /// their plans cannot be checked against this frame. Funding ownership,
+    /// however, remains whole-policy: a funding-bound coordinate cannot become
+    /// a Lifecycle payer or RentCredit, and only `FUND` leaves Lifecycle its
+    /// own recipe and create coverage.
+    pub fn validate_account_profile_with_external_funding_join_for_action<'b>(
+        self,
+        profile: AccountProfileV3<'b>,
+        action: u32,
+    ) -> Result<ValidatedProfileJoinV3<'b>>
+    where
+        'a: 'b,
+    {
+        if self.0.plans != 0 && self.0.action_plan_count(action)? == 0 {
+            return Err(Error::ProfileMismatch);
+        }
+        self.0
+            .validate_account_profile_inner(profile.base(), Some(profile), Some(action))?;
+        Ok(ValidatedProfileJoinV3 {
+            policy: self.0.bytes(),
+            profile: profile.base().bytes(),
+        })
+    }
+
     /// Seed adapter-authenticated current Rent minima into protected scalars atomically.
     ///
     /// `input_scalars`, scratch, and output are the exact complete runtime scalar
@@ -1717,8 +1744,10 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         };
         let mut recipe_index = 0_u16;
         while recipe_index < self.recipes {
-            if is_external_funding_coordinate(external_funding, self.recipe(recipe_index)?.account)?
-            {
+            if is_external_lifecycle_coordinate(
+                external_funding,
+                self.recipe(recipe_index)?.account,
+            )? {
                 return Err(Error::ProfileMismatch);
             }
             recipe_index = recipe_index.checked_add(1).ok_or(Error::Arithmetic)?;
@@ -1727,12 +1756,12 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         while plan_index < self.plans {
             let plan = self.plan(plan_index)?;
             if let Some(payer) = plan.payer
-                && is_external_funding_coordinate(external_funding, payer)?
+                && is_funding_bound_coordinate(external_funding, payer)?
             {
                 return Err(Error::ProfileMismatch);
             }
             if let Some(rent_credit) = plan.rent_credit
-                && is_external_funding_coordinate(external_funding, rent_credit)?
+                && is_funding_bound_coordinate(external_funding, rent_credit)?
             {
                 return Err(Error::ProfileMismatch);
             }
@@ -1987,7 +2016,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             return Ok(());
         }
         if let Some(external_funding) = external_funding
-            && is_external_funding_coordinate(external_funding, coordinate)?
+            && is_external_lifecycle_coordinate(external_funding, coordinate)?
         {
             return Ok(());
         }
@@ -4145,7 +4174,34 @@ fn validate_account_coordinate(
     }
 }
 
-fn is_external_funding_coordinate(
+/// Whether V3, rather than Lifecycle, owns a coordinate's existence.
+///
+/// A `FUND`-only declaration authorizes a balance top-up after Lifecycle has
+/// created the state. It deliberately does not exempt that state from
+/// Lifecycle's recipe and create coverage.
+fn is_external_lifecycle_coordinate(
+    profile: AccountProfileV3<'_>,
+    coordinate: AccountCoordinateV3,
+) -> Result<bool> {
+    if coordinate.scope != CoordinateScopeV3::Fixed {
+        return Ok(false);
+    }
+    profile
+        .funding_bound_for(coordinate.index)
+        .map(|bound| {
+            bound.is_some_and(|bound| {
+                bound.actions().permits_create() || bound.actions().permits_close()
+            })
+        })
+        .map_err(|_| Error::ProfileMismatch)
+}
+
+/// Whether V3 reserves a coordinate for its funding table in any capacity.
+///
+/// `FUND` leaves Lifecycle its state creation and closure, but it cannot make
+/// that state a Lifecycle payer or RentCredit. Those roles would grant the
+/// lifecycle authority that the funding declaration must retain exclusively.
+fn is_funding_bound_coordinate(
     profile: AccountProfileV3<'_>,
     coordinate: AccountCoordinateV3,
 ) -> Result<bool> {

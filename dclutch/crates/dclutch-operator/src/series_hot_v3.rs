@@ -24,7 +24,8 @@
 //! have been a caller that ran beside the one that runs.
 
 use crate::hot_bump_miner::{
-    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
+    HotBumpCorpusV1, activated_custody_program_v1, custody_transfer_authority_bump_v1,
+    mine_hot_bump_hints_v1,
 };
 use crate::series_lifecycle_v3::{
     SeriesLifecycleSnapshotV3, SeriesNextActV3, inspect_series_lifecycle_v3,
@@ -423,6 +424,7 @@ fn build_selected_series_hot_v5(
         state,
         &trading.account.key,
         header.release_set().to_bytes(),
+        roles.occurrence_market,
     )?);
     let mut data = envelope.to_bytes().to_vec();
     data.extend_from_slice(&selected.request_bytes);
@@ -513,12 +515,13 @@ fn series_selected_hot_bump_hints_v5(
     state: &SeriesCurrentHotStateV5<'_>,
     trading_program: &Pubkey,
     release_set: [u8; 32],
+    transfer_market: Option<Pubkey>,
 ) -> Result<HotBumpHintsV1, SeriesHotOperatorErrorV3> {
     let market = &fixed_v5(state, HOT_MARKET_ACCOUNT_V3)?.account;
     // Custody is not in the hot fixed frame; the Market's activation cache is,
     // and it names the release set's Custody deployment.
     let activation = &fixed_v5(state, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.account;
-    Ok(mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
+    let corpus = HotBumpCorpusV1 {
         market_key: market.key,
         market_data: &market.data,
         root_data: &fixed_v5(state, HOT_ROOT_ACCOUNT_V3)?.account.data,
@@ -526,7 +529,21 @@ fn series_selected_hot_bump_hints_v5(
         trading_program: *trading_program,
         custody_program: activated_custody_program_v1(&activation.data),
         release_set,
-    }))
+    };
+    let mut hints = mine_hot_bump_hints_v1(&corpus);
+    // The envelope remains bound to the controller. Occurrence Custody legs
+    // use the authenticated future Market instead; only their authority hint
+    // changes. A hint mined from the controller can coincidentally agree for
+    // one release and fail as soon as its program identities change.
+    if let Some(future_market) = transfer_market {
+        let transfer_corpus = HotBumpCorpusV1 {
+            market_key: future_market,
+            ..corpus
+        };
+        hints.child_relay[1] =
+            custody_transfer_authority_bump_v1(&transfer_corpus).unwrap_or_default();
+    }
+    Ok(hints)
 }
 
 fn fixed_v5<'a>(
@@ -1367,10 +1384,44 @@ mod tests {
             series_selected_hot_bump_hints_v5(
                 &selected,
                 &corpus::trading_program(),
-                corpus::release_set_id()
+                corpus::release_set_id(),
+                None,
             )
             .expect("staged corpus mines"),
             corpus::expected_hints()
+        );
+        let mut differs = false;
+        for byte in 1..=16 {
+            let future = Pubkey::new_from_array([byte; 32]);
+            let projected = series_selected_hot_bump_hints_v5(
+                &selected,
+                &corpus::trading_program(),
+                corpus::release_set_id(),
+                Some(future),
+            )
+            .expect("future Market hint");
+            let expected = Pubkey::find_program_address(
+                &dclutch_custody::CustodyAuthoritySeedsV1::new(
+                    future.to_bytes(),
+                    corpus::release_set_id(),
+                )
+                .as_slices(),
+                &activated_custody_program_v1(
+                    &selected.fixed_accounts[HOT_ACTIVATION_CACHE_ACCOUNT_V3]
+                        .account
+                        .data,
+                )
+                .expect("Custody deployment"),
+            )
+            .1;
+            assert_eq!(projected.market, corpus::expected_hints().market);
+            assert_eq!(projected.root, corpus::expected_hints().root);
+            assert_eq!(projected.child_relay[1], expected);
+            differs |= projected.child_relay[1] != corpus::expected_hints().child_relay[1];
+        }
+        assert!(
+            differs,
+            "the control must distinguish controller and future hints"
         );
     }
 }

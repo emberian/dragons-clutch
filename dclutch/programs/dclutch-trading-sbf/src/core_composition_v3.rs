@@ -52,6 +52,21 @@ const CORE_PRECOMMIT_EXPIRY_DIGEST_DOMAIN_V1: &[u8] =
 // optional funded-crank successor is not part of the selected Series V4 route.
 const SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1: u16 = 25;
 const SERIES_PERMIT_EXPIRY_PRECOMMIT_ACCOUNT_COUNT_V1: u16 = 26;
+const SERIES_PRECOMMIT_REPLAY_COORDINATES_V1: [usize; 2] = [14, 15];
+
+/// The authenticated precommit child observes replay state that Trading alone
+/// commits after the child returns. AccountProfile aliases inherit their
+/// physical representative's writability; the typed Core boundary must remove
+/// that privilege explicitly before making the observation CPI.
+pub(crate) fn series_precommit_replay_observation_v1<'info>(
+    mut account: AccountInfo<'info>,
+) -> Result<AccountInfo<'info>, ProgramError> {
+    if account.is_signer || account.executable {
+        return Err(TradingSbfError::Content.into());
+    }
+    account.is_writable = false;
+    Ok(account)
+}
 /// Recognize the one Core invocation which intentionally observes the two
 /// Trading replay prestates before Trading commits their Expire candidates.
 ///
@@ -556,6 +571,10 @@ fn prepare<'info>(
         {
             return Err(TradingSbfError::Content.into());
         }
+        for coordinate in SERIES_PRECOMMIT_REPLAY_COORDINATES_V1 {
+            let account = frame.get_mut(coordinate).ok_or(TradingSbfError::Content)?;
+            *account = series_precommit_replay_observation_v1(account.clone())?;
+        }
         let caller = frame
             .get(usize::from(SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1))
             .ok_or(TradingSbfError::Content)?;
@@ -612,15 +631,24 @@ fn authenticate_precommit_caller_v1(
     expected_authority: &Pubkey,
 ) -> Result<(), ProgramError> {
     if caller.key != expected_authority {
-        return Err(TradingSbfError::Release.into());
+        return Err(TradingSbfError::SeriesPrecommitCallerKey.into());
     }
-    if caller.is_signer
-        || caller.is_writable
-        || caller.executable
-        || caller.owner != &system_program::ID
-        || !caller.data_is_empty()
-    {
-        return Err(TradingSbfError::Content.into());
+    require_series_precommit_caller_shape_v1(caller)
+}
+
+/// Validate the precommit caller's shape before common profile projection can
+/// flatten these distinct account defects into a generic content refusal.
+pub(crate) fn require_series_precommit_caller_shape_v1(
+    caller: &AccountInfo<'_>,
+) -> Result<(), ProgramError> {
+    if caller.is_signer || caller.is_writable || caller.executable {
+        return Err(TradingSbfError::SeriesPrecommitCallerPrivileges.into());
+    }
+    if caller.owner != &system_program::ID {
+        return Err(TradingSbfError::SeriesPrecommitCallerOwner.into());
+    }
+    if !caller.data_is_empty() {
+        return Err(TradingSbfError::SeriesPrecommitCallerData.into());
     }
     Ok(())
 }
@@ -1036,6 +1064,32 @@ mod tests {
     }
 
     #[test]
+    fn precommit_replay_is_readonly_only_in_the_child_view() {
+        let key = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let mut lamports = 7;
+        let mut data = [19];
+        let parent = AccountInfo::new(&key, false, true, &mut lamports, &mut data, &owner, false);
+        let child = series_precommit_replay_observation_v1(parent.clone()).expect("observation");
+        assert!(parent.is_writable);
+        assert!(!child.is_writable);
+        assert!(!child.is_signer);
+        assert_eq!(child.key, parent.key);
+        assert_eq!(child.owner, parent.owner);
+        assert_eq!(&**child.try_borrow_data().expect("data"), &[19]);
+        assert_eq!(child.lamports(), 7);
+        for (signer, executable) in [(true, false), (false, true), (true, true)] {
+            let mut hostile = parent.clone();
+            hostile.is_signer = signer;
+            hostile.executable = executable;
+            assert_eq!(
+                series_precommit_replay_observation_v1(hostile).err(),
+                Some(TradingSbfError::Content.into())
+            );
+        }
+    }
+
+    #[test]
     fn precommit_caller_refuses_pda_privilege_owner_and_data_substitution() {
         let expected = Pubkey::new_unique();
         let wrong = Pubkey::new_unique();
@@ -1068,7 +1122,9 @@ mod tests {
         );
         assert_eq!(
             authenticate_precommit_caller_v1(&wrong_key, &expected),
-            Err(ProgramError::from(TradingSbfError::Release))
+            Err(ProgramError::from(
+                TradingSbfError::SeriesPrecommitCallerKey
+            ))
         );
 
         for (signer, writable, executable, owner) in [
@@ -1090,7 +1146,11 @@ mod tests {
             );
             assert_eq!(
                 authenticate_precommit_caller_v1(&account, &expected),
-                Err(ProgramError::from(TradingSbfError::Content))
+                Err(ProgramError::from(if owner == &stranger {
+                    TradingSbfError::SeriesPrecommitCallerOwner
+                } else {
+                    TradingSbfError::SeriesPrecommitCallerPrivileges
+                }))
             );
         }
 
@@ -1107,7 +1167,9 @@ mod tests {
         );
         assert_eq!(
             authenticate_precommit_caller_v1(&account, &expected),
-            Err(ProgramError::from(TradingSbfError::Content))
+            Err(ProgramError::from(
+                TradingSbfError::SeriesPrecommitCallerData
+            ))
         );
     }
 

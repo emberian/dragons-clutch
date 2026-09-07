@@ -53,6 +53,8 @@ use crate::rpc::Rpc;
 use crate::stages::StageReportV1;
 use crate::{Error, Result};
 
+const UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1: u64 = 17_001;
+
 /// The terminal sequence's six protocol mutations, in the order the driver runs
 /// them, rendered for a transcript.
 ///
@@ -1307,7 +1309,12 @@ pub(crate) fn retire(
     // campaign runs the loop, and only if the loop stops does it close the
     // replay and resume: the chain decides whether this act is needed, not a
     // flag here.
-    if !completion.exists() {
+    // A terminal sequence can only ask for the maker-root decrement at its
+    // DirectCloseCapability gate. Do not manufacture a close attempt after an
+    // earlier terminal refusal: the driver named that earlier barrier, and a
+    // maker close would merely add a second, unrelated refusal.
+    if !completion.exists() && terminal_needs_maker_replay_close(&outcome) {
+        let upkeep_ready = found_upkeep_vault(rpc, context, spine, fee_payer, fee_payer_keypair);
         // ONE CLOSE PER MAKER. A Direct fill opens a maker replay on BOTH
         // sides -- the manifest names `/seller/maker` and `/buyer/maker` and
         // the root counts both -- and `require_closable` demands
@@ -1315,13 +1322,19 @@ pub(crate) fn retire(
         // close refusing `Successor(MakerRootCountInvariant)` with the count at
         // one (hbox `20260906T172418Z`, after the first close executed at
         // 101,252 CU).
-        for side in ["seller", "buyer"] {
-            close_direct_maker_replay(rpc, context, spine, side, fee_payer_keypair);
+        if upkeep_ready {
+            for side in ["seller", "buyer"] {
+                close_direct_maker_replay(rpc, context, spine, side, fee_payer_keypair);
+            }
+            outcome = resume_until(
+                |_| {
+                    crate::terminal_sequence::run_terminal_sequence_owned_loopback_v1(
+                        sequence.clone(),
+                    )
+                },
+                || completion.exists(),
+            );
         }
-        outcome = resume_until(
-            |_| crate::terminal_sequence::run_terminal_sequence_owned_loopback_v1(sequence.clone()),
-            || completion.exists(),
-        );
     }
     let label = "journey retirement: terminal sequence";
     let (landed, compute) = harvest_dir(rpc, label, &journal_dir, &mut spine.transactions);
@@ -1465,6 +1478,182 @@ pub(crate) fn retire(
     Ok(())
 }
 
+/// Whether the terminal driver stopped at the one gate that requires the
+/// separate maker-replay close producer.
+///
+/// A refused terminal invocation is evidence about the current ordered stage.
+/// Only the exact maker-root invariant permits the journey to write a separate
+/// producer transaction before it resumes the terminal sequence.
+fn terminal_needs_maker_replay_close(
+    outcome: &std::result::Result<usize, (usize, String)>,
+) -> bool {
+    matches!(outcome, Err((_, error)) if error.contains("MakerRootCountInvariant"))
+}
+
+/// Found Custody's canonical Upkeep vault and receipt one nonzero Deposit.
+///
+/// `DirectCloseMaker` writes a protocol-owned Donation remainder after it has
+/// authenticated this vault. The journey cannot seed that state: the Custody
+/// `upkeep-found` producer owns both the Found instruction and the wallet's
+/// voluntary Deposit receipt, and this stage records its two finalized
+/// signatures before the maker-close driver is allowed to plan.
+fn found_upkeep_vault(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    fee_payer: Pubkey,
+    fee_payer_keypair: &Path,
+) -> bool {
+    let stage = "retirement: Custody Upkeep is founded before Direct maker closure";
+    let report = context.work.join("upkeep-found.json");
+    let custody = match read_json(context.plan)
+        .ok()
+        .and_then(|plan| {
+            plan.pointer("/custody/program_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .and_then(|text| text.parse::<Pubkey>().ok())
+    {
+        Some(custody) => custody,
+        None => {
+            spine.refused(
+                stage,
+                "the checked plan omitted Custody's program_id",
+                "`upkeep-found` takes Custody's deployed program address from the checked plan; \
+                 no caller-provided substitute is accepted."
+                    .into(),
+            );
+            return false;
+        }
+    };
+    let document = if report.exists() {
+        match read_json(&report) {
+            Ok(document) => document,
+            Err(error) => {
+                spine.refused(
+                    stage,
+                    &error.to_string(),
+                    "The prior upkeep producer report was unreadable, so the journey will not \
+                     rerun a Found route whose existing vault it has not authenticated."
+                        .into(),
+                );
+                return false;
+            }
+        }
+    } else {
+        let arguments = vec![
+            "--rpc-url".to_owned(),
+            context.rpc_url.to_owned(),
+            "--custody".to_owned(),
+            custody.to_string(),
+            "--payer".to_owned(),
+            fee_payer.to_string(),
+            "--amount".to_owned(),
+            UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1.to_string(),
+            "--payer-keypair".to_owned(),
+            fee_payer_keypair.display().to_string(),
+            "--execute".to_owned(),
+        ];
+        match crate::economics_successor::run_value(
+            crate::economics_successor::RouteV1::Upkeep,
+            crate::economics_successor::ClusterV1::OwnedLoopback,
+            arguments,
+        ) {
+            Ok(document) => {
+                let bytes = match serde_json::to_vec_pretty(&document) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        spine.refused(
+                            stage,
+                            &error.to_string(),
+                            "The finalized Upkeep producer report could not be encoded for its \
+                             durable journey evidence."
+                                .into(),
+                        );
+                        return false;
+                    }
+                };
+                if let Err(error) = std::fs::write(&report, bytes) {
+                    spine.refused(
+                        stage,
+                        &error.to_string(),
+                        "The actual Upkeep Found and Deposit Credit finalized, but the journey \
+                         could not persist their producer report; it will not continue to a \
+                         maker close without that evidence."
+                            .into(),
+                    );
+                    return false;
+                }
+                document
+            }
+            Err(error) => {
+                spine.refused(
+                    stage,
+                    &error.to_string(),
+                    format!(
+                        "The shipped `upkeep-found --execute` producer refused: {error}. The \
+                         maker close is not planned because its Upkeep precondition has no \
+                         authenticated producer evidence."
+                    ),
+                );
+                return false;
+            }
+        }
+    };
+    if !is_exact_upkeep_found_report(&document, custody) {
+        spine.refused(
+            stage,
+            "the Upkeep producer report did not prove its exact Found and Deposit poststate",
+            "The journey requires the producer's custody identity, nonzero Deposit amount, and \
+             zero unreceipted remainder before a Direct close can create its own Donation."
+                .into(),
+        );
+        return false;
+    }
+    let label = "journey retirement: Custody Upkeep Found";
+    let (landed, compute) = harvest_document(rpc, label, &document, &mut spine.transactions);
+    if landed != 2 {
+        spine.refused(
+            stage,
+            "the Upkeep producer report did not yield two finalized transactions",
+            "Found and the nonzero Deposit are distinct producer acts; the maker close is not \
+             planned unless both exact signatures re-read from the chain."
+                .into(),
+        );
+        return false;
+    }
+    spine.executed(
+        stage,
+        landed,
+        compute,
+        "`upkeep-found --execute` founded Custody's canonical Upkeep vault then receipted one \
+         nonzero voluntary Deposit. It does not impersonate the Direct close-maker Donation CPI; \
+         that remainder remains the close route's own economic fact."
+            .into(),
+    );
+    spine.reports.insert("upkeep-found".into(), document);
+    true
+}
+
+/// The exact economic fact the journey requires from the Upkeep producer.
+///
+/// The producer may create the vault only once, so a resumed journey must be
+/// able to authenticate its durable report without re-running Found. A Deposit
+/// is a wallet act; a Donation is a Direct close-maker CPI act and cannot stand
+/// in for it.
+fn is_exact_upkeep_found_report(document: &Value, custody: Pubkey) -> bool {
+    let expected_amount = Value::from(UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1);
+    document.get("command").and_then(Value::as_str) == Some("upkeep-found")
+        && document.get("custody").and_then(Value::as_str) == Some(custody.to_string().as_str())
+        && document.pointer("/poststate/creditAmount") == Some(&expected_amount)
+        && document
+            .pointer("/poststate/creditClass")
+            .and_then(Value::as_str)
+            == Some("Deposit")
+        && document.pointer("/poststate/unreceiptedLamports") == Some(&Value::from(0))
+}
+
 /// Close the one Direct maker replay the fill opened, so the capability close
 /// can reach its zero-count gate.
 ///
@@ -1533,7 +1722,7 @@ fn close_direct_maker_replay(
     };
     let Ok(evidence) = context
         .dir("close-maker")
-        .map(|dir| dir.join("close-maker.json"))
+        .map(|dir| dir.join(format!("close-maker-{side}.json")))
     else {
         return;
     };
@@ -1624,6 +1813,56 @@ fn reported_payout_atoms(document: &Value) -> Result<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maker_close_producer_is_only_admitted_at_its_exact_terminal_gate() {
+        assert!(terminal_needs_maker_replay_close(&Err((
+            3,
+            "Successor(MakerRootCountInvariant)".into(),
+        ))));
+        assert!(!terminal_needs_maker_replay_close(&Err((
+            3,
+            "Successor(InvalidUpkeepVault)".into(),
+        ))));
+        assert!(!terminal_needs_maker_replay_close(&Ok(6)));
+    }
+
+    #[test]
+    fn upkeep_found_report_requires_wallet_deposit_and_zero_remainder() {
+        let custody = Pubkey::new_unique();
+        let valid = serde_json::json!({
+            "command": "upkeep-found",
+            "custody": custody.to_string(),
+            "poststate": {
+                "creditAmount": UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1,
+                "creditClass": "Deposit",
+                "unreceiptedLamports": 0,
+            },
+        });
+        assert!(is_exact_upkeep_found_report(&valid, custody));
+
+        let donation = serde_json::json!({
+            "command": "upkeep-found",
+            "custody": custody.to_string(),
+            "poststate": {
+                "creditAmount": UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1,
+                "creditClass": "Donation",
+                "unreceiptedLamports": 0,
+            },
+        });
+        assert!(!is_exact_upkeep_found_report(&donation, custody));
+
+        let unreceipted = serde_json::json!({
+            "command": "upkeep-found",
+            "custody": custody.to_string(),
+            "poststate": {
+                "creditAmount": UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1,
+                "creditClass": "Deposit",
+                "unreceiptedLamports": 1,
+            },
+        });
+        assert!(!is_exact_upkeep_found_report(&unreceipted, custody));
+    }
 
     #[test]
     fn payout_evidence_preserves_exact_decimal_atoms() {

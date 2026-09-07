@@ -9,7 +9,9 @@ publish = false
 dclutch-market = { path = "../../../../crates/dclutch-market", features = ["alloc"] }
 dclutch-vm = { path = "../../../../crates/dclutch-vm" }
 dclutch-chain-bundle-builder = { path = "../bundle-builder" }
+dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-custody = { path = "../../../../crates/dclutch-custody" }
 dclutch-trading = { path = "../../../../crates/dclutch-trading" }
 dclutch-direct-hot-program-test-support = { path = "../direct-hot" }
 dclutch-operator = { path = "../../../../crates/dclutch-operator" }

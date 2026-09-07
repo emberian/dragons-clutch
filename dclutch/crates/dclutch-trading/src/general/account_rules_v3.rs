@@ -82,8 +82,9 @@ use crate::general::{
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
         GENERAL_VERIFY_PAYER_ACCOUNT_V3, GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
         GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3, GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,
-        GeneralReadonlyEvidenceKindV3, general_readonly_evidence_count_v3,
-        general_readonly_evidence_v3,
+        GeneralReadonlyEvidenceKindV3, general_create_payer_account_v3,
+        general_readonly_evidence_count_v3, general_readonly_evidence_v3,
+        general_rent_credit_account_v3,
     },
 };
 
@@ -1459,8 +1460,12 @@ pub fn general_account_profile_operation_v3(
         system if Some(system) == general_system_program_operation_index_v3(action) => {
             Ok(AccountOperationInputV2::RequireKey {
                 account: AccountCoordinateV2::fixed(
-                    crate::general::state_artifacts_v3::general_system_program_account_v3(action)
+                    first_child_system_coordinate(action)?.unwrap_or(
+                        crate::general::state_artifacts_v3::general_system_program_account_v3(
+                            action,
+                        )
                         .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
+                    ),
                 ),
                 expected: common_identity(identity::RESULT_OWNER)?,
             })
@@ -1930,16 +1935,14 @@ pub fn general_account_profile_rule_v3(
     if crate::general::state_artifacts_v3::general_system_program_account_v3(action)
         == Some(coordinate)
     {
-        return Ok(AccountRuleWithPrestateInputV2 {
-            rule: AccountRuleInputV2 {
-                privileges: AccountPrivilegesV2::new(false, false, true),
-                effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
-                alias: AccountAliasInputV2::SelfCoordinate,
-                data_length: 0,
-                data_item_stride: 0,
-            },
-            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
-        });
+        // The trailing System coordinate used to authenticate the parent
+        // builtin itself. Once a child frame names that same physical builtin,
+        // the RequireKey operation below is moved to the child's first opaque
+        // representative and this logical transport becomes an alias.
+        if let Some(representative) = first_child_system_coordinate(action)? {
+            return Ok(route_alias(representative));
+        }
+        return Ok(opaque_rule(AccountPrivilegesV2::new(false, false, true)));
     }
     if action == Action::VerifyCandidateRow {
         match coordinate {
@@ -2275,16 +2278,15 @@ fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPr
 
 fn evidence_rule(kind: GeneralReadonlyEvidenceKindV3) -> Result<AccountRuleWithPrestateInputV2> {
     match kind {
-        // The identity-covered image of an order record: the fixed header,
-        // then one interleaved 16-byte row per runtime outcome. Readonly,
-        // no effects; the maker's signature on the transaction is what
-        // endorses the bytes.
+        // The identity-covered image is the fixed 184-byte signed header.
+        // Its receive/deliver rows are derived from that header by the
+        // evaluator; attaching an outcome stride here would require bytes the
+        // signed-terms decoder refuses and would make PlaceOrder unbuildable.
         GeneralReadonlyEvidenceKindV3::OrderTerms => Ok(rule(
             AccountPrivilegesV2::new(false, false, false),
             u32::try_from(GENERAL_ORDER_HEADER_BYTES_V2)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-            u32::try_from(GENERAL_ORDER_ROW_STRIDE_V2)
-                .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+            0,
             AccountPrestateV2::Exact,
         )),
         // The closed batch's envelope and fixed span, then one 16-byte
@@ -2392,6 +2394,16 @@ fn child_rule(
     let (frame, relative) = child_coordinate(action, coordinate)?;
     let role = child_role(frame, relative)?;
     let privileges = physical_role_privileges(action, role)?;
+    // Child frames name the normal System builtin with its loader data, while
+    // their contract-level data descriptors intentionally carry no payload.
+    // Keep the first physical occurrence opaque; later occurrences route-alias
+    // it below, so the parent authenticates the actual builtin once.
+    if role == ChildRoleV3::SystemProgram {
+        return Ok(match prior_role_coordinate(action, coordinate, role)? {
+            Some(representative) => route_alias(representative),
+            None => opaque_rule(privileges),
+        });
+    }
     if let Some(representative) = prior_role_coordinate(action, coordinate, role)? {
         return Ok(AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
@@ -2525,11 +2537,108 @@ fn normalize_custody_role(role: CustodyFrameRoleV1) -> ChildRoleV3 {
     }
 }
 
+/// First child-frame coordinate that names the System program, if this
+/// action has one. The trailing lifecycle coordinate aliases it so the profile
+/// carries a single physical representative for the builtin.
+fn first_child_system_coordinate(action: Action) -> Result<Option<u16>> {
+    let mut coordinate = crate::general::state_artifacts_v3::general_child_account_start_v3(action);
+    let end = general_child_frame_end_v3(action)?;
+    while coordinate < end {
+        let (frame, relative) = child_coordinate(action, coordinate)?;
+        if child_role(frame, relative)? == ChildRoleV3::SystemProgram {
+            return Ok(Some(coordinate));
+        }
+        coordinate = coordinate
+            .checked_add(1)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    }
+    Ok(None)
+}
+
+const fn route_alias(representative: u16) -> AccountRuleWithPrestateInputV2 {
+    AccountRuleWithPrestateInputV2 {
+        rule: AccountRuleInputV2 {
+            privileges: AccountPrivilegesV2::new(false, false, false),
+            effect_permissions: no_effects(),
+            alias: AccountAliasInputV2::Fixed(representative),
+            data_length: 0,
+            data_item_stride: 0,
+        },
+        prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+    }
+}
+
 fn prior_role_coordinate(
     action: Action,
     coordinate: u16,
     role: ChildRoleV3,
 ) -> Result<Option<u16>> {
+    // Each child request derives its own caller-authority PDA from its exact
+    // request digest. They share a semantic role but cannot be aliases: an
+    // alias would replace a later request's signer with the first request's
+    // authority before the child program authenticates it.
+    if role == ChildRoleV3::CallerAuthority {
+        return Ok(None);
+    }
+    // PlaceOrder's single maker is the outer lifecycle payer, its rent refund,
+    // and the Claims child rent credit. Those are separate child roles but one
+    // physical account, so each later child view must borrow the outer fact.
+    // The signed order identity is the exact OrderTerms evidence account: the
+    // order id is its digest, never an invented vacant side account.
+    if action == Action::PlaceOrder {
+        match role {
+            // The outer frame is semantic: affine slot zero is the maker and
+            // slot one is the order escrow Position admitted just before the
+            // affine CPI.  The typed Claims adapter canonicalizes its private
+            // key order with the plan immediately before that CPI; it must not
+            // make the outer Profile's alias depend on two PDA bytes.
+            ChildRoleV3::Claims(ClaimsFrameRoleV1::AffinePosition(1)) => {
+                let mut prior =
+                    crate::general::state_artifacts_v3::general_child_account_start_v3(action);
+                while prior < coordinate {
+                    let (frame, relative) = child_coordinate(action, prior)?;
+                    if child_role(frame, relative)?
+                        == ChildRoleV3::Claims(ClaimsFrameRoleV1::ProtocolPosition)
+                    {
+                        return Ok(Some(prior));
+                    }
+                    prior = prior
+                        .checked_add(1)
+                        .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+                }
+                return Err(GeneralAccountRuleErrorV3::Geometry);
+            }
+            ChildRoleV3::Custody(CustodyFrameRoleV1::Payer)
+            | ChildRoleV3::Custody(CustodyFrameRoleV1::RentRefund) => {
+                return Ok(general_create_payer_account_v3(action));
+            }
+            ChildRoleV3::Claims(ClaimsFrameRoleV1::RentCredit) => {
+                return Ok(Some(general_rent_credit_account_v3(action)));
+            }
+            ChildRoleV3::Claims(ClaimsFrameRoleV1::PositionOwnerIdentity) => {
+                return general_readonly_evidence_v3(action, 0)
+                    .map(|selected| Some(selected.coordinate))
+                    .map_err(|_| GeneralAccountRuleErrorV3::Geometry);
+            }
+            ChildRoleV3::Custody(CustodyFrameRoleV1::TransferDestination) => {
+                let mut prior =
+                    crate::general::state_artifacts_v3::general_child_account_start_v3(action);
+                while prior < coordinate {
+                    let (frame, relative) = child_coordinate(action, prior)?;
+                    if child_role(frame, relative)?
+                        == ChildRoleV3::Custody(CustodyFrameRoleV1::Vault)
+                    {
+                        return Ok(Some(prior));
+                    }
+                    prior = prior
+                        .checked_add(1)
+                        .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+                }
+                return Err(GeneralAccountRuleErrorV3::Geometry);
+            }
+            _ => {}
+        }
+    }
     let common = match role {
         ChildRoleV3::ProductRecord => Some(2),
         ChildRoleV3::PortfolioRecord => Some(3),
@@ -2865,13 +2974,16 @@ mod tests {
     use super::*;
     use dclutch_product::PORTFOLIO_CLAIM_BASIS_ID_OFFSET;
 
-    use crate::general::effect_artifacts_v3::{
-        GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
-        general_effect_instruction_count_v3, general_effect_program_bytes_v3,
-        general_effect_template_bytes_v3,
-    };
     use crate::general::state_seeds_v3::{
         GENERAL_BATCH_IDENTITY_REGISTER_V3, GENERAL_ROOT_IDENTITY_REGISTER_V3, GeneralStateRecipeV3,
+    };
+    use crate::general::{
+        collection_v1::general_signed_order_terms_len_v2,
+        effect_artifacts_v3::{
+            GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
+            general_effect_instruction_count_v3, general_effect_program_bytes_v3,
+            general_effect_template_bytes_v3,
+        },
     };
 
     /// The exact emitted Effect bytes for one action.
@@ -3033,8 +3145,11 @@ mod tests {
             let bytes = general_account_profile_bytes_v3(action).expect("profile width");
             let mut encoded = vec![0_u8; bytes];
             let mut scratch = vec![0_u8; bytes];
-            encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut encoded)
-                .expect("account profile");
+            if let Err(error) =
+                encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut encoded)
+            {
+                panic!("{action:?} account profile: {error:?}");
+            }
             let profile = dclutch_vm::account_profile::v2::AccountProfileV2::decode(&encoded)
                 .expect("decode");
             let declared = matches!(
@@ -3116,13 +3231,136 @@ mod tests {
         }
     }
 
+    /// Signed terms are a fixed identity preimage, independent of Product
+    /// width.  The full Order rows are derived by the evaluator and are not
+    /// present in the evidence account.
+    #[test]
+    fn place_order_signed_terms_rule_is_exactly_its_fixed_header() {
+        let selected = general_readonly_evidence_v3(Action::PlaceOrder, 0)
+            .expect("PlaceOrder OrderTerms evidence");
+        assert_eq!(selected.kind, GeneralReadonlyEvidenceKindV3::OrderTerms);
+        for outcome_count in [2_u32, 3] {
+            let rule =
+                general_account_profile_rule_v3(Action::PlaceOrder, selected.coordinate, WIDTHS)
+                    .expect("OrderTerms account rule");
+            let declared = u64::from(rule.rule.data_length)
+                + u64::from(rule.rule.data_item_stride) * u64::from(outcome_count);
+            assert_eq!(
+                declared,
+                general_signed_order_terms_len_v2(outcome_count).expect("nonzero outcome width")
+                    as u64,
+                "PlaceOrder OrderTerms width at {outcome_count} outcomes",
+            );
+            assert_eq!(
+                rule.rule.data_length,
+                u32::try_from(GENERAL_ORDER_HEADER_BYTES_V2).expect("header width"),
+            );
+            assert_eq!(rule.rule.data_item_stride, 0);
+        }
+    }
+
+    #[test]
+    fn child_system_builtin_uses_opaque_representatives_and_child_aliases() {
+        for action in ACTIONS {
+            let representative =
+                first_child_system_coordinate(action).expect("System frame geometry");
+            let child_end = general_child_frame_end_v3(action).expect("child frame end");
+            let mut coordinate =
+                crate::general::state_artifacts_v3::general_child_account_start_v3(action);
+            while coordinate < child_end {
+                let (frame, relative) =
+                    child_coordinate(action, coordinate).expect("child coordinate");
+                if child_role(frame, relative).expect("child role") == ChildRoleV3::SystemProgram {
+                    let rule = general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                        .expect("System child rule");
+                    if Some(coordinate) == representative {
+                        assert_eq!(
+                            rule.prestate,
+                            AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+                            "{action:?} System representative {coordinate}",
+                        );
+                    } else {
+                        assert_eq!(
+                            rule.prestate,
+                            AccountPrestateV2::AuthenticatedRouteAlias,
+                            "{action:?} System alias {coordinate}",
+                        );
+                        assert_eq!(
+                            rule.rule.alias,
+                            AccountAliasInputV2::Fixed(representative.expect("representative")),
+                        );
+                    }
+                }
+                coordinate += 1;
+            }
+            if let Some(trailing) =
+                crate::general::state_artifacts_v3::general_system_program_account_v3(action)
+            {
+                let rule = general_account_profile_rule_v3(action, trailing, WIDTHS)
+                    .expect("trailing System rule");
+                if let Some(representative) = representative {
+                    assert_eq!(rule.prestate, AccountPrestateV2::AuthenticatedRouteAlias);
+                    assert_eq!(rule.rule.alias, AccountAliasInputV2::Fixed(representative));
+                } else {
+                    assert_eq!(
+                        rule.prestate,
+                        AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn place_order_profile_keeps_maker_then_escrow_and_aliases_created_escrow() {
+        let action = Action::PlaceOrder;
+        let start = crate::general::state_artifacts_v3::general_child_account_start_v3(action);
+        let end = general_child_frame_end_v3(action).expect("PlaceOrder child geometry");
+        let mut protocol_position = None;
+        let mut maker_affine = None;
+        let mut escrow_affine = None;
+        let mut coordinate = start;
+        while coordinate < end {
+            let (frame, relative) = child_coordinate(action, coordinate).expect("child coordinate");
+            match child_role(frame, relative).expect("child role") {
+                ChildRoleV3::Claims(ClaimsFrameRoleV1::ProtocolPosition) => {
+                    protocol_position = Some(coordinate);
+                }
+                ChildRoleV3::Claims(ClaimsFrameRoleV1::AffinePosition(0)) => {
+                    maker_affine = Some(coordinate);
+                }
+                ChildRoleV3::Claims(ClaimsFrameRoleV1::AffinePosition(1)) => {
+                    escrow_affine = Some(coordinate);
+                }
+                _ => {}
+            }
+            coordinate += 1;
+        }
+        let protocol_position = protocol_position.expect("PlaceOrder ProtocolPosition");
+        let maker_affine = maker_affine.expect("maker affine Position");
+        let escrow_affine = escrow_affine.expect("escrow affine Position");
+        assert!(protocol_position < maker_affine && maker_affine < escrow_affine);
+        let maker =
+            general_account_profile_rule_v3(action, maker_affine, WIDTHS).expect("maker rule");
+        assert_ne!(maker.prestate, AccountPrestateV2::AuthenticatedRouteAlias);
+        let escrow =
+            general_account_profile_rule_v3(action, escrow_affine, WIDTHS).expect("escrow rule");
+        assert_eq!(escrow.prestate, AccountPrestateV2::AuthenticatedRouteAlias);
+        assert_eq!(
+            escrow.rule.alias,
+            AccountAliasInputV2::Fixed(protocol_position),
+        );
+    }
+
     #[test]
     fn every_action_rule_is_total_and_no_action_declares_a_span() {
         for action in ACTIONS {
             let count = general_account_profile_fixed_count_v3(action).expect("fixed count");
             let mut coordinate = 0_u16;
             while coordinate < count {
-                general_account_profile_rule_v3(action, coordinate, WIDTHS).expect("exact rule");
+                if let Err(error) = general_account_profile_rule_v3(action, coordinate, WIDTHS) {
+                    panic!("{action:?} coordinate {coordinate}: {error:?}");
+                }
                 coordinate += 1;
             }
             assert_eq!(
@@ -3138,8 +3376,11 @@ mod tests {
             let bytes = general_account_profile_bytes_v3(action).expect("profile width");
             let mut encoded = vec![0_u8; bytes];
             let mut scratch = vec![0_u8; bytes];
-            encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut encoded)
-                .expect("account profile");
+            if let Err(error) =
+                encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut encoded)
+            {
+                panic!("{action:?} account profile: {error:?}");
+            }
             let profile = dclutch_vm::account_profile::v2::AccountProfileV2::decode(&encoded)
                 .expect("decode");
             assert_eq!(profile.dynamic_fixed_span_count(), 0);
