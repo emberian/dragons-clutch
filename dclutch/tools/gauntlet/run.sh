@@ -337,11 +337,14 @@ resolution:dclutch-resolution-proof-sbf:dclutch_resolution_proof_sbf
 custody:dclutch-custody-sbf:dclutch_custody_sbf
 rent:dclutch-rent-sbf:dclutch_rent_sbf"
 
-# `cargo build-sbf` exits zero even when the SBF backend reports that a call
-# overwrites its own stack frame and "may cause undefined behavior during
-# execution". Count them per role and say so; an artifact the toolchain calls
-# potentially-undefined has no business entering a campaign unnoticed.
-DIAGNOSTIC_PATTERN='overwrites values in the frame'
+# `cargo build-sbf` exits zero even when the SBF backend reports a frame over
+# SBPF v0's bound and "may cause undefined behavior during execution". Count
+# them per role and say so; an artifact the toolchain calls potentially-
+# undefined has no business entering a campaign unnoticed.
+# TWO shapes, not one: an over-bound frame with a call to blame, and one whose
+# own locals overflow. `tools/gates/common.py` is the authority and carries the
+# measurement that found the second shape missing here (FRAMES-2, 2026-09-07).
+DIAGNOSTIC_PATTERN='overwrites values in the frame|overflows the maximum allowed frame space'
 
 # The features a role's ELF is built with, or empty. Validated against $ROLES
 # rather than trusted: a misspelt role would otherwise build every ELF shipped
@@ -391,7 +394,7 @@ if [ "$MODE" = "full" ]; then
             ) > "$LOGS/build-$role.log" 2>&1 \
                 || { tail -n 40 "$LOGS/build-$role.log" >&2; die "SBF build failed: $role"; }
             cp "$BUILD_TARGET/deploy/$stem.so" "$ELF_DIR/$role.so"
-            count="$(grep -c "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" || true)"
+            count="$(grep -Ec "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" || true)"
             printf '%s=%s\n' "$role" "$count" >> "$WORK/build-diagnostics.txt"
             # Whether this build actually compiled the crate. cargo replays a
             # cached build's warnings AND the SBF backend's frame errors, so a
@@ -429,7 +432,7 @@ if [ "$MODE" = "full" ]; then
         noisy="$(awk -F= '$2 != 0 {printf "%s(%s) ", $1, $2}' "$WORK/build-diagnostics.txt")"
         if [ -n "$noisy" ]; then
             echo "gauntlet: SBF stack-frame-overwrite diagnostics: $noisy" >&2
-            grep -h "$DIAGNOSTIC_PATTERN" "$LOGS"/build-*.log | sort -u >&2
+            grep -Eh "$DIAGNOSTIC_PATTERN" "$LOGS"/build-*.log | sort -u >&2
             # Drop the stage stamp, or the next run reads "stage elf: up to
             # date" and never rebuilds the link it just refused.
             rm -f "$STAMPS/elf"
@@ -601,7 +604,7 @@ PY
             elf_hash="$(sha256 "$elf")"
             program_id="$(program_id_for "$role")"
             log="$LOGS/build-$role.log"
-            frame_diagnostics="$(grep -c "$DIAGNOSTIC_PATTERN" "$log" || true)"
+            frame_diagnostics="$(grep -Ec "$DIAGNOSTIC_PATTERN" "$log" || true)"
             # `verifier` is the SBF *verifier*: the build produced a
             # well-formed, loadable ELF. Backend frame diagnostics are a
             # separate, honestly separate, field — collapsing them would either

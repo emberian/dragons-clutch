@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Report the exact static stack frame LLVM gave each SBF function.
 
-WHY THIS EXISTS. `cargo build-sbf` says one thing about frames and it says it
-only at the wall: "A function call in method X overwrites values in the frame."
-That message is a BOOLEAN dressed as a count -- it is emitted once per call site
-inside an already-over-bound function, so the number drifts (75, then 78, then
-82, on the same defect, under unrelated edits) and it never says how close to
-the bound anything is. A gate built on it is green at 4,095 bytes and red at
-4,097, with nothing in between, which is exactly how
+WHY THIS EXISTS. `cargo build-sbf` speaks about frames only at the wall, and it
+speaks in two voices, not one: "A function call in method X overwrites values in
+the frame" when a call is over the bound, and "Function X overflows the maximum
+allowed frame space ... Estimated function frame size: N bytes" when a
+function's own locals are -- and only the first was ever grepped for here
+(FRAMES-2, 2026-09-07: a 5,632-byte leaf frame planted in dclutch-rent-sbf
+emitted the second and nothing else, and `cargo build-sbf` exited 0). Either
+message is a BOOLEAN dressed as a count -- the first is emitted once per call
+site inside an already-over-bound function, so the number drifts (75, then 78,
+then 82, on the same defect, under unrelated edits) -- and neither says how
+close to the bound anything is. A gate built on them is green at 4,095 bytes and
+red at 4,097, with nothing in between, which is exactly how
 `hot_v3::execute_child_routes_v3` sat at 3,712 of 4,096 in the shipped Trading
 link -- reporting zero, 384 bytes from the wall -- while the same function was
 at 5,184 in the dealer accelerator's link and had been for a wave.

@@ -63,10 +63,10 @@ for package in dclutch-registry-sbf dclutch-trading-sbf dclutch-core-sbf \
     # `cargo build-sbf` exits ZERO when the SBF backend reports that a call
     # overwrites its own stack frame, so a build that only checked the exit
     # status would report success on undefined behaviour. Read the log.
-    count="$(grep -c 'overwrites values in the frame' "$build_log" || true)"
+    count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$build_log" || true)"
     printf '  %-26s %s frame diagnostics\n' "$package" "${count:-0}" >&2
     if [ "${count:-0}" != "0" ]; then
-        grep 'overwrites values in the frame' "$build_log" | sort -u >&2
+        grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$build_log" | sort -u >&2
         echo "refusing $package -- the toolchain says these calls may cause undefined" \
              "behavior during execution. Fix the frame; do not measure on top of it." >&2
         exit 1

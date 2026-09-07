@@ -77,13 +77,16 @@ printf '%s\n' "$REVISION" > "$WORK/revision.txt"
 
 # ----------------------------------------------------------------- 2. ELFs
 #
-# `cargo build-sbf` exits ZERO even when the SBF backend reports that a call
-# overwrites its own stack frame and "may cause undefined behavior during
-# execution". An artifact the toolchain calls potentially-undefined has no
-# business producing a CU figure, so the diagnostics are counted and a nonzero
-# total stops the campaign -- `run-general.sh`'s rule, applied to the six links
-# this campaign actually loads.
-DIAGNOSTIC_PATTERN='overwrites values in the frame'
+# `cargo build-sbf` exits ZERO even when the SBF backend reports a frame over
+# SBPF v0's bound and "may cause undefined behavior during execution". An
+# artifact the toolchain calls potentially-undefined has no business producing
+# a CU figure, so the diagnostics are counted and a nonzero total stops the
+# campaign -- `run-general.sh`'s rule, applied to the six links this campaign
+# actually loads.
+# TWO shapes, not one: an over-bound frame with a call to blame, and one whose
+# own locals overflow. `tools/gates/common.py` is the authority and carries the
+# measurement that found the second shape missing here (FRAMES-2, 2026-09-07).
+DIAGNOSTIC_PATTERN='overwrites values in the frame|overflows the maximum allowed frame space'
 ROLES="registry:dclutch_registry_sbf
 trading:dclutch_trading_sbf
 core:dclutch_core_sbf
@@ -101,7 +104,7 @@ for role in $ROLES; do
         cargo build-sbf --manifest-path "programs/$package/Cargo.toml" --sbf-out-dir "$DEPLOY" ) \
         > "$log" 2>&1 \
         || { tail -n 40 "$log" >&2; die "SBF build failed: $package"; }
-    count="$(grep -c "$DIAGNOSTIC_PATTERN" "$log" || true)"
+    count="$(grep -Ec "$DIAGNOSTIC_PATTERN" "$log" || true)"
     elf="$DEPLOY/$stem.so"
     [ -f "$elf" ] || die "build produced no $elf"
     printf '  %-28s %s  %8s bytes  (%s frame diagnostics)\n' \

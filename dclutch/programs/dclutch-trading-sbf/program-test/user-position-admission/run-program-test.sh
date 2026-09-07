@@ -24,11 +24,11 @@ do
   log="$sbf_out/build-$label.log"
   cargo build-sbf --manifest-path "$manifest" --sbf-out-dir "$sbf_out" \
     > "$log" 2>&1 || { tail -n 60 "$log" >&2; exit 1; }
-  count="$(grep -c 'overwrites values in the frame' "$log" || true)"
+  count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
   diagnostics=$((diagnostics + count))
   printf '  built %-48s %s frame diagnostics\n' "$manifest" "${count:-0}"
   if [ "${count:-0}" != "0" ]; then
-    grep 'overwrites values in the frame' "$log" | sort -u >&2
+    grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" | sort -u >&2
   fi
 done
 if [ "$diagnostics" -ne 0 ]; then

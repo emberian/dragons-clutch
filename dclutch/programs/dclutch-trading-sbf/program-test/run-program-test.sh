@@ -47,7 +47,7 @@ do
   log="$sbf_out/build-$link.log"
   cargo build-sbf --manifest-path "$manifest" --sbf-out-dir "$sbf_out" \
     > "$log" 2>&1 || { tail -n 40 "$log" >&2; exit 1; }
-  count="$(grep -c 'overwrites values in the frame' "$log" || true)"
+  count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
   # Whether the crate was actually rebuilt, because a zero from a build that
   # recompiled nothing is silence rather than evidence. Warm target directories
   # produce exactly that, and it has already cost one lane three false zeros
@@ -57,7 +57,7 @@ do
   fresh="reused"; [ "${built:-0}" != "0" ] && fresh="recompiled"
   printf '  %s (%s frame diagnostics, trading-sbf %s)\n' "$link" "${count:-0}" "$fresh"
   if [ "${count:-0}" != "0" ]; then
-    grep 'overwrites values in the frame' "$log" | sort -u >&2
+    grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" | sort -u >&2
   fi
   diagnostics=$((diagnostics + count))
 done

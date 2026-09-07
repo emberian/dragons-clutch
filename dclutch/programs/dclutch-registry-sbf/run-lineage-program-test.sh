@@ -33,10 +33,10 @@ log="$output/build-registry.log"
 # affected frame's locals are clobbered at runtime and the program misbehaves
 # in ways no assertion here would attribute to the build. Refuse rather than
 # test something the compiler already said it could not lay out.
-diagnostics="$(grep -c 'overwrites values in the frame' "$log" || true)"
+diagnostics="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
 if [ "$diagnostics" -ne 0 ]; then
   echo "lineage: refusing -- $diagnostics SBF stack-frame-overwrite diagnostics" >&2
-  grep 'overwrites values in the frame' "$log" >&2
+  grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" >&2
   exit 1
 fi
 

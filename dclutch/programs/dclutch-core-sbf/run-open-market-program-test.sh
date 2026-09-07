@@ -48,10 +48,10 @@ done
 # docs/evidence/SLIPPED_THROUGH_SWEEP_2026_08_30.md:98), so it has to live in
 # the runner -- and this crate's links now carry the succession ceremony, whose
 # 21-account frame is exactly the shape that would provoke one.
-diagnostics="$(grep -c 'overwrites values in the frame' "$log" || true)"
+diagnostics="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
 if [ "$diagnostics" -ne 0 ]; then
   echo "core: refusing -- $diagnostics SBF stack-frame-overwrite diagnostics" >&2
-  grep 'overwrites values in the frame' "$log" >&2
+  grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" >&2
   exit 1
 fi
 

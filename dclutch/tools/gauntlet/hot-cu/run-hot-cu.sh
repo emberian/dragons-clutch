@@ -542,7 +542,7 @@ programs/dclutch-trading-sbf/program-test/test-programs/registry/Cargo.toml"
         log="$LOGS/build-$name.log"
         build "$BUILD_ROOT/$manifest" > "$log" 2>&1 \
             || { tail -n 40 "$log" >&2; die "SBF build failed: $name (see $log)"; }
-        count="$(grep -c 'overwrites values in the frame' "$log" || true)"
+        count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
         printf '  %-24s %s frame diagnostics\n' "$name" "${count:-0}"
         diagnostics=$((diagnostics + count))
     done

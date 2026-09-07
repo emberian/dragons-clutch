@@ -48,8 +48,10 @@ differs from the pin a human typed in `wire-vector-pins.tsv`. `--run --all` (the
 **frames** — a function in any of the twelve SBF links whose exact frame
 multiset differs from `frames-baseline.json` in either direction (shrinkage is
 red until the ratchet is lowered); a link that did not freshly compile; any
-`overwrites values in the frame` diagnostic; a capture from a dirty tree with no
-`--at`; two captures naming different commits. Red prints `owed`: the commits
+over-bound-frame diagnostic in either shape the backend emits (`common.py`'s
+`FRAME_DIAGNOSTICS` is the authority: a call that `overwrites values in the
+frame`, and a function that `overflows the maximum allowed frame space`); a
+capture from a dirty tree with no `--at`; two captures naming different commits. Red prints `owed`: the commits
 since the baseline's commit that changed sources in a link's path-dependency
 closure and carried no rows, each with its `Lane:` trailer.
 

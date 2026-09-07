@@ -181,6 +181,9 @@ printf '   Compiling %s v0.1.0 (%s)\\n' "$package" "$(dirname "$manifest")"
 if [ "${FRAMES_INJECT_DIAGNOSTIC:-}" = "$package" ]; then
     printf 'warning: A function call in method fixture overwrites values in the frame\\n'
 fi
+if [ "${FRAMES_INJECT_OVERFLOW:-}" = "$package" ]; then
+    printf 'Error: Function fixture overflows the maximum allowed frame space by accessing an offset 1536 bytes greater than the maximum of 4096. Please, minimize large stack variables. Estimated function frame size: 5632 bytes.\\n'
+fi
 """
 
 
@@ -212,6 +215,7 @@ class MeasureTests(unittest.TestCase):
     def tearDown(self):
         os.environ["PATH"] = self.saved_path
         os.environ.pop("FRAMES_INJECT_DIAGNOSTIC", None)
+        os.environ.pop("FRAMES_INJECT_OVERFLOW", None)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def run_frames(self, *args: str) -> int:
@@ -231,6 +235,20 @@ class MeasureTests(unittest.TestCase):
     def test_a_zero_exit_build_with_a_frame_diagnostic_is_still_red(self):
         os.environ["FRAMES_INJECT_DIAGNOSTIC"] = "program-06"
         rejected = self.tmp / "rejected.json"
+        self.assertEqual(self.run_frames("--capture", str(rejected)), 1)
+        self.assertFalse(rejected.exists())
+
+    def test_the_overflow_shape_of_the_diagnostic_is_red_too(self):
+        """The backend's OTHER over-bound-frame message, which nothing here read until 2026-09-07.
+
+        A function whose own locals overflow gets no `overwrites values in the
+        frame` line -- there is no call to blame -- so a grep for that string
+        alone reads the build as clean while `cargo build-sbf` exits 0. Measured
+        on platform-tools v1.53 with a 5,632-byte leaf frame planted in
+        dclutch-rent-sbf; this is that log line.
+        """
+        os.environ["FRAMES_INJECT_OVERFLOW"] = "program-03"
+        rejected = self.tmp / "overflow.json"
         self.assertEqual(self.run_frames("--capture", str(rejected)), 1)
         self.assertFalse(rejected.exists())
 

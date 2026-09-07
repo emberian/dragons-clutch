@@ -43,10 +43,10 @@ build_sbf() {
   log="$work/build-$label.log"
   "${cargo_command[@]}" build-sbf --manifest-path "$manifest" --sbf-out-dir "$output" \
     >"$log" 2>&1 || { tail -n 60 "$log" >&2; exit 1; }
-  count="$(grep -c 'overwrites values in the frame' "$log" || true)"
+  count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
   printf '  built %-72s %s frame diagnostics\n' "$manifest" "${count:-0}"
   if [ "${count:-0}" != "0" ]; then
-    grep 'overwrites values in the frame' "$log" | sort -u >&2
+    grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" | sort -u >&2
     echo "run-fee-second-transaction.sh: refusing $manifest" >&2
     exit 1
   fi

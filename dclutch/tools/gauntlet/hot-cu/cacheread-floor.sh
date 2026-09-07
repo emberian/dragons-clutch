@@ -21,9 +21,12 @@ cd "$ROOT"
 
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 
-# The exact string the SBF backend emits, as `tools/gauntlet/run.sh` spells it.
-# Not paraphrased: see the refusal below for what paraphrasing it cost.
-DIAGNOSTIC_PATTERN='overwrites values in the frame'
+# The exact strings the SBF backend emits, as `tools/gauntlet/run.sh` spells
+# them. Not paraphrased: see the refusal below for what paraphrasing it cost.
+# TWO shapes, not one: an over-bound frame with a call to blame, and one whose
+# own locals overflow. `tools/gates/common.py` is the authority and carries the
+# measurement that found the second shape missing here (FRAMES-2, 2026-09-07).
+DIAGNOSTIC_PATTERN='overwrites values in the frame|overflows the maximum allowed frame space'
 
 for package in dclutch-registry-sbf dclutch-trading-sbf dclutch-core-sbf \
                dclutch-claims-sbf dclutch-custody-sbf; do
@@ -50,10 +53,10 @@ for package in dclutch-registry-sbf dclutch-trading-sbf dclutch-core-sbf \
     # A checker with a wrong pattern is worse than no checker: it does not fail
     # to answer, it answers NO. Take the string from the tool that already
     # refuses on it rather than from memory.
-    if grep -q "$DIAGNOSTIC_PATTERN" "$build_log"; then
+    if grep -Eq "$DIAGNOSTIC_PATTERN" "$build_log"; then
         printf 'SBF FRAME DIAGNOSTICS in %s: %s\n' \
-            "$package" "$(grep -c "$DIAGNOSTIC_PATTERN" "$build_log")" >&2
-        grep "$DIAGNOSTIC_PATTERN" "$build_log" | sort -u >&2
+            "$package" "$(grep -Ec "$DIAGNOSTIC_PATTERN" "$build_log")" >&2
+        grep -E "$DIAGNOSTIC_PATTERN" "$build_log" | sort -u >&2
         echo "Measure the distance with tools/sbf-frame-sizes.py; this count is a" >&2
         echo "detector AT the wall, not a distance to it." >&2
         exit 1

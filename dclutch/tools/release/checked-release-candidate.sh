@@ -540,13 +540,16 @@ esac
     || { echo "could not identify checked-candidate linker/libc substrate" >&2; exit 1; }
 
 # ----------------------------------------------------------------- SBF builds
-# cargo build-sbf exits zero even when the SBF backend reports that a call
-# overwrites its own stack frame and "may cause undefined behavior during
-# execution". Nothing downstream can see that: the ELF is well-formed and every
-# release-tool check passes on it. So count the diagnostics per role here and
-# refuse by default, because an artifact the toolchain says may execute as
-# undefined behavior has no business entering a release unnoticed.
-DIAGNOSTIC_PATTERN='overwrites values in the frame'
+# cargo build-sbf exits zero even when the SBF backend reports a frame over
+# SBPF v0's bound and "may cause undefined behavior during execution". Nothing
+# downstream can see that: the ELF is well-formed and every release-tool check
+# passes on it. So count the diagnostics per role here and refuse by default,
+# because an artifact the toolchain says may execute as undefined behavior has
+# no business entering a release unnoticed.
+# TWO shapes, not one: an over-bound frame with a call to blame, and one whose
+# own locals overflow. `tools/gates/common.py` is the authority and carries the
+# measurement that found the second shape missing here (FRAMES-2, 2026-09-07).
+DIAGNOSTIC_PATTERN='overwrites values in the frame|overflows the maximum allowed frame space'
 
 # Packages excluded from the root workspace resolve against their own lockfile,
 # so they must not share a target directory with the workspace builds: a warm
@@ -646,11 +649,11 @@ while IFS=$'\t' read -r label package; do
             cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
     ) >>"$link_log" 2>&1
     cat "$link_log" >> "$BUILD_LOG"
-    count="$(grep -c "$DIAGNOSTIC_PATTERN" "$link_log" || true)"
+    count="$(grep -Ec "$DIAGNOSTIC_PATTERN" "$link_log" || true)"
     printf '%s=%s\n' "$label" "$count" >> "$WORK/build-diagnostics.txt"
     if [ "$count" != "0" ]; then
         echo "BUILD DIAGNOSTIC: $label emitted $count SBF stack-frame overwrite reports" >&2
-        grep "$DIAGNOSTIC_PATTERN" "$link_log" | sort -u >&2
+        grep -E "$DIAGNOSTIC_PATTERN" "$link_log" | sort -u >&2
     fi
     if [ -n "$stem" ]; then
         [ -f "$link_target/deploy/$stem.so" ] && [ ! -L "$link_target/deploy/$stem.so" ] \
@@ -791,7 +794,7 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
             echo "refusing: frame build for $label has no fresh top-package compile marker for $package" >&2
             exit 1
         fi
-        frame_diagnostics="$(grep -c "$DIAGNOSTIC_PATTERN" "$frame_build_log" || true)"
+        frame_diagnostics="$(grep -Ec "$DIAGNOSTIC_PATTERN" "$frame_build_log" || true)"
         if [ "$frame_diagnostics" != "0" ]; then
             echo "refusing: frame measurement build for $label emitted $frame_diagnostics stack-frame overwrite diagnostics" >&2
             exit 1

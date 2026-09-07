@@ -24,8 +24,9 @@ from pathlib import Path
 from typing import Callable
 
 from .common import (
-    EXIT_FAIL, EXIT_PASS, EXIT_PREREQ, FRAME_DIAGNOSTIC, GATES, REPO, Context, Failed, Prereq,
-    archived, checked_out, dirty, have, measured_tree, note, read_tsv, scratch, sh,
+    EXIT_FAIL, EXIT_PASS, EXIT_PREREQ, GATES, REPO, Context, Failed, Prereq,
+    archived, checked_out, dirty, frame_diagnostics, have, measured_tree, note, read_tsv,
+    scratch, sh,
 )
 
 
@@ -841,13 +842,13 @@ def tier_programs(ctx: Context):
                 if result.returncode:
                     print(log.read_text()[-3000:])
                     return EXIT_FAIL, f"an SBF program did not build: {manifest}"
-                count = log.read_text().count(FRAME_DIAGNOSTIC)
+                count = len(frame_diagnostics(log.read_text()))
                 if count:
-                    note(f"{link}: {count} SBF stack-frame-overwrite diagnostics")
+                    note(f"{link}: {count} SBF over-bound-frame diagnostics")
                     diagnostics += count
             if diagnostics:
-                note("REFUSING: the toolchain says these calls may cause undefined behavior; measure with tools/sbf-frame-sizes.py")
-                return EXIT_FAIL, f"{diagnostics} SBF stack-frame-overwrite diagnostics"
+                note("REFUSING: the toolchain says these frames may cause undefined behavior; measure with tools/sbf-frame-sizes.py")
+                return EXIT_FAIL, f"{diagnostics} SBF over-bound-frame diagnostics"
             args = ["cargo", "test", "--manifest-path", "programs/dclutch-trading-sbf/program-test/Cargo.toml"]
             args += os.environ.get("DCLUTCH_GATE_PROGRAM_TESTS", "").split()
             args += ["--", "--nocapture"]

@@ -141,7 +141,10 @@ trading:dclutch-trading-sbf:dclutch_trading_sbf
 resolution:dclutch-resolution-proof-sbf:dclutch_resolution_proof_sbf
 custody:dclutch-custody-sbf:dclutch_custody_sbf
 rent:dclutch-rent-sbf:dclutch_rent_sbf"
-DIAGNOSTIC_PATTERN='overwrites values in the frame'
+# TWO shapes, not one: an over-bound frame with a call to blame, and one whose
+# own locals overflow. `tools/gates/common.py` is the authority and carries the
+# measurement that found the second shape missing here (FRAMES-2, 2026-09-07).
+DIAGNOSTIC_PATTERN='overwrites values in the frame|overflows the maximum allowed frame space'
 BUILD_TARGET="$WORK/sbf-target"
 
 elf_inputs_digest() {
@@ -190,7 +193,7 @@ elif [ ! -f "$WORK/stamps.elf" ] || [ "$(cat "$WORK/stamps.elf")" != "$ELF_INPUT
             || { tail -n 40 "$LOGS/build-$role.log" >&2; die "SBF build failed: $role"; }
         cp "$BUILD_TARGET/deploy/$stem.so" "$ELF_DIR/$role.so"
         printf '  %s  %s (%s frame diagnostics)\n' "$(sha256 "$ELF_DIR/$role.so")" "$role" \
-            "$(grep -c "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" || true)"
+            "$(grep -Ec "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" || true)"
     done
     printf '%s\n' "$ELF_INPUT_DIGEST" > "$WORK/stamps.elf"
 else
@@ -201,7 +204,7 @@ fi
 TOTAL_DIAGNOSTICS=0
 for entry in $ROLES; do
     role="${entry%%:*}"
-    count="$(grep -c "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" 2>/dev/null || true)"
+    count="$(grep -Ec "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" 2>/dev/null || true)"
     TOTAL_DIAGNOSTICS=$((TOTAL_DIAGNOSTICS + ${count:-0}))
 done
 [ "$TOTAL_DIAGNOSTICS" = 0 ] || die "SBF stack-frame-overwrite diagnostics present ($TOTAL_DIAGNOSTICS); refusing to run the vertical on artifacts the toolchain calls potentially-undefined"

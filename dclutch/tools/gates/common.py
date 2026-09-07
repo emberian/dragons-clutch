@@ -22,9 +22,35 @@ EXIT_PASS, EXIT_FAIL, EXIT_PREREQ, EXIT_USAGE = 0, 1, 2, 64
 GATES = Path(__file__).resolve().parent
 REPO = GATES.parents[1]
 
-# `cargo build-sbf` exits 0 when the SBF backend reports that a call overwrites
-# its own stack frame. Every gate that builds a link greps its log for this.
-FRAME_DIAGNOSTIC = "overwrites values in the frame"
+# `cargo build-sbf` exits 0 when the SBF backend reports an over-bound frame,
+# and the backend reports one in TWO shapes, not one. Both are here because a
+# grep for only the first is blind to the second, and the second is the one a
+# function whose OWN locals overflow gets -- there is no call to blame:
+#
+#   Error: A function call in method <F> overwrites values in the frame. ...
+#   Error: Function <F> overflows the maximum allowed frame space by accessing
+#          an offset N bytes greater than the maximum of 4096. ... Estimated
+#          function frame size: N bytes. ...
+#
+# Measured on platform-tools v1.53, 2026-09-07 (FRAMES-2): a 5,632-byte leaf
+# frame planted in dclutch-rent-sbf emits the SECOND diagnostic and never the
+# first, `cargo build-sbf` still exits 0, and every grep in the tree for the
+# first alone read that build as clean. `tools/sbf-frame-sizes.py` caught it
+# from `.stack_sizes`, which is why the frames gate was fail-safe anyway --
+# but the runners that grep and never measure were not.
+#
+# Shell runners keep their own copy of FRAME_DIAGNOSTIC_PATTERN, since there is
+# no shared shell library; this module is the authority they are copied from.
+FRAME_DIAGNOSTICS = (
+    "overwrites values in the frame",
+    "overflows the maximum allowed frame space",
+)
+FRAME_DIAGNOSTIC_PATTERN = "|".join(FRAME_DIAGNOSTICS)
+
+
+def frame_diagnostics(text: str) -> list[str]:
+    """Every line of a build log in which the SBF backend reported an over-bound frame."""
+    return [line for line in text.splitlines() if any(d in line for d in FRAME_DIAGNOSTICS)]
 
 
 class Prereq(Exception):

@@ -55,10 +55,10 @@ for package in dclutch-registry-sbf dclutch-trading-sbf dclutch-core-sbf \
     # to exactly 4,096 of the 4,096 bytes an SBPF v0 frame gets -- 43
     # diagnostics. Two `#[inline(never)]` attributes are the whole of the fix,
     # and an attribute is a request the type system does not hold.
-    count="$(grep -c 'overwrites values in the frame' "$build_log" || true)"
+    count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$build_log" || true)"
     printf '  %-26s %s frame diagnostics\n' "$package" "${count:-0}" >&2
     if [ "${count:-0}" != "0" ]; then
-        grep 'overwrites values in the frame' "$build_log" | sort -u >&2
+        grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$build_log" | sort -u >&2
         echo "run-begin-retiring.sh: refusing $package -- the toolchain says these calls may" \
              "cause undefined behavior during execution. Fix the frame; do not measure on" \
              "top of it." >&2

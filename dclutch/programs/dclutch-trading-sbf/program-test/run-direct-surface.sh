@@ -86,10 +86,10 @@ do
     tail -n 40 "$log" >&2
     exit 1
   fi
-  count="$(grep -c 'overwrites values in the frame' "$log" || true)"
+  count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
   printf '  built %-18s %s frame diagnostics\n' "$link" "${count:-0}"
   if [ "${count:-0}" != "0" ]; then
-    grep 'overwrites values in the frame' "$log" | sort -u >&2
+    grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" | sort -u >&2
   fi
   diagnostics=$((diagnostics + count))
 done

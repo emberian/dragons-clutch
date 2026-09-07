@@ -25,9 +25,9 @@ cd "$repo_root"
 log="$sbf_out/build-trading.log"
 cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml \
   --sbf-out-dir "$sbf_out" > "$log" 2>&1 || { tail -n 40 "$log" >&2; exit 1; }
-count="$(grep -c 'overwrites values in the frame' "$log" || true)"
+count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
 if [ "${count:-0}" != "0" ]; then
-  grep 'overwrites values in the frame' "$log" | sort -u >&2
+  grep -E 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" | sort -u >&2
   echo "run-program-test.sh: refusing -- ${count} SBF stack-frame-overwrite" \
        "diagnostics on the Trading link. The campaign below would measure a" \
        "route the toolchain says may execute as undefined behavior." >&2

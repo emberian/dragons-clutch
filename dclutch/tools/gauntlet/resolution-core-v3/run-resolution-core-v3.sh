@@ -80,7 +80,7 @@ for manifest in \
 do
     log="$work/build-$(basename "$(dirname "$manifest")").log"
     build "$manifest" > "$log" || { tail -n 40 "$log" >&2; exit 1; }
-    count="$(grep -c 'overwrites values in the frame' "$log" || true)"
+    count="$(grep -Ec 'overwrites values in the frame|overflows the maximum allowed frame space' "$log" || true)"
     diagnostics=$((diagnostics + count))
     printf '  built %-60s %s frame diagnostics\n' "$manifest" "${count:-0}"
 done

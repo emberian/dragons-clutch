@@ -10,8 +10,8 @@
                                                     the commits since the baseline's commit that changed sources
                                                     compiled into a link and carried no baseline rows
 
-Refuses: a link that did not freshly compile; any `overwrites values in the
-frame` diagnostic; a function whose frames differ from the admitted multiset in
+Refuses: a link that did not freshly compile; any over-bound-frame diagnostic
+in either shape the backend emits (`tools/gates/common.py` is the authority); a function whose frames differ from the admitted multiset in
 EITHER direction (shrinkage is red until the ratchet is lowered, so recovered
 headroom cannot be spent again); a capture from a dirty tree with no --at (an
 exact ratchet must name its base); two captures naming different commits.
@@ -34,8 +34,9 @@ from pathlib import Path
 from typing import Any
 
 from .common import (
-    EXIT_FAIL, EXIT_PASS, EXIT_PREREQ, FRAME_DIAGNOSTIC, GATES, REPO, Failed, Prereq, archived,
-    atomic_write, checked_out, dirty, have, note, repo_top, resolve_commit, scratch, sh,
+    EXIT_FAIL, EXIT_PASS, EXIT_PREREQ, GATES, REPO, Failed, Prereq, archived,
+    atomic_write, checked_out, dirty, frame_diagnostics, have, note, repo_top, resolve_commit,
+    scratch, sh,
 )
 
 REPORT_SCHEMA = "dclutch-sbf-frame-sizes-v1"
@@ -409,10 +410,10 @@ def measure(*, source: Path, repo: Path | None, tools: Path, measured_commit: st
                 raise Failed(f"{package} measurement build failed")
             if not re.search(rf"^\s*Compiling\s+{re.escape(package)}\s+v\S+", text, re.M):
                 raise Prereq(f"{package} has no fresh top-package compile marker; no measurement")
-            diagnostics = text.count(FRAME_DIAGNOSTIC)
+            diagnostics = frame_diagnostics(text)
             if diagnostics:
-                print("\n".join(sorted({l for l in text.splitlines() if FRAME_DIAGNOSTIC in l})), file=sys.stderr)
-                raise Failed(f"{package} emitted {diagnostics} stack-frame overwrite diagnostics")
+                print("\n".join(sorted(set(diagnostics))), file=sys.stderr)
+                raise Failed(f"{package} emitted {len(diagnostics)} over-bound-frame diagnostics")
             triple = next((t for t in ("sbpf-solana-solana", "sbf-solana-solana") if (target / t).is_dir()), None)
             if triple is None:
                 raise Prereq(f"{package} emitted no recognizable SBF target directory")
