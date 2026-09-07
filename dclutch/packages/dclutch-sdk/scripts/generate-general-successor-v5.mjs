@@ -207,9 +207,25 @@ const assertions = [
   ['requestV3Generated', 'pub(crate) const REQUEST_V2_EXECUTION_INDEX_OFFSET: usize = 60;'],
   ['local', 'const KIND_SELECTION: u8 = 1;'],
   ['local', 'const KIND_SETTLEMENT: u8 = 2;'],
-  ['collection', 'const BATCH_MAGIC: [u8; 8] = *b"DCGBAT01";'],
+  // THE BATCH AND ORDER RECORDS ARE LEAN-OWNED SINCE THE JOINT CLEARING, and
+  // this script no longer states one of their coordinates. `DCGBTCH2`,
+  // `DCGSORD2`, both versions, the order's whole field sequence and the batch's
+  // clearing tail reach the browser through `abi:general-clearing-v1` and
+  // `abi:general-order-v2`, printed from `ClearingPriceV1Abi` and
+  // `GeneralOrderV2Abi` by the same Lean objects the Rust emitters print.
+  // What is pinned here is the JOIN: that the crate still READS its magics from
+  // those emissions rather than restating a value beside them. A crate that
+  // stopped forwarding would leave the browser emitting Lean's magic while the
+  // program wrote another, and no byte comparison on either side would see it.
+  ['collection', 'const BATCH_MAGIC: [u8; 8] = clearing_wire::BATCH_MAGIC_V2;'],
+  ['collection', 'const ORDER_MAGIC: [u8; 8] = order_wire::ORDER_MAGIC_V2;'],
+  // The occurrence-terms preimage did NOT move: its own magic and its own
+  // version are still V1, and the version is a DIFFERENT constant from the
+  // record version the two records share. This script sourced it from
+  // `VERSION` until the joint clearing took that constant 1 -> 2, which would
+  // have made every browser-derived batch identity disagree with the chain's.
   ['collection', 'const BATCH_OCCURRENCE_TERMS_MAGIC: [u8; 8] = *b"DCGBOC01";'],
-  ['collection', 'const ORDER_MAGIC: [u8; 8] = *b"DCGORD01";'],
+  ['collection', 'const OCCURRENCE_TERMS_VERSION: u16 = 1;'],
   ['candidate', 'pub const MAGIC: [u8; 8] = *b"DCGSUB01";'],
   ['verifier', 'const VERIFIER_MAGIC: [u8; 8] = *b"DCGVFY02";'],
   ['runtimeWire', 'pub const VERIFIED_CANDIDATE_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x56, 0x45, 0x52, 0x30, 0x32];'],
@@ -240,9 +256,7 @@ output += 'export const GENERAL_REQUEST_MAGIC_V2 = Uint8Array.from([0x44, 0x43, 
 output += 'export const GENERAL_REQUEST_MAGIC_V3 = Uint8Array.from([0x44, 0x43, 0x47, 0x52, 0x45, 0x51, 0x30, 0x33]);\n';
 output += 'export const GENERAL_SELECTION_MAGIC_V2 = Uint8Array.from([0x44, 0x43, 0x47, 0x53, 0x45, 0x4c, 0x30, 0x32]);\n';
 output += 'export const GENERAL_SETTLEMENT_MAGIC_V2 = Uint8Array.from([0x44, 0x43, 0x47, 0x53, 0x45, 0x54, 0x30, 0x32]);\n';
-output += 'export const GENERAL_BATCH_MAGIC_V1 = Uint8Array.from([0x44, 0x43, 0x47, 0x42, 0x41, 0x54, 0x30, 0x31]);\n';
 output += array('GENERAL_BATCH_OCCURRENCE_TERMS_MAGIC_V1', bytes('collection', 'BATCH_OCCURRENCE_TERMS_MAGIC'));
-output += 'export const GENERAL_ORDER_MAGIC_V1 = Uint8Array.from([0x44, 0x43, 0x47, 0x4f, 0x52, 0x44, 0x30, 0x31]);\n';
 output += array('GENERAL_SUBMISSION_MAGIC_V1', associatedBytes('candidate', 'GeneralCandidateLayoutV1', 'MAGIC'));
 output += array('GENERAL_VERIFIER_MAGIC_V2', bytes('verifier', 'VERIFIER_MAGIC'));
 output += array('GENERAL_VERIFIED_CANDIDATE_MAGIC_V2', bytes('runtime', 'VERIFIED_CANDIDATE_MAGIC'));
@@ -269,14 +283,8 @@ for (const [name, value] of [
   ['GENERAL_SELECTION_VERSION_V2', scalar('selection', 'VERSION')],
   ['GENERAL_SETTLEMENT_HEADER_BYTES_V2', scalar('runtime', 'SETTLEMENT_CURSOR_HEADER_BYTES_V2')],
   ['GENERAL_SETTLEMENT_VERSION_V2', scalar('runtime', 'RUNTIME_WIDTH_VERSION_V2')],
-  ['GENERAL_BATCH_BYTES_V1', scalar('collection', 'GENERAL_BATCH_BYTES_V1')],
-  ['GENERAL_BATCH_VERSION_V1', scalar('collection', 'VERSION')],
   ['GENERAL_BATCH_OCCURRENCE_TERMS_BYTES_V1', scalar('collection', 'GENERAL_BATCH_OCCURRENCE_TERMS_BYTES_V1')],
-  ['GENERAL_BATCH_OCCURRENCE_TERMS_VERSION_V1', scalar('collection', 'VERSION')],
-  ['GENERAL_ORDER_HEADER_BYTES_V1', scalar('collection', 'GENERAL_ORDER_HEADER_BYTES_V1')],
-  ['GENERAL_ORDER_VERSION_V1', scalar('collection', 'VERSION')],
-  ['GENERAL_ORDER_STATE_BYTES_V1', scalar('collection', 'GENERAL_ORDER_STATE_BYTES_V1')],
-  ['GENERAL_ORDER_ROW_STRIDE_V1', scalar('collection', 'GENERAL_ORDER_ROW_STRIDE_V1')],
+  ['GENERAL_BATCH_OCCURRENCE_TERMS_VERSION_V1', scalar('collection', 'OCCURRENCE_TERMS_VERSION')],
   ['GENERAL_SUBMISSION_BYTES_V1', scalar('candidate', 'GENERAL_CANDIDATE_BYTES_V1')],
   ['GENERAL_VERIFIER_HEADER_BYTES_V2', scalar('verifier', 'RUNTIME_VERIFIER_HEADER_BYTES_V2')],
   ['GENERAL_VERIFIER_VERSION_V2', scalar('verifier', 'VERSION')],
@@ -297,8 +305,6 @@ for (const [name, value] of [
   ['GENERAL_CLOSE_CANDIDATE_BATCH_ACCOUNT_V3', actionMatchScalar('state', 'general_readonly_evidence_start_v3', 'CloseCandidate')],
   ['GENERAL_CLOSE_CANDIDATE_CHILD_START_V3', actionMatchScalar('state', 'general_readonly_evidence_start_v3', 'CloseCandidate') + 1],
 ]) output += `export const ${name} = ${value} as const;\n`;
-output += `export const GENERAL_ORDER_STATE_OFFSET_V1 = ${scalar('collection', 'GENERAL_ORDER_HEADER_BYTES_V1')} as const;\n`;
-output += `export const GENERAL_ORDER_ROW_BASE_V1 = ${scalar('collection', 'GENERAL_ORDER_HEADER_BYTES_V1') + scalar('collection', 'GENERAL_ORDER_STATE_BYTES_V1')} as const;\n`;
 for (const name of [
   'ENVELOPE_REQUEST_BYTES_OFFSET', 'ENVELOPE_RELEASE_SET_OFFSET', 'ENVELOPE_MARKET_OFFSET',
   'ENVELOPE_GENERATION_OFFSET', 'ENVELOPE_ROOT_PRESTATE_DIGEST_OFFSET',
@@ -335,26 +341,40 @@ output += layoutOffsets('local', 'GeneralLocalStateLayoutV3', 'GENERAL_LOCAL_STA
 ]);
 for (const name of actionNames) output += `export const ${name}_V2 = ${scalar('controller', name)} as const;\n`;
 for (const [name, variant] of actionNamesV3) output += `export const ${name}_V3 = ${enumTag('requestV3', 'ControllerActionV3', variant)} as const;\n`;
+// THE BATCH RECORD'S V1 PREFIX, and only it.
+//
+// The clearing tail from byte 224 on is Lean's (`ClearingPriceV1Abi`, emitted
+// to `lib/generated/generalClearingPriceV1.ts`); these nineteen coordinates are
+// not, because no Lean object states the batch prefix's field sequence at all.
+// `GeneralBatchLayoutV2` in `collection_v1.rs` is their only author, and this
+// is a scrape of it. Promoting them to a `ClearingPriceV1Abi`-style field list
+// -- so the whole record derives from one walk instead of a Lean half and a
+// Rust half -- is the named exit; it moves Rust and needs its own re-emission,
+// which is why a browser lane did not take it.
+//
+// They are `_V2` because the record is: the coordinates did not move, but the
+// magic, the version and the width did, and a browser constant that says V1
+// about a V2 record is the mirror going stale in the one way a reader cannot
+// see. The forwarding tail fields are deliberately absent from this list --
+// they read `clearing_wire::` and this scraper cannot follow that, which is the
+// same fact stated by a refusal instead of by a comment.
 for (const name of [
   'MAGIC', 'VERSION', 'PHASE', 'OUTCOME_COUNT', 'SEQUENCE', 'GENERATION', 'MARKET', 'PRODUCT_ID', 'CONFIG_ID', 'PRICE_SCALE',
   'COLLECTION_CLOSE_SLOT', 'MAX_ORDERS', 'SETTLEMENT_CLOSE_SLOT', 'STATUS', 'ORDER_COUNT',
   'OPENED_ROOT_REVISION', 'CLOSED_ROOT_REVISION', 'COMMITTED_QUOTE_RESERVE', 'CANCELLED_COUNT',
-]) output += `export const GENERAL_BATCH_${name}_OFFSET_V1 = ${associatedOffset('collection', 'GeneralBatchLayoutV1', name)} as const;\n`;
+]) output += `export const GENERAL_BATCH_${name}_OFFSET_V2 = ${associatedOffset('collection', 'GeneralBatchLayoutV2', name)} as const;\n`;
 for (const name of [
   'MAGIC', 'VERSION', 'PHASE', 'RESERVED_A', 'OUTCOME_COUNT', 'SEQUENCE', 'GENERATION',
   'MARKET', 'PRODUCT_ID', 'CONFIG_ID', 'PRICE_SCALE', 'MAX_ORDERS', 'RESERVED_B',
 ]) output += `export const GENERAL_BATCH_OCCURRENCE_TERMS_${name}_OFFSET_V1 = ${associatedOffset('collection', 'GeneralBatchOccurrenceTermsLayoutV1', name)} as const;\n`;
-for (const name of [
-  'MAGIC', 'VERSION', 'PHASE', 'OUTCOME_COUNT', 'NONCE', 'OWNER_ID', 'MARKET', 'BATCH_ID', 'GENERATION', 'MAX_LOTS',
-  'MAX_QUOTE_DEBIT_PER_LOT', 'VALID_UNTIL_SLOT', 'STATE_PHASE', 'STATE_ADMITTED_SLOT', 'STATE_RELEASED_SLOT',
-]) output += `export const GENERAL_ORDER_${name}_OFFSET_V1 = ${associatedOffset('collection', 'GeneralOrderLayoutV1', name)} as const;\n`;
-output += `export const GENERAL_BATCH_PHASE_V1 = ${scalar('collection', 'BATCH_PHASE')} as const;\n`;
-output += `export const GENERAL_BATCH_STATUS_COLLECTING_V1 = ${scalar('collection', 'STATUS_COLLECTING')} as const;\n`;
-output += `export const GENERAL_BATCH_STATUS_CLOSED_V1 = ${scalar('collection', 'STATUS_CLOSED')} as const;\n`;
-output += `export const GENERAL_ORDER_PHASE_V1 = ${scalar('collection', 'ORDER_PHASE')} as const;\n`;
-output += `export const GENERAL_ORDER_STATE_PLACED_V1 = ${scalar('collection', 'ORDER_PHASE_PLACED')} as const;\n`;
-output += `export const GENERAL_ORDER_STATE_CANCELLED_V1 = ${scalar('collection', 'ORDER_PHASE_CANCELLED')} as const;\n`;
-output += `export const GENERAL_ORDER_STATE_RELEASED_V1 = ${scalar('collection', 'ORDER_PHASE_RELEASED')} as const;\n`;
+// The batch record's phase byte and the order record's three escrow-state tags
+// are the last four facts of these two records that no Lean object states.
+// `GeneralOrderV2Abi` owns the side tags but not the state phase, and the batch
+// phase belongs to the prefix above; both are literals in `collection_v1.rs`.
+output += `export const GENERAL_BATCH_PHASE_V2 = ${scalar('collection', 'BATCH_PHASE')} as const;\n`;
+output += `export const GENERAL_ORDER_STATE_PLACED_V2 = ${scalar('collection', 'ORDER_PHASE_PLACED')} as const;\n`;
+output += `export const GENERAL_ORDER_STATE_CANCELLED_V2 = ${scalar('collection', 'ORDER_PHASE_CANCELLED')} as const;\n`;
+output += `export const GENERAL_ORDER_STATE_RELEASED_V2 = ${scalar('collection', 'ORDER_PHASE_RELEASED')} as const;\n`;
 output += `export const GENERAL_SUBMISSION_VERSION_V1 = ${associatedScalar('candidate', 'GeneralCandidateLayoutV1', 'VERSION')} as const;\n`;
 output += `export const GENERAL_SUBMISSION_PHASE_V1 = ${associatedScalar('candidate', 'GeneralCandidateLayoutV1', 'PHASE')} as const;\n`;
 output += `export const GENERAL_SUBMISSION_STATUS_SUBMITTED_V1 = ${scalar('candidate', 'STATUS_SUBMITTED')} as const;\n`;

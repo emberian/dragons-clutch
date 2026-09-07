@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest';
 
 import { hex, sha256 } from './bytes';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import * as ClearingAbi from './generated/generalClearingPriceV1';
+import * as OrderAbi from './generated/generalOrderV2';
 import * as Abi from './generated/generalSuccessorV5';
 import { familyRequestDigestV3 } from './shadowDigestV3';
 import devnetPlan from '../fixtures/general-successor-plan-v5.devnet.json';
@@ -133,11 +135,14 @@ async function fixture(action: GeneralSuccessorActionV5, outcomeCount = 1): Prom
   return { text: JSON.stringify(raw), raw, request: requestBytes, table, accounts: Object.freeze(accounts) };
 }
 
+/** The claims one lot of the fixture's order moves at its single outcome. */
+const ORDER_CLAIMS_PER_LOT = 3n;
+
 function localState(kind: 'selection' | 'settlement' | 'batch' | 'order', outcomeCount: number): Uint8Array {
   const body = kind === 'selection' ? new Uint8Array(Abi.GENERAL_SELECTION_BYTES_V2)
     : kind === 'settlement' ? new Uint8Array(Abi.GENERAL_SETTLEMENT_HEADER_BYTES_V2 + outcomeCount * 8)
-      : kind === 'batch' ? new Uint8Array(Abi.GENERAL_BATCH_BYTES_V1)
-        : new Uint8Array(Abi.GENERAL_ORDER_ROW_BASE_V1 + outcomeCount * Abi.GENERAL_ORDER_ROW_STRIDE_V1);
+      : kind === 'batch' ? new Uint8Array(ClearingAbi.GENERAL_CLEARING_PRICES_OFFSET_V1 + outcomeCount * ClearingAbi.GENERAL_CLEARING_TAIL_COUNT_V1 * ClearingAbi.GENERAL_CLEARING_TAIL_STRIDE_V1)
+        : new Uint8Array(OrderAbi.GENERAL_ORDER_ROW_BASE_V2 + outcomeCount * OrderAbi.GENERAL_ORDER_ROW_STRIDE_V2);
   if (kind === 'selection') {
     body.set(Abi.GENERAL_SELECTION_MAGIC_V2); putU16(body, 8, 2); body[10] = 1; putU32(body, 12, outcomeCount); putU64(body, 16, 9n); putU32(body, 24, 2); putU32(body, 28, 1); putU64(body, 32, 4n); putU64(body, 40, 100n);
     for (const [offset, value] of [[48, 1], [80, 2], [112, 3], [144, 4], [176, 5]] as const) body.set(bytes(value), offset);
@@ -146,19 +151,34 @@ function localState(kind: 'selection' | 'settlement' | 'batch' | 'order', outcom
     body.set(Abi.GENERAL_SETTLEMENT_MAGIC_V2); putU16(body, 8, 2); body[10] = Abi.GENERAL_PHASE_COLLECTING_V2; putU32(body, 12, outcomeCount); putU32(body, 16, 2); putU32(body, 20, 1); putU64(body, 24, 9n); body.set(bytes(52), 32); putU64(body, 64, 7n);
     for (let index = 0; index < outcomeCount; index += 1) putU64(body, 88 + index * 8, BigInt(index));
   } else if (kind === 'batch') {
-    body.set(Abi.GENERAL_BATCH_MAGIC_V1); putU16(body, 8, 1); body[10] = Abi.GENERAL_BATCH_PHASE_V1; putU32(body, Abi.GENERAL_BATCH_OUTCOME_COUNT_OFFSET_V1, outcomeCount);
-    putU64(body, Abi.GENERAL_BATCH_SEQUENCE_OFFSET_V1, 2n); putU64(body, Abi.GENERAL_BATCH_GENERATION_OFFSET_V1, 7n); body.set(key(1).toBytes(), Abi.GENERAL_BATCH_MARKET_OFFSET_V1);
-    body.set(bytes(2), Abi.GENERAL_BATCH_PRODUCT_ID_OFFSET_V1); body.set(bytes(3), Abi.GENERAL_BATCH_CONFIG_ID_OFFSET_V1); putU64(body, Abi.GENERAL_BATCH_PRICE_SCALE_OFFSET_V1, 100n);
-    putU64(body, Abi.GENERAL_BATCH_COLLECTION_CLOSE_SLOT_OFFSET_V1, 80n); putU32(body, Abi.GENERAL_BATCH_MAX_ORDERS_OFFSET_V1, 4); putU64(body, Abi.GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V1, 100n);
-    body[Abi.GENERAL_BATCH_STATUS_OFFSET_V1] = Abi.GENERAL_BATCH_STATUS_COLLECTING_V1; putU32(body, Abi.GENERAL_BATCH_ORDER_COUNT_OFFSET_V1, 1); putU64(body, Abi.GENERAL_BATCH_OPENED_ROOT_REVISION_OFFSET_V1, 9n);
-    putU64(body, Abi.GENERAL_BATCH_COMMITTED_QUOTE_RESERVE_OFFSET_V1, 10n);
+    // A COLLECTING V2 BATCH WITH A VACANT CLEARING TAIL. The tail is every
+    // byte from 224 on and stays zero: `ClearingPriceV1Abi.tailAdmissible`
+    // admits a clearing only at status `cleared`, and nothing on any chain
+    // writes that yet (`MERGE_NOTES_JOINT-CLEARING-2.md` §5, Wall B).
+    body.set(ClearingAbi.GENERAL_BATCH_MAGIC_V2); putU16(body, 8, ClearingAbi.GENERAL_BATCH_VERSION_V2); body[10] = Abi.GENERAL_BATCH_PHASE_V2; putU32(body, Abi.GENERAL_BATCH_OUTCOME_COUNT_OFFSET_V2, outcomeCount);
+    putU64(body, Abi.GENERAL_BATCH_SEQUENCE_OFFSET_V2, 2n); putU64(body, Abi.GENERAL_BATCH_GENERATION_OFFSET_V2, 7n); body.set(key(1).toBytes(), Abi.GENERAL_BATCH_MARKET_OFFSET_V2);
+    body.set(bytes(2), Abi.GENERAL_BATCH_PRODUCT_ID_OFFSET_V2); body.set(bytes(3), Abi.GENERAL_BATCH_CONFIG_ID_OFFSET_V2); putU64(body, Abi.GENERAL_BATCH_PRICE_SCALE_OFFSET_V2, 100n);
+    putU64(body, Abi.GENERAL_BATCH_COLLECTION_CLOSE_SLOT_OFFSET_V2, 80n); putU32(body, Abi.GENERAL_BATCH_MAX_ORDERS_OFFSET_V2, 4); putU64(body, Abi.GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V2, 100n);
+    body[Abi.GENERAL_BATCH_STATUS_OFFSET_V2] = ClearingAbi.GENERAL_BATCH_STATUS_COLLECTING_V2; putU32(body, Abi.GENERAL_BATCH_ORDER_COUNT_OFFSET_V2, 1); putU64(body, Abi.GENERAL_BATCH_OPENED_ROOT_REVISION_OFFSET_V2, 9n);
+    putU64(body, Abi.GENERAL_BATCH_COMMITTED_QUOTE_RESERVE_OFFSET_V2, 10n);
   } else {
-    body.set(Abi.GENERAL_ORDER_MAGIC_V1); putU16(body, 8, 1); body[10] = Abi.GENERAL_ORDER_PHASE_V1; putU32(body, Abi.GENERAL_ORDER_OUTCOME_COUNT_OFFSET_V1, outcomeCount);
-    putU64(body, Abi.GENERAL_ORDER_NONCE_OFFSET_V1, 2n); body.set(key(3).toBytes(), Abi.GENERAL_ORDER_OWNER_ID_OFFSET_V1); body.set(key(1).toBytes(), Abi.GENERAL_ORDER_MARKET_OFFSET_V1);
-    body.set(bytes(4), Abi.GENERAL_ORDER_BATCH_ID_OFFSET_V1); putU64(body, Abi.GENERAL_ORDER_GENERATION_OFFSET_V1, 7n); putU64(body, Abi.GENERAL_ORDER_MAX_LOTS_OFFSET_V1, 2n);
-    putU64(body, Abi.GENERAL_ORDER_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V1, 5n); putU64(body, Abi.GENERAL_ORDER_VALID_UNTIL_SLOT_OFFSET_V1, 100n);
-    body[Abi.GENERAL_ORDER_STATE_OFFSET_V1] = Abi.GENERAL_ORDER_STATE_PLACED_V1; putU64(body, Abi.GENERAL_ORDER_STATE_OFFSET_V1 + 8, 50n);
-    for (let index = 0; index < outcomeCount; index += 1) { putU64(body, Abi.GENERAL_ORDER_ROW_BASE_V1 + index * Abi.GENERAL_ORDER_ROW_STRIDE_V1, BigInt(index + 1)); putU64(body, Abi.GENERAL_ORDER_ROW_BASE_V1 + index * Abi.GENERAL_ORDER_ROW_STRIDE_V1 + 8, BigInt(index)); }
+    // A PLACED V2 BUY OF THE LAST OUTCOME, one claim per lot, and its rows
+    // DERIVED. The joint arm makes an order a single-outcome interval
+    // (`GeneralOrderV2Abi.Shape`) and `GeneralOrderV2::decode` refuses a
+    // record whose rows disagree with the shape its own header carries, so a
+    // fixture that spells its rows is a second author for them.
+    const outcome = outcomeCount - 1;
+    body.set(OrderAbi.GENERAL_ORDER_MAGIC_V2); putU16(body, OrderAbi.GENERAL_ORDER_VERSION_OFFSET_V2, OrderAbi.GENERAL_ORDER_VERSION_V2);
+    body[OrderAbi.GENERAL_ORDER_PHASE_OFFSET_V2] = OrderAbi.GENERAL_ORDER_PHASE_V2; putU32(body, OrderAbi.GENERAL_ORDER_OUTCOME_COUNT_OFFSET_V2, outcomeCount);
+    putU64(body, OrderAbi.GENERAL_ORDER_NONCE_OFFSET_V2, 2n); putU64(body, OrderAbi.GENERAL_ORDER_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2, 1n);
+    body.set(key(3).toBytes(), OrderAbi.GENERAL_ORDER_OWNER_ID_OFFSET_V2); body.set(key(1).toBytes(), OrderAbi.GENERAL_ORDER_MARKET_OFFSET_V2);
+    body.set(bytes(4), OrderAbi.GENERAL_ORDER_BATCH_ID_OFFSET_V2); putU64(body, OrderAbi.GENERAL_ORDER_GENERATION_OFFSET_V2, 7n); putU64(body, OrderAbi.GENERAL_ORDER_MAX_LOTS_OFFSET_V2, 2n);
+    putU64(body, OrderAbi.GENERAL_ORDER_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2, 5n); putU64(body, OrderAbi.GENERAL_ORDER_VALID_UNTIL_SLOT_OFFSET_V2, 100n);
+    body[OrderAbi.GENERAL_ORDER_SIDE_OFFSET_V2] = OrderAbi.GENERAL_ORDER_SIDE_BUY_V2;
+    putU32(body, OrderAbi.GENERAL_ORDER_OUTCOME_LO_OFFSET_V2, outcome); putU32(body, OrderAbi.GENERAL_ORDER_OUTCOME_HI_OFFSET_V2, outcome);
+    putU64(body, OrderAbi.GENERAL_ORDER_CLAIMS_PER_LOT_OFFSET_V2, ORDER_CLAIMS_PER_LOT);
+    body[OrderAbi.GENERAL_ORDER_STATE_PHASE_OFFSET_V2] = Abi.GENERAL_ORDER_STATE_PLACED_V2; putU64(body, OrderAbi.GENERAL_ORDER_STATE_ADMITTED_SLOT_OFFSET_V2, 50n);
+    putU64(body, OrderAbi.GENERAL_ORDER_ROW_BASE_V2 + outcome * OrderAbi.GENERAL_ORDER_ROW_STRIDE_V2, ORDER_CLAIMS_PER_LOT);
   }
   const output = new Uint8Array(Abi.GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + body.length); output.set(Abi.GENERAL_LOCAL_STATE_MAGIC_V3); putU16(output, 8, Abi.GENERAL_LOCAL_STATE_VERSION_V3);
   output[10] = kind === 'selection' ? Abi.GENERAL_LOCAL_STATE_SELECTION_KIND_V3
@@ -265,8 +285,8 @@ describe('General V5 operator-plan browser boundary', () => {
     const value = await fixture('close-candidate');
     const inspection = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(value.text));
     const batchState = localState('batch', 1); const body = Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3;
-    batchState[body + Abi.GENERAL_BATCH_STATUS_OFFSET_V1] = Abi.GENERAL_BATCH_STATUS_CLOSED_V1;
-    putU64(batchState, body + Abi.GENERAL_BATCH_CLOSED_ROOT_REVISION_OFFSET_V1, 10n);
+    batchState[body + Abi.GENERAL_BATCH_STATUS_OFFSET_V2] = ClearingAbi.GENERAL_BATCH_STATUS_CLOSED_V2;
+    putU64(batchState, body + Abi.GENERAL_BATCH_CLOSED_ROOT_REVISION_OFFSET_V2, 10n);
     const decodedBatch = decodeGeneralLocalStateV3(batchState);
     // `decodeGeneralLocalStateV3` never yields a vacant status -- only
     // `decodeStateAccount` adds that arm, for a funded System account -- so the
@@ -293,14 +313,14 @@ describe('General V5 operator-plan browser boundary', () => {
     }) as unknown as SolanaRpcClient;
 
     const current = await reacquireGeneralSuccessorStatusV5(client(considered, '99'), inspection);
-    expect(current.candidateClose).toMatchObject({ solver: key(63).toBase58(), closedBatchAccount: batchAddress, closedBatch: { phase: 'closed', settlementCloseSlot: 100n } });
+    expect(current.candidateClose).toMatchObject({ solver: key(63).toBase58(), closedBatchAccount: batchAddress, closedBatch: { status: 'closed', settlementCloseSlot: 100n } });
     await expect(reacquireGeneralSuccessorStatusV5(client(candidateState(candidate(Abi.GENERAL_SUBMISSION_STATUS_CONSIDERED_V1, 1, bytes(52), bytes(91))), '99'), inspection)).rejects.toThrow(/does not join/);
     const underfunded = candidate(Abi.GENERAL_SUBMISSION_STATUS_CONSIDERED_V1, 1, bytes(52), batchId);
     putU64(underfunded, Abi.GENERAL_SUBMISSION_CLEANUP_REMAINING_OFFSET_V1, 9n);
     await expect(reacquireGeneralSuccessorStatusV5(client(candidateState(underfunded), '99'), inspection)).rejects.toThrow(/does not join/);
     await expect(reacquireGeneralSuccessorStatusV5(client(submitted, '99'), inspection)).rejects.toThrow(/censor.*before.*deadline/i);
     const expired = await reacquireGeneralSuccessorStatusV5(client(submitted, '100'), inspection);
-    expect(expired.candidateClose?.closedBatch.phase).toBe('closed');
+    expect(expired.candidateClose?.closedBatch.status).toBe('closed');
   });
 
   it('keeps manifest ordinal distinct from source page/execution coordinates', async () => {
@@ -322,19 +342,26 @@ describe('General V5 operator-plan browser boundary', () => {
 
   it('hostile-decodes content-addressed Batch and mutable-window-masked Order state', () => {
     const batch = decodeGeneralLocalStateV3(localState('batch', 258)).status;
-    expect(batch).toMatchObject({ kind: 'batch', phase: 'collecting', outcomeCount: 258, generation: 7n, orderCount: 1, committedQuoteReserve: 10n });
+    expect(batch).toMatchObject({ kind: 'batch', status: 'collecting', outcomeCount: 258, generation: 7n, orderCount: 1, committedQuoteReserve: 10n, liveOrderCount: 1, clearing: null });
     const order = decodeGeneralLocalStateV3(localState('order', 258)).status;
-    expect(order).toMatchObject({ kind: 'order', phase: 'placed', outcomeCount: 258, generation: 7n, maxLots: 2n, admittedSlot: 50n });
+    expect(order).toMatchObject({ kind: 'order', phase: 'placed', outcomeCount: 258, generation: 7n, maxLots: 2n, admittedSlot: 50n, side: 'buy', outcomeLo: 257, outcomeHi: 257, claimsPerLot: ORDER_CLAIMS_PER_LOT });
     if (order.kind !== 'order') throw new Error('fixture did not decode as an order');
-    expect(order.receivePerLot[257]).toBe(258n);
+    // The rows are the shape, not a second statement of it: the traded outcome
+    // carries the claims and every other coordinate is empty on both legs.
+    expect(order.rows[257]).toEqual({ receive: ORDER_CLAIMS_PER_LOT, deliver: 0n });
+    expect(order.rows[0]).toEqual({ receive: 0n, deliver: 0n });
 
     const badBatchPadding = localState('batch', 1); badBatchPadding[Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + 161] = 1;
     expect(() => decodeGeneralLocalStateV3(badBatchPadding)).toThrow(/batch/);
-    const impossibleClosedBatch = localState('batch', 1); impossibleClosedBatch[Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_BATCH_STATUS_OFFSET_V1] = Abi.GENERAL_BATCH_STATUS_CLOSED_V1;
+    const impossibleClosedBatch = localState('batch', 1); impossibleClosedBatch[Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_BATCH_STATUS_OFFSET_V2] = ClearingAbi.GENERAL_BATCH_STATUS_CLOSED_V2;
     expect(() => decodeGeneralLocalStateV3(impossibleClosedBatch)).toThrow(/lifecycle/);
-    const zeroMovement = localState('order', 1); zeroMovement.fill(0, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_ORDER_ROW_BASE_V1);
-    expect(() => decodeGeneralLocalStateV3(zeroMovement)).toThrow(/claim movement/);
-    const badOrderPadding = localState('order', 1); badOrderPadding[Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_ORDER_STATE_OFFSET_V1 + 1] = 1;
+    // V1 refused an order whose rows were all zero, which was the only way it
+    // could say "this order moves nothing". V2 says it earlier and harder: the
+    // shape carries the magnitude, so blanking the rows now contradicts a
+    // header that still claims a nonzero `claims_per_lot`.
+    const zeroMovement = localState('order', 1); zeroMovement.fill(0, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + OrderAbi.GENERAL_ORDER_ROW_BASE_V2);
+    expect(() => decodeGeneralLocalStateV3(zeroMovement)).toThrow(/rows disagree with the shape/);
+    const badOrderPadding = localState('order', 1); badOrderPadding[Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + OrderAbi.GENERAL_ORDER_STATE_OFFSET_V2 + 1] = 1;
     expect(() => decodeGeneralLocalStateV3(badOrderPadding)).toThrow(/order/);
   });
 
@@ -376,14 +403,14 @@ describe('General V5 operator-plan browser boundary', () => {
     const originalIdentity = await generalBatchOccurrenceIdentityV1(original);
 
     const laterWindowWire = originalWire.slice();
-    putU64(laterWindowWire, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_BATCH_COLLECTION_CLOSE_SLOT_OFFSET_V1, 90n);
-    putU64(laterWindowWire, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V1, 120n);
+    putU64(laterWindowWire, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_BATCH_COLLECTION_CLOSE_SLOT_OFFSET_V2, 90n);
+    putU64(laterWindowWire, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V2, 120n);
     const laterWindow = decodeGeneralLocalStateV3(laterWindowWire).status;
     if (laterWindow.kind !== 'batch') throw new Error('fixture did not decode as a batch');
     expect(await generalBatchOccurrenceIdentityV1(laterWindow)).toBe(originalIdentity);
 
     const nextSequenceWire = originalWire.slice();
-    putU64(nextSequenceWire, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_BATCH_SEQUENCE_OFFSET_V1, 3n);
+    putU64(nextSequenceWire, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3 + Abi.GENERAL_BATCH_SEQUENCE_OFFSET_V2, 3n);
     const nextSequence = decodeGeneralLocalStateV3(nextSequenceWire).status;
     if (nextSequence.kind !== 'batch') throw new Error('fixture did not decode as a batch');
     expect(await generalBatchOccurrenceIdentityV1(nextSequence)).not.toBe(originalIdentity);

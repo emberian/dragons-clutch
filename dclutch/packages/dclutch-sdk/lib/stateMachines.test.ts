@@ -361,18 +361,25 @@ describe('a route machine gate, answered from an observation', () => {
     expect(routeMachineVerdictsV1(route, [resolved])[0]!.verdict).toBe('excluded');
   });
 
-  it('answers both machines of a route gated on two of them', () => {
+  // THREE MACHINES, NOT TWO. The series family gave the root its own machine
+  // (`series-root`), and `marketPhaseAdmissionV1.ts` -- generated, byte-gated,
+  // and green -- has gated this route on all three ever since. This case
+  // enumerated two and had to be told; the SET is the generated table's, so it
+  // is read off `routeMachineStatesV1` rather than typed a second time.
+  it('answers every machine of a route gated on more than one of them', () => {
     const route = 'core/series_consume::process';
     const verdicts = routeMachineVerdictsV1(route, [
       observation('projected-custody', 'HoardLocked'),
+      observation('series-root', 'Active'),
       observation('series-ticket', 'Prepared'),
     ]);
-    expect(verdicts.map((verdict) => verdict.machine)).toEqual(['projected-custody', 'series-ticket']);
+    expect(verdicts.map((verdict) => verdict.machine)).toEqual(['projected-custody', 'series-root', 'series-ticket']);
     expect(verdicts.every((verdict) => verdict.verdict === 'admitted')).toBe(true);
 
     const half = routeMachineVerdictsV1(route, [observation('projected-custody', 'HoardOpen')]);
     expect(half[0]!.verdict).toBe('excluded');
-    expect(half[1]!.verdict).toBe('unobserved');
+    expect(half.slice(1).every((verdict) => verdict.verdict === 'unobserved')).toBe(true);
+    expect(half).toHaveLength(3);
   });
 
   /**

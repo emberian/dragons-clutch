@@ -1,3 +1,4 @@
+import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { LIVE, liveRpcAccount, mutate } from '../fixtures/liveOpenMarket';
@@ -380,8 +381,8 @@ describe('outageDisclosureV1', () => {
     view.setUint16(8, LIABILITY_BASIS_STATE_VERSION_V2, true);
     view.setUint32(12, balances.length, true);
     view.setBigUint64(16, 1n, true);
-    bytes.set(new (require('@solana/web3.js').PublicKey)(aggregate).toBytes(), 24);
-    bytes.set(new (require('@solana/web3.js').PublicKey)(owner).toBytes(), 56);
+    bytes.set(new PublicKey(aggregate).toBytes(), 24);
+    bytes.set(new PublicKey(owner).toBytes(), 56);
     balances.forEach((atoms, index) => view.setBigUint64(128 + index * 8, atoms, true));
     return bytes;
   }
@@ -420,6 +421,66 @@ describe('outageDisclosureV1', () => {
       account: { owner: cohort161.claims, executable: false, data: positionBytes(cohort161.aggregate, cohort161.owner, [0n, 0n, 0n, 0n]) },
     });
     expect(nothing.seated).toBe(false);
+  });
+
+  /**
+   * THE JOIN THE MARKET PAGE MAKES, end to end, and in ONE DIRECTION.
+   *
+   * `MarketDetailWorkspace` read the escrow Position for its lamports and threw
+   * the bytes away, so it passed `founderBondV1` a hard-coded `null` and the
+   * bond's exit sentence was unreachable on every market. It derives the
+   * seating from the same read now, and this is that composition: no new RPC,
+   * no address the page did not derive.
+   *
+   * The asymmetry is the point and is asserted both ways. A SEATED escrow is
+   * evidence -- only a refunding founding seats the whole failure column -- so
+   * the exit is named. An UNSEATED one is NOT evidence of a categorical market,
+   * so the page passes the unread `null` and the exit stays unnamed; passing
+   * `false` there would print `This market posted no founder bond`, which is
+   * the sentence `outageDisclosureV1` exists to prevent.
+   */
+  it('lets a seated escrow name the founder bond exit, and leaves an unseated one unread', () => {
+    const escrow = failureEscrowV1(cohort161.claims, cohort161.market, cohort161.aggregate, 4);
+    const supply = ['166666667', '166666667', '166666667', '166666667'];
+    const rent = 1_823_904n;
+    const heldLamports = rent + 4_031_465n;
+    const admissionBytes = new Uint8Array(PROTOCOL_POSITION_ADMISSION_BYTES_V2);
+    admissionBytes.set(PROTOCOL_POSITION_ADMISSION_MAGIC_V2, 0);
+    const view = new DataView(admissionBytes.buffer);
+    view.setUint16(PROTOCOL_POSITION_ADMISSION_MAGIC_V2.length, PROTOCOL_POSITION_WIRE_VERSION_V2, true);
+    view.setBigUint64(POSITION_ADMISSION_POSITION_RENT_OFFSET_V2, rent, true);
+    view.setBigUint64(POSITION_ADMISSION_POSITION_LAMPORTS_OFFSET_V2, heldLamports, true);
+
+    // Exactly the page's expression, with the account as its only variable.
+    const bondFrom = (account: Readonly<{ owner: string; executable: boolean; data: Uint8Array }> | null) => {
+      const seating = refundsOnFailureFromEscrowV1({
+        escrow, claimsProgramId: cohort161.claims, outcomeCount: 4, supplyAtoms: supply, account,
+      });
+      return founderBondV1({
+        escrowPositionLamports: heldLamports.toString(),
+        escrowAdmissionBytes: admissionBytes,
+        refundsOnFailure: seating.seated ? true : null,
+        phase: 'Terminal',
+        terminalWinner: 1,
+        failureOutcome: 3,
+      });
+    };
+
+    const seatedAccount = {
+      owner: cohort161.claims,
+      executable: false,
+      data: positionBytes(cohort161.aggregate, cohort161.owner, [0n, 0n, 0n, 166666667n]),
+    };
+    const named = bondFrom(seatedAccount);
+    expect(named!.bondLamports).toBe('4031465');
+    expect(named!.exit).toBe('honest');
+    expect(named!.sentence).toContain('goes back to the founder’s refund wallet');
+
+    // An empty escrow address: the bond amount still stands, the direction does not.
+    const unread = bondFrom(null);
+    expect(unread!.bondLamports).toBe('4031465');
+    expect(unread!.exit).toBeNull();
+    expect(unread!.sentence).not.toContain('posted no founder bond');
   });
 
   it('says HOLDERS ARE REFUNDED off the payout scale, not off the seating', () => {

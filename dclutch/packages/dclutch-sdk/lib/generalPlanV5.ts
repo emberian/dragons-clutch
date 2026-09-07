@@ -1,6 +1,10 @@
 import { ComputeBudgetProgram, PublicKey, VersionedTransaction } from '@solana/web3.js';
 
 import { fromHex, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import {
+  decodeGeneralBatchV2, decodeGeneralOrderV2, generalOrderIdV2,
+  type GeneralBatchRecordV2, type GeneralOrderRecordV2,
+} from './generalClearingV1';
 import * as Abi from './generated/generalSuccessorV5';
 import { SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
@@ -158,43 +162,23 @@ export type GeneralSettlementStatusV2 = Readonly<{
   inventory: ReadonlyArray<bigint>;
 }>;
 
-export type GeneralBatchStatusV1 = Readonly<{
-  kind: 'batch';
-  phase: 'collecting' | 'closed';
-  outcomeCount: number;
-  sequence: bigint;
-  generation: bigint;
-  market: string;
-  productId: string;
-  configId: string;
-  priceScale: bigint;
-  collectionCloseSlot: bigint;
-  maxOrders: number;
-  settlementCloseSlot: bigint;
-  orderCount: number;
-  openedRootRevision: bigint;
-  closedRootRevision: bigint;
-  committedQuoteReserve: bigint;
-  cancelledCount: number;
-}>;
+/**
+ * THE LOCAL-STATE PROJECTION OF THE TWO COLLECTION RECORDS, at V2.
+ *
+ * These were two hand-written decoders here until the joint clearing moved
+ * both wires: the batch to `DCGBTCH2` with a clearing tail and a third status,
+ * the order to `DCGSORD2` with a signed shape. `generalClearingV1.ts` already
+ * carried V2 decoders for both, so this module joins them rather than keeping
+ * a second reading of the same bytes -- the browser had one V1 decoder and one
+ * V2 decoder for each record, and only the V1 pair was wired to the page.
+ *
+ * The lifecycle union needs one thing the records do not carry: which record a
+ * local-state body IS, which the local-state header's `kind` byte already said
+ * before either decoder ran. That tag is all this adds.
+ */
+export type GeneralBatchStatusV2 = Readonly<{ kind: 'batch' }> & GeneralBatchRecordV2;
 
-export type GeneralOrderStatusV1 = Readonly<{
-  kind: 'order';
-  phase: 'placed' | 'cancelled' | 'released';
-  outcomeCount: number;
-  nonce: bigint;
-  owner: string;
-  market: string;
-  batchId: string;
-  generation: bigint;
-  maxLots: bigint;
-  maxQuoteDebitPerLot: bigint;
-  validUntilSlot: bigint;
-  admittedSlot: bigint;
-  releasedSlot: bigint;
-  receivePerLot: ReadonlyArray<bigint>;
-  deliverPerLot: ReadonlyArray<bigint>;
-}>;
+export type GeneralOrderStatusV2 = Readonly<{ kind: 'order' }> & GeneralOrderRecordV2;
 
 export type GeneralCandidateStatusV1 = Readonly<{
   kind: 'candidate';
@@ -267,7 +251,7 @@ export type GeneralVerifiedCandidateStatusV2 = Readonly<{
   claimOutputs: ReadonlyArray<bigint>;
 }>;
 
-export type GeneralLocalStateValueV3 = GeneralSelectionStatusV2 | GeneralSettlementStatusV2 | GeneralBatchStatusV1 | GeneralOrderStatusV1 | GeneralCandidateStatusV1 | GeneralVerifierStatusV2;
+export type GeneralLocalStateValueV3 = GeneralSelectionStatusV2 | GeneralSettlementStatusV2 | GeneralBatchStatusV2 | GeneralOrderStatusV2 | GeneralCandidateStatusV1 | GeneralVerifierStatusV2;
 
 export type GeneralLocalStateStatusV3 = Readonly<{
   status: GeneralLocalStateValueV3;
@@ -286,7 +270,7 @@ export type GeneralChainStatusV5 = Readonly<{
     cranker: string;
     solver: string;
     closedBatchAccount: string;
-    closedBatch: GeneralBatchStatusV1;
+    closedBatch: GeneralBatchStatusV2;
   }> | null;
 }>;
 
@@ -680,72 +664,12 @@ function decodeSettlement(bytes: Uint8Array): GeneralSettlementStatusV2 {
   });
 }
 
-function decodeBatch(bytes: Uint8Array): GeneralBatchStatusV1 {
-  if (bytes.length !== Abi.GENERAL_BATCH_BYTES_V1
-      || !same(slice(bytes, Abi.GENERAL_BATCH_MAGIC_OFFSET_V1, Abi.GENERAL_BATCH_MAGIC_V1.length), Abi.GENERAL_BATCH_MAGIC_V1)
-      || u16(bytes, Abi.GENERAL_BATCH_VERSION_OFFSET_V1) !== Abi.GENERAL_BATCH_VERSION_V1
-      || bytes[Abi.GENERAL_BATCH_PHASE_OFFSET_V1] !== Abi.GENERAL_BATCH_PHASE_V1
-      || bytes[Abi.GENERAL_BATCH_PHASE_OFFSET_V1 + Uint8Array.BYTES_PER_ELEMENT] !== 0) throw new Error('General batch body is not exact V1');
-  const afterMaxOrders = Abi.GENERAL_BATCH_MAX_ORDERS_OFFSET_V1 + Uint32Array.BYTES_PER_ELEMENT;
-  const afterStatus = Abi.GENERAL_BATCH_STATUS_OFFSET_V1 + Uint8Array.BYTES_PER_ELEMENT;
-  const afterCancelledCount = Abi.GENERAL_BATCH_CANCELLED_COUNT_OFFSET_V1 + Uint32Array.BYTES_PER_ELEMENT;
-  requireZero(bytes, afterMaxOrders, Abi.GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V1 - afterMaxOrders, 'General batch');
-  requireZero(bytes, afterStatus, Abi.GENERAL_BATCH_ORDER_COUNT_OFFSET_V1 - afterStatus, 'General batch');
-  requireZero(bytes, afterCancelledCount, Abi.GENERAL_BATCH_BYTES_V1 - afterCancelledCount, 'General batch');
-  const phaseByte = bytes[Abi.GENERAL_BATCH_STATUS_OFFSET_V1];
-  const phase = phaseByte === Abi.GENERAL_BATCH_STATUS_COLLECTING_V1 ? 'collecting'
-    : phaseByte === Abi.GENERAL_BATCH_STATUS_CLOSED_V1 ? 'closed' : null;
-  if (phase === null) throw new Error('General batch status is unknown');
-  const value = Object.freeze({
-    kind: 'batch' as const, phase,
-    outcomeCount: readU32(bytes, Abi.GENERAL_BATCH_OUTCOME_COUNT_OFFSET_V1),
-    sequence: u64(bytes, Abi.GENERAL_BATCH_SEQUENCE_OFFSET_V1), generation: u64(bytes, Abi.GENERAL_BATCH_GENERATION_OFFSET_V1),
-    market: pubkeyHex(bytes, Abi.GENERAL_BATCH_MARKET_OFFSET_V1, 'batch Market'),
-    productId: idHex(bytes, Abi.GENERAL_BATCH_PRODUCT_ID_OFFSET_V1, 'batch Product'), configId: idHex(bytes, Abi.GENERAL_BATCH_CONFIG_ID_OFFSET_V1, 'batch config'),
-    priceScale: u64(bytes, Abi.GENERAL_BATCH_PRICE_SCALE_OFFSET_V1), collectionCloseSlot: u64(bytes, Abi.GENERAL_BATCH_COLLECTION_CLOSE_SLOT_OFFSET_V1),
-    maxOrders: readU32(bytes, Abi.GENERAL_BATCH_MAX_ORDERS_OFFSET_V1), settlementCloseSlot: u64(bytes, Abi.GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V1),
-    orderCount: readU32(bytes, Abi.GENERAL_BATCH_ORDER_COUNT_OFFSET_V1), openedRootRevision: u64(bytes, Abi.GENERAL_BATCH_OPENED_ROOT_REVISION_OFFSET_V1),
-    closedRootRevision: u64(bytes, Abi.GENERAL_BATCH_CLOSED_ROOT_REVISION_OFFSET_V1), committedQuoteReserve: u64(bytes, Abi.GENERAL_BATCH_COMMITTED_QUOTE_RESERVE_OFFSET_V1),
-    cancelledCount: readU32(bytes, Abi.GENERAL_BATCH_CANCELLED_COUNT_OFFSET_V1),
-  });
-  if (value.outcomeCount === 0 || value.generation === 0n || value.priceScale === 0n || value.maxOrders === 0 || value.openedRootRevision === 0n
-      || value.settlementCloseSlot <= value.collectionCloseSlot || value.orderCount > value.maxOrders || value.cancelledCount > value.orderCount
-      || (phase === 'collecting' ? value.closedRootRevision !== 0n : value.closedRootRevision <= value.openedRootRevision)) throw new Error('General batch carries noncanonical opening or lifecycle facts');
-  return value;
+function decodeBatch(bytes: Uint8Array): GeneralBatchStatusV2 {
+  return Object.freeze({ kind: 'batch' as const, ...decodeGeneralBatchV2(bytes) });
 }
 
-function decodeOrder(bytes: Uint8Array): GeneralOrderStatusV1 {
-  if (bytes.length < Abi.GENERAL_ORDER_ROW_BASE_V1
-      || !same(slice(bytes, Abi.GENERAL_ORDER_MAGIC_OFFSET_V1, Abi.GENERAL_ORDER_MAGIC_V1.length), Abi.GENERAL_ORDER_MAGIC_V1)
-      || u16(bytes, Abi.GENERAL_ORDER_VERSION_OFFSET_V1) !== Abi.GENERAL_ORDER_VERSION_V1
-      || bytes[Abi.GENERAL_ORDER_PHASE_OFFSET_V1] !== Abi.GENERAL_ORDER_PHASE_V1
-      || bytes[Abi.GENERAL_ORDER_PHASE_OFFSET_V1 + Uint8Array.BYTES_PER_ELEMENT] !== 0) throw new Error('General order body is not exact V1');
-  const afterNonce = Abi.GENERAL_ORDER_NONCE_OFFSET_V1 + BigUint64Array.BYTES_PER_ELEMENT;
-  const afterStatePhase = Abi.GENERAL_ORDER_STATE_PHASE_OFFSET_V1 + Uint8Array.BYTES_PER_ELEMENT;
-  const afterReleasedSlot = Abi.GENERAL_ORDER_STATE_RELEASED_SLOT_OFFSET_V1 + BigUint64Array.BYTES_PER_ELEMENT;
-  requireZero(bytes, afterNonce, Abi.GENERAL_ORDER_OWNER_ID_OFFSET_V1 - afterNonce, 'General order');
-  requireZero(bytes, afterStatePhase, Abi.GENERAL_ORDER_STATE_ADMITTED_SLOT_OFFSET_V1 - afterStatePhase, 'General order');
-  requireZero(bytes, afterReleasedSlot, Abi.GENERAL_ORDER_STATE_OFFSET_V1 + Abi.GENERAL_ORDER_STATE_BYTES_V1 - afterReleasedSlot, 'General order');
-  const outcomeCount = readU32(bytes, Abi.GENERAL_ORDER_OUTCOME_COUNT_OFFSET_V1);
-  if (outcomeCount === 0 || bytes.length !== Abi.GENERAL_ORDER_ROW_BASE_V1 + outcomeCount * Abi.GENERAL_ORDER_ROW_STRIDE_V1) throw new Error('General order runtime width differs from Product N');
-  const phaseByte = bytes[Abi.GENERAL_ORDER_STATE_PHASE_OFFSET_V1];
-  const phase = phaseByte === Abi.GENERAL_ORDER_STATE_PLACED_V1 ? 'placed'
-    : phaseByte === Abi.GENERAL_ORDER_STATE_CANCELLED_V1 ? 'cancelled'
-      : phaseByte === Abi.GENERAL_ORDER_STATE_RELEASED_V1 ? 'released' : null;
-  if (phase === null) throw new Error('General order state is unknown');
-  const receivePerLot = Object.freeze(Array.from({ length: outcomeCount }, (_, index) => u64(bytes, Abi.GENERAL_ORDER_ROW_BASE_V1 + index * Abi.GENERAL_ORDER_ROW_STRIDE_V1)));
-  const deliverPerLot = Object.freeze(Array.from({ length: outcomeCount }, (_, index) => u64(bytes, Abi.GENERAL_ORDER_ROW_BASE_V1 + index * Abi.GENERAL_ORDER_ROW_STRIDE_V1 + BigUint64Array.BYTES_PER_ELEMENT)));
-  if (!receivePerLot.some((quantity, index) => quantity !== 0n || deliverPerLot[index] !== 0n)) throw new Error('General order has no claim movement');
-  const value = Object.freeze({
-    kind: 'order' as const, phase, outcomeCount,
-    nonce: u64(bytes, Abi.GENERAL_ORDER_NONCE_OFFSET_V1), owner: pubkeyHex(bytes, Abi.GENERAL_ORDER_OWNER_ID_OFFSET_V1, 'order owner'),
-    market: pubkeyHex(bytes, Abi.GENERAL_ORDER_MARKET_OFFSET_V1, 'order Market'), batchId: idHex(bytes, Abi.GENERAL_ORDER_BATCH_ID_OFFSET_V1, 'order Batch'),
-    generation: u64(bytes, Abi.GENERAL_ORDER_GENERATION_OFFSET_V1), maxLots: u64(bytes, Abi.GENERAL_ORDER_MAX_LOTS_OFFSET_V1),
-    maxQuoteDebitPerLot: u64(bytes, Abi.GENERAL_ORDER_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V1), validUntilSlot: u64(bytes, Abi.GENERAL_ORDER_VALID_UNTIL_SLOT_OFFSET_V1),
-    admittedSlot: u64(bytes, Abi.GENERAL_ORDER_STATE_ADMITTED_SLOT_OFFSET_V1), releasedSlot: u64(bytes, Abi.GENERAL_ORDER_STATE_RELEASED_SLOT_OFFSET_V1), receivePerLot, deliverPerLot,
-  });
-  if (value.generation === 0n || value.maxLots === 0n || (phase === 'placed' ? value.releasedSlot !== 0n : value.releasedSlot < value.admittedSlot)) throw new Error('General order carries noncanonical immutable or lifecycle facts');
-  return value;
+function decodeOrder(bytes: Uint8Array): GeneralOrderStatusV2 {
+  return Object.freeze({ kind: 'order' as const, ...decodeGeneralOrderV2(bytes) });
 }
 
 /** Hostile-decode one exact General candidate submission body. */
@@ -936,17 +860,18 @@ async function recordIdentity(value: GeneralLocalStateStatusV3 | Readonly<{ stat
   if (value.status.kind === 'candidate') return value.status.candidateId;
   if (account === null) throw new Error('General state identity has no observed account');
   const body = slice(account.data, Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3, account.data.length - Abi.GENERAL_LOCAL_STATE_BODY_OFFSET_V3);
-  if (value.status.kind === 'order') {
-    const preimage = new Uint8Array(body.length - Abi.GENERAL_ORDER_STATE_BYTES_V1);
-    preimage.set(slice(body, 0, Abi.GENERAL_ORDER_STATE_OFFSET_V1));
-    preimage.set(slice(body, Abi.GENERAL_ORDER_ROW_BASE_V1, body.length - Abi.GENERAL_ORDER_ROW_BASE_V1), Abi.GENERAL_ORDER_STATE_OFFSET_V1);
-    return hex(await sha256(preimage));
-  }
+  // THE V2 IDENTITY IS THE SIGNED HEADER ALONE, and this used to be the V1
+  // rule: header plus rows, with the escrow window spliced out. Under
+  // `GeneralOrderV2Abi` the rows are DERIVED from the shape the header already
+  // states, so digesting them would commit to a restatement;
+  // `general_order_identity_v2` in `collection_v1.rs` takes the first 184 bytes
+  // and nothing else, and `generalOrderIdV2` is that rule.
+  if (value.status.kind === 'order') return generalOrderIdV2(body);
   return null;
 }
 
 /** Derive the exact slot-independent occurrence identity used by the Rust runtime and operator. */
-export async function generalBatchOccurrenceIdentityV1(value: GeneralBatchStatusV1): Promise<string> {
+export async function generalBatchOccurrenceIdentityV1(value: GeneralBatchStatusV2): Promise<string> {
   const outcomeCount = integer(value.outcomeCount, 'General batch outcome count');
   const maxOrders = integer(value.maxOrders, 'General batch max orders');
   if (outcomeCount === 0 || maxOrders === 0 || value.generation === 0n || value.priceScale === 0n) throw new Error('General batch occurrence terms contain a zero required scalar');
@@ -959,7 +884,7 @@ export async function generalBatchOccurrenceIdentityV1(value: GeneralBatchStatus
   const terms = new Uint8Array(Abi.GENERAL_BATCH_OCCURRENCE_TERMS_BYTES_V1);
   terms.set(Abi.GENERAL_BATCH_OCCURRENCE_TERMS_MAGIC_V1, Abi.GENERAL_BATCH_OCCURRENCE_TERMS_MAGIC_OFFSET_V1);
   writeU16(terms, Abi.GENERAL_BATCH_OCCURRENCE_TERMS_VERSION_OFFSET_V1, Abi.GENERAL_BATCH_OCCURRENCE_TERMS_VERSION_V1);
-  terms[Abi.GENERAL_BATCH_OCCURRENCE_TERMS_PHASE_OFFSET_V1] = Abi.GENERAL_BATCH_PHASE_V1;
+  terms[Abi.GENERAL_BATCH_OCCURRENCE_TERMS_PHASE_OFFSET_V1] = Abi.GENERAL_BATCH_PHASE_V2;
   writeU32(terms, Abi.GENERAL_BATCH_OCCURRENCE_TERMS_OUTCOME_COUNT_OFFSET_V1, outcomeCount);
   writeU64(terms, Abi.GENERAL_BATCH_OCCURRENCE_TERMS_SEQUENCE_OFFSET_V1, value.sequence);
   writeU64(terms, Abi.GENERAL_BATCH_OCCURRENCE_TERMS_GENERATION_OFFSET_V1, value.generation);
@@ -1001,15 +926,15 @@ async function validateActionPrestate(
   } else if (request.action === 'open-batch') {
     if (state !== 'vacant') throw new Error('OpenBatch requires a funded vacant batch successor');
   } else if (request.action === 'place-order') {
-    if (state === 'vacant' || state.kind !== 'batch' || state.phase !== 'collecting' || state.outcomeCount !== inspection.plan.outcomeCount
+    if (state === 'vacant' || state.kind !== 'batch' || state.status !== 'collecting' || state.outcomeCount !== inspection.plan.outcomeCount
         || state.market !== inspection.plan.market || state.generation !== inspection.plan.generation || secondary !== 'vacant') throw new Error('PlaceOrder prestate is not its exact collecting batch and vacant order successor');
   } else if (request.action === 'cancel-order') {
-    if (state === 'vacant' || state.kind !== 'batch' || state.phase !== 'collecting' || state.outcomeCount !== inspection.plan.outcomeCount
+    if (state === 'vacant' || state.kind !== 'batch' || state.status !== 'collecting' || state.outcomeCount !== inspection.plan.outcomeCount
         || state.market !== inspection.plan.market || state.generation !== inspection.plan.generation || secondary === null || secondary === 'vacant' || secondary.kind !== 'order'
         || secondary.phase !== 'placed' || secondary.outcomeCount !== state.outcomeCount || secondary.market !== state.market || secondary.generation !== state.generation
         || secondary.batchId !== primaryIdentity || request.subjectId !== secondaryIdentity) throw new Error('CancelOrder prestate does not join its exact collecting batch and placed order');
   } else if (request.action === 'close-batch') {
-    if (state === 'vacant' || state.kind !== 'batch' || state.phase !== 'collecting' || state.outcomeCount !== inspection.plan.outcomeCount
+    if (state === 'vacant' || state.kind !== 'batch' || state.status !== 'collecting' || state.outcomeCount !== inspection.plan.outcomeCount
         || state.market !== inspection.plan.market || state.generation !== inspection.plan.generation || request.subjectId !== primaryIdentity) throw new Error('CloseBatch prestate is not its exact collecting batch');
   } else if (request.action === 'release-order') {
     if (state === 'vacant' || state.kind !== 'order' || state.phase !== 'placed' || state.outcomeCount !== inspection.plan.outcomeCount
@@ -1029,7 +954,7 @@ async function validateActionPrestate(
     if (state === 'vacant' || state.kind !== 'candidate' || state.outcomeCount !== inspection.plan.outcomeCount
         || state.candidateId !== request.subjectId || candidateClose === null
         || state.cleanupRemaining !== state.rewardRateLamports
-        || candidateClose.solver !== state.solver || candidateClose.closedBatch.phase !== 'closed'
+        || candidateClose.solver !== state.solver || candidateClose.closedBatch.status !== 'closed'
         || candidateClose.closedBatch.outcomeCount !== state.outcomeCount
         || candidateClose.closedBatch.market !== inspection.plan.market
         || candidateClose.closedBatch.generation !== inspection.plan.generation

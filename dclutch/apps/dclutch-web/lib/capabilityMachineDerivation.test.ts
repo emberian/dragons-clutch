@@ -98,7 +98,7 @@ describe('the intersection of declared routes and machine-gated routes', () => {
     // before this lane the figure was zero of six.
     expect(coverage.decodable).toEqual(coverage.machines);
     expect(coverage.machines).toEqual([
-      'direct-root', 'funding-ledger', 'projected-custody', 'series-ticket', 'source',
+      'direct-root', 'funding-ledger', 'projected-custody', 'series-root', 'series-ticket', 'source',
     ]);
     // Every act's machine gate list is therefore empty, and that is the
     // consequence rather than a second assumption.
@@ -206,9 +206,11 @@ describe('a machine gate answered from a decoded observation', () => {
   /**
    * A machine refusal outranks an unread sibling.
    *
-   * `core/series_consume::process` is gated on two machines. With one excluded
-   * and the other unread the answer is the refusal: an act whose projection is
-   * in the wrong phase cannot become attemptable by reading a ticket.
+   * `core/series_consume::process` is gated on THREE machines -- the series
+   * family gave the root its own, and the generated gate table has said so
+   * since it landed. With one excluded and the others unread the answer is the
+   * refusal: an act whose projection is in the wrong phase cannot become
+   * attemptable by reading a ticket.
    */
   it('publishes the refusal when one machine excludes and another is unread', () => {
     const route = 'core/series_consume::process';
@@ -221,8 +223,8 @@ describe('a machine gate answered from a decoded observation', () => {
     expect(verdict.status).toBe('wrong-phase');
     expect(verdict.reason).toContain('projected-custody');
     expect(verdict.reason).toContain(wrong);
-    // The unread sibling is still reported rather than dropped.
-    expect(verdict.phaseGate.unobservableMachines).toEqual(['series-ticket']);
+    // The unread siblings are still reported rather than dropped.
+    expect(verdict.phaseGate.unobservableMachines).toEqual(['series-root', 'series-ticket']);
   });
 
   /**

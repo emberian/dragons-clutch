@@ -4,8 +4,6 @@
     "lib/dealerEquityChain.ts\tDCLTCPS1",
     "lib/decoders.ts\tDCLRNTL2",
     "lib/directMakerReplay.ts\tDCLTDMR1",
-    "lib/generalClearingV1.ts\tDCGBTCH2",
-    "lib/generalClearingV1.ts\tDCGSORD2",
     "lib/rationalTerminalHotV3.ts\tDCLTPAY3"
   ],
   "domains": [
@@ -23,8 +21,7 @@
     "lib/decoders.ts": 14,
     "lib/directHotChain.ts": 45,
     "lib/directMakerReplay.ts": 2,
-    "lib/generalClearingV1.ts": 6,
-    "lib/generalPlanV5.ts": 14,
+    "lib/generalPlanV5.ts": 13,
     "lib/infrastructure.ts": 14,
     "lib/marketCoreV2.ts": 7,
     "lib/operatorSurface.ts": 5,

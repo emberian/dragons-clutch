@@ -10,10 +10,10 @@ import { useDeploymentV1 } from '@/lib/deploymentStore';
 
 import { type CapabilityFundingQuoteV1 } from '@dclutch/sdk/capabilityManifest';
 import {
-  failureEscrowAccountsV1,
-  failureEscrowOwnerV1,
+  failureEscrowV1,
   founderBondV1,
   inspectMarketDetailV1,
+  refundsOnFailureFromEscrowV1,
   requiredBackingMeaningV1,
   terminalOutcomeMeaningV1,
   type MarketDetailV1,
@@ -59,10 +59,27 @@ type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; detail: MarketDetailV1; facts: ConnectionFacts }>;
 
-/** The failure escrow's Position balance and its admission bytes, as read. */
+/**
+ * The failure escrow's Position balance, its admission bytes, and what its
+ * CONTENTS say about whether this market refunds.
+ *
+ * The page already read the Position account to get its lamports and then
+ * threw the bytes away, so `refundsOnFailure` was hard-coded `null` below and
+ * the bond's exit sentence could never be reached. The seating is derived from
+ * the same read: no second RPC, and no address this page did not derive.
+ *
+ * ONE DIRECTION ONLY, which is why this is `boolean | null` and never `false`.
+ * `EscrowSeatingV1.refundsOnFailure` is evidence when it is `true` -- only a
+ * refunding founding seats the whole failure column in this Position -- and is
+ * not evidence of the opposite when it is `false`, because a market founded to
+ * refund before that founding existed carries the column with its founder and
+ * reads unseated. An unseated escrow is therefore UNREAD here, which is the
+ * same answer `outageDisclosureV1` gives in its own voice.
+ */
 type FailureEscrowReadingV1 = Readonly<{
   positionLamports: string | null;
   admissionBytes: Uint8Array | null;
+  refundsOnFailure: boolean | null;
 }>;
 
 function errorMessage(error: unknown): string {
@@ -503,14 +520,21 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
           && next.card.liability.supplyAtoms.length >= 2) {
         const liability = next.card.liability;
         try {
-          const owner = failureEscrowOwnerV1(liability.claimsProgramId, address, liability.supplyAtoms.length - 1);
-          const pair = failureEscrowAccountsV1(liability.claimsProgramId, liability.aggregateAddress, owner);
-          const read = await client.multipleAccounts([pair.position, pair.admission], next.floorSlot);
+          const escrowAccounts = failureEscrowV1(liability.claimsProgramId, address, liability.aggregateAddress, liability.supplyAtoms.length);
+          const read = await client.multipleAccounts([escrowAccounts.position, escrowAccounts.admission], next.floorSlot);
           const position = read.accounts[0]?.account ?? null;
           const admission = read.accounts[1]?.account ?? null;
+          const seating = refundsOnFailureFromEscrowV1({
+            escrow: escrowAccounts,
+            claimsProgramId: liability.claimsProgramId,
+            outcomeCount: liability.supplyAtoms.length,
+            supplyAtoms: liability.supplyAtoms,
+            account: position,
+          });
           setEscrow(Object.freeze({
             positionLamports: position === null ? null : position.lamports,
             admissionBytes: admission === null ? null : admission.data,
+            refundsOnFailure: seating.seated ? true : null,
           }));
         } catch {
           // Left null, and the bond then reads as unread rather than as none.
@@ -626,18 +650,29 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
    * a subtraction of two u64s off the escrow's own accounts, so it is exact and
    * it is nobody's assertion.
    *
-   * `refundsOnFailure` is passed NULL on purpose. Which way the bond exits is
-   * the payout scale's answer, and this page does not read the Product basis --
-   * the same absence `outageDisclosureV1` already reports in its own voice. So
-   * the amount is stated (a subtraction no scale changes) and the direction is
-   * not. Plumbing the basis through this read would light the exit sentence up.
+   * `refundsOnFailure` NOW COMES FROM THE ESCROW, one direction only. A seated
+   * failure column is evidence this market refunds -- only a refunding founding
+   * seats it -- so a seated escrow names the exit; an unseated one passes the
+   * honest `null` and the direction stays unstated, exactly as before.
+   *
+   * WHAT IS STILL MISSING, said exactly: nothing here can ever produce `false`.
+   * That is `ProductBasisFactsV3.refundsOnFailure`, from the linked
+   * `ProductBasisV3` record, and this page cannot address that record: it is
+   * content-addressed by the sha256 of its own bytes
+   * (`deriveFinalizedRecordAddressesV1(registry, GRADED_BASIS_RECORD_SCHEMA_ID_V3, digest)`),
+   * so you must already hold the account to derive where it lives. The only
+   * in-tree sources of that address are the Direct hot-route manifest's
+   * `HOT_LINKED_BASIS_RAW_ACCOUNT_V3` slot -- an operator-published document
+   * pasted on `/trade` -- and a founding's own `linkedBasisRecord` input. The
+   * aggregate's `liabilityBasisId` is the SEMANTIC basis id, not that content
+   * digest, so it cannot stand in.
    */
   const founderBond = decoded === null || decoded.liability.status !== 'bound' || decoded.liability.supplyAtoms.length < 2
     ? null
     : founderBondV1({
       escrowPositionLamports: escrow?.positionLamports ?? null,
       escrowAdmissionBytes: escrow?.admissionBytes ?? null,
-      refundsOnFailure: null,
+      refundsOnFailure: escrow?.refundsOnFailure ?? null,
       phase: decoded.phase,
       terminalWinner: decoded.settlement.status === 'terminal' ? decoded.settlement.winner : null,
       failureOutcome: decoded.liability.supplyAtoms.length - 1,

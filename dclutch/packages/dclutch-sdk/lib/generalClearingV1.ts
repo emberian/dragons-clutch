@@ -1,92 +1,129 @@
 import { hex, isZero, pubkey, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import {
+  GENERAL_BATCH_MAGIC_V2,
+  GENERAL_BATCH_STATUS_CLEARED_V2,
+  GENERAL_BATCH_STATUS_CLOSED_V2,
+  GENERAL_BATCH_STATUS_COLLECTING_V2,
+  GENERAL_BATCH_V1_BYTES,
+  GENERAL_BATCH_VERSION_V2,
+  GENERAL_CLEARING_CLEARED_CANDIDATE_ID_OFFSET_V1,
+  GENERAL_CLEARING_CLEARED_SLOT_OFFSET_V1,
+  GENERAL_CLEARING_FILLED_LOTS_OFFSET_V1,
+  GENERAL_CLEARING_LIVE_ORDER_COUNT_OFFSET_V1,
+  GENERAL_CLEARING_MOVE_MERGE_V1,
+  GENERAL_CLEARING_MOVE_MINT_V1,
+  GENERAL_CLEARING_MOVE_NONE_V1,
+  GENERAL_CLEARING_PRICES_OFFSET_V1,
+  GENERAL_CLEARING_RESERVED_MOVE_BYTES_V1,
+  GENERAL_CLEARING_RESERVED_MOVE_OFFSET_V1,
+  GENERAL_CLEARING_RESERVED_TAIL_BYTES_V1,
+  GENERAL_CLEARING_RESERVED_TAIL_OFFSET_V1,
+  GENERAL_CLEARING_SETS_MOVE_OFFSET_V1,
+  GENERAL_CLEARING_SETS_QUANTITY_OFFSET_V1,
+  GENERAL_CLEARING_TAIL_COUNT_V1,
+  GENERAL_CLEARING_TAIL_STRIDE_V1,
+} from './generated/generalClearingPriceV1';
+import {
+  GENERAL_ORDER_BATCH_ID_OFFSET_V2,
+  GENERAL_ORDER_CLAIMS_PER_LOT_OFFSET_V2,
+  GENERAL_ORDER_GENERATION_OFFSET_V2,
+  GENERAL_ORDER_HEADER_BYTES_V2,
+  GENERAL_ORDER_MAGIC_BYTES_V2,
+  GENERAL_ORDER_MAGIC_OFFSET_V2,
+  GENERAL_ORDER_MAGIC_V2,
+  GENERAL_ORDER_MARKET_OFFSET_V2,
+  GENERAL_ORDER_MAX_LOTS_OFFSET_V2,
+  GENERAL_ORDER_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2,
+  GENERAL_ORDER_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2,
+  GENERAL_ORDER_NONCE_OFFSET_V2,
+  GENERAL_ORDER_OUTCOME_COUNT_OFFSET_V2,
+  GENERAL_ORDER_OUTCOME_HI_OFFSET_V2,
+  GENERAL_ORDER_OUTCOME_LO_OFFSET_V2,
+  GENERAL_ORDER_OWNER_ID_OFFSET_V2,
+  GENERAL_ORDER_PHASE_OFFSET_V2,
+  GENERAL_ORDER_PHASE_V2,
+  GENERAL_ORDER_RESERVED_BYTES_V2,
+  GENERAL_ORDER_RESERVED_OFFSET_V2,
+  GENERAL_ORDER_RESERVED_SHAPE_BYTES_V2,
+  GENERAL_ORDER_RESERVED_SHAPE_OFFSET_V2,
+  GENERAL_ORDER_RESERVED_STATE_BYTES_V2,
+  GENERAL_ORDER_RESERVED_STATE_OFFSET_V2,
+  GENERAL_ORDER_RESERVED_STATE_TAIL_BYTES_V2,
+  GENERAL_ORDER_RESERVED_STATE_TAIL_OFFSET_V2,
+  GENERAL_ORDER_RESERVED_TAIL_BYTES_V2,
+  GENERAL_ORDER_RESERVED_TAIL_OFFSET_V2,
+  GENERAL_ORDER_ROW_BASE_V2,
+  GENERAL_ORDER_ROW_STRIDE_V2,
+  GENERAL_ORDER_SIDE_BUY_V2,
+  GENERAL_ORDER_SIDE_OFFSET_V2,
+  GENERAL_ORDER_SIDE_SELL_V2,
+  GENERAL_ORDER_STATE_ADMITTED_SLOT_OFFSET_V2,
+  GENERAL_ORDER_STATE_PHASE_OFFSET_V2,
+  GENERAL_ORDER_STATE_RELEASED_SLOT_OFFSET_V2,
+  GENERAL_ORDER_VALID_UNTIL_SLOT_OFFSET_V2,
+  GENERAL_ORDER_VERSION_OFFSET_V2,
+  GENERAL_ORDER_VERSION_V2,
+} from './generated/generalOrderV2';
+import {
+  GENERAL_BATCH_CANCELLED_COUNT_OFFSET_V2,
+  GENERAL_BATCH_CLOSED_ROOT_REVISION_OFFSET_V2,
+  GENERAL_BATCH_MAGIC_OFFSET_V2,
+  GENERAL_BATCH_COLLECTION_CLOSE_SLOT_OFFSET_V2,
+  GENERAL_BATCH_COMMITTED_QUOTE_RESERVE_OFFSET_V2,
+  GENERAL_BATCH_CONFIG_ID_OFFSET_V2,
+  GENERAL_BATCH_GENERATION_OFFSET_V2,
+  GENERAL_BATCH_MARKET_OFFSET_V2,
+  GENERAL_BATCH_MAX_ORDERS_OFFSET_V2,
+  GENERAL_BATCH_OPENED_ROOT_REVISION_OFFSET_V2,
+  GENERAL_BATCH_ORDER_COUNT_OFFSET_V2,
+  GENERAL_BATCH_OUTCOME_COUNT_OFFSET_V2,
+  GENERAL_BATCH_PHASE_OFFSET_V2,
+  GENERAL_BATCH_PHASE_V2,
+  GENERAL_BATCH_PRICE_SCALE_OFFSET_V2,
+  GENERAL_BATCH_PRODUCT_ID_OFFSET_V2,
+  GENERAL_BATCH_SEQUENCE_OFFSET_V2,
+  GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V2,
+  GENERAL_BATCH_STATUS_OFFSET_V2,
+  GENERAL_BATCH_VERSION_OFFSET_V2,
+  GENERAL_ORDER_STATE_CANCELLED_V2,
+  GENERAL_ORDER_STATE_PLACED_V2,
+  GENERAL_ORDER_STATE_RELEASED_V2,
+} from './generated/generalSuccessorV5';
 
 /**
  * The joint clearing's two client-facing records (cohort-18,
  * `MECHANISM_JOINT_CLEARING_2026_09_04.md`).
  *
- * There is no generated TypeScript ABI companion for either wire: the Lean
- * emitters under `formal/dclutch-semantics/` target Rust only
- * (`EmitGeneralOrderV2AbiRust.lean`, `EmitClearingPriceV1AbiRust.lean`), so
- * the byte coordinates below are hand-kept against their authorities —
- * `crates/dclutch-trading/src/general/generated_order_v2.rs`,
- * `generated_clearing_price_v1.rs`, and the decode rules in
- * `crates/dclutch-trading/src/general/collection_v1.rs`
- * (`GeneralBatchV2::decode`, `GeneralOrderV2::decode`) — the same way this
- * package hand-keeps a handful of other local offsets beside its generated
- * modules (see `dealerEquityV3.ts`, `dealerAccountProfileV3.ts`).
+ * NOT ONE COORDINATE BELOW IS HAND-KEPT. The family shipped these two wires
+ * with Lean emitters that targeted Rust only, so this file spelled every
+ * magic, tag and offset itself and the SDK's ABI-coverage baseline grew three
+ * rows to record it. `EmitGeneralOrderV2AbiTs.lean` and
+ * `EmitClearingPriceV1AbiTs.lean` are the second backend, so the same Lean
+ * objects the Rust reads now print the browser's module too:
+ *
+ * - the ORDER record is Lean's entire (`GeneralOrderV2Abi` → `abi:general-order-v2`);
+ * - the BATCH record's magic, version, status tags and clearing tail from byte
+ *   224 on are Lean's (`ClearingPriceV1Abi` → `abi:general-clearing-v1`);
+ * - the batch's V1 PREFIX (bytes 12..224), its phase byte, and the order's
+ *   three escrow-state tags are not: no Lean object states the prefix's field
+ *   sequence, so `GeneralBatchLayoutV2` in `collection_v1.rs` is their author
+ *   and `abi:general-v5` scrapes it. Promoting the prefix to a field list is
+ *   the named exit, and it moves Rust rather than the browser.
+ *
+ * The decode RULES are still this file's own reading of `GeneralBatchV2::decode`
+ * and `GeneralOrderV2::decode`; only the numbers have one author.
  */
 
-const RECORD_VERSION_V2 = 2;
+/**
+ * ONE VERSION PER RECORD, from that record's own author.
+ *
+ * The joint clearing moved both digests in one cohort and both Lean modules
+ * emit `2`, and `collection_v1.rs` asserts exactly that agreement
+ * (`VERSION == order_wire::ORDER_VERSION_V2 && VERSION == clearing_wire::BATCH_VERSION_V2`).
+ * Reading one record's version to check the other would make that agreement an
+ * assumption of this file instead of a fact the crate proves.
+ */
 
-// Batch record (`DCGBTCH2`) — `generated_clearing_price_v1.rs` for the
-// clearing tail at and after byte 224, `GeneralBatchLayoutV2` in
-// `collection_v1.rs` for the V1 prefix. The whole record is `296 + 16N`.
-const BATCH_MAGIC_V2 = new TextEncoder().encode('DCGBTCH2');
-const BATCH_PHASE_V2 = 20;
-const BATCH_OUTCOME_COUNT = 12;
-const BATCH_SEQUENCE = 16;
-const BATCH_GENERATION = 24;
-const BATCH_MARKET = 32;
-const BATCH_PRODUCT_ID = 64;
-const BATCH_CONFIG_ID = 96;
-const BATCH_PRICE_SCALE = 128;
-const BATCH_COLLECTION_CLOSE_SLOT = 136;
-const BATCH_MAX_ORDERS = 144;
-const BATCH_SETTLEMENT_CLOSE_SLOT = 152;
-const BATCH_STATUS = 160;
-const BATCH_ORDER_COUNT = 164;
-const BATCH_OPENED_ROOT_REVISION = 168;
-const BATCH_CLOSED_ROOT_REVISION = 176;
-const BATCH_COMMITTED_QUOTE_RESERVE = 184;
-const BATCH_CANCELLED_COUNT = 192;
-const BATCH_V1_BYTES = 224;
-const BATCH_CLEARED_CANDIDATE_ID = 224;
-const BATCH_CLEARED_SLOT = 256;
-const BATCH_SETS_MOVE = 264;
-const BATCH_SETS_QUANTITY = 272;
-const BATCH_FILLED_LOTS = 280;
-const BATCH_LIVE_ORDER_COUNT = 288;
-const BATCH_PRICES_BASE = 296;
-const BATCH_TAIL_STRIDE = 8;
-
-const BATCH_STATUS_COLLECTING = 1;
-const BATCH_STATUS_CLOSED = 2;
-const BATCH_STATUS_CLEARED = 3;
-const CLEARING_MOVE_NONE = 0;
-const CLEARING_MOVE_MINT = 1;
-const CLEARING_MOVE_MERGE = 2;
-
-// Order record (`DCGSORD2`) — `generated_order_v2.rs`. The header (the
-// identity preimage) is the first 184 bytes; the state window follows at
-// 184; the derived `(receive, deliver)` rows begin at 216, stride 16.
-const ORDER_MAGIC_V2 = new TextEncoder().encode('DCGSORD2');
-const ORDER_PHASE_V2 = 21;
-const ORDER_OUTCOME_COUNT = 12;
-const ORDER_NONCE = 16;
-const ORDER_MIN_QUOTE_CREDIT_PER_LOT = 24;
-const ORDER_OWNER_ID = 32;
-const ORDER_MARKET = 64;
-const ORDER_BATCH_ID = 96;
-const ORDER_GENERATION = 128;
-const ORDER_MAX_LOTS = 136;
-const ORDER_MAX_QUOTE_DEBIT_PER_LOT = 144;
-const ORDER_VALID_UNTIL_SLOT = 152;
-const ORDER_SIDE = 160;
-const ORDER_OUTCOME_LO = 164;
-const ORDER_OUTCOME_HI = 168;
-const ORDER_CLAIMS_PER_LOT = 176;
-const ORDER_HEADER_BYTES = 184;
-const ORDER_STATE_PHASE = 184;
-const ORDER_STATE_ADMITTED_SLOT = 192;
-const ORDER_STATE_RELEASED_SLOT = 200;
-const ORDER_ROW_BASE = 216;
-const ORDER_ROW_STRIDE = 16;
-
-const ORDER_SIDE_BUY = 1;
-const ORDER_SIDE_SELL = 2;
-const ORDER_STATE_PLACED = 1;
-const ORDER_STATE_CANCELLED = 2;
-const ORDER_STATE_RELEASED = 3;
 
 export type GeneralBatchStatusTagV2 = 'collecting' | 'closed' | 'cleared';
 export type GeneralClearingSetsMoveV1 = 'none' | 'mint' | 'merge';
@@ -165,10 +202,37 @@ function readU32(bytes: Uint8Array, offset: number): number {
   return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
 }
 
-function requireHeader(bytes: Uint8Array, magic: Uint8Array, phase: number, label: string): void {
-  if (!same(slice(bytes, 0, 8), magic) || u16(bytes, 8) !== RECORD_VERSION_V2 || bytes[10] !== phase || bytes[11] !== 0) {
+/**
+ * The twelve-byte prologue both records carry, read at EACH RECORD'S OWN
+ * coordinates rather than at one record's borrowed from the other. The two
+ * happen to agree — `RuntimeWireV2.prologueFields` is why — and a shared
+ * reader that assumed it would be right for the wrong reason, which is the
+ * mis-wiring `generate-general-successor-v5.mjs`'s `layoutOffsets` refuses in
+ * the other direction.
+ */
+type PrologueV2 = Readonly<{ magic: Uint8Array; magicOffset: number; magicBytes: number; version: number; versionOffset: number; phaseOffset: number; phase: number; reservedOffset: number; reservedBytes: number }>;
+
+const BATCH_PROLOGUE_V2: PrologueV2 = {
+  magic: GENERAL_BATCH_MAGIC_V2, magicOffset: GENERAL_BATCH_MAGIC_OFFSET_V2, magicBytes: GENERAL_BATCH_MAGIC_V2.length,
+  version: GENERAL_BATCH_VERSION_V2, versionOffset: GENERAL_BATCH_VERSION_OFFSET_V2, phaseOffset: GENERAL_BATCH_PHASE_OFFSET_V2, phase: GENERAL_BATCH_PHASE_V2,
+  // The batch prefix's scrape emits no reserved field, so the canonical zero
+  // is the byte between the phase and the first field the scrape does emit.
+  reservedOffset: GENERAL_BATCH_PHASE_OFFSET_V2 + 1, reservedBytes: GENERAL_BATCH_OUTCOME_COUNT_OFFSET_V2 - (GENERAL_BATCH_PHASE_OFFSET_V2 + 1),
+};
+
+const ORDER_PROLOGUE_V2: PrologueV2 = {
+  magic: GENERAL_ORDER_MAGIC_V2, magicOffset: GENERAL_ORDER_MAGIC_OFFSET_V2, magicBytes: GENERAL_ORDER_MAGIC_BYTES_V2,
+  version: GENERAL_ORDER_VERSION_V2, versionOffset: GENERAL_ORDER_VERSION_OFFSET_V2, phaseOffset: GENERAL_ORDER_PHASE_OFFSET_V2, phase: GENERAL_ORDER_PHASE_V2,
+  reservedOffset: GENERAL_ORDER_RESERVED_OFFSET_V2, reservedBytes: GENERAL_ORDER_RESERVED_BYTES_V2,
+};
+
+function requireHeader(bytes: Uint8Array, prologue: PrologueV2, label: string): void {
+  if (!same(slice(bytes, prologue.magicOffset, prologue.magicBytes), prologue.magic)
+      || u16(bytes, prologue.versionOffset) !== prologue.version
+      || bytes[prologue.phaseOffset] !== prologue.phase) {
     throw new Error(`${label} body is not exact V2`);
   }
+  requireZero(bytes, prologue.reservedOffset, prologue.reservedBytes, `${label} header reserved`);
 }
 
 function id32(bytes: Uint8Array, offset: number, field: string): string {
@@ -189,9 +253,9 @@ function address32(bytes: Uint8Array, offset: number, field: string): string {
 }
 
 function clearingSetsMove(tag: number): GeneralClearingSetsMoveV1 {
-  if (tag === CLEARING_MOVE_NONE) return 'none';
-  if (tag === CLEARING_MOVE_MINT) return 'mint';
-  if (tag === CLEARING_MOVE_MERGE) return 'merge';
+  if (tag === GENERAL_CLEARING_MOVE_NONE_V1) return 'none';
+  if (tag === GENERAL_CLEARING_MOVE_MINT_V1) return 'mint';
+  if (tag === GENERAL_CLEARING_MOVE_MERGE_V1) return 'merge';
   throw new Error('General batch V2 clearing carries an unknown sets-move tag');
 }
 
@@ -207,22 +271,29 @@ function clearingSetsMove(tag: number): GeneralClearingSetsMoveV1 {
  * `GeneralBatchV2::decode` / `validate_clearing_tails` in `collection_v1.rs`).
  */
 export function decodeGeneralBatchV2(bytes: Uint8Array): GeneralBatchRecordV2 {
-  if (bytes.length < BATCH_V1_BYTES) throw new Error('General batch V2 body is truncated before its clearing tail');
-  requireHeader(bytes, BATCH_MAGIC_V2, BATCH_PHASE_V2, 'General batch V2');
-  requireZero(bytes, 148, 4, 'General batch V2 admission-bound tail');
-  requireZero(bytes, 161, 3, 'General batch V2 status tail');
-  requireZero(bytes, 196, 28, 'General batch V2 counters tail');
+  if (bytes.length < GENERAL_BATCH_V1_BYTES) throw new Error('General batch V2 body is truncated before its clearing tail');
+  requireHeader(bytes, BATCH_PROLOGUE_V2, 'General batch V2');
+  // The prefix's three canonical gaps, DERIVED from the coordinates either
+  // side rather than typed: a `u32` bound followed by a `u64`, a `u8` status
+  // followed by a `u32`, and everything between the last counter and the
+  // clearing tail.
+  const afterMaxOrders = GENERAL_BATCH_MAX_ORDERS_OFFSET_V2 + Uint32Array.BYTES_PER_ELEMENT;
+  const afterStatus = GENERAL_BATCH_STATUS_OFFSET_V2 + Uint8Array.BYTES_PER_ELEMENT;
+  const afterCancelledCount = GENERAL_BATCH_CANCELLED_COUNT_OFFSET_V2 + Uint32Array.BYTES_PER_ELEMENT;
+  requireZero(bytes, afterMaxOrders, GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V2 - afterMaxOrders, 'General batch V2 admission-bound tail');
+  requireZero(bytes, afterStatus, GENERAL_BATCH_ORDER_COUNT_OFFSET_V2 - afterStatus, 'General batch V2 status tail');
+  requireZero(bytes, afterCancelledCount, GENERAL_BATCH_V1_BYTES - afterCancelledCount, 'General batch V2 counters tail');
 
-  const outcomeCount = readU32(bytes, BATCH_OUTCOME_COUNT);
-  const sequence = u64(bytes, BATCH_SEQUENCE);
-  const generation = u64(bytes, BATCH_GENERATION);
-  const market = address32(bytes, BATCH_MARKET, 'batch Market');
-  const productId = id32(bytes, BATCH_PRODUCT_ID, 'batch Product');
-  const configId = id32(bytes, BATCH_CONFIG_ID, 'batch config');
-  const priceScale = u64(bytes, BATCH_PRICE_SCALE);
-  const collectionCloseSlot = u64(bytes, BATCH_COLLECTION_CLOSE_SLOT);
-  const maxOrders = readU32(bytes, BATCH_MAX_ORDERS);
-  const settlementCloseSlot = u64(bytes, BATCH_SETTLEMENT_CLOSE_SLOT);
+  const outcomeCount = readU32(bytes, GENERAL_BATCH_OUTCOME_COUNT_OFFSET_V2);
+  const sequence = u64(bytes, GENERAL_BATCH_SEQUENCE_OFFSET_V2);
+  const generation = u64(bytes, GENERAL_BATCH_GENERATION_OFFSET_V2);
+  const market = address32(bytes, GENERAL_BATCH_MARKET_OFFSET_V2, 'batch Market');
+  const productId = id32(bytes, GENERAL_BATCH_PRODUCT_ID_OFFSET_V2, 'batch Product');
+  const configId = id32(bytes, GENERAL_BATCH_CONFIG_ID_OFFSET_V2, 'batch config');
+  const priceScale = u64(bytes, GENERAL_BATCH_PRICE_SCALE_OFFSET_V2);
+  const collectionCloseSlot = u64(bytes, GENERAL_BATCH_COLLECTION_CLOSE_SLOT_OFFSET_V2);
+  const maxOrders = readU32(bytes, GENERAL_BATCH_MAX_ORDERS_OFFSET_V2);
+  const settlementCloseSlot = u64(bytes, GENERAL_BATCH_SETTLEMENT_CLOSE_SLOT_OFFSET_V2);
 
   if (outcomeCount === 0 || priceScale === 0n || maxOrders === 0 || generation === 0n) {
     throw new Error('General batch V2 opening carries a zero outcome count, price scale, max orders, or generation');
@@ -231,24 +302,24 @@ export function decodeGeneralBatchV2(bytes: Uint8Array): GeneralBatchRecordV2 {
     throw new Error('General batch V2 settlement window does not close after its collection window');
   }
 
-  const expectedLength = BATCH_PRICES_BASE + 2 * BATCH_TAIL_STRIDE * outcomeCount;
+  const expectedLength = GENERAL_CLEARING_PRICES_OFFSET_V1 + GENERAL_CLEARING_TAIL_COUNT_V1 * GENERAL_CLEARING_TAIL_STRIDE_V1 * outcomeCount;
   if (bytes.length !== expectedLength) throw new Error('General batch V2 runtime width does not match its outcome count');
 
-  requireZero(bytes, BATCH_SETS_MOVE + 1, 7, 'General batch V2 sets-move tail');
-  requireZero(bytes, BATCH_LIVE_ORDER_COUNT + 4, 4, 'General batch V2 live-order-count tail');
+  requireZero(bytes, GENERAL_CLEARING_RESERVED_MOVE_OFFSET_V1, GENERAL_CLEARING_RESERVED_MOVE_BYTES_V1, 'General batch V2 sets-move tail');
+  requireZero(bytes, GENERAL_CLEARING_RESERVED_TAIL_OFFSET_V1, GENERAL_CLEARING_RESERVED_TAIL_BYTES_V1, 'General batch V2 live-order-count tail');
 
-  const statusByte = bytes[BATCH_STATUS];
+  const statusByte = bytes[GENERAL_BATCH_STATUS_OFFSET_V2];
   const status: GeneralBatchStatusTagV2 | null =
-    statusByte === BATCH_STATUS_COLLECTING ? 'collecting'
-      : statusByte === BATCH_STATUS_CLOSED ? 'closed'
-        : statusByte === BATCH_STATUS_CLEARED ? 'cleared' : null;
+    statusByte === GENERAL_BATCH_STATUS_COLLECTING_V2 ? 'collecting'
+      : statusByte === GENERAL_BATCH_STATUS_CLOSED_V2 ? 'closed'
+        : statusByte === GENERAL_BATCH_STATUS_CLEARED_V2 ? 'cleared' : null;
   if (status === null) throw new Error('General batch V2 status is unknown');
 
-  const orderCount = readU32(bytes, BATCH_ORDER_COUNT);
-  const openedRootRevision = u64(bytes, BATCH_OPENED_ROOT_REVISION);
-  const closedRootRevision = u64(bytes, BATCH_CLOSED_ROOT_REVISION);
-  const committedQuoteReserve = u64(bytes, BATCH_COMMITTED_QUOTE_RESERVE);
-  const cancelledCount = readU32(bytes, BATCH_CANCELLED_COUNT);
+  const orderCount = readU32(bytes, GENERAL_BATCH_ORDER_COUNT_OFFSET_V2);
+  const openedRootRevision = u64(bytes, GENERAL_BATCH_OPENED_ROOT_REVISION_OFFSET_V2);
+  const closedRootRevision = u64(bytes, GENERAL_BATCH_CLOSED_ROOT_REVISION_OFFSET_V2);
+  const committedQuoteReserve = u64(bytes, GENERAL_BATCH_COMMITTED_QUOTE_RESERVE_OFFSET_V2);
+  const cancelledCount = readU32(bytes, GENERAL_BATCH_CANCELLED_COUNT_OFFSET_V2);
 
   if (orderCount > maxOrders || cancelledCount > orderCount) {
     throw new Error('General batch V2 admission counters exceed their bound');
@@ -260,15 +331,15 @@ export function decodeGeneralBatchV2(bytes: Uint8Array): GeneralBatchRecordV2 {
 
   const liveOrderCount = orderCount - cancelledCount;
 
-  const clearedCandidateIdBytes = slice(bytes, BATCH_CLEARED_CANDIDATE_ID, 32);
-  const clearedSlot = u64(bytes, BATCH_CLEARED_SLOT);
-  const setsMoveByte = bytes[BATCH_SETS_MOVE];
-  const setsQuantity = u64(bytes, BATCH_SETS_QUANTITY);
-  const filledLots = u64(bytes, BATCH_FILLED_LOTS);
-  const clearingLiveOrderCount = readU32(bytes, BATCH_LIVE_ORDER_COUNT);
+  const clearedCandidateIdBytes = slice(bytes, GENERAL_CLEARING_CLEARED_CANDIDATE_ID_OFFSET_V1, 32);
+  const clearedSlot = u64(bytes, GENERAL_CLEARING_CLEARED_SLOT_OFFSET_V1);
+  const setsMoveByte = bytes[GENERAL_CLEARING_SETS_MOVE_OFFSET_V1];
+  const setsQuantity = u64(bytes, GENERAL_CLEARING_SETS_QUANTITY_OFFSET_V1);
+  const filledLots = u64(bytes, GENERAL_CLEARING_FILLED_LOTS_OFFSET_V1);
+  const clearingLiveOrderCount = readU32(bytes, GENERAL_CLEARING_LIVE_ORDER_COUNT_OFFSET_V1);
 
-  const tailBytesAreZero = isZero(slice(bytes, BATCH_PRICES_BASE, 2 * BATCH_TAIL_STRIDE * outcomeCount));
-  const tailIsVacant = isZero(clearedCandidateIdBytes) && clearedSlot === 0n && setsMoveByte === CLEARING_MOVE_NONE
+  const tailBytesAreZero = isZero(slice(bytes, GENERAL_CLEARING_PRICES_OFFSET_V1, GENERAL_CLEARING_TAIL_COUNT_V1 * GENERAL_CLEARING_TAIL_STRIDE_V1 * outcomeCount));
+  const tailIsVacant = isZero(clearedCandidateIdBytes) && clearedSlot === 0n && setsMoveByte === GENERAL_CLEARING_MOVE_NONE_V1
     && setsQuantity === 0n && filledLots === 0n && clearingLiveOrderCount === 0 && tailBytesAreZero;
 
   const opening = {
@@ -294,13 +365,13 @@ export function decodeGeneralBatchV2(bytes: Uint8Array): GeneralBatchRecordV2 {
     throw new Error('General batch V2 clearing live order count disagrees with admitted minus cancelled');
   }
 
-  const residualBase = BATCH_PRICES_BASE + BATCH_TAIL_STRIDE * outcomeCount;
+  const residualBase = GENERAL_CLEARING_PRICES_OFFSET_V1 + GENERAL_CLEARING_TAIL_STRIDE_V1 * outcomeCount;
   const prices: bigint[] = [];
   const residual: bigint[] = [];
   let total = 0n;
   for (let outcome = 0; outcome < outcomeCount; outcome += 1) {
-    const price = u64(bytes, BATCH_PRICES_BASE + BATCH_TAIL_STRIDE * outcome);
-    const strand = u64(bytes, residualBase + BATCH_TAIL_STRIDE * outcome);
+    const price = u64(bytes, GENERAL_CLEARING_PRICES_OFFSET_V1 + GENERAL_CLEARING_TAIL_STRIDE_V1 * outcome);
+    const strand = u64(bytes, residualBase + GENERAL_CLEARING_TAIL_STRIDE_V1 * outcome);
     if (price !== 0n && strand !== 0n) throw new Error('General batch V2 clearing strands a residual behind a priced outcome');
     total += price;
     prices.push(price);
@@ -344,59 +415,72 @@ export function clearingPricesV1(decoded: GeneralBatchRecordV2): GeneralClearing
  * disagree with the shape its own header carries.
  */
 export function decodeGeneralOrderV2(bytes: Uint8Array): GeneralOrderRecordV2 {
-  if (bytes.length < ORDER_ROW_BASE) throw new Error('General order V2 body is truncated before its rows');
-  requireHeader(bytes, ORDER_MAGIC_V2, ORDER_PHASE_V2, 'General order V2');
+  if (bytes.length < GENERAL_ORDER_ROW_BASE_V2) throw new Error('General order V2 body is truncated before its rows');
+  requireHeader(bytes, ORDER_PROLOGUE_V2, 'General order V2');
 
-  const outcomeCount = readU32(bytes, ORDER_OUTCOME_COUNT);
-  const nonce = u64(bytes, ORDER_NONCE);
-  const minQuoteCreditPerLot = u64(bytes, ORDER_MIN_QUOTE_CREDIT_PER_LOT);
-  const ownerId = address32(bytes, ORDER_OWNER_ID, 'order owner');
-  const market = address32(bytes, ORDER_MARKET, 'order Market');
-  const batchId = id32(bytes, ORDER_BATCH_ID, 'order Batch');
-  const generation = u64(bytes, ORDER_GENERATION);
-  const maxLots = u64(bytes, ORDER_MAX_LOTS);
-  const maxQuoteDebitPerLot = u64(bytes, ORDER_MAX_QUOTE_DEBIT_PER_LOT);
-  const validUntilSlot = u64(bytes, ORDER_VALID_UNTIL_SLOT);
+  const outcomeCount = readU32(bytes, GENERAL_ORDER_OUTCOME_COUNT_OFFSET_V2);
+  const nonce = u64(bytes, GENERAL_ORDER_NONCE_OFFSET_V2);
+  const minQuoteCreditPerLot = u64(bytes, GENERAL_ORDER_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2);
+  const ownerId = address32(bytes, GENERAL_ORDER_OWNER_ID_OFFSET_V2, 'order owner');
+  const market = address32(bytes, GENERAL_ORDER_MARKET_OFFSET_V2, 'order Market');
+  const batchId = id32(bytes, GENERAL_ORDER_BATCH_ID_OFFSET_V2, 'order Batch');
+  const generation = u64(bytes, GENERAL_ORDER_GENERATION_OFFSET_V2);
+  const maxLots = u64(bytes, GENERAL_ORDER_MAX_LOTS_OFFSET_V2);
+  const maxQuoteDebitPerLot = u64(bytes, GENERAL_ORDER_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2);
+  const validUntilSlot = u64(bytes, GENERAL_ORDER_VALID_UNTIL_SLOT_OFFSET_V2);
 
-  const sideByte = bytes[ORDER_SIDE];
-  const side: GeneralOrderSideV2 | null = sideByte === ORDER_SIDE_BUY ? 'buy' : sideByte === ORDER_SIDE_SELL ? 'sell' : null;
+  // THE BROWSER IS THE FINER OF THE TWO READERS HERE, and that is a finding
+  // about the program rather than a licence for this file.
+  //
+  // An unknown side byte gets its own reason below. The program folds it:
+  // `collection_v1.rs`'s `read_order_header` writes
+  // `OrderSideV2::decode(...).ok_or(GeneralCollectionErrorV1::ShapeNotInterval)`,
+  // so a byte that is neither buy nor sell refuses under a code whose own doc
+  // says "the shape is not a nonempty interval inside the width moving a
+  // positive number of claims per lot" -- three conjuncts, none of which is the
+  // one that failed. That is AGENTS.md's `map_err(|_| Coarse)`: a located
+  // defect turned into a search, and the causes are not one accusation.
+  // Splitting it is a Trading-crate change with a refusal variant and a frame
+  // capture, so it is recorded here rather than done from a browser lane.
+  const sideByte = bytes[GENERAL_ORDER_SIDE_OFFSET_V2];
+  const side: GeneralOrderSideV2 | null = sideByte === GENERAL_ORDER_SIDE_BUY_V2 ? 'buy' : sideByte === GENERAL_ORDER_SIDE_SELL_V2 ? 'sell' : null;
   if (side === null) throw new Error('General order V2 side tag is unknown');
 
-  const outcomeLo = readU32(bytes, ORDER_OUTCOME_LO);
-  const outcomeHi = readU32(bytes, ORDER_OUTCOME_HI);
-  const claimsPerLot = u64(bytes, ORDER_CLAIMS_PER_LOT);
+  const outcomeLo = readU32(bytes, GENERAL_ORDER_OUTCOME_LO_OFFSET_V2);
+  const outcomeHi = readU32(bytes, GENERAL_ORDER_OUTCOME_HI_OFFSET_V2);
+  const claimsPerLot = u64(bytes, GENERAL_ORDER_CLAIMS_PER_LOT_OFFSET_V2);
 
   if (outcomeCount === 0 || maxLots === 0n || generation === 0n) {
     throw new Error('General order V2 header carries a zero outcome count, max lots, or generation');
   }
-  if (bytes.length !== ORDER_ROW_BASE + ORDER_ROW_STRIDE * outcomeCount) {
+  if (bytes.length !== GENERAL_ORDER_ROW_BASE_V2 + GENERAL_ORDER_ROW_STRIDE_V2 * outcomeCount) {
     throw new Error('General order V2 runtime width does not match its outcome count');
   }
   if (outcomeLo > outcomeHi || outcomeHi >= outcomeCount || claimsPerLot === 0n) {
     throw new Error('General order V2 shape is not a nonempty interval inside its width');
   }
 
-  requireZero(bytes, ORDER_SIDE + 1, 3, 'General order V2 shape tail');
-  requireZero(bytes, ORDER_OUTCOME_HI + 4, 4, 'General order V2 interval tail');
-  requireZero(bytes, ORDER_STATE_PHASE + 1, 7, 'General order V2 state tail');
-  requireZero(bytes, ORDER_STATE_RELEASED_SLOT + 8, 8, 'General order V2 state-window tail');
+  requireZero(bytes, GENERAL_ORDER_RESERVED_SHAPE_OFFSET_V2, GENERAL_ORDER_RESERVED_SHAPE_BYTES_V2, 'General order V2 shape tail');
+  requireZero(bytes, GENERAL_ORDER_RESERVED_TAIL_OFFSET_V2, GENERAL_ORDER_RESERVED_TAIL_BYTES_V2, 'General order V2 interval tail');
+  requireZero(bytes, GENERAL_ORDER_RESERVED_STATE_OFFSET_V2, GENERAL_ORDER_RESERVED_STATE_BYTES_V2, 'General order V2 state tail');
+  requireZero(bytes, GENERAL_ORDER_RESERVED_STATE_TAIL_OFFSET_V2, GENERAL_ORDER_RESERVED_STATE_TAIL_BYTES_V2, 'General order V2 state-window tail');
 
-  const phaseByte = bytes[ORDER_STATE_PHASE];
+  const phaseByte = bytes[GENERAL_ORDER_STATE_PHASE_OFFSET_V2];
   const phase: GeneralOrderPhaseV2 | null =
-    phaseByte === ORDER_STATE_PLACED ? 'placed'
-      : phaseByte === ORDER_STATE_CANCELLED ? 'cancelled'
-        : phaseByte === ORDER_STATE_RELEASED ? 'released' : null;
+    phaseByte === GENERAL_ORDER_STATE_PLACED_V2 ? 'placed'
+      : phaseByte === GENERAL_ORDER_STATE_CANCELLED_V2 ? 'cancelled'
+        : phaseByte === GENERAL_ORDER_STATE_RELEASED_V2 ? 'released' : null;
   if (phase === null) throw new Error('General order V2 state phase is unknown');
 
-  const admittedSlot = u64(bytes, ORDER_STATE_ADMITTED_SLOT);
-  const releasedSlot = u64(bytes, ORDER_STATE_RELEASED_SLOT);
+  const admittedSlot = u64(bytes, GENERAL_ORDER_STATE_ADMITTED_SLOT_OFFSET_V2);
+  const releasedSlot = u64(bytes, GENERAL_ORDER_STATE_RELEASED_SLOT_OFFSET_V2);
   if (phase === 'placed' ? releasedSlot !== 0n : releasedSlot < admittedSlot) {
     throw new Error('General order V2 state carries a noncanonical release slot for its phase');
   }
 
   const rows: GeneralOrderRowV2[] = [];
   for (let outcome = 0; outcome < outcomeCount; outcome += 1) {
-    const offset = ORDER_ROW_BASE + ORDER_ROW_STRIDE * outcome;
+    const offset = GENERAL_ORDER_ROW_BASE_V2 + GENERAL_ORDER_ROW_STRIDE_V2 * outcome;
     const receive = u64(bytes, offset);
     const deliver = u64(bytes, offset + 8);
     const covers = outcome >= outcomeLo && outcome <= outcomeHi;
@@ -417,5 +501,5 @@ export function decodeGeneralOrderV2(bytes: Uint8Array): GeneralOrderRecordV2 {
 
 /** The order's content identity: `sha256` of its 184-byte signed header alone. */
 export async function generalOrderIdV2(bytes: Uint8Array): Promise<string> {
-  return hex(await sha256(slice(bytes, 0, ORDER_HEADER_BYTES)));
+  return hex(await sha256(slice(bytes, GENERAL_ORDER_MAGIC_OFFSET_V2, GENERAL_ORDER_HEADER_BYTES_V2)));
 }

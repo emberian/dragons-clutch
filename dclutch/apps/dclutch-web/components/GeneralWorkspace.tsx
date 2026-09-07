@@ -12,12 +12,12 @@ import {
   reacquireGeneralSuccessorStatusV5,
   transactionBytesV5,
   type GeneralChainStatusV5,
-  type GeneralBatchStatusV1,
+  type GeneralBatchStatusV2,
   type GeneralCandidateStatusV1,
   type GeneralHotReceiptV3,
   type GeneralLifecycleStateV5,
   type GeneralLocalStateStatusV3,
-  type GeneralOrderStatusV1,
+  type GeneralOrderStatusV2,
   type GeneralPlanInspectionV5,
   type GeneralSelectionStatusV2,
   type GeneralSettlementStatusV2,
@@ -67,12 +67,17 @@ function SettlementStatus({ value }: Readonly<{ value: GeneralSettlementStatusV2
   return <dl className="registered-facts"><div><dt>Settlement phase / revision</dt><dd>{value.phase} / {value.revision.toString()}</dd></div><div><dt>Progress</dt><dd>{value.nextOrder}/{value.orderCount} orders · N={value.outcomeCount}</dd></div><div><dt>Candidate</dt><dd>{compact(value.candidateId)}</dd></div><div><dt>Inventory</dt><dd>quote {value.quoteInventory.toString()} · claims [{quantities(value.inventory)}]</dd></div><div><dt>Complete sets / terminal</dt><dd>{value.completeSetQuantity.toString()} / {value.terminalCoordinate.toString()}</dd></div></dl>;
 }
 
-function BatchStatus({ value }: Readonly<{ value: GeneralBatchStatusV1 }>) {
-  return <dl className="registered-facts"><div><dt>Batch phase / sequence</dt><dd>{value.phase} / {value.sequence.toString()}</dd></div><div><dt>Orders</dt><dd>{value.orderCount}/{value.maxOrders} admitted · {value.cancelledCount} cancelled</dd></div><div><dt>Window</dt><dd>collect before slot {value.collectionCloseSlot.toString()} · settle by {value.settlementCloseSlot.toString()}</dd></div><div><dt>Committed quote reserve</dt><dd>{value.committedQuoteReserve.toString()} atoms</dd></div><div><dt>Root revisions</dt><dd>opened {value.openedRootRevision.toString()} · closed {value.closedRootRevision.toString()}</dd></div></dl>;
+function BatchStatus({ value }: Readonly<{ value: GeneralBatchStatusV2 }>) {
+  const clearing = value.clearing;
+  return <dl className="registered-facts"><div><dt>Batch status / sequence</dt><dd>{value.status} / {value.sequence.toString()}</dd></div><div><dt>Orders</dt><dd>{value.orderCount}/{value.maxOrders} admitted · {value.cancelledCount} cancelled · {value.liveOrderCount} live</dd></div><div><dt>Window</dt><dd>collect before slot {value.collectionCloseSlot.toString()} · settle by {value.settlementCloseSlot.toString()}</dd></div><div><dt>Committed quote reserve</dt><dd>{value.committedQuoteReserve.toString()} atoms</dd></div><div><dt>Root revisions</dt><dd>opened {value.openedRootRevision.toString()} · closed {value.closedRootRevision.toString()}</dd></div><div><dt>Clearing</dt><dd>{clearing === null ? 'Vacant — this batch has not been cleared, and its price tail is every byte zero.' : `candidate ${compact(clearing.clearedCandidateId)} at slot ${clearing.clearedSlot.toString()} · prices [${quantities(clearing.prices)}] of ${value.priceScale.toString()} · residual [${quantities(clearing.residual)}] · ${clearing.setsMove === 'none' ? 'no complete sets moved' : `${clearing.setsMove} ${clearing.setsQuantity.toString()} sets`} · ${clearing.filledLots.toString()} filled lots`}</dd></div></dl>;
 }
 
-function OrderStatus({ value }: Readonly<{ value: GeneralOrderStatusV1 }>) {
-  return <dl className="registered-facts"><div><dt>Order phase / nonce</dt><dd>{value.phase} / {value.nonce.toString()}</dd></div><div><dt>Owner / Batch</dt><dd>{compact(value.owner)} / {compact(value.batchId)}</dd></div><div><dt>Fill bound</dt><dd>{value.maxLots.toString()} lots · at most {value.maxQuoteDebitPerLot.toString()} quote atoms per lot</dd></div><div><dt>Window</dt><dd>admitted slot {value.admittedSlot.toString()} · valid through {value.validUntilSlot.toString()} · released {value.releasedSlot.toString()}</dd></div><div><dt>Portfolio per lot</dt><dd>receive [{quantities(value.receivePerLot)}] · deliver [{quantities(value.deliverPerLot)}]</dd></div></dl>;
+function OrderStatus({ value }: Readonly<{ value: GeneralOrderStatusV2 }>) {
+  // The interval is inclusive and, this cohort, always one outcome
+  // (`GeneralOrderV2Abi.Shape.isSingleOutcome`); print the range anyway, so a
+  // record that ever carries a wider one is visible rather than rounded off.
+  const interval = value.outcomeLo === value.outcomeHi ? `outcome ${value.outcomeLo}` : `outcomes ${value.outcomeLo}–${value.outcomeHi}`;
+  return <dl className="registered-facts"><div><dt>Order phase / nonce</dt><dd>{value.phase} / {value.nonce.toString()}</dd></div><div><dt>Owner / Batch</dt><dd>{compact(value.ownerId)} / {compact(value.batchId)}</dd></div><div><dt>Shape</dt><dd>{value.side} {interval} · {value.claimsPerLot.toString()} claims per lot</dd></div><div><dt>Fill bound</dt><dd>{value.maxLots.toString()} lots · at most {value.maxQuoteDebitPerLot.toString()} quote atoms per lot · at least {value.minQuoteCreditPerLot.toString()} credited per lot</dd></div><div><dt>Window</dt><dd>admitted slot {value.admittedSlot.toString()} · valid through {value.validUntilSlot.toString()} · released {value.releasedSlot.toString()}</dd></div><div><dt>Portfolio per lot</dt><dd>receive [{quantities(value.rows.map((row) => row.receive))}] · deliver [{quantities(value.rows.map((row) => row.deliver))}]</dd></div></dl>;
 }
 
 function CandidateStatus({ value }: Readonly<{ value: GeneralCandidateStatusV1 }>) {
