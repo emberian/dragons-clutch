@@ -490,12 +490,13 @@ pub(crate) fn run_engine_with_admitted_candidate(
             .observations
             .get(usize::from(evidence.coordinate))
             .ok_or(BuilderError::Projection("general-place-order-evidence"))?;
-        dclutch_trading::general::hot_candidate_v3::seed_general_place_order_rows_from_signed_terms_v3(
+        dclutch_trading::general::hot_candidate_v3::seed_general_place_order_terms_from_signed_terms_v3(
             tail_count,
             &terms.data,
             &mut current_scalars,
+            &mut current_identities,
         )
-        .map_err(|_| BuilderError::Projection("general-place-order-rows"))?;
+        .map_err(|_| BuilderError::Projection("general-place-order-terms"))?;
     }
 
     // Phase 3: current-Rent quote projection.

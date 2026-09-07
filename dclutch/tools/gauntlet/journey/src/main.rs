@@ -216,6 +216,9 @@ mod seed;
 #[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
 #[allow(dead_code)]
 mod selected_capability;
+#[path = "../../../local-validator/bootstrap/successor/src/selected_capability_activation.rs"]
+#[allow(dead_code)]
+mod selected_capability_activation;
 #[path = "../../../local-validator/bootstrap/successor/src/series_consume_campaign.rs"]
 #[allow(dead_code)]
 mod series_consume_campaign;
@@ -298,22 +301,22 @@ mod wallet_terminal_payout_exterior;
 mod substrate;
 
 // ------------------------------------------------------------- this campaign
-mod failure;
-mod journey;
 mod dealer_campaign;
 mod economics_campaign;
 #[path = "../../../local-validator/bootstrap/successor/src/economics_campaign.rs"]
 #[allow(dead_code)]
 mod economics_successor;
-#[path = "../../../local-validator/bootstrap/successor/src/scoring_dealer.rs"]
-#[allow(dead_code)]
-mod scoring_dealer;
-mod structured_claims_campaign;
+mod failure;
+mod journey;
 mod ledger;
 mod provider;
 mod resolution;
+#[path = "../../../local-validator/bootstrap/successor/src/scoring_dealer.rs"]
+#[allow(dead_code)]
+mod scoring_dealer;
 mod spine;
 mod stages;
+mod structured_claims_campaign;
 
 type Result<T> = core::result::Result<T, Error>;
 
@@ -405,7 +408,9 @@ fn run() -> Result<()> {
     match arguments.next().as_deref() {
         Some("run") => run_journey(arguments.collect()),
         Some("dealer") => dealer_campaign::execute(parse_journey_request(arguments.collect())?),
-        Some("economics") => economics_campaign::execute(parse_journey_request(arguments.collect())?),
+        Some("economics") => {
+            economics_campaign::execute(parse_journey_request(arguments.collect())?)
+        }
         Some("structured-claims") => {
             structured_claims_campaign::execute(parse_journey_request(arguments.collect())?)
         }
@@ -568,7 +573,10 @@ mod tests {
                 continue;
             };
             let token = token.trim_matches('"');
-            if let Some(name) = token.strip_prefix("${").and_then(|v| v.strip_suffix("[@]}")) {
+            if let Some(name) = token
+                .strip_prefix("${")
+                .and_then(|v| v.strip_suffix("[@]}"))
+            {
                 // Resolve the array's first element from its assignment.
                 let needle = format!("{name}=(");
                 if let Some(assignment) = script.split(&needle).nth(1) {

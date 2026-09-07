@@ -466,26 +466,32 @@ pub mod item_scalar {
     pub const CURSOR_INVENTORY: u32 = 5;
 }
 
-/// Write PlaceOrder's two per-outcome rows from its exact signed header.
+/// Write PlaceOrder's signed-header-derived rows and vault context.
 ///
 /// The `OrderTerms` evidence record is deliberately its fixed signed header:
 /// rows are derived from that header's side, interval and claim quantity, and
 /// never travel as unauthenticated padding.  AccountProfile authenticates that
-/// exact header.  This General-owned adapter step materializes only the two
-/// item registers the candidate and its effect consume, after that projection
-/// and before lifecycle planning.  It is shared by the host bundle builder and
-/// Trading so neither side invents a wider evidence wire.
-pub fn seed_general_place_order_rows_from_signed_terms_v3(
+/// exact header.  This General-owned adapter step materializes the two item
+/// registers and the order-keyed destination-vault context the candidate and
+/// its effect consume, after that projection and before lifecycle planning.
+/// It is shared by the host bundle builder and Trading so neither side invents
+/// a wider evidence wire.
+pub fn seed_general_place_order_terms_from_signed_terms_v3(
     outcome_count: u32,
     signed_order_terms: &[u8],
     scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
 ) -> Result<()> {
     let expected = usize::try_from(general_hot_scalar_count_v3(
         Action::PlaceOrder,
         outcome_count,
     )?)
     .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
-    if scalars.len() != expected {
+    if scalars.len() != expected
+        || identities.len()
+            != usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?
+    {
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     let terms = GeneralSignedOrderTermsV2::decode(signed_order_terms)
@@ -528,6 +534,12 @@ pub fn seed_general_place_order_rows_from_signed_terms_v3(
             .checked_add(1)
             .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
     }
+    *identities
+        .get_mut(
+            usize::try_from(identity::DESTINATION_VAULT_CONTEXT)
+                .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+        )
+        .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = terms.order_id();
     Ok(())
 }
 
@@ -1867,12 +1879,8 @@ pub fn project_general_place_order_candidate_in_place_v3(
         PlaceOrderClauseV3::IdentityGeneralConfigId,
     )?;
     place_order_clause(
-        read_identity(
-            candidate,
-            scalar_count,
-            identity::TERMINAL_BENEFICIARY_OBSERVATION,
-        )? != owner,
-        PlaceOrderClauseV3::IdentityTerminalBeneficiary,
+        read_identity(candidate, scalar_count, identity::PAYER)? != owner,
+        PlaceOrderClauseV3::IdentityPayer,
     )?;
     place_order_clause(
         read_scalar(candidate, scalar::STATE_BUMP)?
@@ -5834,7 +5842,8 @@ mod tests {
             (identity::ORDER, order.order_id()),
             (identity::PRIMARY_OWNER, environment.trading_program),
             (identity::TERMINAL_OWNER, environment.trading_program),
-            (identity::TERMINAL_BENEFICIARY_OBSERVATION, header.owner_id),
+            (identity::TERMINAL_BENEFICIARY_OBSERVATION, [0; 32]),
+            (identity::PAYER, header.owner_id),
             (
                 identity::DESTINATION_VAULT_CONTEXT,
                 environment.destination_vault_context,
@@ -5886,12 +5895,24 @@ mod tests {
             )
             .expect("scalar count fits usize");
             let mut scalars = vec![0_u64; scalar_count];
-            seed_general_place_order_rows_from_signed_terms_v3(
+            let mut identities = vec![
+                [0_u8; 32];
+                usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                    .expect("identity count fits usize")
+            ];
+            seed_general_place_order_terms_from_signed_terms_v3(
                 outcome_count,
                 &signed_terms,
                 &mut scalars,
+                &mut identities,
             )
-            .expect("exact signed rows");
+            .expect("exact signed terms");
+            assert_eq!(
+                identities[usize::try_from(identity::DESTINATION_VAULT_CONTEXT)
+                    .expect("destination context coordinate")],
+                order.order_id(),
+                "{side:?} order-keyed destination context",
+            );
             for item in 0..outcome_count {
                 let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
                 let (receive, deliver) = order.header().derived_row(item);
@@ -5917,13 +5938,25 @@ mod tests {
             .expect("scalar count fits usize")
         ];
         let before = scalars.clone();
+        let mut identities = vec![
+            [0xa5_u8; 32];
+            usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .expect("identity count fits usize")
+        ];
+        let identities_before = identities.clone();
         assert_eq!(
-            seed_general_place_order_rows_from_signed_terms_v3(1, &hostile, &mut scalars),
+            seed_general_place_order_terms_from_signed_terms_v3(
+                1,
+                &hostile,
+                &mut scalars,
+                &mut identities,
+            ),
             Err(GeneralHotCandidateErrorV3::Record(
                 GeneralRecordV3::SignedTerms
             ))
         );
         assert_eq!(scalars, before);
+        assert_eq!(identities, identities_before);
         let bytes = placed_order_bytes_with_shape(
             outcome_count,
             environment,
@@ -5938,10 +5971,16 @@ mod tests {
             .encode_signed_terms_into(&mut signed_terms)
             .expect("signed immutable terms");
         assert_eq!(
-            seed_general_place_order_rows_from_signed_terms_v3(1, &signed_terms, &mut scalars),
+            seed_general_place_order_terms_from_signed_terms_v3(
+                1,
+                &signed_terms,
+                &mut scalars,
+                &mut identities,
+            ),
             Err(GeneralHotCandidateErrorV3::TailCountMismatch)
         );
         assert_eq!(scalars, before);
+        assert_eq!(identities, identities_before);
     }
 
     fn admitted_batch_and_order(
@@ -7376,6 +7415,49 @@ mod tests {
                 Ok(4)
             );
         }
+    }
+
+    #[test]
+    fn place_order_fee_sponsor_cannot_replace_the_authenticated_maker_payer() {
+        let outcome_count = 1;
+        let mut environment = environment();
+        let config = open_batch_config(environment);
+        let (root, batch) = opened_batch(outcome_count, environment, config);
+        let current_slot = 101;
+        let order_bytes = placed_order_bytes(outcome_count, environment, batch, current_slot);
+        let order = GeneralOrderV2::decode(&order_bytes).expect("order");
+        environment.destination_vault_context = order.order_id();
+        environment.custody_source_owner = order.header().owner_id;
+        environment.settlement_position_owner = order.order_id();
+        environment.rent_credit = order.header().owner_id;
+        let mut candidate =
+            place_order_input(outcome_count, environment, root, batch, order, current_slot);
+        let scalar_count =
+            general_hot_scalar_count_v3(Action::PlaceOrder, outcome_count).expect("scalar count");
+        write_identity(&mut candidate, scalar_count, identity::PAYER, [0xee; 32])
+            .expect("hostile fee sponsor");
+        let before = candidate.clone();
+        let mut signed_terms =
+            vec![0; general_signed_order_terms_len_v2(outcome_count).expect("signed width")];
+        order
+            .encode_signed_terms_into(&mut signed_terms)
+            .expect("signed immutable terms");
+        assert_eq!(
+            project_general_place_order_candidate_in_place_v3(
+                &root.to_bytes(),
+                &batch_record(batch),
+                config,
+                outcome_count,
+                environment,
+                Some(order.order_id()),
+                &signed_terms,
+                &mut candidate,
+            ),
+            Err(GeneralHotCandidateErrorV3::PlaceOrderCoordinate(
+                PlaceOrderClauseV3::IdentityPayer
+            ))
+        );
+        assert_eq!(candidate, before);
     }
 
     #[test]

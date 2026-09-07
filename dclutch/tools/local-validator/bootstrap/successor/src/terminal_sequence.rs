@@ -61,9 +61,16 @@ use dclutch_operator::{
     },
 };
 use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::continuation_v1::{
     RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1,
+};
+use dclutch_registry::{
+    ARTIFACT_RELEASE_SCHEMA_ID_V1,
+    record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1},
+    release_set::{
+        CallerAuthoritySeedsV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+        ProtocolInfrastructureProfileV2,
+    },
 };
 use dclutch_resolution_core_v3_operator::funded_rent_recovery_v1::{
     FundedRentReadingV2, recover_funded_rent_rate_v2,
@@ -7066,7 +7073,14 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
     let context = hex32(&evidence.founding_custody_context)?;
     let rent_credit = evidence_pubkey(evidence, "founding_lifecycle_rent_credit")?;
     let claims_aggregate = evidence_pubkey(evidence, "claims_aggregate")?;
-    let preliminary = finalized_snapshot(rpc, &[rent_credit, claims_aggregate])?;
+    let infrastructure_profile = pubkey(&plan.genesis_infrastructure_profile.address)?;
+    // The Core-owned V2 profile selects the Registry and Rent releases.  Its
+    // predecessor plan is only provenance: it cannot select a live artifact
+    // coordinate after Core has accepted a successor profile.
+    let preliminary = finalized_snapshot(
+        rpc,
+        &[rent_credit, claims_aggregate, infrastructure_profile],
+    )?;
     let credit_account = preliminary.account(rent_credit)?.clone();
     let credit = LifecycleRentCreditV2::decode(&credit_account.data)
         .map_err(|error| Error::new(format!("aggregate RentCredit: {error:?}")))?;
@@ -7101,8 +7115,14 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         registry,
         REALM_SCHEMA_RELEASE_ID_V1,
     )?;
-    let registry_artifact = plan_record_pair_v1(plan, "registry_artifact_release")?;
-    let rent_artifact = plan_record_pair_v1(plan, "rent_artifact_release")?;
+    let preliminary_profile = decode_aggregate_infrastructure_profile_v1(
+        preliminary.account(infrastructure_profile)?,
+        "aggregate preliminary infrastructure profile",
+    )?;
+    let registry_artifact =
+        profile_artifact_record_pair_v1(registry, preliminary_profile.registry(), "Registry")?;
+    let rent_artifact =
+        profile_artifact_record_pair_v1(registry, preliminary_profile.rent(), "Rent")?;
     let core_replay = Pubkey::find_program_address(
         &CustodyReplaySeedsV1::new(market.to_bytes(), release, ExecutionRoleV1::Core, context)
             .as_slices(),
@@ -7154,9 +7174,9 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         // else since `2951b226`; the sealed V1 is lineage evidence and is never
         // an account in a live instruction. The founding path reaches this
         // address through Found's own selection, and this path reads it from
-        // the plan, so the two must name the same account or a market founded
+        // Core's selected profile, so the two must name the same account or a market founded
         // on a born-at-V2 cohort could not be retired.
-        pubkey(&plan.genesis_infrastructure_profile.address)?,
+        infrastructure_profile,
         registry_artifact.0,
         registry_artifact.1,
         pubkey(&plan.registry.programdata_id)?,
@@ -7216,6 +7236,24 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
         }
         None => None,
     };
+    let finalized_profile = decode_aggregate_infrastructure_profile_v1(
+        snapshot.account(infrastructure_profile)?,
+        "aggregate finalized infrastructure profile",
+    )?;
+    authenticate_profile_selected_artifact_v1(
+        registry,
+        finalized_profile.registry(),
+        &account(23, "aggregate Registry ArtifactRelease")?,
+        &account(24, "aggregate Registry ArtifactRelease staging")?,
+        "Registry",
+    )?;
+    authenticate_profile_selected_artifact_v1(
+        registry,
+        finalized_profile.rent(),
+        &account(26, "aggregate Rent ArtifactRelease")?,
+        &account(27, "aggregate Rent ArtifactRelease staging")?,
+        "Rent",
+    )?;
     let retirement = MarketRetirementSnapshotV1 {
         market: account(0, "aggregate Market")?,
         rent_credit: account(1, "aggregate RentCredit")?,
@@ -7257,6 +7295,73 @@ pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
     let mut prestate = snapshot.accounts.values().cloned().collect::<Vec<_>>();
     prestate.sort_unstable_by_key(|account| account.key);
     Ok((retirement, prestate))
+}
+
+fn decode_aggregate_infrastructure_profile_v1(
+    account: &ObservedAccount,
+    label: &str,
+) -> Result<ProtocolInfrastructureProfileV2> {
+    ProtocolInfrastructureProfileV2::decode(&account.data)
+        .map_err(|error| Error::new(format!("{label}: {error:?}")))
+}
+
+/// Derive the Registry record coordinates from a V2 Core profile binding.
+/// A plan record is deliberately absent: the selected digest is the one
+/// semantic owner of these content-addressed accounts.
+fn profile_artifact_record_pair_v1(
+    registry: Pubkey,
+    selected: ExecutionRoleBindingV1,
+    role: &str,
+) -> Result<(Pubkey, Pubkey)> {
+    let digest = selected.artifact_release().to_bytes();
+    if selected.program().to_bytes() == [0; 32] || digest == [0; 32] {
+        return Err(Error::new(format!(
+            "aggregate selected {role} infrastructure binding was all-zero"
+        )));
+    }
+    Ok((
+        Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &digest,
+            ],
+            &registry,
+        )
+        .0,
+        Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &digest,
+            ],
+            &registry,
+        )
+        .0,
+    ))
+}
+
+fn authenticate_profile_selected_artifact_v1(
+    registry: Pubkey,
+    selected: ExecutionRoleBindingV1,
+    raw: &ObservedAccount,
+    staging: &ObservedAccount,
+    role: &str,
+) -> Result<()> {
+    let (expected_raw, expected_staging) =
+        profile_artifact_record_pair_v1(registry, selected, role)?;
+    if raw.key != expected_raw || staging.key != expected_staging {
+        return Err(Error::new(format!(
+            "aggregate profile-selected {role} ArtifactRelease coordinates changed between discovery and finalized snapshot"
+        )));
+    }
+    let selected_digest = selected.artifact_release().to_bytes();
+    if hash(&raw.data).to_bytes() != selected_digest {
+        return Err(Error::new(format!(
+            "aggregate profile-selected {role} ArtifactRelease bytes did not hash to selected digest"
+        )));
+    }
+    Ok(())
 }
 
 fn plan_record_pair_v1(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pubkey)> {
@@ -11801,6 +11906,71 @@ mod tests {
             executable,
             data: Vec::new(),
         }
+    }
+
+    fn profile_binding_for_artifact_data_v1(data: &[u8]) -> ExecutionRoleBindingV1 {
+        use dclutch_registry::release_set::{ArtifactReleaseIdV1, ProgramIdentityV1};
+
+        ExecutionRoleBindingV1::new(
+            ProgramIdentityV1::new(key(71).to_bytes()).expect("nonzero selected program"),
+            ArtifactReleaseIdV1::new(hash(data).to_bytes())
+                .expect("a content hash is a nonzero selected artifact"),
+        )
+    }
+
+    #[test]
+    fn aggregate_profile_selected_artifact_ignores_a_stale_plan_coordinate() {
+        let registry = key(70);
+        let selected_data = b"selected profile artifact";
+        let selected = profile_binding_for_artifact_data_v1(selected_data);
+        let stale_plan = profile_binding_for_artifact_data_v1(b"stale plan artifact");
+        let (raw, staging) = profile_artifact_record_pair_v1(registry, selected, "Registry")
+            .expect("selected profile coordinates");
+        let stale = profile_artifact_record_pair_v1(registry, stale_plan, "Registry")
+            .expect("stale plan coordinates are still derivable");
+        assert_ne!(
+            (raw, staging),
+            stale,
+            "a plan whose records predate Core's selected V2 binding cannot select the retirement frame"
+        );
+        let raw_account = ObservedAccount {
+            data: selected_data.to_vec(),
+            ..test_account(raw, registry, 1, false)
+        };
+        let staging_account = test_account(staging, system_program::ID, 0, false);
+        authenticate_profile_selected_artifact_v1(
+            registry,
+            selected,
+            &raw_account,
+            &staging_account,
+            "Registry",
+        )
+        .expect("the finalized selected binding, not the stale plan, authenticates");
+    }
+
+    #[test]
+    fn aggregate_profile_selected_artifact_refuses_substituted_record_bytes_by_name() {
+        let registry = key(72);
+        let selected = profile_binding_for_artifact_data_v1(b"selected artifact bytes");
+        let (raw, staging) = profile_artifact_record_pair_v1(registry, selected, "Rent")
+            .expect("selected profile coordinates");
+        let substituted = ObservedAccount {
+            data: b"substituted artifact bytes".to_vec(),
+            ..test_account(raw, registry, 1, false)
+        };
+        let refusal = authenticate_profile_selected_artifact_v1(
+            registry,
+            selected,
+            &substituted,
+            &test_account(staging, system_program::ID, 0, false),
+            "Rent",
+        )
+        .expect_err("a selected raw coordinate cannot carry different ArtifactRelease bytes");
+        assert_eq!(
+            refusal.to_string(),
+            "aggregate profile-selected Rent ArtifactRelease bytes did not hash to selected digest",
+            "the substituted selected record has one exact refusal"
+        );
     }
 
     fn synthetic_system_transfer_journal_for_payer(

@@ -117,12 +117,6 @@ use dclutch_trading::series::{
     ticket_admission_v1::SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1,
 };
 use dclutch_trading::{
-    general::{
-        hot_candidate_v3::seed_general_place_order_rows_from_signed_terms_v3,
-        state_artifacts_v3::general_readonly_evidence_v3,
-    },
-    general_codec::Action as GeneralAction,
-    general_config::root::GENERAL_CAPABILITY_KIND_ID_V1,
     direct_finalization_v3::{
         DIRECT_INLINE_POSTSTATE_COUNT_V3, DirectInlineAccountPrestateV3,
         DirectInlineAccountPrestatesV3, DirectInlineFinalizationInputV3,
@@ -135,6 +129,12 @@ use dclutch_trading::{
     execution_v3::{
         DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
     },
+    general::{
+        hot_candidate_v3::seed_general_place_order_terms_from_signed_terms_v3,
+        state_artifacts_v3::general_readonly_evidence_v3,
+    },
+    general_codec::Action as GeneralAction,
+    general_config::root::GENERAL_CAPABILITY_KIND_ID_V1,
     inline_candidate_v2::{
         DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2, DIRECT_INLINE_CUSTODY_ROUTE_SLOTS_V2,
         DirectExternalCollateralV2, DirectExternalDebitV2, DirectInlineCandidateContextV2,

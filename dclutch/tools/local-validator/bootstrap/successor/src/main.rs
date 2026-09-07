@@ -234,6 +234,9 @@ fn run() -> Result<()> {
         Some(command) if command == aggregate_retirement_exterior::COMMAND_DEVNET_TABLE_V1 => {
             aggregate_retirement_exterior::run_devnet_lookup_table(arguments.collect())
         }
+        Some(command) if command == aggregate_retirement_exterior::COMMAND_TABLE_V1 => {
+            aggregate_retirement_exterior::run_owned_loopback_lookup_table(arguments.collect())
+        }
         Some(command) if command == evidence_refresh::REFRESH_EVIDENCE_COMMAND_V1 => {
             evidence_refresh::run_devnet(arguments.collect())
         }

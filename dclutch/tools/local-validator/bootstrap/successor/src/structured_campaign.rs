@@ -8,11 +8,24 @@
 
 use std::path::PathBuf;
 
+use dclutch_claims::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2;
+use dclutch_market::{
+    capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    realm::REALM_SCHEMA_RELEASE_ID_V1,
+};
 use dclutch_operator::representation_composition::native_categorical_v1::{
     NativeBasisCompositionInputV1, compile_native_basis_composition_v1,
 };
+use dclutch_operator::structured_activation_bundle_v1::{
+    STRUCTURED_CAPABILITY_ROOT_TAIL_V1, structured_activation_request_v1,
+};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use serde_json::json;
-use solana_sdk::signature::{Keypair, Signer};
+use sha2::Digest as _;
+use solana_sdk::{
+    pubkey::Pubkey,
+    signature::{Keypair, Signer},
+};
 
 use crate::{
     Error, Result,
@@ -21,6 +34,10 @@ use crate::{
     model::SuccessorPlan,
     plan::pubkey,
     rpc::Rpc,
+    selected_capability_activation::{
+        SelectedActivationRecordPairV1, SelectedCapabilityActivationInputV1,
+        build_selected_capability_activation_plan_v1, execute_selected_capability_activation_v1,
+    },
     structured_activation,
     structured_claims_producer::{
         compile_structured_publication_closure_v1,
@@ -192,6 +209,27 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
     } else {
         None
     };
+    // Root creation is deliberately after the family closure is visible at
+    // Registry and before any lifecycle child can be constructed.  The
+    // generic executor owns the Core/Trading frame and verifies the ledger
+    // transition; this family only authenticates its selector-255 artifacts.
+    let root_activation = if let Some(published) = published.as_ref() {
+        let payer = payer
+            .as_ref()
+            .ok_or_else(|| Error::new("Structured campaign omitted payer"))?;
+        Some(activate_structured_root_v1(
+            &mut rpc,
+            payer,
+            &plan,
+            &market_input,
+            &evidence,
+            activation.market,
+            published.slot,
+            &mut transactions,
+        )?)
+    } else {
+        None
+    };
     write_json(
         &arguments.output,
         &json!({
@@ -210,9 +248,303 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
                 "raw": record.raw.to_string(), "staging": record.staging.to_string(), "schema": crate::plan::hex(&record.schema), "digest": crate::plan::hex(&record.digest)
             })).collect::<Vec<_>>()),
             "compositionAdmission": admitted,
+            "rootActivation": root_activation,
             "transactions": transactions,
         }),
     )
+}
+
+fn selected_pair_v1(
+    registry: solana_sdk::pubkey::Pubkey,
+    schema: [u8; 32],
+    body: &[u8],
+) -> Result<SelectedActivationRecordPairV1> {
+    let content: [u8; 32] = sha2::Sha256::digest(body).into();
+    let key = RecordKeyV1::new(
+        SchemaReleaseId::new(schema)
+            .map_err(|error| Error::new(format!("Structured activation schema: {error:?}")))?,
+        ContentDigest::new(content)
+            .map_err(|error| Error::new(format!("Structured activation content: {error:?}")))?,
+    );
+    let derive = |seeds: RecordPdaSeedsV1| {
+        Pubkey::find_program_address(
+            &[
+                seeds.domain(),
+                seeds.schema_release_id().as_bytes(),
+                seeds.expected_digest().as_bytes(),
+            ],
+            &registry,
+        )
+    };
+    let (raw, raw_bump) = derive(key.raw_record_pda_seeds());
+    let (staging, staging_bump) = derive(key.staging_cursor_pda_seeds());
+    Ok(SelectedActivationRecordPairV1 {
+        raw,
+        staging,
+        schema,
+        content,
+        bumps: [raw_bump, staging_bump],
+    })
+}
+
+/// Execute selector-255 from the founded Market and report-named ledgers.
+///
+/// The report supplies routing coordinates only.  Record content and all root
+/// semantics remain selected from the immutable Structured closure and live
+/// Core Market state.
+fn activate_structured_root_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    plan: &SuccessorPlan,
+    market_input: &[u8],
+    evidence: &crate::campaign::CampaignTerminalEvidenceV1,
+    market: Pubkey,
+    minimum_slot: u64,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<serde_json::Value> {
+    let input: crate::model::MarketRunInput = serde_json::from_slice(market_input)?;
+    let selected = input
+        .selected_capability
+        .as_ref()
+        .ok_or_else(|| Error::new("Structured market omitted selected capability"))?;
+    if selected.family != "structured" || selected.records.len() <= 53 {
+        return Err(Error::new(
+            "Structured root activation omitted selector-255 artifact bank",
+        ));
+    }
+    let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let trading = pubkey(&plan.trading.program_id)?;
+    let resolution = pubkey(&plan.resolution.program_id)?;
+    let program_set_body = crate::runtime::decode_hex(&selected.program_set_hex)?;
+    let config_body = crate::runtime::decode_hex(&selected.config_hex)?;
+    let token_behavior = dclutch_custody::token_svm::TokenBehaviorSelectionV2::decode(&config_body)
+        .map_err(|error| Error::new(format!("Structured root Token behavior: {error:?}")))?;
+    let realm = pair_from_digest_v1(registry, REALM_SCHEMA_RELEASE_ID_V1, token_behavior.realm())?;
+    let manifest_body = crate::runtime::decode_hex(&input.capability_manifest_hex)?;
+    let manifest = selected_pair_v1(
+        registry,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        &manifest_body,
+    )?;
+    let program_set = selected_pair_v1(
+        registry,
+        dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        &program_set_body,
+    )?;
+    let config = selected_pair_v1(
+        registry,
+        dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+        &config_body,
+    )?;
+    let record = |index: usize, label: &str| -> Result<SelectedActivationRecordPairV1> {
+        let row = selected
+            .records
+            .get(index)
+            .ok_or_else(|| Error::new(format!("Structured root activation omitted {label}")))?;
+        let schema = crate::plan::hex32(&row.schema_hex)?;
+        selected_pair_v1(
+            registry,
+            schema,
+            &crate::runtime::decode_hex(&row.body_hex)?,
+        )
+    };
+    let account_profile = record(51, "root activation account profile")?;
+    let effect = record(52, "root activation effect")?;
+    let descriptor = record(53, "root activation descriptor")?;
+    let selected_ledger = evidence
+        .accounts
+        .get("direct_trading_funding_ledger")
+        .ok_or_else(|| Error::new("Structured founding report omitted Trading funding ledger"))?;
+    let resolution_ledger = evidence
+        .accounts
+        .get("resolution_funding_ledger")
+        .or_else(|| evidence.accounts.get("founding_funding_ledger_v2_0"))
+        .or_else(|| evidence.accounts.get("founding_funding_ledger_v2_1"))
+        .ok_or_else(|| {
+            Error::new("Structured founding report omitted Resolution funding ledger")
+        })?;
+    let selected_funding_ledger = pubkey(&selected_ledger.address)?;
+    let mut resolution_funding_ledger = pubkey(&resolution_ledger.address)?;
+    if resolution_funding_ledger == selected_funding_ledger {
+        resolution_funding_ledger = evidence
+            .accounts
+            .get("founding_funding_ledger_v2_0")
+            .into_iter()
+            .chain(evidence.accounts.get("founding_funding_ledger_v2_1"))
+            .filter_map(|row| pubkey(&row.address).ok())
+            .find(|coordinate| *coordinate != selected_funding_ledger)
+            .ok_or_else(|| {
+                Error::new("Structured founding report lacks the dependency funding ledger")
+            })?;
+    }
+    // This is the one mutable/immutable observation boundary for activation.
+    // Every key is derived above from the selected closure or founded report;
+    // no pre-publication Market image or later singleton read enters the plan.
+    let addresses = vec![
+        market,
+        realm.raw,
+        realm.staging,
+        manifest.raw,
+        manifest.staging,
+        program_set.raw,
+        program_set.staging,
+        config.raw,
+        config.staging,
+        account_profile.raw,
+        account_profile.staging,
+        effect.raw,
+        effect.staging,
+        descriptor.raw,
+        descriptor.staging,
+        selected_funding_ledger,
+        resolution_funding_ledger,
+    ];
+    let (observed_slot, accounts) = rpc.finalized_accounts(&addresses, minimum_slot)?;
+    let facts_slot = activation_snapshot_slot_v1(observed_slot, minimum_slot)?;
+    let at =
+        |index: usize, label: &str| -> Result<crate::rpc::RpcAccount> {
+            accounts.get(index).cloned().flatten().ok_or_else(|| {
+                Error::new(format!("Structured activation snapshot omitted {label}"))
+            })
+        };
+    let market_account = at(0, "Core Market")?;
+    let realm_account = at(1, "Realm record")?;
+    let manifest_account = at(3, "capability manifest")?;
+    let program_set_account = at(5, "ProgramSet record")?;
+    let config_account = at(7, "config record")?;
+    let profile_account = at(9, "root activation account profile")?;
+    let effect_account = at(11, "root activation effect")?;
+    let descriptor_account = at(13, "root activation descriptor")?;
+    let ledger_account = at(15, "selected funding ledger")?;
+    let state = dclutch_market::CoreState::decode(&market_account.data)
+        .map_err(|error| Error::new(format!("Structured root Core Market: {error:?}")))?;
+    if state.identity.realm_id.to_bytes() != token_behavior.realm()
+        || state.identity.capability_manifest.to_bytes() != manifest.content
+        || manifest_account.data != manifest_body
+    {
+        return Err(Error::new(
+            "Structured activation same-slot Market/Realm/manifest join differs",
+        ));
+    }
+    let record_matches = |account: &crate::rpc::RpcAccount, expected: &[u8]| {
+        account.owner == registry && account.data == expected
+    };
+    if realm_account.owner != registry
+        || sha2::Sha256::digest(&realm_account.data).as_slice() != realm.content
+        || !record_matches(&program_set_account, &program_set_body)
+        || !record_matches(&config_account, &config_body)
+        || !record_matches(
+            &profile_account,
+            &crate::runtime::decode_hex(&selected.records[51].body_hex)?,
+        )
+        || !record_matches(
+            &effect_account,
+            &crate::runtime::decode_hex(&selected.records[52].body_hex)?,
+        )
+        || !record_matches(
+            &descriptor_account,
+            &crate::runtime::decode_hex(&selected.records[53].body_hex)?,
+        )
+    {
+        return Err(Error::new(
+            "Structured activation finalized selected-record batch differs",
+        ));
+    }
+    let context: [u8; 32] = sha2::Sha256::digest(b"dclutch/structured-root-activation/v1").into();
+    let activation_request = structured_activation_request_v1();
+    let plan = build_selected_capability_activation_plan_v1(SelectedCapabilityActivationInputV1 {
+        market,
+        market_account: &market_account,
+        current_slot: facts_slot,
+        core,
+        core_programdata: pubkey(&plan.core.programdata_id)?,
+        trading,
+        trading_programdata: pubkey(&plan.trading.programdata_id)?,
+        resolution,
+        resolution_programdata: pubkey(&plan.resolution.programdata_id)?,
+        registry,
+        activation_cache: pubkey(&plan.activation)?,
+        realm,
+        manifest,
+        manifest_body: &manifest_account.data,
+        entry_index: selected.selected_manifest_entry_index,
+        program_set,
+        program_set_id: sha2::Sha256::digest(&program_set_body).into(),
+        config,
+        config_id: sha2::Sha256::digest(&config_body).into(),
+        capability_kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+        account_profile,
+        effect,
+        descriptor,
+        selected_funding_ledger,
+        selected_funding_ledger_account: &ledger_account,
+        resolution_funding_ledger,
+        family_activation_request: &activation_request,
+        context,
+    })?;
+    let outcome = execute_selected_capability_activation_v1(
+        rpc,
+        payer,
+        &plan,
+        "activate Structured selector-255 root",
+    )?;
+    transactions.extend(outcome.routing_transactions);
+    transactions.push(outcome.activation.clone());
+    let tail = outcome
+        .root_account
+        .data
+        .get(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or_else(|| Error::new("Structured activated root omitted tail"))?;
+    if tail != STRUCTURED_CAPABILITY_ROOT_TAIL_V1 {
+        return Err(Error::new(
+            "Structured activated root tail differs from selector-255 artifact",
+        ));
+    }
+    Ok(
+        json!({"root": plan.root.to_string(), "slot": plan.facts_slot, "activation": outcome.activation}),
+    )
+}
+
+fn activation_snapshot_slot_v1(observed: u64, minimum: u64) -> Result<u64> {
+    if observed == 0 || observed < minimum {
+        return Err(Error::new(
+            "Structured activation finalized snapshot predates its required publication slot",
+        ));
+    }
+    Ok(observed)
+}
+
+fn pair_from_digest_v1(
+    registry: Pubkey,
+    schema: [u8; 32],
+    content: [u8; 32],
+) -> Result<SelectedActivationRecordPairV1> {
+    let key = RecordKeyV1::new(
+        SchemaReleaseId::new(schema)
+            .map_err(|error| Error::new(format!("Structured root schema: {error:?}")))?,
+        ContentDigest::new(content)
+            .map_err(|error| Error::new(format!("Structured root content: {error:?}")))?,
+    );
+    let derive = |seeds: RecordPdaSeedsV1| {
+        Pubkey::find_program_address(
+            &[
+                seeds.domain(),
+                seeds.schema_release_id().as_bytes(),
+                seeds.expected_digest().as_bytes(),
+            ],
+            &registry,
+        )
+    };
+    let (raw, raw_bump) = derive(key.raw_record_pda_seeds());
+    let (staging, staging_bump) = derive(key.staging_cursor_pda_seeds());
+    Ok(SelectedActivationRecordPairV1 {
+        raw,
+        staging,
+        schema,
+        content,
+        bumps: [raw_bump, staging_bump],
+    })
 }
 
 fn input_release_slot(
@@ -305,5 +637,15 @@ mod tests {
         let error = super::parse_arguments(vec!["--execute".into(), "--execute".into()])
             .expect_err("duplicate execution flag must refuse");
         assert_eq!(error.to_string(), "--execute was given twice");
+    }
+
+    #[test]
+    fn root_activation_refuses_a_snapshot_before_the_published_closure() {
+        let error = super::activation_snapshot_slot_v1(41, 42)
+            .expect_err("a stale finalized snapshot must not build selector-255 activation");
+        assert_eq!(
+            error.to_string(),
+            "Structured activation finalized snapshot predates its required publication slot"
+        );
     }
 }

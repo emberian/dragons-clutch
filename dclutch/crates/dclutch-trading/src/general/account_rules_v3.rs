@@ -222,7 +222,7 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
         Action::CloseCandidate => 26,
         Action::OpenBatch => 24,
         Action::CloseBatch => 22,
-        Action::PlaceOrder => 32,
+        Action::PlaceOrder => 33,
         Action::CancelOrder => 33,
         Action::ReleaseOrder => 22,
         Action::Close => 17,
@@ -1015,8 +1015,9 @@ pub fn general_account_profile_operation_v3(
         // and config provide the independently sourced batch identities. The
         // maker's authority is the final PAYER projection: the transition
         // proves that signer equals the authenticated signed owner. The
-        // protected terminal beneficiary remains zero until lifecycle writes
-        // that same payer on the create branch.
+        // terminal beneficiary observation reads the state envelope: zero on
+        // a vacant create and the recorded maker on an authenticate branch.
+        // Lifecycle alone writes the separate protected beneficiary output.
         5 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: terminal,
             destination: common_scalar(scalar::TERMINAL_BUMP_OBSERVATION)?,
@@ -1027,99 +1028,104 @@ pub fn general_account_profile_operation_v3(
             destination: common_scalar(scalar::TERMINAL_PRINCIPAL_OBSERVATION)?,
             data_offset: GeneralLocalStateLayoutV3::rent_principal(),
         }),
-        7 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+        7 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+            account: terminal,
+            destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::beneficiary(),
+        }),
+        8 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::ZERO)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::OUTCOME_COUNT)?,
         }),
-        8 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
+        9 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: primary,
             destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::STATUS)?,
         }),
-        9 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        10 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT)?,
         }),
-        10 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        11 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::SETTLEMENT_CLOSE_SLOT)?,
         }),
-        11 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+        12 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::CONFIG_MAX_ORDERS)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::MAX_ORDERS)?,
         }),
-        12 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+        13 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::ORDER_COUNT)?,
         }),
-        13 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        14 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::COMMITTED_QUOTE_RESERVE)?,
         }),
-        14 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+        15 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::SCRATCH_A)?,
             data_offset: width(GeneralOrderLayoutV2::OUTCOME_COUNT)?,
         }),
-        15 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        16 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_NONCE)?,
             data_offset: width(GeneralOrderLayoutV2::NONCE)?,
         }),
-        16 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        17 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_MAX_LOTS)?,
             data_offset: width(GeneralOrderLayoutV2::MAX_LOTS)?,
         }),
-        17 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        18 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?,
             data_offset: width(GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT)?,
         }),
-        18 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        19 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_VALID_UNTIL_SLOT)?,
             data_offset: width(GeneralOrderLayoutV2::VALID_UNTIL_SLOT)?,
         }),
-        19 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        20 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::OWNER)?,
             data_offset: width(GeneralOrderLayoutV2::OWNER_ID)?,
         }),
-        20 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        21 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::SELECTION_BATCH)?,
             data_offset: width(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
-        21 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        22 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::CANDIDATE)?,
             data_offset: width(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
-        22 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        23 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
             destination: common_identity(identity::MARKET)?,
             data_offset: root_tail_offset(GENERAL_ROOT_MARKET_OFFSET_V2)?,
         }),
-        23 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        24 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
             destination: common_identity(identity::GENERAL_CONFIG_ID)?,
             data_offset: root_tail_offset(GENERAL_ROOT_CONFIG_ID_OFFSET_V2)?,
         }),
-        24 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        25 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_PRODUCT_COORDINATE_V3)?),
             destination: common_identity(identity::SELECTION_PRODUCT)?,
             data_offset: width(PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2)?,
         }),
         // The maker who pays is the maker the signed terms name; see
         // SubmitCandidate above for why this cannot be a guard here.
-        25 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectKey {
+        26 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
             destination: common_identity(identity::PAYER)?,
         }),
@@ -3198,37 +3204,30 @@ mod tests {
         }
     }
 
-    /// Lifecycle owns the terminal beneficiary on PlaceOrder's vacant create
-    /// branch. Projecting signed owner bytes into that protected destination
-    /// makes every honest create refuse before the maker/PAYER transition can
-    /// establish their equality.
+    /// PlaceOrder observes a vacant order beneficiary as zero, then Lifecycle
+    /// alone writes the distinct protected output. Its payer is independently
+    /// projected for the signed-maker equality the transition proves.
     #[test]
-    fn place_order_leaves_protected_beneficiary_to_lifecycle_and_projects_maker_payer() {
+    fn place_order_observes_lifecycle_beneficiary_and_projects_maker_payer() {
         let action = Action::PlaceOrder;
-        assert_eq!(general_account_profile_operation_count_v3(action), 32);
-        let protected = common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)
-            .expect("terminal beneficiary register");
-        let writers = (0..general_account_profile_operation_count_v3(action))
-            .filter(|index| {
-                matches!(
-                    general_account_profile_operation_v3(action, *index)
-                        .expect("PlaceOrder operation"),
-                    AccountOperationInputV2::ProjectDataIdentity { destination, .. }
-                        if destination == protected
-                )
-            })
-            .count();
+        assert_eq!(general_account_profile_operation_count_v3(action), 33);
         assert_eq!(
-            writers, 0,
-            "only lifecycle writes its protected beneficiary"
+            general_account_profile_operation_v3(action, 7).expect("beneficiary observation"),
+            AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
+                destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)
+                    .expect("terminal beneficiary observation"),
+                data_offset: GeneralLocalStateLayoutV3::beneficiary(),
+            },
+            "the lifecycle input observes the order envelope; it is not a signed-term projection",
         );
         assert_eq!(
-            general_account_profile_operation_v3(action, 25).expect("maker payer operation"),
+            general_account_profile_operation_v3(action, 26).expect("maker payer operation"),
             AccountOperationInputV2::ProjectKey {
                 account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
                 destination: common_identity(identity::PAYER).expect("payer register"),
             },
-            "the transition receives the actual lifecycle payer to join against signed OWNER",
+            "the transition receives the lifecycle payer to join against signed OWNER",
         );
     }
 

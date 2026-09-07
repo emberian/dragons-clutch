@@ -1377,15 +1377,11 @@ fn batch_and_order_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
                 identity::TERMINAL_BENEFICIARY_OBSERVATION,
             )?)),
-            // The authenticated maker pays PlaceOrder, and the transition
-            // proves `PAYER == OWNER` from the signed terms. CancelOrder
-            // merely authenticates an existing shared order, so it retains
-            // the record's already-established Credit refund semantics.
-            refund_source: if action == Action::PlaceOrder {
-                LifecycleRefundSourceInputV3::Payer
-            } else {
-                LifecycleRefundSourceInputV3::Credit
-            },
+            // PlaceOrder creates this maker-owned order, and CancelOrder
+            // authenticates that same stored beneficiary. Both transitions
+            // prove `PAYER == OWNER`; Credit would compare the maker's stored
+            // beneficiary to the market wallet and refuse a real cancellation.
+            refund_source: LifecycleRefundSourceInputV3::Payer,
             guard: LifecycleGuardInputV3::Always,
         },
     ];
@@ -1850,8 +1846,8 @@ mod tests {
         );
         assert_eq!(
             order_authenticate.refund_source,
-            LifecycleRefundSourceInputV3::Credit,
-            "CancelOrder preserves the already-recorded order refund source"
+            LifecycleRefundSourceInputV3::Payer,
+            "CancelOrder authenticates the maker beneficiary PlaceOrder recorded"
         );
     }
 

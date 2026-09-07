@@ -1139,7 +1139,7 @@ fn plan_found(
         mint: [0; 32],
         token_program: [0; 32],
         payer: sponsor.to_bytes(),
-        rent_refund: sponsor.to_bytes(),
+        rent_refund: coordinates.rent_credit.to_bytes(),
         expected_revision: 0,
         resulting_revision: 1,
         amount: 0,
@@ -1208,7 +1208,8 @@ fn plan_found(
         |role| match role {
             CustodyFrameRoleV1::CallerAuthority => Ok(replay_authority),
             CustodyFrameRoleV1::Replay => Ok(replay),
-            CustodyFrameRoleV1::Payer | CustodyFrameRoleV1::RentRefund => Ok(sponsor),
+            CustodyFrameRoleV1::Payer => Ok(sponsor),
+            CustodyFrameRoleV1::RentRefund => Ok(coordinates.rent_credit),
             other => coordinates.common_custody_key(other),
         },
     )?;
@@ -1218,7 +1219,8 @@ fn plan_found(
             CustodyFrameRoleV1::CallerAuthority => Ok(vault_authority),
             CustodyFrameRoleV1::Replay => Ok(replay),
             CustodyFrameRoleV1::Vault => Ok(vault),
-            CustodyFrameRoleV1::Payer | CustodyFrameRoleV1::RentRefund => Ok(sponsor),
+            CustodyFrameRoleV1::Payer => Ok(sponsor),
+            CustodyFrameRoleV1::RentRefund => Ok(coordinates.rent_credit),
             other => coordinates.common_custody_key(other),
         },
     )?);

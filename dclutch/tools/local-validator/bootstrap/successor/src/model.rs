@@ -384,6 +384,11 @@ pub(crate) struct MarketRunInput {
     /// nobody publishes is a rung that can be advanced onto and never answered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) recovery_source_records: Vec<RecoverySourceRecordsV1>,
+    /// Explicit immutable ensemble declaration. Absent preserves the historic
+    /// single-source material byte-for-byte; present is reauthenticated against
+    /// the published recovery policy before founding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ensemble: Option<EnsembleMarketInputV1>,
     pub(crate) capability_manifest_hex: String,
     /// Complete Direct record closure selected by the one non-Resolution
     /// manifest entry. The field is syntactically required; `None` exists only
@@ -424,6 +429,18 @@ pub(crate) struct RecoverySourceRecordsV1 {
     pub(crate) source_spec_hex: String,
     /// Exact canonical `PythAdapterConfigV1` body that spec selects.
     pub(crate) pyth_adapter_config_hex: String,
+}
+
+/// Immutable `SourceMaterialV3` ensemble dimensions authored by this market.
+///
+/// `rungs` is kept explicit because it is part of the material wire, even
+/// though the Ensemble campaign currently uses the member-only (`0`) form.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EnsembleMarketInputV1 {
+    pub(crate) members: u8,
+    pub(crate) quorum: u8,
+    pub(crate) rungs: u8,
 }
 
 /// One Registry record a selected capability's publication chain finalizes.

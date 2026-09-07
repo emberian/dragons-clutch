@@ -173,6 +173,7 @@ mod resolution;
 mod stages;
 
 // ------------------------------------------------------------- this campaign
+mod ensemble;
 mod ladder;
 
 type Result<T> = core::result::Result<T, Error>;

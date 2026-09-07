@@ -834,6 +834,7 @@ pub(crate) fn relayed_market_input(
         // alternative source records: empty here and empty above are one fact
         // said twice, and `validate_market_input` refuses them disagreeing.
         recovery_source_records: Vec::new(),
+        ensemble: None,
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
         selected_capability: None,

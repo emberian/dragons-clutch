@@ -219,21 +219,23 @@ pub(crate) fn selected_entry_with_dependencies_v1(
     .map_err(|error| Error::new(format!("selected manifest entry dependencies: {error:?}")))
 }
 
-/// Merge one selected entry into the canonical three-entry Resolution base.
+/// Merge one selected entry into a canonical Resolution-controller base.
 ///
-/// The base must be canonical, carry exactly three same-release companions,
-/// and none of them may already claim the selected kind — one selected trade
-/// capability per Market. Returns the canonical merged manifest bytes and the
-/// selected entry's index in kind order.
+/// The base's width is derived from the authenticated recovery policy: ordinary
+/// markets have three Resolution rows while an Ensemble can fund every member
+/// slot and therefore has more. The base must remain canonical, contain at
+/// least the three semantic roles, carry one controller release, and contain
+/// no selected trade kind. Returns the canonical merged bytes and selected
+/// entry index.
 pub(crate) fn merge_selected_manifest_v1(
     base_bytes: &[u8],
     selected: CapabilityEntryV1,
 ) -> Result<(Vec<u8>, u16)> {
     let base = CapabilityManifestV1::decode(base_bytes)
         .map_err(|error| Error::new(format!("Resolution capability manifest: {error:?}")))?;
-    if base.entry_count() != 3 || base.as_bytes() != base_bytes {
+    if base.entry_count() < 3 || base.as_bytes() != base_bytes {
         return Err(Error::new(
-            "selected-capability compilation requires the canonical three-entry Resolution base",
+            "selected-capability compilation requires a canonical Resolution base with at least three entries",
         ));
     }
     let selected_kind = selected.kind_id().to_bytes();
@@ -241,14 +243,14 @@ pub(crate) fn merge_selected_manifest_v1(
         .entry(0)
         .map_err(|error| Error::new(format!("Resolution capability entry 0: {error:?}")))?
         .release_id();
-    let mut entries = Vec::with_capacity(4);
+    let mut entries = Vec::with_capacity(usize::from(base.entry_count()).saturating_add(1));
     for index in 0..base.entry_count() {
         let entry = base.entry(index).map_err(|error| {
             Error::new(format!("Resolution capability entry {index}: {error:?}"))
         })?;
         if entry.kind_id().to_bytes() == selected_kind || entry.release_id() != first_release {
             return Err(Error::new(
-                "Resolution base must contain three same-release companions of other kinds \
+                "Resolution base must contain same-release controller companions of other kinds \
                  than the selected capability",
             ));
         }
@@ -284,9 +286,10 @@ pub(crate) fn merge_selected_manifest_v1(
 /// Validate one selected-capable manifest against the entry its closure
 /// re-derives.
 ///
-/// The manifest must be canonical with exactly four entries, the entry at the
-/// recorded index must equal the re-derived closure entry byte for byte, and
-/// the selected kind must appear exactly once.
+/// The manifest must be canonical with one selected entry beside an
+/// authenticated Resolution-controller base. The entry at the recorded index
+/// must equal the re-derived closure byte for byte, and the selected kind must
+/// appear exactly once.
 pub(crate) fn validate_selected_manifest_v1(
     manifest_bytes: &[u8],
     expected: CapabilityEntryV1,
@@ -294,9 +297,9 @@ pub(crate) fn validate_selected_manifest_v1(
 ) -> Result<()> {
     let manifest = CapabilityManifestV1::decode(manifest_bytes)
         .map_err(|error| Error::new(format!("selected-capable manifest: {error:?}")))?;
-    if manifest.entry_count() != 4 || manifest.as_bytes() != manifest_bytes {
+    if manifest.entry_count() < 4 || manifest.as_bytes() != manifest_bytes {
         return Err(Error::new(
-            "selected-capable manifest must be canonical and contain exactly four entries",
+            "selected-capable manifest must be canonical and contain a Resolution base plus one selected entry",
         ));
     }
     let selected = manifest
@@ -334,6 +337,34 @@ pub(crate) fn validate_selected_manifest_v1(
             "selected-capable manifest did not contain exactly one entry of the selected kind",
         ));
     }
+    let controller_release = manifest
+        .entry(if selected_manifest_entry_index == 0 {
+            1
+        } else {
+            0
+        })
+        .map_err(|error| Error::new(format!("Resolution controller companion: {error:?}")))?
+        .release_id();
+    if expected.release_id() == controller_release {
+        return Err(Error::new(
+            "selected capability may not claim the Resolution controller release",
+        ));
+    }
+    for index in 0..manifest.entry_count() {
+        if index == selected_manifest_entry_index {
+            continue;
+        }
+        let companion = manifest.entry(index).map_err(|error| {
+            Error::new(format!(
+                "Resolution controller companion {index}: {error:?}"
+            ))
+        })?;
+        if companion.release_id() != controller_release || companion.kind_id() == selected_kind {
+            return Err(Error::new(
+                "selected-capable manifest contains a non-controller companion",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -362,8 +393,8 @@ pub(crate) fn payload_manifest_entry_v1(
 /// Attach one compiled family closure to a market input.
 ///
 /// Merges the entry the payload's own bytes derive into the input's canonical
-/// three-entry Resolution base, records the selected index, and stores the
-/// payload. The input must not already carry a capability closure of either
+/// policy-derived Resolution-controller base, records the selected index, and
+/// stores the payload. The input must not already carry a capability closure of either
 /// shape — one selected trade capability per Market.
 pub(crate) fn attach_selected_capability_v1(
     input: &mut crate::model::MarketRunInput,
@@ -713,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_refuses_a_base_of_another_entry_count() {
+    fn merge_preserves_a_wide_same_release_resolution_base() {
         let wide = encode(&[
             entry([0x11; 32], COMPANION_RELEASE, [0x21; 32]),
             entry([0x12; 32], COMPANION_RELEASE, [0x22; 32]),
@@ -721,8 +752,12 @@ mod tests {
             entry([0x14; 32], COMPANION_RELEASE, [0x24; 32]),
         ]);
         let selected = entry(SELECTED_KIND, [0x61; 32], [0x62; 32]);
-        merge_selected_manifest_v1(&wide, selected)
-            .expect_err("the canonical Resolution base carries exactly three entries");
+        let (manifest, index) = merge_selected_manifest_v1(&wide, selected)
+            .expect("a policy-derived four-row Resolution base merges");
+        let decoded = CapabilityManifestV1::decode(&manifest).expect("merged manifest");
+        assert_eq!(decoded.entry_count(), 5);
+        validate_selected_manifest_v1(&manifest, selected, index)
+            .expect("the one selected capability remains authenticated");
     }
 
     #[test]
@@ -743,8 +778,9 @@ mod tests {
     /// distinct kinds (a five-entry manifest with two trade kinds encodes
     /// canonically — coexisting capabilities are not a wire impossibility),
     /// and the selection SEAM welds founding to exactly one selected trade
-    /// capability: validation pins the four-entry shape, and the merge only
-    /// ever grows the canonical three-entry Resolution base by one. The
+    /// capability: validation pins every nonselected entry to the one
+    /// Resolution controller release, while the merge grows the authenticated
+    /// policy-derived controller base by one. The
     /// founding funding census welds the same fact independently
     /// (`founding_masks_weld_the_manifest_to_one_selected_capability`,
     /// `market.rs`): every entry must be funded by exactly one of the two
@@ -768,12 +804,12 @@ mod tests {
         // (b) the seam refuses it as a founding manifest…
         let selected = entry(SELECTED_KIND, [0x91; 32], [0x62; 32]);
         validate_selected_manifest_v1(&five, selected, 3)
-            .expect_err("founding validation welds the manifest to four entries");
+            .expect_err("a second non-controller entry is not a Resolution companion");
         // …and as a merge base, so a second trade capability cannot enter
         // through either door.
         let another = entry([0x71; 32], [0x93; 32], [0x64; 32]);
         merge_selected_manifest_v1(&five, another)
-            .expect_err("the merge only grows the three-entry Resolution base");
+            .expect_err("the merge requires one controller release across its base");
     }
 
     #[test]

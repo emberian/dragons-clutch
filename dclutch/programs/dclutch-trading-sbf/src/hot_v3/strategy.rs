@@ -1128,10 +1128,11 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
     if let Some(signed_terms) = general_place_order_terms {
-        seed_general_place_order_rows_from_signed_terms_v3(
+        seed_general_place_order_terms_from_signed_terms_v3(
             tail_count,
             signed_terms,
             &mut current_scalars,
+            &mut current_identities,
         )
         .map_err(|_| TradingSbfError::Content)?;
     }

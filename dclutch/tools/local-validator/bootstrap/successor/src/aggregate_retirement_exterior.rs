@@ -984,9 +984,32 @@ fn progress_v1(
 /// the campaign's own four operations -- so the packets and the table cannot
 /// disagree, and the campaign refuses by name a table that does not carry them.
 pub(crate) const COMMAND_DEVNET_TABLE_V1: &str = "devnet-aggregate-retirement-lookup-table-v1";
+/// The owned-loopback producer for the retirement's own routing table.
+///
+/// The checkpointed route creates addresses that a terminal table cannot
+/// carry, so the local campaign needs the same authenticated producer that
+/// devnet uses before it can send its first retirement packet.
+pub(crate) const COMMAND_TABLE_V1: &str =
+    "local-private-validator-aggregate-retirement-lookup-table-v1";
 
-const TABLE_EVIDENCE_SCHEMA_V1: &str =
+const fn table_command(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => COMMAND_DEVNET_TABLE_V1,
+        ExpectedClusterV1::OwnedLoopback => COMMAND_TABLE_V1,
+    }
+}
+
+const DEVNET_TABLE_EVIDENCE_SCHEMA_V1: &str =
     "dclutch-devnet-aggregate-retirement-lookup-table-evidence-v1";
+const OWNED_LOOPBACK_TABLE_EVIDENCE_SCHEMA_V1: &str =
+    "dclutch-owned-loopback-aggregate-retirement-lookup-table-evidence-v1";
+
+const fn table_evidence_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => DEVNET_TABLE_EVIDENCE_SCHEMA_V1,
+        ExpectedClusterV1::OwnedLoopback => OWNED_LOOPBACK_TABLE_EVIDENCE_SCHEMA_V1,
+    }
+}
 /// What `publish_routing_table_over_v1` calls this table in its own evidence.
 const TABLE_LABEL_V1: &str = "AGGREGATE-RETIREMENT";
 
@@ -1018,8 +1041,18 @@ struct TableArgumentsV1 {
 }
 
 pub(crate) fn run_devnet_lookup_table(arguments: Vec<String>) -> Result<()> {
-    let expected = ExpectedClusterV1::Devnet;
-    let arguments = parse_table_arguments_v1(arguments)?;
+    run_lookup_table(arguments, ExpectedClusterV1::Devnet)
+}
+
+/// Publish the retirement's derived routing table on the checked local
+/// validator. This shares the devnet producer's complete frame and table
+/// authentication; only the already-authenticated origin differs.
+pub(crate) fn run_owned_loopback_lookup_table(arguments: Vec<String>) -> Result<()> {
+    run_lookup_table(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn run_lookup_table(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse_table_arguments_v1(arguments, expected)?;
     expected.authenticate(&arguments.origin)?;
     if arguments.output.exists() {
         return Err(refusal(format!(
@@ -1108,8 +1141,8 @@ pub(crate) fn run_devnet_lookup_table(arguments: Vec<String>) -> Result<()> {
     println!("frame accounts       {}", operations[0].account_count());
     println!("table addresses      {}", required.len());
     let mut evidence = json!({
-        "schema": TABLE_EVIDENCE_SCHEMA_V1,
-        "cluster": "devnet",
+        "schema": table_evidence_schema_v1(expected),
+        "cluster": expected.evidence_label(),
         "rpcUrl": arguments.origin.redacted_url(),
         "planSha256": sha256_hex(&inputs.plan_source),
         "evidenceSha256": sha256_hex(&inputs.evidence_source),
@@ -1234,7 +1267,10 @@ pub(crate) fn run_devnet_lookup_table(arguments: Vec<String>) -> Result<()> {
     )
 }
 
-fn parse_table_arguments_v1(arguments: Vec<String>) -> Result<TableArgumentsV1> {
+fn parse_table_arguments_v1(
+    arguments: Vec<String>,
+    expected: ExpectedClusterV1,
+) -> Result<TableArgumentsV1> {
     let mut values = BTreeMap::new();
     let mut acknowledgment = None;
     let mut execute = false;
@@ -1250,7 +1286,7 @@ fn parse_table_arguments_v1(arguments: Vec<String>) -> Result<TableArgumentsV1> 
         let value = iterator
             .next()
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
-        if argument == DEVNET_ACKNOWLEDGMENT_FLAG {
+        if argument == DEVNET_ACKNOWLEDGMENT_FLAG && expected == ExpectedClusterV1::Devnet {
             if acknowledgment.replace(value).is_some() {
                 return Err(Error::new(format!("{argument} may be supplied only once")));
             }
@@ -1269,7 +1305,8 @@ fn parse_table_arguments_v1(arguments: Vec<String>) -> Result<TableArgumentsV1> 
                 | "--output"
         ) {
             return Err(Error::new(format!(
-                "unknown {COMMAND_DEVNET_TABLE_V1} argument: {argument}"
+                "unknown {} argument: {argument}",
+                table_command(expected)
             )));
         }
         if values.insert(argument.clone(), value).is_some() {
@@ -1289,7 +1326,7 @@ fn parse_table_arguments_v1(arguments: Vec<String>) -> Result<TableArgumentsV1> 
         Ok(path)
     };
     let rpc_url = take(&mut values, "--rpc-url")?;
-    if acknowledgment.is_none() {
+    if expected == ExpectedClusterV1::Devnet && acknowledgment.is_none() {
         return Err(Error::new(format!(
             "{DEVNET_ACKNOWLEDGMENT_FLAG} is required by {COMMAND_DEVNET_TABLE_V1}"
         )));
@@ -1672,6 +1709,66 @@ mod tests {
         .collect();
         argv.extend(extra.iter().map(|value| (*value).to_owned()));
         argv
+    }
+
+    fn retirement_table_arguments(extra: &[&str]) -> Vec<String> {
+        let mut argv: Vec<String> = [
+            "--rpc-url",
+            "http://127.0.0.1:8899",
+            "--plan",
+            "/tmp/plan.json",
+            "--evidence",
+            "/tmp/evidence.json",
+            "--market",
+            "11111111111111111111111111111112",
+            "--source-receipt",
+            "11111111111111111111111111111113",
+            "--fee-payer",
+            "11111111111111111111111111111114",
+            "--fee-payer-keypair",
+            "/tmp/payer.json",
+            "--output",
+            "/tmp/retirement-table.json",
+        ]
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect();
+        argv.extend(extra.iter().map(|value| (*value).to_owned()));
+        argv
+    }
+
+    #[test]
+    fn the_owned_loopback_retirement_table_producer_accepts_only_its_local_arguments() {
+        parse_table_arguments_v1(
+            retirement_table_arguments(&[]),
+            ExpectedClusterV1::OwnedLoopback,
+        )
+        .expect("the local table producer accepts the local retirement frame");
+        let Err(refusal) = parse_table_arguments_v1(
+            retirement_table_arguments(&[DEVNET_ACKNOWLEDGMENT_FLAG, "SomeGenesisHash"]),
+            ExpectedClusterV1::OwnedLoopback,
+        ) else {
+            panic!("the local table producer must not accept a devnet acknowledgement");
+        };
+        assert!(
+            refusal.to_string().contains(COMMAND_TABLE_V1)
+                && refusal.to_string().contains(DEVNET_ACKNOWLEDGMENT_FLAG),
+            "the exact local table command owns its devnet-flag refusal: {refusal}"
+        );
+    }
+
+    #[test]
+    fn the_devnet_retirement_table_producer_still_requires_its_acknowledgment() {
+        let Err(refusal) =
+            parse_table_arguments_v1(retirement_table_arguments(&[]), ExpectedClusterV1::Devnet)
+        else {
+            panic!("the public table producer must remain explicitly acknowledged");
+        };
+        assert!(
+            refusal.to_string().contains(DEVNET_ACKNOWLEDGMENT_FLAG)
+                && refusal.to_string().contains(COMMAND_DEVNET_TABLE_V1),
+            "the devnet table producer names its own acknowledgement: {refusal}"
+        );
     }
 
     /// A refresh is optional and absolute, and both arms take it.

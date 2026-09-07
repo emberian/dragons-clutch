@@ -1809,6 +1809,7 @@ fn market_shape_from_arguments_v1(
             None => default.recovery.clone(),
             Some(raw) => Some(parse_recovery_rungs_v1(raw)?),
         },
+        ensemble: default.ensemble.clone(),
         // NOT A FLAG, AND NOT MEANT TO BE. A minted publication is a signed
         // artifact rather than a scalar, so the caller that mints one hands the
         // shape its projection in process; a command line cannot carry it and

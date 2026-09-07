@@ -30,6 +30,9 @@ use dclutch_custody::{
     TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_market::Phase;
+use dclutch_market::rent::lifecycle_v2::{
+    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
+};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading::scoring_rule::records_v1::{
     DealerFundV1, DealerQuoteV1, FundPhaseV1, ScoringRuleRecordV1,
@@ -229,6 +232,36 @@ pub fn process_dealer_found_v1(
     let vault = get(prefix, generated::FOUND_VAULT_ACCOUNT)?;
     let context = fund_account.key.to_bytes();
     let parent = hash(instruction_data).to_bytes();
+    let rent_credit = get(admit_window, ADMIT_RENT_CREDIT_ACCOUNT)?;
+    let rent_program = get(admit_window, ADMIT_RENT_PROGRAM_ACCOUNT)?;
+    if rent_credit.owner != rent_program.key {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
+    let rent_credit_state = LifecycleRentCreditV2::decode(
+        &rent_credit
+            .try_borrow_data()
+            .map_err(|_| ScoringDealerErrorV1::Custody)?,
+    )
+    .map_err(|_| ScoringDealerErrorV1::Custody)?;
+    if rent_credit_state.refund_wallet().to_bytes() != sponsor.key.to_bytes()
+        || rent_credit_state.market().to_bytes() != request.market
+        || rent_credit_state.release_set().to_bytes() != facts.release_set
+        || rent_credit_state.generation() != facts.generation
+    {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
+    let generation = facts.generation.to_le_bytes();
+    let (expected_rent_credit, expected_bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            request.market.as_ref(),
+            &generation,
+        ],
+        rent_program.key,
+    );
+    if rent_credit.key != &expected_rent_credit || rent_credit_state.pda_bump() != expected_bump {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
     let replay_rent = rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1);
     invoke_custody_v1(
         program_id,
@@ -252,7 +285,7 @@ pub fn process_dealer_found_v1(
             mint: [0; 32],
             token_program: [0; 32],
             payer: sponsor.key.to_bytes(),
-            rent_refund: sponsor.key.to_bytes(),
+            rent_refund: rent_credit.key.to_bytes(),
             expected_revision: 0,
             resulting_revision: 1,
             amount: 0,
@@ -286,7 +319,7 @@ pub fn process_dealer_found_v1(
             mint: mint.key.to_bytes(),
             token_program: token_program.key.to_bytes(),
             payer: sponsor.key.to_bytes(),
-            rent_refund: sponsor.key.to_bytes(),
+            rent_refund: rent_credit.key.to_bytes(),
             expected_revision: 1,
             resulting_revision: 2,
             amount: 0,

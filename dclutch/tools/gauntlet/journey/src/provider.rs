@@ -1170,7 +1170,7 @@ fn prospective_execute_snapshot_v1(
         addresses.portfolio.raw,
         rung.policy.raw,
     ];
-    let (observation, present) = rpc.finalized_observed_accounts(&keys, 0)?;
+    let (observation, present) = rpc.finalized_observed_accounts_admitting_vacant(&keys, 0)?;
     let at = |index: usize| -> Result<ObservedAccount> {
         let key = *keys.get(index).ok_or_else(|| {
             Error::new("prospective snapshot asked for an address it does not name")

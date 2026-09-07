@@ -105,13 +105,13 @@ use dclutch_source::resolution::{
     pre_market_funding_prestate_digest_v1,
 };
 use dclutch_source::{
-    ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
-    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
-    PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2,
-    SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    ContentId as SourceContentId, EnsembleSpecV1, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+    ManipulationFloorV1, PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+    ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2,
+    RecoveryPolicyV2, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
     SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
-    WINDOW_SPEC_SCHEMA_ID_V1,
+    WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 use dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1;
 #[cfg(test)]
@@ -149,8 +149,8 @@ use crate::{
         plan_funding_readiness_from_rpc_v1, plan_funding_readiness_with_routing_from_rpc_v1,
     },
     model::{
-        AccountEvidence, FoundingRouteV1, MarketRunInput, RecordPair, SuccessorPlan,
-        TransactionEvidence,
+        AccountEvidence, EnsembleMarketInputV1, FoundingRouteV1, MarketRunInput, RecordPair,
+        SuccessorPlan, TransactionEvidence,
     },
     plan::{hex, hex32, pubkey},
     rpc::{FOUNDING_HEAP_FRAME_BYTES, Rpc, RpcAccount, account_evidence, bounded_instructions},
@@ -2500,6 +2500,32 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
         primary_spec,
         record_identity(&primary_spec_bytes),
     )?;
+    if let Some(ensemble) = &input.ensemble {
+        if !input.manipulation_floor_hex.is_empty() {
+            return Err(Error::new(
+                "the Ensemble validator producer currently admits explicitly unbounded material only",
+            ));
+        }
+        let spec = EnsembleSpecV1::new(ensemble.members, ensemble.quorum)
+            .map_err(|error| Error::new(format!("ensemble dimensions: {error:?}")))?;
+        spec.validate_foundable()
+            .map_err(|error| Error::new(format!("ensemble founding quorum: {error:?}")))?;
+        let policy = RecoveryPolicyV2::decode(&ladder.policy)
+            .map_err(|error| Error::new(format!("ensemble RecoveryPolicyV2: {error:?}")))?;
+        let window_bytes = decode_hex(&input.window_spec_hex)?;
+        let window = WindowSpecV1::decode(&window_bytes)
+            .map_err(|error| Error::new(format!("ensemble WindowSpecV1: {error:?}")))?;
+        policy
+            .validate_ensemble_membership(
+                spec,
+                ensemble.rungs,
+                window
+                    .end_unix_seconds()
+                    .checked_add(i64::from(window.max_age_seconds()))
+                    .ok_or_else(|| Error::new("ensemble primary deadline overflow"))?,
+            )
+            .map_err(|error| Error::new(format!("ensemble policy membership: {error:?}")))?;
+    }
     let manifest = decode_hex(&input.capability_manifest_hex)?;
     let manifest = CapabilityManifestV1::decode(&manifest)
         .map_err(|error| Error::new(format!("CapabilityManifestV1: {error:?}")))?;
@@ -4393,6 +4419,17 @@ fn compile_market_bodies(
             recovery_link,
             source_id(&input.failure_policy_release_id)?,
         ),
+    };
+    let source = match &input.ensemble {
+        None => source,
+        Some(ensemble) => source
+            .with_ensemble(
+                EnsembleSpecV1::new(ensemble.members, ensemble.quorum).map_err(|error| {
+                    Error::new(format!("ensemble material dimensions: {error:?}"))
+                })?,
+                ensemble.rungs,
+            )
+            .map_err(|error| Error::new(format!("ensemble material: {error:?}")))?,
     };
     let authenticated_floor = match manipulation_floor {
         Some(floor) => Some((
@@ -14039,6 +14076,9 @@ pub(crate) struct PythMarketParamsV1<'a> {
     /// `Some` authors an alternative source per rung and the `RecoveryPolicyV2`
     /// that funds them.
     pub(crate) recovery: Option<Vec<PythRecoveryRungV1>>,
+    /// Explicit member-only Ensemble material. This is a separate producer
+    /// choice from recovery rungs: members occupy the leading policy slots.
+    pub(crate) ensemble: Option<EnsembleMarketInputV1>,
 }
 
 /// One authored rung of a Pyth market's funded ordered ladder.
@@ -14182,6 +14222,123 @@ fn author_pyth_recovery_ladder_v1(
     })
 }
 
+/// Author the leading member slots of an explicit Ensemble source.
+///
+/// The policy is canonical authority, not a caller-selected retry list: member
+/// `m` occupies attempt `m - 1`, its deadline is the source window deadline
+/// plus `m - 1`, and the material declares no post-member recovery rungs.
+/// The alternatives differ only in a tighter Pyth confidence bound, so they
+/// remain independent SourceSpecs while preserving the source graph.
+fn author_pyth_ensemble_members_v1(
+    ensemble: &EnsembleMarketInputV1,
+    local_label: &[u8; 32],
+    feed_id: [u8; 32],
+    exponent: i32,
+    primary: SourceSpecV1,
+    window_deadline_unix_seconds: i64,
+    primary_max_confidence_bps: u16,
+) -> Result<AuthoredRecoveryLadderV1> {
+    if ensemble.rungs != 0 {
+        return Err(Error::new(
+            "the Ensemble validator producer currently authors member-only material; post-member recovery rungs need their own canonical compiler",
+        ));
+    }
+    let spec = EnsembleSpecV1::new(ensemble.members, ensemble.quorum)
+        .map_err(|error| Error::new(format!("ensemble dimensions: {error:?}")))?;
+    spec.validate_foundable()
+        .map_err(|error| Error::new(format!("ensemble founding quorum: {error:?}")))?;
+    if spec.is_single() {
+        return Err(Error::new(
+            "an explicit Ensemble must declare more than the default one source",
+        ));
+    }
+    let mut attempts = [None; 4];
+    let mut records = Vec::with_capacity(usize::from(spec.first_rung_index()));
+    let mut entries = Vec::with_capacity(usize::from(spec.first_rung_index()).saturating_add(1));
+    let mut member = 1_u8;
+    while member < spec.members() {
+        let slot = member - 1;
+        let confidence = primary_max_confidence_bps
+            .checked_sub(u16::from(member))
+            .ok_or_else(|| {
+                Error::new(
+                    "the primary Pyth confidence ceiling leaves no distinct member configuration",
+                )
+            })?;
+        let adapter = PythAdapterConfigV1::new(feed_id, exponent, confidence)
+            .map_err(|error| Error::new(format!("ensemble member {member} adapter: {error:?}")))?;
+        let adapter_bytes = adapter.to_bytes();
+        let source = SourceSpecV1::new(
+            primary.domain_id(),
+            primary.unit_id(),
+            primary.provider_release_id(),
+            primary.access_profile(),
+            SourceContentId::new(record_identity(&adapter_bytes)).map_err(|error| {
+                Error::new(format!(
+                    "ensemble member {member} adapter identity: {error:?}"
+                ))
+            })?,
+            primary.capacity_profile_id(),
+        );
+        let source_bytes = source.to_bytes();
+        let allocation = demo_id(
+            "funding-allocation/ensemble-member",
+            &[local_label, &[member]],
+        );
+        attempts[usize::from(slot)] = Some(
+            RecoveryAttemptV2::new(
+                SourceContentId::new(record_identity(&source_bytes)).map_err(|error| {
+                    Error::new(format!(
+                        "ensemble member {member} source identity: {error:?}"
+                    ))
+                })?,
+                primary.provider_release_id(),
+                window_deadline_unix_seconds
+                    .checked_add(i64::from(member) - 1)
+                    .ok_or_else(|| Error::new("ensemble member deadline overflow"))?,
+                SourceContentId::new(allocation).map_err(|error| {
+                    Error::new(format!(
+                        "ensemble member {member} allocation identity: {error:?}"
+                    ))
+                })?,
+            )
+            .map_err(|error| {
+                Error::new(format!(
+                    "ensemble member {member} policy attempt: {error:?}"
+                ))
+            })?,
+        );
+        records.push(crate::model::RecoverySourceRecordsV1 {
+            source_spec_hex: hex(&source_bytes),
+            pyth_adapter_config_hex: hex(&adapter_bytes),
+        });
+        // These small, nonzero canonical kind IDs put members at the head of
+        // the manifest in policy order. The generic hash-derived kinds remain
+        // free to describe all unrelated capabilities.
+        let mut kind = [0_u8; 32];
+        kind[31] = member;
+        entries.push((kind, allocation));
+        member = member
+            .checked_add(1)
+            .ok_or_else(|| Error::new("ensemble member overflow"))?;
+    }
+    let count = spec.first_rung_index();
+    let policy = RecoveryPolicyV2::new(primary.capacity_profile_id(), attempts, count)
+        .map_err(|error| Error::new(format!("ensemble recovery policy: {error:?}")))?;
+    policy
+        .validate_ensemble_membership(spec, ensemble.rungs, window_deadline_unix_seconds)
+        .map_err(|error| Error::new(format!("ensemble membership policy: {error:?}")))?;
+    let policy_bytes = policy.to_bytes();
+    let mut exhaustion_kind = [0_u8; 32];
+    exhaustion_kind[31] = spec.members();
+    entries.push((exhaustion_kind, record_identity(&policy_bytes)));
+    Ok(AuthoredRecoveryLadderV1 {
+        policy_hex: hex(&policy_bytes),
+        records,
+        entries,
+    })
+}
+
 /// Construct the canonical local demo Market: SOL/USD range protection.
 ///
 /// The Product is a small categorical partition of USD-cents-per-SOL with cuts
@@ -14267,6 +14424,9 @@ pub(crate) struct LocalMarketShapeV1 {
     /// alternative sources, which is the only shape `advance-recovery` has
     /// anything to crank.
     pub(crate) recovery: Option<Vec<RelativeRecoveryRungV1>>,
+    /// Explicit multi-member Source material. `None` is the ordinary single
+    /// source compiler path; no caller receives ensemble semantics by default.
+    pub(crate) ensemble: Option<EnsembleMarketInputV1>,
     /// How stale the captured publication may be, in seconds, or `None` for
     /// the fixture's own declared shelf life.
     ///
@@ -14420,6 +14580,7 @@ impl Default for LocalMarketShapeV1 {
             // per rung, plus a named alternative feed -- so defaulting a market
             // into buying one would be spending on the caller's behalf.
             recovery: None,
+            ensemble: None,
         }
     }
 }
@@ -14559,6 +14720,7 @@ pub(crate) fn demo_market_input_base_shaped(
                     .checked_add(i64::from(max_age_seconds))
                     .ok_or_else(|| Error::new("fixture primary deadline overflowed"))?,
             )?,
+            ensemble: shape.ensemble.clone(),
             registry,
             release: PythMarketProviderV1::Pull(fixture.release()),
             label: fixture.local_label(),
@@ -14675,6 +14837,7 @@ pub(crate) fn devnet_market_input(
                     .checked_add(i64::from(spec.max_age_seconds))
                     .ok_or_else(|| Error::new("devnet primary deadline overflowed"))?,
             )?,
+            ensemble: None,
             registry: spec.registry,
             release: PythMarketProviderV1::Pull(&release),
             // The cluster identity is the devnet label: a devnet market's ids can
@@ -14761,6 +14924,7 @@ pub(crate) fn devnet_sponsored_market_input_base(
                     .checked_add(i64::from(spec.max_age_seconds))
                     .ok_or_else(|| Error::new("devnet primary deadline overflowed"))?,
             )?,
+            ensemble: None,
             registry: spec.registry,
             release: PythMarketProviderV1::Sponsored(release),
             label: release.cluster_id(),
@@ -15127,9 +15291,13 @@ fn pyth_market_input_base(
         .window_end
         .checked_add(i64::from(params.max_age_seconds))
         .ok_or_else(|| Error::new("primary window end + max_age overflows"))?;
-    let ladder = match &params.recovery {
-        None => None,
-        Some(rungs) => Some(author_pyth_recovery_ladder_v1(
+    let ladder = match (&params.recovery, &params.ensemble) {
+        (Some(_), Some(_)) => {
+            return Err(Error::new(
+                "a Pyth market cannot combine ordered recovery rungs and Ensemble members: one policy has one canonical leading-member layout",
+            ));
+        }
+        (Some(rungs), None) => Some(author_pyth_recovery_ladder_v1(
             rungs,
             &local_label,
             update.feed_id(),
@@ -15137,6 +15305,16 @@ fn pyth_market_input_base(
             source_spec,
             primary_deadline,
         )?),
+        (None, Some(ensemble)) => Some(author_pyth_ensemble_members_v1(
+            ensemble,
+            &local_label,
+            update.feed_id(),
+            update.exponent(),
+            source_spec,
+            primary_deadline,
+            params.max_confidence_bps,
+        )?),
+        (None, None) => None,
     };
     let recovery_link = match &ladder {
         None => None,
@@ -15158,6 +15336,17 @@ fn pyth_market_input_base(
         SourceContentId::new(failure_policy)
             .map_err(|error| Error::new(format!("demo failure policy: {error:?}")))?,
     );
+    let material = match &params.ensemble {
+        None => material,
+        Some(ensemble) => material
+            .with_ensemble(
+                EnsembleSpecV1::new(ensemble.members, ensemble.quorum).map_err(|error| {
+                    Error::new(format!("ensemble material dimensions: {error:?}"))
+                })?,
+                ensemble.rungs,
+            )
+            .map_err(|error| Error::new(format!("ensemble material: {error:?}")))?,
+    };
     let material_digest: [u8; 32] = Sha256::digest(material.to_bytes()).into();
 
     let native = CompartmentFundingV1::native_lamports(1)
@@ -15279,6 +15468,7 @@ fn pyth_market_input_base(
         recovery_source_records: ladder
             .as_ref()
             .map_or_else(Vec::new, |authored| authored.records.clone()),
+        ensemble: params.ensemble.clone(),
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
         selected_capability: None,
@@ -15645,6 +15835,54 @@ mod tests {
             Some(record_identity(&policy_bytes)),
             "the material is the one bit that separates a market with a ladder from one without"
         );
+    }
+
+    /// A member-only Ensemble is a distinct material and funds every policy
+    /// slot. This is the compiler control the validator producer consumes:
+    /// two non-primary members occupy the first two canonical policy rows,
+    /// while ordinary ladders and the single-source default keep their bytes.
+    #[test]
+    fn ensemble_members_compile_to_a_canonical_full_funding_selection() {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("deployment widths"),
+        );
+        let shape = LocalMarketShapeV1 {
+            ensemble: Some(EnsembleMarketInputV1 {
+                members: 3,
+                quorum: 1,
+                rungs: 0,
+            }),
+            ..LocalMarketShapeV1::default()
+        };
+        let input = demo_market_input_shaped(registry, direct.compiler(), &shape)
+            .expect("three-member Ensemble market");
+        assert_eq!(input.ensemble.as_ref().expect("ensemble").members, 3);
+        let policy_bytes = decode_hex(&input.recovery_policy_hex).expect("policy");
+        let policy = RecoveryPolicyV2::decode(&policy_bytes).expect("policy");
+        assert_eq!(policy.attempt_count(), 2, "k - 1 member slots are funded");
+        assert_eq!(input.recovery_source_records.len(), 2);
+        let manifest_bytes = decode_hex(&input.capability_manifest_hex).expect("manifest");
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest");
+        assert_eq!(
+            manifest.entry_count(),
+            5,
+            "Direct plus two members, exhaustion, failure"
+        );
+        validate_market_input(&input).expect("canonical Ensemble input validates");
+        let compiled = compile_market_bodies(registry, &input, Pubkey::new_unique())
+            .expect("Ensemble market bodies");
+        let material = SourceMaterialV3::decode(&compiled.source).expect("material");
+        assert_eq!(material.ensemble().members(), 3);
+        assert_eq!(material.ensemble().quorum(), 1);
+        assert_eq!(material.ensemble_rungs(), 0);
+
+        let mut even_quorum = input.clone();
+        even_quorum.ensemble.as_mut().expect("ensemble").quorum = 2;
+        let refusal = validate_market_input(&even_quorum).expect_err("even quorum refuses");
+        assert!(format!("{refusal}").contains("quorum"), "got {refusal}");
     }
 
     /// Each way of authoring a ladder wrong refuses, and each refusal says which.

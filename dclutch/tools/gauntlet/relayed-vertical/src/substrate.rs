@@ -248,6 +248,10 @@ fn role_key_path(
 
 /// prepare-mutable -> spawn -> wait -> authenticate -> campaign activation.
 pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstrateV1> {
+    // `prepare_local_mutable_v1` deliberately creates its own work directory,
+    // but requires its parent to exist.  Each campaign owns this substrate
+    // root, so establish that parent before deriving disposable key material.
+    std::fs::create_dir_all(request.work)?;
     // 1. Prepare: derive keys and the exact genesis account fixtures from the
     //    checked release gate. In-process; the typed report comes back.
     let prepare_work = request.work.join("prepare");

@@ -20,6 +20,8 @@ use dclutch_sha256_adapter::digestv;
 pub mod activation;
 /// Complete stateless Ticket-to-Found Consume composition.
 pub mod composition;
+/// Canonical immutable record encoders from explicit founder facts.
+pub mod encode;
 /// Stateless pre-founding SeriesEscrow effect sequence.
 pub mod escrow;
 /// Lean-generated Series V3 widths, offsets, domains, and hostile examples.

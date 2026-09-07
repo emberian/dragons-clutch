@@ -114,8 +114,8 @@ pub enum PlaceOrderClauseV3 {
     IdentityMarket,
     /// `GENERAL_CONFIG_ID` is not the root's own config.
     IdentityGeneralConfigId,
-    /// `TERMINAL_BENEFICIARY_OBSERVATION` is not the maker.
-    IdentityTerminalBeneficiary,
+    /// The lifecycle payer is not the maker authenticated by the signed terms.
+    IdentityPayer,
     /// `STATE_BUMP` is not the canonical bump for the batch address.
     ScalarStateBump,
     /// `PRIMARY_OWNER` is not the Trading program.
@@ -216,9 +216,7 @@ impl PlaceOrderClauseV3 {
             Self::IdentityGeneralConfigId => {
                 "place-order: GENERAL_CONFIG_ID is not the root config"
             }
-            Self::IdentityTerminalBeneficiary => {
-                "place-order: the order rent beneficiary is not the maker"
-            }
+            Self::IdentityPayer => "place-order: PAYER is not the signed maker",
             Self::ScalarStateBump => "place-order: the witnessed batch bump is not canonical",
             Self::IdentityPrimaryOwner => "place-order: the batch state owner is not Trading",
             Self::ScalarPrimaryRentPrincipal => {
