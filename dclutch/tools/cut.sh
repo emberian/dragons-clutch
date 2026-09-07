@@ -45,8 +45,23 @@ done
 say() { printf '%s\n' "$*"; }
 die() { printf 'cut: %s\n' "$*" >&2; exit 1; }
 
-[ -d "$LIVE/.git" ] || die "live tree is not a git repository: $LIVE"
+# A worktree carries a .git FILE, not a directory, and cutting from a worktree of
+# the publication branch is how a cut proceeds while a lane holds the live tree.
+[ -e "$LIVE/.git" ] || die "live tree is not a git repository: $LIVE"
 [ -d "$PUB/.git" ] || die "publication host is not a git repository: $PUB"
+
+# WHICH BRANCH HEAD IS. A cut publishes the live tree's HEAD, and the live tree
+# is a shared checkout: a lane may park it on its own branch while it works. On
+# 2026-09-07 a cut published `build/joint-clearing`'s tree as the public dClutch
+# because HEAD was that branch and the tree-identity gate below cannot tell which
+# branch a self-consistent tree came from. So: HEAD must be the publication
+# branch, or an explicit override must name what is being cut and why.
+LIVE_BRANCH="$(git -C "$LIVE" rev-parse --abbrev-ref HEAD)"
+CUT_BRANCH="${CUT_BRANCH:-main}"
+if [ "$LIVE_BRANCH" != "$CUT_BRANCH" ]; then
+  [ "${CUT_ANY_BRANCH:-0}" = "1" ] || die "live tree is on '$LIVE_BRANCH', not '$CUT_BRANCH' -- a cut publishes HEAD, so this would publish that branch as the public tree. Check out $CUT_BRANCH, or set CUT_ANY_BRANCH=1 deliberately."
+  say "cut       publishing '$LIVE_BRANCH', not '$CUT_BRANCH', because CUT_ANY_BRANCH=1"
+fi
 
 LIVE_COMMIT="$(git -C "$LIVE" rev-parse HEAD)"
 LIVE_TREE="$(git -C "$LIVE" rev-parse 'HEAD^{tree}')"
