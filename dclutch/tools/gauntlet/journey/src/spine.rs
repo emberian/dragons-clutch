@@ -1131,12 +1131,10 @@ pub(crate) fn redeem(
     match outcome {
         Ok(passes) => {
             let document = read_json(&evidence)?;
-            spine.paid_atoms = spine.paid_atoms.saturating_add(u128::from(
-                document
-                    .get("payout")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| Error::new("the payout evidence declared no `payout` amount"))?,
-            ));
+            spine.paid_atoms = spine
+                .paid_atoms
+                .checked_add(reported_payout_atoms(&document)?)
+                .ok_or_else(|| Error::new("the campaign payout total overflowed"))?;
             let (extra, more) = harvest_document(rpc, label, &document, &mut spine.transactions);
             spine.executed(
                 stage,
@@ -1605,9 +1603,57 @@ fn digest_of(path: &Path) -> Result<String> {
     )?)))
 }
 
+// The shipped exterior emits exact quantities as decimal strings so a JSON
+// consumer never rounds them through a floating-point number.
+fn reported_payout_atoms(document: &Value) -> Result<u128> {
+    let text = document
+        .get("payout")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("the payout evidence requires a decimal-string `payout`"))?;
+    let amount = text
+        .parse::<u128>()
+        .map_err(|_| Error::new("the payout evidence contains an invalid atom quantity"))?;
+    if amount.to_string() != text {
+        return Err(Error::new(
+            "the payout evidence contains a noncanonical atom quantity",
+        ));
+    }
+    Ok(amount)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payout_evidence_preserves_exact_decimal_atoms() {
+        assert_eq!(
+            reported_payout_atoms(&serde_json::json!({"payout":"9007199254740993"})).unwrap(),
+            9_007_199_254_740_993
+        );
+        assert_eq!(
+            reported_payout_atoms(&serde_json::json!({"payout":"0"})).unwrap(),
+            0
+        );
+        for value in [serde_json::json!({}), serde_json::json!({"payout":1})] {
+            assert_eq!(
+                reported_payout_atoms(&value).unwrap_err().to_string(),
+                "the payout evidence requires a decimal-string `payout`"
+            );
+        }
+        assert_eq!(
+            reported_payout_atoms(&serde_json::json!({"payout":"-1"}))
+                .unwrap_err()
+                .to_string(),
+            "the payout evidence contains an invalid atom quantity"
+        );
+        assert_eq!(
+            reported_payout_atoms(&serde_json::json!({"payout":"01"}))
+                .unwrap_err()
+                .to_string(),
+            "the payout evidence contains a noncanonical atom quantity"
+        );
+    }
 
     /// The aperture is a READ, and a read that finds nothing adds nothing.
     ///

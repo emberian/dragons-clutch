@@ -105,6 +105,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 | 2026-09-07 | the build wave lands: ten families merged in the queue's order, one skipped and why, the reference at its fixpoint | [2026-09-07](docs/ledger/2026-09-07.md) | `docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md` |
 | 2026-09-07 | the handoff at the end of the build wave: the state, the rules, what is owed, the pitfalls | [handoff](docs/HANDOFF_2026_09_07.md) | `docs/HANDOFF_2026_09_07.md` |
 | 2026-09-07 | Claims campaigns execute: accepted backed round trips, exact refusal rollback, all six targets accounted for | [Claims evidence](docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md) | `cac1a0593` |
+| 2026-09-07 | checked runtime build; validator trade, fee, resolution and first payout; Series/General walls located | [executed prefixes](docs/evidence/EXECUTED_PREFIXES_2026_09_07.md) | `56767e555` runtime; diagnostic host |
 
 A new delta is one new row here and one entry in the store it names. The
 GOAL ledger file is closed; the entries main appended during the swarm are
