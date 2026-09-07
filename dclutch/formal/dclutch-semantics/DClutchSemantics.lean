@@ -112,6 +112,7 @@ import DClutchSemantics.RepresentationCompositionV3Abi
 import DClutchSemantics.RequestProfileAbi
 import DClutchSemantics.RequestProfileV4Abi
 import DClutchSemantics.RustEmit
+import DClutchSemantics.ScoringRuleAbiV1
 import DClutchSemantics.ScoringRuleV1
 import DClutchSemantics.Series
 import DClutchSemantics.SeriesCoreFoundAckV2Abi

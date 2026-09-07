@@ -67,6 +67,8 @@ pub mod registered_state_artifacts_v4;
 /// First-use Trading-mediated Direct Custody replay setup.
 pub mod replay_setup_v1;
 pub mod retirement_v1;
+/// The scoring Dealer: the base-two LMSR kernel, its records and wires.
+pub mod scoring_rule;
 pub mod state_artifacts_v3;
 pub mod successor;
 /// Permissionless dust-tolerant setup of Direct's Token-2022 destinations.

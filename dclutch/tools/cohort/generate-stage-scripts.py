@@ -107,6 +107,12 @@ MARKET_KIND = {
     # the two-source market carries neither split field.
     "split": ("direct",),
     "merge": ("direct",),
+    # The scoring Dealer sits on the General capability -- its rows run
+    # after `activate-general` and read that market's own `dealer` block.
+    "dealer-found": ("general",),
+    "dealer-quote": ("general",),
+    "dealer-fill": ("general",),
+    "dealer-withdraw": ("general",),
     "found-general-family": ("general",),
     "refound-general": ("general",),
     "found-general": ("general",),

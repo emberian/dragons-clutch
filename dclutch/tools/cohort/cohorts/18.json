@@ -171,7 +171,21 @@
       "portfolio_record": "",
       "linked_basis_record": "",
       "rent_credit": "",
-      "generation": "1"
+      "generation": "1",
+      "dealer": {
+        "dealer_id": "",
+        "sponsor_keypair": "keys/founder.json",
+        "sponsor_collateral_account": "",
+        "liquidity": "1000",
+        "scale": "10000",
+        "tolerance": "1",
+        "deposit_atoms": "",
+        "taker_keypair": "keys/participant-2.json",
+        "taker_collateral_account": "",
+        "buy_outcome": "0",
+        "buy_claims": "100",
+        "withdraw_atoms": ""
+      }
     },
     {
       "label": "S",

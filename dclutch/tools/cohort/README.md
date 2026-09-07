@@ -1287,3 +1287,36 @@ exactly its recorded rent in every order the holders redeem in. A payout
 submitted on this arm WITHOUT the tail refuses `ClaimsSbfError::FounderBondFrame`
 by name, rather than paying the atoms and skipping the lamports — a partial exit
 `FounderBondV1.lean` forbids.
+
+### dealer-found
+
+*Cohort-18.* The scoring Dealer's founding, and the first act of the mechanism
+on a chain. Anyone may found one; the signer becomes the sponsor of record and
+puts up the deposit, which must cover `subsidyOf(liquidity, K) * claim_unit_atoms`
+or `found.rs` refuses `Subsidy`. The rule account's bytes are the fund's
+authority: the fund carries their digest, so a rule swapped afterwards is a fund
+that no longer validates rather than a Dealer quoting under new terms.
+
+### dealer-quote
+
+*Cohort-18. Permissionless.* Publish the price series so it is a chain fact
+rather than a candidate account's private field. The verifier is the whole
+point of the row: the prices must equal `pricesOf` recomputed off chain **from
+the Dealer Position's own balances**, not from the fund's cached
+`inventory_minimum` — the second would make this a projection of the record and
+the first makes it a projection of the chain.
+
+### dealer-fill
+
+*Cohort-18.* A taker buys claims of one outcome: the solver inverts the scoring
+rule off chain and the route re-admits R0 through R3 on chain. `Φ = cash +
+W(inventory)`, recomputed from the POST-fill Position, must not fall — which is
+the solvency statement the whole mechanism rests on — and the Hoard must rise by
+exactly the mint's par and by nothing else.
+
+### dealer-withdraw
+
+*Cohort-18.* The sponsor takes profit down to the floor while the Market is
+still Open, and one unit past it must refuse `WithdrawBelowFloor`. The evidence
+carries the floor `Φ` the route computed, so a reader can check the amount was
+at or under it rather than reading a landed signature as the proof.

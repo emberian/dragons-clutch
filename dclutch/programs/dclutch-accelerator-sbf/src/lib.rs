@@ -33,6 +33,7 @@ use dclutch_market::capability_program::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_market::execution_strategy::{
     admitted_v3::ADMITTED_INSTRUCTIONS_ACCOUNT_V3, shadow_v3::SHADOW_REQUEST_MAGIC_V3,
 };
+use dclutch_trading::scoring_rule::generated::FILL_WITNESS_MAGIC;
 use dclutch_trading_sbf::dealer::{
     equity_request::DEALER_EQUITY_REQUEST_MAGIC_V3, lp_request::DEALER_MULTI_LP_REQUEST_MAGIC_V3,
 };
@@ -85,6 +86,12 @@ pub fn process_instruction(
         == Some(SHADOW_REQUEST_MAGIC_V3.as_slice())
     {
         return series::process(program_id, accounts, instruction_data);
+    }
+    // The scoring Dealer's row, like the Shadow transport, announces itself in
+    // the instruction data: it holds no account, so there is no admitted frame
+    // for the sysvar read below to classify. See `dealer::process_scoring_row_v1`.
+    if instruction_data.get(..FILL_WITNESS_MAGIC.len()) == Some(FILL_WITNESS_MAGIC.as_slice()) {
+        return dealer::process_scoring_row_v1(program_id, accounts, instruction_data);
     }
     if dealer_family_selected(accounts) {
         return dealer::process(program_id, accounts, instruction_data);

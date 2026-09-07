@@ -121,6 +121,9 @@ pub mod projected_custody_bootstrap_v1;
 pub mod projected_market_v2;
 /// Family-neutral EffectProgram V3 composition for canonical Resolution CPIs.
 pub mod resolution_composition_v3;
+/// The scoring Dealer: found, quote, fill, withdraw (sub-band 0x4100).
+#[cfg(feature = "dealer-family")]
+pub mod scoring_dealer_v1;
 /// Series family projection behind the common data-defined Trading boundary.
 #[cfg(any(feature = "families", feature = "series-family"))]
 pub mod series;
@@ -864,6 +867,40 @@ pub fn process_instruction(
     require_instruction_account_bound_v3(accounts.len())?;
     if dclutch_claims::position_admission::is_user_position_admission_v1(instruction_data) {
         return user_position_admission_v1::process_user_position_admission_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    // The scoring Dealer (decision 0031 direction 3): four routes selected by
+    // magic alone, in the Dealer sub-band 0x4100.
+    #[cfg(feature = "dealer-family")]
+    if scoring_dealer_v1::is_dealer_found_v1(instruction_data) {
+        return scoring_dealer_v1::found::process_dealer_found_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "dealer-family")]
+    if scoring_dealer_v1::is_dealer_quote_v1(instruction_data) {
+        return scoring_dealer_v1::quote::process_dealer_quote_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "dealer-family")]
+    if scoring_dealer_v1::is_dealer_fill_v1(instruction_data) {
+        return scoring_dealer_v1::fill::process_dealer_fill_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "dealer-family")]
+    if scoring_dealer_v1::is_dealer_withdraw_v1(instruction_data) {
+        return scoring_dealer_v1::withdraw::process_dealer_withdraw_v1(
             program_id,
             accounts,
             instruction_data,

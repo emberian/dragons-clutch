@@ -67,6 +67,7 @@ mod release_capture;
 mod release_identity;
 mod rpc;
 mod runtime;
+mod scoring_dealer;
 mod seed;
 mod selected_capability;
 mod source_abort_exterior;
@@ -309,6 +310,18 @@ fn run() -> Result<()> {
         }
         Some(command) if command == direct_fee_settlement::COMMAND_DEVNET_V1 => {
             direct_fee_settlement::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_FOUND_V1 => {
+            scoring_dealer::run_found_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_QUOTE_V1 => {
+            scoring_dealer::run_quote_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_FILL_V1 => {
+            scoring_dealer::run_fill_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_WITHDRAW_V1 => {
+            scoring_dealer::run_withdraw_devnet_v1(arguments.collect())
         }
         Some(command) if command == infrastructure_succession::COMMAND_V1 => {
             infrastructure_succession::run_owned_loopback_v1(arguments.collect())
@@ -2373,6 +2386,7 @@ fn usage() {
     println!("{}", claims_custody_replay::usage());
     println!("{}", claims_custody_replay::devnet_usage());
     println!("{}", direct_fee_settlement::usage());
+    println!("{}", scoring_dealer::usage());
     println!("{}", direct_close_maker::usage());
     println!("{}", capability_seal_close::usage());
     println!("{}", capability_seal_devnet::usage());

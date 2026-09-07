@@ -15,6 +15,10 @@ use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3, AcceleratorAckV2, AcceleratorOutputPageAckV3,
     AdmittedAcceleratorRequestV2,
 };
+use dclutch_trading_sbf::scoring_dealer_v1::accelerator::{
+    SCORING_ROW_MAX_BANK_BYTES_V1, ScoringAcceleratorRefusalV1, decode_scoring_row_v1,
+    evaluate_scoring_dealer_row_v1, scoring_row_bank_bytes_v1,
+};
 use dclutch_trading_sbf::{
     TradingSbfError,
     dealer::{
@@ -90,6 +94,21 @@ pub enum DealerAcceleratorSbfErrorV4 {
     /// A provisioning fact, not an authentication one, and it is the only one
     /// of the three that a correct caller can hit by growing a Product.
     OutputPageTooNarrow = 0xC10A,
+    /// The scoring row's wire: not the witness-then-request width, or a half
+    /// that did not decode, or two halves of different rows.
+    ///
+    /// One accusation -- *these are not one row's bytes* -- and the arm logs
+    /// which of the five it was under [`FAMILY_REFUSAL_LOG_PREFIX_V4`] before
+    /// returning, so a campaign can name the cause without a code per byte.
+    ScoringRow = 0xC10B,
+    /// The scoring row refused the RULE, and the rule's own conjunct is in the
+    /// log under [`FAMILY_REFUSAL_LOG_PREFIX_V4`].
+    ///
+    /// Distinct from [`Self::ScoringRow`] because they are opposite answers: a
+    /// malformed wire is the caller's error and never reached the kernel, and
+    /// a rule refusal IS the evaluation -- the row was well formed and the
+    /// scoring rule declined it.
+    ScoringRule = 0xC10C,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -106,7 +125,9 @@ dclutch_refusal_registry::pin_refusal_band!(
         HeapCeilingNotLifted,
         OutputPageUnwritable,
         OutputPageAliasesFrame,
-        OutputPageTooNarrow
+        OutputPageTooNarrow,
+        ScoringRow,
+        ScoringRule
     ]
 );
 
@@ -244,6 +265,59 @@ pub fn process(
         }
     }
     Ok(())
+}
+
+/// Evaluate one scoring Dealer row: the same kernel the `DealerFill` route
+/// links, over the witness the caller composed from accounts it authenticated.
+///
+/// This arm holds no account and authenticates none. Its input is the wire
+/// (`DCLSFLW1` witness, then `DCLSFLR1` request); its output is one scalar
+/// bank in the return data, which the caller compares against what its own
+/// state says. That is the whole contract, and it is why the arm is reached by
+/// its own magic rather than through the admitted-AOT prelude: the prelude
+/// exists to rejoin accounts, and there are none to rejoin.
+///
+/// Decision 0031's second mechanism (`MECHANISM_SCORING_DEALER_2026_09_04.md`
+/// §7) leaves the placement question open between the link and a CPI, and
+/// answers it for the ROUTE by linking. This is the other caller: a General
+/// candidate verifier that already goes through this program and must admit a
+/// Dealer row by the same `admit_fill`, never by a second implementation of
+/// R0–R3 that can disagree with the route about the same fill.
+pub fn process_scoring_row_v1(
+    _program_id: &Pubkey,
+    _accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    cu_checkpoint!("scoring:entry");
+    let (witness, _) = decode_scoring_row_v1(instruction_data).map_err(named_scoring_row_v4)?;
+    let mut bank = [0_u8; SCORING_ROW_MAX_BANK_BYTES_V1];
+    let width = scoring_row_bank_bytes_v1(witness.rule.parameters.outcome_count);
+    let bank = bank
+        .get_mut(..width)
+        .ok_or(DealerAcceleratorSbfErrorV4::ScoringRow)?;
+    evaluate_scoring_dealer_row_v1(instruction_data, bank).map_err(named_scoring_rule_v4)?;
+    cu_checkpoint!("scoring:evaluated");
+    set_return_data(bank);
+    Ok(())
+}
+
+/// Log the wire's own cause, then publish the one code that says *not one
+/// row's bytes*.
+fn named_scoring_row_v4(cause: ScoringAcceleratorRefusalV1) -> DealerAcceleratorSbfErrorV4 {
+    solana_program::log::sol_log(FAMILY_REFUSAL_LOG_PREFIX_V4);
+    solana_program::log::sol_log(cause.refusal_name());
+    DealerAcceleratorSbfErrorV4::ScoringRow
+}
+
+/// Log the rule's own conjunct, then publish the one code that says *the
+/// scoring rule declined this row*.
+fn named_scoring_rule_v4(cause: ScoringAcceleratorRefusalV1) -> DealerAcceleratorSbfErrorV4 {
+    solana_program::log::sol_log(FAMILY_REFUSAL_LOG_PREFIX_V4);
+    solana_program::log::sol_log(cause.refusal_name());
+    match cause {
+        ScoringAcceleratorRefusalV1::Rule(_) => DealerAcceleratorSbfErrorV4::ScoringRule,
+        _ => DealerAcceleratorSbfErrorV4::ScoringRow,
+    }
 }
 
 /// Admit the one account this program is ever handed write authority over.
@@ -437,4 +511,41 @@ fn accelerator_invocation_refusal_v4(error: ProgramError) -> DealerAcceleratorSb
 fn content(bytes: &[u8]) -> Result<ContentId, DealerAcceleratorSbfErrorV4> {
     ContentId::new(hash(bytes).to_bytes())
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)
+}
+
+#[cfg(test)]
+mod tests {
+    use dclutch_trading::scoring_rule::generated::FILL_WITNESS_MAGIC;
+
+    use super::*;
+
+    /// A wire that carries the scoring magic and nothing else is this arm's
+    /// refusal by its own code, not General's and not an abort.
+    ///
+    /// The value of naming it: before this arm existed, a scoring row handed
+    /// to this program fell through `dealer_family_selected` into the General
+    /// arm, whose authenticator would have refused it as a foreign family --
+    /// a true statement about the wrong program.
+    #[test]
+    fn a_truncated_scoring_wire_refuses_scoring_row_by_its_own_code() {
+        let refusal =
+            process_scoring_row_v1(&Pubkey::new_from_array([1; 32]), &[], &FILL_WITNESS_MAGIC)
+                .expect_err("a wire of only the magic is not one row");
+        assert_eq!(
+            refusal,
+            ProgramError::Custom(DealerAcceleratorSbfErrorV4::ScoringRow as u32)
+        );
+        assert_eq!(
+            DealerAcceleratorSbfErrorV4::ScoringRow as u32,
+            dclutch_refusal_registry::ACCELERATOR_REFUSAL_BASE + 0x10B
+        );
+    }
+
+    /// The magic the entrypoint guards on is the witness's, so it can never
+    /// collide with the two admitted families the sysvar read classifies.
+    #[test]
+    fn the_scoring_magic_is_neither_admitted_family() {
+        assert_ne!(FILL_WITNESS_MAGIC, DEALER_MULTI_LP_REQUEST_MAGIC_V3);
+        assert_ne!(FILL_WITNESS_MAGIC, DEALER_EQUITY_REQUEST_MAGIC_V3);
+    }
 }
