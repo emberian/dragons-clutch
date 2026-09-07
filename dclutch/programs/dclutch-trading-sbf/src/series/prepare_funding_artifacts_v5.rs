@@ -1,11 +1,26 @@
 //! Canonical current-source Series Prepare ProfileV3/EffectV5 artifacts.
 //!
 //! Prepare owns exactly one lifecycle transition: creation of the vacant
-//! Ticket PDA at coordinate five. The five child routes start after the Hot
-//! prefix and Ticket, use the current thirteen-account Custody replay frame,
-//! and never receive the Ticket. FundingV5 derives the Ticket only from the
-//! existing Ticket domain, authenticated root key, authenticated Ticket
-//! content identity, and the adapter-derived canonical bump.
+//! Ticket PDA at coordinate five, AND the first valid bytes in it. The five
+//! child routes start after the Hot prefix and Ticket, use the current
+//! thirteen-account Custody replay frame, and never receive the Ticket.
+//! FundingV5 derives the Ticket only from the existing Ticket domain,
+//! authenticated root key, authenticated Ticket content identity, and the
+//! adapter-derived canonical bump.
+//!
+//! # The producer of `TicketStateV3::prepared`
+//!
+//! A `LifecycleBound` account arrives as sixty-four zeros, and zero is the
+//! `Prepared` phase tag and revision zero -- so the magic and the two header
+//! words are the whole difference between "unwritten" and "prepared", and the
+//! Ticket record identity is the one fact the state carries. The commit phase
+//! applies the lifecycle `Create` before any data effect
+//! (`commit_prepared_hot_result_v3`), so four writes after it produce exactly
+//! the bytes `TicketStateV3::prepared(ticket).encode()` produces: the magic as
+//! one `u64` word, the schema and profile words, and the identity register the
+//! RequestProfile projected from the family request. The three constants ride
+//! in the Transition as `load_const` scalars, as the Direct maker replay's
+//! magic, version and bump do in `registered_effect_artifacts_v4`.
 
 extern crate alloc;
 
@@ -94,6 +109,13 @@ use super::{
     occurrence_artifacts_v4::SeriesPrepareChildRequestsV4,
     state::{SERIES_TICKET_STATE_BYTES_V3, SERIES_TICKET_STATE_PDA_DOMAIN_V3},
 };
+use dclutch_trading::series::generated::SERIES_TICKET_STATE_MAGIC_V3;
+use dclutch_trading::series::generated_ticket_state_v3::{
+    SERIES_TICKET_STATE_MAGIC_OFFSET_V3, SERIES_TICKET_STATE_PROFILE_OFFSET_V3,
+    SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3, SERIES_TICKET_STATE_SCHEMA_OFFSET_V3,
+};
+use dclutch_trading::series::replay::{PROFILE_V3, SCHEMA_V3};
+use dclutch_vm::effect::v3::encode::{AccountCoordinateV3, ScalarCoordinateV3};
 
 /// Vacant Ticket state, the sole funding-owned Prepare coordinate.
 pub const SERIES_PREPARE_TICKET_COORDINATE_V5: u16 = 5;
@@ -114,6 +136,12 @@ pub const SERIES_PREPARE_SYSTEM_COORDINATE_V5: u16 = 16;
 
 /// Common scalar carrying the exact Ticket rent target.
 pub const SERIES_PREPARE_TICKET_RENT_SCALAR_V5: u16 = 7;
+/// Common scalar carrying `SERIES_TICKET_STATE_MAGIC_V3` as one `u64` word.
+pub const SERIES_PREPARE_TICKET_MAGIC_SCALAR_V5: u16 = 8;
+/// Common scalar carrying the family-wide schema word.
+pub const SERIES_PREPARE_TICKET_SCHEMA_SCALAR_V5: u16 = 9;
+/// Common scalar carrying the family-wide profile word.
+pub const SERIES_PREPARE_TICKET_PROFILE_SCALAR_V5: u16 = 10;
 /// Common identity carrying the authenticated outer root key.
 pub const SERIES_PREPARE_ROOT_KEY_IDENTITY_V5: u16 = 6;
 /// Common identity carrying the request-selected Ticket content identity.
@@ -124,7 +152,7 @@ pub const SERIES_PREPARE_REFUND_OWNER_IDENTITY_V5: u16 = 8;
 pub const SERIES_PREPARE_TRADING_PROGRAM_IDENTITY_V5: u16 = 0;
 
 /// Complete common scalar register width.
-pub const SERIES_PREPARE_COMMON_SCALAR_COUNT_V5: u16 = 8;
+pub const SERIES_PREPARE_COMMON_SCALAR_COUNT_V5: u16 = 11;
 /// Complete common identity register width.
 pub const SERIES_PREPARE_COMMON_IDENTITY_COUNT_V5: u16 = 9;
 
@@ -134,8 +162,11 @@ const REQUEST_TICKET_OFFSET: u32 = 80;
 const PROOF_OFFSET: u32 = 128;
 const PROFILE_OPERATIONS: usize = 11;
 const REQUEST_OPERATIONS: usize = 3;
-const TRANSITION_OPERATIONS: usize = 4;
-const EFFECT_OPERATIONS: usize = 2;
+const TRANSITION_OPERATIONS: usize = 7;
+const EFFECT_OPERATIONS: usize = 6;
+
+/// The ticket-state magic as the `u64` the Effect VM writes at offset zero.
+const TICKET_STATE_MAGIC_WORD_V5: u64 = u64::from_le_bytes(SERIES_TICKET_STATE_MAGIC_V3);
 
 /// Exact embedded AccountProfileV2 width.
 pub const SERIES_PREPARE_BASE_ACCOUNT_PROFILE_BYTES_V5: usize = DYNAMIC_FIXED_SPAN_HEADER_BYTES
@@ -447,6 +478,21 @@ fn emit_transition(ticket_rent_lamports: u64) -> Result<Vec<u8>> {
             ticket_rent_lamports,
         ),
         InstructionV3::checked_mul_into(s(2), s(3), s(1)),
+        // The three constant words the Effect writes into the fresh Ticket
+        // state. They are per-release constants, not per-request facts, which
+        // is why they ride the Transition and not the family request.
+        InstructionV3::load_const(
+            s(SERIES_PREPARE_TICKET_MAGIC_SCALAR_V5),
+            TICKET_STATE_MAGIC_WORD_V5,
+        ),
+        InstructionV3::load_const(
+            s(SERIES_PREPARE_TICKET_SCHEMA_SCALAR_V5),
+            u64::from(SCHEMA_V3),
+        ),
+        InstructionV3::load_const(
+            s(SERIES_PREPARE_TICKET_PROFILE_SCALAR_V5),
+            u64::from(PROFILE_V3),
+        ),
     ];
     let mut scratch = vec![0; SERIES_PREPARE_TRANSITION_BYTES_V5];
     let mut output = vec![0; SERIES_PREPARE_TRANSITION_BYTES_V5];
@@ -506,6 +552,10 @@ fn emit_effect(requests: SeriesPrepareChildRequestsV4<'_>) -> Result<Vec<u8>> {
     ];
     let dependencies = [&SERIES_NO_RECEIPT_DEPENDENCIES_V3[..]; 5];
     let root = IdentityCoordinateV3::common(SERIES_PREPARE_ROOT_KEY_IDENTITY_V5);
+    let ticket = AccountCoordinateV3::fixed(SERIES_PREPARE_TICKET_COORDINATE_V5);
+    let offset = |value: usize| {
+        u32::try_from(value).map_err(|_| SeriesPrepareFundingArtifactErrorV5::Geometry)
+    };
     let operations = [
         EffectInstructionV3::write_request_identity(
             0,
@@ -518,6 +568,30 @@ fn emit_effect(requests: SeriesPrepareChildRequestsV4<'_>) -> Result<Vec<u8>> {
             RequestSpaceV3::Fixed,
             parent_root_offset,
             root,
+        ),
+        // The first valid TicketStateV3, into the account the lifecycle
+        // `Create` above materializes first: magic, schema, profile, and the
+        // Ticket record identity the RequestProfile projected. Phase
+        // (`Prepared` = 0) and revision (0) are the zeros a fresh account holds.
+        EffectInstructionV3::write_u64(
+            ticket,
+            offset(SERIES_TICKET_STATE_MAGIC_OFFSET_V3)?,
+            ScalarCoordinateV3::common(SERIES_PREPARE_TICKET_MAGIC_SCALAR_V5),
+        ),
+        EffectInstructionV3::write_u16(
+            ticket,
+            offset(SERIES_TICKET_STATE_SCHEMA_OFFSET_V3)?,
+            ScalarCoordinateV3::common(SERIES_PREPARE_TICKET_SCHEMA_SCALAR_V5),
+        ),
+        EffectInstructionV3::write_u16(
+            ticket,
+            offset(SERIES_TICKET_STATE_PROFILE_OFFSET_V3)?,
+            ScalarCoordinateV3::common(SERIES_PREPARE_TICKET_PROFILE_SCALAR_V5),
+        ),
+        EffectInstructionV3::write_identity(
+            ticket,
+            offset(SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3)?,
+            IdentityCoordinateV3::common(SERIES_PREPARE_TICKET_IDENTITY_V5),
         ),
     ];
     let mut base_scratch = vec![0; SERIES_PREPARE_BASE_EFFECT_BYTES_V5];
@@ -944,6 +1018,73 @@ mod tests {
         assert_eq!(effect.funding_action(1), Err(ErrorV5::ActionTable));
         assert_eq!(profile.funding_bound_for(0), Ok(None));
         assert_eq!(profile.funding_bound_for(6), Ok(None));
+    }
+
+    /// The four data writes over a fresh sixty-four-zero account are exactly
+    /// `TicketStateV3::prepared(ticket).encode()`.
+    ///
+    /// Applied by hand at the offsets and widths the Effect declares, against
+    /// the values the Transition loads, so the test refutes a moved offset, a
+    /// narrowed width, or a constant the emission changed -- and so the
+    /// producer-missing debt `replay.rs` carried is discharged by a check and
+    /// not by a sentence.
+    #[test]
+    fn the_effect_writes_the_first_valid_ticket_state() {
+        use dclutch_core_contract::ContentId;
+        use dclutch_trading::series::replay::TicketStateV3;
+
+        let lengths = [0_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
+        let (a, b, c, d, e) = requests();
+        let artifacts = emit_series_prepare_funding_artifacts_v5(
+            SeriesPrepareAccountProfileInputV5 {
+                fixed_data_lengths: &lengths,
+            },
+            SeriesPrepareChildRequestsV4 {
+                projected_initialize: &a,
+                projected_open: &b,
+                replay_initialize: &c,
+                escrow_open: &d,
+                escrow_lock: &e,
+            },
+            123,
+        )
+        .expect("Prepare artifacts");
+        let effect = ProgramV5::decode(&artifacts.effect).expect("EffectV5");
+        let base = effect.base().base();
+        assert_eq!(base.fixed_operation_count(), 6);
+
+        // The scalar bank the Transition would leave behind: the three constant
+        // words at the registers the Effect names.
+        let transition =
+            TransitionProgramV3::decode(&artifacts.transition).expect("transition decode");
+        assert_eq!(
+            transition.common_scalar_count(),
+            SERIES_PREPARE_COMMON_SCALAR_COUNT_V5
+        );
+        let ticket_id = ContentId::new([0x5a; 32]).expect("ticket identity");
+        let mut account = [0_u8; SERIES_TICKET_STATE_BYTES_V3];
+        account[SERIES_TICKET_STATE_MAGIC_OFFSET_V3..SERIES_TICKET_STATE_MAGIC_OFFSET_V3 + 8]
+            .copy_from_slice(&TICKET_STATE_MAGIC_WORD_V5.to_le_bytes());
+        account[SERIES_TICKET_STATE_SCHEMA_OFFSET_V3..SERIES_TICKET_STATE_SCHEMA_OFFSET_V3 + 2]
+            .copy_from_slice(&SCHEMA_V3.to_le_bytes());
+        account[SERIES_TICKET_STATE_PROFILE_OFFSET_V3..SERIES_TICKET_STATE_PROFILE_OFFSET_V3 + 2]
+            .copy_from_slice(&PROFILE_V3.to_le_bytes());
+        account
+            [SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3..SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3 + 32]
+            .copy_from_slice(&ticket_id.to_bytes());
+        assert_eq!(
+            TicketStateV3::decode(&account),
+            Ok(TicketStateV3::prepared(ticket_id)),
+            "the four writes must be the prepared encoding and nothing else"
+        );
+        assert_eq!(account, TicketStateV3::prepared(ticket_id).encode());
+
+        // NEGATIVE CONTROL: without the magic word the account is the sixty-four
+        // zeros `LifecycleBound` delivers, and the decoder refuses it -- which
+        // is the refusal every downstream route used to inherit.
+        let mut unwritten = account;
+        unwritten[..8].fill(0);
+        assert!(TicketStateV3::decode(&unwritten).is_err());
     }
 
     #[test]

@@ -20,9 +20,9 @@ use dclutch_market::execution_strategy::{
     },
     shadow_v3::{SHADOW_CALLER_AUTHORITY_INDEX_V1, ShadowArtifactTupleV3, ShadowRequestV3},
     v2::{
-        AuthenticatedInterpreterArtifactsV2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
-        EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyCertificateV2,
-        ExecutionStrategyProgramV2, StrategyDispositionV2,
+        AuthenticatedInterpreterArtifactsV2, CertificateArtifactBindingV2,
+        EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+        ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
     },
 };
 use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -676,6 +676,41 @@ fn resolve_role_keys(
     })
 }
 
+/// Which identity the certificate binds, and the one conjunct that checks it.
+///
+/// A Series Shadow certificate is compiled INTO the accelerator ELF it
+/// certifies, so a certificate naming that ELF's digest could not be authored
+/// (`SERIES_SHADOW.md`, measured in `23eed7df`). RULING (BUILD-SERIES,
+/// provisional): the Series certificate binds the accelerator's source-derived
+/// `semantic_release_id` and never the ELF digest; the ELF digest is bound by
+/// the Registry `ArtifactReleaseV1` the activation cache names -- compared to
+/// the live ProgramData by `shadow_accelerator_auth::deployment` at callback
+/// time -- and by the checked release the caller holds. Two facts, one author
+/// each. A Release-bound certificate is still admitted: it is the AdmittedAot
+/// chain's binding and the Dealer's, so nothing that authenticated yesterday
+/// stops authenticating today.
+///
+/// The two identities are NOT interchangeable and this refuses when they are
+/// swapped, which is the whole content of admitting both.
+fn require_series_certificate_binding_v5(
+    certificate: ExecutionStrategyCertificateV2,
+    artifact_digest: [u8; 32],
+    artifact: &ArtifactReleaseV1,
+) -> Result<(), SeriesCurrentAcquisitionErrorV5> {
+    match certificate.artifact_binding() {
+        CertificateArtifactBindingV2::Release(_) => {
+            let artifact_id = ArtifactReleaseIdV1::new(artifact_digest)
+                .map_err(SeriesCurrentAcquisitionErrorV5::ReleaseSet)?;
+            certificate
+                .validate_artifact(artifact_id)
+                .map_err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy)
+        }
+        CertificateArtifactBindingV2::Semantic(_) => certificate
+            .validate_semantic_release(artifact.semantic_release_id())
+            .map_err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy),
+    }
+}
+
 fn assemble_strategy_accounts(
     selected: &SeriesSelectedActionV5,
     fixed: &DirectHotFixedRouteV3,
@@ -751,13 +786,9 @@ fn assemble_strategy_accounts(
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         artifact_digest,
     )?;
-    let artifact_id = ArtifactReleaseIdV1::new(artifact_digest)
-        .map_err(SeriesCurrentAcquisitionErrorV5::ReleaseSet)?;
-    certificate
-        .validate_artifact(artifact_id)
-        .map_err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy)?;
     let artifact = ArtifactReleaseV1::decode(&shadow.artifact.raw.data)
         .map_err(SeriesCurrentAcquisitionErrorV5::Registry)?;
+    require_series_certificate_binding_v5(certificate, artifact_digest, &artifact)?;
     if shadow.accelerator_program.key != shadow.checked.accelerator_program
         || shadow.accelerator_programdata.key != shadow.checked.accelerator_programdata
         || artifact.program().to_bytes() != shadow.accelerator_program.key.to_bytes()
@@ -2050,6 +2081,102 @@ mod tests {
             is_signer: privileges.signer(),
             is_writable: privileges.writable(),
         }
+    }
+
+    /// The acquisition admits BOTH certificate bindings and refuses each one's
+    /// identity presented as the other's.
+    ///
+    /// This is the whole executable content of the Series certificate ruling.
+    /// Nothing in this tree authors a Series certificate yet -- the generator
+    /// carries the identity its source manifest states, and no in-tree producer
+    /// writes that manifest -- so without this test the Semantic arm is an
+    /// authenticator with no producer and no exercise.
+    #[test]
+    fn the_acquisition_admits_both_certificate_bindings_and_swaps_neither() {
+        use dclutch_registry::ArtifactUpgradePolicyV1;
+        use dclutch_registry::release_set::ProgramIdentityV1;
+
+        let elf_digest = [0x41; 32];
+        let semantic = content_id(0x42);
+        let artifact = ArtifactReleaseV1::new(
+            ProgramIdentityV1::new([0x11; 32]).expect("program"),
+            ProgramIdentityV1::new([0x12; 32]).expect("loader"),
+            [0x13; 32],
+            semantic,
+            elf_digest,
+            9,
+            ArtifactUpgradePolicyV1::Immutable,
+            None,
+        )
+        .expect("artifact release");
+
+        let certificate = |binding: ContentId, semantic_binding: bool| {
+            let profile = content_id(1);
+            if semantic_binding {
+                ExecutionStrategyCertificateV2::new_semantic(
+                    profile,
+                    content_id(2),
+                    content_id(3),
+                    content_id(4),
+                    content_id(5),
+                    content_id(6),
+                    binding,
+                    content_id(7),
+                    content_id(8),
+                    content_id(9),
+                )
+            } else {
+                ExecutionStrategyCertificateV2::new(
+                    profile,
+                    content_id(2),
+                    content_id(3),
+                    content_id(4),
+                    content_id(5),
+                    content_id(6),
+                    ArtifactReleaseIdV1::new(binding.to_bytes()).expect("release id"),
+                    content_id(7),
+                    content_id(8),
+                    content_id(9),
+                )
+            }
+        };
+
+        // Each binding, against the identity it names.
+        assert_eq!(
+            require_series_certificate_binding_v5(
+                certificate(ContentId::new(elf_digest).expect("elf"), false),
+                elf_digest,
+                &artifact,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            require_series_certificate_binding_v5(
+                certificate(semantic, true),
+                elf_digest,
+                &artifact
+            ),
+            Ok(())
+        );
+
+        // Each binding against the OTHER identity: the two are not
+        // interchangeable, and a swap is what admitting both could have cost.
+        assert!(matches!(
+            require_series_certificate_binding_v5(
+                certificate(semantic, false),
+                elf_digest,
+                &artifact
+            ),
+            Err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy(_)),
+        ));
+        assert!(matches!(
+            require_series_certificate_binding_v5(
+                certificate(ContentId::new(elf_digest).expect("elf"), true),
+                elf_digest,
+                &artifact,
+            ),
+            Err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy(_)),
+        ));
     }
 
     #[test]

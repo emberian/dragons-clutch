@@ -433,9 +433,17 @@ pub(super) fn preflight_child_routes_v3<'accounts, 'info>(
     // `require_local_effect_discipline_v5` already makes, at these exact
     // registers. `None` only when that walk saw no route to answer for.
     participation: Option<&mut [CoordinateParticipationV3]>,
-    authenticated_series_expiry_replay: bool,
-    authenticated_series_expiry_rent_credit: [u8; 32],
+    series_expiry_premarket: Option<SeriesExpiryPremarketFactsV1>,
 ) -> Result<ChildCallerBumpsV4, ProgramError> {
+    // The one place the walk decides which Market a Custody child binds to.
+    // See `custody_child_market_v3`.
+    let custody_child_market = custody_child_market_v3(envelope, series_expiry_premarket);
+    #[cfg(not(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )))]
+    let _ = custody_child_market;
     #[cfg(not(feature = "families"))]
     let _ = (
         request_digest,
@@ -530,8 +538,7 @@ pub(super) fn preflight_child_routes_v3<'accounts, 'info>(
                     aliases,
                     participation,
                     effect_accounts,
-                    authenticated_series_expiry_replay,
-                    authenticated_series_expiry_rent_credit,
+                    series_expiry_premarket,
                     CoreCompositionParentV3 {
                         release_set: envelope.release_set(),
                         market: envelope.market(),
@@ -654,8 +661,8 @@ pub(super) fn preflight_child_routes_v3<'accounts, 'info>(
                         custody_program.ok_or(TradingSbfError::Release)?,
                         CustodyCompositionParentV3 {
                             release_set: envelope.release_set(),
-                            market: envelope.market(),
-                            generation: envelope.generation(),
+                            market: custody_child_market.market,
+                            generation: custody_child_market.generation,
                             parent_request_digest: request_digest,
                             trading_program: program_id.to_bytes(),
                             child_relay: envelope.bump_hints().child_relay,
@@ -821,6 +828,9 @@ pub(super) fn execute_child_routes_v3<'accounts, 'info>(
     // See `crate::child_authority_v4`: this walk reproduces those addresses
     // instead of searching for them a second time.
     caller_bumps: &ChildCallerBumpsV4,
+    // The Market and generation every Custody child binds to, derived once by
+    // the preflight walk from the same facts. See `custody_child_market_v3`.
+    custody_child_market: ChildMarketAuthorityV3,
     sparse_post_resource_verification: SparsePostResourceVerificationV3,
 ) -> Result<[u8; 32], ProgramError> {
     // The preflight walk's derivations, read back in the order it produced
@@ -838,7 +848,7 @@ pub(super) fn execute_child_routes_v3<'accounts, 'info>(
         feature = "series-family",
         feature = "dealer-family"
     )))]
-    let _ = shared;
+    let _ = (shared, custody_child_market);
     let mut execution = Box::new(ChildExecutionStateV3 {
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
         receipt_bank: ChildReceiptBankV3::new(),
@@ -1101,8 +1111,8 @@ pub(super) fn execute_child_routes_v3<'accounts, 'info>(
                             custody_program.ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
                                 release_set: envelope.release_set(),
-                                market: envelope.market(),
-                                generation: envelope.generation(),
+                                market: custody_child_market.market,
+                                generation: custody_child_market.generation,
                                 parent_request_digest: request_digest,
                                 trading_program: program_id.to_bytes(),
                                 child_relay: envelope.bump_hints().child_relay,

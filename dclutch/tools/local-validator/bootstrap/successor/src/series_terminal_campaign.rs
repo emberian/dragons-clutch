@@ -883,6 +883,7 @@ fn acquire_current_series_selected_v1(
     source: &DecodedSeriesCurrentSourceV1,
     payer: Pubkey,
     lookup_table: Pubkey,
+    policy: SeriesCampaignPolicyV1,
 ) -> Result<AcquiredSeriesSelectedV1> {
     let mut keys = BTreeSet::new();
     for address in frame
@@ -1153,6 +1154,7 @@ fn acquire_current_series_selected_v1(
             "current Series release changed the lifecycle-selected action",
         ));
     }
+    policy.require_act(planned.action())?;
     let runtime_logical_accounts = frame
         .runtime_logical_accounts
         .iter()
@@ -1519,7 +1521,54 @@ fn parse_hex32_v1(value: &str, label: &str) -> Result<[u8; 32]> {
 /// Drive one bounded crash-safe pass of the current-source Series campaign.
 /// Repeated invocations converge each selected action; no action selector is
 /// accepted. `--execute` is the sole boundary that opens the fee-payer key.
+/// What a caller of this campaign fixes before the planner runs.
+///
+/// The planner is still the only action SELECTOR: `expected_act` never chooses
+/// an act, it refuses when the act the lifecycle selected is not the one the
+/// caller was named for, so a verb named for consuming a ticket cannot silently
+/// expire one because the retry window closed between the operator's read and
+/// the send.
+///
+/// There is no cluster here. Which chain this campaign may reach is stated
+/// once, by `authenticate_series_terminal_campaign_input_v1`'s loopback-origin
+/// conjunct, and a policy field repeating it would be a second author of the
+/// same fact -- one that could disagree with the conjunct that actually
+/// refuses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SeriesCampaignPolicyV1 {
+    pub(crate) expected_act: Option<SeriesActionV3>,
+}
+
+impl SeriesCampaignPolicyV1 {
+    /// The campaign as it has always run: the planner's act, whatever it is.
+    pub(crate) const PLANNER_SELECTED: Self = Self { expected_act: None };
+
+    /// The campaign restricted to one act, for a verb named after that act.
+    pub(crate) const fn for_act(act: SeriesActionV3) -> Self {
+        Self {
+            expected_act: Some(act),
+        }
+    }
+
+    fn require_act(self, planned: SeriesActionV3) -> Result<()> {
+        match self.expected_act {
+            Some(expected) if expected != planned => Err(refusal(format!(
+                "the Series lifecycle selected {planned:?}, and this verb drives only {expected:?}: \
+                 rerun the verb named for the act the chain is at"
+            ))),
+            _ => Ok(()),
+        }
+    }
+}
+
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
+    run_with_policy(arguments, SeriesCampaignPolicyV1::PLANNER_SELECTED)
+}
+
+pub(crate) fn run_with_policy(
+    arguments: Vec<String>,
+    policy: SeriesCampaignPolicyV1,
+) -> Result<()> {
     let arguments = parse_series_terminal_arguments_v1(arguments)?;
     let (input, campaign_sha256) = read_series_terminal_campaign_input_v1(&arguments.input)?;
     authenticate_series_terminal_campaign_input_v1(&input, &arguments, &campaign_sha256)?;
@@ -1657,7 +1706,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         ));
     }
     let acquired =
-        acquire_current_series_selected_v1(&mut rpc, frame, &source, payer, lookup_table)?;
+        acquire_current_series_selected_v1(&mut rpc, frame, &source, payer, lookup_table, policy)?;
     let _durable_frame = load_or_create_series_acquired_address_frame_v2(
         &arguments.journal_dir,
         sequence,
@@ -8239,5 +8288,38 @@ mod tests {
                 .contains("changed identity, observation, or routing"),
             "unexpected payer refusal: {error}"
         );
+    }
+
+    /// The act gate refuses BY NAME when the planner selected another act, and
+    /// admits the one the verb was named for. The bare campaign fixes no act
+    /// and therefore admits every one of them.
+    ///
+    /// This is the whole safety content of the three act verbs: without it a
+    /// row named for consuming a ticket sends whatever the planner chose after
+    /// the retry window closed between the read and the send.
+    #[test]
+    fn the_act_gate_refuses_the_act_it_was_not_named_for() {
+        let consume = SeriesCampaignPolicyV1::for_act(SeriesActionV3::Consume);
+        consume
+            .require_act(SeriesActionV3::Consume)
+            .expect("the named act is admitted");
+        let error = consume
+            .require_act(SeriesActionV3::Expire)
+            .expect_err("another act must refuse");
+        assert!(
+            error.to_string().contains("this verb drives only Consume"),
+            "unexpected act refusal: {error}"
+        );
+        for act in [
+            SeriesActionV3::Prepare,
+            SeriesActionV3::Consume,
+            SeriesActionV3::Expire,
+            SeriesActionV3::Retire,
+            SeriesActionV3::Close,
+        ] {
+            SeriesCampaignPolicyV1::PLANNER_SELECTED
+                .require_act(act)
+                .expect("the bare campaign fixes no act");
+        }
     }
 }

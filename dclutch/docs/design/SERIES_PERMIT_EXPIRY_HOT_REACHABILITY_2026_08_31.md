@@ -1,7 +1,20 @@
 # Series permit-expiry Hot reachability
 
-Status: two unselected designs. This note records the state-transition order;
-it does not recommend or implement either design.
+Status: Design 1 (the authenticated pre-Market Hot mode) is what exists;
+Design 2 is unselected. This note records the state-transition order.
+
+One fact this note's step 7 assumed silently and never stated: the four Custody
+cleanup routes of that mode bind to the FUTURE occurrence Market at occurrence
++ 1, not to the controller envelope every other family's Custody children bind
+to. The escrow's replay, vault and transfer authority are PDAs of that Market
+and `custody-sbf` requires it at its own frame coordinate 1, so a child walk
+that offered the controller would refuse at `custody_composition_v3::prepare`'s
+parent conjunct. The Core route keeps the controller: its caller authority is
+seeded from `header.market()` by Core itself. The authority is
+`hot_v3::series_expiry::custody_child_market_v3`, and the frame coordinate the
+vacancy conjunct reads is the emitted representative
+`SERIES_EXPIRE_FUTURE_MARKET_COORDINATE_V5`, never one of its three route
+aliases.
 
 ## The current contradiction
 

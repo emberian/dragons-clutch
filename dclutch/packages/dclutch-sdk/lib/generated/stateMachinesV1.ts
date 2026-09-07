@@ -5,6 +5,7 @@
 // direct-root: crates/dclutch-trading/src/{successor,generated_successor}.rs
 // dealer-root: crates/dclutch-trading/src/dealer/{lib,generated_dealer_liquidity,generated_dealer_trading_profile}.rs
 // projected-custody: crates/dclutch-custody/src/{projected,generated_projected_state_v2}.rs
+// series-root: crates/dclutch-trading/src/series/{replay,generated,generated_series_state_v3}.rs
 // series-ticket: crates/dclutch-trading/src/series/{replay,generated,generated_ticket_state_v3}.rs
 // funding-ledger: crates/dclutch-market/src/capability_manifest/{funding,generated_abi}.rs
 // source: crates/dclutch-source/src/{lib,generated_source_resolution_state_v2}.rs
@@ -22,6 +23,7 @@ export type StateMachineV1 =
   | 'direct-root'
   | 'dealer-root'
   | 'projected-custody'
+  | 'series-root'
   | 'series-ticket'
   | 'funding-ledger'
   | 'source';
@@ -129,6 +131,22 @@ export const STATE_MACHINE_RECORDS_V1: ReadonlyArray<StateMachineRecordV1> = [
     counters: [],
     states: [{ state: 'Initialized', tag: 1 }, { state: 'HoardOpen', tag: 2 }, { state: 'HoardLocked', tag: 3 }, { state: 'SourceFunded', tag: 4 }],
     authority: 'crates/dclutch-custody/src/{projected,generated_projected_state_v2}.rs',
+  },
+  {
+    machine: 'series-root',
+    admission: 'SeriesRootAdmissionV1',
+    discriminant: 'SeriesPhaseV3',
+    record: 'SeriesStateV3',
+    magic: 'DCLTSSV3',
+    bytes: 64,
+    header: [[8, 3], [10, 1]],
+    tagOffset: 12,
+    headerBytes: null,
+    rowBytes: null,
+    pdaDomain: null,
+    counters: [{ field: 'revision', offset: 24 }, { field: 'closeRentRemaining', offset: 32 }],
+    states: [{ state: 'Active', tag: 0 }, { state: 'Terminal', tag: 1 }],
+    authority: 'crates/dclutch-trading/src/series/{replay,generated,generated_series_state_v3}.rs',
   },
   {
     machine: 'series-ticket',

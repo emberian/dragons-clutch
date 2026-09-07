@@ -5,68 +5,48 @@
 //! `dclutch_trading_sbf::series::release_v5`, and the physical evidence joins
 //! remain owned by the adjacent support module.
 //!
-//! # THREE ROWS ARE STILL RED, AND THE CUSTODY CALLEE NOW RESOLVES
+//! # THREE ROWS ARE UNMEASURED ON THIS BRANCH, AND TWO WALLS ARE REPAIRED
 //!
-//! All three rows refuse identically: **Trading consumes 530,018 CU of
-//! 1,317,313 and refuses `Content` (`0x4003`)** in the FIRST Custody route's
-//! preflight, after `pf-invocation-resolved`. Before this lane they refused
-//! `Release` (`0x4001`) at 533,198 in `resolve_carrier_by_representative_v3`,
-//! because the activated Custody program was at no coordinate of the frame.
+//! `272fb867d` appended the Custody callee and reported the three rows
+//! moving from `Release` (`0x4001`) to `Content` (`0x4003`) at 530,018 CU in
+//! the FIRST Custody route's preflight, `custody-prepare` case 6. That
+//! measurement was of a working tree: `hot_v3/series_expiry.rs` still pinned
+//! the logical frame at 81 while the profile emitted 82, and `git log -S`
+//! finds no commit in which it ever said 82. On the committed sources the
+//! pre-Market authenticator refused `Content` at its width check, roughly
+//! 200,000 CU before the wall the message named. Both are repaired here and
+//! neither is measured: the build wave builds no SBF, and the number that
+//! belongs in this paragraph is the one the next real-ELF run produces.
 //!
-//! ## THE EXPIRE PROFILE WAS THE DEFECT, AND THE REPAIR RENUMBERS NO FRAME
+//! ## THE FRAME HAS ONE AUTHOR
 //!
-//! A CPI's callee is not a member of its own account list, and
-//! `CustodyFrameRoleV1` has no `CustodyProgram` variant at all -- a Custody
-//! frame names `CallerProgram`, which is Trading's. So no Custody route window
-//! can carry the callee, and `hot_v3::resolve_role_carrier_v3` resolves one by
-//! scanning the downgraded LOGICAL vector for the key the activation cache
-//! names. Every other Custody-routing topology in this tree therefore declares
-//! a coordinate of its own and says so in the same words: Direct's
-//! inline-ordinary (90), RegisterBuy (55) and registered-terminal (70),
-//! General's `general_custody_callee_coordinate_v3`, Dealer's
-//! `DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3`, and
-//! `custody_composition_v3::require_custody_frame_shape_v3`'s own doc comment.
-//! Series Consume needed none because its Core Found suffix, Claims founding
-//! frame and Core Open suffix each name the Custody program inside their own
-//! frames -- those are the three carriers `resolve_role_carrier_v3` was taught
-//! to dedup. Expire's five frames name it nowhere, and Expire was the only
-//! Custody-routing topology in the tree without a callee coordinate.
+//! `formal/dclutch-semantics/DClutchSemantics/SeriesExpireFrameV5Abi.lean`
+//! owns the eighty-two coordinates, the five windows, every named coordinate,
+//! the privileged representatives and the thirty-seven aliases; the emission
+//! `crates/dclutch-trading/src/series/generated_expire_frame_v5.rs` is what
+//! `expire_funding_artifacts_v5`, `hot_v3::series_expiry`, this fixture, the
+//! operator and the successor read. A CPI's callee is not a member of its own
+//! account list and `CustodyFrameRoleV1` has no `CustodyProgram` role, so the
+//! callee is Expire's own coordinate, appended past every window (81), and the
+//! theorem `the_windows_tile_the_routes_and_the_callee_is_last` says so.
 //!
-//! The bundle builder is NOT the defect. It packs exactly the profile's logical
-//! coordinates and binds an unbound one to a placeholder; it uses
-//! `WaistFactsV1::custody_program` to MINE Custody's two bumps and to leave the
-//! bank's own deployment uninstalled, and neither of those is a frame entry. It
-//! had nothing to bind because the profile declared nothing to bind to.
+//! ## THE CUSTODY CHILDREN BIND TO THE FUTURE MARKET
 //!
-//! So `SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5` is appended PAST every
-//! route range, exactly as Direct's and General's are, and the blast radius the
-//! blocked-route entry predicted does not happen: `SERIES_EXPIRE_ROUTE_STARTS_V5`,
-//! `SERIES_EXPIRE_ROUTE_COUNTS_V5` and all thirty-seven `ROUTE_ALIASES` pairs
-//! are byte-identical. Only the fixed count moves, 81 to 82, and with it the
-//! Trading digest.
-//!
-//! ## THE NEXT WALL IS NAMED, AND IT IS A MARKET APART
-//!
-//! `dclutch-hot-why:custody-prepare` reports **case 6, bitmap `0xc`, operands
-//! 1 and 9**: two of the six parent bindings inside the first escrow refund
-//! request disagree with the executing envelope -- `custody.market !=
-//! parent.market` and `custody.semantic.generation != parent.generation`, the
-//! request naming generation 1 and the envelope 9.
-//!
-//! That is not a fixture typo. The Series escrow's replay, vault and transfer
-//! authority are all PDAs of the FUTURE occurrence Market, derived at Prepare,
-//! and `custody-sbf` requires the CoreMarket account at its own frame
-//! coordinate 1 to have the key `request.market`. So the request must name the
-//! future Market -- while `CustodyCompositionParentV3` binds every child
-//! request to `envelope.market()`/`envelope.generation()`, which for a
-//! pre-Market Expire is the PARENT Series root's Market at its own generation.
-//! The pre-Market Expire topology has always been one Market and eight
-//! generations away from the conjunct that binds it. Either the family-neutral
-//! Custody composition gains a projected-market authority for this case (route
-//! 3 already carries a projected shape whose parent root the Effect patches at
-//! runtime), or the Series escrow lifecycle moves into the parent Market's
-//! namespace. That ruling moves the child composition Direct and Dealer also
-//! ride, and it is NOT taken here.
+//! `custody-prepare` case 6 was `custody.market != parent.market` and
+//! `custody.semantic.generation != parent.generation`: the escrow requests
+//! name the FUTURE occurrence Market at occurrence + 1 -- the Market whose
+//! PDAs the escrow's replay, vault and transfer authority are, and which every
+//! Expire Custody window presents as its `CoreMarket` (coordinate 7) -- while
+//! the composition parent was the executing envelope's controller Market at
+//! its own generation. RULING (provisional, BUILD-SERIES): the child
+//! composition gains a projected-market authority for the selected pre-Market
+//! Series action and nothing else moves. `try_authenticate_series_expiry_premarket_v1`
+//! now returns `SeriesExpiryPremarketFactsV1` (the RentCredit, the future
+//! Market it proved vacant and PDA-exact, the generation the permit and the
+//! RentCredit are keyed on); `custody_child_market_v3` is the envelope for
+//! every live-Market family and those facts for this one; both child walks
+//! build their `CustodyCompositionParentV3` from it. The Core route keeps the
+//! envelope, whose controller Market its caller authority is seeded from.
 //!
 //! ## THE SERIES ROOT'S CONFIG IDENTITY HAS ONE AUTHOR
 //!
@@ -164,9 +144,11 @@
 //!
 //! ## WHAT IS OWED
 //!
-//! The Market/generation ruling above, which no lane owns yet, and the
-//! `TicketStateV3` producer in `prepare_funding_artifacts_v5`, which still
-//! needs this route to reach Core.
+//! The measurement. The three rows on ELFs built from `build/series`, and the
+//! CU and code they report, replace the paragraph above. The TicketStateV3
+//! producer is written (`prepare_funding_artifacts_v5`, four Effect writes
+//! after the lifecycle Create) and proved natively; this route is what
+//! exercises it end to end.
 //!
 //! `precommit_caller_substitutions_...` is RE-BASED and is red for a stated
 //! reason. It used to assert inside its loop, so the first disagreeing leg

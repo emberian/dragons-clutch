@@ -61,6 +61,7 @@ const sources = Object.freeze({
 
   seriesReplay: readFileSync(new URL('crates/dclutch-trading/src/series/replay.rs', root), 'utf8'),
   seriesGenerated: readFileSync(new URL('crates/dclutch-trading/src/series/generated.rs', root), 'utf8'),
+  seriesStateGenerated: readFileSync(new URL('crates/dclutch-trading/src/series/generated_series_state_v3.rs', root), 'utf8'),
   seriesTicketGenerated: readFileSync(new URL('crates/dclutch-trading/src/series/generated_ticket_state_v3.rs', root), 'utf8'),
 
   funding: readFileSync(new URL('crates/dclutch-market/src/capability_manifest/funding.rs', root), 'utf8'),
@@ -322,16 +323,60 @@ const machines = [
     authority: 'crates/dclutch-custody/src/{projected,generated_projected_state_v2}.rs',
   },
   {
+    label: 'series-root',
+    record: 'SeriesStateV3',
+    magic: magic('seriesGenerated', 'SERIES_STATE_MAGIC_V3'),
+    bytes: scalar('seriesStateGenerated', 'SERIES_STATE_BYTES_V3'),
+    // The Series family's two header words, at this record's own coordinates.
+    // The tail is 64 bytes inside the composite capability root, exactly as
+    // `direct-root` and `dealer-root` are: the caller slices it out, and every
+    // offset below is relative to the tail.
+    header: [
+      [scalar('seriesStateGenerated', 'SERIES_STATE_SCHEMA_OFFSET_V3'), scalar('seriesGenerated', 'SERIES_TEMPLATE_SCHEMA_V3')],
+      [scalar('seriesStateGenerated', 'SERIES_STATE_PROFILE_OFFSET_V3'), scalar('seriesGenerated', 'SERIES_TEMPLATE_PROFILE_V3')],
+    ],
+    tagOffset: scalar('seriesStateGenerated', 'SERIES_STATE_PHASE_OFFSET_V3'),
+    rowBytes: null,
+    headerBytes: null,
+    // `counters` is u64 BY DECLARATION -- the emitted interface says so -- and
+    // the two counters that gate this machine's acts are u32:
+    // `nextOccurrence` (@16) against the Template's occurrence count in
+    // `settle_current`, and `outstandingTicketAccounts` (@20) in `admit_close`.
+    // Publishing either here would read eight bytes across both of them and
+    // call the result a count, so they are deliberately absent until the table
+    // carries a width per counter. What IS published is the pair a client can
+    // read at the declared width: the replay `revision` every act checks
+    // against, and the separately classified close-rent principal.
+    counters: [
+      ['revision', scalar('seriesStateGenerated', 'SERIES_STATE_REVISION_OFFSET_V3')],
+      ['closeRentRemaining', scalar('seriesStateGenerated', 'SERIES_STATE_CLOSE_RENT_REMAINING_OFFSET_V3')],
+    ],
+    pdaDomain: null,
+    discriminant: 'SeriesPhaseV3',
+    states: decodedTags(
+      block('seriesReplay', 'impl SeriesPhaseV3 {'),
+      emittedTag('seriesStateGenerated'),
+    ),
+    declared: declaredDiscriminants('seriesReplay', 'SeriesPhaseV3', emittedTag('seriesStateGenerated')),
+    variants: declaredVariants('seriesReplay', 'SeriesPhaseV3'),
+    authority: 'crates/dclutch-trading/src/series/{replay,generated,generated_series_state_v3}.rs',
+  },
+  {
     label: 'series-ticket',
     record: 'TicketStateV3',
     magic: magic('seriesGenerated', 'SERIES_TICKET_STATE_MAGIC_V3'),
     bytes: scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_BYTES_V3'),
-    // The two header words' VALUES are the Series family's and stay in
-    // `replay.rs`; the coordinates they are written at belong to this record
-    // and are emitted.
+    // The two header words' VALUES are the Series family's and are emitted by
+    // `EmitSeriesOccurrenceV3Rust.lean`; the coordinates they are written at
+    // belong to this record and are emitted beside it. `replay.rs` re-exports
+    // the values under its own names, and this file read THOSE until they
+    // stopped being integer literals -- `scalar` matches `= ([0-9_]+);` and an
+    // alias of an emitted constant is not a literal, so the generator threw
+    // and every `abi:*:verify` in `abiVerification.test.ts` went with it. Read
+    // the emission both times.
     header: [
-      [scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_SCHEMA_OFFSET_V3'), scalar('seriesReplay', 'SCHEMA_V3')],
-      [scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_PROFILE_OFFSET_V3'), scalar('seriesReplay', 'PROFILE_V3')],
+      [scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_SCHEMA_OFFSET_V3'), scalar('seriesGenerated', 'SERIES_TEMPLATE_SCHEMA_V3')],
+      [scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_PROFILE_OFFSET_V3'), scalar('seriesGenerated', 'SERIES_TEMPLATE_PROFILE_V3')],
     ],
     // Emitted, where it used to be inferred from two bare expressions agreeing
     // -- and one of the two belonged to `SeriesStateV3`, whose `encode` writes

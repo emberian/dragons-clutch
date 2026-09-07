@@ -92,44 +92,19 @@ use super::{
     state::SERIES_TICKET_STATE_BYTES_V3,
 };
 
-/// Outer writable Ticket representative retained for replay after Expire.
-pub const SERIES_EXPIRE_TICKET_COORDINATE_V5: u16 = 5;
-/// Fixed-account start of each of the five authenticated child routes.
-pub const SERIES_EXPIRE_ROUTE_STARTS_V5: [u16; 5] = [6, 20, 34, 44, 55];
-/// Fixed-account width of each of the five authenticated child routes.
-pub const SERIES_EXPIRE_ROUTE_COUNTS_V5: [u16; 5] = [14, 14, 10, 11, 26];
-/// Canonical RentCredit representative supplied by the second custody route.
-pub const SERIES_EXPIRE_RENT_CREDIT_COORDINATE_V5: u16 = 33;
-/// Outer readonly caller PDA synthesized as a signer only for the Core CPI.
-pub const SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5: u16 = 80;
-/// The release-selected Custody program the four Custody routes are invoked
-/// through.
-///
-/// A CPI's callee is not a member of its own account list, and
-/// `CustodyFrameRoleV1` has no `CustodyProgram` variant at all -- a Custody
-/// frame names `CallerProgram`, which is Trading's -- so no Custody route
-/// window can carry it. `hot_v3::resolve_role_carrier_v3` resolves a child
-/// route's callee by scanning the downgraded LOGICAL vector for the key the
-/// Registry activation cache names for that role, so the program has to BE one
-/// of this profile's coordinates or every Custody route refuses `Release`
-/// before its first CPI. Series Consume needed no coordinate of its own --
-/// `account_profile_v4`'s Core Found suffix, Claims founding frame and Core
-/// Open suffix each name the Custody program inside their own frames, which is
-/// where its three carriers come from -- and Expire's five frames name it
-/// nowhere: three canonical `CustodyFrameSpecV1` windows, one Trading-owned
-/// projected-custody window, and the twenty-five-account Core
-/// unallocated-permit frame plus its caller.
-///
-/// It is Expire's own outer coordinate, appended PAST every route range, so
-/// carrying it renumbers no frame: `SERIES_EXPIRE_ROUTE_STARTS_V5`,
-/// `SERIES_EXPIRE_ROUTE_COUNTS_V5` and every `ROUTE_ALIASES` pair are
-/// unchanged. Its rule is executable, readonly and opaque, exactly as Direct's
-/// three, General's and Dealer's are: the loader that deployed it owns its
-/// record width, and the activation cache -- not this profile -- is the sole
-/// authority on which program the Custody role selects.
-pub const SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5: u16 = 81;
-/// Complete fixed-account width of the Expire outer invocation.
-pub const SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5: u16 = 82;
+// The frame -- its count, the five route windows, every named coordinate,
+// the privileged representatives and the alias table -- is
+// `formal/dclutch-semantics/DClutchSemantics/SeriesExpireFrameV5Abi.lean`'s,
+// through `EmitSeriesExpireFrameV5Rust.lean`; `check-generated-series.sh`
+// byte-compares it. This file and `hot_v3::series_expiry` used to spell the
+// count separately (82 here, 81 there) and every commit between them compiled.
+pub use dclutch_trading::series::generated_expire_frame_v5::{
+    SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5, SERIES_EXPIRE_EXECUTABLE_REPRESENTATIVES_V5,
+    SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5, SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5,
+    SERIES_EXPIRE_RENT_CREDIT_COORDINATE_V5, SERIES_EXPIRE_ROUTE_ALIASES_V5,
+    SERIES_EXPIRE_ROUTE_COUNTS_V5, SERIES_EXPIRE_ROUTE_STARTS_V5,
+    SERIES_EXPIRE_TICKET_COORDINATE_V5, SERIES_EXPIRE_WRITABLE_REPRESENTATIVES_V5,
+};
 /// Common scalar register width authenticated by Expire artifacts.
 pub const SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5: u16 = 26;
 /// Common identity register width authenticated by Expire artifacts.
@@ -974,55 +949,9 @@ const fn write_data() -> AccountEffectPermissionsV2 {
     AccountEffectPermissionsV2::new(false, false, true)
 }
 
-const WRITABLE_REPRESENTATIVES: &[u16] = &[0, 5, 14, 16, 17, 33, 45, 51, 55];
-const EXECUTABLE_REPRESENTATIVES: &[u16] = &[
-    9,
-    10,
-    19,
-    57,
-    79,
-    SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5,
-];
-
-const ROUTE_ALIASES: &[(u16, u16)] = &[
-    (21, 7),
-    (22, 8),
-    (23, 9),
-    (24, 10),
-    (25, 11),
-    (26, 12),
-    (27, 13),
-    (28, 14),
-    (29, 15),
-    (30, 16),
-    (31, 18),
-    (32, 19),
-    (35, 7),
-    (36, 8),
-    (37, 9),
-    (38, 10),
-    (39, 11),
-    (40, 12),
-    (41, 13),
-    (42, 14),
-    (43, 33),
-    (46, 8),
-    (47, 9),
-    (48, 10),
-    (49, 11),
-    (50, 33),
-    (52, 18),
-    (53, 19),
-    (54, 7),
-    (56, 33),
-    (61, 9),
-    (66, 8),
-    (67, 10),
-    (68, 11),
-    (69, 0),
-    (70, 5),
-    (71, 1),
-];
+const WRITABLE_REPRESENTATIVES: &[u16] = &SERIES_EXPIRE_WRITABLE_REPRESENTATIVES_V5;
+const EXECUTABLE_REPRESENTATIVES: &[u16] = &SERIES_EXPIRE_EXECUTABLE_REPRESENTATIVES_V5;
+const ROUTE_ALIASES: &[(u16, u16)] = &SERIES_EXPIRE_ROUTE_ALIASES_V5;
 
 fn alias_representative(coordinate: u16) -> Option<u16> {
     ROUTE_ALIASES

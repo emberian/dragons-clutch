@@ -26,6 +26,17 @@ pub mod escrow;
 #[allow(dead_code, missing_docs)]
 #[doc(hidden)]
 pub mod generated;
+/// Lean-generated Series Expire V5 account frame: the count, the five route
+/// windows, every named coordinate, the privileged representatives and the
+/// alias table, with one author for all of them.
+#[allow(missing_docs)]
+#[doc(hidden)]
+pub mod generated_expire_frame_v5;
+/// Lean-generated Series root-tail ABI: the width, the two phase tags, the
+/// reserved spans and the coordinate of every word.
+#[allow(missing_docs)]
+#[doc(hidden)]
+pub mod generated_series_state_v3;
 /// Lean-generated occurrence-ticket replay-state tag ABI.
 #[allow(missing_docs)]
 #[doc(hidden)]
@@ -36,6 +47,8 @@ pub mod plan;
 pub mod replay;
 /// Exact Series action request and occurrence-proof wire.
 pub mod request;
+/// Named admissible root phases for each replay act.
+pub mod root_admission_v1;
 /// Stateless complete semantic plan for Shadow-AOT and differential execution.
 pub mod shadow;
 /// Terminal Ticket/root retirement into the lifecycle-scoped Rent V2 sink.

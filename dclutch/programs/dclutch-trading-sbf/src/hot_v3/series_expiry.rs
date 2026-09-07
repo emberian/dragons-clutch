@@ -28,44 +28,83 @@ use dclutch_trading::series::{
     SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TICKET_DERIVATION_PREIMAGE_V3,
 };
 
-pub(super) const SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1: usize = 81;
-pub(super) const SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1: usize = 5;
-pub(super) const SERIES_EXPIRE_CORE_ROUTE_START_V1: usize = 55;
-pub(super) const SERIES_EXPIRE_CORE_ROUTE_COUNT_V1: usize = 26;
-/// Vacant future Market carried by projected-Custody Abort, never the fixed
-/// live controller Market authenticated by ordinary Hot.
-pub(super) const SERIES_EXPIRE_FUTURE_MARKET_ACCOUNT_V1: usize = 54;
-pub(super) const SERIES_EXPIRE_PERMIT_ACCOUNT_V1: usize = SERIES_EXPIRE_CORE_ROUTE_START_V1;
-pub(super) const SERIES_EXPIRE_RENT_CREDIT_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 1;
-pub(super) const SERIES_EXPIRE_RENT_PROGRAM_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 2;
-pub(super) const SERIES_EXPIRE_ROOT_REPLAY_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 14;
-pub(super) const SERIES_EXPIRE_TICKET_REPLAY_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 15;
-pub(super) const SERIES_EXPIRE_TEMPLATE_RAW_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 16;
-pub(super) const SERIES_EXPIRE_TEMPLATE_STAGING_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 17;
-pub(super) const SERIES_EXPIRE_OCCURRENCE_RAW_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 18;
-pub(super) const SERIES_EXPIRE_OCCURRENCE_STAGING_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 19;
-pub(super) const SERIES_EXPIRE_TICKET_RAW_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 20;
-pub(super) const SERIES_EXPIRE_TICKET_STAGING_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 21;
-pub(super) const SERIES_EXPIRE_SYSTEM_PROGRAM_ACCOUNT_V1: usize =
-    SERIES_EXPIRE_CORE_ROUTE_START_V1 + 24;
-const SERIES_EXPIRE_CALLER_ACCOUNT_V1: usize = SERIES_EXPIRE_CORE_ROUTE_START_V1 + 25;
+// One author for the frame: `SeriesExpireFrameV5Abi.lean`, through the
+// emission `dclutch_trading::series::generated_expire_frame_v5`. This module
+// pinned the logical width at 81 while the profile emitter said 82 -- the
+// Custody callee `272fb867d` appended -- and every commit between them
+// compiled; on the committed sources the pre-Market authenticator refused
+// `Content` at the width check below, ~200,000 CU before the wall that commit
+// measured on a working tree.
+use dclutch_trading::series::generated_expire_frame_v5 as frame_v5;
 
+pub(super) const SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1: usize =
+    frame_v5::SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize;
+pub(super) const SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_TICKET_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_CORE_ROUTE_START_V1: usize =
+    frame_v5::SERIES_EXPIRE_CORE_ROUTE_START_V5 as usize;
+pub(super) const SERIES_EXPIRE_CORE_ROUTE_COUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_CORE_ROUTE_COUNT_V5 as usize;
+/// The vacant future occurrence Market, at the coordinate that OWNS it, never
+/// the fixed live controller Market authenticated by ordinary Hot.
+///
+/// Every Custody window sees this one account: the first route holds it here,
+/// and the other three reach it through `AccountPrestateV2::AuthenticatedRouteAlias`
+/// bindings the Expire ProfileV3 declares against this coordinate. The
+/// representative is therefore the single author of which account the future
+/// Market is, and the vacancy conjunct below reads it rather than one window's
+/// alias of it.
+pub(super) const SERIES_EXPIRE_FUTURE_MARKET_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_FUTURE_MARKET_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_PERMIT_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_PERMIT_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_RENT_CREDIT_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_CORE_RENT_CREDIT_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_RENT_PROGRAM_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_RENT_PROGRAM_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_ROOT_REPLAY_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_ROOT_REPLAY_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_TICKET_REPLAY_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_TICKET_REPLAY_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_TEMPLATE_RAW_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_TEMPLATE_RAW_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_TEMPLATE_STAGING_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_TEMPLATE_STAGING_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_OCCURRENCE_RAW_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_OCCURRENCE_RAW_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_OCCURRENCE_STAGING_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_OCCURRENCE_STAGING_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_TICKET_RAW_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_TICKET_RAW_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_TICKET_STAGING_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_TICKET_STAGING_COORDINATE_V5 as usize;
+pub(super) const SERIES_EXPIRE_SYSTEM_PROGRAM_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_SYSTEM_PROGRAM_COORDINATE_V5 as usize;
+const SERIES_EXPIRE_CALLER_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5 as usize;
+const SERIES_EXPIRE_CUSTODY_PROGRAM_ACCOUNT_V1: usize =
+    frame_v5::SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5 as usize;
+
+// The emission's theorems, restated where this module reads them: the Core
+// window ends at the callee, the callee is the last coordinate, and the caller
+// is the Core window's last local. A renumbering upstream turns one of these
+// red before it turns a route red.
 const _: () = {
-    assert!(SERIES_EXPIRE_CORE_ROUTE_START_V1 + SERIES_EXPIRE_CORE_ROUTE_COUNT_V1 == 81);
-    assert!(SERIES_EXPIRE_CALLER_ACCOUNT_V1 + 1 == SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1);
+    assert!(
+        SERIES_EXPIRE_CORE_ROUTE_START_V1 + SERIES_EXPIRE_CORE_ROUTE_COUNT_V1
+            == SERIES_EXPIRE_CUSTODY_PROGRAM_ACCOUNT_V1
+    );
+    assert!(SERIES_EXPIRE_CUSTODY_PROGRAM_ACCOUNT_V1 + 1 == SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1);
+    assert!(SERIES_EXPIRE_CALLER_ACCOUNT_V1 + 1 == SERIES_EXPIRE_CUSTODY_PROGRAM_ACCOUNT_V1);
     assert!(SERIES_EXPIRE_ROOT_REPLAY_ACCOUNT_V1 == 69);
     assert!(SERIES_EXPIRE_TICKET_REPLAY_ACCOUNT_V1 == 70);
-    assert!(SERIES_EXPIRE_FUTURE_MARKET_ACCOUNT_V1 + 1 == SERIES_EXPIRE_CORE_ROUTE_START_V1);
+    assert!(
+        SERIES_EXPIRE_FUTURE_MARKET_ACCOUNT_V1
+            >= frame_v5::SERIES_EXPIRE_ROUTE_STARTS_V5[0] as usize
+            && SERIES_EXPIRE_FUTURE_MARKET_ACCOUNT_V1
+                < (frame_v5::SERIES_EXPIRE_ROUTE_STARTS_V5[0]
+                    + frame_v5::SERIES_EXPIRE_ROUTE_COUNTS_V5[0]) as usize
+    );
     assert!(SERIES_EXPIRE_OCCURRENCE_RAW_ACCOUNT_V1 == 73);
     assert!(SERIES_EXPIRE_TICKET_RAW_ACCOUNT_V1 == 75);
 };
@@ -241,6 +280,70 @@ mod tests {
     }
 }
 
+/// What the selected pre-Market Expire proved about the Market that does not
+/// exist yet, carried into the child walk.
+///
+/// Every field is derived from finalized records and re-derived addresses,
+/// never read off the fixed Hot Market, which is the live Series CONTROLLER:
+/// `future_market` is the occurrence record's Market, re-derived through
+/// `future_market_projection` and required vacant and System-owned;
+/// `future_generation` is the occurrence index plus one, the generation the
+/// permit, the RentCredit and Core's precommit route all key on; `rent_credit`
+/// is the lifecycle RentCredit the permit refunds into.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct SeriesExpiryPremarketFactsV1 {
+    pub(super) rent_credit: [u8; 32],
+    pub(super) future_market: [u8; 32],
+    pub(super) future_generation: u64,
+}
+
+/// The Market and generation a Custody child request must name.
+///
+/// `custody_composition_v3::prepare` binds every Custody request to one
+/// parent `(market, generation)` and refuses `Content` when the request names
+/// another. For every live-Market family that parent is the executing
+/// envelope's. For a selected pre-Market Series action it cannot be: the
+/// Series escrow's replay, vault and transfer authority are PDAs of the FUTURE
+/// occurrence Market, derived at Prepare and refunded at Expire, and
+/// `custody-sbf` requires the `CoreMarket` at its frame coordinate 1 -- which
+/// every Expire Custody window presents as the vacant future Market -- to be
+/// the key the request names. So the request must name the future Market at
+/// its own generation, and the parent must agree. `272fb867d` measured the
+/// disagreement as `custody-prepare` case 6, bitmap `0xc`: the request naming
+/// generation 1 and the envelope generation 9, one Market apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ChildMarketAuthorityV3 {
+    pub(super) market: [u8; 32],
+    pub(super) generation: u64,
+}
+
+/// The envelope's Market for every family, and the authenticated future
+/// occurrence Market for the selected pre-Market Series action.
+///
+/// This is the whole of the projected-market authority: no new field on the
+/// composition parent, no second conjunct in `custody_composition_v3`. The
+/// future Market was proved vacant, PDA-exact and distinct from the controller
+/// by `try_authenticate_series_expiry_premarket_v1` before any child walk, and
+/// Core's precommit route (`controller_and_future_markets_are_distinct`)
+/// re-proves the distinctness from its own frame. The Core route keeps the
+/// envelope: its caller authority is seeded from the CONTROLLER Market, which
+/// is what `series_permit_expiry_precommit_v1::authenticate_caller` derives.
+pub(super) fn custody_child_market_v3(
+    envelope: HotExecutionEnvelopeV3,
+    premarket: Option<SeriesExpiryPremarketFactsV1>,
+) -> ChildMarketAuthorityV3 {
+    match premarket {
+        Some(facts) => ChildMarketAuthorityV3 {
+            market: facts.future_market,
+            generation: facts.future_generation,
+        },
+        None => ChildMarketAuthorityV3 {
+            market: envelope.market(),
+            generation: envelope.generation(),
+        },
+    }
+}
+
 /// Authenticated byte-and-lamport facts which the final Series Core child may
 /// observe but may not alter before Trading's commit-last replay writes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -301,7 +404,7 @@ pub(super) fn try_authenticate_series_expiry_premarket_v1<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
     root: &AuthenticatedRootV3,
     product_runtime_v3: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
-) -> Result<Option<[u8; 32]>, ProgramError> {
+) -> Result<Option<SeriesExpiryPremarketFactsV1>, ProgramError> {
     if !matches!(
         SeriesActionRequestV3::decode(family_request),
         Ok(request) if request.action() == SeriesActionV3::Expire
@@ -353,7 +456,7 @@ fn authenticate_selected_series_expiry_premarket_v1<'accounts, 'info>(
     descriptor: CapabilityProgramV4,
     selected_program: ContentId,
     selected_action: u32,
-) -> Result<[u8; 32], ProgramError> {
+) -> Result<SeriesExpiryPremarketFactsV1, ProgramError> {
     let (runtime_accounts, core_template) = authenticate_series_expiry_execution_artifacts_v1(
         program_id,
         accounts,
@@ -521,7 +624,7 @@ fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
     runtime_accounts: &[&'accounts AccountInfo<'info>],
     core_template: &[u8],
     product_runtime_v3: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
-) -> Result<[u8; 32], ProgramError> {
+) -> Result<SeriesExpiryPremarketFactsV1, ProgramError> {
     let template_raw = *runtime_accounts
         .get(series_expiry::SERIES_EXPIRE_TEMPLATE_RAW_ACCOUNT_V1)
         .ok_or(TradingSbfError::Content)?;
@@ -585,7 +688,7 @@ fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
         &ticket_bytes,
     )?;
     authenticate_series_expiry_core_template_v1(core_template)?;
-    let rent_credit = authenticate_series_expiry_vacant_permit_request_v1(
+    let facts = authenticate_series_expiry_vacant_permit_request_v1(
         program_id,
         frame,
         runtime_accounts,
@@ -597,8 +700,12 @@ fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
     drop(template_bytes);
     drop(occurrence_bytes);
     drop(ticket_bytes);
-
-    Ok(rent_credit)
+    // The permit and the vacancy conjunct each derived the future Market on
+    // their own; the facts the child walk binds to are the vacancy's.
+    if facts.future_market != expected_future_market.to_bytes() {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(facts)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -940,7 +1047,7 @@ fn authenticate_series_expiry_vacant_permit_request_v1(
     template_bytes: &[u8],
     occurrence_bytes: &[u8],
     ticket_bytes: &[u8],
-) -> Result<[u8; 32], ProgramError> {
+) -> Result<SeriesExpiryPremarketFactsV1, ProgramError> {
     let admitted = admit_series_action_v3(
         family_request,
         template_bytes,
@@ -1024,7 +1131,11 @@ fn authenticate_series_expiry_vacant_permit_request_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
-    Ok(rent_credit.key.to_bytes())
+    Ok(SeriesExpiryPremarketFactsV1 {
+        rent_credit: rent_credit.key.to_bytes(),
+        future_market,
+        future_generation: generation,
+    })
 }
 
 /// Select the one Series child which must observe both replay prestates before
@@ -1042,8 +1153,7 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
     aliases: &[usize],
     participation: &[CoordinateParticipationV3],
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
-    authenticated_series_expiry_replay: bool,
-    authenticated_series_expiry_rent_credit: [u8; 32],
+    series_expiry_premarket: Option<SeriesExpiryPremarketFactsV1>,
     parent: CoreCompositionParentV3,
 ) -> Result<AllowedLocalOverlapV3, ProgramError> {
     use series_expiry::{
@@ -1051,8 +1161,10 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
         SERIES_EXPIRE_RENT_CREDIT_ACCOUNT_V1, SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1,
     };
 
-    if !authenticated_series_expiry_replay
-        || usize::from(invocation.fixed_account_start) != SERIES_EXPIRE_CORE_ROUTE_START_V1
+    let Some(premarket) = series_expiry_premarket else {
+        return Ok(AllowedLocalOverlapV3::None);
+    };
+    if usize::from(invocation.fixed_account_start) != SERIES_EXPIRE_CORE_ROUTE_START_V1
         || usize::from(invocation.fixed_account_count) != SERIES_EXPIRE_CORE_ROUTE_COUNT_V1
         || !is_series_permit_expiry_precommit_observation_v1(
             effect.base(),
@@ -1109,7 +1221,7 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
         .view(SERIES_EXPIRE_RENT_CREDIT_ACCOUNT_V1)?
         .key
         .to_bytes()
-        != authenticated_series_expiry_rent_credit
+        != premarket.rent_credit
     {
         return Ok(AllowedLocalOverlapV3::None);
     }
@@ -1218,4 +1330,107 @@ pub(super) fn require_series_expiry_replay_prestate_v1(
         return Err(TradingSbfError::Commit.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod child_market_tests {
+    use super::*;
+
+    fn envelope(market: u8, generation: u64) -> HotExecutionEnvelopeV3 {
+        HotExecutionEnvelopeV3::new(128, [1; 32], [market; 32], generation, [2; 32])
+            .expect("envelope")
+    }
+
+    /// Every live-Market family binds its Custody children to the envelope.
+    #[test]
+    fn without_premarket_facts_the_child_market_is_the_envelopes() {
+        let envelope = envelope(9, 9);
+        assert_eq!(
+            custody_child_market_v3(envelope, None),
+            ChildMarketAuthorityV3 {
+                market: [9; 32],
+                generation: 9,
+            }
+        );
+    }
+
+    /// The selected pre-Market Series action binds them to the FUTURE Market
+    /// at occurrence + 1 -- the pair `custody-prepare` case 6 reported as one
+    /// Market and eight generations away from the envelope.
+    #[test]
+    fn with_premarket_facts_the_child_market_is_the_future_occurrence_market() {
+        let envelope = envelope(9, 9);
+        let facts = SeriesExpiryPremarketFactsV1 {
+            rent_credit: [3; 32],
+            future_market: [7; 32],
+            future_generation: 1,
+        };
+        let authority = custody_child_market_v3(envelope, Some(facts));
+        assert_eq!(authority.market, [7; 32]);
+        assert_eq!(authority.generation, 1);
+        assert_ne!(authority.market, envelope.market());
+        assert_ne!(authority.generation, envelope.generation());
+    }
+}
+
+#[cfg(test)]
+mod future_market_coordinate_tests {
+    use super::*;
+
+    /// The coordinate the vacancy conjunct reads is the frame's REPRESENTATIVE
+    /// of the vacant future Market, every Custody window sees that one account
+    /// exactly once, and Core's window never sees it.
+    ///
+    /// What this refuses is the shape the Expire frame was already caught in
+    /// once: the same fact with two authors, here the emitted representative
+    /// with no consumer and one window's alias read in its place. Both spell
+    /// the same account only because the ProfileV3 binds the aliases; nothing
+    /// in Rust said so, and no compiler could.
+    #[test]
+    fn every_custody_window_sees_the_representative_the_vacancy_conjunct_reads() {
+        let future = SERIES_EXPIRE_FUTURE_MARKET_ACCOUNT_V1 as u16;
+        assert!(
+            frame_v5::SERIES_EXPIRE_ROUTE_ALIASES_V5
+                .iter()
+                .all(|(alias, _)| *alias != future),
+            "the vacancy conjunct reads coordinate {future}, which is an alias, not a representative"
+        );
+        let custody_routes = frame_v5::SERIES_EXPIRE_ROUTE_STARTS_V5.len() - 1;
+        assert_eq!(
+            frame_v5::SERIES_EXPIRE_ROUTE_STARTS_V5[custody_routes],
+            frame_v5::SERIES_EXPIRE_CORE_ROUTE_START_V5,
+            "the last route window is not Core's",
+        );
+        for route in 0..custody_routes {
+            let start = frame_v5::SERIES_EXPIRE_ROUTE_STARTS_V5[route];
+            let count = frame_v5::SERIES_EXPIRE_ROUTE_COUNTS_V5[route];
+            assert_eq!(
+                sightings_of_the_future_market(start, count),
+                1,
+                "Custody route {route} does not see the future Market exactly once",
+            );
+        }
+        assert_eq!(
+            sightings_of_the_future_market(
+                frame_v5::SERIES_EXPIRE_CORE_ROUTE_START_V5,
+                frame_v5::SERIES_EXPIRE_CORE_ROUTE_COUNT_V5,
+            ),
+            0,
+            "Core's precommit window carries the future Market, not the controller",
+        );
+    }
+
+    /// How many coordinates of one window present the future Market, whether
+    /// as the representative itself or through a declared route alias of it.
+    fn sightings_of_the_future_market(start: u16, count: u16) -> usize {
+        let future = SERIES_EXPIRE_FUTURE_MARKET_ACCOUNT_V1 as u16;
+        (start..start + count)
+            .filter(|coordinate| {
+                *coordinate == future
+                    || frame_v5::SERIES_EXPIRE_ROUTE_ALIASES_V5.iter().any(
+                        |(alias, representative)| alias == coordinate && *representative == future,
+                    )
+            })
+            .count()
+    }
 }

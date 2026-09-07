@@ -118,10 +118,12 @@ import DClutchSemantics.Series
 import DClutchSemantics.SeriesCoreFoundAckV2Abi
 import DClutchSemantics.SeriesEscrowV3
 import DClutchSemantics.SeriesExamples
+import DClutchSemantics.SeriesExpireFrameV5Abi
 import DClutchSemantics.SeriesOccurrenceV3
 import DClutchSemantics.SeriesOccurrenceV3Abi
 import DClutchSemantics.SeriesReplayPlanV3
 import DClutchSemantics.SeriesReplayV3
+import DClutchSemantics.SeriesStateV3Abi
 import DClutchSemantics.SeriesTicketStateV3Abi
 import DClutchSemantics.SourceMaterialV2Abi
 import DClutchSemantics.SourceMaterialV3Abi

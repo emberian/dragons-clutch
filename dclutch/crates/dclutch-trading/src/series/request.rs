@@ -566,6 +566,104 @@ mod tests {
         output
     }
 
+    /// The canonical shape of each act, as `decode`'s own `valid_shape` match
+    /// states it: which of occurrence and ticket the act carries, and whether
+    /// it may name a ticket revision.
+    const CANONICAL_SHAPES_V3: [(SeriesActionV3, bool, bool, u64); 5] = [
+        (SeriesActionV3::Prepare, true, true, 0),
+        (SeriesActionV3::Consume, true, true, 7),
+        (SeriesActionV3::Expire, true, true, 7),
+        (SeriesActionV3::Retire, false, true, 7),
+        (SeriesActionV3::Close, false, false, 0),
+    ];
+
+    /// Every one of the FIVE acts round-trips through the kernel's own decoder
+    /// in its canonical shape, and every act refuses another act's shape by
+    /// name.
+    ///
+    /// This replaces `every_series_occurrence_action_round_trips_through_the_kernel_decoder`,
+    /// which covered three of the five and was deleted with the Series arm of
+    /// the family-hot campaign; nothing else proved a Series request survives
+    /// its own encoder. The replacement lives with the encoder rather than with
+    /// a caller, because the encoder is the kernel's and a caller is not.
+    #[test]
+    fn every_act_round_trips_in_its_canonical_shape() {
+        for (action, has_occurrence, has_ticket, ticket_revision) in CANONICAL_SHAPES_V3 {
+            let header = encode_series_action_header_v3(
+                action,
+                id(1),
+                has_occurrence.then(|| id(2)),
+                has_ticket.then(|| id(3)),
+                4,
+                ticket_revision,
+                0,
+            )
+            .unwrap_or_else(|error| panic!("{action:?} canonical header: {error:?}"));
+            assert_eq!(header.len(), SERIES_ACTION_HEADER_BYTES_V3, "{action:?}");
+            let decoded = SeriesActionRequestV3::decode(&header)
+                .unwrap_or_else(|error| panic!("{action:?} decode: {error:?}"));
+            assert_eq!(decoded.action(), action);
+            assert_eq!(decoded.template(), id(1));
+            assert_eq!(
+                decoded.occurrence(),
+                has_occurrence.then(|| id(2)),
+                "{action:?}"
+            );
+            assert_eq!(decoded.ticket(), has_ticket.then(|| id(3)), "{action:?}");
+            assert_eq!(decoded.expected_series_revision(), 4, "{action:?}");
+            assert_eq!(
+                decoded.expected_ticket_revision(),
+                ticket_revision,
+                "{action:?}"
+            );
+        }
+    }
+
+    /// No act admits another act's shape: the encoder refuses `Action`, by
+    /// name, for every one of the twenty cross pairs.
+    #[test]
+    fn no_act_admits_another_acts_shape() {
+        let mut refused = 0_usize;
+        for (action, _, _, _) in CANONICAL_SHAPES_V3 {
+            for (other, has_occurrence, has_ticket, ticket_revision) in CANONICAL_SHAPES_V3 {
+                if other == action {
+                    continue;
+                }
+                let encoded = encode_series_action_header_v3(
+                    action,
+                    id(1),
+                    has_occurrence.then(|| id(2)),
+                    has_ticket.then(|| id(3)),
+                    4,
+                    ticket_revision,
+                    0,
+                );
+                if encoded.is_ok() {
+                    // Two acts may legitimately share one shape; what must never
+                    // happen is an act ADMITTING a shape its own match rejects.
+                    let decoded = SeriesActionRequestV3::decode(
+                        encoded.as_ref().expect("shape accepted above"),
+                    )
+                    .expect("an accepted header decodes");
+                    assert_eq!(decoded.action(), action);
+                    continue;
+                }
+                assert_eq!(
+                    encoded.err(),
+                    Some(SeriesInstructionErrorV3::Action),
+                    "{action:?} refused {other:?}'s shape for the wrong reason",
+                );
+                refused += 1;
+            }
+        }
+        // Positive control: two acts may share one shape, but if NOTHING in the
+        // twenty pairs refused, this loop measured its own disconnection.
+        assert!(
+            refused > 0,
+            "no act refused another act's shape; the matrix proves nothing",
+        );
+    }
+
     #[test]
     fn occurrence_packet_roundtrips_without_allocation_in_decoder() {
         let proof = [[5_u8; 32], [6_u8; 32]];

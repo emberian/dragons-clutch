@@ -205,8 +205,9 @@ pub(super) struct AuthenticatedHotPreludeV3<'program, 'request, 'accounts, 'info
     pub(super) root: Box<AuthenticatedRootV3>,
     pub(super) rent: Rent,
     pub(super) product_runtime_v3: Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>,
-    pub(super) authenticated_series_expiry_replay: bool,
-    pub(super) authenticated_series_expiry_rent_credit: [u8; 32],
+    /// What the selected pre-Market Series Expire proved, or `None` for every
+    /// live-Market action. See `custody_child_market_v3`.
+    pub(super) series_expiry_premarket: Option<SeriesExpiryPremarketFactsV1>,
 }
 
 /// Exact Market facts consumed by the family-neutral Hot tail.
@@ -247,8 +248,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
     let root = &prepared.root;
     let rent = &prepared.rent;
     let product_runtime_v3 = &prepared.product_runtime_v3;
-    let authenticated_series_expiry_replay = prepared.authenticated_series_expiry_replay;
-    let authenticated_series_expiry_rent_credit = prepared.authenticated_series_expiry_rent_credit;
+    let series_expiry_premarket = prepared.series_expiry_premarket;
     let context = &root.context;
     let product_runtime = product_runtime_v3.runtime;
     hot_cu_checkpoint!("root-product");
@@ -612,8 +612,7 @@ pub(super) fn authenticate_and_execute_hot_v3(
         transition,
         effect,
         sealed_ownership,
-        authenticated_series_expiry_replay,
-        authenticated_series_expiry_rent_credit,
+        series_expiry_premarket,
     })
 }
 
@@ -656,8 +655,7 @@ pub(super) struct AuthenticatedHotExecutionV3<'a, 'accounts, 'info, 'artifact> {
     transition: TransitionProgramV3<'artifact>,
     effect: SelectedEffectProgramV4<'artifact>,
     sealed_ownership: SealedStaticOwnershipV1<'artifact>,
-    authenticated_series_expiry_replay: bool,
-    authenticated_series_expiry_rent_credit: [u8; 32],
+    series_expiry_premarket: Option<SeriesExpiryPremarketFactsV1>,
 }
 
 /// The four logical-projection keys, boxed in a frame of their own.
@@ -719,8 +717,7 @@ pub(super) fn execute_authenticated_hot_v3(
         transition,
         effect,
         sealed_ownership,
-        authenticated_series_expiry_replay,
-        authenticated_series_expiry_rent_credit,
+        series_expiry_premarket,
     } = prepared;
     let context = &root.context;
     let immutable_root_header = &root.immutable_header;
@@ -1388,11 +1385,10 @@ pub(super) fn execute_authenticated_hot_v3(
         &aliases,
         &child_walk,
         participation.as_deref_mut(),
-        authenticated_series_expiry_replay,
-        authenticated_series_expiry_rent_credit,
+        series_expiry_premarket,
     )?;
     hot_cu_checkpoint!("preflight-children");
-    let series_expiry_replay_prestate = if authenticated_series_expiry_replay {
+    let series_expiry_replay_prestate = if series_expiry_premarket.is_some() {
         let replay_root = runtime_accounts
             .first()
             .copied()
@@ -1507,6 +1503,7 @@ pub(super) fn execute_authenticated_hot_v3(
             child_walk: &child_walk,
             direct_crosscheck,
             series_expiry_replay_prestate,
+            custody_child_market: custody_child_market_v3(envelope, series_expiry_premarket),
         }),
     );
     hot_cu_checkpoint!("after-commit");
@@ -1560,6 +1557,9 @@ pub(super) struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     child_walk: &'a ChildWalkResolutionV3<'a, 'info>,
     pub(super) direct_crosscheck: Option<HeapBoxV3<DirectHotCrosscheckV3>>,
     pub(super) series_expiry_replay_prestate: Option<SeriesExpiryReplayPrestateV1>,
+    /// The Market and generation every Custody child of this action binds to;
+    /// the preflight walk derived the same value from the same facts.
+    pub(super) custody_child_market: ChildMarketAuthorityV3,
 }
 
 #[inline(never)]
@@ -1674,6 +1674,7 @@ fn execute_prepared_child_routes_v3(
         prepared.selected_program.to_bytes(),
         prepared.child_walk,
         caller_bumps,
+        prepared.custody_child_market,
         // Deferring a Claims child's post-resource verification to the Direct
         // finalization is only sound when there IS one, and the registered
         // creation variant has none: its planner re-derives three Trading-owned

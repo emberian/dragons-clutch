@@ -2274,6 +2274,7 @@ const STATE_MACHINE_SUMMARIES: Readonly<Record<StateMachineV1, string>> = Object
   'direct-root': 'Whether one market’s Direct capability is still opening maker roots, and how many of those roots are still open. It is not the market’s phase: a Market stays Open across the whole of this record’s retirement.',
   'dealer-root': 'The Dealer capability’s own lifecycle on one market, which runs on its own clock rather than on the market’s phase.',
   'projected-custody': 'How far one projected-custody ladder has come: initialized, hoard open, hoard locked, or funded from its source.',
+  'series-root': 'Whether a series still has an occurrence to settle, and where its replay revision stands. It is not the market’s phase: a series root reads Terminal from the moment its last occurrence settles, while the market that occurrence founded is still trading.',
   'series-ticket': 'One occurrence ticket’s replay state — prepared, consumed, or expired — which is what stops a series occurrence being replayed.',
   'funding-ledger': 'Which capabilities one controller is funding, and where each funded slot stands.',
   'source': 'Where one Source stands in resolution: still on its primary, in recovery, resolved, exhausted, committed to failure, or retired.',

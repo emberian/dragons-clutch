@@ -1141,7 +1141,7 @@ pub fn process_hot_execution_v3(
     )?;
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
     let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &market)?;
-    let authenticated_series_expiry_rent_credit = try_authenticate_series_expiry_premarket_v1(
+    let series_expiry_premarket = try_authenticate_series_expiry_premarket_v1(
         program_id,
         accounts,
         family_request,
@@ -1166,9 +1166,7 @@ pub fn process_hot_execution_v3(
         root,
         rent,
         product_runtime_v3,
-        authenticated_series_expiry_replay: authenticated_series_expiry_rent_credit.is_some(),
-        authenticated_series_expiry_rent_credit: authenticated_series_expiry_rent_credit
-            .unwrap_or([0; 32]),
+        series_expiry_premarket,
     })
 }
 

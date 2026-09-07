@@ -662,8 +662,11 @@ fn validate_install_identities(
 /// Join the selected release's account geometry to the Hot instruction's
 /// runtime account metas.
 ///
-/// MEASURED 2026-09-01, and this is where the pre-Market Expire campaign now
-/// stops: `runtime=39 geometry.physical=44 bindings=81 geometry.logical=81`.
+/// MEASURED 2026-09-01, at a frame that has since moved: `runtime=39
+/// geometry.physical=44 bindings=81 geometry.logical=81`. The logical width is
+/// 82 since `272fb867d` appended the Custody callee, and
+/// `SeriesExpireFrameV5Abi.lean` is its one author; the paragraph is kept for
+/// the reading below, which is about the physical side and did not move.
 /// The logical side agrees exactly and every one of the 44 declared physical
 /// ordinals IS bound by some logical coordinate — none is unreferenced — so
 /// `release_v5` does NOT over-declare. The instruction under-packs by five.

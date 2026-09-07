@@ -7,11 +7,24 @@
 
 use dclutch_core_contract::ContentId;
 
+use crate::series::root_admission_v1::{
+    SERIES_ROOT_CLOSE_ADMISSIBLE_STATES_V1, SERIES_ROOT_OCCURRENCE_ADMISSIBLE_STATES_V1,
+};
 use crate::series::ticket_admission_v1::SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1;
 
 use crate::series::generated::{
     SERIES_OCCURRENCE_MAGIC_V3, SERIES_STATE_MAGIC_V3, SERIES_TEMPLATE_MAGIC_V3,
-    SERIES_TICKET_MAGIC_V3, SERIES_TICKET_STATE_MAGIC_V3,
+    SERIES_TEMPLATE_PROFILE_V3, SERIES_TEMPLATE_SCHEMA_V3, SERIES_TICKET_MAGIC_V3,
+    SERIES_TICKET_STATE_MAGIC_V3,
+};
+use crate::series::generated_series_state_v3::{
+    SERIES_PHASE_ACTIVE_V3, SERIES_PHASE_TERMINAL_V3, SERIES_STATE_CLOSE_RENT_REMAINING_OFFSET_V3,
+    SERIES_STATE_CURRENT_TICKET_PREPARED_OFFSET_V3, SERIES_STATE_HEAD_RESERVED_BYTES_V3,
+    SERIES_STATE_HEAD_RESERVED_OFFSET_V3, SERIES_STATE_MAGIC_OFFSET_V3,
+    SERIES_STATE_NEXT_OCCURRENCE_OFFSET_V3, SERIES_STATE_OUTSTANDING_TICKET_ACCOUNTS_OFFSET_V3,
+    SERIES_STATE_PHASE_OFFSET_V3, SERIES_STATE_PROFILE_OFFSET_V3, SERIES_STATE_REVISION_OFFSET_V3,
+    SERIES_STATE_SCHEMA_OFFSET_V3, SERIES_STATE_TAIL_RESERVED_BYTES_V3,
+    SERIES_STATE_TAIL_RESERVED_OFFSET_V3,
 };
 use crate::series::generated_ticket_state_v3::{
     SERIES_TICKET_PHASE_CONSUMED_V3, SERIES_TICKET_PHASE_EXPIRED_V3,
@@ -52,7 +65,10 @@ const _: () = {
 };
 
 /// Exact width of the mutable Series tail inside the composite Trading root.
-pub const SERIES_STATE_BYTES_V3: usize = 64;
+///
+/// Re-exported from the Lean emission: the width, the two phase tags and every
+/// coordinate below have one author, `DClutchSemantics.SeriesStateV3Abi`.
+pub use crate::series::generated_series_state_v3::SERIES_STATE_BYTES_V3;
 /// Exact width of one Trading-owned mutable occurrence-ticket state.
 ///
 /// Re-exported from the Lean emission rather than restated: the width, the
@@ -62,8 +78,12 @@ pub use crate::series::generated_ticket_state_v3::SERIES_TICKET_STATE_BYTES_V3;
 /// PDA domain for a mutable ticket state under the selected Trading program.
 pub const SERIES_TICKET_STATE_PDA_DOMAIN_V3: &[u8] = b"dclutch:series-ticket:v3";
 
-const SCHEMA_V3: u16 = 3;
-const PROFILE_V3: u16 = 1;
+/// The family-wide schema and profile words every Series V3 record opens with,
+/// which the Lean emission owns. `pub` because the Prepare Effect writes them
+/// into a fresh ticket state and must load the same two values.
+pub const SCHEMA_V3: u16 = SERIES_TEMPLATE_SCHEMA_V3;
+/// See [`SCHEMA_V3`].
+pub const PROFILE_V3: u16 = SERIES_TEMPLATE_PROFILE_V3;
 
 /// Refusal from hostile mutable-state decoding or replay planning.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,16 +103,16 @@ pub enum SeriesStateError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SeriesPhaseV3 {
     /// One scheduled occurrence remains to be settled.
-    Active = 0,
+    Active = SERIES_PHASE_ACTIVE_V3,
     /// Every occurrence settled; only terminal ticket retirement remains.
-    Terminal = 1,
+    Terminal = SERIES_PHASE_TERMINAL_V3,
 }
 
 impl SeriesPhaseV3 {
     fn decode(value: u8) -> Result<Self, SeriesStateError> {
         match value {
-            0 => Ok(Self::Active),
-            1 => Ok(Self::Terminal),
+            SERIES_PHASE_ACTIVE_V3 => Ok(Self::Active),
+            SERIES_PHASE_TERMINAL_V3 => Ok(Self::Terminal),
             _ => Err(SeriesStateError::Phase),
         }
     }
@@ -126,25 +146,40 @@ impl SeriesStateV3 {
     /// Hostile-decode one exact canonical tail and its Template occurrence count.
     pub fn decode(bytes: &[u8], occurrence_count: u32) -> Result<Self, SeriesStateError> {
         if bytes.len() != SERIES_STATE_BYTES_V3
-            || bytes.get(..8) != Some(SERIES_STATE_MAGIC_V3.as_slice())
-            || read_u16(bytes, 8)? != SCHEMA_V3
-            || read_u16(bytes, 10)? != PROFILE_V3
-            || !all_zero(bytes, 14, 2)?
-            || !all_zero(bytes, 40, 24)?
+            || bytes.get(SERIES_STATE_MAGIC_OFFSET_V3..SERIES_STATE_SCHEMA_OFFSET_V3)
+                != Some(SERIES_STATE_MAGIC_V3.as_slice())
+            || read_u16(bytes, SERIES_STATE_SCHEMA_OFFSET_V3)? != SCHEMA_V3
+            || read_u16(bytes, SERIES_STATE_PROFILE_OFFSET_V3)? != PROFILE_V3
+            || !all_zero(
+                bytes,
+                SERIES_STATE_HEAD_RESERVED_OFFSET_V3,
+                SERIES_STATE_HEAD_RESERVED_BYTES_V3,
+            )?
+            || !all_zero(
+                bytes,
+                SERIES_STATE_TAIL_RESERVED_OFFSET_V3,
+                SERIES_STATE_TAIL_RESERVED_BYTES_V3,
+            )?
         {
             return Err(SeriesStateError::Encoding);
         }
         let value = Self {
-            phase: SeriesPhaseV3::decode(read_u8(bytes, 12)?)?,
-            current_ticket_prepared: match read_u8(bytes, 13)? {
+            phase: SeriesPhaseV3::decode(read_u8(bytes, SERIES_STATE_PHASE_OFFSET_V3)?)?,
+            current_ticket_prepared: match read_u8(
+                bytes,
+                SERIES_STATE_CURRENT_TICKET_PREPARED_OFFSET_V3,
+            )? {
                 0 => false,
                 1 => true,
                 _ => return Err(SeriesStateError::Phase),
             },
-            next_occurrence: read_u32(bytes, 16)?,
-            outstanding_ticket_accounts: read_u32(bytes, 20)?,
-            revision: read_u64(bytes, 24)?,
-            close_rent_remaining: read_u64(bytes, 32)?,
+            next_occurrence: read_u32(bytes, SERIES_STATE_NEXT_OCCURRENCE_OFFSET_V3)?,
+            outstanding_ticket_accounts: read_u32(
+                bytes,
+                SERIES_STATE_OUTSTANDING_TICKET_ACCOUNTS_OFFSET_V3,
+            )?,
+            revision: read_u64(bytes, SERIES_STATE_REVISION_OFFSET_V3)?,
+            close_rent_remaining: read_u64(bytes, SERIES_STATE_CLOSE_RENT_REMAINING_OFFSET_V3)?,
         };
         value.validate(occurrence_count)?;
         Ok(value)
@@ -157,15 +192,24 @@ impl SeriesStateV3 {
     ) -> Result<[u8; SERIES_STATE_BYTES_V3], SeriesStateError> {
         self.validate(occurrence_count)?;
         let mut output = [0_u8; SERIES_STATE_BYTES_V3];
-        output[..8].copy_from_slice(&SERIES_STATE_MAGIC_V3);
-        output[8..10].copy_from_slice(&SCHEMA_V3.to_le_bytes());
-        output[10..12].copy_from_slice(&PROFILE_V3.to_le_bytes());
-        output[12] = self.phase as u8;
-        output[13] = u8::from(self.current_ticket_prepared);
-        output[16..20].copy_from_slice(&self.next_occurrence.to_le_bytes());
-        output[20..24].copy_from_slice(&self.outstanding_ticket_accounts.to_le_bytes());
-        output[24..32].copy_from_slice(&self.revision.to_le_bytes());
-        output[32..40].copy_from_slice(&self.close_rent_remaining.to_le_bytes());
+        output[SERIES_STATE_MAGIC_OFFSET_V3..SERIES_STATE_SCHEMA_OFFSET_V3]
+            .copy_from_slice(&SERIES_STATE_MAGIC_V3);
+        output[SERIES_STATE_SCHEMA_OFFSET_V3..SERIES_STATE_PROFILE_OFFSET_V3]
+            .copy_from_slice(&SCHEMA_V3.to_le_bytes());
+        output[SERIES_STATE_PROFILE_OFFSET_V3..SERIES_STATE_PHASE_OFFSET_V3]
+            .copy_from_slice(&PROFILE_V3.to_le_bytes());
+        output[SERIES_STATE_PHASE_OFFSET_V3] = self.phase as u8;
+        output[SERIES_STATE_CURRENT_TICKET_PREPARED_OFFSET_V3] =
+            u8::from(self.current_ticket_prepared);
+        output[SERIES_STATE_NEXT_OCCURRENCE_OFFSET_V3
+            ..SERIES_STATE_OUTSTANDING_TICKET_ACCOUNTS_OFFSET_V3]
+            .copy_from_slice(&self.next_occurrence.to_le_bytes());
+        output[SERIES_STATE_OUTSTANDING_TICKET_ACCOUNTS_OFFSET_V3..SERIES_STATE_REVISION_OFFSET_V3]
+            .copy_from_slice(&self.outstanding_ticket_accounts.to_le_bytes());
+        output[SERIES_STATE_REVISION_OFFSET_V3..SERIES_STATE_CLOSE_RENT_REMAINING_OFFSET_V3]
+            .copy_from_slice(&self.revision.to_le_bytes());
+        output[SERIES_STATE_CLOSE_RENT_REMAINING_OFFSET_V3..SERIES_STATE_TAIL_RESERVED_OFFSET_V3]
+            .copy_from_slice(&self.close_rent_remaining.to_le_bytes());
         Ok(output)
     }
 
@@ -189,7 +233,7 @@ impl SeriesStateV3 {
 
     /// Plan creation of one replay account without advancing the occurrence.
     pub fn prepare_ticket(self, expected_revision: u64) -> Result<Self, SeriesStateError> {
-        if self.phase != SeriesPhaseV3::Active
+        if !SERIES_ROOT_OCCURRENCE_ADMISSIBLE_STATES_V1.admits(self.phase)
             || self.current_ticket_prepared
             || self.revision != expected_revision
         {
@@ -215,7 +259,7 @@ impl SeriesStateV3 {
         expected_revision: u64,
         occurrence_count: u32,
     ) -> Result<Self, SeriesStateError> {
-        if self.phase != SeriesPhaseV3::Active
+        if !SERIES_ROOT_OCCURRENCE_ADMISSIBLE_STATES_V1.admits(self.phase)
             || !self.current_ticket_prepared
             || self.revision != expected_revision
         {
@@ -261,7 +305,7 @@ impl SeriesStateV3 {
 
     /// Require terminal root closure to have no replay account left behind.
     pub fn admit_close(self, expected_revision: u64) -> Result<(), SeriesStateError> {
-        if self.phase == SeriesPhaseV3::Terminal
+        if SERIES_ROOT_CLOSE_ADMISSIBLE_STATES_V1.admits(self.phase)
             && self.revision == expected_revision
             && self.outstanding_ticket_accounts == 0
         {
@@ -332,37 +376,13 @@ impl TicketPhaseV3 {
 
 /// Minimal mutable replay state; the immutable Ticket record owns all facts.
 ///
-/// # NAMED DEBT: this record has no on-chain producer
-///
-/// Nothing dispatched writes the FIRST valid `TicketStateV3`. The route that
-/// owns the coordinate is `prepare_funding_artifacts_v5`, whose
-/// `SERIES_PREPARE_TICKET_COORDINATE_V5` declares exactly
-/// `SERIES_TICKET_STATE_BYTES_V3` of `LifecycleBound` account and grants it
-/// `AccountEffectPermissionsV2::new(true, true, true)` -- lamport debit,
-/// lamport credit, and WRITE DATA. So the authority to write these bytes is
-/// declared and then never exercised: the account presents as sixty-four
-/// zeros, `decode` below requires `SERIES_TICKET_STATE_MAGIC_V3` in the first
-/// eight, and it refuses them. Every route downstream refuses with it.
-///
-/// The two places that DO write these bytes both read them first:
-/// `hot_v3.rs` decodes and re-encodes, and `series_open.rs` decodes, settles
-/// and re-encodes. Both are consumers wearing a producer's shape. The only
-/// code that calls `TicketStateV3::prepared(..).encode()` into a real account
-/// is test support -- `found_program_test.rs` and
-/// `series_premarket_expiry_chain_v1.rs` -- which is the exact signature of
-/// the producer-missing pattern: a reader, a schema and a refusal all built
-/// and exercised, with only the failure path ever reached, because the
-/// producer was never written.
-///
-/// This is a DESIGN DEBT, recorded rather than repaired. Series is
-/// loopback-only through cohort 13, so no live route needs the producer yet,
-/// and writing one now would be building a route with no caller. The owner
-/// when it is wanted is `prepare_funding_artifacts_v5`: it already declares
-/// the coordinate, the width and the write permission, and it is the only
-/// route that holds all three. What it lacks is the effect that puts a
-/// `TicketStateV3::prepared(ticket_record_id)` encoding into the account the
-/// coordinate names. Do not infer from the refusal that the state is corrupt;
-/// infer that nobody has written it.
+/// The FIRST valid one is written by the Prepare Effect: `prepare_funding_artifacts_v5`
+/// creates the sixty-four-byte account at coordinate five through its
+/// lifecycle `Create` and then writes the magic, the two header words and the
+/// request-projected Ticket record identity into it -- the four writes that
+/// are exactly [`TicketStateV3::prepared`] once the phase byte and the
+/// revision are the zeros a fresh account already holds. Every later writer
+/// (`hot_v3`, `series_open.rs`) decodes before it re-encodes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TicketStateV3 {
     phase: TicketPhaseV3,

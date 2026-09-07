@@ -578,14 +578,20 @@ the reviewed instruction and prestate, the durable signed packet, finalized
 signature/fee/compute/log evidence, and the writable poststates in that one
 path. The keypair file and secret bytes never enter the report.
 
-## General and Series: one durable family caller
+## General: one durable family caller
 
 `local-private-validator-general-hot-campaign-v1` drives all seven authored
-General actions against the real accelerator ELF on a local validator, and
-`local-private-validator-series-hot-campaign-v1` is its Series sibling. They
-share one journal ladder — `planned`, `prepared`, `submitted`, `finalized`,
-each phase renamed into place — because what the two families have in common
-is not their semantics but their transaction discipline.
+General actions against the real accelerator ELF on a local validator, on a
+journal ladder — `planned`, `prepared`, `submitted`, `finalized`, each phase
+renamed into place — which is transaction discipline rather than family
+semantics.
+
+It had a Series sibling, `local-private-validator-series-hot-campaign-v1`,
+whose whole body was a refusal naming the pieces it did not have; it is
+deleted. The Series acts are driven by
+`local-private-validator-series-terminal-{prepare,consume,expire}-v1`, one
+act-fixed driver each over `local-private-validator-series-terminal-campaign-v1`
+(see "Series occurrence acts" below).
 
 The campaign runs in **two phases**, and the first one deliberately opens no
 socket and no key file. Its output is a set of genesis account fixtures, and
@@ -813,6 +819,26 @@ here rather than discovered again:
 2. **The buyer needs 50,250,000 collateral atoms**, from
    `FILL_ATOMS_V1 x EXECUTION_PRICE_V1 / scale` plus the 50-bps floor. An
    admission funded with less refuses on the balance, not on the trade.
+
+## Series occurrence acts: three act-fixed drivers over one campaign
+
+`local-private-validator-series-terminal-campaign-v1` converges whichever act
+the lifecycle planner selected. Three verbs wrap it and fix the act:
+`local-private-validator-series-terminal-prepare-v1`, `-consume-v1` and
+`-expire-v1`. They select nothing — the planner remains the only action
+selector — they refuse when the planner selected an act the verb is not named
+for, so an invocation named for consuming a ticket cannot quietly expire one
+whose retry window closed between the operator's read and the send. Every
+argument other than the verb is the campaign's.
+
+Every one of the four names says `local-private-validator`, and that is a fact
+about which chain they can reach, not a habit: the campaign refuses any RPC
+origin that is not `http://127.0.0.1:` at its own input conjunct. Its input
+schema is `dclutch-owned-loopback-series-terminal-campaign-input-v2`, and
+**nothing in this tree writes that input yet** — `SeriesHotAcquisitionRecipeV2`,
+`SeriesCurrentSourceCorpusV1` and the rest of it are declared once each, as
+readers. Until a producer exists these four verbs have no runnable input, which
+is why the cohort runbook carries no Series row.
 
 ## Series: the first executed Found
 

@@ -34,15 +34,16 @@ use dclutch_trading::series::{
     request::{SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3},
 };
 use dclutch_trading::shadow_accelerator_auth::{
-    AuthenticatedShadowAcceleratorInvocationV4, authenticate_shadow_accelerator_invocation_v4,
+    AuthenticatedShadowAcceleratorInvocationV4, ShadowAcceleratorAuthErrorV4,
+    authenticate_shadow_accelerator_invocation_v4,
 };
 use dclutch_vm::account_profile::{
     AccountObservationV1,
     v2::{AccountPrestateV2, AccountProfileV2},
 };
 use solana_program::{
-    account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash,
-    program::set_return_data, pubkey::Pubkey, sysvar::SysvarSerialize,
+    account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash, msg,
+    program::set_return_data, program_error::ProgramError, pubkey::Pubkey, sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::system_program;
 
@@ -107,8 +108,36 @@ pub fn process(
 ) -> ProgramResult {
     let invocation =
         authenticate_shadow_accelerator_invocation_v4(program_id, accounts, instruction_data)
-            .map_err(|_| SeriesShadowSbfErrorV4::InvalidInvocation)?;
+            .map_err(refused_shadow_callback_v4)?;
     evaluate_selected_and_publish(&invocation, instruction_data)
+}
+
+/// Collapse the callback's refusal to this program's band WITHOUT losing which
+/// conjunct refused.
+///
+/// The wire carries one accelerator code for four distinct Trading causes, so
+/// `InvalidInvocation` alone turns a located defect into a search across the
+/// whole callback. The discriminant is unchanged -- it is protocol-visible and
+/// bands are append-only -- and the cause survives on the refusing path, which
+/// is where an operator reads it. Splitting `0xC200` into four codes is the
+/// stronger repair and is a decision-0007 change, not this one.
+#[cold]
+#[inline(never)]
+fn refused_shadow_callback_v4(cause: ProgramError) -> SeriesShadowSbfErrorV4 {
+    msg!(match cause {
+        ProgramError::Custom(code) if code == ShadowAcceleratorAuthErrorV4::Release as u32 =>
+            "dclutch-accelerator series: callback refused, Registry receipt is not current Trading",
+        ProgramError::Custom(code) if code == ShadowAcceleratorAuthErrorV4::Content as u32 =>
+            "dclutch-accelerator series: callback refused, request or account frame content",
+        ProgramError::Custom(code)
+            if code == ShadowAcceleratorAuthErrorV4::ReleaseSuperseded as u32 =>
+            "dclutch-accelerator series: callback refused, Trading substrate was upgraded",
+        ProgramError::Custom(code)
+            if code == ShadowAcceleratorAuthErrorV4::DeploymentSlotMismatch as u32 =>
+            "dclutch-accelerator series: callback refused, observed deployment slot is not the bound one",
+        _ => "dclutch-accelerator series: callback refused, builtin ProgramError",
+    });
+    SeriesShadowSbfErrorV4::InvalidInvocation
 }
 
 #[inline(never)]
@@ -542,5 +571,120 @@ mod tests {
 
     fn content(byte: u8) -> Result<dclutch_core_contract::ContentId, dclutch_core_contract::Error> {
         dclutch_core_contract::ContentId::new([byte; 32])
+    }
+
+    /// One request the callback cannot authenticate, and the frame it names.
+    fn unauthenticable_request(
+        program_id: &Pubkey,
+        registry: &Pubkey,
+        trading: &Pubkey,
+    ) -> Result<Vec<u8>, dclutch_core_contract::Error> {
+        let family = [7_u8; SERIES_ACTION_HEADER_BYTES_V3];
+        let request = ShadowRequestV3 {
+            release_set: content(1)?,
+            market: content(2)?,
+            root: content(3)?,
+            registry_program: dclutch_core_contract::ContentId::new(registry.to_bytes())?,
+            trading_program: dclutch_core_contract::ContentId::new(trading.to_bytes())?,
+            accelerator_program: dclutch_core_contract::ContentId::new(program_id.to_bytes())?,
+            artifacts: dclutch_market::execution_strategy::shadow_v3::ShadowArtifactTupleV3 {
+                capability_program: content(7)?,
+                account_profile: content(8)?,
+                request_profile: content(9)?,
+                transition: content(10)?,
+                effect: content(11)?,
+                strategy: content(12)?,
+                certificate: content(13)?,
+            },
+            invocation_context: content(14)?,
+            digests: dclutch_market::execution_strategy::shadow_v3::ShadowExecutionDigestsV3 {
+                interpreted_candidate: content(15)?,
+                interpreted_effect: content(16)?,
+                runtime_observations: content(17)?,
+                family_request: content(18)?,
+            },
+            shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
+                tail_count: 0,
+                account_count: 1,
+                scalar_count: 1,
+                identity_count: 0,
+            },
+            family_request: &family,
+        };
+        let mut bytes = alloc::vec![
+            0_u8;
+            dclutch_market::execution_strategy::shadow_v3::SHADOW_REQUEST_HEADER_BYTES_V3
+                + family.len()
+        ];
+        request
+            .encode_into(&mut bytes)
+            .map_err(|_| dclutch_core_contract::Error::InvalidLength)?;
+        Ok(bytes)
+    }
+
+    /// The FIRST execution of this arm in any language: `process` refuses, in
+    /// this program's own band, when the common Shadow callback cannot
+    /// authenticate the invocation.
+    ///
+    /// The two cases below fail at different conjuncts of a different program
+    /// and carry DIFFERENT Trading codes -- `Content` for an undecodable
+    /// request, `Release` for a caller authority that does not sign -- and this
+    /// program publishes one code for both. That collapse is checked here
+    /// rather than assumed, and it is why the refusing path now carries the
+    /// cause in a `msg!`. Every code is derived from its enum, and the
+    /// accelerator's is checked against the registered band base.
+    #[test]
+    fn an_unauthenticated_callback_refuses_in_this_programs_own_band()
+    -> Result<(), dclutch_core_contract::Error> {
+        let expected = || ProgramError::Custom(SeriesShadowSbfErrorV4::InvalidInvocation as u32);
+        assert_eq!(
+            SeriesShadowSbfErrorV4::InvalidInvocation as u32,
+            dclutch_refusal_registry::ACCELERATOR_REFUSAL_BASE + 0x200,
+        );
+
+        let program_id = Pubkey::new_from_array([9; 32]);
+        assert_eq!(
+            authenticate_shadow_accelerator_invocation_v4(&program_id, &[], &[])
+                .err()
+                .expect("an undecodable request must refuse"),
+            ProgramError::from(ShadowAcceleratorAuthErrorV4::Content),
+        );
+        assert_eq!(process(&program_id, &[], &[]), Err(expected()));
+
+        let owner = Pubkey::new_from_array([0; 32]);
+        let keys: Vec<Pubkey> = (0..7_u8)
+            .map(|index| Pubkey::new_from_array([index + 32; 32]))
+            .collect();
+        let bytes = unauthenticable_request(&program_id, &keys[2], &keys[3])?;
+        let mut lamports = alloc::vec![1_u64; keys.len()];
+        let mut datas: Vec<Vec<u8>> = alloc::vec![Vec::new(); keys.len()];
+        let mut accounts = Vec::with_capacity(keys.len());
+        for ((key, lamport), data) in keys.iter().zip(lamports.iter_mut()).zip(datas.iter_mut()) {
+            accounts.push(AccountInfo::new(
+                key,
+                false,
+                false,
+                lamport,
+                data.as_mut_slice(),
+                &owner,
+                false,
+            ));
+        }
+        // Positive control: this case is PAST the decode conjunct, so its
+        // refusal is a later one than the empty case above. Without this the
+        // two would be indistinguishable and the second case would prove
+        // nothing the first did not.
+        ShadowRequestV3::decode(&bytes).expect("the frame this case names decodes");
+        assert_eq!(
+            authenticate_shadow_accelerator_invocation_v4(&program_id, &accounts, &bytes)
+                .err()
+                .expect("an unsigned caller authority must refuse"),
+            ProgramError::from(ShadowAcceleratorAuthErrorV4::Release),
+        );
+        // And the accelerator publishes its own code instead: one accelerator
+        // discriminant standing for four Trading ones, which is what the
+        // `msg!` on the refusing path exists to keep locatable.
+        assert_eq!(process(&program_id, &accounts, &bytes), Err(expected()));
+        Ok(())
     }
 }

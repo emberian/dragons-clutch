@@ -46,6 +46,7 @@ mod general_successor_plan;
 mod infrastructure_succession;
 mod local_mutable;
 mod release_lineage;
+mod series_act_verbs_v1;
 mod series_consume_campaign;
 mod series_lifecycle_campaign;
 mod series_permit_expiry_campaign;
@@ -251,8 +252,14 @@ fn run() -> Result<()> {
         {
             series_terminal_campaign::run(arguments.collect())
         }
-        Some(command) if command == family_hot_campaign::SERIES_COMMAND_V1 => {
-            family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::Series)
+        Some(series_act_verbs_v1::SERIES_TERMINAL_PREPARE_COMMAND_V1) => {
+            series_act_verbs_v1::run(arguments.collect(), series_act_verbs_v1::SeriesVerbV1::Prepare)
+        }
+        Some(series_act_verbs_v1::SERIES_TERMINAL_CONSUME_COMMAND_V1) => {
+            series_act_verbs_v1::run(arguments.collect(), series_act_verbs_v1::SeriesVerbV1::Consume)
+        }
+        Some(series_act_verbs_v1::SERIES_TERMINAL_EXPIRE_COMMAND_V1) => {
+            series_act_verbs_v1::run(arguments.collect(), series_act_verbs_v1::SeriesVerbV1::Expire)
         }
         Some(command) if command == recovery_crank::COMMAND_V1 => {
             recovery_crank::run_owned_loopback_v1(arguments.collect())
@@ -2424,6 +2431,7 @@ fn usage() {
     println!("{}", general_capability_activation::usage());
     println!("{}", general_successor_plan::usage());
     println!("{}", series_terminal_campaign::usage());
+    println!("{}", series_act_verbs_v1::usage());
     println!("{}", campaign_usage_v1());
     println!(
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \

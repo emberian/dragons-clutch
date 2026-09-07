@@ -22,7 +22,13 @@ the lifecycle Rent V2 sink through the generic retirement authority. A late
 Claims/Open refusal snapshot covers the Series root, Ticket, Market, permit,
 Claims, Custody, ordered FundingStates, and LifecycleRentCreditV2 byte-for-byte.
 
-Until the common authenticated Shadow callback is committed, this crate exposes
-only the real-ELF loader, selected-build gate, route-order contract, and rollback
-snapshot support. It does not install a provisional entrypoint or pass artifacts
-at runtime.
+The common authenticated Shadow callback IS committed
+(`crates/dclutch-trading/src/shadow_accelerator_auth/`, used by
+`dclutch-accelerator-sbf/src/series/mod.rs::process`), and its refusal path is
+executed natively by
+`series::tests::an_unauthenticated_callback_refuses_in_this_programs_own_band`.
+What this crate still lacks is a selected include built with a certificate that
+can exist before the ELF that embeds it — the generator authors a Release
+binding where a Semantic one is owed. So it exposes only the real-ELF loader,
+selected-build gate, route-order contract, and rollback snapshot support. It
+does not install a provisional entrypoint or pass artifacts at runtime.

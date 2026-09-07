@@ -51,15 +51,12 @@
 //! this tree founds one. The Market-selection hook that names those
 //! requirements exactly is [`general_market_selection_requirements_v1`].
 //!
-//! **Series** reaches request compilation and no further, and this module says
-//! so by refusing rather than by pretending. Its Hot builders
-//! (`build_series_{prepare,consume,expire}_hot_v3`) have no caller anywhere in
-//! the tree, and `projected_open_composition_v4`, the Consume chain's
-//! terminal, has none either. The family request bytes this module compiles
-//! are real and are checked against the kernel's own decoder, so the wire is
-//! proved; the route that would carry them is not built. Naming that as debt
-//! is the honest report, and a caller that "ran" against a route nobody
-//! dispatches would not be evidence of anything.
+//! **Series** is not driven here. Its three occurrence acts have their own
+//! verbs (`series_devnet_v1`: `devnet-series-{open,consume,expire}-v1`) over
+//! the Series lifecycle planner, and the loopback lifecycle is
+//! `series_terminal_campaign`. This module used to carry a Series arm that
+//! compiled the family request and then refused by design; a command that
+//! exists to refuse is a status report wearing a route's name, so it is gone.
 
 use std::{
     collections::BTreeMap,
@@ -95,10 +92,6 @@ use dclutch_trading::general_codec::{
     successor_request_v2::ControllerRequestV2,
 };
 use dclutch_trading::general_config::v3::{GeneralConfigV3, GeneralConfigV3Input};
-use dclutch_trading::series::request::{
-    SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
-    encode_series_action_header_v3,
-};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_sdk::{
@@ -121,13 +114,9 @@ use crate::{
 
 /// Command that drives the General family's seven authored actions.
 pub(crate) const GENERAL_COMMAND_V1: &str = "local-private-validator-general-hot-campaign-v1";
-/// Command that drives the Series family's occurrence actions.
-pub(crate) const SERIES_COMMAND_V1: &str = "local-private-validator-series-hot-campaign-v1";
 
 const GENERAL_JOURNAL_SCHEMA_V1: &str = "dclutch-local-general-hot-campaign-journal-v1";
-const SERIES_JOURNAL_SCHEMA_V1: &str = "dclutch-local-series-hot-campaign-journal-v1";
 const GENERAL_EVIDENCE_SCHEMA_V1: &str = "dclutch-local-general-hot-campaign-evidence-v1";
-const SERIES_EVIDENCE_SCHEMA_V1: &str = "dclutch-local-series-hot-campaign-evidence-v1";
 
 /// PDA seed of the readonly accelerator caller.
 ///
@@ -164,29 +153,24 @@ const BEST_CANDIDATE_V1: [u8; 32] = [0xb5; 32];
 pub(crate) enum FamilyV1 {
     /// The General settlement family and its seven authored actions.
     General,
-    /// The Series occurrence family.
-    Series,
 }
 
 impl FamilyV1 {
     const fn journal_schema(self) -> &'static str {
         match self {
             Self::General => GENERAL_JOURNAL_SCHEMA_V1,
-            Self::Series => SERIES_JOURNAL_SCHEMA_V1,
         }
     }
 
     const fn evidence_schema(self) -> &'static str {
         match self {
             Self::General => GENERAL_EVIDENCE_SCHEMA_V1,
-            Self::Series => SERIES_EVIDENCE_SCHEMA_V1,
         }
     }
 
     const fn label(self) -> &'static str {
         match self {
             Self::General => "General",
-            Self::Series => "Series",
         }
     }
 }
@@ -284,7 +268,6 @@ pub(crate) fn run(arguments: Vec<String>, family: FamilyV1) -> Result<()> {
     let parsed = parse_arguments(arguments, family)?;
     match family {
         FamilyV1::General => run_general(&parsed),
-        FamilyV1::Series => run_series(&parsed),
     }
 }
 
@@ -394,124 +377,6 @@ fn absolute_path(value: String, label: &str) -> Result<PathBuf> {
         return Err(Error::new(format!("{label} must be an absolute path")));
     }
     Ok(path)
-}
-
-/// The Series arm: compile the real wire, then refuse to pretend it has a route.
-///
-/// This is deliberately not a stub that "succeeds". It builds the exact family
-/// request the Series kernel decodes, proves the bytes round-trip through
-/// [`SeriesActionRequestV3::decode`], and then reports the precise reason no
-/// transaction follows. The refusal names the two missing pieces so the next
-/// lane inherits a coordinate rather than a mood.
-fn run_series(arguments: &ArgumentsV1) -> Result<()> {
-    let mut compiled = Vec::new();
-    for action in [
-        SeriesActionV3::Prepare,
-        SeriesActionV3::Consume,
-        SeriesActionV3::Expire,
-    ] {
-        let request = compile_series_request_v1(action)?;
-        compiled.push((action, request));
-    }
-    fs::create_dir_all(&arguments.journal_dir)?;
-    for (action, request) in &compiled {
-        let journal = FamilyHotJournalV1 {
-            schema: FamilyV1::Series.journal_schema().to_owned(),
-            family: FamilyV1::Series.label().to_owned(),
-            action: format!("{action:?}"),
-            action_index: 0,
-            outcome_count: arguments.outcome_count,
-            phase: FamilyHotPhaseV1::Planned,
-            caller_program: arguments.caller.to_string(),
-            accelerator_program: arguments.accelerator.to_string(),
-            family_request_base64: BASE64.encode(request),
-            family_request_sha256: hex(&Sha256::digest(request)),
-            instruction_data_sha256: String::new(),
-            accelerator_request_sha256: String::new(),
-            input_bank_sha256: String::new(),
-            admitted_invocation_count: 0,
-            account_count: 0,
-            legacy_packet_bytes: None,
-            signed_packet_base64: None,
-            signed_packet_sha256: None,
-            expected_signature: None,
-            last_valid_block_height: None,
-            finalized_slot: None,
-            compute_units_consumed: None,
-            return_data_producer: None,
-            return_data_base64: None,
-            ack_disposition: None,
-        };
-        write_json_atomic_v1(
-            &arguments
-                .journal_dir
-                .join(format!("series-{action:?}.json")),
-            &journal,
-        )?;
-    }
-    Err(Error::new(format!(
-        "REFUSED: compiled {} exact Series family requests (Prepare, Consume, Expire) and wrote \
-         their planned journals to {}, but NO Series action has a dispatched Hot route to run \
-         through. The blocker is not that the builders lack callers -- it is upstream of that. \
-         programs/dclutch-series-shadow-sbf/program-test/README.md states it plainly: \"Until the \
-         common authenticated Shadow callback is committed, this crate exposes only the real-ELF \
-         loader, selected-build gate, route-order contract, and rollback snapshot support. It does \
-         not install a provisional entrypoint or pass artifacts at runtime.\" Series is a \
-         ShadowAot family, so that callback is the seam every one of its actions would enter \
-         Trading through. Downstream of it, build_series_{{prepare,consume,expire}}_hot_v3 in \
-         crates/dclutch-operator/src/series_hot_v3.rs have no caller anywhere, and each would \
-         additionally need a SeriesOccurrenceHotStateV3: 38 family-neutral fixed accounts, seven \
-         Shadow strategy extras including a deployed accelerator Program and ProgramData, \
-         Registry-FINALIZED occurrence and Ticket records with their Merkle siblings, and two \
-         CheckedRelease values a release checker only mints after matching a finalized \
-         ArtifactRelease against live Loader metadata. Submitting anything here would be a caller \
-         that ran against nothing, so it refuses instead.",
-        compiled.len(),
-        arguments.journal_dir.display()
-    )))
-}
-
-/// Compile one exact Series family request.
-///
-/// The shape rules are the kernel's, not this caller's: Prepare, Consume and
-/// Expire are all occurrence-bound and carry both an occurrence and a ticket,
-/// and Prepare additionally requires a zero expected ticket revision because
-/// no ticket state exists yet.
-fn compile_series_request_v1(action: SeriesActionV3) -> Result<Vec<u8>> {
-    let template = ContentId::new([0x51; 32])
-        .map_err(|error| Error::new(format!("Series template identity: {error:?}")))?;
-    let occurrence = ContentId::new([0x52; 32])
-        .map_err(|error| Error::new(format!("Series occurrence identity: {error:?}")))?;
-    let ticket = ContentId::new([0x53; 32])
-        .map_err(|error| Error::new(format!("Series ticket identity: {error:?}")))?;
-    let expected_ticket_revision = match action {
-        SeriesActionV3::Prepare => 0,
-        _ => 1,
-    };
-    let header = encode_series_action_header_v3(
-        action,
-        template,
-        Some(occurrence),
-        Some(ticket),
-        1,
-        expected_ticket_revision,
-        0,
-    )
-    .map_err(|error| Error::new(format!("Series {action:?} header: {error:?}")))?;
-    let bytes = header.to_vec();
-    if bytes.len() != SERIES_ACTION_HEADER_BYTES_V3 {
-        return Err(Error::new("Series header width changed"));
-    }
-    // Encode then hostile-decode our own candidate. A caller that emits bytes
-    // its own family cannot read has proved nothing.
-    let decoded = SeriesActionRequestV3::decode(&bytes)
-        .map_err(|error| Error::new(format!("Series {action:?} request: {error:?}")))?;
-    if decoded.action() != action || decoded.proof_count() != 0 {
-        return Err(Error::new(format!(
-            "Series {action:?} request did not decode to the action it encoded"
-        )));
-    }
-    Ok(bytes)
 }
 
 /// The General arm: drive all seven authored actions against the real ELF.
@@ -1636,8 +1501,7 @@ pub(crate) fn usage() -> &'static str {
     "  local-private-validator-general-hot-campaign-v1 --rpc-url URL --accelerator PUBKEY \\\n\
      \x20   --caller PUBKEY --payer-keypair PATH --journal-dir DIR --evidence PATH \\\n\
      \x20   [--outcome-count N] [--execute]\n\
-     \x20 local-private-validator-series-hot-campaign-v1 (same flags; refuses with the exact \
-     reason Series has no dispatched route)\n"
+"
 }
 
 #[cfg(test)]
@@ -1672,21 +1536,6 @@ mod tests {
             assert_eq!(bytes.len(), 64, "{action:?}");
             let decoded = ControllerRequestV2::decode(&bytes).expect("decode");
             assert_eq!(decoded.action, action);
-        }
-    }
-
-    /// The Series wire round-trips through the kernel's own decoder.
-    #[test]
-    fn every_series_occurrence_action_round_trips_through_the_kernel_decoder() {
-        for action in [
-            SeriesActionV3::Prepare,
-            SeriesActionV3::Consume,
-            SeriesActionV3::Expire,
-        ] {
-            let bytes = compile_series_request_v1(action).expect("request");
-            assert_eq!(bytes.len(), SERIES_ACTION_HEADER_BYTES_V3, "{action:?}");
-            let decoded = SeriesActionRequestV3::decode(&bytes).expect("decode");
-            assert_eq!(decoded.action(), action);
         }
     }
 

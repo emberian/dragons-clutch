@@ -205,6 +205,25 @@ export function decodeDealerRootStateV1(tail: Uint8Array): MachineDecodeV1 {
   return decodeMachineStateV1('dealer-root', tail);
 }
 
+/**
+ * The Series capability root's own lifecycle tail.
+ *
+ * `SeriesStateV3` is the 64 bytes that follow the composite capability root's
+ * header, exactly as `DirectRootStateV1` and the Dealer's `RootTail` are, and
+ * the caller slices it out. `Active` and `Terminal` are about OCCURRENCES, not
+ * about the market: a Series root is `Terminal` from the moment its last
+ * occurrence settles, while the Market that occurrence founded is still
+ * trading and every ticket account it left is still to be retired.
+ *
+ * The two counters this record carries that a client needs for the acts it
+ * gates -- `next_occurrence` and `outstanding_ticket_accounts` -- are u32 and
+ * the generated table's counters are u64 by declaration, so they are not
+ * published here; `revision` and `close_rent_remaining` are.
+ */
+export function decodeSeriesRootStateV3(tail: Uint8Array): MachineDecodeV1 {
+  return decodeMachineStateV1('series-root', tail);
+}
+
 /** One occurrence ticket's mutable replay state. */
 export function decodeSeriesTicketStateV3(bytes: Uint8Array): MachineDecodeV1 {
   return decodeMachineStateV1('series-ticket', bytes);

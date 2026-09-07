@@ -51,10 +51,16 @@
 //! admitted by its phase still has its record identity, its replay revision,
 //! its derived address and its occurrence checked.
 
+use crate::series::generated_ticket_state_v3::SERIES_TICKET_PHASE_LIMIT_V3;
 use crate::series::replay::TicketPhaseV3;
 
-/// Number of distinct `TicketPhaseV3` values.
-const STATE_COUNT: u8 = 3;
+/// Number of distinct `TicketPhaseV3` values, from the emission that owns the
+/// tags themselves.
+///
+/// It was a literal `3` here while `SERIES_TICKET_PHASE_LIMIT_V3` sat emitted,
+/// guarded and read by nothing: two authors for one count, agreeing, which is
+/// the shape this family keeps finding.
+const STATE_COUNT: u8 = SERIES_TICKET_PHASE_LIMIT_V3;
 
 /// The wire tag of one ticket phase, as a bit index.
 const fn state_tag(state: TicketPhaseV3) -> u8 {

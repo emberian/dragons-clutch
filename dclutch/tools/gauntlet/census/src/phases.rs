@@ -94,6 +94,13 @@ const MACHINES: &[Machine] = &[
         secondary: None,
     },
     Machine {
+        admission_type: "SeriesRootAdmissionV1",
+        label: "series-root",
+        primary: "SeriesPhaseV3",
+        primary_constructor: "states",
+        secondary: None,
+    },
+    Machine {
         admission_type: "SeriesTicketAdmissionV1",
         label: "series-ticket",
         primary: "TicketPhaseV3",
