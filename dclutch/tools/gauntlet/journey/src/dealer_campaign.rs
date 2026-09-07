@@ -71,12 +71,13 @@ fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
         .push(json!({"stage": progress.stage, "outcome": "executed"}));
     progress.stage = "compile and found through Open".into();
     let registry = crate::plan::pubkey(&checked.plan.registry.program_id)?;
+    let fee_recipient = solana_sdk::signature::Keypair::new();
     let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
         &checked.plan_path,
         &checked.rpc_url,
         registry,
-        None,
-        None,
+        Some(50),
+        Some(fee_recipient.pubkey()),
     )?;
     let shape = crate::market::LocalMarketShapeV1 {
         recovery: Some(crate::local_mutable::parse_recovery_rungs_v1("2500:120")?),
