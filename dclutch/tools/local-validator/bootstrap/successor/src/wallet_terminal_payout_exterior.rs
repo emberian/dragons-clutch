@@ -55,6 +55,15 @@ use crate::{
 
 pub(crate) const COMMAND_V1: &str = "local-private-validator-wallet-terminal-payout-v1";
 pub(crate) const COMMAND_DEVNET_V1: &str = "devnet-wallet-terminal-payout-v1";
+/// The payout poststate coordinates whose BYTES the projection owns: the
+/// aggregate, the wallet Position, the Custody replay, the Hoard token account
+/// and the recipient token account.
+const PAYOUT_POSTSTATE_ACCOUNTS_V1: usize = 5;
+/// The two further coordinates a refunding Market's payout moves LAMPORTS
+/// between: the failure-escrow Position and the bond recipient. Two, not the
+/// tail's three -- the escrow admission rides the frame read-only and its
+/// balance does not move, so observing it would assert nothing.
+const PAYOUT_FOUNDER_BOND_POSTSTATE_ACCOUNTS_V1: usize = 2;
 const JOURNAL_SCHEMA_V1: &str = "dclutch-local-private-validator-wallet-terminal-payout-journal-v1";
 const JOURNAL_SCHEMA_DEVNET_V1: &str = "dclutch-devnet-wallet-terminal-payout-journal-v1";
 const EVIDENCE_SCHEMA_V1: &str =
@@ -1181,17 +1190,21 @@ fn finalize_transaction(
             journal.finalized_poststates = vec![observed_account(&account)];
         }
         StageV1::Payout => {
-            let accounts = finalized_accounts(
-                rpc,
-                &[
-                    planning.report.route.aggregate,
-                    planning.report.route.position,
-                    planning.report.route.custody_replay,
-                    planning.report.route.hoard,
-                    planning.report.route.recipient,
-                ],
-                authenticated.slot,
-            )?;
+            let mut coordinates = vec![
+                planning.report.route.aggregate,
+                planning.report.route.position,
+                planning.report.route.custody_replay,
+                planning.report.route.hoard,
+                planning.report.route.recipient,
+            ];
+            // A refunding Market's payout draws the founder bond in the same
+            // instruction, so the escrow it is drawn from and the address it
+            // lands on are observed here or the draw is verified by nothing.
+            if let Some(tail) = planning.report.route.founder_bond {
+                coordinates.push(tail.escrow_position);
+                coordinates.push(tail.recipient);
+            }
+            let accounts = finalized_accounts(rpc, &coordinates, authenticated.slot)?;
             verify_payout_poststates(planning, journal, &accounts)?;
             journal.finalized_poststates = accounts.iter().map(observed_account).collect();
         }
@@ -1515,10 +1528,21 @@ fn verify_payout_poststates(
     journal: &JournalV1,
     accounts: &[ObservedAccount],
 ) -> Result<()> {
-    authenticate_expected_accounts(accounts, &journal.expected_poststates)?;
-    if accounts.len() != 5 {
+    // The five data coordinates carry bytes the projection owns. The bond pair
+    // carries LAMPORTS, which the draw plan owns, so it is authenticated below
+    // against the plan rather than listed here with a prestate balance.
+    let founder_bond_observed = planning.report.route.founder_bond.is_some();
+    let width = if founder_bond_observed {
+        PAYOUT_POSTSTATE_ACCOUNTS_V1 + PAYOUT_FOUNDER_BOND_POSTSTATE_ACCOUNTS_V1
+    } else {
+        PAYOUT_POSTSTATE_ACCOUNTS_V1
+    };
+    if accounts.len() != width {
         return Err(refusal("wallet payout poststate width changed"));
     }
+    let (data_accounts, bond_accounts) = accounts.split_at(PAYOUT_POSTSTATE_ACCOUNTS_V1);
+    authenticate_expected_accounts(data_accounts, &journal.expected_poststates)?;
+    let accounts = data_accounts;
     let receipt = BASE64
         .decode(
             journal
@@ -1536,6 +1560,8 @@ fn verify_payout_poststates(
             custody_replay_bytes: &accounts[2].data,
             hoard_token_bytes: &accounts[3].data,
             recipient_token_bytes: &accounts[4].data,
+            founder_bond: founder_bond_observed
+                .then(|| (bond_accounts[0].lamports, bond_accounts[1].lamports)),
         },
     )
     .map_err(|error| Error::new(format!("wallet payout semantic postcondition: {error:?}")))

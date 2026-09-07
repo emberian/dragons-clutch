@@ -14,9 +14,18 @@ import {
   REALM_SCHEMA_RELEASE_ID_V1,
 } from './generated/coreFound';
 import {
+  POSITION_ADMISSION_POSITION_LAMPORTS_OFFSET_V2,
+  POSITION_ADMISSION_POSITION_RENT_OFFSET_V2,
+  PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+  PROTOCOL_POSITION_ADMISSION_MAGIC_V2,
+  PROTOCOL_POSITION_WIRE_VERSION_V2,
+} from './generated/directParticipantV1';
+import {
   capabilityProvenanceV1,
+  failureEscrowAccountsV1,
   failureEscrowOwnerV1,
   failureEscrowV1,
+  founderBondV1,
   inspectMarketDetailV1,
   refundsOnFailureFromEscrowV1,
   liabilityProvenanceV1,
@@ -525,5 +534,220 @@ describe('outageDisclosureV1', () => {
     });
     expect(narrow!.holders).toHaveLength(0);
     expect(narrow!.payee).toContain('cannot say who an outage would pay');
+  });
+});
+
+/**
+ * THE FOUNDER BOND, and the numbers are cohort-15's own.
+ *
+ * Devnet's rent rate was 6,333 lamports a byte at that founding; a four-outcome
+ * Claims Position is 160 bytes (a 128-byte header plus 8 an outcome) and its
+ * exempt minimum is 1,823,904; the size rule prices the bond at 4,031,465. So a
+ * seated escrow reads 5,855,369 lamports with 1,823,904 recorded as its rent,
+ * and the difference is the whole disclosure. Every figure here is the same one
+ * `founder_bond_v1::tests` decides in Rust, to the lamport.
+ */
+describe('founderBondV1', () => {
+  const rent = 1_823_904n;
+  const bond = 4_031_465n;
+  const seated = rent + bond;
+
+  function admission(
+    recordedRent: bigint,
+    atFounding: bigint,
+    mutate?: (bytes: Uint8Array) => void,
+  ): Uint8Array {
+    const bytes = new Uint8Array(PROTOCOL_POSITION_ADMISSION_BYTES_V2);
+    bytes.set(PROTOCOL_POSITION_ADMISSION_MAGIC_V2, 0);
+    const view = new DataView(bytes.buffer);
+    view.setUint16(PROTOCOL_POSITION_ADMISSION_MAGIC_V2.length, PROTOCOL_POSITION_WIRE_VERSION_V2, true);
+    view.setBigUint64(POSITION_ADMISSION_POSITION_RENT_OFFSET_V2, recordedRent, true);
+    view.setBigUint64(POSITION_ADMISSION_POSITION_LAMPORTS_OFFSET_V2, atFounding, true);
+    mutate?.(bytes);
+    return bytes;
+  }
+
+  const refunding = {
+    escrowPositionLamports: seated.toString(),
+    escrowAdmissionBytes: admission(rent, seated),
+    refundsOnFailure: true,
+    phase: 'Open' as const,
+    terminalWinner: null,
+    failureOutcome: 3,
+  };
+
+  /**
+   * The join to the kernel, asserted rather than trusted. These three are typed
+   * in `crates/dclutch-claims/src/protocol_position_v2.rs` -- line 76
+   * `EVIDENCE_POSITION_RENT_OFFSET = 448`, line 81
+   * `EVIDENCE_POSITION_LAMPORTS_OFFSET = 488`, line 21
+   * `PROTOCOL_POSITION_ADMISSION_MAGIC_V2 = *b"DCLPPS02"` -- and reading the
+   * bond one field off would report a founder's stake as somebody's rent.
+   */
+  it('reads the escrow admission where the kernel writes it', () => {
+    expect(POSITION_ADMISSION_POSITION_RENT_OFFSET_V2).toBe(448);
+    expect(POSITION_ADMISSION_POSITION_LAMPORTS_OFFSET_V2).toBe(488);
+    expect(PROTOCOL_POSITION_ADMISSION_BYTES_V2).toBe(512);
+    expect(new TextDecoder('ascii').decode(PROTOCOL_POSITION_ADMISSION_MAGIC_V2)).toBe('DCLPPS02');
+  });
+
+  it('reads cohort-15’s bond as the escrow’s balance above its recorded rent', () => {
+    const posted = founderBondV1(refunding);
+    expect(posted).not.toBeNull();
+    expect(posted!.bondLamports).toBe('4031465');
+    expect(posted!.recordedRentLamports).toBe('1823904');
+    expect(posted!.postedAtFoundingLamports).toBe('5855369');
+    expect(posted!.exit).toBeNull();
+    expect(posted!.sentence).toContain('The founder posted a bond of 4031465 lamports (0.004031465 SOL)');
+    expect(posted!.sentence).toContain('paid pro rata to the holders of ordinary claims if the feed goes quiet');
+  });
+
+  it('names the honest exit when an ordinary outcome won', () => {
+    const honest = founderBondV1({ ...refunding, phase: 'Terminal', terminalWinner: 1 });
+    expect(honest!.exit).toBe('honest');
+    expect(honest!.bondLamports).toBe('4031465');
+    expect(honest!.sentence).toContain('The data source reported');
+    expect(honest!.sentence).toContain('goes back to the founder’s refund wallet');
+    // And once the market is retired it has already happened, so it is not
+    // still promised in the future tense.
+    const retired = founderBondV1({ ...refunding, phase: 'Retired', terminalWinner: 1 });
+    expect(retired!.exit).toBe('honest');
+    expect(retired!.sentence).toContain('went back to the founder’s refund wallet');
+  });
+
+  it('names the exhausted exit and says how each redemption draws its share', () => {
+    const exhausted = founderBondV1({ ...refunding, phase: 'Terminal', terminalWinner: 3 });
+    expect(exhausted!.exit).toBe('exhausted');
+    expect(exhausted!.sentence).toContain('The data source never reported');
+    expect(exhausted!.sentence).toContain('4031465 lamports (0.004031465 SOL) go pro rata to the holders of ordinary claims');
+    expect(exhausted!.sentence).toContain('the last one drawing the rest');
+    // Nobody has redeemed yet, so nothing has been drawn and the page does not
+    // invent a walk that has not started.
+    expect(exhausted!.sentence).not.toContain('still in the escrow');
+  });
+
+  it('reports a partly drawn bond as the difference it is', () => {
+    const midWalk = founderBondV1({
+      ...refunding,
+      escrowPositionLamports: (rent + 1_000_000n).toString(),
+      phase: 'Terminal',
+      terminalWinner: 3,
+    });
+    expect(midWalk!.bondLamports).toBe('1000000');
+    expect(midWalk!.postedAtFoundingLamports).toBe('5855369');
+    expect(midWalk!.sentence).toContain('Of the 4031465 lamports posted at founding, 1000000 are still in the escrow.');
+  });
+
+  it('says a categorical market posted no bond, without reading an account', () => {
+    const none = founderBondV1({
+      escrowPositionLamports: null,
+      escrowAdmissionBytes: null,
+      refundsOnFailure: false,
+      phase: 'Open',
+      terminalWinner: null,
+      failureOutcome: 3,
+    });
+    expect(none!.bondLamports).toBe('0');
+    expect(none!.exit).toBeNull();
+    expect(none!.sentence).toBe('This market posted no founder bond: it was founded before the bond, and an outage pays whoever holds the failure column.');
+  });
+
+  /**
+   * UNREAD IS NOT ZERO, and the type says so: `'0'` is the read fact that no
+   * bond stands here and `null` is the refusal to assert either way. Collapsing
+   * them would let one unreachable account read, on the page, as a founder who
+   * staked nothing on the oracle they chose -- which is a claim about a person
+   * and would be made from no evidence at all.
+   */
+  it('refuses rather than calling an unread escrow a founder who staked nothing', () => {
+    const wrongMagic = founderBondV1({
+      ...refunding,
+      escrowAdmissionBytes: admission(rent, seated, (bytes) => { bytes[0] = 0x00; }),
+    });
+    expect(wrongMagic!.bondLamports).toBeNull();
+    expect(wrongMagic!.recordedRentLamports).toBeNull();
+    expect(wrongMagic!.exit).toBeNull();
+    expect(wrongMagic!.sentence).toContain('This page has not read this market’s failure escrow admission');
+    expect(wrongMagic!.sentence).not.toContain('no founder bond');
+
+    expect(founderBondV1({ ...refunding, escrowAdmissionBytes: null })!.bondLamports).toBeNull();
+    expect(founderBondV1({
+      ...refunding,
+      escrowAdmissionBytes: admission(rent, seated).slice(0, 511),
+    })!.bondLamports).toBeNull();
+
+    // The admission read and the balance did not: the two figures the founding
+    // recorded are still stated, and only today's bond is withheld.
+    const halfRead = founderBondV1({ ...refunding, escrowPositionLamports: null });
+    expect(halfRead!.bondLamports).toBeNull();
+    expect(halfRead!.recordedRentLamports).toBe('1823904');
+    expect(halfRead!.sentence).toContain('not the escrow Position’s own balance');
+  });
+
+  it('says an escrow at its own rent posted nothing, which is a read fact', () => {
+    const bare = founderBondV1({
+      ...refunding,
+      escrowPositionLamports: rent.toString(),
+      escrowAdmissionBytes: admission(rent, rent),
+    });
+    expect(bare!.bondLamports).toBe('0');
+    expect(bare!.recordedRentLamports).toBe('1823904');
+    expect(bare!.sentence).toContain('no founder bond stands behind its oracle');
+  });
+
+  /**
+   * The exit is the SCALE's answer, exactly as `payee` is. An unread scale still
+   * gets the amount -- a subtraction of two numbers off one account, which no
+   * scale changes -- and gets no direction, because only the direction depends
+   * on it.
+   */
+  it('states the amount but never the exit when the payout scale was not read', () => {
+    const unread = founderBondV1({ ...refunding, refundsOnFailure: null, phase: 'Terminal', terminalWinner: 3 });
+    expect(unread!.bondLamports).toBe('4031465');
+    expect(unread!.exit).toBeNull();
+    expect(unread!.sentence).toContain('The founder posted a bond of 4031465 lamports');
+    expect(unread!.sentence).not.toContain('never reported');
+  });
+
+  it('refuses a failure outcome no market could have', () => {
+    expect(founderBondV1({ ...refunding, failureOutcome: 0 })).toBeNull();
+    expect(founderBondV1({ ...refunding, failureOutcome: -1 })).toBeNull();
+    expect(founderBondV1({ ...refunding, failureOutcome: 1.5 })).toBeNull();
+  });
+
+  it('carries the bond into the outage disclosure the page renders', () => {
+    const founderBond = founderBondV1({ ...refunding, phase: 'Terminal', terminalWinner: 3 });
+    const disclosure = outageDisclosureV1({
+      outcomeCount: 4,
+      supplyAtoms: ['500000000', '500000000', '500000000', '500000000'],
+      refundsOnFailure: true,
+      positions: [{ owner: 'FBYW95Fo', balances: ['500000000', '500000000', '500000000', '500000000'] }],
+      founderBond,
+    });
+    expect(disclosure!.founderBond).toBe(founderBond);
+    expect(disclosure!.headline).toContain('HOLDERS ARE REFUNDED');
+    expect(disclosure!.headline).toContain('4031465 lamports');
+    // Unread stays unread here too: a disclosure handed no bond says nothing
+    // about one rather than reporting that none was posted.
+    const without = outageDisclosureV1({
+      outcomeCount: 4,
+      supplyAtoms: ['500000000', '500000000', '500000000', '500000000'],
+      refundsOnFailure: true,
+      positions: [],
+    });
+    expect(without!.founderBond).toBeNull();
+    expect(without!.headline).not.toContain('bond');
+  });
+
+  it('derives the escrow’s Position and admission from the market’s own aggregate', () => {
+    const owner = failureEscrowOwnerV1(CLAIMS, LIVE.market.address, 3);
+    const accounts = failureEscrowAccountsV1(CLAIMS, LIVE.claimsAggregate.address, owner);
+    // Two different seed domains, so two different accounts -- reading the
+    // Position's balance out of the admission's address would read nothing.
+    expect(accounts.position).not.toBe(accounts.admission);
+    expect(accounts.position).not.toBe(owner);
+    // And the pair is a pure derivation: the same three addresses, always the
+    // same two accounts.
+    expect(failureEscrowAccountsV1(CLAIMS, LIVE.claimsAggregate.address, owner)).toEqual(accounts);
   });
 });

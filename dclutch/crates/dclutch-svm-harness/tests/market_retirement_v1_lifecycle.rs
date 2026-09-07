@@ -2,6 +2,7 @@
 
 include!("resolution_core_v3_lifecycle.rs");
 
+use dclutch_claims::founder_bond_v1::{FounderBondExitV1, founding_bond_size_v1};
 use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
@@ -10,9 +11,10 @@ use dclutch_claims::liability_basis_state_v2::{
     liability_basis_vector_width_v2,
 };
 use dclutch_claims::protocol_position_v2::{
-    FailureEscrowV1, ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2,
-    ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
-    ProtocolPositionRequestV2, ProtocolPositionSeedsV2, failure_escrow_v1,
+    FailureEscrowV1, PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
+    ProtocolPositionAdmissionEvidenceV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
+    ProtocolPositionPresenceV2, ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
+    failure_escrow_v1,
 };
 use dclutch_market_retirement_v1_operator::{
     CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, CHECKPOINT_RETIREMENT_FINISH_BYTES_V1,
@@ -1458,11 +1460,21 @@ const SEATED_RESIDUE_V1: u64 = 166_666_667;
 /// it is handed. A test that declared both independently would pass while
 /// proving nothing about the join.
 ///
-/// Returns the escrow's addresses and the rent its pair holds.
+/// The escrow also holds the FOUNDER BOND decision 0033 makes mandatory: the
+/// lamports it carries above the rent its admission recorded at founding. The
+/// two numbers are the real ones rather than a placeholder pair -- the rent is
+/// what `Rent::default()` charges the two account widths, which is what
+/// `protocol_account` funds every fixture account at, and the bond is
+/// `founding_bond_size_v1` at the rate that rent was funded at -- because the
+/// closure reads the bond as `lamports - position_rent_principal` and a
+/// fixture that recorded 1 would call the whole balance the bond.
+///
+/// Returns the escrow's addresses, the rent its pair holds, and the bond,
+/// which is BESIDE the rent rather than inside it.
 async fn seed_refunding_failure_escrow_v1(
     context: &mut ProgramTestContext,
     fixture: &JoinedFixture,
-) -> (FailureEscrowV1, u64) {
+) -> (FailureEscrowV1, u64, u64) {
     let escrow = failure_escrow_v1(
         JOINED_CLAIMS_PROGRAM_ID,
         fixture.base.market.to_bytes(),
@@ -1561,15 +1573,30 @@ async fn seed_refunding_failure_escrow_v1(
         },
     );
 
-    // The escrow's own Position, holding the column and nothing else.
-    let mut position_bytes = vec![
-        0;
-        liability_basis_vector_width_v2(
-            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-            RETIREMENT_CLAIM_COUNT,
-        )
-        .expect("position width")
-    ];
+    // The bond this founding posted, priced the way the founding prices it:
+    // the rate is DERIVED from two readings of the bank's own rent (decision
+    // 0030's shape, `funded_rent_rate`) rather than typed, and the size rule is
+    // the kernel's at this Market's width.
+    let position_width = liability_basis_vector_width_v2(
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        RETIREMENT_CLAIM_COUNT,
+    )
+    .expect("position width");
+    let position_rent = Rent::default().minimum_balance(position_width);
+    let admission_rent = Rent::default().minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2);
+    let bond = founding_bond_size_v1(
+        funded_rent_rate(position_width),
+        RETIREMENT_CLAIM_COUNT,
+        // Λ: this fixture's Market has no recovery ladder to fund.
+        0,
+    )
+    .expect("the size rule at this width and rate")
+    .bond;
+    assert!(bond > 0, "a mandatory bond that is zero proves nothing");
+
+    // The escrow's own Position, holding the column and nothing else -- and,
+    // in lamports, its rent and the bond.
+    let mut position_bytes = vec![0; position_width];
     encode_liability_basis_position_into_v2(
         LiabilityBasisPositionInputV2 {
             revision: 1,
@@ -1584,7 +1611,15 @@ async fn seed_refunding_failure_escrow_v1(
     set_account(
         context,
         escrow.position,
-        protocol_account(JOINED_CLAIMS_PROGRAM_ID, position_bytes),
+        Account {
+            lamports: position_rent
+                .checked_add(bond)
+                .expect("a fixture escrow balance"),
+            data: position_bytes,
+            owner: JOINED_CLAIMS_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
     );
 
     // Its admission record, in the shape a founding writes: a ClaimsCapability
@@ -1602,10 +1637,14 @@ async fn seed_refunding_failure_escrow_v1(
         generation: GENERATION,
         expected_market_revision: CLAIMS_REVISION,
         expected_position_revision: 0,
-        observed_position_lamports: 1,
-        observed_admission_lamports: 1,
-        position_rent_principal: 1,
-        admission_rent_principal: 1,
+        // The bond's whole record: what the pair was observed holding, and
+        // what of that was rent. The closure reads the difference.
+        observed_position_lamports: position_rent
+            .checked_add(bond)
+            .expect("a fixture escrow balance"),
+        observed_admission_lamports: admission_rent,
+        position_rent_principal: position_rent,
+        admission_rent_principal: admission_rent,
         capability_descriptor: fixture.base.market.to_bytes(),
         capability_outcome: escrow.failure_selector,
     })
@@ -1636,9 +1675,20 @@ async fn seed_refunding_failure_escrow_v1(
                 .to_vec(),
         ),
     );
-    let rent = required_observed(context, escrow.position).await.lamports
-        + required_observed(context, escrow.admission).await.lamports;
-    (escrow, rent)
+    // What the pair ACTUALLY holds, read back off the bank rather than
+    // restated: the fixture's arithmetic above is only the bond's record if the
+    // accounts agree with it.
+    assert_eq!(
+        required_observed(context, escrow.position).await.lamports,
+        position_rent + bond,
+        "the escrow holds its own rent and the founder bond, and nothing else"
+    );
+    assert_eq!(
+        required_observed(context, escrow.admission).await.lamports,
+        admission_rent,
+        "the admission holds its own rent, which is what it recorded"
+    );
+    (escrow, position_rent + admission_rent, bond)
 }
 
 /// The four extents a refunding retirement's packets occupy.
@@ -1706,7 +1756,8 @@ const REFUNDING_FINISH_EXTENT: PacketExtentV1 = PacketExtentV1 {
 async fn a_refunding_market_retires_once_the_closure_burns_its_failure_column() {
     let (fixture, mut context) = joined_fixture().await;
     seed_exact_retirement_prestate(&mut context, &fixture).await;
-    let (escrow, escrow_rent) = seed_refunding_failure_escrow_v1(&mut context, &fixture).await;
+    let (escrow, escrow_rent, bond) =
+        seed_refunding_failure_escrow_v1(&mut context, &fixture).await;
 
     let snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
     let plan = build_checkpoint_market_retirement_v1(&snapshot)
@@ -1715,7 +1766,29 @@ async fn a_refunding_market_retires_once_the_closure_burns_its_failure_column() 
         plan.burned_failure_units, SEATED_RESIDUE_V1,
         "the plan says exactly what the closure will burn"
     );
-    assert_eq!(plan.failure_escrow_rent_lamports, escrow_rent);
+    // The operator's number is the pair's OBSERVED lamports
+    // (`FailureEscrowStateV1::rent`), so on a Market that posted a bond it is
+    // rent PLUS bond -- which is right, because that whole balance is what the
+    // escrow surrenders to the aggregate, and it is why the projection Core
+    // hashes stays correct on a refunding Market.
+    assert_eq!(
+        plan.failure_escrow_rent_lamports,
+        escrow_rent + bond,
+        "the escrow surrenders its rent AND the bond, and the plan projects both"
+    );
+    // And the plan SPLITS that sum, so a reader is not left to subtract. This
+    // is the only place the report's two bond fields are read: without it the
+    // seeded principals could be anything and every other assertion here would
+    // still pass.
+    assert_eq!(
+        plan.founder_bond_lamports, bond,
+        "the plan names how much of the surrendered balance is bond"
+    );
+    assert_eq!(
+        plan.founder_bond_exit,
+        Some(FounderBondExitV1::Honest),
+        "an ordinary winner returns the bond to the founder's refund source"
+    );
     for instruction in [
         &plan.prepare,
         &plan.close_vault,
@@ -1792,8 +1865,9 @@ async fn a_refunding_market_retires_once_the_closure_burns_its_failure_column() 
     );
     assert_eq!(
         checkpoint.lamports,
-        checkpoint_lamports_before + escrow_rent,
-        "the escrow's rent went to the checkpoint, not to a fourth account"
+        checkpoint_lamports_before + escrow_rent + bond,
+        "the honest exit returns the bond WITH the rent: the escrow's whole \
+         balance went to the checkpoint, not to a fourth account"
     );
     assert!(
         observed(&mut context, escrow.position).await.is_none(),
@@ -1864,9 +1938,14 @@ async fn a_refunding_market_retires_once_the_closure_burns_its_failure_column() 
         wallet_before + plan.expected_refund_delta,
         "the refund wallet receives the escrow's rent along with everything else, to the lamport"
     );
+    // `expected_refund_delta` is built off `authenticated.escrow.rent()`, which
+    // is the pair's observed lamports, so the bond IS inside this number: on
+    // the honest exit the founder's capital comes home by the same path the
+    // rent does, to decision 0021's refund source.
     assert!(
-        plan.expected_refund_delta > escrow_rent,
-        "and the escrow's rent is inside that number rather than beside it"
+        plan.expected_refund_delta > escrow_rent + bond,
+        "the escrow's rent AND the returned bond are inside that number rather \
+         than beside it"
     );
     assert!(
         census.iter().all(|keys| *keys <= 64),
@@ -1992,7 +2071,7 @@ const CLOSURE_BURN_SUBSTITUTED_BASIS_REFUSAL_V1: u32 =
 async fn the_closure_burn_refuses_its_four_hostiles_by_discriminant() {
     let (fixture, mut context) = joined_fixture().await;
     seed_exact_retirement_prestate(&mut context, &fixture).await;
-    let (escrow, _) = seed_refunding_failure_escrow_v1(&mut context, &fixture).await;
+    let (escrow, _, _) = seed_refunding_failure_escrow_v1(&mut context, &fixture).await;
     let snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
     let plan = build_checkpoint_market_retirement_v1(&snapshot).expect("the honest plan");
 
@@ -2314,6 +2393,203 @@ fn custom_program_error_code(error: BanksClientError) -> u32 {
         } => code,
         other => panic!("expected a custom program error, got {other:?}"),
     }
+}
+
+/// The exhausted close's own refusal: the certificate named the failure
+/// selector, so the founder bond is owed to the ordinary claims one redemption
+/// at a time, and a claim still standing means that walk is unfinished.
+const CLOSURE_EXHAUSTED_ORDINARY_CLAIMS_REFUSAL_V1: u32 =
+    dclutch_claims_sbf::market_closure_v1::ClaimsMarketClosureSbfErrorV1::OrdinaryClaimsOutstanding
+        as u32;
+
+/// Move the terminal winner, in BOTH accounts that carry it.
+///
+/// The closure's founder-bond arm decides the exit from Core's
+/// `terminal_winner` alone, but that field is cross-checked against the Source
+/// closure receipt's `selector` twice on the way there -- once by the operator
+/// (`authenticate_resolution`) and once by Core itself -- so a prestate that
+/// moved one and not the other would refuse in a different program for a
+/// different reason and never reach the bond at all.
+async fn set_terminal_winner_v1(
+    context: &mut ProgramTestContext,
+    fixture: &JoinedFixture,
+    winner: u32,
+) {
+    let market_account = observed(context, fixture.base.market)
+        .await
+        .expect("the Retiring Core Market");
+    let mut market = CoreState::decode(&market_account.data).expect("Core Market");
+    market.terminal_winner = winner;
+    set_account(
+        context,
+        fixture.base.market,
+        Account {
+            data: market
+                .encode()
+                .expect("Core Market at the new winner")
+                .to_vec(),
+            ..market_account
+        },
+    );
+
+    let receipt_account = observed(context, fixture.base.closure)
+        .await
+        .expect("the Source closure receipt");
+    let mut receipt =
+        SourceClosureReceiptV3::decode(&receipt_account.data).expect("Source closure receipt");
+    receipt.selector = winner;
+    set_account(
+        context,
+        fixture.base.closure,
+        Account {
+            data: receipt
+                .to_bytes()
+                .expect("Source closure receipt at the new selector")
+                .to_vec(),
+            ..receipt_account
+        },
+    );
+}
+
+/// One ordinary claim still standing refuses the close TWICE, by two different
+/// names, and which name it gets is the founder bond's exit.
+///
+/// Decision 0033. The bond leaves the escrow by exactly one of two exits, and
+/// the exit is read off the terminal winner:
+///
+/// - **Exhausted** (the winner IS the failure selector). The bond is owed to
+///   the ordinary claims, walked out one redemption at a time, and the
+///   redemption that retires the last one draws whatever is left. Closing now
+///   would hand the unwalked remainder to the founder's refund source -- the
+///   one exit the Lean forbids on this arm -- so the close refuses
+///   [`ClaimsMarketClosureSbfErrorV1::OrdinaryClaimsOutstanding`] and its
+///   reader waits for the walk.
+/// - **Honest** (the winner is an ordinary coordinate). The bond comes home
+///   with the rent, the bond arm admits the close, the burn runs, and it is
+///   `require_empty_aggregate` AFTER the burn that refuses
+///   [`ClaimsMarketClosureSbfErrorV1::Liability`] -- the accusation this file
+///   has always made, whose reader goes looking for the unpaid holder.
+///
+/// The two arms run against a BYTE-IDENTICAL aggregate: the only thing that
+/// moves between them is the winner, in the CoreState and the Source closure
+/// receipt. The honest arm is this test's positive control rather than a second
+/// hostile -- but read it for exactly what it gives. `Liability` has four raise
+/// sites and two of them (a tradeable claim in the escrow, and a supply that
+/// does not equal the residue) sit UPSTREAM of the bond arm, so reaching it
+/// proves the fixture reached the closure and no more. What proves the escrow
+/// identity, the residue equality and the bond arm's own admission all passed
+/// is the EXHAUSTED arm's `0x5507`, which is raised at exactly one site and
+/// only after all three. The honest arm's job is to show the refusal follows
+/// the winner rather than the fixture.
+///
+/// The aggregate is mutated after both plans are compiled because the OPERATOR
+/// refuses an unescrowed ordinary supply itself
+/// (`MarketRetirementOperatorErrorV1::UnescrowedSupply`); that is the host-side
+/// half of the same rule and not the chain conjunct under test.
+#[tokio::test]
+async fn an_exhausted_close_with_an_ordinary_claim_standing_refuses_by_name() {
+    assert_ne!(
+        CLOSURE_EXHAUSTED_ORDINARY_CLAIMS_REFUSAL_V1, CHECKPOINT_PREPARE_SEATED_RESIDUE_REFUSAL_V1,
+        "the split is only worth proving if the two readings have two codes"
+    );
+
+    let (fixture, mut context) = joined_fixture().await;
+    seed_exact_retirement_prestate(&mut context, &fixture).await;
+    let (escrow, _, _) = seed_refunding_failure_escrow_v1(&mut context, &fixture).await;
+
+    // The honest-winner plan: `seed_exact_retirement_prestate` seats
+    // `terminal_winner = 0`, an ordinary coordinate.
+    let honest_snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    let honest_plan =
+        build_checkpoint_market_retirement_v1(&honest_snapshot).expect("the ordinary-winner plan");
+    let honest_market = observed(&mut context, fixture.base.market)
+        .await
+        .expect("the ordinary-winner Core Market");
+    let honest_receipt = observed(&mut context, fixture.base.closure)
+        .await
+        .expect("the ordinary-winner Source closure receipt");
+
+    // The exhausted prestate, and the plan the operator compiles for it.
+    set_terminal_winner_v1(&mut context, &fixture, escrow.failure_selector).await;
+    let exhausted_snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    let exhausted_plan = build_checkpoint_market_retirement_v1(&exhausted_snapshot)
+        .expect("an exhausted winner is still a retirement the operator plans");
+
+    let (table, addresses) = frozen_route_lookup_table(
+        &mut context,
+        &[honest_plan.prepare.clone(), exhausted_plan.prepare.clone()],
+    )
+    .await;
+
+    // ONE ordinary claim, still standing on the aggregate. The escrow's own
+    // Position is untouched, so the residue equality still holds and this is
+    // the only conjunct in the walk that has moved.
+    let clean_aggregate = observed(&mut context, fixture.claims_aggregate)
+        .await
+        .expect("the seeded aggregate");
+    let view = LiabilityBasisMarketViewV2::decode(&clean_aggregate.data).expect("aggregate");
+    let mut standing = vec![0_u64; RETIREMENT_CLAIM_COUNT as usize];
+    standing[0] = 1;
+    standing[escrow.failure_selector as usize] = SEATED_RESIDUE_V1;
+    let mut standing_bytes = clean_aggregate.data.clone();
+    encode_liability_basis_market_into_v2(
+        LiabilityBasisMarketInputV2 {
+            revision: view.revision,
+            logical_market: view.logical_market,
+            release_set: view.release_set,
+            registry_program: view.registry_program,
+            product_instance_id: view.product_instance_id,
+            basis_id: view.basis_id,
+            realm_id: view.realm_id,
+            custody_context: view.custody_context,
+            generation: view.generation,
+        },
+        &standing,
+        &mut standing_bytes,
+    )
+    .expect("an aggregate with one ordinary claim still outstanding");
+    set_account(
+        &mut context,
+        fixture.claims_aggregate,
+        Account {
+            data: standing_bytes,
+            ..clean_aggregate.clone()
+        },
+    );
+
+    assert_eq!(
+        refused_burn_hostile(
+            &mut context,
+            &exhausted_plan.prepare,
+            "exhausted close: the bond still owes an ordinary claim",
+            table,
+            &addresses,
+        )
+        .await,
+        CLOSURE_EXHAUSTED_ORDINARY_CLAIMS_REFUSAL_V1,
+        "an exhausted close while a claim stands refuses 0x5507 by name, not \
+         the liability reading"
+    );
+
+    // THE CONTROL, and the positive control: the same aggregate, the same
+    // escrow, the same instruction shape -- only the winner is ordinary. The
+    // bond arm admits the honest exit, the burn runs, and the refusal comes
+    // from after it.
+    set_account(&mut context, fixture.base.market, honest_market);
+    set_account(&mut context, fixture.base.closure, honest_receipt);
+    assert_eq!(
+        refused_burn_hostile(
+            &mut context,
+            &honest_plan.prepare,
+            "honest close: an ordinary claim stands under an ordinary winner",
+            table,
+            &addresses,
+        )
+        .await,
+        CHECKPOINT_PREPARE_SEATED_RESIDUE_REFUSAL_V1,
+        "under an ordinary winner the bond arm admits the close and the same \
+         standing claim is an outstanding liability instead"
+    );
 }
 
 #[tokio::test]

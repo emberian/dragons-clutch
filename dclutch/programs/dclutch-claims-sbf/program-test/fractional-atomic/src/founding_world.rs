@@ -16,6 +16,7 @@
 use std::{env, fs, path::PathBuf};
 
 use dclutch_claims::{
+    founder_bond_v1::founding_bond_size_v1,
     founding_v5::{
         CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, ClaimsFoundingAggregateSeedsV5,
         ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
@@ -44,6 +45,7 @@ use crate::{
         NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, compile_narrow_fixture_v3,
     },
 };
+use dclutch_market::capability_manifest::funding::derive_funded_rent_rate_v2;
 use dclutch_market::{
     CoreState, FoundingIntentV5, Identity, Phase, Readiness, SeriesFoundingPermitV1,
 };
@@ -185,6 +187,13 @@ pub enum HostileV1 {
     /// The escrow's accounts are the Market's own and are left UNFUNDED, as a
     /// categorical founding may leave them.
     EscrowRentNotPrepaid,
+    /// The escrow Position holds its rent and all but the LAST lamport of the
+    /// founder bond. Every other account, and the admission beside it, is the
+    /// accepted world's.
+    FounderBondOneLamportShort,
+    /// The escrow Position holds exactly its own rent and no bond: the state a
+    /// host that priced the escrow by `Rent::minimum_balance` alone produces.
+    FounderBondAbsent,
 }
 
 pub struct FoundingWorld {
@@ -209,6 +218,11 @@ pub struct FoundingWorld {
     pub aggregate_rent: u64,
     pub position_rent: u64,
     pub admission_rent: u64,
+    /// The founder bond this Market's width and rent rate require the escrow
+    /// Position to hold ON TOP of its own recorded rent (decision 0033). Zero
+    /// is not a value this takes: the size rule's floor is what MANDATORY
+    /// means.
+    pub bond: u64,
 }
 
 /// The founding world with no collateral beyond the founding's own.
@@ -395,7 +409,10 @@ pub fn world_with_extra_collateral(
     // derivation can notice.
     let escrow_position_owner = match hostile {
         HostileV1::EscrowIsNotTheMarketsOwn => Pubkey::new_from_array([0x39; 32]),
-        HostileV1::None | HostileV1::EscrowRentNotPrepaid => escrow_owner,
+        HostileV1::None
+        | HostileV1::EscrowRentNotPrepaid
+        | HostileV1::FounderBondOneLamportShort
+        | HostileV1::FounderBondAbsent => escrow_owner,
     };
     let escrow_position = Pubkey::find_program_address(
         &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), escrow_position_owner.to_bytes())
@@ -520,11 +537,25 @@ pub fn world_with_extra_collateral(
         liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, CLAIM_COUNT)
             .expect("aggregate width"),
     );
-    let position_rent = rent.minimum_balance(
+    let position_width =
         liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, CLAIM_COUNT)
-            .expect("position width"),
-    );
+            .expect("position width");
+    let position_rent = rent.minimum_balance(position_width);
     let admission_rent = rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2);
+    // The founder bond (decision 0033), derived here the way
+    // `authenticate_founder_bond` derives it and not one step differently: the
+    // rate comes from two readings of the SAME `Rent` the escrow's own rent
+    // came from, and the size rule is evaluated at this Market's width with a
+    // zero ladder term. A fixture that typed the bond as a number would pass
+    // whatever the route computed; this one refuses to agree by accident.
+    let bond = founding_bond_size_v1(
+        derive_funded_rent_rate_v2(rent.minimum_balance(0), position_width, position_rent)
+            .expect("affine rent"),
+        CLAIM_COUNT,
+        0,
+    )
+    .expect("size rule")
+    .bond;
 
     let request = ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
         release_set,
@@ -677,17 +708,30 @@ pub fn world_with_extra_collateral(
     // says the Market refunds -- a categorical founding must find it vacant and
     // unfunded, which is the conjunct that makes the shape unforgeable by a
     // caller.
-    for (key, lamports) in [
-        (escrow_position, position_rent),
-        (escrow_admission, admission_rent),
-    ] {
-        let funded = if shape.seats_escrow() && !matches!(hostile, HostileV1::EscrowRentNotPrepaid)
-        {
-            lamports
+    // The Position's share of that prepayment is its rent PLUS the founder
+    // bond (decision 0033); the two bond hostiles move that one number by one
+    // lamport and by the whole bond, and touch nothing else in the world.
+    let escrow_position_funded = if shape.seats_escrow() {
+        match hostile {
+            HostileV1::None | HostileV1::EscrowIsNotTheMarketsOwn => position_rent + bond,
+            HostileV1::FounderBondOneLamportShort => position_rent + bond - 1,
+            HostileV1::FounderBondAbsent => position_rent,
+            HostileV1::EscrowRentNotPrepaid => 0,
+        }
+    } else {
+        0
+    };
+    let escrow_admission_funded =
+        if shape.seats_escrow() && !matches!(hostile, HostileV1::EscrowRentNotPrepaid) {
+            admission_rent
         } else {
             0
         };
-        add_account_with_lamports(&mut test, key, system_program::ID, Vec::new(), funded);
+    for (key, lamports) in [
+        (escrow_position, escrow_position_funded),
+        (escrow_admission, escrow_admission_funded),
+    ] {
+        add_account_with_lamports(&mut test, key, system_program::ID, Vec::new(), lamports);
     }
     add_account_with_lamports(
         &mut test,
@@ -722,6 +766,7 @@ pub fn world_with_extra_collateral(
             aggregate_rent,
             position_rent,
             admission_rent,
+            bond,
         },
     )
 }

@@ -4,12 +4,17 @@
 //! campaign without creating a second payout implementation. Product payout,
 //! exposure translation, and the SignedDelta packet remain owned by
 //! `dclutch-claims`; this host-only operator supplies the wallet request,
-//! exact 36-account frame, Custody caller PDA, sole canonical lookup sequence,
+//! exact 36-account frame -- 39 with a refunding Market's founder-bond tail --
+//! Custody caller PDA, sole canonical lookup sequence,
 //! unsigned v0 message, and independently checked postcondition.
 
 use dclutch_claims::rational_kernel::product_v3::TerminalScenarioV3;
 use dclutch_claims::{
     CallerRole,
+    founder_bond_v1::{
+        FounderBondDrawObservationV1, FounderBondDrawPlanV1, FounderBondErrorV1, FounderBondExitV1,
+        ordinary_outstanding_v1,
+    },
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketLayoutV2, LiabilityBasisMarketViewV2,
         LiabilityBasisPositionLayoutV2, LiabilityBasisPositionViewV2,
@@ -18,7 +23,10 @@ use dclutch_claims::{
         ProductClaimsTerminalAdmissionV3, ProductClaimsTerminalInputV3,
         encode_product_claims_terminal_signed_delta_v3,
     },
-    protocol_position_v2::ProtocolPositionSeedsV2,
+    protocol_position_v2::{
+        FailureEscrowV1, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
+        ProtocolPositionSeedsV2,
+    },
     signed_delta_v3::{
         DeltaDirectionV3, SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3,
         SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3, SignedDeltaPlanV3, SignedDeltaV3, plan_bytes,
@@ -26,7 +34,8 @@ use dclutch_claims::{
     terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
         TERMINAL_SETTLEMENT_POST_RESOURCE_DOMAIN_V3, TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3,
-        TerminalSettlementReceiptV3, TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
+        TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3, TerminalSettlementReceiptV3,
+        TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
     },
 };
 use dclutch_core_contract::ContentId;
@@ -53,8 +62,27 @@ use solana_sdk_ids::sysvar;
 
 use crate::{
     Finality, Observation, ObservedAccount,
+    failure_escrow_v1::failure_escrow_v1,
     versioned::{VersionedMessagePlanV0, compile_v0_message},
 };
+
+/// The trailing founder-bond tail of the Claims terminal-settlement frame.
+///
+/// Present exactly when the Market's linked basis refunds on failure
+/// (`ProductBasisV3::refunds_on_failure`), because only such a Market seats a
+/// failure escrow and only an escrow holds a bond. Absent on a categorical
+/// Market, whose settlement keeps its exact thirty-six accounts and its exact
+/// behaviour; offered there anyway, the chain refuses the frame
+/// (`ClaimsSbfError::Accounts`) and this builder refuses it first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WalletTerminalPayoutFounderBondRouteV3 {
+    /// Writable derived failure-escrow Position the bond is drawn from.
+    pub escrow_position: Pubkey,
+    /// Read-only escrow admission carrying the rent recorded at founding.
+    pub escrow_admission: Pubkey,
+    /// Writable bond recipient; the request's own recipient owner on this route.
+    pub recipient: Pubkey,
+}
 
 /// Exact physical account coordinates of the Claims terminal-settlement route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,6 +149,24 @@ pub struct WalletTerminalPayoutRouteV3 {
     pub custody_authority: Pubkey,
     /// Realm-selected token program.
     pub token_program: Pubkey,
+    /// The trailing founder-bond tail, present exactly when the basis refunds.
+    pub founder_bond: Option<WalletTerminalPayoutFounderBondRouteV3>,
+}
+
+/// The founder-bond tail's exact observed prestate.
+///
+/// The escrow's lamports and the recipient's are OBSERVATIONS, never a caller's
+/// numbers: the bond is whatever the escrow holds above the rent its own
+/// admission recorded at founding, so a lamport somebody donated enlarges it
+/// rather than stranding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WalletTerminalPayoutFounderBondInputV3<'a> {
+    /// The failure-escrow Position's live lamports, dust and donations included.
+    pub escrow_lamports: u64,
+    /// Exact escrow admission-record bytes carrying the recorded rent.
+    pub escrow_admission_bytes: &'a [u8],
+    /// The bond recipient's live lamports before the draw.
+    pub recipient_lamports: u64,
 }
 
 /// Exact public prestate required to build one wallet terminal payout.
@@ -172,12 +218,14 @@ pub struct WalletTerminalPayoutInputV3<'a> {
     pub expected_market_revision: u64,
     /// Optimistic Position revision.
     pub expected_position_revision: u64,
+    /// The founder-bond tail's prestate, present exactly when the basis refunds.
+    pub founder_bond: Option<WalletTerminalPayoutFounderBondInputV3<'a>>,
 }
 
 /// Exact unsigned payout instruction plus independently derived commitments.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WalletTerminalPayoutReportV3 {
-    /// Exact 36-account Claims instruction.
+    /// Exact 36-account Claims instruction, or 39 with the founder-bond tail.
     pub instruction: Instruction,
     /// Finalized observation selecting its public prestate.
     pub observation: Observation,
@@ -213,6 +261,12 @@ pub struct WalletTerminalPayoutReportV3 {
     pub pre_hoard_token_bytes: Vec<u8>,
     /// Exact recipient token bytes used to build the request.
     pub pre_recipient_token_bytes: Vec<u8>,
+    /// The sole admitted bond movement this redemption makes, on a refunding
+    /// Market; `None` on a Market that posted no bond.
+    pub founder_bond: Option<FounderBondDrawPlanV1>,
+    /// Lamports this redemption walks from the escrow to the bond recipient;
+    /// zero without a plan, and zero on the honest exit.
+    pub founder_bond_draw: u64,
 }
 
 /// Unsigned packet-safe transaction and its exact wallet signer set.
@@ -243,6 +297,20 @@ pub enum WalletTerminalPayoutErrorV3 {
     Routing(crate::versioned::Error),
     /// A claimed accepted poststate disagreed with the exact plan.
     Postcondition,
+    /// The founder-bond tail's own accusation, split out of `Route` because it
+    /// is a different fact about three different accounts.
+    ///
+    /// Raised when the tail is present on a Market that posted no bond or
+    /// absent on one that did, when route and input disagree about carrying it,
+    /// when the escrow pair is not the one the aggregate derives, when the bond
+    /// recipient is not the request's recipient owner, or when the admission
+    /// offered as the escrow's is seated under another owner or kind. The chain
+    /// refuses the same disagreements by name (`ClaimsSbfError::Accounts`,
+    /// `FounderBondFrame`, `FailureEscrow`, `Identity`); refusing here costs no
+    /// submission to learn it.
+    FounderBondRoute,
+    /// `dclutch_claims::founder_bond_v1` refused; the cause is its own.
+    FounderBond(FounderBondErrorV1),
     /// `dclutch_claims` refused; the cause is its own.
     LiabilityBasisState(dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2),
     /// `dclutch_claims` refused; the cause is its own.
@@ -273,7 +341,16 @@ pub fn build_wallet_terminal_payout_v3(
         .map_err(WalletTerminalPayoutErrorV3::LiabilityBasisState)?;
     let position = LiabilityBasisPositionViewV2::decode(input.position_bytes)
         .map_err(WalletTerminalPayoutErrorV3::LiabilityBasisState)?;
-    validate_claims_route(input, market, position)?;
+    // The basis record is the SOLE author of whether this Market refunds on
+    // failure, and therefore of whether it seated an escrow to hold a bond.
+    // Decoded before the route is validated so the tail's presence is a fact
+    // about the Market rather than about what the caller supplied.
+    let basis = ProductBasisV3::decode(input.product_basis_bytes)
+        .map_err(WalletTerminalPayoutErrorV3::ProductBasis)?;
+    let refunds = basis.refunds_on_failure();
+    let escrow = validate_claims_route(input, market, position, refunds)?;
+    let founder_bond = founder_bond_plan(input, market, escrow)?;
+    let founder_bond_draw = founder_bond.map_or(0, FounderBondDrawPlanV1::draw);
     let replay = validate_custody_route(input, market)?;
 
     let request = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
@@ -307,12 +384,8 @@ pub fn build_wallet_terminal_payout_v3(
     .map_err(WalletTerminalPayoutErrorV3::TerminalSettlement)?;
     let request_bytes = request.to_bytes();
     let request_digest = hash(&request_bytes).to_bytes();
-    let product_width = usize::try_from(
-        ProductBasisV3::decode(input.product_basis_bytes)
-            .map_err(WalletTerminalPayoutErrorV3::ProductBasis)?
-            .basis_width(),
-    )
-    .map_err(|_| WalletTerminalPayoutErrorV3::Arithmetic)?;
+    let product_width = usize::try_from(basis.basis_width())
+        .map_err(|_| WalletTerminalPayoutErrorV3::Arithmetic)?;
     let claims_width =
         usize::try_from(market.claim_count).map_err(|_| WalletTerminalPayoutErrorV3::Arithmetic)?;
     let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0)
@@ -376,7 +449,14 @@ pub fn build_wallet_terminal_payout_v3(
         payout,
     )?;
     let accounts = payout_accounts(route, Pubkey::new_from_array(input.owner), custody_caller);
-    if accounts.len() != TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 {
+    // Thirty-six accounts, or thirty-nine with the trailing bond tail; the two
+    // widths the deployed program admits and no third.
+    let expected_accounts = if route.founder_bond.is_some() {
+        TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3
+    } else {
+        TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3
+    };
+    if accounts.len() != expected_accounts {
         return Err(WalletTerminalPayoutErrorV3::Route);
     }
     Ok(WalletTerminalPayoutReportV3 {
@@ -402,7 +482,59 @@ pub fn build_wallet_terminal_payout_v3(
         pre_custody_replay_bytes: input.custody_replay_bytes.to_vec(),
         pre_hoard_token_bytes: input.hoard_token_bytes.to_vec(),
         pre_recipient_token_bytes: input.recipient_token_bytes.to_vec(),
+        founder_bond,
+        founder_bond_draw,
     })
+}
+
+/// The sole admitted bond movement for this redemption, or none.
+///
+/// `escrow` is the derivation `validate_claims_route` already proved the tail
+/// against, so nothing here re-decides WHICH escrow; it decides what the
+/// redemption may take from it. The exit comes from the scenario the terminal
+/// certificate authenticated -- `Failure` is the exhausted walk, everything
+/// else the honest one -- and the outstanding claims are read off the aggregate
+/// BEFORE this redemption's own debit, which is the quantity the chain reads
+/// too.
+fn founder_bond_plan(
+    input: WalletTerminalPayoutInputV3<'_>,
+    market: LiabilityBasisMarketViewV2,
+    escrow: Option<FailureEscrowV1>,
+) -> Result<Option<FounderBondDrawPlanV1>, WalletTerminalPayoutErrorV3> {
+    let (Some(escrow), Some(bond)) = (escrow, input.founder_bond) else {
+        return Ok(None);
+    };
+    // The rent is READ off the escrow's own admission, never off a sysvar of
+    // the moment and never from the caller: decision 0030 records at founding
+    // what was actually paid, and the bond is everything above it.
+    let admission = ProtocolPositionAdmissionV2::decode(bond.escrow_admission_bytes)
+        .map_err(WalletTerminalPayoutErrorV3::ProtocolPosition)?;
+    let request = admission.request();
+    if request.position_owner != escrow.owner.to_bytes()
+        || request.owner_kind != ProtocolPositionOwnerKindV2::ClaimsCapability
+    {
+        return Err(WalletTerminalPayoutErrorV3::FounderBondRoute);
+    }
+    let exit = if matches!(input.terminal, TerminalScenarioV3::Failure) {
+        FounderBondExitV1::Exhausted
+    } else {
+        FounderBondExitV1::Honest
+    };
+    let ordinary_outstanding =
+        ordinary_outstanding_v1(market, input.aggregate_bytes, escrow.failure_selector)
+            .map_err(WalletTerminalPayoutErrorV3::FounderBond)?;
+    FounderBondDrawPlanV1::new(FounderBondDrawObservationV1 {
+        exit,
+        escrow_lamports: bond.escrow_lamports,
+        recorded_rent: request.position_rent_principal,
+        ordinary_outstanding,
+        claim_index: input.claim_index,
+        failure_selector: escrow.failure_selector,
+        quantity: input.quantity,
+        recipient_lamports: bond.recipient_lamports,
+    })
+    .map(Some)
+    .map_err(WalletTerminalPayoutErrorV3::FounderBond)
 }
 
 /// Return the exact first-use, duplicate-free lookup sequence proven by the campaign.
@@ -517,6 +649,12 @@ pub struct WalletTerminalPayoutPoststateV3<'a> {
     pub hoard_token_bytes: &'a [u8],
     /// Recipient token-account poststate.
     pub recipient_token_bytes: &'a [u8],
+    /// Observed escrow and bond-recipient lamports after an accepted draw.
+    ///
+    /// `None` on a Market that posted no bond. A report that carries a draw
+    /// plan and a poststate that carries no pair is a `Postcondition`: "nobody
+    /// looked" and "nothing moved" are the same number and different facts.
+    pub founder_bond: Option<(u64, u64)>,
 }
 
 /// Exact owned poststate projected before a wallet payout is signed.
@@ -539,6 +677,9 @@ pub struct WalletTerminalPayoutExpectedPoststateV3 {
     pub hoard_token_bytes: Vec<u8>,
     /// Exact recipient token-account bytes after the payout.
     pub recipient_token_bytes: Vec<u8>,
+    /// Exact escrow and bond-recipient lamports after the admitted draw, from
+    /// the report's own plan; `None` on a Market that posted no bond.
+    pub founder_bond: Option<(u64, u64)>,
 }
 
 /// Project the exact poststate and nested receipts of one checked payout.
@@ -706,6 +847,9 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
         custody_replay_bytes,
         hoard_token_bytes,
         recipient_token_bytes,
+        founder_bond: report
+            .founder_bond
+            .map(|plan| (plan.escrow_after(), plan.recipient_after())),
     })
 }
 
@@ -721,6 +865,7 @@ pub fn verify_wallet_terminal_payout_postcondition_v3(
         || post.custody_replay_bytes != expected.custody_replay_bytes
         || post.hoard_token_bytes != expected.hoard_token_bytes
         || post.recipient_token_bytes != expected.recipient_token_bytes
+        || post.founder_bond != expected.founder_bond
     {
         return Err(WalletTerminalPayoutErrorV3::Postcondition);
     }
@@ -734,11 +879,17 @@ fn validate_snapshot(observation: Observation) -> Result<(), WalletTerminalPayou
     Ok(())
 }
 
+/// Prove the route, and with it the founder-bond tail this Market either owes
+/// or must not carry.
+///
+/// Returns the derived failure escrow when the tail is present, so the draw
+/// plan reads one derivation rather than making a second.
 fn validate_claims_route(
     input: WalletTerminalPayoutInputV3<'_>,
     market: LiabilityBasisMarketViewV2,
     position: LiabilityBasisPositionViewV2,
-) -> Result<(), WalletTerminalPayoutErrorV3> {
+    refunds: bool,
+) -> Result<Option<FailureEscrowV1>, WalletTerminalPayoutErrorV3> {
     let route = input.route;
     let aggregate = Pubkey::find_program_address(
         &[
@@ -815,7 +966,35 @@ fn validate_claims_route(
     {
         return Err(WalletTerminalPayoutErrorV3::Route);
     }
-    Ok(())
+    // The tail is carried by exactly the Markets that posted a bond, and the
+    // route and the prestate agree about it or neither is trusted: half a tail
+    // is a shape the program does not accept.
+    if route.founder_bond.is_some() != refunds || input.founder_bond.is_some() != refunds {
+        return Err(WalletTerminalPayoutErrorV3::FounderBondRoute);
+    }
+    let Some(tail) = route.founder_bond else {
+        return Ok(None);
+    };
+    // Every input to this derivation is the aggregate's own -- the Claims
+    // program, the logical Market, the runtime width -- so a caller cannot
+    // point the tail at another Market's escrow. It is the derivation
+    // `FailureEscrowIdentityV1::derive` makes inside Claims.
+    let escrow = failure_escrow_v1(
+        route.claims_program,
+        market.logical_market,
+        route.aggregate,
+        market.claim_count,
+    )
+    .map_err(|_| WalletTerminalPayoutErrorV3::FounderBondRoute)?;
+    // The recipient is DERIVED, never accepted: on the wallet route the bond
+    // walks to the same identity the atoms do.
+    if tail.escrow_position != escrow.position
+        || tail.escrow_admission != escrow.admission
+        || tail.recipient != Pubkey::new_from_array(input.recipient_owner)
+    {
+        return Err(WalletTerminalPayoutErrorV3::FounderBondRoute);
+    }
+    Ok(Some(escrow))
 }
 
 fn validate_custody_route(
@@ -1017,7 +1196,7 @@ fn payout_accounts(
     owner: Pubkey,
     custody_caller: Pubkey,
 ) -> Vec<AccountMeta> {
-    vec![
+    let mut accounts = vec![
         AccountMeta::new_readonly(owner, true),
         AccountMeta::new(route.aggregate, false),
         AccountMeta::new_readonly(route.linked_basis_raw, false),
@@ -1054,10 +1233,21 @@ fn payout_accounts(
         AccountMeta::new(route.recipient, false),
         AccountMeta::new_readonly(route.custody_authority, false),
         AccountMeta::new_readonly(route.token_program, false),
-    ]
+    ];
+    // TRAILING, in the program's own order: escrow Position writable, its
+    // admission read-only, the bond recipient writable. Appending rather than
+    // inserting is what keeps a categorical Market's frame byte-for-byte the
+    // one that shipped.
+    if let Some(tail) = route.founder_bond {
+        accounts.push(AccountMeta::new(tail.escrow_position, false));
+        accounts.push(AccountMeta::new_readonly(tail.escrow_admission, false));
+        accounts.push(AccountMeta::new(tail.recipient, false));
+    }
+    accounts
 }
 
-/// Reproduce the exact 36-account frame owned by a payout report.
+/// Reproduce the exact 36-account frame owned by a payout report, or the
+/// 39-account one when its route carries the founder-bond tail.
 ///
 /// Successor operators that wrap the terminal route must extend this frame,
 /// never restate its account order. The returned value is derived only from
@@ -1164,6 +1354,10 @@ pub(crate) mod tests {
             encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
             liability_basis_vector_width_v2,
         },
+        protocol_position_v2::{
+            ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2,
+            ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
+        },
         terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_BYTES_V3,
     };
     use dclutch_product::payoff::runtime_v3::{
@@ -1224,6 +1418,24 @@ pub(crate) mod tests {
     }
 
     fn fixture() -> Fixture {
+        fixture_with_scale(1)
+    }
+
+    /// The shared fixture at one payout scale.
+    ///
+    /// `1` is the legacy categorical shape and posts no bond; `basis_width - 1`
+    /// is the refunding shape, and the sole author of that rule is
+    /// `categorical_refunds_on_failure_v3`, not this test.
+    fn fixture_with_scale(payout_scale: u64) -> Fixture {
+        fixture_with_scale_and_ordinary_supply(payout_scale, 5)
+    }
+
+    /// The same fixture with the ordinary coordinate's supply chosen.
+    ///
+    /// A walk that exhausts the bond has to exhaust the ORDINARY claims, and
+    /// the fixture's owner holds two of them, so a walk needs an aggregate
+    /// whose ordinary supply is two rather than five.
+    fn fixture_with_scale_and_ordinary_supply(payout_scale: u64, ordinary: u64) -> Fixture {
         let claims_program = key(40);
         let custody_program = key(41);
         let collateral_mint = key(42);
@@ -1304,6 +1516,8 @@ pub(crate) mod tests {
             token_program: Pubkey::new_from_array(
                 dclutch_custody::token_svm::LEGACY_TOKEN_PROGRAM_ID,
             ),
+            // A categorical Market seats no failure escrow and posts no bond.
+            founder_bond: None,
         };
 
         let basis_bytes =
@@ -1318,7 +1532,7 @@ pub(crate) mod tests {
                 result_unit_id: RESULT_UNIT,
                 evaluator_release_id: EVALUATOR,
                 basis_width: 3,
-                payout_scale: 1,
+                payout_scale,
                 knot_denominator: 1,
                 knots: &[],
                 terms: &[],
@@ -1392,7 +1606,7 @@ pub(crate) mod tests {
             RELEASE_SET,
             EVALUATOR,
             2,
-            1,
+            payout_scale,
         )
         .expect("terminal admission");
 
@@ -1414,7 +1628,7 @@ pub(crate) mod tests {
                 custody_context: CUSTODY_CONTEXT,
                 generation: 3,
             },
-            &[5, 7],
+            &[ordinary, 7],
             &mut aggregate_bytes,
         )
         .expect("aggregate");
@@ -1492,6 +1706,8 @@ pub(crate) mod tests {
             expected_generation: 3,
             expected_market_revision: 7,
             expected_position_revision: 11,
+            // The categorical fixture's basis does not refund on failure.
+            founder_bond: None,
         }
     }
 
@@ -1690,6 +1906,7 @@ pub(crate) mod tests {
             custody_replay_bytes: &replay,
             hoard_token_bytes: &hoard,
             recipient_token_bytes: &recipient,
+            founder_bond: None,
         };
         assert_eq!(
             verify_wallet_terminal_payout_postcondition_v3(&report, post),
@@ -1730,6 +1947,7 @@ pub(crate) mod tests {
             custody_replay_bytes: &replay,
             hoard_token_bytes: &hoard,
             recipient_token_bytes: &recipient,
+            founder_bond: None,
         };
         assert_eq!(
             verify_wallet_terminal_payout_postcondition_v3(&report, post),
@@ -1746,6 +1964,355 @@ pub(crate) mod tests {
                 },
             ),
             Err(WalletTerminalPayoutErrorV3::Postcondition)
+        );
+    }
+
+    // The escrow's own numbers, kept apart from the aggregate's so a draw that
+    // silently read a token balance instead of lamports could not pass.
+    const ESCROW_RECORDED_RENT: u64 = 1_000_000;
+    const ESCROW_LAMPORTS: u64 = 1_500_000;
+    const ADMISSION_RENT: u64 = 900_000;
+    const BOND_RECIPIENT_LAMPORTS: u64 = 7_000_000;
+
+    /// The escrow admission a refunding founding writes: a `ClaimsCapability`
+    /// owner at this Market's failure descriptor and coordinate, recording what
+    /// the Position's rent actually cost.
+    fn escrow_admission_bytes(escrow: FailureEscrowV1) -> Vec<u8> {
+        let request = ProtocolPositionRequestV2 {
+            action: ProtocolPositionActionV2::Admit,
+            owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
+            presence: ProtocolPositionPresenceV2::Vacant,
+            release_set: RELEASE_SET,
+            market: MARKET,
+            position_owner: escrow.owner.to_bytes(),
+            parent_request_digest: [0xc1; 32],
+            rent_credit: [0xc5; 32],
+            rent_program: [0xc6; 32],
+            generation: 3,
+            expected_market_revision: 7,
+            expected_position_revision: 0,
+            observed_position_lamports: ESCROW_LAMPORTS,
+            observed_admission_lamports: ADMISSION_RENT,
+            position_rent_principal: ESCROW_RECORDED_RENT,
+            admission_rent_principal: ADMISSION_RENT,
+            capability_descriptor: MARKET,
+            capability_outcome: escrow.failure_selector,
+        }
+        .new()
+        .expect("escrow admission request");
+        ProtocolPositionAdmissionV2::new(
+            request,
+            ProtocolPositionAdmissionEvidenceV2 {
+                product_record_digest: PRODUCT_RECORD,
+                semantic_basis_id: SEMANTIC_BASIS,
+                linked_basis_record_digest: LINKED_BASIS,
+                request_digest: [0xc4; 32],
+                claims_program: key(40).to_bytes(),
+                trading_program: [0xc7; 32],
+                capability_descriptor: MARKET,
+                capability_outcome: escrow.failure_selector,
+                outcome_count: 2,
+            },
+        )
+        .expect("escrow admission")
+        .to_state_bytes()
+        .expect("admission bytes")
+        .to_vec()
+    }
+
+    /// The same fixture at the refunding payout scale, with the tail its basis
+    /// obliges it to carry.
+    fn refunding_fixture() -> (Fixture, FailureEscrowV1, Vec<u8>) {
+        refunding_fixture_with_ordinary_supply(5)
+    }
+
+    fn refunding_fixture_with_ordinary_supply(
+        ordinary: u64,
+    ) -> (Fixture, FailureEscrowV1, Vec<u8>) {
+        let mut fixture = fixture_with_scale_and_ordinary_supply(2, ordinary);
+        assert!(
+            ProductBasisV3::decode(&fixture.basis)
+                .expect("basis decodes")
+                .refunds_on_failure(),
+            "this fixture is only a founder-bond fixture if its basis refunds"
+        );
+        let escrow = failure_escrow_v1(
+            fixture.route.claims_program,
+            MARKET,
+            fixture.route.aggregate,
+            2,
+        )
+        .expect("a width that seats a failure coordinate");
+        fixture.route.founder_bond = Some(WalletTerminalPayoutFounderBondRouteV3 {
+            escrow_position: escrow.position,
+            escrow_admission: escrow.admission,
+            recipient: Pubkey::new_from_array(OWNER),
+        });
+        let admission = escrow_admission_bytes(escrow);
+        (fixture, escrow, admission)
+    }
+
+    fn refunding_input<'a>(
+        fixture: &'a Fixture,
+        admission_bytes: &'a [u8],
+        claim_index: u32,
+    ) -> WalletTerminalPayoutInputV3<'a> {
+        WalletTerminalPayoutInputV3 {
+            terminal: TerminalScenarioV3::Failure,
+            founder_bond: Some(WalletTerminalPayoutFounderBondInputV3 {
+                escrow_lamports: ESCROW_LAMPORTS,
+                escrow_admission_bytes: admission_bytes,
+                recipient_lamports: BOND_RECIPIENT_LAMPORTS,
+            }),
+            ..input(fixture, claim_index)
+        }
+    }
+
+    #[test]
+    fn a_refunding_market_missing_its_bond_tail_is_refused_by_name() {
+        let (fixture, _escrow, admission) = refunding_fixture();
+
+        // The route forgot the tail. The frame it would build is thirty-six
+        // accounts and the chain refuses it `FounderBondFrame`; this costs no
+        // submission to learn.
+        let mut without_route = fixture.route;
+        without_route.founder_bond = None;
+        assert_eq!(
+            build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+                route: without_route,
+                founder_bond: None,
+                ..refunding_input(&fixture, &admission, 0)
+            }),
+            Err(WalletTerminalPayoutErrorV3::FounderBondRoute)
+        );
+
+        // The route carries it and the prestate does not: half a tail.
+        assert_eq!(
+            build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+                founder_bond: None,
+                ..refunding_input(&fixture, &admission, 0)
+            }),
+            Err(WalletTerminalPayoutErrorV3::FounderBondRoute)
+        );
+
+        // A categorical Market offered the tail anyway is the same accusation
+        // from the other side.
+        let categorical = fixture_with_scale(1);
+        assert_eq!(
+            build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+                route: fixture.route,
+                ..refunding_input(&categorical, &admission, 0)
+            }),
+            Err(WalletTerminalPayoutErrorV3::FounderBondRoute)
+        );
+    }
+
+    #[test]
+    fn the_bond_tail_is_appended_in_order_and_draws_the_kernel_share() {
+        let (fixture, escrow, admission) = refunding_fixture();
+        let report = build_wallet_terminal_payout_v3(refunding_input(&fixture, &admission, 0))
+            .expect("refunding terminal payout");
+        assert_eq!(
+            report.instruction.accounts.len(),
+            TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3
+        );
+        assert_eq!(
+            &report.instruction.accounts[TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3..],
+            [
+                AccountMeta::new(escrow.position, false),
+                AccountMeta::new_readonly(escrow.admission, false),
+                AccountMeta::new(Pubkey::new_from_array(OWNER), false),
+            ]
+            .as_slice()
+        );
+        // The first thirty-six are the frame that shipped: the tail is
+        // appended, never interleaved. Stripping it from the same route
+        // reproduces them exactly.
+        let mut without_tail = report.route;
+        without_tail.founder_bond = None;
+        assert_eq!(
+            &report.instruction.accounts[..TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3],
+            payout_accounts(without_tail, report.owner, report.custody_caller).as_slice()
+        );
+
+        // The draw is the kernel's, recomputed here from the same observation
+        // rather than restated as a number.
+        let expected = FounderBondDrawPlanV1::new(FounderBondDrawObservationV1 {
+            exit: FounderBondExitV1::Exhausted,
+            escrow_lamports: ESCROW_LAMPORTS,
+            recorded_rent: ESCROW_RECORDED_RENT,
+            // Supply at every coordinate but the failure selector: the
+            // fixture's aggregate carries 5 there.
+            ordinary_outstanding: 5,
+            claim_index: 0,
+            failure_selector: escrow.failure_selector,
+            quantity: 2,
+            recipient_lamports: BOND_RECIPIENT_LAMPORTS,
+        })
+        .expect("the kernel admits this draw");
+        assert!(
+            expected.draw() > 0,
+            "an exhausted walk that moves nothing would prove nothing"
+        );
+        assert_eq!(report.founder_bond, Some(expected));
+        assert_eq!(report.founder_bond_draw, expected.draw());
+
+        // The canonical lookup sequence lists every frame key at its first
+        // appearance and excludes only the two static signers, so the escrow
+        // pair joins it and the bond recipient -- which IS the Position owner
+        // on this route -- stays out.
+        let addresses = canonical_wallet_terminal_payout_lookup_addresses_v3(&report, key(200))
+            .expect("canonical lookup addresses");
+        assert!(addresses.contains(&escrow.position));
+        assert!(addresses.contains(&escrow.admission));
+        assert!(!addresses.contains(&Pubkey::new_from_array(OWNER)));
+
+        let projected =
+            project_wallet_terminal_payout_postcondition_v3(&report).expect("projected poststate");
+        assert_eq!(
+            projected.founder_bond,
+            Some((expected.escrow_after(), expected.recipient_after()))
+        );
+        let (receipt, aggregate, position, replay, hoard, recipient) = accepted_poststate(&report);
+        let post = WalletTerminalPayoutPoststateV3 {
+            receipt_bytes: &receipt,
+            aggregate_bytes: &aggregate,
+            position_bytes: &position,
+            custody_replay_bytes: &replay,
+            hoard_token_bytes: &hoard,
+            recipient_token_bytes: &recipient,
+            founder_bond: projected.founder_bond,
+        };
+        assert_eq!(
+            verify_wallet_terminal_payout_postcondition_v3(&report, post),
+            Ok(())
+        );
+        // A plan with no observed pair is not a draw that did not happen; it is
+        // a poststate nobody read.
+        assert_eq!(
+            verify_wallet_terminal_payout_postcondition_v3(
+                &report,
+                WalletTerminalPayoutPoststateV3 {
+                    founder_bond: None,
+                    ..post
+                },
+            ),
+            Err(WalletTerminalPayoutErrorV3::Postcondition)
+        );
+    }
+
+    #[test]
+    fn an_exhausting_walk_drains_the_escrow_to_exactly_its_recorded_rent() {
+        // `an_exhausting_walk_pays_the_bond_exactly` is proved in Lean and
+        // computed in the kernel; this is the first place it is WALKED through
+        // the builder that submits it. Each redemption's prestate is the
+        // previous redemption's projected poststate -- aggregate, Position,
+        // replay, tokens and the escrow's own lamports -- so nothing about the
+        // sequence is retyped between steps.
+        let (fixture, escrow, admission) = refunding_fixture_with_ordinary_supply(2);
+        let bond = ESCROW_LAMPORTS - ESCROW_RECORDED_RENT;
+
+        let first = build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+            quantity: 1,
+            ..refunding_input(&fixture, &admission, 0)
+        })
+        .expect("first redemption of the walk");
+        let first_plan = first.founder_bond.expect("the first redemption draws");
+        let projected = project_wallet_terminal_payout_postcondition_v3(&first)
+            .expect("the first redemption's poststate");
+
+        // Two ordinary claims stand and this redemption retires one, so it
+        // draws half the bond and leaves the escrow above its rent: a walk
+        // whose first step already emptied the escrow would prove nothing
+        // about the walk.
+        assert_eq!(first_plan.draw(), bond / 2);
+        assert!(first_plan.escrow_after() > ESCROW_RECORDED_RENT);
+
+        let second = build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+            quantity: 1,
+            aggregate_bytes: &projected.aggregate_bytes,
+            position_bytes: &projected.position_bytes,
+            custody_replay_bytes: &projected.custody_replay_bytes,
+            hoard_token_bytes: &projected.hoard_token_bytes,
+            recipient_token_bytes: &projected.recipient_token_bytes,
+            expected_market_revision: 8,
+            expected_position_revision: 12,
+            transfer_index: 1,
+            founder_bond: Some(WalletTerminalPayoutFounderBondInputV3 {
+                escrow_lamports: first_plan.escrow_after(),
+                escrow_admission_bytes: &admission,
+                recipient_lamports: first_plan.recipient_after(),
+            }),
+            ..refunding_input(&fixture, &admission, 0)
+        })
+        .expect("second redemption of the walk");
+        let second_plan = second.founder_bond.expect("the second redemption draws");
+
+        // The redemption that retires the last ordinary claim draws everything
+        // left, so the escrow ends holding exactly the rent its admission
+        // recorded and the two draws sum to the bond -- no lamport stranded, no
+        // lamport invented.
+        assert_eq!(second_plan.escrow_after(), ESCROW_RECORDED_RENT);
+        assert_eq!(first_plan.draw() + second_plan.draw(), bond);
+        assert_eq!(
+            second_plan.recipient_after(),
+            BOND_RECIPIENT_LAMPORTS + bond
+        );
+        // Both frames carried the tail; the walk is not two shapes.
+        assert_eq!(
+            first.instruction.accounts.len(),
+            TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3
+        );
+        assert_eq!(
+            second.instruction.accounts.len(),
+            TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3
+        );
+
+        // And a third redemption has nothing to retire. The refusal that
+        // arrives is the ROUTE's -- neither the Position nor the aggregate
+        // holds a claim at this coordinate any more -- and it arrives before
+        // the bond arithmetic, which is the right order: the kernel's own
+        // `ExceedsOutstanding` backstop is proved against the chain's numbers
+        // in `founder_bond_v1`, not reached from a builder that already knows
+        // the holding is empty.
+        let after = project_wallet_terminal_payout_postcondition_v3(&second)
+            .expect("the second redemption's poststate");
+        assert_eq!(
+            build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+                quantity: 1,
+                aggregate_bytes: &after.aggregate_bytes,
+                position_bytes: &after.position_bytes,
+                custody_replay_bytes: &after.custody_replay_bytes,
+                hoard_token_bytes: &after.hoard_token_bytes,
+                recipient_token_bytes: &after.recipient_token_bytes,
+                expected_market_revision: 9,
+                expected_position_revision: 13,
+                transfer_index: 2,
+                founder_bond: Some(WalletTerminalPayoutFounderBondInputV3 {
+                    escrow_lamports: second_plan.escrow_after(),
+                    escrow_admission_bytes: &admission,
+                    recipient_lamports: second_plan.recipient_after(),
+                }),
+                ..refunding_input(&fixture, &admission, 0)
+            }),
+            Err(WalletTerminalPayoutErrorV3::Route)
+        );
+
+        // The escrow's OWN redemption at the failure coordinate draws nothing:
+        // the bond is the ordinary holders', and the coordinate the outage
+        // pays is not one of them.
+        let failure = build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+            quantity: 1,
+            claim_index: escrow.failure_selector,
+            ..refunding_input(&fixture, &admission, escrow.failure_selector)
+        })
+        .expect("the failure coordinate's own redemption");
+        assert_eq!(
+            failure
+                .founder_bond
+                .expect("the failure redemption still carries a plan")
+                .draw(),
+            0
         );
     }
 }

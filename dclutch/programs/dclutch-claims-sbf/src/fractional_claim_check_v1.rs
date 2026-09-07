@@ -1495,6 +1495,9 @@ fn commit_fractional_compaction(
                 claim_check_rent: record_rent,
                 opener_debt: escrow.opener_outlay,
                 crank_reward_cap: COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+                // A Fractional reserve is settled through the rational
+                // terminal, which carries no founder bond.
+                founder_bond_draw: 0,
             },
             denominator: prepared.denominator,
             payout_per_claim: prepared.payout_per_claim,

@@ -52,15 +52,29 @@ use dclutch_claims::composition::{
 };
 use dclutch_claims::{
     CallerRole,
+    claim_check_v1::ClaimCheckSeedsV1,
+    founder_bond_v1::{
+        FounderBondDrawObservationV1, FounderBondDrawPlanV1, FounderBondExitV1, exit_v1,
+        ordinary_outstanding_v1,
+    },
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     product_basis_terminal_v3::{
         ProductClaimsTerminalAdmissionV3, ProductClaimsTerminalInputV3,
         encode_product_claims_terminal_signed_delta_v3,
     },
+    protocol_position_v2::{
+        ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2,
+        ProtocolPositionOwnerKindV2, ProtocolPositionSeedsV2,
+    },
+    rational_kernel::product_v3::TerminalScenarioV3,
     signed_delta_v3::{SignedDeltaV3, plan_bytes},
     terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 as ACCOUNT_COUNT,
         TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
+        TERMINAL_SETTLEMENT_FOUNDER_BOND_ADMISSION_ACCOUNT_V3 as BOND_ADMISSION,
+        TERMINAL_SETTLEMENT_FOUNDER_BOND_ESCROW_ACCOUNT_V3 as BOND_ESCROW,
+        TERMINAL_SETTLEMENT_FOUNDER_BOND_RECIPIENT_ACCOUNT_V3 as BOND_RECIPIENT,
+        TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3 as BOND_ACCOUNT_COUNT,
         TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3 as CERTIFICATE,
         TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3 as COLLATERAL_MINT,
         TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3 as CUSTODY_AUTHORITY,
@@ -96,6 +110,7 @@ use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
+    log::sol_log_64,
     program::set_return_data,
     program_error::ProgramError,
     pubkey::Pubkey,
@@ -103,7 +118,7 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 
 use super::{
-    ClaimsSbfError,
+    ClaimsSbfError, FailureEscrowIdentityV1,
     liability_basis_v2::LIABILITY_BASIS_MARKET_SEED_V2,
     market_admission_v1::CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1,
     rational_terminal_v3::{
@@ -118,12 +133,18 @@ use super::{
     },
 };
 
+/// Whether a frame is the fixed thirty-six or the thirty-six plus the
+/// founder-bond tail. Any other width is refused before a byte is read.
+const fn frame_width_admitted(accounts: &[AccountInfo<'_>]) -> bool {
+    accounts.len() == ACCOUNT_COUNT || accounts.len() == BOND_ACCOUNT_COUNT
+}
+
 pub(super) fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    if accounts.len() != ACCOUNT_COUNT {
+    if !frame_width_admitted(accounts) {
         return Err(ClaimsSbfError::Accounts.into());
     }
     let request = TerminalSettlementRequestV3::decode(instruction_data)
@@ -157,7 +178,7 @@ pub(crate) fn execute_enclosing_authenticated(
     outer_context: [u8; 32],
     outer_request_digest: [u8; 32],
 ) -> Result<TerminalSettlementReceiptV3, ProgramError> {
-    if accounts.len() != ACCOUNT_COUNT || request.input().caller_role != CallerRole::Trading {
+    if !frame_width_admitted(accounts) || request.input().caller_role != CallerRole::Trading {
         return Err(ClaimsSbfError::Accounts.into());
     }
     let input = request.input();
@@ -215,7 +236,7 @@ pub(crate) fn execute_claim_check_compaction(
     accounts: &[AccountInfo<'_>],
     request: TerminalSettlementRequestV3,
 ) -> Result<TerminalSettlementReceiptV3, ProgramError> {
-    if accounts.len() != ACCOUNT_COUNT || request.input().caller_role != CallerRole::Claims {
+    if !frame_width_admitted(accounts) || request.input().caller_role != CallerRole::Claims {
         return Err(ClaimsSbfError::Accounts.into());
     }
     let request_bytes = request.to_bytes();
@@ -242,6 +263,9 @@ struct PreparedTerminalSettlementV3 {
     payout: u64,
     market: LiabilityBasisMarketViewV2,
     terminal_digest: [u8; 32],
+    /// The founder bond's draw for this redemption, when the frame carries the
+    /// tail. `None` on every Market that posted no bond.
+    bond: Option<FounderBondDrawPlanV1>,
 }
 
 #[inline(never)]
@@ -316,6 +340,14 @@ fn authenticate_and_prepare(
         COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         input.exposure_digest,
     )?;
+    // Computed by the codec's sole author of the rule and never re-derived
+    // here; it selects the certificate's arm and, below, whether this Market
+    // posted a founder bond at all.
+    let refunds_on_failure = dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3(
+        runtime.basis_kind,
+        runtime.runtime.outcome_count,
+        runtime.payout_scale,
+    );
     let scenario = authenticate_terminal_certificate_scenario_v3(
         TerminalCertificateFrameV3 {
             registry: &accounts[13],
@@ -327,11 +359,7 @@ fn authenticate_and_prepare(
         input.release_set,
         core,
         runtime.basis_kind,
-        dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3(
-            runtime.basis_kind,
-            runtime.runtime.outcome_count,
-            runtime.payout_scale,
-        ),
+        refunds_on_failure,
         runtime.runtime.outcome_count,
     )?;
     let exposure_bytes = accounts[EXPOSURE_RAW]
@@ -346,6 +374,17 @@ fn authenticate_and_prepare(
     let position_bytes = accounts[20]
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
+    let bond = authenticate_founder_bond_arm(
+        program_id,
+        accounts,
+        input,
+        market,
+        &market_bytes,
+        core.terminal_winner,
+        refunds_on_failure,
+        scenario,
+        authority,
+    )?;
     let admission = ProductClaimsTerminalAdmissionV3::new(
         input.exposure_id,
         input.exposure_digest,
@@ -429,6 +468,7 @@ fn authenticate_and_prepare(
         payout,
         market,
         terminal_digest,
+        bond,
     }))
 }
 
@@ -448,6 +488,194 @@ const fn terminal_planning_refusal(
         }
         _ => ClaimsSbfError::Economic,
     }
+}
+
+/// The founder bond's arm of one redemption: authenticate the trailing tail,
+/// observe what stands, and plan the draw. Nothing moves here.
+///
+/// Decision 0033. The bond is the failure escrow's lamports above the rent
+/// its admission recorded at founding. On the exhausted exit -- the
+/// certificate names the failure selector, which on a refunding Market is the
+/// `Failure` scenario the payout already runs under -- every ordinary
+/// redemption draws `remaining * quantity / outstanding`, floored, and the one
+/// that retires the last ordinary claim draws everything left. On the honest
+/// exit the tail may be present and draws nothing. The failure coordinate's
+/// own redemption draws nothing on either.
+///
+/// The tail is TRAILING so that a Market with no bond keeps the exact frame
+/// that shipped, and a refunding Market's exhausted-arm redemption without it
+/// refuses `FounderBondFrame` by name rather than paying atoms and skipping
+/// lamports -- a partial exit the Lean forbids.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_founder_bond_arm(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    input: dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestInputV3,
+    market: LiabilityBasisMarketViewV2,
+    market_bytes: &[u8],
+    terminal_winner: u32,
+    refunds_on_failure: bool,
+    scenario: TerminalScenarioV3,
+    authority: ParentAuthorityV3,
+) -> Result<Option<FounderBondDrawPlanV1>, ProgramError> {
+    let exhausted = matches!(scenario, TerminalScenarioV3::Failure);
+    let Some(tail) = accounts.get(ACCOUNT_COUNT..) else {
+        return Err(ClaimsSbfError::Accounts.into());
+    };
+    let [escrow, admission, recipient] = tail else {
+        // No tail. A Market that posted no bond has nothing to draw; a
+        // refunding Market on its honest exit draws nothing either. Only the
+        // exhausted exit of a refunding Market has a lamport to move, and a
+        // frame that cannot move it is refused by name.
+        if refunds_on_failure && exhausted {
+            return Err(ClaimsSbfError::FounderBondFrame.into());
+        }
+        return Ok(None);
+    };
+    if !refunds_on_failure {
+        // A Market that posted no bond has no escrow to draw from; a tail
+        // offered anyway is a frame of the wrong shape, not a bond.
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    if !escrow.is_writable
+        || escrow.is_signer
+        || escrow.executable
+        || escrow.owner != program_id
+        || admission.is_writable
+        || admission.is_signer
+        || admission.executable
+        || admission.owner != program_id
+        || !recipient.is_writable
+        || recipient.executable
+        || recipient.key == escrow.key
+        || recipient.key == admission.key
+        || escrow.key == admission.key
+    {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    let derived = FailureEscrowIdentityV1::derive(program_id, input.market, market.claim_count)?;
+    let aggregate = accounts[1].key.to_bytes();
+    let position_seeds = ProtocolPositionSeedsV2::new(aggregate, derived.owner)
+        .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+    let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(aggregate, derived.owner)
+        .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+    if Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0 != *escrow.key
+        || Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).0
+            != *admission.key
+    {
+        // 0x5010, the accusation every route makes with the same word: the
+        // account offered as this Market's failure escrow is not the one the
+        // Market derives.
+        return Err(ClaimsSbfError::FailureEscrow.into());
+    }
+    // The recipient is DERIVED, never accepted: the wallet the atoms are paid
+    // to, or under the compaction crank the sleeping holder's own claim-check
+    // address, which redemption sweeps whole to the holder.
+    let expected_recipient = match authority {
+        ParentAuthorityV3::ClaimCheckCrank => Pubkey::find_program_address(
+            &ClaimCheckSeedsV1::new(aggregate, input.owner)
+                .map_err(|_| ClaimsSbfError::Identity)?
+                .as_slices(),
+            program_id,
+        )
+        .0,
+        ParentAuthorityV3::PositionOwner(_)
+        | ParentAuthorityV3::CallerProgramPda
+        | ParentAuthorityV3::EnclosingClaimsRoute => Pubkey::new_from_array(input.recipient_owner),
+    };
+    if *recipient.key != expected_recipient {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    // The rent the escrow recorded when it was funded (decision 0030), read
+    // off its admission rather than off the sysvar of the moment; and the
+    // admission has to be the escrow's own, seated at this Market's failure
+    // coordinate.
+    let recorded_rent = {
+        let bytes = admission
+            .try_borrow_data()
+            .map_err(|_| ClaimsSbfError::Accounts)?;
+        let admission = ProtocolPositionAdmissionV2::decode(&bytes)
+            .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+        let request = admission.request();
+        if request.position_owner != derived.owner
+            || request.owner_kind != ProtocolPositionOwnerKindV2::ClaimsCapability
+            || request.market != input.market
+            || request.capability_outcome != derived.failure_selector
+        {
+            return Err(ClaimsSbfError::FailureEscrow.into());
+        }
+        request.position_rent_principal
+    };
+    let Some(exit) = exit_v1(refunds_on_failure, terminal_winner, derived.failure_selector) else {
+        return Err(ClaimsSbfError::Identity.into());
+    };
+    // The certificate's arm and the winner agree about the exit or nothing
+    // moves: two readings of one fact.
+    if (exit == FounderBondExitV1::Exhausted) != exhausted {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    let ordinary_outstanding = ordinary_outstanding_v1(market, market_bytes, derived.failure_selector)
+        .map_err(|_| ClaimsSbfError::Economic)?;
+    let plan = FounderBondDrawPlanV1::new(FounderBondDrawObservationV1 {
+        exit,
+        escrow_lamports: escrow.lamports(),
+        recorded_rent,
+        ordinary_outstanding,
+        claim_index: input.claim_index,
+        failure_selector: derived.failure_selector,
+        quantity: input.quantity,
+        recipient_lamports: recipient.lamports(),
+    })
+    .map_err(|_| ClaimsSbfError::Economic)?;
+    Ok(Some(plan))
+}
+
+/// Move the planned draw and prove the post-balances are the plan's.
+///
+/// Runs after Custody has paid the atoms, so a redemption that pays the escrow
+/// refund and draws the bond is one instruction with one rollback domain:
+/// the two units share the redemption (design note section 3.2) and neither
+/// can land without the other.
+#[inline(never)]
+fn apply_founder_bond_draw(
+    accounts: &[AccountInfo<'_>],
+    plan: FounderBondDrawPlanV1,
+) -> Result<(), ProgramError> {
+    let escrow = accounts.get(BOND_ESCROW).ok_or(ClaimsSbfError::Accounts)?;
+    let recipient = accounts
+        .get(BOND_RECIPIENT)
+        .ok_or(ClaimsSbfError::Accounts)?;
+    if accounts.get(BOND_ADMISSION).is_none() {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    let draw = plan.draw();
+    if draw != 0 {
+        let mut escrow_lamports = escrow
+            .try_borrow_mut_lamports()
+            .map_err(|_| ClaimsSbfError::Accounts)?;
+        let mut recipient_lamports = recipient
+            .try_borrow_mut_lamports()
+            .map_err(|_| ClaimsSbfError::Accounts)?;
+        **escrow_lamports = escrow_lamports
+            .checked_sub(draw)
+            .ok_or(ClaimsSbfError::Economic)?;
+        **recipient_lamports = recipient_lamports
+            .checked_add(draw)
+            .ok_or(ClaimsSbfError::Economic)?;
+    }
+    plan.validate_post(escrow.lamports(), recipient.lamports())
+        .map_err(|_| ClaimsSbfError::Receipt)?;
+    // What moved and what stands, for the reader of a validator log: the draw,
+    // the bond before, the bond after, and a zero pair the fifth slot pads.
+    sol_log_64(
+        draw,
+        plan.remaining_before(),
+        plan.remaining_after(),
+        0,
+        0,
+    );
+    Ok(())
 }
 
 #[inline(never)]
@@ -523,6 +751,9 @@ fn execute(
     )?;
     if prepared.payout == 0 {
         authenticate_zero_custody_accounts(accounts, input, prepared.market.custody_context)?;
+    }
+    if let Some(bond) = prepared.bond {
+        apply_founder_bond_draw(accounts, bond)?;
     }
     let replay_digest =
         custody_replay_digest(accounts, input.expected_custody_revision, prepared.payout)?;

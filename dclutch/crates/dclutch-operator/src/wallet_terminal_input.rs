@@ -325,12 +325,14 @@ pub fn route_terminal_payout_frame_v1(
     let custody_context =
         observed_custody_context_v1(aggregate_account, coordinates.claims, request.market)?;
     refuse_the_failure_escrow_as_owner_v1(aggregate_account, coordinates.claims, request)?;
+    let founder_bond_escrow = routed_failure_escrow_v1(aggregate_account, coordinates.claims)?;
     let input = routed_input_v1(
         coordinates,
         routing,
         request,
         terminal_receipt,
         custody_context,
+        founder_bond_escrow,
     );
     let selected = SelectedInputV1::parse(&input, LookupTableRequirementV1::Absent)?;
     authenticate_routing_hints_v1(&selected, routing)?;
@@ -687,12 +689,36 @@ pub fn observed_custody_context_v1(
     Ok(aggregate.custody_context)
 }
 
+/// The Market's failure-escrow pair, derived off the aggregate that owns it.
+///
+/// UNCONDITIONAL. This phase reads the Market and the aggregate; the basis
+/// record that decides whether the Market refunds on failure -- and therefore
+/// whether it posted a founder bond -- is a round-two observation. So stage one
+/// derives the pair wherever the runtime width seats a failure coordinate at
+/// all and lets the report builder, which does read the basis, decide use. A
+/// width that seats none has no escrow and no bond: `None`, not a refusal.
+fn routed_failure_escrow_v1(
+    aggregate_account: &ObservedAccount,
+    claims: Pubkey,
+) -> Result<Option<crate::failure_escrow_v1::FailureEscrowV1>> {
+    let aggregate = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
+    Ok(crate::failure_escrow_v1::failure_escrow_v1(
+        claims,
+        aggregate.logical_market,
+        aggregate_account.key,
+        aggregate.claim_count,
+    )
+    .ok())
+}
+
 fn routed_input_v1(
     coordinates: &ProtocolCoordinatesV1,
     routing: &TerminalRoutingTableV1,
     request: &TerminalPayoutRequestV1,
     terminal_receipt: [u8; 32],
     custody_context: [u8; 32],
+    founder_bond_escrow: Option<crate::failure_escrow_v1::FailureEscrowV1>,
 ) -> PlanInputV1 {
     let records = &routing.records;
     PlanInputV1 {
@@ -712,6 +738,11 @@ fn routed_input_v1(
         custody_context: hex(&custody_context),
         release_set: hex(&coordinates.release_set),
         terminal_certificate: Pubkey::new_from_array(terminal_receipt).to_string(),
+        // The bond walks to the same identity the atoms do on this route.
+        founder_bond_escrow_position: founder_bond_escrow.map(|escrow| escrow.position.to_string()),
+        founder_bond_escrow_admission: founder_bond_escrow
+            .map(|escrow| escrow.admission.to_string()),
+        founder_bond_recipient: founder_bond_escrow.map(|_| request.owner.to_string()),
         lookup_table: None,
         programs: ProgramSelectorsV1 {
             registry: coordinates.registry.to_string(),

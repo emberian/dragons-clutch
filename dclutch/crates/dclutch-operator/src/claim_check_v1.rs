@@ -494,6 +494,11 @@ pub fn build_claim_check_compaction_v1(
         claim_check_rent,
         opener_debt: escrow.opener_outlay,
         crank_reward_cap: COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+        // The operator's compaction plan is built for the categorical route's
+        // thirty-six-account terminal, which carries no founder-bond tail; a
+        // refunding Market's exhausted-arm compaction (the sleeper's share of
+        // the bond) is owed to this planner and named in BUILD_founder-bond.md.
+        founder_bond_draw: 0,
     })
     .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheckConservation)?;
 

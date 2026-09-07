@@ -41,6 +41,7 @@ use crate::representation_composition::{
 use crate::{
     Finality, Observation, ObservedAccount,
     wallet_terminal_payout_v3::{
+        WalletTerminalPayoutFounderBondInputV3, WalletTerminalPayoutFounderBondRouteV3,
         WalletTerminalPayoutInputV3, WalletTerminalPayoutReportV3, WalletTerminalPayoutRouteV3,
         build_wallet_terminal_payout_v3, canonical_wallet_terminal_payout_lookup_addresses_v3,
         compile_wallet_terminal_payout_v0,
@@ -63,15 +64,15 @@ use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use dclutch_custody::{ContextV1, CustodyRequestV1, OperationV1};
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use dclutch_market::capability_manifest::ContentId;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_market::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES, StateBumpsV1,
-};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES};
+#[cfg(test)]
+use dclutch_market::StateBumpsV1;
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
@@ -83,6 +84,7 @@ use dclutch_registry::activation_auth_v1::{
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 #[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use dclutch_registry::release_set::CallerAuthoritySeedsV1;
 use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_source::resolution::{
@@ -152,6 +154,21 @@ pub struct PlanInputV1 {
     pub release_set: String,
     /// Exact Resolution certificate account accepted by live Core.
     pub terminal_certificate: String,
+    /// Derived failure-escrow Position, when stage one could derive one.
+    ///
+    /// Stage one derives the escrow pair off the aggregate's own coordinates
+    /// without reading the basis record, so these three are present on every
+    /// Market whose runtime width seats a failure coordinate. Whether they are
+    /// USED is the basis record's decision, made in `build_report`: a
+    /// categorical Market carries them here and no tail on chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub founder_bond_escrow_position: Option<String>,
+    /// That Position's protocol-Position admission record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub founder_bond_escrow_admission: Option<String>,
+    /// The identity a drawn bond walks to: the request's own recipient owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub founder_bond_recipient: Option<String>,
     #[serde(
         default,
         deserialize_with = "optional_lookup_table",
@@ -200,6 +217,9 @@ pub struct SelectedInputV1 {
     pub composition_translation: RecordPairV1,
     pub composition_exposure: RecordPairV1,
     pub terminal_certificate: Pubkey,
+    pub founder_bond_escrow_position: Option<Pubkey>,
+    pub founder_bond_escrow_admission: Option<Pubkey>,
+    pub founder_bond_recipient: Option<Pubkey>,
     pub aggregate: Pubkey,
     pub position: Pubkey,
     activation_cache: Pubkey,
@@ -273,6 +293,27 @@ impl SelectedInputV1 {
         let resolution = nonzero_pubkey(&input.programs.resolution, "programs.resolution")?;
         let terminal_certificate =
             nonzero_pubkey(&input.terminal_certificate, "terminalCertificate")?;
+        // All three or none: half a tail is a shape neither this builder nor
+        // the program accepts, and a partly-derived escrow would silently
+        // become a frame the chain refuses by name.
+        let founder_bond = match (
+            &input.founder_bond_escrow_position,
+            &input.founder_bond_escrow_admission,
+            &input.founder_bond_recipient,
+        ) {
+            (Some(position), Some(admission), Some(recipient)) => Some((
+                nonzero_pubkey(position, "founderBondEscrowPosition")?,
+                nonzero_pubkey(admission, "founderBondEscrowAdmission")?,
+                nonzero_pubkey(recipient, "founderBondRecipient")?,
+            )),
+            (None, None, None) => None,
+            _ => {
+                return Err(Error::new(
+                    "founderBondEscrowPosition, founderBondEscrowAdmission and \
+                     founderBondRecipient are present together or not at all",
+                ));
+            }
+        };
         if input.transfer_index != 0 {
             return Err(Error::new(
                 "transferIndex must be zero for a wallet terminal payout",
@@ -359,7 +400,7 @@ impl SelectedInputV1 {
                     ));
                 }
             }
-            RecipientRouteV1::Wallet | RecipientRouteV1::ClaimCheckEscrow => {}
+            RecipientRouteV1::Wallet => {}
         }
         let position = Pubkey::find_program_address(
             &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
@@ -428,6 +469,9 @@ impl SelectedInputV1 {
             composition_translation,
             composition_exposure,
             terminal_certificate,
+            founder_bond_escrow_position: founder_bond.map(|(position, _, _)| position),
+            founder_bond_escrow_admission: founder_bond.map(|(_, admission, _)| admission),
+            founder_bond_recipient: founder_bond.map(|(_, _, recipient)| recipient),
             aggregate,
             position,
             activation_cache: activation_cache_address_v1(&registry, &release_set),
@@ -466,6 +510,18 @@ impl SelectedInputV1 {
         ];
         if let Some(lookup_table) = self.lookup_table {
             values.push(lookup_table);
+        }
+        // Every optional address this input selects is observed, or the report
+        // builder cannot read the escrow's lamports and its recorded rent.
+        for address in [
+            self.founder_bond_escrow_position,
+            self.founder_bond_escrow_admission,
+            self.founder_bond_recipient,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            values.push(address);
         }
         for pair in [
             self.realm,
@@ -740,7 +796,7 @@ pub fn build_report(
         },
     })
     .map_err(|error| Error::new(format!("Product/composition admission: {error:?}")))?;
-    let realm_record = authenticate_record(selected.realm, snapshot, &rent, selected.registry)?;
+    let realm_record = authenticate_record(selected.realm, snapshot, selected.registry)?;
     let realm = RealmV1::decode(&realm_record.data)
         .map_err(|error| Error::new(format!("Realm record: {error:?}")))?;
     if realm.token_program() != &selected.token_program.to_bytes()
@@ -830,13 +886,8 @@ pub fn build_report(
             "Core, Claims, Realm, Product, exposure, release, or Custody context did not join",
         ));
     }
-    let certificate = authenticate_terminal_certificate(
-        selected,
-        snapshot,
-        &rent,
-        core,
-        product.join.outcome_count,
-    )?;
+    let certificate =
+        authenticate_terminal_certificate(selected, snapshot, core, product.join.outcome_count)?;
     let terminal = terminal_scenario(
         core,
         basis.kind(),
@@ -860,6 +911,33 @@ pub fn build_report(
         basis.payout_scale(),
     )
     .map_err(|error| Error::new(format!("terminal admission: {error:?}")))?;
+    // The basis record decides whether this Market posted a bond, and stage
+    // one's derived pair is carried only where it does. A refunding Market
+    // whose input omits the pair cannot build the frame the chain requires, so
+    // it is refused here rather than at submission.
+    let founder_bond_route = if basis.refunds_on_failure() {
+        match (
+            selected.founder_bond_escrow_position,
+            selected.founder_bond_escrow_admission,
+            selected.founder_bond_recipient,
+        ) {
+            (Some(escrow_position), Some(escrow_admission), Some(recipient)) => {
+                Some(WalletTerminalPayoutFounderBondRouteV3 {
+                    escrow_position,
+                    escrow_admission,
+                    recipient,
+                })
+            }
+            _ => {
+                return Err(Error::new(
+                    "this Market refunds on failure and posted a founder bond, so its payout \
+                     input must carry the derived escrow pair and the bond recipient",
+                ));
+            }
+        }
+    } else {
+        None
+    };
     let route = WalletTerminalPayoutRouteV3 {
         aggregate: selected.aggregate,
         linked_basis_raw: selected.product_basis.raw,
@@ -892,6 +970,30 @@ pub fn build_report(
         recipient: selected.recipient,
         custody_authority: selected.custody_authority,
         token_program: selected.token_program,
+        founder_bond: founder_bond_route,
+    };
+    let founder_bond = match founder_bond_route {
+        Some(tail) => {
+            let escrow = snapshot.required(tail.escrow_position, "failure escrow Position")?;
+            let admission = snapshot.required(tail.escrow_admission, "failure escrow admission")?;
+            let bond_recipient = snapshot.required(tail.recipient, "founder bond recipient")?;
+            if escrow.owner != selected.claims
+                || escrow.executable
+                || admission.owner != selected.claims
+                || admission.executable
+            {
+                return Err(Error::new(
+                    "the failure escrow pair offered for the founder bond has another owner or \
+                     executable bit",
+                ));
+            }
+            Some(WalletTerminalPayoutFounderBondInputV3 {
+                escrow_lamports: escrow.lamports,
+                escrow_admission_bytes: &admission.data,
+                recipient_lamports: bond_recipient.lamports,
+            })
+        }
+        None => None,
     };
     let report = build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
         observation: snapshot.observation,
@@ -929,6 +1031,7 @@ pub fn build_report(
         expected_generation: aggregate.generation,
         expected_market_revision: aggregate.revision,
         expected_position_revision: position_revision(&position_account.data)?,
+        founder_bond,
     })
     .map_err(|error| Error::new(format!("wallet terminal payout builder: {error:?}")))?;
     Ok(report)
@@ -1083,7 +1186,6 @@ fn terminal_scenario(
 fn authenticate_terminal_certificate(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
-    rent: &Rent,
     core: CoreState,
     outcome_count: u32,
 ) -> Result<ResolutionCertificateV2> {
@@ -1119,7 +1221,6 @@ fn authenticate_terminal_certificate(
 fn authenticate_record<'a>(
     pair: RecordPairV1,
     snapshot: &'a FinalizedSnapshotV1,
-    rent: &Rent,
     owner: Pubkey,
 ) -> Result<&'a ObservedAccount> {
     let raw = snapshot.required(pair.raw, "finalized record")?;
@@ -1370,20 +1471,29 @@ fn array_at<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
 // exactly what an extraction exists to prevent: two fixtures drift.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod tests {
+    // The fixture `input()` is what downstream crates take under the feature.
+    // Everything this module needs only to ASSERT with is `#[cfg(test)]`, so a
+    // consumer that wants the fixture does not compile the cases around it.
+    #[cfg(test)]
     use std::borrow::Cow;
 
+    #[cfg(test)]
     use crate::wallet_terminal_payout_v3::{
         WalletTerminalPayoutErrorV3, canonical_wallet_terminal_payout_lookup_addresses_v3,
     };
+    #[cfg(test)]
     use dclutch_claims::{
         CallerRole,
         terminal_settlement_v3::{TerminalSettlementRequestInputV3, TerminalSettlementRequestV3},
     };
+    #[cfg(test)]
     use sha2::{Digest as _, Sha256};
+    #[cfg(test)]
     use solana_address_lookup_table_interface::{
         program as lookup_table_program,
         state::{AddressLookupTable, LookupTableMeta},
     };
+    #[cfg(test)]
     use solana_program::instruction::{AccountMeta, Instruction};
 
     use super::*;
@@ -1412,6 +1522,9 @@ pub mod tests {
             custody_context: id(7),
             release_set: id(8),
             terminal_certificate: key(30),
+            founder_bond_escrow_position: None,
+            founder_bond_escrow_admission: None,
+            founder_bond_recipient: None,
             lookup_table: Some(key(9)),
             programs: ProgramSelectorsV1 {
                 registry: key(10),
@@ -1636,6 +1749,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(test)]
     fn terminal_core(winner: u32) -> CoreState {
         use dclutch_market::{Identity, MarketIdentity, Phase, Readiness};
 
@@ -1663,6 +1777,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(test)]
     fn terminal_certificate(
         kind: ResolutionCertificateKindV2,
         selector: u32,
@@ -1690,6 +1805,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(test)]
     fn programdata_free_position(selected: &SelectedInputV1) -> Pubkey {
         Pubkey::find_program_address(
             &ProtocolPositionSeedsV2::new(selected.aggregate.to_bytes(), selected.owner.to_bytes())
@@ -1700,6 +1816,7 @@ pub mod tests {
         .0
     }
 
+    #[cfg(test)]
     fn payout_report() -> WalletTerminalPayoutReportV3 {
         let owner = Pubkey::new_from_array([90; 32]);
         let route = WalletTerminalPayoutRouteV3 {
@@ -1734,6 +1851,8 @@ pub mod tests {
             recipient: Pubkey::new_from_array([26; 32]),
             custody_authority: Pubkey::new_from_array([27; 32]),
             token_program: Pubkey::new_from_array([28; 32]),
+            // This golden vector is a categorical Market: no escrow, no bond.
+            founder_bond: None,
         };
         let request = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
             caller_role: CallerRole::Claims,
@@ -1853,9 +1972,12 @@ pub mod tests {
             pre_custody_replay_bytes: vec![3],
             pre_hoard_token_bytes: vec![4],
             pre_recipient_token_bytes: vec![5],
+            founder_bond: None,
+            founder_bond_draw: 0,
         }
     }
 
+    #[cfg(test)]
     fn lookup(
         report: &WalletTerminalPayoutReportV3,
         substituted: bool,
@@ -2058,13 +2180,7 @@ pub mod tests {
             accounts: BTreeMap::from([(raw.key, raw), (staging.key, staging)]),
         };
         assert!(
-            authenticate_record(
-                selected.realm,
-                &snapshot,
-                &Rent::default(),
-                selected.registry
-            )
-            .is_err()
+            authenticate_record(selected.realm, &snapshot, selected.registry).is_err()
         );
 
         let report = payout_report();

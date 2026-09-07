@@ -351,6 +351,24 @@ pub enum ClaimsSbfError {
     /// sentence (`wallet_terminal_input`'s `1..=balance`); this is the wire's
     /// word for the same fact when a caller builds the packet by hand.
     Overdraw = 0x5012,
+    /// A terminal settlement that must draw the founder bond was handed no
+    /// escrow to draw it from.
+    ///
+    /// Decision 0033: on a refunding Market whose certificate names the
+    /// failure selector, every ordinary redemption draws its pro-rata share of
+    /// the bond from the failure escrow's lamports, in the same instruction
+    /// that pays the escrow refund. The draw needs the escrow Position, its
+    /// admission and the recipient in frame as a trailing tail
+    /// (`TERMINAL_SETTLEMENT_FOUNDER_BOND_ACCOUNT_COUNT_V3`). A redemption
+    /// submitted with the thirty-six-account frame on that arm would pay the
+    /// atoms and skip the lamports, which is a partial exit the Lean forbids
+    /// (`the_bond_leaves_by_exactly_one_exit`), so it refuses here instead.
+    ///
+    /// Distinct from [`ClaimsSbfError::Accounts`], which is a frame of the
+    /// wrong width or privileges: this frame is well-formed for a Market that
+    /// posted no bond, and the reader's fix is to append the tail the
+    /// operator's payout builder appends on every refunding Market.
+    FounderBondFrame = 0x5013,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -375,7 +393,8 @@ dclutch_refusal_registry::pin_refusal_band!(
         ReceiptAlias,
         FailureEscrow,
         FailureEscrowUnseated,
-        Overdraw
+        Overdraw,
+        FounderBondFrame
     ]
 );
 

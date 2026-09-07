@@ -30,6 +30,8 @@ use dclutch_custody::{
     PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_RECEIPT_BYTES_V1,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyReceiptV1,
 };
+use dclutch_claims::founder_bond_v1::{founded_v1, founding_bond_size_v1};
+use dclutch_market::capability_manifest::funding::derive_funded_rent_rate_v2;
 use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_market::{
     CoreState, FoundingIntentV5, Identity, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
@@ -207,6 +209,21 @@ pub enum ClaimsFoundingSbfErrorV5 {
     /// remedy is a re-release, not an investigation, and folding it into a
     /// generic release refusal was what made it unsayable on this route.
     ReleaseSuperseded = 0x5190,
+    /// The escrow Position holds its rent but not the founder bond.
+    ///
+    /// Decision 0033: the bond is MANDATORY at the size rule. A refunding
+    /// founding seats the failure escrow, and the escrow Position must hold its
+    /// rent-exempt minimum PLUS `bond_size_v1(rate, width, ladder)` -- the
+    /// certificate seat, the first crank's shortfall and the ladder's funding,
+    /// priced at the rate this founding is creating accounts at. One lamport
+    /// short refuses (`a_founding_one_lamport_short_refuses`).
+    ///
+    /// Distinct from [`Self::Rent`], which is the escrow holding less than its
+    /// own rent: that reader looks at the prefunding transfer, this one at the
+    /// bond derivation. The seat's check -- cohort-15 market 3 found it six
+    /// refusals later as `0x8002` -- rides forward to founding inside this
+    /// conjunct, so a founding without the terminal's cost costs one refusal.
+    FounderBondUnderfunded = 0x5191,
 }
 
 impl ClaimsFoundingSbfErrorV5 {
@@ -236,6 +253,7 @@ impl ClaimsFoundingSbfErrorV5 {
             Self::ActivationCache => "claims founding v5: refused, activation cache",
             Self::RoleDeployment => "claims founding v5: refused, role deployment",
             Self::ReleaseSuperseded => "claims founding v5: refused, release superseded",
+            Self::FounderBondUnderfunded => "claims founding v5: refused, founder bond underfunded",
         }
     }
 }
@@ -337,7 +355,8 @@ dclutch_refusal_registry::pin_refusal_band!(
         PermitBody,
         ActivationCache,
         RoleDeployment,
-        ReleaseSuperseded
+        ReleaseSuperseded,
+        FounderBondUnderfunded
     ]
 );
 
@@ -1649,6 +1668,15 @@ fn authenticate_escrow_seating(
             "escrow rent was not prepaid by the founder",
         ));
     }
+    if refunds_on_failure {
+        authenticate_founder_bond(
+            rent,
+            position_width,
+            position_rent_principal,
+            observed_position_lamports,
+            request.claim_count(),
+        )?;
+    }
     Ok(FoundingEscrowSeatingV1 {
         selector: derived.failure_selector,
         owner: derived.owner,
@@ -1659,6 +1687,55 @@ fn authenticate_escrow_seating(
         observed_position_lamports,
         observed_admission_lamports,
     })
+}
+
+/// The founder bond conjunct: the escrow Position holds its rent AND the bond.
+///
+/// Decision 0033. The bond is the lamport side of the escrow -- what the
+/// account holds above its rent -- so the founding that seats the escrow is
+/// where the bond is posted, and the same observed balance the admission
+/// record persists (`observed_position_lamports`) is what every later reader
+/// subtracts the recorded rent from. Nothing is written for the bond that the
+/// seating did not already write.
+///
+/// The RATE is the founding's: this route is a CREATING site under decision
+/// 0030 and prices the bond at the sysvar it funds the escrow at, derived the
+/// way the funding ledger derives the rate it records -- two readings pin the
+/// affine function and a cluster whose rent is not affine refuses by name.
+/// The Position's own principal is the second reading, so the rate the bond
+/// is priced at is provably the rate the escrow's admission records.
+///
+/// The ladder term is ZERO at this conjunct: the recovery policy is not in
+/// the founding frame, so the chain enforces the floor `S + F` and the host
+/// funds `S + F + Λ` -- `a_rung_never_lowers_the_bond` is what makes the floor
+/// sound. See `BUILD_founder-bond.md` §3 for the ruling and its lifting plan.
+#[inline(never)]
+fn authenticate_founder_bond(
+    rent: &Rent,
+    position_width: usize,
+    position_rent_principal: u64,
+    observed_position_lamports: u64,
+    claim_count: u32,
+) -> Result<(), ProgramError> {
+    let rate = derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        position_width,
+        position_rent_principal,
+    )
+    .map_err(|_| refuse(ClaimsFoundingSbfErrorV5::Rent, "rent is not affine in length"))?;
+    let bond = founding_bond_size_v1(rate, claim_count, 0).map_err(|_| {
+        refuse(
+            ClaimsFoundingSbfErrorV5::FounderBondUnderfunded,
+            "the size rule did not evaluate at this width",
+        )
+    })?;
+    if !founded_v1(observed_position_lamports, position_rent_principal, bond.bond) {
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::FounderBondUnderfunded,
+            "the escrow position does not hold its rent plus the founder bond",
+        ));
+    }
+    Ok(())
 }
 
 #[inline(never)]

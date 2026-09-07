@@ -13,7 +13,7 @@ import {
   type MarketActivityV1,
   type MarketFillV1,
 } from '@dclutch/sdk/marketActivity';
-import { failureEscrowOwnerV1, failureEscrowV1, outageDisclosureV1, refundsOnFailureFromEscrowV1, type EscrowSeatingV1 } from '@dclutch/sdk/marketDetail';
+import { failureEscrowOwnerV1, failureEscrowV1, outageDisclosureV1, refundsOnFailureFromEscrowV1, type EscrowSeatingV1, type FounderBondV1 } from '@dclutch/sdk/marketDetail';
 import { shortAddressV1 } from '@dclutch/sdk/marketDiscovery';
 import { checkedReleaseSetIdsV1 } from '@dclutch/sdk/publicCutStaging';
 import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@dclutch/sdk/quantity';
@@ -120,7 +120,7 @@ export function CrossingsTable({ fills, denomination, outcomes }: Readonly<{
   </div>;
 }
 
-export default function MarketActivity({ address, endpoint, programs, denomination, outcomes, supplyAtoms }: Readonly<{
+export default function MarketActivity({ address, endpoint, programs, denomination, outcomes, supplyAtoms, founderBond }: Readonly<{
   address: string;
   endpoint: string;
   /** The deployment's program ids, from the page's own deployment store. */
@@ -129,6 +129,14 @@ export default function MarketActivity({ address, endpoint, programs, denominati
   outcomes: ReadonlyArray<string> | null;
   /** The Claims aggregate's own supply vector, which the page already read. */
   supplyAtoms: ReadonlyArray<string> | null;
+  /**
+   * What the founder staked on their own oracle, from the page's escrow read.
+   *
+   * Handed down rather than read here: the escrow's two accounts are derived
+   * from the Claims AGGREGATE, which is the page's own read, and this section
+   * already owns three reads of its own. `null` is unread and says nothing.
+   */
+  founderBond?: FounderBondV1 | null;
 }>) {
   const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading what has happened here…' });
   const { core, registry, trading, claims } = programs;
@@ -216,6 +224,7 @@ export default function MarketActivity({ address, endpoint, programs, denominati
     outcomes={outcomes}
     supplyAtoms={supplyAtoms}
     failureEscrowOwner={failureEscrowOwner}
+    founderBond={founderBond ?? null}
     onReread={() => { void read(); }}
   />;
 }
@@ -226,13 +235,15 @@ export default function MarketActivity({ address, endpoint, programs, denominati
  * Exported for exactly that: the arrangement of this section is pinned by a
  * case that hands it a state, not by a screenshot.
  */
-export function MarketActivityView({ state, denomination, outcomes, supplyAtoms, failureEscrowOwner, onReread }: Readonly<{
+export function MarketActivityView({ state, denomination, outcomes, supplyAtoms, failureEscrowOwner, founderBond, onReread }: Readonly<{
   state: State;
   denomination: DenominationV1 | null;
   outcomes: ReadonlyArray<string> | null;
   supplyAtoms: ReadonlyArray<string> | null;
   /** This market's derived failure escrow, when the caller derived one. */
   failureEscrowOwner?: string | null;
+  /** This market's founder bond, when the caller read the escrow. */
+  founderBond?: FounderBondV1 | null;
   onReread?: () => void;
 }>) {
   const activity = state.kind === 'ready' ? state.activity : null;
@@ -260,6 +271,10 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
       // that refunds every ordinary holder instead. Unseated is UNREAD, and
       // the disclosure has a sentence for that.
       refundsOnFailure: seating?.seated === true ? true : null,
+      // The bond rides in the disclosure rather than beside it: what an outage
+      // pays and what the founder loses by it are one answer, and a reader
+      // given the first without the second has the smaller half.
+      founderBond: founderBond ?? null,
     });
 
   return <section className="trade-v3-card" aria-label="What has happened on this market">

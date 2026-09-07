@@ -10,11 +10,15 @@ import { useDeploymentV1 } from '@/lib/deploymentStore';
 
 import { type CapabilityFundingQuoteV1 } from '@dclutch/sdk/capabilityManifest';
 import {
+  failureEscrowAccountsV1,
+  failureEscrowOwnerV1,
+  founderBondV1,
   inspectMarketDetailV1,
   requiredBackingMeaningV1,
   terminalOutcomeMeaningV1,
   type MarketDetailV1,
 } from '@dclutch/sdk/marketDetail';
+import { lamportsAsSolV1 } from '@dclutch/sdk/openerTerms';
 import { marketEditorialV1, marketNarrativeV1, type MarketNarrativeV1 } from '@dclutch/sdk/marketRegistry';
 import { formatWindowInstantV1, inspectMarketQuestionV1, type MarketQuestionV1 } from '@dclutch/sdk/marketQuestion';
 import {
@@ -54,6 +58,12 @@ import { useAccountWatchV1 } from '@/lib/useAccountWatch';
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; detail: MarketDetailV1; facts: ConnectionFacts }>;
+
+/** The failure escrow's Position balance and its admission bytes, as read. */
+type FailureEscrowReadingV1 = Readonly<{
+  positionLamports: string | null;
+  admissionBytes: Uint8Array | null;
+}>;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'the detail read refused without a usable reason';
@@ -397,6 +407,17 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
    * with a reason rather than collapsing to null.
    */
   const [resolution, setResolution] = useState<MarketResolutionV1 | null>(null);
+  /**
+   * The two accounts this market's failure escrow keeps, as they read today.
+   *
+   * A fourth read, and it fails alone for the same reason the two above it do.
+   * Nothing on chain stores the founder bond as a field: it is the escrow
+   * Position's balance above the rent its ADMISSION recorded at founding, so
+   * the fact needs both accounts and neither is on the detail read's path.
+   * Absent stays absent -- `founderBondV1` says the escrow was not read rather
+   * than reporting a founder who staked nothing.
+   */
+  const [escrow, setEscrow] = useState<FailureEscrowReadingV1 | null>(null);
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
@@ -425,6 +446,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     setClock(null);
     setDerived(null);
     setResolution(null);
+    setEscrow(null);
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
@@ -470,6 +492,30 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
           // absence would be reported by the reader, not silently be a zero.
           registryProgramId: deployment.programs.registry,
         }));
+      }
+      // THE FOUNDER BOND'S TWO ACCOUNTS, and both are DERIVED from what the
+      // detail read already holds: the escrow owner from this market's address
+      // and its failure selector, then the Position and its admission from the
+      // Claims aggregate and that owner. No address here is taken on trust and
+      // no figure is read from anywhere but those two accounts.
+      if (next.card.status === 'decoded'
+          && next.card.liability.status === 'bound'
+          && next.card.liability.supplyAtoms.length >= 2) {
+        const liability = next.card.liability;
+        try {
+          const owner = failureEscrowOwnerV1(liability.claimsProgramId, address, liability.supplyAtoms.length - 1);
+          const pair = failureEscrowAccountsV1(liability.claimsProgramId, liability.aggregateAddress, owner);
+          const read = await client.multipleAccounts([pair.position, pair.admission], next.floorSlot);
+          const position = read.accounts[0]?.account ?? null;
+          const admission = read.accounts[1]?.account ?? null;
+          setEscrow(Object.freeze({
+            positionLamports: position === null ? null : position.lamports,
+            admissionBytes: admission === null ? null : admission.data,
+          }));
+        } catch {
+          // Left null, and the bond then reads as unread rather than as none.
+          setEscrow(null);
+        }
       }
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
@@ -571,6 +617,30 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       // because the page's most confident paragraph is the last place an
       // unchecked join belongs.
       outcomeName: terminalWinner?.joined === true ? terminalWinner.name : undefined,
+    });
+  /**
+   * WHAT THE FOUNDER PUT UP AGAINST THEIR OWN ORACLE, derived once for the page.
+   *
+   * The bond is the answer to a question the outage disclosure could not reach:
+   * that disclosure says who an outage PAYS, and this says who it COSTS. It is
+   * a subtraction of two u64s off the escrow's own accounts, so it is exact and
+   * it is nobody's assertion.
+   *
+   * `refundsOnFailure` is passed NULL on purpose. Which way the bond exits is
+   * the payout scale's answer, and this page does not read the Product basis --
+   * the same absence `outageDisclosureV1` already reports in its own voice. So
+   * the amount is stated (a subtraction no scale changes) and the direction is
+   * not. Plumbing the basis through this read would light the exit sentence up.
+   */
+  const founderBond = decoded === null || decoded.liability.status !== 'bound' || decoded.liability.supplyAtoms.length < 2
+    ? null
+    : founderBondV1({
+      escrowPositionLamports: escrow?.positionLamports ?? null,
+      escrowAdmissionBytes: escrow?.admissionBytes ?? null,
+      refundsOnFailure: null,
+      phase: decoded.phase,
+      terminalWinner: decoded.settlement.status === 'terminal' ? decoded.settlement.winner : null,
+      failureOutcome: decoded.liability.supplyAtoms.length - 1,
     });
   const redemption = decoded === null ? null : marketRedemptionStateV1(decoded);
   const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, narrative, detail?.phaseMeaning ?? null, derived, nowMs, selectorJoin);
@@ -837,6 +907,19 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               <Fact label="Claims ledger account" value={decoded.liability.aggregateAddress} />
               <Fact label="Claims program" value={decoded.liability.claimsProgramId} />
               <ContentId label="Rule it pays by" value={decoded.liability.liabilityBasisId} />
+              {/* Three states, printed as three: unread asserts nothing, `'0'`
+                  is the read fact that no bond stands here, and a figure is the
+                  escrow's balance above the rent its founding recorded. The
+                  sentence is the title, so the whole fact is one hover away. */}
+              <Fact
+                label="Founder bond"
+                value={founderBond === null || founderBond.bondLamports === null
+                  ? 'not read'
+                  : founderBond.bondLamports === '0'
+                    ? 'none posted'
+                    : `${founderBond.bondLamports} lamports · ${lamportsAsSolV1(BigInt(founderBond.bondLamports))} SOL`}
+                title={founderBond?.sentence}
+              />
             </dl>
               </div>
             </details>
@@ -925,6 +1008,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       denomination={denomination}
       outcomes={narrative.outcomes}
       supplyAtoms={'supplyAtoms' in decoded.liability ? decoded.liability.supplyAtoms : null}
+      founderBond={founderBond}
     />}
 
     {decoded !== null && <MarketTradePanel

@@ -1,5 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
+import { u16, u64 } from './bytes';
 import {
   inspectMarketDiscoveryV1,
   type MarketCapabilityManifestV1,
@@ -14,10 +15,20 @@ import {
   PROTOCOL_POSITION_STATE_SEED_V2,
 } from './generated/directParticipantV1';
 import { type RequiredBackingBasisV2 } from './marketDiscovery';
+import { lamportsAsSolV1 } from './openerTerms';
 import { type SolanaRpcClient } from './rpc';
 import {
   PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2,
 } from './generated/protocolConstantsV1';
+import {
+  POSITION_ADMISSION_POSITION_LAMPORTS_OFFSET_V2,
+  POSITION_ADMISSION_POSITION_RENT_OFFSET_V2,
+  PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+  PROTOCOL_POSITION_ADMISSION_MAGIC_V2,
+  PROTOCOL_POSITION_ADMISSION_SEED_V2,
+  PROTOCOL_POSITION_STATE_SEED_V2,
+  PROTOCOL_POSITION_WIRE_VERSION_V2,
+} from './generated/directParticipantV1';
 
 /** Claims `ClaimsCapability` Position-owner seed domain (`protocol_position_v2.rs`). */
 const CLAIMS_CAPABILITY_OWNER_SEED_V2 = PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2;
@@ -238,6 +249,17 @@ export type OutageDisclosureV1 = Readonly<{
   refundsOnFailure: boolean | null;
   /** Where the failure column actually sits, from the Positions this page read. */
   columnNote: string;
+  /**
+   * What the founder staked on their own oracle, when the caller read it.
+   *
+   * The bond is the other half of the outage answer and it points the opposite
+   * way from the failure column: the column is what the founder would have
+   * been PAID under the legacy scale, and the bond is what they LOSE if the
+   * feed they chose goes quiet. `null` is unread, never "none" -- and the
+   * value's own `bondLamports` distinguishes a market that posted nothing
+   * (`'0'`) from an escrow this page could not read (`null`).
+   */
+  founderBond: FounderBondV1 | null;
   /** What happens under an outage, in the words a buyer needs before trading. */
   headline: string;
   /** Who is paid, named from the read rather than asserted. */
@@ -280,6 +302,11 @@ export function outageDisclosureV1(
      * Absent means unread, and the disclosure says so rather than guessing.
      */
     refundsOnFailure?: boolean | null;
+    /**
+     * This market's founder bond, from `founderBondV1`. Absent is unread: the
+     * disclosure then says nothing about a bond rather than denying one.
+     */
+    founderBond?: FounderBondV1 | null;
   }>,
 ): OutageDisclosureV1 | null {
   if (input.outcomeCount < 2 || input.supplyAtoms.length !== input.outcomeCount) return null;
@@ -349,6 +376,24 @@ export function outageDisclosureV1(
         : escrowOwner !== null
           ? `None of the ${supply.toString()} atoms on the failure outcome is seated in this market\u2019s own escrow ${escrowOwner}; the column is held by ordinary Positions.`
           : `This page did not derive this market\u2019s failure escrow, so it says nothing about where the failure column is seated.`;
+  // THE BOND IS PART OF THE OUTAGE ANSWER, so it is appended to the headline
+  // rather than left as a field the caller may forget to render. A reader who
+  // is told what an outage pays and not told what the founder loses by it has
+  // been told the smaller half.
+  const founderBond = input.founderBond ?? null;
+  // THREE ARMS, LIKE `payee`, AND IT USED TO HAVE TWO. `refundsOnFailure` is
+  // `null` when the caller has not read this market's payout scale, and the
+  // two-armed version answered a null by stating the LEGACY outcome as fact:
+  // a reader of a refunding market was told, in the page's own derived voice
+  // and directly beside a `payee` sentence saying the scale had not been
+  // read, that the whole collateral goes to whoever holds the failure claim.
+  // That is the one sentence on this page a buyer cannot afford to have
+  // wrong, and an unread fact must read as unread.
+  const headline = refundsOnFailure === true
+    ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and HOLDERS ARE REFUNDED: the collateral goes back to whoever holds an ordinary outcome, whichever of them would have been right. The failure claim is paid nothing.`
+    : refundsOnFailure === false
+      ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and the whole collateral is paid to whoever holds that claim. Everyone holding one of the other outcomes is paid nothing, whichever of them would have been right.`
+      : `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome. WHO THAT PAYS DEPENDS ON THIS MARKET'S PAYOUT SCALE, and this page has not read it: at the legacy scale the whole collateral goes to whoever holds the failure claim, and at the refunding scale the failure claim is paid nothing and the collateral goes back to the ordinary holders. Read the market's own basis record before trading on either answer.`;
   return Object.freeze({
     failureOutcome,
     supplyAtoms: supply.toString(),
@@ -361,19 +406,8 @@ export function outageDisclosureV1(
     escrowSeated,
     refundsOnFailure,
     columnNote,
-    // THREE ARMS, LIKE `payee`, AND IT USED TO HAVE TWO. `refundsOnFailure` is
-    // `null` when the caller has not read this market's payout scale, and the
-    // two-armed version answered a null by stating the LEGACY outcome as fact:
-    // a reader of a refunding market was told, in the page's own derived voice
-    // and directly beside a `payee` sentence saying the scale had not been
-    // read, that the whole collateral goes to whoever holds the failure claim.
-    // That is the one sentence on this page a buyer cannot afford to have
-    // wrong, and an unread fact must read as unread.
-    headline: refundsOnFailure === true
-      ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and HOLDERS ARE REFUNDED: the collateral goes back to whoever holds an ordinary outcome, whichever of them would have been right. The failure claim is paid nothing.`
-      : refundsOnFailure === false
-        ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and the whole collateral is paid to whoever holds that claim. Everyone holding one of the other outcomes is paid nothing, whichever of them would have been right.`
-        : `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome. WHO THAT PAYS DEPENDS ON THIS MARKET'S PAYOUT SCALE, and this page has not read it: at the legacy scale the whole collateral goes to whoever holds the failure claim, and at the refunding scale the failure claim is paid nothing and the collateral goes back to the ordinary holders. Read the market's own basis record before trading on either answer.`,
+    founderBond,
+    headline: founderBond === null ? headline : `${headline} ${founderBond.sentence}`,
     payee,
   });
 }
@@ -402,6 +436,185 @@ export function failureEscrowOwnerV1(claimsProgramId: string, marketAddress: str
     [CLAIMS_CAPABILITY_OWNER_SEED_V2, new PublicKey(marketAddress).toBytes(), selector],
     new PublicKey(claimsProgramId),
   )[0].toBase58();
+}
+
+/**
+ * The two accounts this market's failure escrow keeps, derived rather than read.
+ *
+ * A Position and its admission, at `ProtocolPositionSeedsV2(aggregate, owner)`
+ * and `ProtocolPositionAdmissionSeedsV2(aggregate, owner)` with the owner
+ * `failureEscrowOwnerV1` derives. The Position holds the lamports; the
+ * admission holds what the FOUNDING recorded about them, which is the only
+ * thing that makes today's balance readable as a bond rather than as rent.
+ */
+export function failureEscrowAccountsV1(
+  claimsProgramId: string,
+  aggregateAddress: string,
+  escrowOwner: string,
+): Readonly<{ position: string; admission: string }> {
+  const claims = new PublicKey(claimsProgramId);
+  const seeds = [new PublicKey(aggregateAddress).toBytes(), new PublicKey(escrowOwner).toBytes()];
+  return Object.freeze({
+    position: PublicKey.findProgramAddressSync([PROTOCOL_POSITION_STATE_SEED_V2, ...seeds], claims)[0].toBase58(),
+    admission: PublicKey.findProgramAddressSync([PROTOCOL_POSITION_ADMISSION_SEED_V2, ...seeds], claims)[0].toBase58(),
+  });
+}
+
+/** Which way the bond leaves the escrow once the answer is in. */
+export type FounderBondExitV1 = 'honest' | 'exhausted';
+
+/**
+ * What the founder staked on their own oracle, and which way it will go.
+ *
+ * `bondLamports` HAS THREE STATES AND THEY ARE NOT INTERCHANGEABLE. `null` is
+ * "this page did not read the escrow" and asserts nothing. `'0'` is a read
+ * fact: this market posted no bond, because it is categorical (decision 0033
+ * seats the bond in the failure escrow, and a categorical founding seats no
+ * escrow) or because its escrow holds nothing above the rent it recorded.
+ * Collapsing the two would let an unreachable RPC read on the page as a
+ * founder who staked nothing, which is a claim about a person.
+ */
+export type FounderBondV1 = Readonly<{
+  /** Lamports the escrow holds ABOVE its recorded rent, today. */
+  bondLamports: string | null;
+  /** `position_rent_principal`: what the founding recorded as the rent. */
+  recordedRentLamports: string | null;
+  /** `observed_position_lamports`: rent plus bond, as of the founding. */
+  postedAtFoundingLamports: string | null;
+  /** Which exit the answer selects, or `null` while the answer is not in. */
+  exit: FounderBondExitV1 | null;
+  /** The whole fact in one sentence, in the disclosure's voice. */
+  sentence: string;
+}>;
+
+/** Canonical unsigned decimal lamports, or `null` -- never a silent zero. */
+function lamportsTextV1(value: string | null): bigint | null {
+  return value === null || !/^(0|[1-9][0-9]*)$/.test(value) ? null : BigInt(value);
+}
+
+/**
+ * What the escrow's admission recorded at founding, or `null` if it is not one.
+ *
+ * The two numbers are read at the offsets the kernel names --
+ * `EVIDENCE_POSITION_RENT_OFFSET` and `EVIDENCE_POSITION_LAMPORTS_OFFSET` in
+ * `crates/dclutch-claims/src/protocol_position_v2.rs` -- through the generated
+ * mirror, so neither is a literal typed on this side.
+ */
+function escrowFoundingRecordV1(bytes: Uint8Array | null): Readonly<{ rent: bigint; atFounding: bigint }> | null {
+  if (bytes === null || bytes.length !== PROTOCOL_POSITION_ADMISSION_BYTES_V2) return null;
+  if (PROTOCOL_POSITION_ADMISSION_MAGIC_V2.some((byte, index) => bytes[index] !== byte)) return null;
+  if (u16(bytes, PROTOCOL_POSITION_ADMISSION_MAGIC_V2.length) !== PROTOCOL_POSITION_WIRE_VERSION_V2) return null;
+  return Object.freeze({
+    rent: u64(bytes, POSITION_ADMISSION_POSITION_RENT_OFFSET_V2),
+    atFounding: u64(bytes, POSITION_ADMISSION_POSITION_LAMPORTS_OFFSET_V2),
+  });
+}
+
+/**
+ * The founder bond, DERIVED from two accounts and never from a written figure.
+ *
+ * A refunding market's failure escrow is funded at founding to more than its
+ * own rent, and the excess is the founder's bond: capital they put up against
+ * the oracle THEY chose. Nothing on chain stores the bond as a field. What is
+ * stored is the escrow admission's `position_rent_principal` -- the rent the
+ * founding paid and recorded in the same instruction -- so the bond is the
+ * subtraction, and it is exact because both sides are u64 lamports.
+ *
+ * WHICH WAY IT GOES IS THE ANSWER'S TO DECIDE, not the founder's. On an
+ * ordinary winner the bond is theirs and comes back with the escrow's rent at
+ * retirement. On the failure outcome -- the feed went quiet, on the market's
+ * own terms -- it is paid pro rata to the holders of ordinary claims through
+ * their own redemptions, each drawing its share and the last drawing the rest.
+ * That is the whole point of it: the founder is the one person who cannot
+ * profit from their oracle going silent, and this sentence is how a buyer
+ * learns that before trading rather than after.
+ *
+ * The exit is named only on a market whose payout scale the caller READ. An
+ * unread scale still gets the amount and both branches, because the amount is
+ * a subtraction of two numbers this page holds and does not depend on the
+ * scale; only the direction does.
+ */
+export function founderBondV1(
+  input: Readonly<{
+    /** The escrow Position's own balance, from the account read. */
+    escrowPositionLamports: string | null;
+    /** The escrow admission's 512 bytes, from the same read. */
+    escrowAdmissionBytes: Uint8Array | null;
+    /** `ProductBasisFactsV3.refundsOnFailure`; `null` when it was not read. */
+    refundsOnFailure: boolean | null;
+    /** The Market's phase, which says whether an honest exit has happened yet. */
+    phase: MarketCorePhaseV2 | null;
+    /** The outcome that won, or `null` while there is no answer. */
+    terminalWinner: number | null;
+    /** This market's failure outcome: the last cell. */
+    failureOutcome: number;
+  }>,
+): FounderBondV1 | null {
+  if (!Number.isSafeInteger(input.failureOutcome) || input.failureOutcome < 1) return null;
+  // R3: the bond lives in the failure escrow and a categorical founding seats
+  // none. This is the one arm that may answer without reading an account,
+  // because the record itself settles it.
+  if (input.refundsOnFailure === false) {
+    return Object.freeze({
+      bondLamports: '0',
+      recordedRentLamports: null,
+      postedAtFoundingLamports: null,
+      exit: null,
+      sentence: 'This market posted no founder bond: it was founded before the bond, and an outage pays whoever holds the failure column.',
+    });
+  }
+  const record = escrowFoundingRecordV1(input.escrowAdmissionBytes);
+  if (record === null) {
+    return Object.freeze({
+      bondLamports: null,
+      recordedRentLamports: null,
+      postedAtFoundingLamports: null,
+      exit: null,
+      sentence: 'This page has not read this market’s failure escrow admission — the account the founding recorded its own rent in — so it cannot say whether a founder bond stands behind this oracle, or what it would be worth.',
+    });
+  }
+  const held = lamportsTextV1(input.escrowPositionLamports);
+  if (held === null) {
+    return Object.freeze({
+      bondLamports: null,
+      recordedRentLamports: record.rent.toString(),
+      postedAtFoundingLamports: record.atFounding.toString(),
+      exit: null,
+      sentence: `This page read this market’s failure escrow admission, which records ${record.rent.toString()} lamports of rent and ${record.atFounding.toString()} lamports held at founding, but not the escrow Position’s own balance — so it cannot say what the founder’s bond is worth today.`,
+    });
+  }
+  const read = Object.freeze({
+    recordedRentLamports: record.rent.toString(),
+    postedAtFoundingLamports: record.atFounding.toString(),
+  });
+  const bond = held > record.rent ? held - record.rent : 0n;
+  if (bond === 0n) {
+    return Object.freeze({
+      ...read,
+      bondLamports: '0',
+      exit: null,
+      sentence: `This market’s failure escrow holds ${held.toString()} lamports, no more than the ${record.rent.toString()} of rent it recorded at founding, so no founder bond stands behind its oracle.`,
+    });
+  }
+  const exit: FounderBondExitV1 | null = input.refundsOnFailure === true && input.terminalWinner !== null
+    ? (input.terminalWinner === input.failureOutcome ? 'exhausted' : 'honest')
+    : null;
+  const amount = `${bond.toString()} lamports (${lamportsAsSolV1(bond)} SOL)`;
+  const posted = record.atFounding > record.rent ? record.atFounding - record.rent : 0n;
+  // A bond smaller than the one posted is a bond partly DRAWN, which only the
+  // exhausted walk can do. Stated as the difference rather than left for a
+  // reader to subtract two other rows.
+  const drawn = posted > bond
+    ? ` Of the ${posted.toString()} lamports posted at founding, ${bond.toString()} are still in the escrow.`
+    : '';
+  const sentence = exit === null
+    ? `The founder posted a bond of ${amount} against their own oracle: returned to the founder on an honest answer, paid pro rata to the holders of ordinary claims if the feed goes quiet.`
+    : exit === 'honest'
+      ? input.phase === 'Retired'
+        ? `The data source reported, so the founder’s bond of ${amount} was theirs: it went back to the founder’s refund wallet, with the escrow’s rent, when this market retired.`
+        : `The data source reported, so the founder’s bond of ${amount} is theirs: it goes back to the founder’s refund wallet, with the escrow’s rent, when this market retires.`
+      : `The data source never reported, so the founder’s bond is paid out rather than returned: ${amount} go pro rata to the holders of ordinary claims, each redemption drawing its own share and the last one drawing the rest.${drawn}`;
+  return Object.freeze({ ...read, bondLamports: bond.toString(), exit, sentence });
 }
 
 /** One market's derived failure escrow: the three addresses the host derives. */
@@ -439,17 +652,7 @@ export function failureEscrowV1(
   }
   const failureSelector = outcomeCount - 1;
   const owner = failureEscrowOwnerV1(claimsProgramId, marketAddress, failureSelector);
-  const claims = new PublicKey(claimsProgramId);
-  const aggregate = new PublicKey(aggregateAddress).toBytes();
-  const ownerBytes = new PublicKey(owner).toBytes();
-  const position = PublicKey.findProgramAddressSync(
-    [PROTOCOL_POSITION_STATE_SEED_V2, aggregate, ownerBytes],
-    claims,
-  )[0].toBase58();
-  const admission = PublicKey.findProgramAddressSync(
-    [PROTOCOL_POSITION_ADMISSION_SEED_V2, aggregate, ownerBytes],
-    claims,
-  )[0].toBase58();
+  const { position, admission } = failureEscrowAccountsV1(claimsProgramId, aggregateAddress, owner);
   return Object.freeze({ failureSelector, owner, position, admission });
 }
 

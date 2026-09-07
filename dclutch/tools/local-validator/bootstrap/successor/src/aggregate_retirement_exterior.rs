@@ -1881,6 +1881,8 @@ mod tests {
             // three more accounts on all four rather than a different shape.
             burned_failure_units: 0,
             failure_escrow_rent_lamports: 0,
+            founder_bond_lamports: 0,
+            founder_bond_exit: None,
         };
         // The table a producer would have frozen for this campaign: the four
         // packets' own routing coordinates, derived rather than listed.

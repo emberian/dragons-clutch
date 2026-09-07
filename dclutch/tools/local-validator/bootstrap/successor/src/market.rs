@@ -2354,6 +2354,50 @@ fn authenticate_ladder_entry_adjacency_v1(
     Ok(())
 }
 
+/// The ladder's funding for the founder bond (decision 0033): each rung's
+/// Bounty quote, summed, read off the manifest entry the policy's attempt
+/// names -- the same lookup [`authenticate_ladder_entry_adjacency_v1`] makes,
+/// so a rung the founding pays for is a rung the bond prices and nothing else
+/// is. A market with no policy has none.
+fn ladder_funding_v1(input: &MarketRunInput, manifest: CapabilityManifestV1<'_>) -> Result<u64> {
+    let policy_bytes = decode_hex(&input.recovery_policy_hex)?;
+    if policy_bytes.is_empty() {
+        return Ok(0);
+    }
+    let policy = RecoveryPolicyV2::decode(&policy_bytes)
+        .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
+    let mut total = 0_u64;
+    for rung in 0..policy.attempt_count() {
+        let attempt = policy
+            .attempt(rung)
+            .map_err(|error| Error::new(format!("recovery attempt {rung}: {error:?}")))?;
+        let allocation = attempt.funding_allocation_id().to_bytes();
+        let mut bounty: Option<u64> = None;
+        let mut index = 0_u16;
+        while index < manifest.entry_count() {
+            let entry = manifest
+                .entry(index)
+                .map_err(|error| Error::new(format!("capability entry {index}: {error:?}")))?;
+            if entry.config_id().to_bytes() == allocation {
+                bounty = Some(entry.funding_quote().amounts().bounty().amount());
+            }
+            index = index
+                .checked_add(1)
+                .ok_or_else(|| Error::new("capability entry index overflow"))?;
+        }
+        let bounty = bounty.ok_or_else(|| {
+            Error::new(format!(
+                "no capability entry is configured by rung {rung}'s funding allocation, so the \
+                 founder bond cannot price a leg nothing paid for"
+            ))
+        })?;
+        total = total
+            .checked_add(bounty)
+            .ok_or_else(|| Error::new("ladder funding overflowed u64"))?;
+    }
+    Ok(total)
+}
+
 pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
     if input.initial_collateral_atoms == 0
         || input.cut_denominator == 0
@@ -10320,6 +10364,11 @@ struct FoundingOuterV1 {
     /// rule. The host does not choose it and the program does not take it from
     /// the host: both derive it from the same record.
     seats_failure_escrow: bool,
+    /// The founder bond the escrow Position must hold above its rent
+    /// (decision 0033): `founding_bond_size_v1` at the cluster's own rate with
+    /// the policy's rung bounties as the ladder term. Zero on a categorical
+    /// founding, which seats no escrow and posts no bond.
+    founder_bond_lamports: u64,
     aggregate_width: usize,
     position_width: usize,
     market_rent: u64,
@@ -10514,6 +10563,24 @@ fn derive_founding_outer_v1(
     let aggregate_rent = rpc.minimum_balance(aggregate_width)?;
     let position_rent = rpc.minimum_balance(position_width)?;
     let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
+    // THE FOUNDER BOND, priced the way the chain prices it and one term wider:
+    // the rate is the cluster's own, derived from two readings so a cluster
+    // whose rent is not affine refuses here rather than on chain; the ladder
+    // term is the policy's rung bounties, which the chain's conjunct floors at
+    // zero because the policy is not in the founding frame
+    // (BUILD_founder-bond.md R2). A categorical founding posts none.
+    let founder_bond_lamports = if records.basis_refunds_on_failure {
+        let manifest = CapabilityManifestV1::decode(&records.manifest_body)
+            .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
+        let ladder_funding = ladder_funding_v1(input, manifest)?;
+        let rate = derive_funded_rent_rate_v2(rpc.minimum_balance(0)?, position_width, position_rent)
+            .map_err(|error| Error::new(format!("founded rent rate: {error:?}")))?;
+        dclutch_claims::founder_bond_v1::founding_bond_size_v1(rate, claim_count, ladder_funding)
+            .map_err(|error| Error::new(format!("founder bond size rule: {error:?}")))?
+            .bond
+    } else {
+        0
+    };
 
     let intent = FoundingIntentV5::new(
         poststate.permit_bump,
@@ -10686,6 +10753,7 @@ fn derive_founding_outer_v1(
         escrow_position,
         escrow_admission,
         seats_failure_escrow: records.basis_refunds_on_failure,
+        founder_bond_lamports,
         aggregate_width,
         position_width,
         market_rent: coordinates.found.market_rent(),
@@ -12458,7 +12526,12 @@ fn prefund_founding_accounts_v1(
         (outer.admission, admission_rent),
     ];
     if outer.seats_failure_escrow {
-        prefunding.push((outer.escrow_position, position_rent));
+        // Rent PLUS the founder bond (decision 0033): the chain refuses a
+        // founding whose escrow holds one lamport less, by name.
+        let escrow_position_lamports = position_rent
+            .checked_add(outer.founder_bond_lamports)
+            .ok_or_else(|| Error::new("escrow prefunding overflowed u64"))?;
+        prefunding.push((outer.escrow_position, escrow_position_lamports));
         prefunding.push((outer.escrow_admission, admission_rent));
     }
     let observed_prefunding = prefunding
@@ -13572,13 +13645,17 @@ fn authenticate_found_and_permit_poststate_v1(
     Ok(())
 }
 
-/// Require the five program-allocated accounts to hold exactly their rents.
+/// Require the program-allocated accounts to hold exactly their rents -- and
+/// the escrow Position, on a refunding founding, its rent plus the founder
+/// bond.
 fn authenticate_founding_prefunding_v1(
     rpc: &mut Rpc,
     outer: &FoundingOuterV1,
     market: Pubkey,
 ) -> Result<()> {
-    for (label, key, lamports) in [
+    let position_rent = rpc.minimum_balance(outer.position_width)?;
+    let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
+    let mut required = vec![
         ("founding Market", market, outer.market_rent),
         ("founding permit", outer.permit, outer.permit_rent),
         (
@@ -13586,17 +13663,20 @@ fn authenticate_founding_prefunding_v1(
             outer.aggregate,
             rpc.minimum_balance(outer.aggregate_width)?,
         ),
-        (
-            "founder Position",
-            outer.position,
-            rpc.minimum_balance(outer.position_width)?,
-        ),
-        (
-            "Claims admission",
-            outer.admission,
-            rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?,
-        ),
-    ] {
+        ("founder Position", outer.position, position_rent),
+        ("Claims admission", outer.admission, admission_rent),
+    ];
+    if outer.seats_failure_escrow {
+        required.push((
+            "failure escrow Position (rent plus the founder bond)",
+            outer.escrow_position,
+            position_rent
+                .checked_add(outer.founder_bond_lamports)
+                .ok_or_else(|| Error::new("escrow prefunding overflowed u64"))?,
+        ));
+        required.push(("failure escrow admission", outer.escrow_admission, admission_rent));
+    }
+    for (label, key, lamports) in required {
         let account = rpc.required_account(key, label)?;
         if account.owner != system_program::ID
             || !account.data.is_empty()
@@ -17250,6 +17330,7 @@ mod tests {
             position: Pubkey::new_unique(),
             admission: Pubkey::new_unique(),
             escrow_position: Pubkey::new_unique(),
+            founder_bond_lamports: 0,
             escrow_admission: Pubkey::new_unique(),
             seats_failure_escrow: false,
             aggregate_width: 258,

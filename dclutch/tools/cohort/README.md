@@ -1243,3 +1243,47 @@ escrow — the ClaimsCapability PDA at `(market, claim_count − 1)`, then the
 Positions sum to the aggregate supply at every coordinate with the founder
 issued no failure claim (decision 0025 item 2), read off chain rather than off
 the founding's own receipt.
+
+### founder-bond
+
+*Cohort-18.* Price the founder bond off two accounts and nothing written down.
+On a refunding market the failure escrow's Position is funded at founding to
+more than its own rent, and the excess is the founder's stake against the oracle
+they chose (decision 0033). Nothing on chain stores it as a field: the
+admission's `position_rent_principal` is what the founding paid and recorded,
+so the bond is the subtraction — exact, because both sides are u64 lamports.
+The rate is recovered from that recorded principal by exact division rather than
+read off the sysvar of the moment (decision 0030), and the size rule is
+evaluated at this market's width with the recovery policy's rung bounties as the
+ladder term. A categorical market's escrow reads `AccountNotFound` and carries
+no bond, which is a read fact and not a silent zero.
+
+The census prints it as `founder_bond_lamports` on the failure-escrow row and L7
+is unchanged, because the bond is the lamport side of an account the census
+already watches. **The founding's own refusal is the control**: an escrow one
+lamport short of rent plus bond refuses `ClaimsFoundingSbfErrorV5::FounderBondUnderfunded`
+at founding rather than six refusals later.
+
+Read `BUILD_founder-bond.md` R2 before treating a green here as the whole rule:
+the chain's conjunct floors the ladder term at zero because the recovery policy
+is not in the founding frame, and this row holds the FULL rule, so a laddered
+market funded at the floor alone is red here and green on chain. That gap is a
+named provisional bound, not a defect in either.
+
+### refund-bond-walk
+
+*Cohort-18. No args yet, and the reason is not an oversight.* The row describes
+the walk that pays the bond out, and it needs a market whose feed actually went
+quiet — an EXHAUSTED refunding market, certificate kind 4. The campaign that
+first forces an outage writes the invocation; until then this row carries its
+verifier and no command, which is the honest state and not a placeholder.
+
+The walk itself is the payout row's, repeated once per ordinary holder with the
+three-account founder-bond tail the operator's payout builder appends: the
+escrow Position, its admission, and the recipient owner's wallet. Each
+redemption draws `floor(remaining × quantity / outstanding)` and the one that
+retires the last ordinary claim draws everything left, so the escrow ends at
+exactly its recorded rent in every order the holders redeem in. A payout
+submitted on this arm WITHOUT the tail refuses `ClaimsSbfError::FounderBondFrame`
+by name, rather than paying the atoms and skipping the lamports — a partial exit
+`FounderBondV1.lean` forbids.

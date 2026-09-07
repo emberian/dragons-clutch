@@ -30,8 +30,13 @@ getrandom = { version = "0.2.17", features = ["js"] }
 getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
-dclutch-operator = { path = "../dclutch-operator", default-features = false }
-# The shared fixture, not a second copy of one.
+dclutch-operator = { path = "../dclutch-operator", default-features = false, features = [
+    "test-fixtures",
+] }
+# The shared fixture, not a second copy of one. The feature is what makes
+# `wallet_terminal_payout::wire::tests::input()` reachable; without it the
+# fixture is gated out and this crate's own tests name a module that is not
+# there.
 
 [lints]
 workspace = true

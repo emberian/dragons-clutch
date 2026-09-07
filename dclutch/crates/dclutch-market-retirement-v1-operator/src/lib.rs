@@ -6,6 +6,7 @@
 pub mod terminal_stage_order_v1;
 
 use dclutch_claims::{
+    founder_bond_v1::{FounderBondExitV1, exit_v1, observed_bond_v1},
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2, read_claim_v2,
@@ -17,7 +18,7 @@ use dclutch_claims::{
         ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestInputV1,
         ClaimsMarketClosureRequestV1,
     },
-    protocol_position_v2::failure_escrow_v1,
+    protocol_position_v2::{ProtocolPositionAdmissionV2, failure_escrow_v1},
     retirement_checkpoint_handoff_v1::{
         CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
         ClaimsRetirementCheckpointHandoffReceiptV1, ClaimsRetirementCheckpointHandoffRequestV1,
@@ -206,8 +207,19 @@ enum FailureEscrowStateV1 {
     Seated {
         /// Failure-coordinate units the closure will burn.
         residue: u64,
-        /// Rent the escrow pair surrenders to the aggregate at closure.
+        /// What the escrow pair's two accounts surrender to the aggregate at
+        /// closure: their OBSERVED lamports, so on a Market that posted a
+        /// founder bond this number already carries it.
         rent: u64,
+        /// The rent the escrow Position recorded at founding, read off its
+        /// admission (decision 0030) rather than off the sysvar of the moment.
+        recorded_rent: u64,
+        /// The founder bond standing in the escrow: everything the Position
+        /// holds above the rent it recorded. An observation, never a caller's
+        /// number.
+        founder_bond: u64,
+        /// The runtime failure coordinate this escrow is seated at.
+        failure_selector: u32,
     },
 }
 
@@ -264,6 +276,13 @@ pub struct CheckpointMarketRetirementReportV1 {
     /// Same finalized observation used for all four packets.
     pub observation: Observation,
     /// Exact terminal refund wallet delta.
+    ///
+    /// On a seated escrow this ALREADY INCLUDES the founder bond: the escrow
+    /// term it sums is the pair's OBSERVED lamports (`FailureEscrowStateV1`'s
+    /// `rent`, built from `position_account.lamports + admission_account
+    /// .lamports`), and decision 0033 leaves the bond sitting in those lamports
+    /// until the closure disposes of it. `founder_bond_lamports` names how much
+    /// of this delta is bond rather than rent; adding it again would double it.
     pub expected_refund_delta: u64,
     /// Failure-coordinate units the `prepare` packet's closure burns.
     ///
@@ -274,7 +293,23 @@ pub struct CheckpointMarketRetirementReportV1 {
     /// (decision 0025's shape A).
     pub burned_failure_units: u64,
     /// Rent the escrow pair surrenders to the checkpoint at closure.
+    ///
+    /// The pair's OBSERVED lamports, so on a Market that posted a founder bond
+    /// this carries the bond too; `founder_bond_lamports` is how much of it.
     pub failure_escrow_rent_lamports: u64,
+    /// The founder bond standing in the escrow before the closure disposes of
+    /// it: the Position's lamports above the rent its admission recorded at
+    /// founding. Zero on a categorical Market and on a refunding one whose
+    /// column was never seated.
+    pub founder_bond_lamports: u64,
+    /// Which exit that bond leaves by, from the certificate's own winner.
+    ///
+    /// `Honest` returns it to the founder's refund source at closure;
+    /// `Exhausted` means the terminal payouts' own tail walked it pro rata to
+    /// the ordinary claims and the closure refuses while any still stand
+    /// (`ClaimsMarketClosureSbfErrorV1::OrdinaryClaimsOutstanding`, `0x5507`).
+    /// `None` on a Market that posted no bond.
+    pub founder_bond_exit: Option<FounderBondExitV1>,
 }
 
 /// Stable refusal from chain observation, semantic join, or instruction construction.
@@ -850,6 +885,10 @@ pub fn build_checkpoint_market_retirement_v1(
         expected_refund_delta,
         burned_failure_units: authenticated.escrow.residue(),
         failure_escrow_rent_lamports: authenticated.escrow.rent(),
+        founder_bond_lamports: authenticated.escrow.founder_bond(),
+        founder_bond_exit: authenticated
+            .escrow
+            .founder_bond_exit(authenticated.market.terminal_winner),
     })
 }
 
@@ -1425,11 +1464,44 @@ fn authenticate_failure_escrow(
             return Err(MarketRetirementOperatorErrorV1::UnescrowedSupply);
         }
     }
+    // The rent the escrow RECORDED when it was funded, read off its own
+    // admission. The admission has to be the derived owner's, or the number is
+    // some other Position's recorded principal wearing this frame's address.
+    let recorded_rent = {
+        let admission = ProtocolPositionAdmissionV2::decode(&admission_account.data)
+            .map_err(|_| MarketRetirementOperatorErrorV1::EscrowFrame)?;
+        let request = admission.request();
+        if request.position_owner != derived.owner.to_bytes() {
+            return Err(MarketRetirementOperatorErrorV1::EscrowFrame);
+        }
+        request.position_rent_principal
+    };
+    // The bond is what the Position holds ABOVE that recorded rent -- the
+    // founder's capital, still standing because decision 0033's honest return
+    // fires inside the closure and not at Terminal.
+    let founder_bond = observed_bond_v1(position_account.lamports, recorded_rent);
+    // OBSERVED lamports, both accounts. On a Market that posted a bond this
+    // already includes it, which is why `expected_refund_delta` needs no
+    // separate bond term.
     let rent = position_account
         .lamports
         .checked_add(admission_account.lamports)
         .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
-    Ok(FailureEscrowStateV1::Seated { residue, rent })
+    let state = FailureEscrowStateV1::Seated {
+        residue,
+        rent,
+        recorded_rent,
+        founder_bond,
+        failure_selector,
+    };
+    // The pair surrenders at least the rent its own admission recorded. An
+    // escrow standing below that has been drained since founding, and its bond
+    // reading would be a floor -- `observed_bond_v1` saturates -- rather than
+    // an observation, which is not a number to publish a refund delta from.
+    if state.rent() < state.recorded_rent() {
+        return Err(MarketRetirementOperatorErrorV1::EscrowFrame);
+    }
+    Ok(state)
 }
 
 impl FailureEscrowStateV1 {
@@ -1446,6 +1518,35 @@ impl FailureEscrowStateV1 {
         match self {
             Self::Vacant => 0,
             Self::Seated { residue, .. } => residue,
+        }
+    }
+
+    /// The founder bond standing in the escrow, above the rent it recorded at
+    /// founding. Zero on a Market that seated no escrow to hold one.
+    const fn founder_bond(self) -> u64 {
+        match self {
+            Self::Vacant => 0,
+            Self::Seated { founder_bond, .. } => founder_bond,
+        }
+    }
+
+    /// The rent the escrow Position recorded at founding, which is what splits
+    /// its surrendered lamports into rent and bond.
+    const fn recorded_rent(self) -> u64 {
+        match self {
+            Self::Vacant => 0,
+            Self::Seated { recorded_rent, .. } => recorded_rent,
+        }
+    }
+
+    /// Which exit the bond leaves by under this terminal winner, or `None` on
+    /// a Market that posted none.
+    fn founder_bond_exit(self, terminal_winner: u32) -> Option<FounderBondExitV1> {
+        match self {
+            Self::Vacant => None,
+            Self::Seated {
+                failure_selector, ..
+            } => exit_v1(true, terminal_winner, failure_selector),
         }
     }
 

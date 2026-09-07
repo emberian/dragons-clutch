@@ -30,6 +30,23 @@ function scalar(source, name) {
   if (!match) throw new Error(`missing Rust scalar ${source}.${name}`);
   return Number(match[1].replaceAll('_', ''));
 }
+// A frame coordinate the Rust DERIVES rather than types -- `ACCOUNT_COUNT`,
+// `ESCROW + 1`, `ADMISSION + 1` -- resolved by the same addition rather than
+// mirrored as a literal this side would have to keep in step by hand.
+const resolved = new Map();
+function terminalCoordinate(name) {
+  const cached = resolved.get(name);
+  if (cached !== undefined) return cached;
+  const match = sources.terminal.match(new RegExp(`pub const ${name}: usize =\\s*([^;]+);`));
+  if (!match) throw new Error(`missing Rust scalar terminal.${name}`);
+  const value = match[1].split('+').reduce((sum, term) => {
+    const token = term.trim();
+    if (token === '') throw new Error(`terminal.${name} is not a sum of coordinates`);
+    return sum + (/^[0-9_]+$/.test(token) ? Number(token.replaceAll('_', '')) : terminalCoordinate(token));
+  }, 0);
+  resolved.set(name, value);
+  return value;
+}
 function magic(source, name) {
   const match = sources[source].match(new RegExp(`(?:pub )?const ${name}: \\[u8; 8\\] = \\*b"([^"]+)";`));
   if (!match) throw new Error(`missing Rust magic ${source}.${name}`);
@@ -73,6 +90,16 @@ for (const name of [
   'TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3',
   'TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3',
 ]) output += `export const ${name} = ${scalar('terminal', name)} as const;\n`;
+// The founder-bond tail (decision 0033): the three coordinates a refunding
+// Market's settlement APPENDS, and the frame width that carries them. Without
+// these a browser can build the thirty-six-account frame and no other.
+for (const name of [
+  'TERMINAL_SETTLEMENT_FOUNDER_BOND_ACCOUNT_COUNT_V3',
+  'TERMINAL_SETTLEMENT_FOUNDER_BOND_ESCROW_ACCOUNT_V3',
+  'TERMINAL_SETTLEMENT_FOUNDER_BOND_ADMISSION_ACCOUNT_V3',
+  'TERMINAL_SETTLEMENT_FOUNDER_BOND_RECIPIENT_ACCOUNT_V3',
+  'TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3',
+]) output += `export const ${name} = ${terminalCoordinate(name)} as const;\n`;
 for (const [exported, rust] of [
   ['TERMINAL_SETTLEMENT_ROLE_OFFSET_V3', 'ROLE_OFFSET'], ['TERMINAL_SETTLEMENT_RELEASE_OFFSET_V3', 'RELEASE_OFFSET'],
   ['TERMINAL_SETTLEMENT_MARKET_OFFSET_V3', 'MARKET_OFFSET'], ['TERMINAL_SETTLEMENT_REALM_OFFSET_V3', 'REALM_OFFSET'],

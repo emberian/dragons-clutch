@@ -515,6 +515,7 @@ mod tests {
                 opener_debt: rent_exempt_reference_v1(CLAIM_CHECK_ESCROW_BYTES_V1 as u64)
                     + rent_exempt_reference_v1(165),
                 crank_reward_cap: COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+                founder_bond_draw: 0,
             },
             denominator: DENOMINATOR,
             payout_per_claim,

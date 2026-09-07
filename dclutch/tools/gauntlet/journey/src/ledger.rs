@@ -79,10 +79,7 @@ use std::collections::BTreeMap;
 use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
-use dclutch_claims::protocol_position_v2::{
-    ProtocolPositionAdmissionSeedsV2, ProtocolPositionClaimsCapabilitySeedsV2,
-    ProtocolPositionSeedsV2,
-};
+use dclutch_claims::protocol_position_v2::ProtocolPositionAdmissionV2;
 use dclutch_custody::{CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_market::{CoreState, Phase as CorePhase};
 use dclutch_custody::token_svm::{MINT_BYTES, Mint, TokenAccount};
@@ -374,6 +371,13 @@ pub(crate) struct ObservationV1 {
     /// across the change reloads without a schema break.
     #[serde(default)]
     pub(crate) market_phase: Option<String>,
+    /// The founder bond (decision 0033): what the derived failure escrow's
+    /// Position holds above the rent its admission recorded at founding.
+    /// `None` when the Market has no seated escrow. Reported, never a law of
+    /// its own -- the escrow is a watched account and L7 already holds the
+    /// number this is inside of.
+    #[serde(default)]
+    pub(crate) founder_bond_lamports: Option<u64>,
     pub(crate) verdicts: Vec<VerdictV1>,
 }
 
@@ -855,6 +859,26 @@ impl ConservationLedgerV1 {
             }
         };
 
+        // The founder bond: the lamport side of the escrow this census already
+        // watches, read the way every route reads it -- the Position's
+        // lamports above the principal its admission recorded (decision 0030),
+        // never the sysvar of the moment.
+        let founder_bond_lamports = match &escrow {
+            None => None,
+            Some(escrow) => match (rpc.account(escrow.position)?, rpc.account(escrow.admission)?) {
+                (Some(position), Some(admission)) if !position.data.is_empty() => {
+                    let recorded = ProtocolPositionAdmissionV2::decode(&admission.data)
+                        .map_err(|error| {
+                            Error::new(format!("failure escrow admission: {error:?}"))
+                        })?
+                        .request()
+                        .position_rent_principal;
+                    Some(position.lamports.saturating_sub(recorded))
+                }
+                _ => None,
+            },
+        };
+
         let mut observation = ObservationV1 {
             stage: stage.into(),
             slot,
@@ -874,6 +898,7 @@ impl ConservationLedgerV1 {
             position_totals,
             accounts,
             market_phase,
+            founder_bond_lamports,
             verdicts: Vec::new(),
         };
         observation.verdicts = self.evaluate(&observation);
@@ -1276,7 +1301,7 @@ impl ConservationLedgerV1 {
                 "L7",
                 format!(
                     "the payer moved {payer_delta} lamports since `{}`, its transactions paid {} in \
-                     fees, watched accounts gained {}, and {} went to {}; debit == credit + fee",
+                     fees, watched accounts gained {}, and {} went to {}; debit == credit + fee{}",
                     previous.stage,
                     now.lamports.fees_lamports,
                     watched_growth,
@@ -1285,6 +1310,13 @@ impl ConservationLedgerV1 {
                         "nothing unwatched"
                     } else {
                         now.lamports.unwatched_note.as_str()
+                    },
+                    match now.founder_bond_lamports {
+                        Some(bond) => format!(
+                            "; the founder bond stands at {bond} lamports on the failure escrow, \
+                             inside the watched set"
+                        ),
+                        None => String::new(),
                     }
                 ),
             )
@@ -1433,6 +1465,7 @@ mod tests {
             // Synthetic censuses bind no Market, so the phase-gated laws behave
             // exactly as they did before the binding existed.
             market_phase: None,
+            founder_bond_lamports: None,
             verdicts: Vec::new(),
         }
     }
@@ -1564,6 +1597,7 @@ mod tests {
             // Synthetic censuses bind no Market, so the phase-gated laws behave
             // exactly as they did before the binding existed.
             market_phase: None,
+            founder_bond_lamports: None,
             verdicts: Vec::new(),
         }
     }

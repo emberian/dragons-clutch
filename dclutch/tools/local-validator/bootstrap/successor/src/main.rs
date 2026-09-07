@@ -3010,6 +3010,7 @@ mod tests {
             position_totals: Vec::new(),
             accounts: BTreeMap::new(),
             market_phase: None,
+            founder_bond_lamports: None,
             verdicts: Vec::new(),
         }
     }

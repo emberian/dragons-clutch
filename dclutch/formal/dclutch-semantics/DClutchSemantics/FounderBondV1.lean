@@ -533,4 +533,149 @@ example : draw 4031465 1500000000 0 = 0 := by decide
 /-- Half the claims draw half the bond, to the lamport the floor allows. -/
 example : draw 4031465 1500000000 750000000 = 2015732 := by decide
 
+/-! ## The close
+
+The escrow's close is the one place the bond leaves the escrow: the closure
+burn hands everything the escrow holds to the aggregate, which carries it to
+the founder's refund source (decision 0021).  On the honest exit that is the
+return.  On the exhausted exit the bond has already been walked out, one
+redemption at a time, so the close is admitted only once no ordinary claim
+stands -- `OrdinaryClaimsOutstanding` otherwise -- and whatever then stands
+above rent is a donation that arrived after the last redemption, carried as
+surplus.  The build's `FounderBondClosureV1::new` is this admission. -/
+
+/-- Whether the close is admitted: always on the honest exit; on the exhausted
+exit only once no ordinary claim stands. -/
+def closeAdmits : Exit → Nat → Bool
+  | .honest, _ => true
+  | .exhausted, outstanding => decide (outstanding = 0)
+
+theorem an_honest_close_is_always_admitted (outstanding : Nat) :
+    closeAdmits .honest outstanding = true := rfl
+
+/-- **Hostile: a close before the walk finishes.**  While an ordinary claim
+stands, the exhausted close refuses. -/
+theorem an_exhausted_close_refuses_while_claims_stand
+    (outstanding : Nat) (standing : 0 < outstanding) :
+    closeAdmits .exhausted outstanding = false := by
+  unfold closeAdmits
+  apply decide_eq_false
+  omega
+
+theorem an_exhausted_close_is_admitted_once_the_walk_is_done :
+    closeAdmits .exhausted 0 = true := rfl
+
+/-- Along any exhausting walk the close is admitted at its end and finds
+nothing of the bond standing: what the founder's refund source receives on
+this arm above rent is a late donation, never the bond. -/
+theorem an_admitted_exhausted_close_carries_none_of_the_bond
+    (walk : Walk) (redemptions : List Nat)
+    (positive : 0 < walk.outstanding)
+    (partition : redemptions.sum = walk.outstanding) :
+    closeAdmits .exhausted (walk.run redemptions).outstanding = true
+      ∧ (walk.run redemptions).remaining = 0 := by
+  have paid := an_exhausting_walk_pays_the_bond_exactly walk redemptions positive partition
+  have final := walk.run_outstanding redemptions
+  rw [partition, Nat.sub_self] at final
+  refine ⟨?_, paid.right⟩
+  simp [closeAdmits, final]
+
+/-! ## The compaction crank
+
+A sleeping holder's redemption can be submitted by the holder or by the
+compaction crank on their behalf.  Two facts make the crank safe for the
+sleeper, and they are separate facts.  First, the submitter reaches exactly one
+coordinate -- where the drawn lamports land -- and the draw itself is a
+function of what stands, what is outstanding and what this redemption retires,
+none of which the submitter appears in.  Second, the lamports the crank draws
+onto the vacant claim-check address are the holder's and must ride into the
+minted record rather than be counted as dust the sweep owes less for; that is
+`ClaimCheckCompactionObservationV1::founder_bond_draw` and the subtraction
+before `claim_check_top_up`. -/
+
+/-- Who submits a redemption. -/
+inductive Submitter where
+  | holder
+  | crank
+  deriving DecidableEq, Repr
+
+/-- Where a redemption's drawn lamports land: the holder's own recipient, or
+the vacant claim-check address the crank mints the sleeper's record at. -/
+def bondRecipient (holderRecipient claimCheck : Nat) : Submitter → Nat
+  | .holder => holderRecipient
+  | .crank => claimCheck
+
+/-- One submitted redemption: what it draws, and where the draw lands. -/
+def submittedRedemption
+    (ordinaryCount : Nat) (phase : Phase)
+    (index quantity remaining outstanding holderRecipient claimCheck : Nat)
+    (submitter : Submitter) : Nat × Nat :=
+  (redemptionDraw ordinaryCount phase index quantity remaining outstanding,
+    bondRecipient holderRecipient claimCheck submitter)
+
+/-- **The compaction crank draws for a sleeping holder exactly what the holder
+would have drawn.**  The submitter is an argument of the submitted redemption
+and not of its draw. -/
+theorem a_compacted_redemption_draws_what_the_holder_would_have
+    (ordinaryCount : Nat) (phase : Phase)
+    (index quantity remaining outstanding holderRecipient claimCheck : Nat) :
+    (submittedRedemption ordinaryCount phase index quantity remaining outstanding
+        holderRecipient claimCheck .crank).fst
+      = (submittedRedemption ordinaryCount phase index quantity remaining outstanding
+        holderRecipient claimCheck .holder).fst := rfl
+
+/-- ...and the coordinate the submitter DOES reach is the destination, so the
+theorem above is a claim about two different redemptions rather than two names
+for one term. -/
+theorem the_crank_pays_the_claim_check_address_instead
+    (ordinaryCount : Nat) (phase : Phase)
+    (index quantity remaining outstanding holderRecipient claimCheck : Nat)
+    (distinct : holderRecipient ≠ claimCheck) :
+    (submittedRedemption ordinaryCount phase index quantity remaining outstanding
+        holderRecipient claimCheck .crank).snd
+      ≠ (submittedRedemption ordinaryCount phase index quantity remaining outstanding
+        holderRecipient claimCheck .holder).snd := by
+  simpa [submittedRedemption, bondRecipient] using Ne.symm distinct
+
+/-- What stands on the vacant claim-check address before the mint: dust that
+arrived from anywhere, plus the draw this settlement just made for the sleeper. -/
+def claimCheckBefore (dust drawn : Nat) : Nat := dust + drawn
+
+/-- What the sweep tops that address up by.  The draw is subtracted back out of
+the observed lamports first, so only the dust counts against the rent floor. -/
+def compactionTopUp (recordRent dust : Nat) : Nat := recordRent - dust
+
+/-- What the minted record then holds. -/
+def compactedRecord (recordRent dust drawn : Nat) : Nat :=
+  claimCheckBefore dust drawn + compactionTopUp recordRent dust
+
+/-- **The sleeper's draw rides into the record.**  A record minted over a draw
+holds its own rent AND the draw, whatever dust was already there -- so the
+redemption that later sweeps the record whole pays the sleeper exactly what
+their own redemption would have drawn. -/
+theorem a_compacted_record_carries_the_whole_draw
+    (recordRent dust drawn : Nat) (covered : dust ≤ recordRent) :
+    compactedRecord recordRent dust drawn = recordRent + drawn := by
+  unfold compactedRecord claimCheckBefore compactionTopUp
+  omega
+
+/-- The policy this one replaced: the draw counted as dust, so the top-up is
+measured against `dust + drawn`. -/
+def compactedRecordIfDrawWereDust (recordRent dust drawn : Nat) : Nat :=
+  claimCheckBefore dust drawn + compactionTopUp recordRent (dust + drawn)
+
+/-- **Hostile: the draw counted as dust.**  The record holds only its rent, the
+sleeper's share has been absorbed into the rent floor the cranker, the opener
+and the RentCredit are paid out of, and the sweep pays the holder nothing for
+it.  This is the one lamport-losing policy `founder_bond_draw` exists to
+refuse. -/
+theorem counting_the_draw_as_dust_absorbs_it
+    (recordRent dust drawn : Nat) (covered : dust + drawn ≤ recordRent) :
+    compactedRecordIfDrawWereDust recordRent dust drawn = recordRent := by
+  unfold compactedRecordIfDrawWereDust claimCheckBefore compactionTopUp
+  omega
+
+example : closeAdmits .exhausted (cohortFifteenWalk.run [1499999800, 200]).outstanding = true := by
+  decide
+
 end DClutch.FounderBond

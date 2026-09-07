@@ -100,6 +100,17 @@ pub struct ClaimCheckCompactionObservationV1 {
     pub opener_debt: u64,
     /// Ceiling on this crank's reward.
     pub crank_reward_cap: u64,
+    /// Lamports the terminal settlement this crank just ran drew from the
+    /// founder bond onto the claim-check address (decision 0033, the sleeper's
+    /// share of an exhausted Market's bond). Zero on every honest terminal and
+    /// on every Market that posted no bond.
+    ///
+    /// The draw landed BEFORE this observation and sits on the vacant record
+    /// address as lamports. It is the holder's, so it is excluded from the dust
+    /// that reduces the sweep's top-up and carried into the minted record,
+    /// which redemption sweeps whole to the holder. Counting it as dust would
+    /// hand the sleeper's share to the cranker, the opener and the RentCredit.
+    pub founder_bond_draw: u64,
 }
 
 /// The sole admitted compaction movement: atoms and lamports, both closed.
@@ -162,11 +173,23 @@ impl ClaimCheckCompactionPlanV1 {
             return Err(ClaimCheckConservationErrorV1::ZeroCoordinate);
         }
 
+        // A bond draw with no record to carry it would strand on a vacant
+        // address; the exhausted arm pays every ordinary claim at least one
+        // atom, so this is unreachable on a well-formed walk and refused by
+        // name rather than absorbed if it is ever reached.
+        if observation.claim_check_rent == 0 && observation.founder_bond_draw != 0 {
+            return Err(ClaimCheckConservationErrorV1::Conservation);
+        }
         // Dust already at the vacant address is not a refusal and not a
-        // windfall: it counts against what the sweep owes the new record.
-        let claim_check_top_up = observation
-            .claim_check_rent
-            .saturating_sub(observation.claim_check.lamports);
+        // windfall: it counts against what the sweep owes the new record. The
+        // founder bond's draw is not dust: it is the holder's, already there,
+        // and it rides into the record on top of the rent floor.
+        let dust = observation
+            .claim_check
+            .lamports
+            .checked_sub(observation.founder_bond_draw)
+            .ok_or(ClaimCheckConservationErrorV1::Conservation)?;
+        let claim_check_top_up = observation.claim_check_rent.saturating_sub(dust);
         let after_rent = swept_lamports
             .checked_sub(claim_check_top_up)
             .ok_or(ClaimCheckConservationErrorV1::Uncapitalized)?;
@@ -581,6 +604,7 @@ mod tests {
             claim_check_rent,
             opener_debt: opener_outlay(),
             crank_reward_cap: COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+            founder_bond_draw: 0,
         }
     }
 
@@ -979,6 +1003,114 @@ mod tests {
         assert_eq!(
             ClaimCheckRedemptionPlanV1::new(redemption(0)),
             Err(ClaimCheckConservationErrorV1::EmptyClaimCheck)
+        );
+    }
+
+    #[test]
+    fn a_founder_bond_draw_rides_into_the_record_and_the_dust_does_not() {
+        // The Lean twin is `a_compacted_record_carries_the_whole_draw` and its
+        // hostile `counting_the_draw_as_dust_absorbs_it`
+        // (`FounderBondV1.lean`). Both policies are computed here so the test
+        // states the loss the exclusion prevents rather than only the number
+        // the current code produces.
+        const DUST: u64 = 4_242;
+        // Below the record's own rent floor, where the replaced policy loses
+        // the draw exactly. Above it that policy strands the top-up instead --
+        // a different number, the same holder short.
+        const DRAW: u64 = 500_000;
+
+        let mut observed = observation(2, 750_000);
+        observed.claim_check = account(CLAIM_CHECK, DUST + DRAW);
+        observed.founder_bond_draw = DRAW;
+        let plan = ClaimCheckCompactionPlanV1::new(observed).expect("plan");
+
+        // Only the dust counts against the rent floor.
+        assert_eq!(plan.claim_check_top_up(), observed.claim_check_rent - DUST);
+        // So the minted record holds its own rent AND the sleeper's draw.
+        let post = post_of(plan, observed);
+        assert_eq!(post.claim_check_lamports, observed.claim_check_rent + DRAW);
+        assert_eq!(plan.validate_post(post), Ok(()));
+        // And the sweep still closes: four credits, nothing invented.
+        assert_eq!(
+            plan.swept_lamports(),
+            plan.claim_check_top_up()
+                + plan.crank_reward()
+                + plan.opener_repayment()
+                + plan.rent_credit_residue()
+        );
+
+        // The policy this replaced: the same lamports on the same address,
+        // with the draw declared to be dust. The record ends at exactly its
+        // rent and the draw has been paid to the cranker, the opener and the
+        // RentCredit instead.
+        let as_dust = ClaimCheckCompactionObservationV1 {
+            founder_bond_draw: 0,
+            ..observed
+        };
+        let dust_plan = ClaimCheckCompactionPlanV1::new(as_dust).expect("plan");
+        assert_eq!(
+            post_of(dust_plan, as_dust).claim_check_lamports,
+            observed.claim_check_rent
+        );
+        assert_eq!(
+            dust_plan.crank_reward() + dust_plan.opener_repayment() + dust_plan.rent_credit_residue()
+                - (plan.crank_reward() + plan.opener_repayment() + plan.rent_credit_residue()),
+            DRAW
+        );
+    }
+
+    #[test]
+    fn the_sleeper_is_swept_the_whole_draw_the_crank_made_for_them() {
+        // The other half of the same fact, from the redemption side: a record
+        // minted over a draw pays the holder the draw as well as the rent, so
+        // a compacted holder receives what their own redemption would have
+        // drawn.
+        const DRAW: u64 = 4_031_465;
+
+        let mut observed = observation(2, 750_000);
+        observed.claim_check = account(CLAIM_CHECK, DRAW);
+        observed.founder_bond_draw = DRAW;
+        let minted = post_of(
+            ClaimCheckCompactionPlanV1::new(observed).expect("plan"),
+            observed,
+        )
+        .claim_check_lamports;
+
+        let redeemed = ClaimCheckRedemptionObservationV1 {
+            record_lamports: minted,
+            ..redemption(750_000)
+        };
+        let plan = ClaimCheckRedemptionPlanV1::new(redeemed).expect("plan");
+        assert_eq!(
+            plan.holder_lamports_after(),
+            redeemed.holder_lamports_before + observed.claim_check_rent + DRAW
+        );
+    }
+
+    #[test]
+    fn a_bond_draw_with_no_record_to_carry_it_refuses_by_name() {
+        // A losing outcome mints no record (`claim_check_rent == 0`), so a
+        // draw would strand on a vacant address nobody can sweep.
+        let mut observed = observation(2, 0);
+        observed.claim_check = account(CLAIM_CHECK, 4_031_465);
+        observed.founder_bond_draw = 4_031_465;
+        assert_eq!(
+            ClaimCheckCompactionPlanV1::new(observed),
+            Err(ClaimCheckConservationErrorV1::Conservation)
+        );
+    }
+
+    #[test]
+    fn a_draw_larger_than_the_address_holds_refuses_by_name() {
+        // The caller's number checked against the chain's: a draw claimed
+        // above what the address actually received is refused rather than
+        // wrapped into a negative dust.
+        let mut observed = observation(2, 750_000);
+        observed.claim_check = account(CLAIM_CHECK, 4_031_464);
+        observed.founder_bond_draw = 4_031_465;
+        assert_eq!(
+            ClaimCheckCompactionPlanV1::new(observed),
+            Err(ClaimCheckConservationErrorV1::Conservation)
         );
     }
 }

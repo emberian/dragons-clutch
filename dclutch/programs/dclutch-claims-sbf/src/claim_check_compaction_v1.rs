@@ -593,6 +593,20 @@ pub const COMPACT_OPENER_ACCOUNT_V1: usize = TERMINAL_FRAME_V1 + 4;
 pub const COMPACT_SYSTEM_ACCOUNT_V1: usize = TERMINAL_FRAME_V1 + 5;
 /// Exact compaction frame width.
 pub const COMPACT_ACCOUNT_COUNT_V1: usize = TERMINAL_FRAME_V1 + 6;
+/// The failure escrow's Position, trailing, on a refunding Market (decision
+/// 0033): the sleeper's redemption draws its share of the founder bond from
+/// it, in the same terminal settlement that pays the escrow refund.
+pub const COMPACT_BOND_ESCROW_ACCOUNT_V1: usize = COMPACT_ACCOUNT_COUNT_V1;
+/// The failure escrow's admission, trailing, carrying the rent it recorded.
+pub const COMPACT_BOND_ADMISSION_ACCOUNT_V1: usize = COMPACT_ACCOUNT_COUNT_V1 + 1;
+/// Exact compaction frame width with the founder-bond pair.
+///
+/// TRAILING, so a Market that posted no bond compacts on the exact frame that
+/// shipped. The bond's recipient is not a third trailing account: it is the
+/// claim-check address this frame already carries, which redemption sweeps
+/// whole to the holder -- the draw rides into the minted record on top of its
+/// rent floor (`ClaimCheckCompactionObservationV1::founder_bond_draw`).
+pub const COMPACT_WITH_BOND_ACCOUNT_COUNT_V1: usize = COMPACT_ACCOUNT_COUNT_V1 + 2;
 
 /// Compact one sleeping position into a claim-check, permissionlessly.
 ///
@@ -612,7 +626,9 @@ pub fn process_compaction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    if accounts.len() != COMPACT_ACCOUNT_COUNT_V1 {
+    if accounts.len() != COMPACT_ACCOUNT_COUNT_V1
+        && accounts.len() != COMPACT_WITH_BOND_ACCOUNT_COUNT_V1
+    {
         return Err(ClaimCheckCompactionSbfErrorV1::Accounts.into());
     }
     let request = CompactPositionToClaimCheckRequestV1::decode(instruction_data)
@@ -627,17 +643,53 @@ pub fn process_compaction(
     let hoard_account = accounts
         .get(TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3)
         .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)?;
+    let claim_check_account = accounts
+        .get(COMPACT_CLAIM_CHECK_ACCOUNT_V1)
+        .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)?;
     let vault_before = token_balance(vault_account)?;
     let hoard_before = token_balance(hoard_account)?;
+    let claim_check_before = claim_check_account.lamports();
 
     // CALLED, never re-implemented. Everything the holder's own redemption
     // authenticates, this authenticates, because it is the same code.
-    crate::terminal_settlement_v3::execute_claim_check_compaction(
-        program_id,
-        terminal,
-        request.settlement(),
-    )
-    .map_err(|_| ClaimCheckCompactionSbfErrorV1::Economic)?;
+    //
+    // On a refunding Market the wrapped terminal frame gains the founder-bond
+    // tail: the escrow pair this frame carries trailing, and the claim-check
+    // address as the bond's recipient, so the sleeper's share of an exhausted
+    // Market's bond lands where redemption will sweep it to the holder.
+    match accounts
+        .get(COMPACT_ACCOUNT_COUNT_V1..)
+        .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)?
+    {
+        [] => crate::terminal_settlement_v3::execute_claim_check_compaction(
+            program_id,
+            terminal,
+            request.settlement(),
+        )
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Economic)?,
+        [escrow_position, escrow_admission] => {
+            let mut with_bond = Vec::with_capacity(TERMINAL_FRAME_V1 + 3);
+            with_bond.extend_from_slice(terminal);
+            with_bond.push(escrow_position.clone());
+            with_bond.push(escrow_admission.clone());
+            with_bond.push(claim_check_account.clone());
+            crate::terminal_settlement_v3::execute_claim_check_compaction(
+                program_id,
+                &with_bond,
+                request.settlement(),
+            )
+            .map_err(|_| ClaimCheckCompactionSbfErrorV1::Economic)?
+        }
+        _ => return Err(ClaimCheckCompactionSbfErrorV1::Accounts.into()),
+    };
+    // The bond's draw is OBSERVED as the claim-check address's rise across the
+    // settlement, never taken from the receipt: the plan below excludes it
+    // from the dust that reduces the sweep's top-up and carries it into the
+    // record.
+    let founder_bond_draw = claim_check_account
+        .lamports()
+        .checked_sub(claim_check_before)
+        .ok_or(ClaimCheckCompactionSbfErrorV1::Conservation)?;
 
     commit_compaction(
         program_id,
@@ -649,6 +701,7 @@ pub fn process_compaction(
             vault_before,
             vault_after: token_balance(vault_account)?,
         },
+        founder_bond_draw,
     )
 }
 
@@ -833,6 +886,7 @@ fn commit_compaction(
     accounts: &[AccountInfo<'_>],
     prepared: &CompactionPreparedV1,
     movement: CollateralMovementV1,
+    founder_bond_draw: u64,
 ) -> ProgramResult {
     let at = |index: usize| {
         accounts
@@ -876,6 +930,7 @@ fn commit_compaction(
         claim_check_rent,
         opener_debt: escrow.opener_outlay,
         crank_reward_cap: COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+        founder_bond_draw,
     })
     .map_err(|_| ClaimCheckCompactionSbfErrorV1::Conservation)?;
 

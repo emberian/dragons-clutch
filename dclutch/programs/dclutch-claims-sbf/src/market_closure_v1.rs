@@ -37,14 +37,20 @@ use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
     hash::{hash, hashv},
+    log::sol_log_64,
     program::set_return_data,
     program_error::ProgramError,
     pubkey::Pubkey,
 };
 use solana_sdk_ids::system_program;
 
+use dclutch_claims::founder_bond_v1::{
+    FounderBondClosureObservationV1, FounderBondClosureV1, FounderBondErrorV1, FounderBondExitV1,
+    exit_v1, ordinary_outstanding_v1,
+};
 use dclutch_claims::protocol_position_v2::{
-    ProtocolPositionAdmissionSeedsV2, ProtocolPositionSeedsV2,
+    ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
+    ProtocolPositionSeedsV2,
 };
 use dclutch_product::payoff::runtime_v3::{ProductBasisV3, semantic_basis_id_v3};
 
@@ -122,13 +128,38 @@ pub enum ClaimsMarketClosureSbfErrorV1 {
     /// saying this column is owed nothing under every certificate, and a
     /// record that does not say so licenses nothing.
     Basis = 0x5506,
+    /// The exhausted-arm close ran while ordinary claims still stood: the walk
+    /// that pays the founder bond has not finished.
+    ///
+    /// Decision 0033. On a refunding Market whose certificate names the
+    /// failure selector, the bond leaves the escrow one ordinary redemption at
+    /// a time, and the redemption that retires the last ordinary claim draws
+    /// everything left (`the_last_redemption_draws_everything`). A close before
+    /// that would carry the unwalked remainder to the founder's refund source
+    /// -- the one exit the Lean forbids on this arm
+    /// (`an_exhausted_exit_pays_the_founder_nothing`).
+    ///
+    /// Distinct from [`Self::Liability`], which is the same observation read
+    /// the other way: `Liability` says a holder still has a claim that can be
+    /// paid, and its reader goes looking for the unpaid holder; this one says
+    /// the BOND still owes those holders lamports, and its reader waits for
+    /// the walk. Both refuse the same prestate; only this one names what the
+    /// founder was about to be handed.
+    OrdinaryClaimsOutstanding = 0x5507,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
     ClaimsMarketClosureSbfErrorV1,
     dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x500,
     [
-        Accounts, Authority, Identity, Liability, Commit, Receipt, Basis
+        Accounts,
+        Authority,
+        Identity,
+        Liability,
+        Commit,
+        Receipt,
+        Basis,
+        OrdinaryClaimsOutstanding
     ]
 );
 
@@ -309,7 +340,7 @@ pub fn process(
     let core = authenticate_core(accounts, request_input)?;
     authenticate_rent_credit(accounts, core)?;
     let (pre_digest, market) = authenticate_aggregate_identity(accounts, request_input)?;
-    burn_failure_escrow_column_v1(program_id, accounts, market)?;
+    burn_failure_escrow_column_v1(program_id, accounts, market, core)?;
     require_empty_aggregate(accounts, market)?;
     let refund_lamports = aggregate_refund_lamports(accounts)?;
     let rent_after = accounts
@@ -371,7 +402,7 @@ pub fn process_checkpoint_handoff(
     let core = authenticate_core(accounts, request_input)?;
     authenticate_rent_credit(accounts, core)?;
     let (pre_digest, market) = authenticate_aggregate_identity(accounts, request_input)?;
-    burn_failure_escrow_column_v1(program_id, accounts, market)?;
+    burn_failure_escrow_column_v1(program_id, accounts, market, core)?;
     require_empty_aggregate(accounts, market)?;
     let refund_lamports = aggregate_refund_lamports(accounts)?;
     let rent_before = accounts.rent_credit.lamports();
@@ -883,6 +914,7 @@ fn burn_failure_escrow_column_v1(
     program_id: &Pubkey,
     accounts: ClosureAccounts<'_, '_>,
     market: LiabilityBasisMarketViewV2,
+    core: CoreState,
 ) -> ProgramResult {
     let Some(escrow) = accounts.escrow else {
         return Ok(());
@@ -964,6 +996,7 @@ fn burn_failure_escrow_column_v1(
     if supply != residue {
         return Err(ClaimsMarketClosureSbfErrorV1::Liability.into());
     }
+    admit_founder_bond_disposition_v1(accounts, escrow, market, core, derived)?;
     {
         let mut aggregate_bytes = accounts
             .aggregate
@@ -998,13 +1031,102 @@ fn burn_failure_escrow_column_v1(
     close_escrow_pair_into_aggregate_v1(accounts, escrow)
 }
 
+/// The founder bond's arm of the closure: decide the exit and admit the
+/// disposition before the escrow pair surrenders everything it holds.
+///
+/// Decision 0033. The bond is the escrow Position's lamports above the rent
+/// its admission recorded at founding (decision 0030), and the closure is the
+/// one place the escrow's balance leaves the escrow:
+/// [`close_escrow_pair_into_aggregate_v1`] hands the whole balance to the
+/// aggregate, which carries it to the founder's refund source (decision 0021).
+///
+/// - **Honest exit** (the certificate names an ordinary winner): that is the
+///   return, in full, and nothing here has to move -- the arm only says so.
+/// - **Exhausted exit** (the winner is the failure selector): the bond has been
+///   walked to the ordinary claims one redemption at a time, and the close is
+///   admitted only once no ordinary claim stands
+///   ([`ClaimsMarketClosureSbfErrorV1::OrdinaryClaimsOutstanding`] otherwise).
+///   Whatever then stands above rent is a donation that arrived after the last
+///   redemption, carried to the refund wallet as surplus and named in the log.
+///
+/// `FounderBondClosureV1` is the author of both arms; this function supplies
+/// the observations and refuses by name.
+#[inline(never)]
+fn admit_founder_bond_disposition_v1(
+    accounts: ClosureAccounts<'_, '_>,
+    escrow: ClosureEscrowV1<'_, '_>,
+    market: LiabilityBasisMarketViewV2,
+    core: CoreState,
+    derived: FailureEscrowIdentityV1,
+) -> ProgramResult {
+    let recorded_rent = {
+        let bytes = escrow
+            .admission
+            .try_borrow_data()
+            .map_err(|_| ClaimsMarketClosureSbfErrorV1::Accounts)?;
+        let admission = ProtocolPositionAdmissionV2::decode(&bytes)
+            .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+        let request = admission.request();
+        if request.position_owner != derived.owner
+            || request.owner_kind != ProtocolPositionOwnerKindV2::ClaimsCapability
+            || request.capability_outcome != derived.failure_selector
+        {
+            return Err(ClaimsSbfError::FailureEscrow.into());
+        }
+        request.position_rent_principal
+    };
+    // The record refunds on failure -- `refunds_on_failure_v1` admitted it
+    // before this arm was reached -- so the Market posted a bond and the exit
+    // is the winner's alone.
+    let Some(exit) = exit_v1(true, core.terminal_winner, derived.failure_selector) else {
+        return Err(ClaimsMarketClosureSbfErrorV1::Identity.into());
+    };
+    let ordinary_outstanding = {
+        let aggregate_bytes = accounts
+            .aggregate
+            .try_borrow_data()
+            .map_err(|_| ClaimsMarketClosureSbfErrorV1::Accounts)?;
+        ordinary_outstanding_v1(market, &aggregate_bytes, derived.failure_selector)
+            .map_err(|_| ClaimsMarketClosureSbfErrorV1::Identity)?
+    };
+    let disposition = FounderBondClosureV1::new(FounderBondClosureObservationV1 {
+        exit,
+        escrow_lamports: escrow.position.lamports(),
+        recorded_rent,
+        ordinary_outstanding,
+    })
+    .map_err(|error| match error {
+        FounderBondErrorV1::OrdinaryClaimsOutstanding => {
+            ProgramError::from(ClaimsMarketClosureSbfErrorV1::OrdinaryClaimsOutstanding)
+        }
+        _ => ClaimsMarketClosureSbfErrorV1::Identity.into(),
+    })?;
+    // The disposition, for the reader of a validator log: which exit (0
+    // honest, 1 exhausted), the rent, what returns to the founder, what
+    // reaches the refund wallet as surplus.
+    sol_log_64(
+        match disposition.exit() {
+            FounderBondExitV1::Honest => 0,
+            FounderBondExitV1::Exhausted => 1,
+        },
+        disposition.rent(),
+        disposition.returned_to_founder(),
+        disposition.surplus_to_refund_wallet(),
+        0,
+    );
+    Ok(())
+}
+
 /// Close the emptied escrow pair and hand its rent to the aggregate.
 ///
 /// The aggregate is the ONE account this route already disposes of, and both
 /// dispositions carry the escrow's rent to decision 0021's refund source
 /// without a fourth account in the frame: `close_aggregate` credits it to the
 /// immutable RentCredit, and `handoff_aggregate_to_core` carries it into the
-/// retirement checkpoint that pays the refund wallet at `Finish`.
+/// retirement checkpoint that pays the refund wallet at `Finish`. On a Market
+/// that posted a founder bond the balance is rent PLUS the bond's disposition
+/// -- returned on the honest exit, surplus on the exhausted one -- and the arm
+/// above has already said which.
 #[inline(never)]
 fn close_escrow_pair_into_aggregate_v1(
     accounts: ClosureAccounts<'_, '_>,

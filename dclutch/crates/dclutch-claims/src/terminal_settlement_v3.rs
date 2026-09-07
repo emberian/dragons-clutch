@@ -52,6 +52,30 @@ pub const TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3: usize = 33;
 pub const TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3: usize = 34;
 /// Realm-selected Token program account index.
 pub const TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3: usize = 35;
+/// Accounts the founder-bond arm APPENDS to the fixed frame on a refunding
+/// Market (decision 0033): the failure escrow's Position, its admission, and
+/// the bond recipient.
+///
+/// TRAILING, so a categorical Market's settlement keeps its exact thirty-six
+/// accounts and its exact behaviour; a frame that does not carry the tail is
+/// byte-for-byte the frame that shipped, and the draw is unreachable from it.
+/// A refunding Market's settlement under the exhausted exit MUST carry it
+/// (`ClaimsSbfError::FounderBondFrame`); under the honest exit it may, and
+/// draws nothing.
+pub const TERMINAL_SETTLEMENT_FOUNDER_BOND_ACCOUNT_COUNT_V3: usize = 3;
+/// Writable failure-escrow Position the bond is drawn from.
+pub const TERMINAL_SETTLEMENT_FOUNDER_BOND_ESCROW_ACCOUNT_V3: usize =
+    TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3;
+/// Read-only escrow admission carrying the rent the escrow recorded at founding.
+pub const TERMINAL_SETTLEMENT_FOUNDER_BOND_ADMISSION_ACCOUNT_V3: usize =
+    TERMINAL_SETTLEMENT_FOUNDER_BOND_ESCROW_ACCOUNT_V3 + 1;
+/// Writable bond recipient: the recipient owner's wallet, or under the
+/// compaction crank the holder's derived claim-check address.
+pub const TERMINAL_SETTLEMENT_FOUNDER_BOND_RECIPIENT_ACCOUNT_V3: usize =
+    TERMINAL_SETTLEMENT_FOUNDER_BOND_ADMISSION_ACCOUNT_V3 + 1;
+/// Exact frame width with the founder-bond tail.
+pub const TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3: usize =
+    TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 + TERMINAL_SETTLEMENT_FOUNDER_BOND_ACCOUNT_COUNT_V3;
 /// Domain separating a terminal Custody candidate from all caller candidates.
 pub const TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3: &[u8] =
     b"dclutch/claims-terminal-custody-candidate/v3";

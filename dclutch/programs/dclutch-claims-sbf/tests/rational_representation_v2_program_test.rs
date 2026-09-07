@@ -7835,6 +7835,7 @@ fn wallet_payout_operator_report(
     let admission = wallet_payout_admission(fixture, request);
     let input = request.input();
     build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+        founder_bond: None,
         observation: Observation {
             slot: 1,
             unix_timestamp: 0,
@@ -7872,6 +7873,9 @@ fn wallet_payout_operator_report(
             recipient: terminal.recipient,
             custody_authority: terminal.custody_authority,
             token_program: TOKEN_PROGRAM_ID,
+            // This campaign's basis is categorical: it seats no failure escrow,
+            // so there is no bond and no tail to draw one from.
+            founder_bond: None,
         },
         parent_context: fixture.parent_context,
         terminal_record_digest: input.terminal_record_digest,

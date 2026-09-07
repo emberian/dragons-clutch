@@ -98,7 +98,9 @@ use dclutch_claims::{
         CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_REQUEST_BYTES_V5, ClaimsFoundingReceiptV5,
     },
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
+    protocol_position_v2::ProtocolPositionAdmissionV2,
 };
+use dclutch_claims_sbf::founding_v5::ClaimsFoundingSbfErrorV5;
 use dclutch_fractional_atomic_program_test::founding_world::{
     CLAIM_COUNT, CLAIMS_PROGRAM_ID, FoundingShapeV1, HostileV1, QUANTITY, found, world,
 };
@@ -191,14 +193,36 @@ async fn a_refunding_founding_seats_the_escrow_on_the_real_elf() {
         QUANTITY,
         "the escrow holds the whole failure column",
     );
-    assert!(
-        context
-            .banks_client
-            .get_account(world.escrow_admission)
-            .await
-            .expect("escrow admission query")
-            .is_some_and(|account| account.owner == CLAIMS_PROGRAM_ID),
-        "a refunding founding writes the escrow's ClaimsCapability admission",
+    assert_eq!(
+        escrow_account.lamports,
+        world.position_rent + world.bond,
+        "the escrow Position holds its rent AND the founder bond; the founding \
+         neither tops the bond up nor spends it",
+    );
+
+    let admission_account = context
+        .banks_client
+        .get_account(world.escrow_admission)
+        .await
+        .expect("escrow admission query")
+        .expect("a refunding founding writes the escrow's ClaimsCapability admission");
+    assert_eq!(admission_account.owner, CLAIMS_PROGRAM_ID);
+    // Nothing is written FOR the bond: the admission the seating already wrote
+    // is its record, and these two fields are what every later reader -- the
+    // payout draw, the closure, the census -- subtracts to recover it
+    // (decision 0030).
+    let admitted = ProtocolPositionAdmissionV2::decode(&admission_account.data)
+        .expect("the escrow admission decodes")
+        .request();
+    assert_eq!(
+        admitted.position_rent_principal, world.position_rent,
+        "the admission records the rent the escrow was funded at",
+    );
+    assert_eq!(
+        admitted.observed_position_lamports,
+        world.position_rent + world.bond,
+        "and the balance observed beside it, so the bond is exactly the \
+         difference of two fields of one account",
     );
 }
 
@@ -296,7 +320,21 @@ fn the_two_shapes_differ_in_the_payout_scale_and_nothing_else() {
         "the RECORD is what says which shape this Market is",
     );
     assert_eq!(CLAIMS_FOUNDING_RECEIPT_BYTES_V5, 1008);
-    let _ = ClaimsFoundingReceiptV5::decode(&[0; CLAIMS_FOUNDING_RECEIPT_BYTES_V5]).is_err();
+    assert!(
+        ClaimsFoundingReceiptV5::decode(&[0; CLAIMS_FOUNDING_RECEIPT_BYTES_V5]).is_err(),
+        "a receipt of the right WIDTH and the wrong bytes is refused by the magic, not accepted",
+    );
+    assert_ne!(
+        refunding.bond, 0,
+        "the founder bond's size rule has a nonzero floor at this width, which \
+         is what MANDATORY means; a zero here would make every bond assertion \
+         in this file pass over nothing",
+    );
+    assert_eq!(
+        refunding.bond, categorical.bond,
+        "the bond is priced off the width and the rent rate, neither of which \
+         the payout scale moves",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -373,3 +411,94 @@ async fn a_refunding_founding_whose_escrow_rent_is_not_prepaid_refuses() {
 /// silently re-pointing it at another route's code. `0x5186` is the seventh
 /// variant of the run that starts at `CLAIMS_REFUSAL_BASE + 0x180`.
 const FOUNDING_RENT_REFUSAL_V5: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x180 + 6;
+
+// ---------------------------------------------------------------------------
+// The founder bond, decision 0033
+// ---------------------------------------------------------------------------
+
+/// A refunding founding one lamport short of the bond refuses by name.
+///
+/// The escrow holds strictly MORE than its own rent, so the `Rent` conjunct
+/// standing in front of the bond is satisfied and cannot be what fires; the
+/// only quantity that moved is the last lamport of the size rule. The rule is a
+/// FLOOR -- `founded_v1` admits `recorded_rent + bond <= lamports`, so an
+/// over-funded escrow founds and the surplus is bond like any other lamport
+/// above the recorded rent -- and what MANDATORY means is that the floor is not
+/// zero. This breaks the moment the founding prices the bond at a rate other
+/// than the one it funds the escrow at, or reads the size rule at a width other
+/// than this Market's.
+#[tokio::test]
+async fn a_founding_one_lamport_short_of_the_bond_refuses_by_name() {
+    let (_, _, outcome) = found(
+        FoundingShapeV1::Refunding,
+        HostileV1::FounderBondOneLamportShort,
+        "claims founding: refunding, founder bond one lamport short",
+    )
+    .await;
+    assert!(!outcome.accepted);
+    assert_eq!(
+        outcome.refusal,
+        Some(ClaimsFoundingSbfErrorV5::FounderBondUnderfunded as u32),
+        "the bond conjunct is the one that must fire; logs {:#?}",
+        outcome.logs,
+    );
+    assert!(
+        outcome
+            .logs
+            .iter()
+            .any(|line| line.contains("claims founding v5: refused, founder bond underfunded")),
+        "and the refusal names itself in the validator log, because the wire \
+         carries one u32 and a reader of that log has nothing else; logs {:#?}",
+        outcome.logs,
+    );
+}
+
+/// An escrow at exactly its rent refuses the BOND, not the rent.
+///
+/// Two mistakes the same host makes -- transferring nothing, and transferring
+/// only `Rent::minimum_balance` -- and they must not arrive as one code,
+/// because the remedies differ: one is a transfer that was forgotten, the other
+/// is a host that has never read decision 0033. This runs both worlds and holds
+/// the two discriminants apart, so a refactor that folds the bond conjunct back
+/// into `Rent` fails here rather than in a cohort.
+#[tokio::test]
+async fn an_escrow_holding_its_rent_but_no_bond_refuses_the_bond_not_the_rent() {
+    let (_, _, no_bond) = found(
+        FoundingShapeV1::Refunding,
+        HostileV1::FounderBondAbsent,
+        "claims founding: refunding, escrow rent without the bond",
+    )
+    .await;
+    assert!(!no_bond.accepted);
+    assert_eq!(
+        no_bond.refusal,
+        Some(ClaimsFoundingSbfErrorV5::FounderBondUnderfunded as u32),
+        "an escrow at exactly its rent is past the rent conjunct and short at \
+         the bond's; logs {:#?}",
+        no_bond.logs,
+    );
+
+    let (_, _, no_rent) = found(
+        FoundingShapeV1::Refunding,
+        HostileV1::EscrowRentNotPrepaid,
+        "claims founding: refunding, escrow below its own rent",
+    )
+    .await;
+    assert!(!no_rent.accepted);
+    assert_eq!(
+        no_rent.refusal,
+        Some(FOUNDING_RENT_REFUSAL_V5),
+        "and an escrow below its own rent still refuses the rent; logs {:#?}",
+        no_rent.logs,
+    );
+    assert_ne!(
+        ClaimsFoundingSbfErrorV5::FounderBondUnderfunded as u32,
+        FOUNDING_RENT_REFUSAL_V5,
+        "or the split above proves one thing between the two campaigns",
+    );
+    assert_eq!(
+        FOUNDING_RENT_REFUSAL_V5,
+        ClaimsFoundingSbfErrorV5::Rent as u32,
+        "the band-derived code and the enum's own must be the same number",
+    );
+}
