@@ -416,3 +416,318 @@ the second occurrence is what shows that a scoped `add -A` is the same hazard.
 
 Publishing another lane's uncommitted work inside a merge commit makes the merge
 commit a claim about work the merge did not do.
+
+---
+
+## 8. The eleventh landing — `recovery-capture`, by MERGE-QUEUE-2
+
+A second queue opened after the first closed, to land the twelfth family the
+first one never had. Sections 8, 9 and 10 are its record; sections 1–7 above
+are the first queue's and are untouched, except where §8.3 corrects one
+measurement of §6 that had gone stale by the first queue's own landing 6.
+
+| # | family | branch head | merge | cut | conflicts |
+|---|---|---|---|---|---|
+| 11 | `recovery-capture` | `957fd0b35` | `ab29bbe97` | `d63e4696a` | **none** |
+| — | (regeneration) | — | `15934ad5a` | `e9773f660` | — |
+
+**No conflicts, and that is a fact about the lane rather than about the merge.**
+`build/recovery-capture` rebased itself three times as the first queue advanced,
+and the last rebase resolved all ten landed families by hand. The one commit
+`main` took after that rebase — `673220e24`, the census recogniser — touches
+three files (`tools/gates/README.md`, `tools/gauntlet/census/src/{enumerate,main}.rs`)
+that this family does not. 61 files, +7,806/−680.
+
+### 8.1 The refusal codes, and the ordering rule the family established
+
+**Taken as they stand: `EnsembleMember = 0x8029`, `EnsembleQuorum = 0x802A`,
+`EnsembleQuorumMet = 0x802B`**, contiguous behind `RelayedVenueKind = 0x8028`.
+
+§1 of this document records the queue's plan for this family: renumber around
+`deploy-lifecycle`'s `0x801E`. **That plan is impossible for any branch in
+isolation, and the family proved it.** `pin_refusal_band!` asserts that the
+discriminants are the *contiguous run from the band base*, so a hole is a
+compile error — a branch cannot leave `0x801E` free and take `0x801F` before
+the branch that fills `0x801E` has landed. **Land-then-renumber is the only
+order that exists**, which is what the first queue did in practice at landing 9
+without naming it as the general rule. Recorded here because it is the rule,
+not the anecdote: a lane asked to "renumber around" an unlanded branch should
+answer that it cannot, and rebase instead.
+
+### 8.2 What was regenerated, and the three routes that were not this family's
+
+`tools/gate reference --converge` from a clean worktree at `ab29bbe97`, to its
+fixpoint in three passes (six files, then two, then nothing);
+`tools/gate reference --check --converge` at `15934ad5a` reports *"15934ad5a8af
+is already the fixpoint"*.
+
+**162 → 165 routes; refusal codes unchanged at 451.** The family had already
+regenerated the whole surface on its branch for its own three codes and two
+routes, which is why 451 does not move here and why §7 of its notes asked only
+that the reference be regenerated rather than hand-merged.
+
+The three routes that move are `673220e24`'s, not this family's, and that
+commit's own message says the regeneration is owed and is the convergence
+owner's:
+
+  * `custody/upkeep_vault_v1::process` (predicate `selects`, `DCLCUPQ1`)
+  * `custody/protocol_parameters_v1::process` (predicate `selects`, `DCLTPRQ1`)
+  * `accelerator/dealer::process` (predicate `dealer_family_selected`)
+
+The first two are exactly the live wires §5 records as invisible to the route
+census. **They are on the published surface now.** `custody` goes 4 → 6 entry
+routes, `accelerator` 3 → 4; magic-selected 86 → 88, predicate-selected 26 → 29.
+One honest row arrives with them: `protocol_parameters_v1::process` also lands
+in `UNRESOLVED_PREDICATE_ARMS_V1`, because its magic does not resolve to eight
+ASCII bytes for the reader. The route is enumerated and its magic is not
+resolved, and the generated surface states both rather than choosing.
+
+The route-count history of the whole wave, since three different numbers are
+each correct for their own commit: **149** before the wave → **160** at
+`09068cfa9` (ten families) → **163** at `673220e24` (no new code; the census
+recogniser reading a guard's *body* instead of its name found three that had
+always been there) → **165** at `ab29bbe97`. Refusal codes: **370 → 448 → 451**.
+
+### 8.3 The workspace, and a correction to §6
+
+`cargo check --workspace --tests --offline` at `15934ad5a`: **exit 0, zero
+errors, 98 workspace members.** No exceptions.
+
+**§6 above is stale and this corrects it.** It records
+`dclutch-wallet-terminal-payout-wasm` and `dclutch-wallet-terminal-input-wasm`
+as red for nine `E0433: cannot find 'tests' in 'wire'`, states that the fix is
+`features = ["test-fixtures"]` on that dev-dependency, and says "It is nobody in
+this wave's — no build branch touches either file … That control was re-measured
+at every landing."
+
+The first two clauses were true at `67ecd841b` and the third was not true after
+landing 6. `3f9e3c810` (Lane `CONVERGE-founder-bond`) put exactly that
+`features = ["test-fixtures"]` on **both** dev-dependencies, and says so in its
+own message — "main's own red, outside this family and fixed so the family's
+gate could run". It reached `main` inside `98eb0deb8`. The manifests at
+`09068cfa9` already carry the feature. Whatever the queue's re-measurement was
+reading after landing 6, it was not those two packages: they compile.
+
+The lesson is not about the wasm crates. **A control that is stated once and
+re-asserted at each step stops being a measurement.** The nine-error control was
+carried forward by name through four more landings after the branch that
+removed it had landed.
+
+### 8.4 Four findings about `main` this family measured, carried here because they are not about it
+
+1. **Two workspaces outside the root one were red on this family's new relay
+   variants**: `tools/relayer` and `tools/gauntlet/relayed-vertical`, both of
+   which match exhaustively over `RelayAccountNameV1`. `cargo check --workspace`
+   does not reach either, and the `journey` gate is the only thing in the tree
+   that compiles them. The family repaired both (`214830bd1`). **The structural
+   fact is owed to whoever owns the gates**: a non-root workspace with an
+   exhaustive match over a shared enum is a consumer that only one gate can see,
+   and the family's own BUILD doc named neither.
+2. **`relay::instruction::tests::an_unknown_action_refuses` was red and nobody
+   had run it.** It put action byte `9` — which this family's `ReclaimMemberSeat`
+   had taken — so it was decoding a well-formed action of the wrong width and
+   reading `InvalidLength` as its refusal. It asks `RelayActionV1::decode` which
+   bytes are actions now, and puts every byte that is not one. **A family that
+   adds an action must re-run the wire tests, not only the ones it wrote.**
+3. **`tools/gate seam` is red on `main` itself**, measured by that lane in a
+   clean `git worktree` at `main` rather than asserted, and identical to its own
+   branch's — the family adds nothing to it.
+4. **`tools/gate clippy` is red on `main` itself**, in six packages outside
+   `clippy-debt.tsv`, and **this family repairs one of them** —
+   `crates/dclutch-source/src/relay/decode.rs:359`, a collapsible `if` that
+   landed with the native venue. It is one line of `main`'s, and it made the
+   whole `dclutch-source` package red; **a red package hides every package above
+   it**, so nothing in this family's own crate could be measured while it stood.
+
+Findings 3 and 4 were re-measured at `15934ad5a` by this queue:
+
+* **`seam`: 28 findings** — 10 `NEW DOMAIN_RAW_RESTATEMENT`, 9
+  `NEW UNSET_GUARD_PRESENT`, 1 `NEW PRIVILEGE_PIN_UNEXEMPTED`
+  (`derived_transport_v1.rs::validate_frame`), 1 `NEW SEED_DOMAIN_UNASSERTED`
+  (`PROTOCOL_PARAMETERS_RECEIPT_PDA_DOMAIN_V1`, 29 bytes with no `<= 32`
+  assertion), and 7 `GONE`. The seven `GONE` include the three
+  `claims_founding.rs` → `founding_world.rs` moves and the three
+  `direct_close_maker_v1` signer-census repairs §5 names. **Still not
+  recaptured**, for §5's reason: `--write` from a tree carrying other lanes'
+  findings adopts them as ACCEPTED without a verdict. §5 recorded 21 at
+  `09068cfa9`; it is 28 now, and the same lane measured 28 on a clean `main`
+  worktree before this landing — so the growth is not this landing's.
+* **`clippy`: 98 members, 52 clean, 9 red, 37 never reached.** Five red outside
+  `clippy-debt.tsv`: `dclutch-claims`, `dclutch-market`,
+  `dclutch-pre-market-funding-test-caller-sbf`,
+  `dclutch-resolution-core-v3-operator`, `dclutch-route-census`.
+  **`dclutch-source` is not among them**, which is finding 4 confirmed at HEAD:
+  six became five and the one that fell was the one hiding the others. The
+  37 never-reached are behind the remaining five.
+
+### 8.5 The gates at `15934ad5a`
+
+`tools/gate cheap` is **eight PASS, one FAILED, one NOT RUN**: selftest, census,
+emission, citations, budgets, fmt, locks and release PASS; `seam` FAILED (§8.4);
+`commands` **NOT RUN** — "a published command was not probed", because the
+`dclutch` CLI is neither built under this worktree's `target/` nor on `PATH`.
+That is a property of the isolated worktree this queue measured in, not of
+`main`; the first queue ran `commands` green from the live tree.
+
+* `tools/gate census` PASS: **165 routes, 451 refusal codes**, 0 unclassified
+  positions, 47 blocked, 0 stale blocking entries.
+* `tools/gate emission` PASS: **101 generated, 101 guarded, 0 unguarded.**
+* `tools/seam-audit/baseline.json` was set-differenced against `main` rather
+  than read as a diff, because a re-sorted JSON register makes a textual diff
+  unreadable: **exactly two rows added**, both this family's own
+  (`validate_relay_frame_with_tail_v1`; `ensemble_v1.rs`), **none removed, none
+  changed**. Main's outstanding findings were not absorbed.
+
+**Where this queue measured, and why it matters.** The live tree
+`/Users/ember/dev/dclutch` was checked out on `build/joint-clearing` throughout,
+by the lane that owns that family, with that lane's work in it. Every landing,
+gate and cut above was therefore done from a private `git worktree` at `main`
+with its own `CARGO_TARGET_DIR`, and the live tree was never touched. A reader
+reproducing these numbers from the live tree will reproduce them; a reader
+running `tools/cut.sh` from it will not publish `main` (§8.7).
+
+### 8.6 What this landing owes
+
+**The frame ratchet, unchanged and now owed by one more commit.** Two new
+`#[inline(never)]` symbols enter the Resolution link — `process_ensemble_fold`
+and `process_reclaim_member_seat` — and neither has a row in
+`tools/gates/frames-baseline.json`. No SBF build was run by this queue either.
+The §5 table gains an eleventh row:
+
+| family | what moved |
+|---|---|
+| `recovery-capture` | `process_ensemble_fold` and `process_reclaim_member_seat` enter the Resolution link; `ENSEMBLE_FOLD_FRAME_PREFIX_V1` 25 → 29 and `RECLAIM_MEMBER_SEAT_FRAME_V1` 6 → 10. |
+
+**The ensemble is complete as a route and unreachable on any chain, and now
+says so.** Two producers are missing and each is its own piece of work, not a
+missing test — both are `structural` rows in `tools/gauntlet/blocked.json`,
+which the route census prints, and both are visible in `docs/reference/routes.md`:
+
+1. **No founding writes an ensemble material.** `SourceMaterialV3::with_ensemble`
+   exists, `EnsembleSpecV1::validate_foundable` states the odd-quorum conjunct,
+   and Core's founding calls neither; every material on any chain reads
+   `EnsembleSpecV1::SINGLE`, so the fold's first conjunct refuses.
+2. **No route writes a fragment.** The family's R9 makes this exact rather than
+   optimistic: `observed_fragments = 0` from every existing frame is correct
+   *today* and has a named trigger — **the moment a member-capture route exists,
+   `ensemble_seat_tail_v1` must be threaded onto the crank's and the failure
+   walk's frames in the same change**, or `EnsembleQuorumMet` becomes a code
+   whose raiser can never fire and the crank can steal the decision from a met
+   quorum.
+
+Never started, and named as such: the operator, the successor driver, the
+`tools/cohort/steps.tsv` row for `found-ensemble`, and the TypeScript decoder
+for the fold receipt.
+
+**`batch-spine`'s obligation is discharged in part.** §3 records that
+`DirectRfqV1.lean` names `ClearingPriceV1` in prose while `ClearingPriceV1Abi.lean`
+is defined only on `build/joint-clearing`. That reference is still unreal; it
+belongs to the twelfth family, not this one.
+
+### 8.7 An incident: the publication host was carrying an unmerged branch
+
+Found by this queue when its first cut was rejected non-fast-forward.
+
+**The public repo's `dclutch/` tree was `build/joint-clearing`'s.** Public
+commit `36b81ab6c` — "dclutch 75cede26c (+10)" — has `dclutch` tree
+`cbacef750`, which is exactly `75cede26c^{tree}`, the tip of a branch that is
+not on `main` and whose own family declares itself NOT READY (§3). `main`'s
+`673220e24` was never cut at all.
+
+**The mechanism is `tools/cut.sh` reading `HEAD`, and it is not a bug in the
+script.** The script is explicit that it cuts from HEAD and refuses the working
+tree, and it gates on the published tree being byte-identical to that HEAD —
+which it was. Its unstated premise is the one AGENTS.md states elsewhere: the
+live tree is on the canonical integration branch. The live tree was on a lane's
+branch, so a correct script published a correct tree of the wrong commit.
+**A cut is authorized for `main`; the gate that proves the tree cannot tell
+which branch it came from.**
+
+Repaired by this queue's own cuts: `d63e4696a` publishes `ab29bbe97`, restoring
+`main` as the published content, and says so in its message. Nothing is lost —
+the public repo carries content and not history, and `36b81ab6c` stays in the
+public log naming the live commit it published. `refs/cut/live` in the
+publication host had to be force-updated once locally, because it pointed at
+`75cede26c` and `main` is not a descendant of it; that is a transport handle
+inside the publication host, not a remote force-push.
+
+**Owed**: `tools/cut.sh` has no assertion that `HEAD` is on `main`. One would
+have refused `36b81ab6c` and cost nothing. It is left unwritten here because
+this queue is not the owner of that script and a lane editing a shared script
+mid-wave is its own hazard; it is named so the next owner writes it.
+
+## 9. The twelfth family — `joint-clearing` — still not landed
+
+**Not landed, not abandoned, and not this queue's to force.** At 02:37 EDT
+`build/joint-clearing` is 12 commits ahead of `main` at `5e76533f3` and its lane
+(JOINT-CLEARING-2) is still committing — the last four commits in ten minutes,
+the most recent being *"converge: the two writes with no frame get a name, a
+reason and a test each"*, which is the second of the three reasons §3 gives for
+the abort. No `MERGE_NOTES_JOINT-CLEARING-2.md` exists yet.
+
+This queue's instruction was to land it only if that lane had landed it or
+declared it ready. It has done neither, so it is recorded and left alone. §3's
+reasons stand until that lane says otherwise, and §3's own warning stands with
+them: completing the V2 migration means **authoring what those program-test
+walks assert**, in files the family did not touch, and that is the family's work
+and not a conflict resolution.
+
+Two things about `main` that the twelfth family's landing will meet:
+
+* **The `CONVERGE-RECOVERY-CAPTURE` ledger entry is not on `main`.** It was
+  written onto `build/joint-clearing` (`75cede26c`, "ledger: the twelfth family
+  is ready, and a hole in a band is a compile error") rather than onto `main`,
+  so `docs/ledger/2026-09-07.md` on `main` has no closing row for the family
+  that just landed. It is deliberately **not copied here** — the entry has one
+  author and one copy, and duplicating it would make the twelfth family's merge
+  conflict on a paragraph that agrees with itself. Whoever lands
+  `joint-clearing` brings it with them.
+* `docs/reference/` moved twice since that branch's base, and is generated.
+  Regenerate after landing; never hand-merge it.
+
+## 10. The wave's final tally
+
+**Eleven of twelve families are on `main`.** Ten by MERGE-QUEUE-1
+(`31de5e2bd` … `b5f277e63`), the eleventh by MERGE-QUEUE-2 (`ab29bbe97`), and
+`joint-clearing` outstanding.
+
+| | before the wave | after |
+|---|---|---|
+| routes | 149 | **165** |
+| refusal codes | 370 | **451** |
+| generated files / guarded / unguarded | 91 / 91 / 0 | **101 / 101 / 0** |
+| `fmt` baseline rows | 120 | **106** |
+| Lean modules imported by the root | 135 | **145** |
+| `cargo check --workspace --tests` | 9 errors, 2 crates | **exit 0, zero errors** |
+
+Refusal codes moved by the wave, in landing order: `ClaimsSbfError::Overdraw`
+kept `0x5012` and `FounderBondFrame` took `0x5013`; `ResolutionError::FundedRent`
+kept `0x801E` and `product-shapes`' ten moved to `0x801F`–`0x8028`; and
+`recovery-capture`'s three took `0x8029`–`0x802B`, the first free run behind
+them. **No code that had ever reached a chain or a published reference moved**,
+which is decision 0007's rule and the reason the order mattered.
+
+The Lean row is a count, not a build. This queue did not run `lake build`:
+`formal/` at `15934ad5a` is **byte-identical to `build/recovery-capture` at
+`957fd0b35`**, where that family measured `lake build DClutchSemantics` green at
+147 jobs with only `ScoringRuleV1`'s two declared `sorry`s. `main` contributed no
+Lean change after the rebase, so the measurement transfers exactly; a reader who
+wants a build rather than a transfer should run it.
+
+**Owed, in the order a reader should care:**
+
+1. **The frame ratchet**, red across eight of the eleven landed families, needing
+   two independent SBF captures of one commit on the canonical Linux builder.
+   The largest single debt, and unchanged.
+2. **`batch-spine`'s re-release obligation** under decision 0012: it moves every
+   artifact identity a live Direct market pins, so the next cohort redeploys the
+   Direct set and re-founds.
+3. **The seam register**, 28 findings wanting one triage pass by whoever owns the
+   wave rather than twelve lanes each declining to adopt the others'.
+4. **`clippy`**, five red packages outside the debt list, hiding 37 more.
+5. **The ELF campaigns nobody has run** (§5), unchanged.
+6. **The producer-missing work** (§5), now four families rather than three:
+   `economics`' vault credit, `series`' certificate, `product-shapes`' child
+   founding, and `recovery-capture`'s ensemble material and fragment.
+7. **A branch guard in `tools/cut.sh`** (§8.7).
+8. **The twelfth family** (§9).

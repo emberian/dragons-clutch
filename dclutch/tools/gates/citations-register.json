@@ -141,6 +141,12 @@
         "docs/evidence/SEAM_AUDIT_2026_08_29.md"
       ]
     },
+    "36b81ab6c": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "3b857b22": {
       "class": "artifact-digest",
       "cited_by": [
@@ -489,6 +495,12 @@
         "docs/evidence/DEVNET_SMOKE_0.md"
       ]
     },
+    "cbacef750": {
+      "class": "artifact-digest",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
     "d171cf74": {
       "class": "artifact-digest",
       "cited_by": [
@@ -508,6 +520,12 @@
       ]
     },
     "d2dad1d52": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
+      ]
+    },
+    "d63e4696a": {
       "class": "compost-commit",
       "cited_by": [
         "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
@@ -572,6 +590,12 @@
       "class": "compost-commit",
       "cited_by": [
         "docs/evidence/DEVNET_ITERATION_2.md"
+      ]
+    },
+    "e9773f660": {
+      "class": "compost-commit",
+      "cited_by": [
+        "docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md"
       ]
     },
     "ef3f165761fb20269e96bad9d8df7c851a463dcc": {
