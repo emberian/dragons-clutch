@@ -494,8 +494,8 @@ fn authenticate_core(
         {
             return Err(ClaimsConservationSbfErrorV1::ProductBasis.into());
         }
-        let core =
-            CoreState::decode(&core_data).map_err(|_| ClaimsConservationSbfErrorV1::ProductBasis)?;
+        let core = CoreState::decode(&core_data)
+            .map_err(|_| ClaimsConservationSbfErrorV1::ProductBasis)?;
         if !CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(core.phase) {
             return Err(ClaimsConservationSbfErrorV1::Phase.into());
         }
@@ -541,9 +541,8 @@ fn authenticate_positions_and_escrow(
         market,
         Some(request.expected_position_revision),
     )?;
-    let derived =
-        FailureEscrowIdentityV1::derive(program_id, request.market, market.claim_count)
-            .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+    let derived = FailureEscrowIdentityV1::derive(program_id, request.market, market.claim_count)
+        .map_err(|_| ClaimsSbfError::FailureEscrow)?;
     let escrow_seeds =
         ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), derived.owner)
             .map_err(|_| ClaimsSbfError::FailureEscrow)?;
@@ -857,12 +856,16 @@ fn verify_balances_after(
     let (expected_vault, expected_external) = if split {
         (
             prestate.vault_atoms.checked_add(request.collateral_atoms),
-            prestate.external_atoms.checked_sub(request.collateral_atoms),
+            prestate
+                .external_atoms
+                .checked_sub(request.collateral_atoms),
         )
     } else {
         (
             prestate.vault_atoms.checked_sub(request.collateral_atoms),
-            prestate.external_atoms.checked_add(request.collateral_atoms),
+            prestate
+                .external_atoms
+                .checked_add(request.collateral_atoms),
         )
     };
     if Some(vault_atoms) != expected_vault
@@ -896,7 +899,13 @@ fn move_collateral(
             .map_err(|_| ClaimsConservationSbfErrorV1::CustodyWire)?,
     );
     let request_bytes = encode_custody_wire(accounts, request, parent_digest)?;
-    authenticate_custody_frame(program_id, accounts, request, custody.as_ref(), &request_bytes)?;
+    authenticate_custody_frame(
+        program_id,
+        accounts,
+        request,
+        custody.as_ref(),
+        &request_bytes,
+    )?;
     invoke_custody(program_id, accounts, custody.as_ref(), &request_bytes)
 }
 
@@ -969,7 +978,8 @@ fn authenticate_custody_frame(
     request_bytes: &[u8],
 ) -> Result<(), ProgramError> {
     let caller = CallerAuthoritySeedsV1::new(
-        ContentId::new(custody.release_set).map_err(|_| ClaimsConservationSbfErrorV1::CustodyWire)?,
+        ContentId::new(custody.release_set)
+            .map_err(|_| ClaimsConservationSbfErrorV1::CustodyWire)?,
         custody.market,
         ExecutionRoleV1::Claims,
         custody.context,
@@ -1051,7 +1061,8 @@ fn invoke_custody(
         data: request_bytes.to_vec(),
     };
     let caller = CallerAuthoritySeedsV1::new(
-        ContentId::new(custody.release_set).map_err(|_| ClaimsConservationSbfErrorV1::CustodyWire)?,
+        ContentId::new(custody.release_set)
+            .map_err(|_| ClaimsConservationSbfErrorV1::CustodyWire)?,
         custody.market,
         ExecutionRoleV1::Claims,
         custody.context,

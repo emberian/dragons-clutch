@@ -10,5 +10,5 @@
 //! encodes real on-chain formats by hand.
 
 pub mod campaign_support;
-pub mod narrow_fixture;
 pub mod founding_world;
+pub mod narrow_fixture;

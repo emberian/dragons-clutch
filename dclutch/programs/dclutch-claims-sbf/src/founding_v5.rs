@@ -11,6 +11,7 @@ extern crate alloc;
 use alloc::{boxed::Box, vec, vec::Vec};
 use core::convert::TryFrom;
 
+use dclutch_claims::founder_bond_v1::{founded_v1, founding_bond_size_v1};
 use dclutch_claims::{
     founding_v5::{
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingAggregateSeedsV5,
@@ -30,7 +31,6 @@ use dclutch_custody::{
     PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_RECEIPT_BYTES_V1,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyReceiptV1,
 };
-use dclutch_claims::founder_bond_v1::{founded_v1, founding_bond_size_v1};
 use dclutch_market::capability_manifest::funding::derive_funded_rent_rate_v2;
 use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_market::{
@@ -1722,14 +1722,23 @@ fn authenticate_founder_bond(
         position_width,
         position_rent_principal,
     )
-    .map_err(|_| refuse(ClaimsFoundingSbfErrorV5::Rent, "rent is not affine in length"))?;
+    .map_err(|_| {
+        refuse(
+            ClaimsFoundingSbfErrorV5::Rent,
+            "rent is not affine in length",
+        )
+    })?;
     let bond = founding_bond_size_v1(rate, claim_count, 0).map_err(|_| {
         refuse(
             ClaimsFoundingSbfErrorV5::FounderBondUnderfunded,
             "the size rule did not evaluate at this width",
         )
     })?;
-    if !founded_v1(observed_position_lamports, position_rent_principal, bond.bond) {
+    if !founded_v1(
+        observed_position_lamports,
+        position_rent_principal,
+        bond.bond,
+    ) {
         return Err(refuse(
             ClaimsFoundingSbfErrorV5::FounderBondUnderfunded,
             "the escrow position does not hold its rent plus the founder bond",

@@ -15,6 +15,16 @@
 
 use std::{env, fs, path::PathBuf};
 
+use crate::{
+    campaign_support::{
+        ReleaseSetInputV1, activation_cache, add_account, add_account_with_lamports,
+        add_upgradeable_program, collateral_mint_bytes, finalized, programdata_address,
+        token_account_bytes_for, token_program_id,
+    },
+    narrow_fixture::{
+        NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, compile_narrow_fixture_v3,
+    },
+};
 use dclutch_claims::{
     founder_bond_v1::founding_bond_size_v1,
     founding_v5::{
@@ -30,35 +40,25 @@ use dclutch_claims::{
         ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2,
     },
 };
+use dclutch_custody::token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
 use dclutch_custody::{
     CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1,
     CustodyVaultSeedsV1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1,
     ProjectedCustodyReceiptV1,
 };
-use crate::{
-    campaign_support::{
-        ReleaseSetInputV1, activation_cache, add_account, add_account_with_lamports,
-        add_upgradeable_program, collateral_mint_bytes, finalized, programdata_address,
-        token_account_bytes_for, token_program_id,
-    },
-    narrow_fixture::{
-        NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, compile_narrow_fixture_v3,
-    },
-};
 use dclutch_market::capability_manifest::funding::derive_funded_rent_rate_v2;
-use dclutch_market::{
-    CoreState, FoundingIntentV5, Identity, Phase, Readiness, SeriesFoundingPermitV1,
-};
-use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_market::rent::RefundAuthority;
 use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
-use dclutch_custody::token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
+use dclutch_market::{
+    CoreState, FoundingIntentV5, Identity, Phase, Readiness, SeriesFoundingPermitV1,
+};
+use dclutch_program_test_evidence::TransactionEvidence;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     clock::Clock,
     hash::{hash, hashv},
@@ -284,10 +284,7 @@ pub fn world_with_extra_collateral(
         custody: Some((CUSTODY_PROGRAM_ID, artifacts.custody.as_slice())),
     });
     let activation_cache_key = Pubkey::find_program_address(
-        &[
-            dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
-            &release_set,
-        ],
+        &[dclutch_registry::ACTIVATION_PDA_DOMAIN_V1, &release_set],
         &REGISTRY_PROGRAM_ID,
     )
     .0;

@@ -125,12 +125,12 @@ pub fn general_last_opened_batch_id_v1(
     product_id: [u8; 32],
     outcome_count: u32,
 ) -> Result<[u8; 32], GeneralSessionErrorV1> {
-    let sequence = root
-        .next_batch_sequence()
-        .checked_sub(1)
-        .ok_or(GeneralSessionErrorV1::SubjectMissing(
-            "batch: the root has opened no batch yet",
-        ))?;
+    let sequence =
+        root.next_batch_sequence()
+            .checked_sub(1)
+            .ok_or(GeneralSessionErrorV1::SubjectMissing(
+                "batch: the root has opened no batch yet",
+            ))?;
     general_batch_occurrence_id_v1(root, config, config_id, product_id, outcome_count, sequence)
 }
 
@@ -210,9 +210,7 @@ pub fn general_subject_states_v1(
     let root_seed = root_address.to_bytes();
     let last_batch = || match subject.batch_id {
         Some(value) => Ok(value),
-        None => {
-            general_last_opened_batch_id_v1(root, config, config_id, product_id, outcome_count)
-        }
+        None => general_last_opened_batch_id_v1(root, config, config_id, product_id, outcome_count),
     };
     let candidate = || {
         subject
@@ -275,7 +273,10 @@ pub fn general_subject_states_v1(
             (
                 id,
                 Some(pda(seeds(GeneralStateRecipeV3::Verifier, id)?, trading)?),
-                Some(pda(seeds(GeneralStateRecipeV3::VerifiedCandidate, id)?, trading)?),
+                Some(pda(
+                    seeds(GeneralStateRecipeV3::VerifiedCandidate, id)?,
+                    trading,
+                )?),
                 None,
             )
         }
@@ -292,7 +293,9 @@ pub fn general_subject_states_v1(
             let id = candidate()?;
             let revision = subject
                 .settlement_revision
-                .ok_or(GeneralSessionErrorV1::SubjectMissing("--settlement-revision"))?
+                .ok_or(GeneralSessionErrorV1::SubjectMissing(
+                    "--settlement-revision",
+                ))?
                 .checked_add(1)
                 .ok_or(GeneralSessionErrorV1::Geometry("terminal revision"))?;
             let terminal = GeneralStateAddressSeedsV3::terminal(root_seed, id, revision)
@@ -349,15 +352,15 @@ pub fn general_frame_sources_v1(
     action: Action,
 ) -> Result<Vec<(u16, GeneralFrameSourceV1)>, GeneralSessionErrorV1> {
     let mut sources = Vec::new();
-    let fixed_count = dclutch_trading::general::account_rules_v3::general_account_profile_fixed_count_v3(action)
-        .map_err(|_| GeneralSessionErrorV1::Geometry("fixed count"))?;
+    let fixed_count =
+        dclutch_trading::general::account_rules_v3::general_account_profile_fixed_count_v3(action)
+            .map_err(|_| GeneralSessionErrorV1::Geometry("fixed count"))?;
     let two_state = matches!(
         action,
         Action::PlaceOrder | Action::CancelOrder | Action::Close
     );
-    let payer = general_create_payer_account_v3(action).unwrap_or(
-        dclutch_trading::general::state_artifacts_v3::GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
-    );
+    let payer = general_create_payer_account_v3(action)
+        .unwrap_or(dclutch_trading::general::state_artifacts_v3::GENERAL_PRIMARY_PAYER_ACCOUNT_V3);
     let credit = general_rent_credit_account_v3(action);
     let system = general_system_program_account_v3(action);
     let callee = general_custody_callee_coordinate_v3(action)
@@ -521,16 +524,9 @@ impl GeneralEscrowChildrenV1 {
             CustodyVaultSeedsV1::new(market, release_set, context, CompartmentV1::Settlement);
         Ok(Self {
             context,
-            position: Pubkey::find_program_address(
-                &position_seeds.as_slices(),
-                &claims_program,
-            )
-            .0,
-            admission: Pubkey::find_program_address(
-                &admission_seeds.as_slices(),
-                &claims_program,
-            )
-            .0,
+            position: Pubkey::find_program_address(&position_seeds.as_slices(), &claims_program).0,
+            admission: Pubkey::find_program_address(&admission_seeds.as_slices(), &claims_program)
+                .0,
             replay: Pubkey::find_program_address(&replay_seeds.as_slices(), &custody_program).0,
             vault: Pubkey::find_program_address(&vault_seeds.as_slices(), &custody_program).0,
         })
@@ -544,7 +540,8 @@ pub fn general_hoard_vault_v1(
     market: [u8; 32],
     release_set: [u8; 32],
 ) -> Pubkey {
-    let seeds = CustodyVaultSeedsV1::new(market, release_set, market, CompartmentV1::HoardPrincipal);
+    let seeds =
+        CustodyVaultSeedsV1::new(market, release_set, market, CompartmentV1::HoardPrincipal);
     Pubkey::find_program_address(&seeds.as_slices(), &custody_program).0
 }
 
@@ -669,7 +666,10 @@ pub struct GeneralFrameInputsV1 {
 }
 
 impl GeneralFrameInputsV1 {
-    fn evidence(&self, kind: GeneralReadonlyEvidenceKindV3) -> Result<Pubkey, GeneralSessionErrorV1> {
+    fn evidence(
+        &self,
+        kind: GeneralReadonlyEvidenceKindV3,
+    ) -> Result<Pubkey, GeneralSessionErrorV1> {
         // Live-state evidence is derived; published records are stated.
         let states = self.states;
         let derived = match kind {
@@ -682,17 +682,23 @@ impl GeneralFrameInputsV1 {
                     .find(|e| e.kind == kind)
                     .map(|e| e.address)
                     .or_else(|| self.batch_state())
-                    .ok_or(GeneralSessionErrorV1::InputMissing("--evidence closed-batch=ADDRESS"));
+                    .ok_or(GeneralSessionErrorV1::InputMissing(
+                        "--evidence closed-batch=ADDRESS",
+                    ));
             }
             GeneralReadonlyEvidenceKindV3::EscrowedOrder => states.secondary.map(|(k, _)| k),
             GeneralReadonlyEvidenceKindV3::RuntimeVerifier => states.secondary.map(|(k, _)| k),
             GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate
-            | GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate => {
-                self.evidence.iter().find(|e| e.kind == kind).map(|e| e.address)
-            }
-            GeneralReadonlyEvidenceKindV3::FrozenSelection => {
-                self.evidence.iter().find(|e| e.kind == kind).map(|e| e.address)
-            }
+            | GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate => self
+                .evidence
+                .iter()
+                .find(|e| e.kind == kind)
+                .map(|e| e.address),
+            GeneralReadonlyEvidenceKindV3::FrozenSelection => self
+                .evidence
+                .iter()
+                .find(|e| e.kind == kind)
+                .map(|e| e.address),
             _ => None,
         };
         if let Some(address) = derived {
@@ -702,7 +708,9 @@ impl GeneralFrameInputsV1 {
             .iter()
             .find(|e| e.kind == kind)
             .map(|e| e.address)
-            .ok_or(GeneralSessionErrorV1::InputMissing("--evidence KIND=ADDRESS"))
+            .ok_or(GeneralSessionErrorV1::InputMissing(
+                "--evidence KIND=ADDRESS",
+            ))
     }
 
     fn batch_state(&self) -> Option<Pubkey> {
@@ -713,8 +721,9 @@ impl GeneralFrameInputsV1 {
     }
 
     fn party(&self) -> Result<GeneralEscrowPartyV1, GeneralSessionErrorV1> {
-        self.party
-            .ok_or(GeneralSessionErrorV1::InputMissing("--maker / --owner party"))
+        self.party.ok_or(GeneralSessionErrorV1::InputMissing(
+            "--maker / --owner party",
+        ))
     }
 
     fn order_children(&self) -> Result<GeneralEscrowChildrenV1, GeneralSessionErrorV1> {
@@ -728,15 +737,15 @@ impl GeneralFrameInputsV1 {
     }
 
     fn child_chain(&self) -> Result<GeneralChildChainV1, GeneralSessionErrorV1> {
-        self.child_chain
-            .ok_or(GeneralSessionErrorV1::InputMissing("child-route chain frame"))
+        self.child_chain.ok_or(GeneralSessionErrorV1::InputMissing(
+            "child-route chain frame",
+        ))
     }
 
     fn child_caller(&self, route: u16) -> Result<Pubkey, GeneralSessionErrorV1> {
-        self.child_callers
-            .get(usize::from(route))
-            .copied()
-            .ok_or(GeneralSessionErrorV1::InputMissing("--child-caller ROUTE=ADDRESS"))
+        self.child_callers.get(usize::from(route)).copied().ok_or(
+            GeneralSessionErrorV1::InputMissing("--child-caller ROUTE=ADDRESS"),
+        )
     }
 
     /// Resolve one frame source to its address for `action`.
@@ -790,15 +799,19 @@ impl GeneralFrameInputsV1 {
                 ClaimsFrameRoleV1::TradingProgram | ClaimsFrameRoleV1::CallerProgram => {
                     self.trading_program
                 }
-                ClaimsFrameRoleV1::TradingProgramData
-                | ClaimsFrameRoleV1::CallerProgramData => self.trading_programdata,
+                ClaimsFrameRoleV1::TradingProgramData | ClaimsFrameRoleV1::CallerProgramData => {
+                    self.trading_programdata
+                }
                 ClaimsFrameRoleV1::ClaimsProgram => self.child_chain()?.claims_program,
                 ClaimsFrameRoleV1::ClaimsProgramData => self.child_chain()?.claims_programdata,
                 ClaimsFrameRoleV1::CoreProgram => self.core_program,
                 ClaimsFrameRoleV1::CoreProgramData => self.core_programdata,
-                ClaimsFrameRoleV1::PositionOwnerIdentity => self
-                    .position_owner_identity
-                    .ok_or(GeneralSessionErrorV1::InputMissing("--position-owner-identity"))?,
+                ClaimsFrameRoleV1::PositionOwnerIdentity => {
+                    self.position_owner_identity
+                        .ok_or(GeneralSessionErrorV1::InputMissing(
+                            "--position-owner-identity",
+                        ))?
+                }
                 ClaimsFrameRoleV1::RentCredit => self.rent_credit,
                 ClaimsFrameRoleV1::RentProgram => self.child_chain()?.rent_program,
                 ClaimsFrameRoleV1::AffinePosition(index) => self.affine_position(action, index)?,
@@ -870,7 +883,11 @@ impl GeneralFrameInputsV1 {
                 vec![self.party()?.position, self.settlement_children()?.position]
             }
             Action::Materialize => vec![self.settlement_children()?.position],
-            _ => return Err(GeneralSessionErrorV1::Geometry("affine on a non-affine action")),
+            _ => {
+                return Err(GeneralSessionErrorV1::Geometry(
+                    "affine on a non-affine action",
+                ));
+            }
         };
         let mut sorted = pair;
         sorted.sort_unstable_by_key(Pubkey::to_bytes);
@@ -908,7 +925,11 @@ impl GeneralFrameInputsV1 {
             (Action::Close, false) => self
                 .surplus_beneficiary
                 .ok_or(GeneralSessionErrorV1::InputMissing("--surplus-beneficiary"))?,
-            _ => return Err(GeneralSessionErrorV1::Geometry("transfer on a non-transfer action")),
+            _ => {
+                return Err(GeneralSessionErrorV1::Geometry(
+                    "transfer on a non-transfer action",
+                ));
+            }
         })
     }
 }
@@ -936,8 +957,8 @@ pub fn general_runtime_suffix_v1(
     action: Action,
     inputs: &GeneralFrameInputsV1,
 ) -> Result<Vec<GeneralRuntimeAccountV1>, GeneralSessionErrorV1> {
-    let profile = AccountProfileV3::decode(published_profile)
-        .map_err(|_| GeneralSessionErrorV1::Profile)?;
+    let profile =
+        AccountProfileV3::decode(published_profile).map_err(|_| GeneralSessionErrorV1::Profile)?;
     let base = profile.base();
     let mut accounts = Vec::new();
     for (coordinate, source) in general_frame_sources_v1(action)? {
@@ -971,7 +992,10 @@ mod tests {
         for action in dclutch_trading::general::release_v3::GENERAL_ACTIONS_V5 {
             let sources = general_frame_sources_v1(action)
                 .unwrap_or_else(|error| panic!("{action:?}: {error:?}"));
-            let fixed = dclutch_trading::general::account_rules_v3::general_account_profile_fixed_count_v3(action)
+            let fixed =
+                dclutch_trading::general::account_rules_v3::general_account_profile_fixed_count_v3(
+                    action,
+                )
                 .expect("fixed count");
             assert_eq!(
                 sources.len(),
@@ -1030,10 +1054,24 @@ mod tests {
     fn escrow_children_are_distinct_and_keyed_by_context() {
         let claims = Pubkey::new_from_array([0xc1; 32]);
         let custody = Pubkey::new_from_array([0xc2; 32]);
-        let a = GeneralEscrowChildrenV1::derive(claims, custody, Pubkey::new_from_array([3; 32]), [1; 32], [2; 32], [0xaa; 32])
-            .expect("children");
-        let b = GeneralEscrowChildrenV1::derive(claims, custody, Pubkey::new_from_array([3; 32]), [1; 32], [2; 32], [0xbb; 32])
-            .expect("children");
+        let a = GeneralEscrowChildrenV1::derive(
+            claims,
+            custody,
+            Pubkey::new_from_array([3; 32]),
+            [1; 32],
+            [2; 32],
+            [0xaa; 32],
+        )
+        .expect("children");
+        let b = GeneralEscrowChildrenV1::derive(
+            claims,
+            custody,
+            Pubkey::new_from_array([3; 32]),
+            [1; 32],
+            [2; 32],
+            [0xbb; 32],
+        )
+        .expect("children");
         let set = std::collections::BTreeSet::from([a.position, a.admission, a.replay, a.vault]);
         assert_eq!(set.len(), 4);
         assert_ne!(a.vault, b.vault);

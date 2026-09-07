@@ -18,7 +18,7 @@ Regenerate with: npm run abi:phase-admission
 
 | name | value |
 | --- | ---: |
-| `ROUTE_COUNT_V1` | 149 |
+| `ROUTE_COUNT_V1` | 160 |
 
 ## Functions (see the source module)
 
@@ -144,8 +144,8 @@ export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachine
   { route: "core/capability::process#CloseCapability", machines: ["funding-ledger"], gates: [{ machine: "funding-ledger", states: ["Active", "Pending"] }] },
   { route: "core/close_capability_child#CloseCapability", machines: ["funding-ledger"], gates: [{ machine: "funding-ledger", states: ["Active", "Pending"] }] },
   { route: "core/process_found#FoundAndPermit", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }] },
-  { route: "core/series_consume::process", machines: ["projected-custody", "series-ticket"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }, { machine: "series-ticket", states: ["Prepared"] }] },
-  { route: "core/series_open::process", machines: ["series-ticket"], gates: [{ machine: "series-ticket", states: ["Prepared"] }] },
+  { route: "core/series_consume::process", machines: ["projected-custody", "series-root", "series-ticket"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }, { machine: "series-root", states: ["Active"] }, { machine: "series-ticket", states: ["Prepared"] }] },
+  { route: "core/series_open::process", machines: ["series-root", "series-ticket"], gates: [{ machine: "series-root", states: ["Active"] }, { machine: "series-ticket", states: ["Prepared"] }] },
   { route: "core/series_permit_expiry::process", machines: ["series-ticket"], gates: [{ machine: "series-ticket", states: ["Expired"] }] },
   { route: "core/series_permit_expiry_precommit_v1::process", machines: ["series-ticket"], gates: [{ machine: "series-ticket", states: ["Prepared"] }] },
   { route: "custody/abort_open_and_close#AbortOpenAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen"] }] },
@@ -183,7 +183,7 @@ export interface RouteSelectedGateV1 {
 ```ts
 export const ROUTE_SELECTED_GATES_V1: ReadonlyArray<RouteSelectedGateV1> = [
   { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::direct::prepare_direct_inline_hot_crosscheck_v3", machine: "direct-root", states: ["Open"], provenance: "crates/dclutch-trading/src/direct_root_admission_v1.rs:107" },
-  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::series_expiry::try_authenticate_series_expiry_premarket_v1", machine: "series-ticket", states: ["Prepared"], provenance: "crates/dclutch-trading/src/series/ticket_admission_v1.rs:115" },
+  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::series_expiry::try_authenticate_series_expiry_premarket_v1", machine: "series-ticket", states: ["Prepared"], provenance: "crates/dclutch-trading/src/series/ticket_admission_v1.rs:121" },
 ];
 
 /** Every gate on one route that lies behind a classifier's decline. */

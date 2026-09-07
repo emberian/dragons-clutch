@@ -20,6 +20,15 @@ use dclutch_market::{
     Readiness, STATE_BYTES, StateBumpsV1,
 };
 
+use dclutch_claims::composition::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
+};
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product::payoff::{
     price_gate_v1::verify_price_gate_v1,
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -29,17 +38,8 @@ use dclutch_product::payoff::{
     },
 };
 use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_claims::composition::{
-    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
-    CompositionExposureTermV3, composition_exposure_bytes_v3,
-    encode_composition_exposure_v3_atomic,
-};
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,

@@ -41,6 +41,13 @@
 //! carries no approval.
 
 use dclutch_claims::complete_set_v1::{held_complete_sets_v1, principal_v1};
+use dclutch_claims::conservation::frame_v1::{
+    AGGREGATE, BASIS_RECORD, CACHE, CLAIMS_CONSERVATION_ACCOUNT_COUNT_V1, CLAIMS_PROGRAM,
+    CLAIMS_PROGRAMDATA, COLLATERAL_MINT, CORE_MARKET, CORE_PROGRAM, CUSTODY_AUTHORITY,
+    CUSTODY_CALLER_AUTHORITY, CUSTODY_PROGRAM, CUSTODY_REPLAY, ESCROW_POSITION,
+    EXTERNAL_COLLATERAL, HOARD_VAULT, OWNER, POSITION, REALM_RECORD, REALM_STAGING, REGISTRY,
+    TOKEN_PROGRAM,
+};
 use dclutch_claims::conservation::{
     CLAIMS_CONSERVATION_REQUEST_BYTES_V1, ClaimsConservationDirectionV1,
     ClaimsConservationRequestV1, Error as ConservationError, collateral_atoms_v1,
@@ -49,13 +56,6 @@ use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
 use dclutch_claims::protocol_position_v2::{ProtocolPositionSeedsV2, failure_escrow_v1};
-use dclutch_claims::conservation::frame_v1::{
-    AGGREGATE, BASIS_RECORD, CACHE, CLAIMS_CONSERVATION_ACCOUNT_COUNT_V1, CLAIMS_PROGRAM,
-    CLAIMS_PROGRAMDATA, COLLATERAL_MINT, CORE_MARKET, CORE_PROGRAM, CUSTODY_AUTHORITY,
-    CUSTODY_CALLER_AUTHORITY, CUSTODY_PROGRAM, CUSTODY_REPLAY, ESCROW_POSITION,
-    EXTERNAL_COLLATERAL, HOARD_VAULT, OWNER, POSITION, REALM_RECORD, REALM_STAGING, REGISTRY,
-    TOKEN_PROGRAM,
-};
 use dclutch_core_contract::ContentId;
 use dclutch_custody::token_svm::instruction::approve_checked;
 use dclutch_custody::token_svm::{Mint, TokenAccount};
@@ -63,8 +63,8 @@ use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplayV1};
 use dclutch_market::{CoreState, MarketAdmissionV1, Phase};
 use dclutch_product::payoff::runtime_v3::{ProductBasisV3, semantic_basis_id_v3};
 use dclutch_registry::ACTIVATION_PDA_DOMAIN_V1;
-use dclutch_source::MarketPrincipalCapSetsV1;
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::MarketPrincipalCapSetsV1;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -368,33 +368,34 @@ pub fn plan_claims_conservation_v1(
     // ---- the request, its poststate derived ------------------------------
     let atoms = collateral_atoms_v1(act.quantity, basis_scale)
         .map_err(ClaimsConservationOperatorErrorV1::Contract)?;
-    let (post_external, post_hoard) = if split {
-        (
-            external.amount.checked_sub(atoms).ok_or(
-                ClaimsConservationOperatorErrorV1::Contract(
-                    ConservationError::ExternalBalanceMismatch,
-                ),
-            )?,
-            vault.amount.checked_add(atoms).ok_or(
-                ClaimsConservationOperatorErrorV1::Contract(
-                    ConservationError::HoardBalanceMismatch,
-                ),
-            )?,
-        )
-    } else {
-        (
-            external.amount.checked_add(atoms).ok_or(
-                ClaimsConservationOperatorErrorV1::Contract(
-                    ConservationError::ExternalBalanceMismatch,
-                ),
-            )?,
-            vault.amount.checked_sub(atoms).ok_or(
-                ClaimsConservationOperatorErrorV1::Contract(
-                    ConservationError::HoardBalanceMismatch,
-                ),
-            )?,
-        )
-    };
+    let (post_external, post_hoard) =
+        if split {
+            (
+                external.amount.checked_sub(atoms).ok_or(
+                    ClaimsConservationOperatorErrorV1::Contract(
+                        ConservationError::ExternalBalanceMismatch,
+                    ),
+                )?,
+                vault.amount.checked_add(atoms).ok_or(
+                    ClaimsConservationOperatorErrorV1::Contract(
+                        ConservationError::HoardBalanceMismatch,
+                    ),
+                )?,
+            )
+        } else {
+            (
+                external.amount.checked_add(atoms).ok_or(
+                    ClaimsConservationOperatorErrorV1::Contract(
+                        ConservationError::ExternalBalanceMismatch,
+                    ),
+                )?,
+                vault.amount.checked_sub(atoms).ok_or(
+                    ClaimsConservationOperatorErrorV1::Contract(
+                        ConservationError::HoardBalanceMismatch,
+                    ),
+                )?,
+            )
+        };
     let request = ClaimsConservationRequestV1 {
         direction: act.direction,
         realm: market.realm_id,
@@ -428,11 +429,8 @@ pub fn plan_claims_conservation_v1(
     // The vault is derived through the contract's own direction-free seed
     // helper and only then written into the request, so the field and the
     // derivation cannot disagree.
-    let hoard_vault = Pubkey::find_program_address(
-        &request.hoard_vault_seeds().as_slices(),
-        &programs.custody,
-    )
-    .0;
+    let hoard_vault =
+        Pubkey::find_program_address(&request.hoard_vault_seeds().as_slices(), &programs.custody).0;
     let request = ClaimsConservationRequestV1 {
         hoard_vault: hoard_vault.to_bytes(),
         ..request
@@ -470,15 +468,15 @@ pub fn plan_claims_conservation_v1(
                 .delegated_custody_request(parent_digest, custody_authority.to_bytes())
                 .map_err(ClaimsConservationOperatorErrorV1::Contract)?
                 .encode()
-                .map_err(|_| ClaimsConservationOperatorErrorV1::Contract(ConservationError::CustodyShape))?,
+                .map_err(|_| {
+                    ClaimsConservationOperatorErrorV1::Contract(ConservationError::CustodyShape)
+                })?,
         )
         .to_bytes()
     } else {
-        hash(
-            &custody
-                .to_bytes()
-                .map_err(|_| ClaimsConservationOperatorErrorV1::Contract(ConservationError::CustodyShape))?,
-        )
+        hash(&custody.to_bytes().map_err(|_| {
+            ClaimsConservationOperatorErrorV1::Contract(ConservationError::CustodyShape)
+        })?)
         .to_bytes()
     };
     let custody_caller_authority = Pubkey::find_program_address(
@@ -504,8 +502,10 @@ pub fn plan_claims_conservation_v1(
     // ---- the frame, in the route's own coordinate order ------------------
     // Every coordinate is seated by its own named constant, so a frame that
     // grows a coordinate fails to compile here rather than shipping a hole.
-    let mut accounts =
-        vec![AccountMeta::new_readonly(Pubkey::default(), false); CLAIMS_CONSERVATION_ACCOUNT_COUNT_V1];
+    let mut accounts = vec![
+        AccountMeta::new_readonly(Pubkey::default(), false);
+        CLAIMS_CONSERVATION_ACCOUNT_COUNT_V1
+    ];
     let mut seat = |coordinate: usize, meta: AccountMeta| {
         *accounts
             .get_mut(coordinate)
@@ -515,23 +515,65 @@ pub fn plan_claims_conservation_v1(
     seat(AGGREGATE, AccountMeta::new(aggregate_key, false));
     seat(POSITION, AccountMeta::new(position_key, false));
     seat(ESCROW_POSITION, AccountMeta::new(escrow.position, false));
-    seat(CORE_MARKET, AccountMeta::new_readonly(observed.market, false));
-    seat(BASIS_RECORD, AccountMeta::new_readonly(observed.basis_record.0, false));
+    seat(
+        CORE_MARKET,
+        AccountMeta::new_readonly(observed.market, false),
+    );
+    seat(
+        BASIS_RECORD,
+        AccountMeta::new_readonly(observed.basis_record.0, false),
+    );
     seat(CACHE, AccountMeta::new_readonly(activation_cache, false));
-    seat(REGISTRY, AccountMeta::new_readonly(programs.registry, false));
-    seat(CLAIMS_PROGRAM, AccountMeta::new_readonly(programs.claims, false));
-    seat(CLAIMS_PROGRAMDATA, AccountMeta::new_readonly(programs.claims_programdata, false));
-    seat(CORE_PROGRAM, AccountMeta::new_readonly(programs.core, false));
-    seat(CUSTODY_CALLER_AUTHORITY, AccountMeta::new_readonly(custody_caller_authority, false));
-    seat(CUSTODY_PROGRAM, AccountMeta::new_readonly(programs.custody, false));
+    seat(
+        REGISTRY,
+        AccountMeta::new_readonly(programs.registry, false),
+    );
+    seat(
+        CLAIMS_PROGRAM,
+        AccountMeta::new_readonly(programs.claims, false),
+    );
+    seat(
+        CLAIMS_PROGRAMDATA,
+        AccountMeta::new_readonly(programs.claims_programdata, false),
+    );
+    seat(
+        CORE_PROGRAM,
+        AccountMeta::new_readonly(programs.core, false),
+    );
+    seat(
+        CUSTODY_CALLER_AUTHORITY,
+        AccountMeta::new_readonly(custody_caller_authority, false),
+    );
+    seat(
+        CUSTODY_PROGRAM,
+        AccountMeta::new_readonly(programs.custody, false),
+    );
     seat(CUSTODY_REPLAY, AccountMeta::new(custody_replay, false));
     seat(HOARD_VAULT, AccountMeta::new(hoard_vault, false));
-    seat(EXTERNAL_COLLATERAL, AccountMeta::new(observed.external_collateral.0, false));
-    seat(COLLATERAL_MINT, AccountMeta::new_readonly(observed.collateral_mint.0, false));
-    seat(TOKEN_PROGRAM, AccountMeta::new_readonly(observed.token_program, false));
-    seat(CUSTODY_AUTHORITY, AccountMeta::new_readonly(custody_authority, false));
-    seat(REALM_RECORD, AccountMeta::new_readonly(observed.realm_raw, false));
-    seat(REALM_STAGING, AccountMeta::new_readonly(observed.realm_staging, false));
+    seat(
+        EXTERNAL_COLLATERAL,
+        AccountMeta::new(observed.external_collateral.0, false),
+    );
+    seat(
+        COLLATERAL_MINT,
+        AccountMeta::new_readonly(observed.collateral_mint.0, false),
+    );
+    seat(
+        TOKEN_PROGRAM,
+        AccountMeta::new_readonly(observed.token_program, false),
+    );
+    seat(
+        CUSTODY_AUTHORITY,
+        AccountMeta::new_readonly(custody_authority, false),
+    );
+    seat(
+        REALM_RECORD,
+        AccountMeta::new_readonly(observed.realm_raw, false),
+    );
+    seat(
+        REALM_STAGING,
+        AccountMeta::new_readonly(observed.realm_staging, false),
+    );
     drop(seat);
 
     let approve = if split {
@@ -772,12 +814,18 @@ mod tests {
         bytes
     }
 
-    fn aggregate_bytes(basis_id: [u8; 32], market: Pubkey, registry: Pubkey, supply: u64) -> Vec<u8> {
-        let mut bytes = vec![
-            0_u8;
-            liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, WIDTH)
-                .expect("aggregate width")
-        ];
+    fn aggregate_bytes(
+        basis_id: [u8; 32],
+        market: Pubkey,
+        registry: Pubkey,
+        supply: u64,
+    ) -> Vec<u8> {
+        let mut bytes =
+            vec![
+                0_u8;
+                liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, WIDTH)
+                    .expect("aggregate width")
+            ];
         encode_liability_basis_market_into_v2(
             LiabilityBasisMarketInputV2 {
                 revision: 2,
@@ -804,11 +852,12 @@ mod tests {
         revision: u64,
         balances: &[u64],
     ) -> Vec<u8> {
-        let mut bytes = vec![
-            0_u8;
-            liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, WIDTH)
-                .expect("position width")
-        ];
+        let mut bytes =
+            vec![
+                0_u8;
+                liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, WIDTH)
+                    .expect("position width")
+            ];
         encode_liability_basis_position_into_v2(
             LiabilityBasisPositionInputV2 {
                 revision,
@@ -824,10 +873,9 @@ mod tests {
     }
 
     fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
-        let mut bytes =
-            TokenAccount::initialized_base_bytes(mint.to_bytes(), owner.to_bytes())
-                .expect("token account")
-                .to_vec();
+        let mut bytes = TokenAccount::initialized_base_bytes(mint.to_bytes(), owner.to_bytes())
+            .expect("token account")
+            .to_vec();
         bytes
             .get_mut(TokenAccountLayoutV1::AMOUNT..TokenAccountLayoutV1::AMOUNT + 8)
             .expect("amount field")
@@ -874,8 +922,9 @@ mod tests {
                 &programs.claims,
             )
             .0;
-            let escrow = failure_escrow_v1(programs.claims, market.to_bytes(), aggregate_key, WIDTH)
-                .expect("failure escrow");
+            let escrow =
+                failure_escrow_v1(programs.claims, market.to_bytes(), aggregate_key, WIDTH)
+                    .expect("failure escrow");
             let custody_authority = Pubkey::find_program_address(
                 &CustodyAuthoritySeedsV1::new(market.to_bytes(), RELEASE_SET).as_slices(),
                 &programs.custody,
@@ -1051,7 +1100,10 @@ mod tests {
             merge.request.post_external_amount,
             split.request.pre_external_amount
         );
-        assert_eq!(merge.request.post_hoard_amount, split.request.pre_hoard_amount);
+        assert_eq!(
+            merge.request.post_hoard_amount,
+            split.request.pre_hoard_amount
+        );
         assert_eq!(
             merge.request.direction.source_compartment(),
             CompartmentV1::HoardPrincipal

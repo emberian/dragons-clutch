@@ -24,10 +24,10 @@ pub mod activation_bundle_v1;
 pub mod admitted_accelerator_v3;
 /// Complete content-addressed General V3 artifact joins for generic Trading.
 pub mod artifacts_v3;
-/// Candidate submission and streamed on-chain page verification.
-pub mod candidate_v1;
 /// Which clause of the CancelOrder coordinate conjunct disagreed.
 pub mod cancel_order_clause_v3;
+/// Candidate submission and streamed on-chain page verification.
+pub mod candidate_v1;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
 /// Which clause of the CloseBatch coordinate conjunct disagreed.

@@ -63,12 +63,23 @@ pub(crate) const MERGE_COMMAND_V1: &str = "local-private-validator-merge-v1";
 /// The public merge.
 pub(crate) const MERGE_COMMAND_DEVNET_V1: &str = "devnet-merge-v1";
 
-const fn command(direction: ClaimsConservationDirectionV1, expected: ExpectedClusterV1) -> &'static str {
+const fn command(
+    direction: ClaimsConservationDirectionV1,
+    expected: ExpectedClusterV1,
+) -> &'static str {
     match (direction, expected) {
-        (ClaimsConservationDirectionV1::Split, ExpectedClusterV1::Devnet) => SPLIT_COMMAND_DEVNET_V1,
-        (ClaimsConservationDirectionV1::Split, ExpectedClusterV1::OwnedLoopback) => SPLIT_COMMAND_V1,
-        (ClaimsConservationDirectionV1::Merge, ExpectedClusterV1::Devnet) => MERGE_COMMAND_DEVNET_V1,
-        (ClaimsConservationDirectionV1::Merge, ExpectedClusterV1::OwnedLoopback) => MERGE_COMMAND_V1,
+        (ClaimsConservationDirectionV1::Split, ExpectedClusterV1::Devnet) => {
+            SPLIT_COMMAND_DEVNET_V1
+        }
+        (ClaimsConservationDirectionV1::Split, ExpectedClusterV1::OwnedLoopback) => {
+            SPLIT_COMMAND_V1
+        }
+        (ClaimsConservationDirectionV1::Merge, ExpectedClusterV1::Devnet) => {
+            MERGE_COMMAND_DEVNET_V1
+        }
+        (ClaimsConservationDirectionV1::Merge, ExpectedClusterV1::OwnedLoopback) => {
+            MERGE_COMMAND_V1
+        }
     }
 }
 
@@ -92,19 +103,35 @@ struct ArgumentsV1 {
 }
 
 pub(crate) fn run_split_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
-    run(arguments, ClaimsConservationDirectionV1::Split, ExpectedClusterV1::OwnedLoopback)
+    run(
+        arguments,
+        ClaimsConservationDirectionV1::Split,
+        ExpectedClusterV1::OwnedLoopback,
+    )
 }
 
 pub(crate) fn run_split_devnet_v1(arguments: Vec<String>) -> Result<()> {
-    run(arguments, ClaimsConservationDirectionV1::Split, ExpectedClusterV1::Devnet)
+    run(
+        arguments,
+        ClaimsConservationDirectionV1::Split,
+        ExpectedClusterV1::Devnet,
+    )
 }
 
 pub(crate) fn run_merge_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
-    run(arguments, ClaimsConservationDirectionV1::Merge, ExpectedClusterV1::OwnedLoopback)
+    run(
+        arguments,
+        ClaimsConservationDirectionV1::Merge,
+        ExpectedClusterV1::OwnedLoopback,
+    )
 }
 
 pub(crate) fn run_merge_devnet_v1(arguments: Vec<String>) -> Result<()> {
-    run(arguments, ClaimsConservationDirectionV1::Merge, ExpectedClusterV1::Devnet)
+    run(
+        arguments,
+        ClaimsConservationDirectionV1::Merge,
+        ExpectedClusterV1::Devnet,
+    )
 }
 
 fn run(
@@ -126,7 +153,15 @@ fn run(
     report(direction, &plan, &before);
 
     if !arguments.execute {
-        write_evidence(&arguments.evidence, direction, &plan, &before, None, expected, None)?;
+        write_evidence(
+            &arguments.evidence,
+            direction,
+            &plan,
+            &before,
+            None,
+            expected,
+            None,
+        )?;
         println!("dry run; no key was opened and nothing was sent");
         return Ok(());
     }
@@ -295,7 +330,9 @@ fn plan(
     .0;
     let realm_account = rpc.required_account(realm_raw, "Realm record")?;
     if hash(&realm_account.data).to_bytes() != realm_digest {
-        return Err(Error::new("the Realm record's bytes do not hash to Core's realm_id"));
+        return Err(Error::new(
+            "the Realm record's bytes do not hash to Core's realm_id",
+        ));
     }
     let realm = RealmV1::decode(&realm_account.data)
         .map_err(|error| Error::new(format!("Realm record: {error:?}")))?;
@@ -341,7 +378,9 @@ fn plan(
         core_state: &core_account.data,
         aggregate: &aggregate_account.data,
         position: &position_account.data,
-        escrow_position: escrow_account.as_ref().map(|account| account.data.as_slice()),
+        escrow_position: escrow_account
+            .as_ref()
+            .map(|account| account.data.as_slice()),
         basis_record: (arguments.linked_basis_record, &basis_account.data),
         custody_replay: &replay_account.data,
         hoard_vault: &vault_account.data,
@@ -404,7 +443,11 @@ fn read_poststate(rpc: &mut Rpc, plan: &ClaimsConservationPlanV1) -> Result<Stat
         vault_atoms: vault.amount,
         external_atoms: external.amount,
         supplies: (0..aggregate.claim_count)
-            .map(|index| aggregate.supply(&aggregate_account.data, index).unwrap_or(0))
+            .map(|index| {
+                aggregate
+                    .supply(&aggregate_account.data, index)
+                    .unwrap_or(0)
+            })
             .collect(),
         position_balances: (0..position.claim_count)
             .map(|index| position.balance(&position_account.data, index).unwrap_or(0))
@@ -439,9 +482,16 @@ fn describe_refusal(error: ClaimsConservationOperatorErrorV1) -> Error {
     }
 }
 
-fn report(direction: ClaimsConservationDirectionV1, plan: &ClaimsConservationPlanV1, before: &StateV1) {
+fn report(
+    direction: ClaimsConservationDirectionV1,
+    plan: &ClaimsConservationPlanV1,
+    before: &StateV1,
+) {
     println!("direction            {direction:?}");
-    println!("market               {}", Pubkey::new_from_array(plan.request.market));
+    println!(
+        "market               {}",
+        Pubkey::new_from_array(plan.request.market)
+    );
     println!("claims aggregate     {}", plan.aggregate);
     println!("owner position       {}", plan.position);
     println!("failure escrow       {}", plan.escrow_position);
@@ -465,7 +515,11 @@ fn report(direction: ClaimsConservationDirectionV1, plan: &ClaimsConservationPla
     println!("held sets after      {}", plan.held_complete_sets_after);
     println!(
         "instructions         {}",
-        if plan.approve.is_some() { "ApproveChecked + conserve" } else { "conserve" }
+        if plan.approve.is_some() {
+            "ApproveChecked + conserve"
+        } else {
+            "conserve"
+        }
     );
     println!("frame accounts       {}", plan.instruction.accounts.len());
 }
@@ -598,7 +652,9 @@ fn parse(
         .parse()
         .map_err(|error| Error::new(format!("--quantity: {error}")))?;
     if quantity == 0 {
-        return Err(Error::new("--quantity must be a positive number of complete sets"));
+        return Err(Error::new(
+            "--quantity must be a positive number of complete sets",
+        ));
     }
     Ok(ArgumentsV1 {
         origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
@@ -674,10 +730,22 @@ mod tests {
     #[test]
     fn the_four_verbs_are_distinct() {
         let verbs = [
-            command(ClaimsConservationDirectionV1::Split, ExpectedClusterV1::OwnedLoopback),
-            command(ClaimsConservationDirectionV1::Split, ExpectedClusterV1::Devnet),
-            command(ClaimsConservationDirectionV1::Merge, ExpectedClusterV1::OwnedLoopback),
-            command(ClaimsConservationDirectionV1::Merge, ExpectedClusterV1::Devnet),
+            command(
+                ClaimsConservationDirectionV1::Split,
+                ExpectedClusterV1::OwnedLoopback,
+            ),
+            command(
+                ClaimsConservationDirectionV1::Split,
+                ExpectedClusterV1::Devnet,
+            ),
+            command(
+                ClaimsConservationDirectionV1::Merge,
+                ExpectedClusterV1::OwnedLoopback,
+            ),
+            command(
+                ClaimsConservationDirectionV1::Merge,
+                ExpectedClusterV1::Devnet,
+            ),
         ];
         for (index, verb) in verbs.iter().enumerate() {
             assert!(verbs.iter().skip(index + 1).all(|other| other != verb));

@@ -13,11 +13,11 @@ reachable inside an entry route's request.
 
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |
-| `accelerator` | `dclutch-accelerator-sbf` | 0xC | 2 | 3 | 39 | `process_instruction` (programs/dclutch-accelerator-sbf/src/lib.rs:71) |
-| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 24 | 150 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:96) |
+| `accelerator` | `dclutch-accelerator-sbf` | 0xC | 3 | 3 | 41 | `process_instruction` (programs/dclutch-accelerator-sbf/src/lib.rs:72) |
+| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 24 | 167 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:96) |
 | `core` | `dclutch-core-sbf` | 0x3 | 21 | 15 | 40 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:377) |
-| `custody` | `dclutch-custody-sbf` | 0x6 | 4 | 9 | 18 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:225) |
+| `custody` | `dclutch-custody-sbf` | 0x6 | 4 | 15 | 45 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:229) |
 | `registry` | `dclutch-registry-sbf` | 0x1 | 7 | 4 | 22 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:244) |
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:128) |
-| `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 11 | 20 | 40 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:330) |
-| `trading` | `dclutch-trading-sbf` | 0x4 | 19 | 2 | 49 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1609) |
+| `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 11 | 20 | 41 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:367) |
+| `trading` | `dclutch-trading-sbf` | 0x4 | 23 | 2 | 80 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1609) |

@@ -10603,8 +10603,9 @@ fn derive_founding_outer_v1(
         let manifest = CapabilityManifestV1::decode(&records.manifest_body)
             .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
         let ladder_funding = ladder_funding_v1(input, manifest)?;
-        let rate = derive_funded_rent_rate_v2(rpc.minimum_balance(0)?, position_width, position_rent)
-            .map_err(|error| Error::new(format!("founded rent rate: {error:?}")))?;
+        let rate =
+            derive_funded_rent_rate_v2(rpc.minimum_balance(0)?, position_width, position_rent)
+                .map_err(|error| Error::new(format!("founded rent rate: {error:?}")))?;
         dclutch_claims::founder_bond_v1::founding_bond_size_v1(rate, claim_count, ladder_funding)
             .map_err(|error| Error::new(format!("founder bond size rule: {error:?}")))?
             .bond
@@ -13704,7 +13705,11 @@ fn authenticate_founding_prefunding_v1(
                 .checked_add(outer.founder_bond_lamports)
                 .ok_or_else(|| Error::new("escrow prefunding overflowed u64"))?,
         ));
-        required.push(("failure escrow admission", outer.escrow_admission, admission_rent));
+        required.push((
+            "failure escrow admission",
+            outer.escrow_admission,
+            admission_rent,
+        ));
     }
     for (label, key, lamports) in required {
         let account = rpc.required_account(key, label)?;

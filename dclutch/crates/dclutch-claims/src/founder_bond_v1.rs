@@ -40,7 +40,8 @@ pub(crate) const FOUNDER_BOND_CERTIFICATE_SEAT_BYTES_V1: usize =
 
 /// A Token-2022 base account, the vault a compaction opener funds beside the
 /// escrow record.
-pub(crate) const FOUNDER_BOND_TOKEN_ACCOUNT_BYTES_V1: usize = dclutch_custody::token_svm::state::ACCOUNT_BYTES;
+pub(crate) const FOUNDER_BOND_TOKEN_ACCOUNT_BYTES_V1: usize =
+    dclutch_custody::token_svm::state::ACCOUNT_BYTES;
 
 /// Bytes one claim coordinate occupies in a `LiabilityBasisV2` Position.
 ///
@@ -154,7 +155,10 @@ pub(crate) fn seat_prepay_v1(widths: FounderBondWidthsV1, rate: u32) -> FounderB
 }
 
 /// What a compaction opener advances: the escrow record and its vault.
-pub(crate) fn opener_advance_v1(widths: FounderBondWidthsV1, rate: u32) -> FounderBondResultV1<u64> {
+pub(crate) fn opener_advance_v1(
+    widths: FounderBondWidthsV1,
+    rate: u32,
+) -> FounderBondResultV1<u64> {
     rent_for_v1(rate, widths.claim_check_escrow)?
         .checked_add(rent_for_v1(rate, widths.token_account)?)
         .ok_or(FounderBondErrorV1::ArithmeticOverflow)
@@ -201,8 +205,14 @@ pub(crate) fn first_crank_shortfall_v1(
     outcomes: u32,
     crank_reward_cap: u64,
 ) -> FounderBondResultV1<u64> {
-    Ok(opener_advance_v1(widths, rate)?
-        .saturating_sub(first_crank_repayment_v1(widths, rate, outcomes, crank_reward_cap)?))
+    Ok(
+        opener_advance_v1(widths, rate)?.saturating_sub(first_crank_repayment_v1(
+            widths,
+            rate,
+            outcomes,
+            crank_reward_cap,
+        )?),
+    )
 }
 
 /// **The size rule.** `B = S + F + Λ`: the seat prepay plus the first crank's
@@ -587,11 +597,9 @@ mod tests {
     #[test]
     fn the_position_width_is_the_trees_own() {
         for outcomes in [2_u32, 3, 4, 7, 16] {
-            let width = liability_basis_vector_width_v2(
-                LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-                outcomes,
-            )
-            .expect("position width");
+            let width =
+                liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, outcomes)
+                    .expect("position width");
             assert_eq!(
                 width,
                 FOUNDER_BOND_WIDTHS_V1.position_header
@@ -605,7 +613,10 @@ mod tests {
     fn the_size_rule_reproduces_the_lean_witnesses() {
         let widths = FOUNDER_BOND_WIDTHS_V1;
         assert_eq!(seat_prepay_v1(widths, COHORT_FIFTEEN_RATE), Ok(2_786_520));
-        assert_eq!(opener_advance_v1(widths, COHORT_FIFTEEN_RATE), Ok(4_287_441));
+        assert_eq!(
+            opener_advance_v1(widths, COHORT_FIFTEEN_RATE),
+            Ok(4_287_441)
+        );
         assert_eq!(
             first_crank_repayment_v1(
                 widths,
@@ -624,7 +635,10 @@ mod tests {
             ),
             Ok(1_244_945)
         );
-        assert_eq!(cohort_fifteen(COHORT_FIFTEEN_RATE).bond, COHORT_FIFTEEN_BOND);
+        assert_eq!(
+            cohort_fifteen(COHORT_FIFTEEN_RATE).bond,
+            COHORT_FIFTEEN_BOND
+        );
         assert_eq!(cohort_fifteen(EPOCH_1141_RATE).bond, 3_273_400);
         assert_eq!(cohort_fifteen(KERNEL_REFERENCE_RATE).bond, 4_410_800);
     }
@@ -648,10 +662,21 @@ mod tests {
     #[test]
     fn a_founding_one_lamport_short_refuses() {
         let rent = rent_for_v1(COHORT_FIFTEEN_RATE, 160).expect("rent");
-        assert!(founded_v1(rent + COHORT_FIFTEEN_BOND, rent, COHORT_FIFTEEN_BOND));
-        assert!(!founded_v1(rent + COHORT_FIFTEEN_BOND - 1, rent, COHORT_FIFTEEN_BOND));
+        assert!(founded_v1(
+            rent + COHORT_FIFTEEN_BOND,
+            rent,
+            COHORT_FIFTEEN_BOND
+        ));
+        assert!(!founded_v1(
+            rent + COHORT_FIFTEEN_BOND - 1,
+            rent,
+            COHORT_FIFTEEN_BOND
+        ));
         assert!(!founded_v1(u64::MAX, u64::MAX, 1));
-        assert_eq!(observed_bond_v1(rent + COHORT_FIFTEEN_BOND, rent), COHORT_FIFTEEN_BOND);
+        assert_eq!(
+            observed_bond_v1(rent + COHORT_FIFTEEN_BOND, rent),
+            COHORT_FIFTEEN_BOND
+        );
         assert_eq!(observed_bond_v1(rent - 1, rent), 0);
     }
 
@@ -725,7 +750,11 @@ mod tests {
         for partition in partitions {
             assert_eq!(partition.iter().sum::<u64>(), COHORT_FIFTEEN_OUTSTANDING);
             let (draws, remaining) = walk(FounderBondExitV1::Exhausted, partition);
-            assert_eq!(draws.iter().sum::<u64>(), COHORT_FIFTEEN_BOND, "{partition:?}");
+            assert_eq!(
+                draws.iter().sum::<u64>(),
+                COHORT_FIFTEEN_BOND,
+                "{partition:?}"
+            );
             assert_eq!(remaining, 0, "{partition:?}");
         }
         // Half the claims draw half the bond, to the lamport the floor allows.
@@ -769,7 +798,10 @@ mod tests {
             draw_v1(COHORT_FIFTEEN_BOND, 100, 101),
             Err(FounderBondErrorV1::ExceedsOutstanding)
         );
-        assert_eq!(draw_v1(COHORT_FIFTEEN_BOND, 0, 1), Err(FounderBondErrorV1::ExceedsOutstanding));
+        assert_eq!(
+            draw_v1(COHORT_FIFTEEN_BOND, 0, 1),
+            Err(FounderBondErrorV1::ExceedsOutstanding)
+        );
         assert_eq!(draw_v1(COHORT_FIFTEEN_BOND, 0, 0), Ok(0));
         // The draw is bounded by what remains for every admitted quantity.
         for quantity in [1_u64, 200, 500_000_000, COHORT_FIFTEEN_OUTSTANDING] {

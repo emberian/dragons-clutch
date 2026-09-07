@@ -32,10 +32,6 @@ use dclutch_product::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
     PORTFOLIO_LIABILITY_BASIS_ID_OFFSET,
 };
-use dclutch_vm::account_profile::v3::{
-    AccountProfileV3, FUNDING_BOUND_BYTES_V3, FundingActionMaskV3, FundingBoundV3,
-    HEADER_BYTES_V3 as ACCOUNT_PROFILE_HEADER_BYTES_V3, encode_account_profile_v3_atomic,
-};
 use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
     OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
@@ -47,6 +43,10 @@ use dclutch_vm::account_profile::v2::{
         ScalarCoordinateV2,
         encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic_with_item_operations,
     },
+};
+use dclutch_vm::account_profile::v3::{
+    AccountProfileV3, FUNDING_BOUND_BYTES_V3, FundingActionMaskV3, FundingBoundV3,
+    HEADER_BYTES_V3 as ACCOUNT_PROFILE_HEADER_BYTES_V3, encode_account_profile_v3_atomic,
 };
 
 use crate::general::{
@@ -1643,7 +1643,11 @@ pub fn general_account_profile_funding_bytes_v3(action: Action) -> Result<usize>
                 .checked_mul(FUNDING_BOUND_BYTES_V3)
                 .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
         )
-        .and_then(|value| general_account_profile_bytes_v3(action).ok()?.checked_add(value))
+        .and_then(|value| {
+            general_account_profile_bytes_v3(action)
+                .ok()?
+                .checked_add(value)
+        })
         .ok_or(GeneralAccountRuleErrorV3::Geometry)
 }
 

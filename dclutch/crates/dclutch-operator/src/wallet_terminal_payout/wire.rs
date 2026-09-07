@@ -67,12 +67,12 @@ use dclutch_custody::{
 #[cfg(test)]
 use dclutch_custody::{ContextV1, CustodyRequestV1, OperationV1};
 #[cfg(test)]
+use dclutch_market::StateBumpsV1;
+#[cfg(test)]
 use dclutch_market::capability_manifest::ContentId;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES};
-#[cfg(test)]
-use dclutch_market::StateBumpsV1;
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
@@ -2179,9 +2179,7 @@ pub mod tests {
             observation,
             accounts: BTreeMap::from([(raw.key, raw), (staging.key, staging)]),
         };
-        assert!(
-            authenticate_record(selected.realm, &snapshot, selected.registry).is_err()
-        );
+        assert!(authenticate_record(selected.realm, &snapshot, selected.registry).is_err());
 
         let report = payout_report();
         let canonical = lookup(&report, false, report.observation.slot);

@@ -828,7 +828,11 @@ theorem the_cut_separates_the_branches (a deadline : Nat) :
     activatedBy (Int.ofNat featureNotActivatedSentinel) deadline = decide (deadline ≥ 2 ^ 64 - 1) := by
   constructor
   · simp [activatedBy]
-  · simp [activatedBy, featureNotActivatedSentinel]
+  · -- `simp` normalises the sentinel to `2 ^ 64 - 1` on the left and leaves the
+    -- `Int.ofNat` coercion standing on the right; `omega` is what discharges a
+    -- goal that is an inequality across that cast and nothing else.
+    simp [activatedBy, featureNotActivatedSentinel]
+    omega
 
 /-- `bincode(EpochSchedule)`. -/
 def epochScheduleSlotsPerEpochOffset : Nat := 0

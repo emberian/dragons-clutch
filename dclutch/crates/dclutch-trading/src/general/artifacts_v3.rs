@@ -447,8 +447,8 @@ pub fn authenticate_general_artifacts_v3<'a>(
     // `general_funding_actions_v5` authors for this action, joined here the
     // same way the profile's bounds are, so the two halves of "who funds what"
     // cannot drift apart in a release.
-    let funding = EffectProgramV5::decode(artifacts.effect)
-        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let funding =
+        EffectProgramV5::decode(artifacts.effect).map_err(|_| GeneralArtifactErrorV3::Effect)?;
     let expected_actions =
         crate::general::effect_artifacts_v3::general_funding_actions_v5(request.action);
     if usize::from(funding.funding_action_count()) != expected_actions.actions().len()

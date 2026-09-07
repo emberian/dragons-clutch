@@ -454,11 +454,12 @@ mod tests {
     const BASIS: [u8; 32] = [0x15; 32];
 
     fn aggregate(supplies: &[u64], revision: u64) -> Vec<u8> {
-        let mut bytes = vec![
-            0_u8;
-            liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, WIDTH)
-                .unwrap()
-        ];
+        let mut bytes =
+            vec![
+                0_u8;
+                liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, WIDTH)
+                    .unwrap()
+            ];
         encode_liability_basis_market_into_v2(
             LiabilityBasisMarketInputV2 {
                 revision,
@@ -479,11 +480,12 @@ mod tests {
     }
 
     fn position(owner: u8, balances: &[u64], revision: u64) -> Vec<u8> {
-        let mut bytes = vec![
-            0_u8;
-            liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, WIDTH)
-                .unwrap()
-        ];
+        let mut bytes =
+            vec![
+                0_u8;
+                liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, WIDTH)
+                    .unwrap()
+            ];
         encode_liability_basis_position_into_v2(
             LiabilityBasisPositionInputV2 {
                 revision,
@@ -505,7 +507,9 @@ mod tests {
 
     fn balances(bytes: &[u8]) -> Vec<u64> {
         let view = LiabilityBasisPositionViewV2::decode(bytes).unwrap();
-        (0..WIDTH).map(|k| view.balance(bytes, k).unwrap()).collect()
+        (0..WIDTH)
+            .map(|k| view.balance(bytes, k).unwrap())
+            .collect()
     }
 
     /// `split_complete_set_exact` and `merge_complete_set_exact`, executed:
@@ -548,8 +552,16 @@ mod tests {
         assert_eq!(balances(&holder), balances(&before_holder));
         assert_eq!((post.market_revision, post.holder_revision), (6, 4));
         let mut expected_aggregate = before_aggregate.clone();
-        advance_revision(&mut expected_aggregate, LiabilityBasisMarketLayoutV2::REVISION).unwrap();
-        advance_revision(&mut expected_aggregate, LiabilityBasisMarketLayoutV2::REVISION).unwrap();
+        advance_revision(
+            &mut expected_aggregate,
+            LiabilityBasisMarketLayoutV2::REVISION,
+        )
+        .unwrap();
+        advance_revision(
+            &mut expected_aggregate,
+            LiabilityBasisMarketLayoutV2::REVISION,
+        )
+        .unwrap();
         assert_eq!(agg, expected_aggregate, "nothing but the revision moved");
     }
 
@@ -558,8 +570,7 @@ mod tests {
     /// touches nothing else, and the aggregate cannot tell the two shapes
     /// apart.
     #[test]
-    fn a_refunding_mint_seats_the_failure_coordinate_in_the_escrow_and_the_merge_burns_it_there()
-    {
+    fn a_refunding_mint_seats_the_failure_coordinate_in_the_escrow_and_the_merge_burns_it_there() {
         let mut agg = aggregate(&[10; 4], 0);
         let mut holder = position(0x21, &[0; 4], 0);
         let mut escrow = position(0x31, &[0, 0, 0, 10], 0);
@@ -706,11 +717,12 @@ mod tests {
     #[test]
     fn a_position_of_another_basis_or_width_does_not_join() {
         let mut agg = aggregate(&[10; 4], 0);
-        let mut bytes = vec![
-            0_u8;
-            liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, WIDTH)
-                .unwrap()
-        ];
+        let mut bytes =
+            vec![
+                0_u8;
+                liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, WIDTH)
+                    .unwrap()
+            ];
         encode_liability_basis_position_into_v2(
             LiabilityBasisPositionInputV2 {
                 revision: 0,
@@ -756,10 +768,7 @@ mod tests {
             31,
             "a donated atom is excess backing, not a refusal",
         );
-        assert_eq!(
-            principal_v1(&agg, 29, 3),
-            Err(CompleteSetErrorV1::Backing),
-        );
+        assert_eq!(principal_v1(&agg, 29, 3), Err(CompleteSetErrorV1::Backing),);
         assert_eq!(principal_v1(&agg, 30, 0), Err(CompleteSetErrorV1::Quantity));
         // Non-uniform supply (a Market past Terminal) backs its LARGEST
         // coordinate: that is the L4 statement, not an average.

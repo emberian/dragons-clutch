@@ -1333,7 +1333,10 @@ mod fund_tests {
         let mut output = vec![0_u8; width];
         encode_program_v5_atomic(&base, &actions, &seeds, &mut scratch, &mut output)
             .expect("a Create then a Fund");
-        assert_eq!(ProgramV5::decode(&output).map(|p| p.funding_action_count()), Ok(2));
+        assert_eq!(
+            ProgramV5::decode(&output).map(|p| p.funding_action_count()),
+            Ok(2)
+        );
         let same_state = [
             FundingActionV5::create(5, 6, 7, 8, 0, 0, 64, 0, 2),
             FundingActionV5::fund(5, 6, 8, 1, 0),
@@ -1363,7 +1366,10 @@ mod fund_tests {
         assert_eq!(SEED_COMMON_IDENTITY, EFFECT_V5_SEED_COMMON_IDENTITY_LEAN);
         assert_eq!(SEED_CANONICAL_BUMP, EFFECT_V5_SEED_CANONICAL_BUMP_LEAN);
         assert_eq!(UNUSED_COORDINATE, EFFECT_V5_UNUSED_COORDINATE_LEAN);
-        assert_eq!(SCHEMA_RELEASE_PREIMAGE_V5, EFFECT_V5_SCHEMA_RELEASE_PREIMAGE_LEAN);
+        assert_eq!(
+            SCHEMA_RELEASE_PREIMAGE_V5,
+            EFFECT_V5_SCHEMA_RELEASE_PREIMAGE_LEAN
+        );
         assert_eq!(SCHEMA_RELEASE_ID_V5, EFFECT_V5_SCHEMA_RELEASE_ID_LEAN);
         // The Lean witness of a Fund is what this kernel decodes as one.
         let base = base_v4_general();

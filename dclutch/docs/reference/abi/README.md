@@ -45,6 +45,7 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [relayTransportV1](relayTransportV1.md) | from crates/dclutch-source/src/relay/{instruction,frame}.rs and generated_relayed_abi.rs; do not edit. | npm run abi:relay-transport |
 | [resolutionCertificateV2](resolutionCertificateV2.md) | by scripts/generate-resolution-certificate-v2.mjs; do not edit. |  |
 | [routeCensus](routeCensus.md) | by scripts/generate-route-census.mjs from `dclutch-route-census inventory`; do not edit. | npm run abi:route-census |
+| [scoringRuleV1](scoringRuleV1.md) | by formal/dclutch-semantics/EmitScoringRuleV1Ts.lean; do not edit. | npm run abi:scoring-rule |
 | [sourceProviderWasmV1](sourceProviderWasmV1.md) | from the authoritative Rust Source-provider owner and WASM artifact; do not edit. |  |
 | [sourceReadinessWasmV1](sourceReadinessWasmV1.md) | from the authoritative Rust Source-readiness owner and WASM artifact; do not edit. |  |
 | [sourceResolutionStateV2](sourceResolutionStateV2.md) | by scripts/generate-source-resolution-state-v2.mjs; do not edit. |  |

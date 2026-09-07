@@ -6524,9 +6524,7 @@ mod tests {
                 (
                     scalar::CURRENT_SLOT,
                     160,
-                    GeneralHotCandidateErrorV3::Submission(
-                        GeneralCandidateErrorV1::OutsideWindow,
-                    ),
+                    GeneralHotCandidateErrorV3::Submission(GeneralCandidateErrorV1::OutsideWindow),
                 ),
                 (
                     scalar::PRIMARY_CREATED,
@@ -7509,7 +7507,10 @@ mod tests {
         // `SettlementClauseV3` assertions in this module, over the widest of
         // the nine enums.
         for (input, expected) in [
-            (hostile_tail, SettlementClauseV3::EnvironmentScalarOutcomeCount),
+            (
+                hostile_tail,
+                SettlementClauseV3::EnvironmentScalarOutcomeCount,
+            ),
             (hostile_parent, SettlementClauseV3::EnvironmentRequestDigest),
         ] {
             let mut scratch = vec![0_u8; input.len()];

@@ -1053,7 +1053,9 @@ mod tests {
             observed.claim_check_rent
         );
         assert_eq!(
-            dust_plan.crank_reward() + dust_plan.opener_repayment() + dust_plan.rent_credit_residue()
+            dust_plan.crank_reward()
+                + dust_plan.opener_repayment()
+                + dust_plan.rent_credit_residue()
                 - (plan.crank_reward() + plan.opener_repayment() + plan.rent_credit_residue()),
             DRAW
         );

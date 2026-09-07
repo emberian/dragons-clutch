@@ -80,9 +80,9 @@ use crate::general::{
     runtime_width::{SettlementCursorLayoutV2, VerifiedCandidateLayoutV2},
     state_artifacts_v3::{
         GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_STATE_ACCOUNT_V3,
-        GENERAL_TERMINAL_STATE_ACCOUNT_V3,
-        GENERAL_VERIFY_PAYER_ACCOUNT_V3, GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3,
-        GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3, general_child_account_start_v3,
+        GENERAL_TERMINAL_STATE_ACCOUNT_V3, GENERAL_VERIFY_PAYER_ACCOUNT_V3,
+        GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3, GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,
+        general_child_account_start_v3,
     },
 };
 
@@ -595,7 +595,11 @@ pub fn general_effect_program_bytes_v5(action: Action) -> Result<usize> {
                 .checked_mul(FUNDING_SEED_BYTES_V5)
                 .and_then(|width| value.checked_add(width))
         })
-        .and_then(|value| general_effect_program_bytes_v4(action).ok()?.checked_add(value))
+        .and_then(|value| {
+            general_effect_program_bytes_v4(action)
+                .ok()?
+                .checked_add(value)
+        })
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)
 }
 

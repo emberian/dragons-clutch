@@ -63,18 +63,14 @@ use dclutch_claims::{
         encode_product_claims_terminal_signed_delta_v3,
     },
     protocol_position_v2::{
-        ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2,
-        ProtocolPositionOwnerKindV2, ProtocolPositionSeedsV2,
+        ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
+        ProtocolPositionSeedsV2,
     },
     rational_kernel::product_v3::TerminalScenarioV3,
     signed_delta_v3::{SignedDeltaV3, plan_bytes},
     terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 as ACCOUNT_COUNT,
         TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
-        TERMINAL_SETTLEMENT_FOUNDER_BOND_ADMISSION_ACCOUNT_V3 as BOND_ADMISSION,
-        TERMINAL_SETTLEMENT_FOUNDER_BOND_ESCROW_ACCOUNT_V3 as BOND_ESCROW,
-        TERMINAL_SETTLEMENT_FOUNDER_BOND_RECIPIENT_ACCOUNT_V3 as BOND_RECIPIENT,
-        TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3 as BOND_ACCOUNT_COUNT,
         TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3 as CERTIFICATE,
         TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3 as COLLATERAL_MINT,
         TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3 as CUSTODY_AUTHORITY,
@@ -83,6 +79,9 @@ use dclutch_claims::{
         TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3 as CUSTODY_REPLAY,
         TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3 as EXPOSURE_RAW,
         TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3 as EXPOSURE_STAGING,
+        TERMINAL_SETTLEMENT_FOUNDER_BOND_ADMISSION_ACCOUNT_V3 as BOND_ADMISSION,
+        TERMINAL_SETTLEMENT_FOUNDER_BOND_ESCROW_ACCOUNT_V3 as BOND_ESCROW,
+        TERMINAL_SETTLEMENT_FOUNDER_BOND_RECIPIENT_ACCOUNT_V3 as BOND_RECIPIENT,
         TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3 as HOARD, TERMINAL_SETTLEMENT_POST_RESOURCE_DOMAIN_V3,
         TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3 as REALM,
         TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3 as REALM_STAGING,
@@ -91,6 +90,7 @@ use dclutch_claims::{
         TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3 as RESOLUTION_PROGRAMDATA,
         TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3,
         TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3 as TOKEN_PROGRAM,
+        TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3 as BOND_ACCOUNT_COUNT,
         TerminalSettlementReceiptInputV3, TerminalSettlementReceiptV3, TerminalSettlementRequestV3,
     },
 };
@@ -573,13 +573,15 @@ fn authenticate_founder_bond_arm(
     // to, or under the compaction crank the sleeping holder's own claim-check
     // address, which redemption sweeps whole to the holder.
     let expected_recipient = match authority {
-        ParentAuthorityV3::ClaimCheckCrank => Pubkey::find_program_address(
-            &ClaimCheckSeedsV1::new(aggregate, input.owner)
-                .map_err(|_| ClaimsSbfError::Identity)?
-                .as_slices(),
-            program_id,
-        )
-        .0,
+        ParentAuthorityV3::ClaimCheckCrank => {
+            Pubkey::find_program_address(
+                &ClaimCheckSeedsV1::new(aggregate, input.owner)
+                    .map_err(|_| ClaimsSbfError::Identity)?
+                    .as_slices(),
+                program_id,
+            )
+            .0
+        }
         ParentAuthorityV3::PositionOwner(_)
         | ParentAuthorityV3::CallerProgramPda
         | ParentAuthorityV3::EnclosingClaimsRoute => Pubkey::new_from_array(input.recipient_owner),
@@ -607,7 +609,11 @@ fn authenticate_founder_bond_arm(
         }
         request.position_rent_principal
     };
-    let Some(exit) = exit_v1(refunds_on_failure, terminal_winner, derived.failure_selector) else {
+    let Some(exit) = exit_v1(
+        refunds_on_failure,
+        terminal_winner,
+        derived.failure_selector,
+    ) else {
         return Err(ClaimsSbfError::Identity.into());
     };
     // The certificate's arm and the winner agree about the exit or nothing
@@ -615,8 +621,9 @@ fn authenticate_founder_bond_arm(
     if (exit == FounderBondExitV1::Exhausted) != exhausted {
         return Err(ClaimsSbfError::Identity.into());
     }
-    let ordinary_outstanding = ordinary_outstanding_v1(market, market_bytes, derived.failure_selector)
-        .map_err(|_| ClaimsSbfError::Economic)?;
+    let ordinary_outstanding =
+        ordinary_outstanding_v1(market, market_bytes, derived.failure_selector)
+            .map_err(|_| ClaimsSbfError::Economic)?;
     let plan = FounderBondDrawPlanV1::new(FounderBondDrawObservationV1 {
         exit,
         escrow_lamports: escrow.lamports(),
@@ -668,13 +675,7 @@ fn apply_founder_bond_draw(
         .map_err(|_| ClaimsSbfError::Receipt)?;
     // What moved and what stands, for the reader of a validator log: the draw,
     // the bond before, the bond after, and a zero pair the fifth slot pads.
-    sol_log_64(
-        draw,
-        plan.remaining_before(),
-        plan.remaining_after(),
-        0,
-        0,
-    );
+    sol_log_64(draw, plan.remaining_before(), plan.remaining_after(), 0, 0);
     Ok(())
 }
 
