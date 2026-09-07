@@ -1,0 +1,27 @@
+{
+  "campaign": "ladder",
+  "note": "The witnesses of the CAPTURE arm, evaluated only against a capture transcript. None of them is disjoined over `.walk`: the first witness pins the arm, so every witness below it is about a walk that really ran, and running this file against an exhaust transcript is RED rather than vacuously green.",
+  "witnesses": [
+    {
+      "id": "this-transcript-is-the-capture-arm",
+      "kind": "plan-jq",
+      "query": ".walk",
+      "expect": "capture",
+      "provenance": "The campaign writes its own `walk` into the transcript from the `--walk` it was given (`tools/gauntlet/ladder/src/ladder.rs`, `WalkV1`), so this reads back which arm produced the file the evaluator was handed. It is the POSITIVE CONTROL for every witness below: those witnesses used to be written `if .walk != \"capture\" then <green>`, which made them hold on the arm that never asked their question, and a green that cannot tell a silent instrument from a silent chain is not evidence. With the escape removed, this file against an exhaust transcript is red here and red below, which is the correct reading of \"you did not run the walk these are about\"."
+    },
+    {
+      "id": "the-rung-was-answered-by-the-source-it-paid-for",
+      "kind": "plan-jq",
+      "query": "if (.capture != null and .capture.route == \"Recovery\" and .capture.attemptIndex == 1) then \"answered-on-the-rung\" else (\"answered-on-\" + ((.capture.route // \"nothing\") | tostring) + \":\" + ((.capture.attemptIndex // \"none\") | tostring)) end",
+      "expect": "answered-on-the-rung",
+      "provenance": "THE WHOLE SUBJECT OF THE CAPTURE WALK, read off the chain rather than off the campaign's intention. `route` is the Source's own terminal projection and `attemptIndex` is the field the Resolution program wrote into the certificate, and the two together are the entire difference between a market whose FIRST choice answered and a market whose funded alternative did. A capture walk that resolved on the primary reports `answered-on-Primary:0` and is a run whose rung nobody walked. The capture stage additionally refuses to proceed unless the same builder, handed the primary-shaped request against this same Source, refuses it by name -- so `Recovery` here is a leg that was ANSWERED, not merely one that was accepted. It is no longer disjoined over the walk: this file is evaluated against the capture arm's own transcript, which `this-transcript-is-the-capture-arm` pins, so a run whose capture arm did not happen is red here instead of green."
+    },
+    {
+      "id": "a-capture-before-the-rung-is-due-refuses-by-name",
+      "kind": "plan-jq",
+      "query": "if ([.stages[] | select(.stage == \"capture before the rung is due\") | .outcome] == [\"refused-by-name\"]) then \"refused-by-name\" else ([.stages[] | select(.stage == \"capture before the rung is due\") | .outcome] | join(\",\")) end",
+      "expect": "refused-by-name",
+      "provenance": "A LADDER IS NOT A FREE CHOICE. Before the crank advances anything, the capture walk asks the chain-derived operator to build the capture that answers the rung and requires it to REFUSE -- off chain, with no key open and nothing sent. `dclutch-provider-transport-v3-operator` derives a request's `source_index` from the Source's own phase and active attempt, so an operator that could build this one could answer a market on a leg its holders paid for and nobody walked. The refusal's own sentence is recorded verbatim in the stage note rather than asserted as a discriminant, because more than one of the builder's ordered conjuncts is false at that instant; the outcome word is what this witness holds, and `built-a-capture` is the failing value -- a finding rather than a crash, so the transcript carries it and the walk goes on. It is no longer disjoined over the walk, for the reason `this-transcript-is-the-capture-arm` states; and an arm that never reached the stage at all reports the empty join, which is red rather than green."
+    }
+  ]
+}

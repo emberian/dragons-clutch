@@ -3,7 +3,7 @@
 use core::convert::TryInto;
 
 use super::{
-    ContentId, Error, Result,
+    ContentId, EnsembleSpecV1, Error, Result,
     generated_source_recovery_policy_v2::{
         RECOVERY_ATTEMPT_BYTES_V2, RECOVERY_ATTEMPT_V2_DEADLINE_OFFSET,
         RECOVERY_ATTEMPT_V2_FUNDING_ALLOCATION_OFFSET, RECOVERY_ATTEMPT_V2_PROVIDER_RELEASE_OFFSET,
@@ -231,6 +231,64 @@ impl RecoveryPolicyV2 {
     /// Number of ordered funded attempts.
     pub const fn attempt_count(self) -> u8 {
         self.attempt_count
+    }
+
+    /// The attempt slot that is ensemble member `member` (`1..k`): the leading
+    /// `k - 1` slots are the members, in member order, and slot `m - 1` is
+    /// member `m`. Member zero is the primary and has no slot.
+    pub fn member_attempt(self, ensemble: EnsembleSpecV1, member: u8) -> Result<RecoveryAttemptV2> {
+        if member == 0 || !ensemble.declares_member(member) {
+            return Err(Error::EnsembleMemberOutOfRange);
+        }
+        self.attempt(member.checked_sub(1).ok_or(Error::ArithmeticOverflow)?)
+    }
+
+    /// The number of attempt slots after the members: the ladder's rungs.
+    pub fn rung_count(self, ensemble: EnsembleSpecV1) -> u8 {
+        self.attempt_count
+            .saturating_sub(ensemble.first_rung_index())
+    }
+
+    /// The founding conjunct that makes a policy the holder of a material's
+    /// ensemble: the members and the rungs are exactly the attempts, and every
+    /// member sits at the window's closed deadline.
+    ///
+    /// A member's deadline is never read by a route -- a member is captured
+    /// under the window's own clock rule, exactly as the primary is -- and the
+    /// record requires strictly increasing deadlines over its whole list, so
+    /// two members cannot share the window's deadline byte for byte. The
+    /// canonical spelling is a one-second stagger: member `m` sits at
+    /// `window_deadline + m - 1`. It is canonical so one founding input has one
+    /// policy body, and it is within the seconds the window's own liveness
+    /// grace already spans.
+    pub fn validate_ensemble_membership(
+        self,
+        ensemble: EnsembleSpecV1,
+        rungs: u8,
+        window_deadline_unix_seconds: i64,
+    ) -> Result<()> {
+        let members = ensemble.first_rung_index();
+        let attempts = members
+            .checked_add(rungs)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if attempts != self.attempt_count {
+            return Err(Error::NonCanonicalEnsemble);
+        }
+        let mut member = 1_u8;
+        while member <= members {
+            let expected = window_deadline_unix_seconds
+                .checked_add(i64::from(member) - 1)
+                .ok_or(Error::ArithmeticOverflow)?;
+            if self
+                .member_attempt(ensemble, member)?
+                .deadline_unix_seconds()
+                != expected
+            {
+                return Err(Error::EnsembleWindowMismatch);
+            }
+            member = member.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(())
     }
 
     /// Return one exact ordered attempt.

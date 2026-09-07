@@ -79,15 +79,17 @@ use dclutch_source::relay::{
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
     decode::{RelayedObservableV1, RelayedVenueKindV1},
     frame::{
-        CONSUME_RECORD_FRAME_V1, CONSUME_RECORD_NATIVE_VENUE_FRAME_V1, RelayAccountPrivilegeV1,
-        RelayFrameKindV1, consume_frame_kind_v1, consume_position_v1, validate_relay_frame_v1,
+        CONSUME_RECORD_FRAME_V1, CONSUME_RECORD_NATIVE_VENUE_FRAME_V1,
+        ENSEMBLE_FOLD_FRAME_PREFIX_V1, RelayAccountPrivilegeV1, RelayAccountRoleV1,
+        RelayFrameKindV1, consume_frame_kind_v1, consume_position_v1, ensemble_fold_tail_v1,
+        validate_relay_frame_v1, validate_relay_frame_with_tail_v1,
     },
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AdvanceRecoveryInstructionV1,
         AppendObservationInstructionV1, CommitDeadlineFailureInstructionV1,
-        ConsumeRecordInstructionV1, CreateRecordInstructionV1, RELAY_INSTRUCTION_MAGIC,
-        RelayInstructionV1, RetireRecordInstructionV1, SEAL_RECORD_PREFIX_BYTES,
-        SealRecordInstructionV1,
+        ConsumeRecordInstructionV1, CreateRecordInstructionV1, EnsembleFoldInstructionV1,
+        RELAY_INSTRUCTION_MAGIC, ReclaimMemberSeatInstructionV1, RelayInstructionV1,
+        RetireRecordInstructionV1, SEAL_RECORD_PREFIX_BYTES, SealRecordInstructionV1,
     },
     record::{
         RelayedObservationRecordViewV1, RelayedRecordBindingV1,
@@ -106,12 +108,14 @@ use dclutch_source::relay::{
     wire::{AttestationMessageV1, ObservationSetSealV1},
 };
 use dclutch_source::resolution::{
-    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2,
+    EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
-    PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
-    RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
+    ENSEMBLE_FOLD_RECEIPT_PDA_DOMAIN_V1, ENSEMBLE_FOLD_RECEIPT_V1_BYTES,
+    ENSEMBLE_FRAGMENT_PDA_DOMAIN_V1, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
+    ProviderReleaseV1, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_V3_BYTES,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1,
     STATISTIC_SPEC_BYTES, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile, SourceMaterialV3,
@@ -135,10 +139,14 @@ use crate::market_admission_v1::RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1;
 use crate::{
     RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
     authenticate_rent,
+    ensemble_v1::{
+        AuthenticatedEnsembleSourceV1, ENSEMBLE_MAX_MEMBERS, EnsembleFoldErrorV1,
+        EnsembleFoldRequestV1, MemberSeatV1, plan_ensemble_fold_v1,
+    },
     funded::{
         AuthenticatedFailureFundingV2, AuthenticatedRecoveryPolicyV1, AuthenticatedWalkSourceV1,
-        DeadlineFailureRequestV1, FundedWalkErrorV1, RESOLUTION_FUNDING_LEDGER_BYTES_V2,
-        plan_deadline_failure_v1, process_funded_transition,
+        DeadlineFailureRequestV1, FundedWalkErrorV1, MemberBountyReleaseV1,
+        RESOLUTION_FUNDING_LEDGER_BYTES_V2, plan_deadline_failure_v1, process_funded_transition,
     },
     provider_instruction_v3::authenticate_record,
     relay_v1::{
@@ -193,6 +201,12 @@ pub(crate) fn process_relay_transport_v1(
         }
         RelayInstructionV1::AdvanceRecovery(request) => {
             process_advance_recovery(program_id, accounts, request)
+        }
+        RelayInstructionV1::EnsembleFold(request) => {
+            process_ensemble_fold(program_id, accounts, request)
+        }
+        RelayInstructionV1::ReclaimMemberSeat(request) => {
+            process_reclaim_member_seat(program_id, accounts, request)
         }
     }
 }
@@ -1191,7 +1205,7 @@ fn process_advance_recovery(
     // the crank it actually took, and `plan_funding_release` refuses if the two
     // ever disagreed.
     let selecting_config = source_state
-        .next_crank_funding_config(ladder.policy_id, ladder.policy)
+        .next_crank_funding_config(walk_source.material, ladder.policy_id, ladder.policy)
         .map_err(|_| ResolutionError::Transition)?
         .to_bytes();
 
@@ -1233,6 +1247,10 @@ fn process_advance_recovery(
         &walk_source,
         &ladder,
         &escrow,
+        // No frame in this family carries a member seat, and no route yet
+        // writes one: `select_rung` refuses a member capture on `Primary` by
+        // name, so a crank cannot be looking at fragments it did not count.
+        0,
     )?;
 
     let worker_lamports_after = worker
@@ -1255,6 +1273,762 @@ fn process_advance_recovery(
         &outputs.encoded,
         worker_lamports_after,
     )
+}
+
+/// Fold an ensemble market's fragments into its one terminal.
+///
+/// This is the physical outer [`crate::ensemble_v1`] was written against: it
+/// owns the accounts, the seat derivations and the writes, and the pure fold
+/// owns every decision. What it authenticates, in order, each refusing on its
+/// own field:
+///
+/// 1. the Source state's program custody and its own derived address;
+/// 2. the Market, its Core ownership, its derived address, this Program as its
+///    Resolution role, and that its resolution policy is the material the
+///    state is bound to;
+/// 3. the `SourceMaterialV3`, the primary `SourceSpecV1` whose provider
+///    release is member zero's route, the `WindowSpecV1` that closes the fold's
+///    window, the `StatisticSpecV1` that carries the source-to-result shift,
+///    and the `RecoveryPolicyV2` whose leading slots are the members;
+/// 4. the whole frame -- the fixed prefix and a tail of `2k`, `k` from the
+///    authenticated material -- with no alias anywhere in it, so a seat cannot
+///    be passed twice to answer twice;
+/// 5. each member seat at its own derived address, as this Program's decoded
+///    certificate or as a System-owned vacancy and nothing else;
+/// 6. the Product Runtime V2 graph, the `CapabilityManifestV1` and the
+///    three-row funding ledger.
+///
+/// The frame is validated after the material rather than before it, and that
+/// ordering is forced rather than chosen: the frame's width is `25 + 2k` and
+/// `k` is a byte of a finalized record, not a field of the request. Everything
+/// read before the frame check is authenticated by custody and derivation --
+/// the Source state by its PDA, the Market by Core's, each record by the
+/// Registry's -- and no account is written until the whole frame has passed.
+#[inline(never)]
+fn process_ensemble_fold(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: EnsembleFoldInstructionV1,
+) -> ProgramResult {
+    let market_account = account(accounts, 1)?;
+    let source_state_account = account(accounts, 4)?;
+    let generation = request.generation();
+    let terminal_sequence = request.terminal_sequence();
+
+    authenticate_source_state_account(program_id, source_state_account, market_account)?;
+    let source_state = Box::new({
+        let data = source_state_account
+            .try_borrow_data()
+            .map_err(|_| ResolutionError::OutputState)?;
+        SourceResolutionStateV2::decode(&data).map_err(|_| ResolutionError::OutputState)?
+    });
+    let material_id = source_state.material_id();
+
+    let market = authenticate_market(
+        program_id,
+        market_account,
+        account(accounts, 2)?,
+        account(accounts, 3)?,
+        generation,
+        material_id.to_bytes(),
+    )?;
+    let source = boxed_ensemble_fold_source(&market.registry_program, accounts, material_id)?;
+    let members = source.material.ensemble().members();
+    let tail_len = usize::from(members)
+        .checked_mul(2)
+        .ok_or(ResolutionError::Arithmetic)?;
+    validate_frame_with_tail(
+        RelayFrameKindV1::EnsembleFold,
+        accounts,
+        tail_len,
+        |index| ensemble_fold_tail_v1(members, index),
+    )?;
+
+    let worker = account(accounts, 0)?;
+    let certificate_account = account(accounts, 5)?;
+    let receipt_account = account(accounts, 6)?;
+    let funding_account = account(accounts, 25)?;
+    let clock = authenticate_clock(account(accounts, 26)?)?;
+    let rent = authenticate_rent(account(accounts, 27)?)?;
+    let system = account(accounts, 28)?;
+    require_system(system)?;
+
+    let seats = boxed_member_seats(
+        program_id,
+        accounts,
+        source_state_account,
+        members,
+        terminal_sequence,
+    )?;
+    let product_runtime = boxed_product_runtime(
+        &market.registry_program,
+        ProductContentId::new(market.product_record).map_err(|_| ResolutionError::ProductDomain)?,
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: account(accounts, 17)?,
+                staging: account(accounts, 18)?,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: account(accounts, 19)?,
+                staging: account(accounts, 20)?,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: account(accounts, 21)?,
+                staging: account(accounts, 22)?,
+            },
+        },
+    )?;
+
+    let manifest_data = account(accounts, 23)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    authenticate_finalized_record(
+        market.registry_program,
+        account(accounts, 23)?,
+        account(accounts, 24)?,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        market.capability_manifest,
+        &manifest_data,
+        RecordKind::CapabilityManifest,
+    )?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
+    let manifest_id = CapabilityContentId::new(market.capability_manifest)
+        .map_err(|_| ResolutionError::Funding)?;
+    // The fold spends no compartment of its own, and the row named here is the
+    // ledger's explicit-failure row for the same reason the failure walk names
+    // it: to authenticate the ledger's derivation, its native custody and its
+    // three-row shape. Which row each member's bounty leaves is decided inside
+    // the plan, by that member's own attempt configuration and never by a
+    // position.
+    let escrow = Box::new(authenticate_failure_funding(
+        program_id,
+        funding_account,
+        market_account,
+        manifest_id,
+        manifest,
+        generation,
+        material_id.to_bytes(),
+    )?);
+
+    let domain_data = account(accounts, 19)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ProductDomain)?;
+    let result_domain =
+        ResultDomainV2::decode(&domain_data).map_err(|_| ResolutionError::ProductDomain)?;
+
+    let encoded = plan_and_encode_ensemble_fold(
+        &EnsembleFoldRequestV1 {
+            market: market_account.key.to_bytes(),
+            generation,
+            terminal_sequence,
+            certificate_account: certificate_account.key.to_bytes(),
+            current_unix_seconds: clock.unix_timestamp,
+        },
+        &source_state,
+        &source,
+        &product_runtime,
+        result_domain,
+        &seats[..usize::from(members)],
+        &escrow,
+    )?;
+
+    drop(domain_data);
+    drop(manifest_data);
+    let captors_from = ENSEMBLE_FOLD_FRAME_PREFIX_V1
+        .len()
+        .checked_add(usize::from(members))
+        .ok_or(ResolutionError::Arithmetic)?;
+    commit_ensemble_fold(
+        program_id,
+        terminal_sequence,
+        EnsembleFoldOutputs {
+            source_state: source_state_account,
+            certificate: certificate_account,
+            receipt: receipt_account,
+            funding: funding_account,
+            worker,
+            system,
+        },
+        accounts
+            .get(captors_from..)
+            .ok_or(ResolutionError::AccountFrame)?,
+        &rent,
+        &encoded,
+    )
+}
+
+/// Validate a fixed prefix and a tail whose width one authenticated record set.
+fn validate_frame_with_tail(
+    kind: RelayFrameKindV1,
+    accounts: &[AccountInfo<'_>],
+    tail_len: usize,
+    tail_role: impl Fn(usize) -> Option<RelayAccountRoleV1>,
+) -> ProgramResult {
+    let mut observed = Vec::new();
+    observed
+        .try_reserve_exact(accounts.len())
+        .map_err(|_| ResolutionError::Arithmetic)?;
+    for info in accounts {
+        observed.push(RelayAccountPrivilegeV1 {
+            key: info.key.to_bytes(),
+            is_signer: info.is_signer,
+            is_writable: info.is_writable,
+        });
+    }
+    validate_relay_frame_with_tail_v1(kind, &observed, tail_len, tail_role)
+        .map_err(|_| ResolutionError::AccountFrame)?;
+    Ok(())
+}
+
+/// Authenticate the five Source records the fold reads.
+///
+/// The failure walk needs the material and the window; the crank needs the
+/// policy as well. The fold needs two more and each for one value: the primary
+/// `SourceSpecV1` for the provider release that is member zero's route, and
+/// the `StatisticSpecV1` for the decimal shift the median reaches the
+/// selector on. Neither is a caller's word; both hang off the material by
+/// content identity.
+#[inline(never)]
+fn boxed_ensemble_fold_source(
+    registry: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    material_id: dclutch_source::ContentId,
+) -> Result<Box<AuthenticatedEnsembleSourceV1>, ProgramError> {
+    let material_data = account(accounts, 7)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 7)?,
+        account(accounts, 8)?,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        material_id.to_bytes(),
+        &material_data,
+        SOURCE_MATERIAL_V3_BYTES,
+    )?;
+    let material =
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    drop(material_data);
+    let source_spec_id = material.primary_source_spec();
+    let window_spec_id = material.window_spec();
+    let statistic_spec_id = material.statistic_spec();
+    // The members live in the policy's leading slots, so a material that
+    // declares an ensemble and selects no policy has nowhere to hold them.
+    let policy_id = material
+        .recovery_policy()
+        .ok_or(ResolutionError::SourceMaterial)?;
+
+    let spec_data = account(accounts, 9)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 9)?,
+        account(accounts, 10)?,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        source_spec_id.to_bytes(),
+        &spec_data,
+        SOURCE_SPEC_BYTES,
+    )?;
+    let spec = SourceSpecV1::decode(&spec_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    let primary_provider_release_id = spec.provider_release_id();
+    drop(spec_data);
+
+    let window_data = account(accounts, 11)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 11)?,
+        account(accounts, 12)?,
+        WINDOW_SPEC_SCHEMA_ID_V1,
+        window_spec_id.to_bytes(),
+        &window_data,
+        WINDOW_SPEC_BYTES,
+    )?;
+    let window = WindowSpecV1::decode(&window_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    drop(window_data);
+
+    let statistic_data = account(accounts, 13)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 13)?,
+        account(accounts, 14)?,
+        STATISTIC_SPEC_SCHEMA_ID_V1,
+        statistic_spec_id.to_bytes(),
+        &statistic_data,
+        STATISTIC_SPEC_BYTES,
+    )?;
+    let statistic =
+        StatisticSpecV1::decode(&statistic_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    let source_scale_exponent = statistic.source_scale_exponent();
+    drop(statistic_data);
+
+    let policy_data = account(accounts, 15)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 15)?,
+        account(accounts, 16)?,
+        RECOVERY_POLICY_SCHEMA_ID_V2,
+        policy_id.to_bytes(),
+        &policy_data,
+        RECOVERY_POLICY_BYTES_V2,
+    )?;
+    let policy =
+        RecoveryPolicyV2::decode(&policy_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    drop(policy_data);
+
+    Ok(Box::new(AuthenticatedEnsembleSourceV1 {
+        material_id,
+        material,
+        window_spec_id,
+        window,
+        policy_id,
+        policy,
+        primary_provider_release_id,
+        source_scale_exponent,
+    }))
+}
+
+/// Read every declared member's seat, at its own derived address.
+///
+/// A seat is this Program's decoded certificate or a System-owned vacancy, and
+/// there is no third shape: an account at a member's seat address holding
+/// anything else is a hostile rather than an absence, and the whole route
+/// refuses on it. The address is derived from the Source state, the member
+/// byte and the terminal sequence, so a fragment can neither stand at the
+/// market's terminal seat nor stand in for another member.
+#[inline(never)]
+fn boxed_member_seats(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    source_state: &AccountInfo<'_>,
+    members: u8,
+    terminal_sequence: u64,
+) -> Result<Box<[MemberSeatV1; ENSEMBLE_MAX_MEMBERS]>, ProgramError> {
+    let mut seats = Box::new([MemberSeatV1::Vacant; ENSEMBLE_MAX_MEMBERS]);
+    let mut member = 0_u8;
+    while member < members {
+        let index = ENSEMBLE_FOLD_FRAME_PREFIX_V1
+            .len()
+            .checked_add(usize::from(member))
+            .ok_or(ResolutionError::Arithmetic)?;
+        let seat = account(accounts, index)?;
+        let seeds = EnsembleFragmentSeatSeedsV1::new(
+            source_state.key.to_bytes(),
+            member,
+            terminal_sequence,
+        );
+        if seat.key != &Pubkey::find_program_address(&seeds.seeds(), program_id).0
+            || seat.executable
+        {
+            return Err(ResolutionError::EnsembleMember.into());
+        }
+        if seat.owner == program_id {
+            if seat.data_len() != RESOLUTION_CERTIFICATE_BYTES_V2 {
+                return Err(ResolutionError::EnsembleMember.into());
+            }
+            let data = seat
+                .try_borrow_data()
+                .map_err(|_| ResolutionError::EnsembleMember)?;
+            let certificate = ResolutionCertificateV2::decode(&data)
+                .map_err(|_| ResolutionError::EnsembleMember)?;
+            drop(data);
+            *seats
+                .get_mut(usize::from(member))
+                .ok_or(ResolutionError::EnsembleMember)? = MemberSeatV1::Written(certificate);
+        } else if seat.owner != &system_program::ID || seat.data_len() != 0 {
+            return Err(ResolutionError::EnsembleMember.into());
+        }
+        member = member.checked_add(1).ok_or(ResolutionError::Arithmetic)?;
+    }
+    Ok(seats)
+}
+
+/// Everything one fold writes, and who is owed what for it.
+struct EncodedEnsembleFoldV1 {
+    /// `SourceResolutionStateV2` after the primary transition on the median.
+    source: [u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
+    /// The market's own terminal `ResolutionSuccess`, already schema-validated.
+    certificate: [u8; RESOLUTION_CERTIFICATE_BYTES_V2],
+    /// The fold's durable receipt, already schema-validated.
+    receipt: [u8; ENSEMBLE_FOLD_RECEIPT_V1_BYTES],
+    /// The complete `FundingLedgerV2` after every member's bounty release.
+    funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    /// Digest of the full ledger prestate the plan authenticated.
+    funding_prestate_digest: [u8; 32],
+    /// Exact funding-account lamports after every release.
+    funding_lamports_after: u64,
+    /// Which member is paid what, in member order.
+    bounties: [Option<MemberBountyReleaseV1>; ENSEMBLE_MAX_MEMBERS],
+    /// The captor each consumed member's fragment named, in member order.
+    captors: [Option<[u8; 32]>; ENSEMBLE_MAX_MEMBERS],
+}
+
+/// Plan the fold and encode every byte it writes, on a frame of its own.
+///
+/// The same reason the failure walk and the crank do it here: the plan carries
+/// a Source state, a certificate, a receipt and a complete three-row ledger
+/// poststate by value, and encoding them produces another full wire image
+/// beside them, which does not fit in the caller's four-kilobyte frame
+/// alongside the authenticated Market, Source graph, seats and escrow.
+///
+/// The encoding happens here rather than at the commit, and that ordering is
+/// the point: `to_bytes` runs the Lean-owned schema's own `validate_shape` for
+/// the certificate and for the receipt, so a shape either schema would refuse
+/// never reaches an account and no lamport has moved when it is refused.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn plan_and_encode_ensemble_fold(
+    request: &EnsembleFoldRequestV1,
+    source_state: &SourceResolutionStateV2,
+    source: &AuthenticatedEnsembleSourceV1,
+    product_runtime: &AuthenticatedProductRuntimeV2,
+    result_domain: ResultDomainV2<'_>,
+    seats: &[MemberSeatV1],
+    escrow: &AuthenticatedFailureFundingV2<'_>,
+) -> Result<Box<EncodedEnsembleFoldV1>, ProgramError> {
+    let plan = plan_ensemble_fold_v1(
+        request,
+        source_state,
+        source,
+        product_runtime,
+        result_domain,
+        seats,
+        escrow,
+    )
+    .map_err(map_ensemble_fold_error)?;
+    let mut encoded = Box::new(EncodedEnsembleFoldV1 {
+        source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
+        certificate: [0; RESOLUTION_CERTIFICATE_BYTES_V2],
+        receipt: [0; ENSEMBLE_FOLD_RECEIPT_V1_BYTES],
+        funding: [0; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+        funding_prestate_digest: hash(&escrow.ledger_bytes).to_bytes(),
+        funding_lamports_after: plan.funding_lamports_after,
+        bounties: plan.bounties,
+        captors: plan.captors,
+    });
+    encoded.source = plan.next_source.to_bytes();
+    encoded.certificate = plan
+        .certificate
+        .to_bytes()
+        .map_err(|_| ResolutionError::Transition)?;
+    encoded.receipt = plan
+        .receipt
+        .to_bytes()
+        .map_err(|_| ResolutionError::Transition)?;
+    encoded.funding = plan.next_funding;
+    Ok(encoded)
+}
+
+/// The pure fold's refusals, each naming its own conjunct.
+pub(crate) const fn map_ensemble_fold_error(error: EnsembleFoldErrorV1) -> ResolutionError {
+    match error {
+        EnsembleFoldErrorV1::Request => ResolutionError::Instruction,
+        EnsembleFoldErrorV1::Source => ResolutionError::SourceMaterial,
+        EnsembleFoldErrorV1::Product => ResolutionError::ProductDomain,
+        EnsembleFoldErrorV1::Fragment => ResolutionError::EnsembleMember,
+        EnsembleFoldErrorV1::Quorum => ResolutionError::EnsembleQuorum,
+        EnsembleFoldErrorV1::Transition => ResolutionError::Transition,
+        EnsembleFoldErrorV1::Funding => ResolutionError::Funding,
+        EnsembleFoldErrorV1::Arithmetic => ResolutionError::Arithmetic,
+    }
+}
+
+/// The accounts one fold writes, named rather than indexed.
+struct EnsembleFoldOutputs<'a, 'info> {
+    source_state: &'a AccountInfo<'info>,
+    certificate: &'a AccountInfo<'info>,
+    receipt: &'a AccountInfo<'info>,
+    funding: &'a AccountInfo<'info>,
+    worker: &'a AccountInfo<'info>,
+    system: &'a AccountInfo<'info>,
+}
+
+/// Commit the terminal, the receipt, the debited escrow and every captor's pay.
+///
+/// All of them move or none do, which is what makes a member's bounty a
+/// payment for a capture rather than a claim about one: the receipt that says
+/// which fragments were consumed is written by the same transaction that pays
+/// the captors those fragments named.
+#[inline(never)]
+fn commit_ensemble_fold(
+    program_id: &Pubkey,
+    terminal_sequence: u64,
+    outputs: EnsembleFoldOutputs<'_, '_>,
+    captors: &[AccountInfo<'_>],
+    rent: &Rent,
+    encoded: &EncodedEnsembleFoldV1,
+) -> ProgramResult {
+    initialize_certificate_at_kind(
+        program_id,
+        // A fold selects an ordinary outcome, so its terminal lives at the
+        // success kind's own address; the failure walk's receipt for the same
+        // Source state at the same sequence is a different account and neither
+        // can overwrite the other.
+        ResolutionCertificateKindV2::ResolutionSuccess.kind_seed(),
+        terminal_sequence,
+        outputs.source_state,
+        outputs.certificate,
+        outputs.system,
+        rent,
+    )?;
+    initialize_fold_receipt_seat(
+        program_id,
+        terminal_sequence,
+        outputs.source_state,
+        outputs.receipt,
+        outputs.worker,
+        outputs.system,
+        rent,
+    )?;
+
+    let mut state_output = outputs
+        .source_state
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    let mut certificate_output = outputs
+        .certificate
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    let mut receipt_output = outputs
+        .receipt
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    let mut funding_output = outputs
+        .funding
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if state_output.len() != SOURCE_RESOLUTION_STATE_BYTES_V2
+        || certificate_output.len() != RESOLUTION_CERTIFICATE_BYTES_V2
+        || receipt_output.len() != ENSEMBLE_FOLD_RECEIPT_V1_BYTES
+        || funding_output.len() != RESOLUTION_FUNDING_LEDGER_BYTES_V2
+        || certificate_output.iter().any(|byte| *byte != 0)
+        || receipt_output.iter().any(|byte| *byte != 0)
+        || hash(&funding_output).to_bytes() != encoded.funding_prestate_digest
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    state_output.copy_from_slice(&encoded.source);
+    certificate_output.copy_from_slice(&encoded.certificate);
+    receipt_output.copy_from_slice(&encoded.receipt);
+    funding_output.copy_from_slice(&encoded.funding);
+    if funding_output.as_ref() != encoded.funding {
+        return Err(ResolutionError::OutputState.into());
+    }
+    drop(state_output);
+    drop(certificate_output);
+    drop(receipt_output);
+    drop(funding_output);
+
+    // Each consumed member's bounty goes to the captor its own fragment named,
+    // at the frame position its member order fixes. The total is then checked
+    // against the ledger poststate the plan computed, so the lamports that
+    // leave the escrow and the lamports the ledger says left it are one
+    // number rather than two.
+    let mut paid = 0_u64;
+    for (member, release) in encoded.bounties.iter().enumerate() {
+        let Some(release) = release else { continue };
+        let named = encoded
+            .captors
+            .get(member)
+            .copied()
+            .flatten()
+            .ok_or(ResolutionError::EnsembleMember)?;
+        let captor = captors.get(member).ok_or(ResolutionError::AccountFrame)?;
+        if captor.key.to_bytes() != named {
+            return Err(ResolutionError::EnsembleMember.into());
+        }
+        let after = captor
+            .lamports()
+            .checked_add(release.work_paid)
+            .ok_or(ResolutionError::Arithmetic)?;
+        let mut captor_lamports = captor
+            .try_borrow_mut_lamports()
+            .map_err(|_| ResolutionError::OutputState)?;
+        **captor_lamports = after;
+        paid = paid
+            .checked_add(release.work_paid)
+            .ok_or(ResolutionError::Arithmetic)?;
+    }
+    let mut funding_lamports = outputs
+        .funding
+        .try_borrow_mut_lamports()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if (**funding_lamports).checked_sub(paid) != Some(encoded.funding_lamports_after) {
+        return Err(ResolutionError::OutputState.into());
+    }
+    **funding_lamports = encoded.funding_lamports_after;
+    Ok(())
+}
+
+/// Create the fold's receipt seat at its own derived address.
+///
+/// Unlike the terminal certificate, no founding prepays this account: the
+/// receipt exists because a fold happened, so the worker that folds pays its
+/// rent. The seat is derived from the Source state and the terminal sequence,
+/// so one fold has one receipt and a second fold at the same sequence finds a
+/// written account rather than an empty one.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn initialize_fold_receipt_seat<'info>(
+    program_id: &Pubkey,
+    terminal_sequence: u64,
+    source_state: &AccountInfo<'info>,
+    receipt: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    rent: &Rent,
+) -> ProgramResult {
+    let state_key = source_state.key.to_bytes();
+    let sequence_seed = terminal_sequence.to_le_bytes();
+    let seeds = EnsembleFoldReceiptSeatSeedsV1::new(state_key, terminal_sequence);
+    let (expected, bump) = Pubkey::find_program_address(&seeds.seeds(), program_id);
+    if receipt.key != &expected {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let bump_seed = [bump];
+    let signer: [&[u8]; 4] = [
+        ENSEMBLE_FOLD_RECEIPT_PDA_DOMAIN_V1,
+        &state_key,
+        &sequence_seed,
+        &bump_seed,
+    ];
+    create_prefunded_pda(
+        payer,
+        receipt,
+        system,
+        rent.minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+        ENSEMBLE_FOLD_RECEIPT_V1_BYTES,
+        program_id,
+        &signer,
+    )
+}
+
+/// Return a never-written member seat's prepaid rent after the terminal.
+///
+/// A member seat is prepaid at founding and written only if that member
+/// answers inside the window. Once the market has its terminal, a seat still
+/// System-owned and empty is rent nobody will ever use, and it goes back to
+/// the Source state's own `rent_beneficiary` -- one beneficiary for every seat
+/// of one Source, named by the state rather than by the caller.
+///
+/// The member byte is checked against the material's `k` BEFORE the seat's
+/// address is derived, so this route cannot be used to learn where a seat the
+/// material declares no member for would live.
+#[inline(never)]
+fn process_reclaim_member_seat(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: ReclaimMemberSeatInstructionV1,
+) -> ProgramResult {
+    validate_frame(RelayFrameKindV1::ReclaimMemberSeat, accounts)?;
+    let market_account = account(accounts, 1)?;
+    let source_state_account = account(accounts, 4)?;
+    let seat = account(accounts, 7)?;
+    let beneficiary = account(accounts, 8)?;
+    let system = account(accounts, 9)?;
+    require_system(system)?;
+    let generation = request.generation();
+    let terminal_sequence = request.terminal_sequence();
+
+    authenticate_source_state_account(program_id, source_state_account, market_account)?;
+    let source_state = Box::new({
+        let data = source_state_account
+            .try_borrow_data()
+            .map_err(|_| ResolutionError::OutputState)?;
+        SourceResolutionStateV2::decode(&data).map_err(|_| ResolutionError::OutputState)?
+    });
+    let material_id = source_state.material_id();
+    let market = authenticate_market(
+        program_id,
+        market_account,
+        account(accounts, 2)?,
+        account(accounts, 3)?,
+        generation,
+        material_id.to_bytes(),
+    )?;
+
+    let material_data = account(accounts, 5)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        &market.registry_program,
+        account(accounts, 5)?,
+        account(accounts, 6)?,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        material_id.to_bytes(),
+        &material_data,
+        SOURCE_MATERIAL_V3_BYTES,
+    )?;
+    let material =
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    drop(material_data);
+    if !material.ensemble().declares_member(request.member()) {
+        return Err(ResolutionError::EnsembleMember.into());
+    }
+
+    // A seat is only dead rent once the market has its own terminal, and only
+    // at the sequence that terminal was written under: reclaiming a seat of a
+    // sequence still open would take a member's own place to answer away.
+    // `terminal_projection` is the contract's one author of "this state is
+    // terminal", so this route asks it rather than restating the phase set.
+    if source_state
+        .terminal_projection()
+        .map_err(|_| ResolutionError::Transition)?
+        .terminal_sequence()
+        != terminal_sequence
+    {
+        return Err(ResolutionError::Transition.into());
+    }
+
+    let state_key = source_state_account.key.to_bytes();
+    let member_seed = [request.member()];
+    let sequence_seed = terminal_sequence.to_le_bytes();
+    let seeds = EnsembleFragmentSeatSeedsV1::new(state_key, request.member(), terminal_sequence);
+    let (expected, bump) = Pubkey::find_program_address(&seeds.seeds(), program_id);
+    if seat.key != &expected {
+        return Err(ResolutionError::EnsembleMember.into());
+    }
+    // A written seat is a fragment the fold consumed or refused; either way it
+    // is evidence, not rent, and this route does not close it.
+    if seat.owner != &system_program::ID
+        || seat.executable
+        || seat.data_len() != 0
+        || seat.lamports() == 0
+        || beneficiary.key.to_bytes() != source_state.rent_beneficiary()
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+
+    let bump_seed = [bump];
+    let signer: [&[u8]; 5] = [
+        ENSEMBLE_FRAGMENT_PDA_DOMAIN_V1,
+        &state_key,
+        &member_seed,
+        &sequence_seed,
+        &bump_seed,
+    ];
+    let claimed = seat.lamports();
+    let beneficiary_after = beneficiary
+        .lamports()
+        .checked_add(claimed)
+        .ok_or(ResolutionError::Arithmetic)?;
+    invoke_signed(
+        &transfer(seat.key, beneficiary.key, claimed),
+        &[seat.clone(), beneficiary.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| ResolutionError::OutputState)?;
+    if seat.lamports() != 0 || beneficiary.lamports() != beneficiary_after {
+        return Err(ResolutionError::OutputState.into());
+    }
+    Ok(())
 }
 
 /// Everything one crank writes, plus the seed that decides where it writes it.
@@ -1285,9 +2059,17 @@ fn plan_and_encode_funded_transition(
     walk_source: &AuthenticatedWalkSourceV1,
     ladder: &AuthenticatedRecoveryPolicyV1,
     escrow: &AuthenticatedFailureFundingV2<'_>,
+    observed_fragments: u8,
 ) -> Result<Box<EncodedFundedTransitionV1>, ProgramError> {
-    let plan = process_funded_transition(request, source_state, walk_source, ladder, escrow)
-        .map_err(map_funded_walk_error)?;
+    let plan = process_funded_transition(
+        request,
+        source_state,
+        walk_source,
+        ladder,
+        escrow,
+        observed_fragments,
+    )
+    .map_err(map_funded_walk_error)?;
     let mut outputs = Box::new(EncodedFundedTransitionV1 {
         encoded: EncodedDeadlineFailureV1 {
             source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
@@ -1455,6 +2237,8 @@ pub(crate) fn process_deadline_failure_coordinates(
         &product_runtime,
         result_domain,
         &escrow,
+        // The same count, on the same reasoning as the crank's above.
+        0,
     )?;
 
     let worker_lamports_after = worker
@@ -1530,6 +2314,7 @@ fn plan_and_encode_deadline_failure(
     product_runtime: &AuthenticatedProductRuntimeV2,
     result_domain: ResultDomainV2<'_>,
     escrow: &AuthenticatedFailureFundingV2<'_>,
+    observed_fragments: u8,
 ) -> Result<Box<EncodedDeadlineFailureV1>, ProgramError> {
     let plan = plan_deadline_failure_v1(
         request,
@@ -1538,6 +2323,7 @@ fn plan_and_encode_deadline_failure(
         product_runtime,
         result_domain,
         escrow,
+        observed_fragments,
     )
     .map_err(map_funded_walk_error)?;
     let mut encoded = Box::new(EncodedDeadlineFailureV1 {
@@ -1557,13 +2343,14 @@ fn plan_and_encode_deadline_failure(
     Ok(encoded)
 }
 
-const fn map_funded_walk_error(error: FundedWalkErrorV1) -> ResolutionError {
+pub(crate) const fn map_funded_walk_error(error: FundedWalkErrorV1) -> ResolutionError {
     match error {
         FundedWalkErrorV1::Request => ResolutionError::Instruction,
         FundedWalkErrorV1::Source => ResolutionError::SourceMaterial,
         FundedWalkErrorV1::Product => ResolutionError::ProductDomain,
         FundedWalkErrorV1::Transition => ResolutionError::Transition,
         FundedWalkErrorV1::Funding => ResolutionError::Funding,
+        FundedWalkErrorV1::QuorumMet => ResolutionError::EnsembleQuorumMet,
     }
 }
 

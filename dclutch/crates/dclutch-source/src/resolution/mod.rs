@@ -139,6 +139,72 @@ pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32] = [
 ];
 
 const _: () = assert!(RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3.len() <= 32);
+
+/// The seeds of one ensemble member's fragment seat:
+/// `dclutch/ensemble-fragment/v1 ‖ source_state ‖ [member] ‖ terminal_sequence`.
+///
+/// A member's seat is a different address from the market's terminal seat
+/// (a different domain), and from every other member's (the member byte), so
+/// a fragment can neither overwrite the terminal nor stand in for another
+/// source. The seeds are stated here, SDK-free, and derived by every caller
+/// with its own `find_program_address`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnsembleFragmentSeatSeedsV1 {
+    source_state: [u8; 32],
+    member: [u8; 1],
+    terminal_sequence: [u8; 8],
+}
+
+impl EnsembleFragmentSeatSeedsV1 {
+    /// The seat of `member` under `source_state` at `terminal_sequence`.
+    pub const fn new(source_state: [u8; 32], member: u8, terminal_sequence: u64) -> Self {
+        Self {
+            source_state,
+            member: [member],
+            terminal_sequence: terminal_sequence.to_le_bytes(),
+        }
+    }
+
+    /// The seed components, in derivation order.
+    pub fn seeds(&self) -> [&[u8]; 4] {
+        [
+            crate::ENSEMBLE_FRAGMENT_PDA_DOMAIN_V1,
+            &self.source_state,
+            &self.member,
+            &self.terminal_sequence,
+        ]
+    }
+}
+
+/// The seeds of the fold's receipt seat:
+/// `dclutch/ensemble-fold-receipt/v1 ‖ source_state ‖ terminal_sequence`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnsembleFoldReceiptSeatSeedsV1 {
+    source_state: [u8; 32],
+    terminal_sequence: [u8; 8],
+}
+
+impl EnsembleFoldReceiptSeatSeedsV1 {
+    /// The receipt seat under `source_state` at `terminal_sequence`.
+    pub const fn new(source_state: [u8; 32], terminal_sequence: u64) -> Self {
+        Self {
+            source_state,
+            terminal_sequence: terminal_sequence.to_le_bytes(),
+        }
+    }
+
+    /// The seed components, in derivation order.
+    pub fn seeds(&self) -> [&[u8]; 3] {
+        [
+            crate::ENSEMBLE_FOLD_RECEIPT_PDA_DOMAIN_V1,
+            &self.source_state,
+            &self.terminal_sequence,
+        ]
+    }
+}
+
+const _: () = assert!(crate::ENSEMBLE_FRAGMENT_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(crate::ENSEMBLE_FOLD_RECEIPT_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2.len() <= 32);
 

@@ -150,7 +150,7 @@ impl RecordPairV1 {
     /// not a lookup: passing the founding's recorded raw address back in as a
     /// cross-check is how a moved record surfaces as a mismatch rather than as
     /// a later refusal nobody can attribute.
-    fn derive(registry: Pubkey, schema: [u8; 32], body: &[u8]) -> Self {
+    pub(crate) fn derive(registry: Pubkey, schema: [u8; 32], body: &[u8]) -> Self {
         let digest = hash(body).to_bytes();
         Self {
             raw: Pubkey::find_program_address(
@@ -1095,7 +1095,7 @@ fn verify_snapshot(
 /// The finalized record routine finalizes by CLOSING the staging cursor, so a
 /// finalized record's cursor is genuinely a System-owned vacancy rather than an
 /// account this campaign failed to read.
-fn vacant(observation: Observation, key: Pubkey) -> ObservedAccount {
+pub(crate) fn vacant(observation: Observation, key: Pubkey) -> ObservedAccount {
     ObservedAccount {
         observation,
         key,

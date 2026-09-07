@@ -229,17 +229,6 @@ pub enum ClaimsAction {
     /// The collateral reaches the SOURCE owner, so the holder who burned the
     /// ordinary claims is paid and the escrow is not.
     MergeRefundingCompleteSet = 9,
-    /// Burn a per-coordinate quantity out of the source Position with NO
-    /// collateral movement: the joint clearing's strand (decision 0032 §2a).
-    ///
-    /// Quantities are per coordinate and need not be uniform -- this is the
-    /// first pre-terminal non-uniform supply move in the tree, and
-    /// `EconomicKernel.strandPost` is its law: aggregate and native supply
-    /// fall by the quantity at each coordinate, the Hoard does not move, and
-    /// the source must hold every claim burned. The SBF arm must refuse a
-    /// destination (there is none) and a source that is not the caller's own
-    /// settlement Position.
-    StrandResidual = 10,
 }
 
 impl ClaimsAction {
@@ -252,7 +241,6 @@ impl ClaimsAction {
             7 => Ok(Self::InitializeCompleteSet),
             8 => Ok(Self::MintRefundingCompleteSet),
             9 => Ok(Self::MergeRefundingCompleteSet),
-            10 => Ok(Self::StrandResidual),
             _ => Err(Error::UnknownTag),
         }
     }
@@ -487,12 +475,6 @@ impl<'a> ClaimsPlanV1<'a> {
             ClaimsAction::RedeemNativeTerminal | ClaimsAction::MergeCompleteSet => {
                 source && !destination && source_revision && !destination_revision
             }
-            // The strand burns out of ONE Position and pays nobody: there is no
-            // destination to name, and naming one would claim a movement that
-            // the burn does not make.
-            ClaimsAction::StrandResidual => {
-                source && !destination && source_revision && !destination_revision
-            }
             ClaimsAction::MintCompleteSet | ClaimsAction::InitializeCompleteSet => {
                 !source && destination && !source_revision && destination_revision
             }
@@ -644,9 +626,7 @@ impl ClaimsReceiptV1 {
             ClaimsAction::TransferNative
             | ClaimsAction::MintRefundingCompleteSet
             | ClaimsAction::MergeRefundingCompleteSet => (true, true),
-            ClaimsAction::RedeemNativeTerminal
-            | ClaimsAction::MergeCompleteSet
-            | ClaimsAction::StrandResidual => (true, false),
+            ClaimsAction::RedeemNativeTerminal | ClaimsAction::MergeCompleteSet => (true, false),
             ClaimsAction::MintCompleteSet | ClaimsAction::InitializeCompleteSet => (false, true),
         };
         validate_post_revision_presence(value.post_source_revision, source_present)?;

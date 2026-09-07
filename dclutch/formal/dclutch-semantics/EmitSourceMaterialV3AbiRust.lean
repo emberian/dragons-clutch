@@ -16,12 +16,15 @@ def main : IO Unit := do
   emitBytesRows "pub" "SOURCE_MATERIAL_DERIVATION_RELEASE_ID_V3" derivationReleaseId
   IO.println s!"pub const SOURCE_MATERIAL_V3_EXPLICITLY_UNBOUNDED_TAG: u8 = {explicitlyUnboundedTag};"
   IO.println s!"pub const SOURCE_MATERIAL_V3_BOUNDED_BY_FLOOR_TAG: u8 = {boundedByFloorTag};"
+  IO.println s!"pub const SOURCE_MATERIAL_V3_ENSEMBLE_MAX_MEMBERS: u8 = {ensembleMaxMembers};"
   for field in layout do
     IO.println s!"pub const {Field.rustName field.spec.name}: usize = {field.offset};"
   IO.println "#[cfg(test)]"
   emitBytesRows "pub(crate)" "SOURCE_MATERIAL_V3_BOUNDED_EXAMPLE" (encode boundedExample)
   IO.println "#[cfg(test)]"
   emitBytesRows "pub(crate)" "SOURCE_MATERIAL_V3_UNBOUNDED_EXAMPLE" (encode unboundedExample)
+  IO.println "#[cfg(test)]"
+  emitBytesRows "pub(crate)" "SOURCE_MATERIAL_V3_ENSEMBLE_EXAMPLE" (encode ensembleExample)
   IO.println "#[cfg(test)]"
   IO.println s!"pub(crate) const SOURCE_MATERIAL_V3_REFUSAL_COUNT: usize = {refusalCorpus.length};"
   IO.println "#[cfg(test)]"

@@ -2124,6 +2124,9 @@ const fn role_name(name: RelayAccountNameV1) -> &'static str {
         RelayAccountNameV1::CapabilityManifest => "capabilityManifest",
         RelayAccountNameV1::CapabilityManifestStagingVacancy => "capabilityManifestStagingVacancy",
         RelayAccountNameV1::ResolutionFunding => "resolutionFunding",
+        RelayAccountNameV1::EnsembleFoldReceipt => "ensembleFoldReceipt",
+        RelayAccountNameV1::EnsembleFragmentSeat => "ensembleFragmentSeat",
+        RelayAccountNameV1::EnsembleCaptor => "ensembleCaptor",
     }
 }
 

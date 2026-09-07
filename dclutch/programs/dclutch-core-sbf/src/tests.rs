@@ -334,6 +334,7 @@ fn a_recovery_bearing_market_now_has_the_terminal_the_weld_was_protecting_it_fro
             window,
             9,
             1_000_601,
+            0,
         ),
         Ok(())
     );
@@ -346,6 +347,7 @@ fn a_recovery_bearing_market_now_has_the_terminal_the_weld_was_protecting_it_fro
             window,
             9,
             i64::MAX,
+            0,
         ),
         Err(SourceError::RecoveryNotExhausted),
         "the primary exhaustion is still not a recovery market's terminal"
@@ -366,6 +368,7 @@ fn a_recovery_bearing_market_now_has_the_terminal_the_weld_was_protecting_it_fro
                 policy,
                 9,
                 1_000_601,
+                0,
             )
             .is_ok(),
         "the primary window closed and the funded alternative is enterable"
@@ -382,6 +385,7 @@ fn a_recovery_bearing_market_now_has_the_terminal_the_weld_was_protecting_it_fro
                 policy,
                 9,
                 1_002_001,
+                0,
             )
             .is_ok(),
         "and the last funded window closed"

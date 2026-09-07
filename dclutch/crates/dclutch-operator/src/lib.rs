@@ -82,7 +82,6 @@ pub mod direct_inline_v3;
 pub mod general_activation_v3;
 /// Chain-derived General V3 Hot execution and packet construction.
 pub mod general_hot_v3;
-pub mod general_joint_clearing_v1;
 /// Compile the seven General actions into one publishable, selectable release.
 pub mod general_selected_release_v1;
 /// One author for the runtime frame of every General action: subject states,

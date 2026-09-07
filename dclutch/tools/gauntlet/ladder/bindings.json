@@ -1,6 +1,6 @@
 {
   "campaign": "ladder",
-  "note": "The ladder's OWN transactions. This file deliberately does not restate the 183 labels the administration and founding campaign submits before them: those belong to `campaign --founding-only` and are bound where that campaign is bound, and a second copy here would be the numbered-directory race one level down. A `census observe` of this tier's evidence therefore needs the campaign's bindings merged in front of these, exactly as the journey merges tier 1's at run time -- and that merge is OWED, not done. What is here is what this tier is FOR: the two cranks, each folded from a finalized transaction whose logs the census can cross-check against the chain's own invoke lines.",
+  "note": "The ladder's OWN transactions. This file deliberately does not restate the 183 labels the administration and founding campaign submits before them: those belong to `campaign --founding-only` and are bound where that campaign is bound, and a second copy here would be the numbered-directory race one level down. A `census observe` of this tier's evidence therefore needs the campaign's bindings merged in front of these, exactly as the journey merges tier 1's at run time -- and that merge is OWED, not done. What is here is what this tier is FOR: the two cranks, each folded from a finalized transaction whose logs the census can cross-check against the chain's own invoke lines. The capture walk's own transactions are the JOURNEY's, verbatim: this tier `#[path]`-links `tools/gauntlet/journey/src/provider.rs` and `resolution.rs` rather than forking them, so the labels those modules send still carry the `journey:` prefix and the prefix is the binding key. The rows below restate what each route does ON THIS TIER, where the publication is minted and the leg that answers is a funded rung; the routes themselves are the journey's and a divergence between the two files is a divergence in one linked module, which is the tripwire this tier wants.",
   "bindings": [
     {
       "label": "ladder: fund the stranger who cranks",
@@ -11,17 +11,117 @@
     },
     {
       "label": "Recovery ladder crank: advance",
-      "routes": ["resolution/process_advance_recovery#AdvanceRecovery"],
+      "routes": [
+        "resolution/process_advance_recovery#AdvanceRecovery"
+      ],
       "program": "resolution",
       "outcome": "executed",
       "note": "The market's primary window closed unobserved and a STRANGER advanced the ladder onto the funded alternative it had paid for. The permissionless crank, one second after the leg's deadline, over the relay contract's own 18-account frame; the Source reads back phase Recovery, active attempt 0, and the certificate seat is the RecoveryAdvanced kind. The same driver refused this same crank by name 761 seconds earlier with no key open."
     },
     {
       "label": "Recovery ladder crank: exhaust",
-      "routes": ["resolution/process_advance_recovery#AdvanceRecovery"],
+      "routes": [
+        "resolution/process_advance_recovery#AdvanceRecovery"
+      ],
       "program": "resolution",
       "outcome": "executed",
       "note": "The rung's own committed deadline passed unobserved too, and the SAME transition that advanced the ladder now ends it: there is no attempt after this one, so the crank writes the Exhausted certificate kind instead of RecoveryAdvanced and the Source reads back Exhausted. One route, two arms, and the whole of the difference between them is whether the policy funds the index being entered."
+    },
+    {
+      "label": "journey: the captured Wormhole router initializes its synthetic guardian set",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "THE LABEL IS THE BINDING KEY, so it is the journey's verbatim: this tier does not fork the Pyth transport, it `#[path]`-links `tools/gauntlet/journey/src/provider.rs` and sends exactly the labels that module writes. The router ELF and the guardian set are the same nineteen-key synthetic lab set the journey uses; what differs here is the VAA it later verifies, which this tier MINTS rather than replays."
+    },
+    {
+      "label": "journey: the captured Pyth receiver initializes its Config",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "The journey's own label, sent by the journey's own module. The receiver's Config is idempotent and this tier's substrate is fresh, so it is established here for the first time on this cluster."
+    },
+    {
+      "label": "journey: capitalize the canonical zero-data receiver treasury",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "One System transfer. The receiver's treasury is a zero-data PDA that has to be rent-capitalized before it can receive a posting fee."
+    },
+    {
+      "label": "journey: create the exact encoded-VAA buffer",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "System create_account for the router-owned encoded-VAA buffer, sized to the header plus the exact MINTED VAA. Its width is a fact about the publication this run produced rather than about a file on disk."
+    },
+    {
+      "label": "journey: the real router initializes the encoded-VAA header",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "The router's own `init_encoded_vaa`. No dClutch program is invoked."
+    },
+    {
+      "label": "journey: the real router writes signed-VAA chunk *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "A minted VAA is the same shape as the captured one -- version, guardian set index, thirteen 66-byte signature entries, body -- so it arrives in the same two `write_encoded_vaa` transactions. No dClutch program is invoked."
+    },
+    {
+      "label": "journey: the real router cryptographically verifies the signed VAA",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "THE MINT'S OWN GATE. `verify_encoded_vaa_v1` against guardian set zero, and the signatures it verifies were produced in this process by `pyth_lab_publication.rs` over a body stamped with the cluster's own block time. The real router ELF recovers thirteen of nineteen secp256k1 signatures under the double keccak and the campaign reads the buffer back requiring ProcessingStatus::Verified, so a producer that had drifted from the upstream wire would fail HERE, on chain, rather than in a fixture assertion."
+    },
+    {
+      "label": "journey: prepay the provider update lifecycle",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "One System transfer. The lifecycle account is prepaid in its own transaction rather than ahead of the submit frame, so the frame's routing table never has to cover an account only the prepayment names."
+    },
+    {
+      "label": "journey: Resolution submits one update through the real receiver ELF",
+      "routes": [
+        "resolution/provider_transport_v3::process_provider_transport_v3",
+        "resolution/process_submit#magic",
+        "resolution/process_instruction"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The first provider leg, and on this tier it carries the RUNG's publication: Resolution authenticates the Market's source spec, provider release, Pyth release and window as finalized records, then CPIs the real receiver to post one cryptographically verified price update and records a lifecycle for it. The submit leg is the same on either leg of the ladder -- what a rung changes is which source spec and adapter configuration the EXECUTE frame carries."
+    },
+    {
+      "label": "journey: prepay the terminal certificate and establish the distinct resolver",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Two System transfers. The resolver is deliberately NOT the submitter: the two roles are separable in the protocol, and a campaign that collapses them cannot tell whether the separation holds."
+    },
+    {
+      "label": "journey: Core composes the provider execution that mints the terminal certificate",
+      "routes": [
+        "core/execute_provider_v3::process#ExecuteProvider",
+        "core/process_instruction",
+        "resolution/provider_instruction_v3::process_provider_resolution_v3",
+        "resolution/process_instruction"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "THE ROUTE THIS TIER'S CAPTURE WALK EXISTS FOR. Core drives the provider execution against a Source standing on the market's funded RUNG: `dclutch-provider-transport-v3-operator` derives the request's `source_index` and its source-spec identity from the Source's own phase and active attempt, so the frame carries the alternative SourceSpecV1, its own PythAdapterConfigV1 and the RecoveryPolicyV2 that names them in the three positions a primary capture fills from the material. The recovery leg drops the primary's age floor and keeps the future-skew ceiling, which is `normalize_authenticated_recovery_update`'s own rule. Poststate asserted: Source Resolved, terminal route Recovery, and a certificate at attempt index one that binds this Market, this generation and the seat the campaign prepaid. The same builder, handed the primary-shaped request against this same Source, refuses by name first."
+    },
+    {
+      "label": "journey: Core admits the terminal state of an atomically founded Market",
+      "routes": [
+        "core/process_instruction",
+        "core/resolution::process#AdmitTerminal"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "The third act, and the one that moves the Market's phase byte. `execute_provider_v3` above writes a durable certificate and transitions neither the phase nor the readiness; the standalone Core `AdmitTerminal` consumes that certificate and commits the Market transition, and on this tier the certificate it consumes was minted on a RECOVERY route. Nothing about the permission changes: a Market that has resolved may be admitted terminal by anyone, and the permission is the certificate rather than a key."
     }
   ]
 }

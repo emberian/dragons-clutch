@@ -34,6 +34,20 @@ pub const RETIRE_RECORD_INSTRUCTION_BYTES: usize = 24;
 pub const COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES: usize = 32;
 /// Exact `AdvanceRecovery` instruction width.
 pub const ADVANCE_RECOVERY_INSTRUCTION_BYTES: usize = 32;
+/// Exact `EnsembleFold` instruction width: the crank's shape, a generation
+/// and a terminal sequence, because everything else the fold reads is a
+/// finalized record or a seat the frame carries.
+pub const ENSEMBLE_FOLD_INSTRUCTION_BYTES: usize = 32;
+/// Exact `ReclaimMemberSeat` instruction width: the crank's shape plus the
+/// member whose seat is reclaimed, then reserved bytes to the next word.
+pub const RECLAIM_MEMBER_SEAT_INSTRUCTION_BYTES: usize = 40;
+/// Where `ReclaimMemberSeat` carries its member byte.
+pub const RECLAIM_MEMBER_SEAT_MEMBER_OFFSET: usize = 32;
+/// Where `ConsumeRecord` carries the ladder position it answers on: zero is
+/// the primary, `m` in `1..k` a member of an ensemble on `Primary`, and
+/// `active_attempt + 1` the rung on `Recovery` -- the same declaration the
+/// Pyth family's `source_index` makes, in the byte this prefix held in reserve.
+pub const CONSUME_RECORD_SOURCE_INDEX_OFFSET: usize = 42;
 /// Fixed prefix before the inline account-set entries in `ConsumeRecord`.
 pub const CONSUME_RECORD_PREFIX_BYTES: usize = 112;
 /// Wire width of one inline account-set entry, identical to its contribution to
@@ -63,6 +77,10 @@ pub enum RelayActionV1 {
     CommitDeadlineFailure = 6,
     /// Crank the funded ordered-recovery ladder by exactly one rung.
     AdvanceRecovery = 7,
+    /// Fold an ensemble market's fragments into its terminal.
+    EnsembleFold = 8,
+    /// Return a never-written member seat's prepaid rent after the terminal.
+    ReclaimMemberSeat = 9,
 }
 
 impl RelayActionV1 {
@@ -75,6 +93,8 @@ impl RelayActionV1 {
             5 => Ok(Self::ConsumeRecord),
             6 => Ok(Self::CommitDeadlineFailure),
             7 => Ok(Self::AdvanceRecovery),
+            8 => Ok(Self::EnsembleFold),
+            9 => Ok(Self::ReclaimMemberSeat),
             _ => Err(Error::UnknownInstructionAction),
         }
     }
@@ -311,6 +331,7 @@ pub struct ConsumeRecordInstructionV1 {
     source_material_id: [u8; 32],
     source_spec_id: [u8; 32],
     entry_count: u16,
+    source_index: u8,
 }
 
 impl ConsumeRecordInstructionV1 {
@@ -340,7 +361,16 @@ impl ConsumeRecordInstructionV1 {
             source_material_id,
             source_spec_id,
             entry_count,
+            source_index: 0,
         })
+    }
+
+    /// Declare the ladder position this consumption answers on. Zero -- the
+    /// primary -- is what `new` states and what every consumption before the
+    /// ladder had a relayed rung sent, so a primary request is byte-identical.
+    pub const fn on_source_index(mut self, source_index: u8) -> Self {
+        self.source_index = source_index;
+        self
     }
 
     /// Encode the exact fixed prefix.
@@ -355,6 +385,11 @@ impl ConsumeRecordInstructionV1 {
         put(&mut out, 24, &self.observed_slot.to_le_bytes())?;
         put(&mut out, 32, &self.terminal_sequence.to_le_bytes())?;
         put(&mut out, 40, &self.entry_count.to_le_bytes())?;
+        put(
+            &mut out,
+            CONSUME_RECORD_SOURCE_INDEX_OFFSET,
+            &[self.source_index],
+        )?;
         put(&mut out, 48, &self.source_material_id)?;
         put(&mut out, 80, &self.source_spec_id)?;
         Ok(out)
@@ -383,6 +418,10 @@ impl ConsumeRecordInstructionV1 {
     /// The cardinality of the inline pinned account set.
     pub const fn entry_count(self) -> u16 {
         self.entry_count
+    }
+    /// The ladder position this consumption answers on.
+    pub const fn source_index(self) -> u8 {
+        self.source_index
     }
 }
 
@@ -436,6 +475,109 @@ impl AdvanceRecoveryInstructionV1 {
     /// The exact positive terminal sequence naming the receipt.
     pub const fn terminal_sequence(self) -> u64 {
         self.terminal_sequence
+    }
+}
+
+/// Fixed `EnsembleFold` wire fields.
+///
+/// The crank's shape on purpose: the fold decides from finalized records and
+/// from the member seats the frame carries, and a caller who could name a
+/// quorum, a member set or a reading here would be a caller choosing the
+/// outcome. It names which market generation and which terminal sequence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnsembleFoldInstructionV1 {
+    generation: u64,
+    terminal_sequence: u64,
+}
+
+impl EnsembleFoldInstructionV1 {
+    /// Construct one fold request.
+    pub fn new(generation: u64, terminal_sequence: u64) -> Result<Self> {
+        if terminal_sequence == 0 {
+            return Err(Error::InvalidRecordTransition);
+        }
+        Ok(Self {
+            generation,
+            terminal_sequence,
+        })
+    }
+
+    /// Encode the exact canonical bytes.
+    pub fn to_bytes(self) -> Result<[u8; ENSEMBLE_FOLD_INSTRUCTION_BYTES]> {
+        let mut out = base::<ENSEMBLE_FOLD_INSTRUCTION_BYTES>(RELAY_INSTRUCTION_MAGIC)?;
+        put(
+            &mut out,
+            ACTION_OFFSET,
+            &[RelayActionV1::EnsembleFold.byte()],
+        )?;
+        put(&mut out, 16, &self.generation.to_le_bytes())?;
+        put(&mut out, 24, &self.terminal_sequence.to_le_bytes())?;
+        Ok(out)
+    }
+
+    /// The Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+    /// The exact positive terminal sequence naming the certificate, the
+    /// receipt and every member seat.
+    pub const fn terminal_sequence(self) -> u64 {
+        self.terminal_sequence
+    }
+}
+
+/// Fixed `ReclaimMemberSeat` wire fields.
+///
+/// A member seat is prepaid at founding and written only if its member
+/// answers. After the market's terminal, a seat still System-owned and empty
+/// is rent nobody will ever use, and this returns it to the Source state's
+/// own rent beneficiary. The member byte names which seat; the seat's address
+/// is derived, never accepted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReclaimMemberSeatInstructionV1 {
+    generation: u64,
+    terminal_sequence: u64,
+    member: u8,
+}
+
+impl ReclaimMemberSeatInstructionV1 {
+    /// Construct one reclaim request.
+    pub fn new(generation: u64, terminal_sequence: u64, member: u8) -> Result<Self> {
+        if terminal_sequence == 0 {
+            return Err(Error::InvalidRecordTransition);
+        }
+        Ok(Self {
+            generation,
+            terminal_sequence,
+            member,
+        })
+    }
+
+    /// Encode the exact canonical bytes.
+    pub fn to_bytes(self) -> Result<[u8; RECLAIM_MEMBER_SEAT_INSTRUCTION_BYTES]> {
+        let mut out = base::<RECLAIM_MEMBER_SEAT_INSTRUCTION_BYTES>(RELAY_INSTRUCTION_MAGIC)?;
+        put(
+            &mut out,
+            ACTION_OFFSET,
+            &[RelayActionV1::ReclaimMemberSeat.byte()],
+        )?;
+        put(&mut out, 16, &self.generation.to_le_bytes())?;
+        put(&mut out, 24, &self.terminal_sequence.to_le_bytes())?;
+        put(&mut out, RECLAIM_MEMBER_SEAT_MEMBER_OFFSET, &[self.member])?;
+        Ok(out)
+    }
+
+    /// The Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+    /// The terminal sequence the seat was prepaid under.
+    pub const fn terminal_sequence(self) -> u64 {
+        self.terminal_sequence
+    }
+    /// The member whose seat is reclaimed.
+    pub const fn member(self) -> u8 {
+        self.member
     }
 }
 
@@ -510,6 +652,10 @@ pub enum RelayInstructionV1<'a> {
     CommitDeadlineFailure(CommitDeadlineFailureInstructionV1),
     /// Crank the funded ordered-recovery ladder by exactly one rung.
     AdvanceRecovery(AdvanceRecoveryInstructionV1),
+    /// Fold an ensemble market's fragments into its terminal.
+    EnsembleFold(EnsembleFoldInstructionV1),
+    /// Return a never-written member seat's rent after the terminal.
+    ReclaimMemberSeat(ReclaimMemberSeatInstructionV1),
 }
 
 impl<'a> RelayInstructionV1<'a> {
@@ -574,7 +720,7 @@ impl<'a> RelayInstructionV1<'a> {
                 )?)))
             }
             RelayActionV1::ConsumeRecord => {
-                require_zero(bytes, 42, 6)?;
+                require_zero(bytes, 43, 5)?;
                 let request = ConsumeRecordInstructionV1::new(
                     u64_at(bytes, 16)?,
                     u64_at(bytes, 24)?,
@@ -582,7 +728,8 @@ impl<'a> RelayInstructionV1<'a> {
                     crate::relay::array(bytes, 48)?,
                     crate::relay::array(bytes, 80)?,
                     u16_at(bytes, 40)?,
-                )?;
+                )?
+                .on_source_index(one(bytes, CONSUME_RECORD_SOURCE_INDEX_OFFSET)?);
                 // The entry tail is exact: a caller cannot append a shadow entry
                 // the digest never covered, and cannot elide one either.
                 let width = CONSUME_RECORD_PREFIX_BYTES
@@ -623,6 +770,36 @@ impl<'a> RelayInstructionV1<'a> {
                     u64_at(bytes, 16)?,
                     u64_at(bytes, 24)?,
                 )?))
+            }
+            RelayActionV1::EnsembleFold => {
+                header(
+                    bytes,
+                    ENSEMBLE_FOLD_INSTRUCTION_BYTES,
+                    RELAY_INSTRUCTION_MAGIC,
+                )?;
+                Ok(Self::EnsembleFold(EnsembleFoldInstructionV1::new(
+                    u64_at(bytes, 16)?,
+                    u64_at(bytes, 24)?,
+                )?))
+            }
+            RelayActionV1::ReclaimMemberSeat => {
+                header(
+                    bytes,
+                    RECLAIM_MEMBER_SEAT_INSTRUCTION_BYTES,
+                    RELAY_INSTRUCTION_MAGIC,
+                )?;
+                require_zero(
+                    bytes,
+                    RECLAIM_MEMBER_SEAT_MEMBER_OFFSET + 1,
+                    RECLAIM_MEMBER_SEAT_INSTRUCTION_BYTES - RECLAIM_MEMBER_SEAT_MEMBER_OFFSET - 1,
+                )?;
+                Ok(Self::ReclaimMemberSeat(
+                    ReclaimMemberSeatInstructionV1::new(
+                        u64_at(bytes, 16)?,
+                        u64_at(bytes, 24)?,
+                        one(bytes, RECLAIM_MEMBER_SEAT_MEMBER_OFFSET)?,
+                    )?,
+                ))
             }
         }
     }
@@ -713,6 +890,92 @@ mod tests {
     }
 
     #[test]
+    fn the_ensemble_fold_and_the_seat_reclaim_round_trip_as_their_own_actions() {
+        let fold = EnsembleFoldInstructionV1::new(9, 3).expect("fold");
+        let bytes = fold.to_bytes().expect("encode");
+        assert_eq!(
+            RelayInstructionV1::decode(&bytes),
+            Ok(RelayInstructionV1::EnsembleFold(fold))
+        );
+        assert_eq!(bytes.len(), ENSEMBLE_FOLD_INSTRUCTION_BYTES);
+        // The crank's shape exactly, and that is the point: a caller who could
+        // name a quorum, a member set or a reading here would be a caller
+        // choosing the outcome.
+        assert_eq!(bytes.len(), ADVANCE_RECOVERY_INSTRUCTION_BYTES);
+        assert_eq!(
+            EnsembleFoldInstructionV1::new(9, 0),
+            Err(Error::InvalidRecordTransition),
+            "a fold names a positive terminal sequence"
+        );
+
+        let reclaim = ReclaimMemberSeatInstructionV1::new(9, 3, 2).expect("reclaim");
+        let bytes = reclaim.to_bytes().expect("encode");
+        assert_eq!(
+            RelayInstructionV1::decode(&bytes),
+            Ok(RelayInstructionV1::ReclaimMemberSeat(reclaim))
+        );
+        assert_eq!(reclaim.member(), 2);
+        assert_eq!(
+            ReclaimMemberSeatInstructionV1::new(9, 0, 2),
+            Err(Error::InvalidRecordTransition)
+        );
+        assert_ne!(
+            RelayActionV1::EnsembleFold.byte(),
+            RelayActionV1::ReclaimMemberSeat.byte(),
+            "the fold and the reclaim are two actions"
+        );
+        let mut hostile = bytes;
+        put(&mut hostile, RECLAIM_MEMBER_SEAT_MEMBER_OFFSET + 1, &[1]).expect("reserved");
+        assert_eq!(
+            RelayInstructionV1::decode(&hostile),
+            Err(Error::NonCanonicalReservedBytes),
+            "a second field cannot ride in beside the member byte"
+        );
+    }
+
+    #[test]
+    fn a_consumption_that_names_no_source_index_is_the_primarys_own_bytes() {
+        // The claim that made `source_index` safe to add to a live wire: every
+        // consumption sent before an ensemble existed is byte-identical,
+        // because `new` still produces the primary and the primary is zero.
+        let primary = ConsumeRecordInstructionV1::new(7, 423_941_138, 1, [0x11; 32], [0x12; 32], 4)
+            .expect("consume");
+        assert_eq!(primary.source_index(), 0);
+        let member = primary.on_source_index(3);
+        let before = primary.to_prefix_bytes().expect("prefix");
+        let after = member.to_prefix_bytes().expect("prefix");
+        let differing: alloc::vec::Vec<usize> = before
+            .iter()
+            .zip(after.iter())
+            .enumerate()
+            .filter(|(_, (left, right))| left != right)
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            differing,
+            alloc::vec![CONSUME_RECORD_SOURCE_INDEX_OFFSET],
+            "the ladder position a consumption answers on is the only byte it moves"
+        );
+
+        // The reserved span narrowed by exactly that byte and no further: the
+        // five bytes after it are still required zero.
+        let mut wire = [0u8; CONSUME_RECORD_PREFIX_BYTES + 4 * CONSUME_RECORD_ENTRY_BYTES];
+        put(&mut wire, 0, &after).expect("prefix");
+        match RelayInstructionV1::decode(&wire).expect("decodes") {
+            RelayInstructionV1::ConsumeRecord(seen, _) => {
+                assert_eq!(seen.source_index(), 3, "the member the caller declared");
+            }
+            _ => unreachable!("wrong variant"),
+        }
+        let mut hostile = wire;
+        put(&mut hostile, CONSUME_RECORD_SOURCE_INDEX_OFFSET + 1, &[1]).expect("reserved");
+        assert_eq!(
+            RelayInstructionV1::decode(&hostile),
+            Err(Error::NonCanonicalReservedBytes)
+        );
+    }
+
+    #[test]
     fn a_zero_terminal_sequence_or_empty_set_refuses_at_construction() {
         assert_eq!(
             ConsumeRecordInstructionV1::new(7, 1, 0, [0x11; 32], [0x12; 32], 4),
@@ -776,14 +1039,33 @@ mod tests {
 
     #[test]
     fn an_unknown_action_refuses() {
-        let mut bytes = RetireRecordInstructionV1::new(1)
-            .to_bytes()
-            .expect("encode");
-        put(&mut bytes, ACTION_OFFSET, &[9]).expect("action");
+        // This used to put ONE byte that happened to be unknown when it was
+        // written, and the byte it named was `9` -- which `ReclaimMemberSeat`
+        // took, so the test went on passing a well-formed action of the wrong
+        // width and reading `InvalidLength` as its refusal. It now asks the
+        // family's own decoder which bytes are actions and puts every byte
+        // that is not one, so no future action can quietly become the
+        // "unknown" this test names.
+        let declared: alloc::vec::Vec<u8> = (0..=u8::MAX)
+            .filter(|byte| RelayActionV1::decode(*byte).is_ok())
+            .collect();
         assert_eq!(
-            RelayInstructionV1::decode(&bytes),
-            Err(Error::UnknownInstructionAction)
+            declared,
+            alloc::vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
+            "the actions this family declares are a contiguous run from one, and this is the \
+             assertion that moves when one is added"
         );
+        for action in (0..=u8::MAX).filter(|byte| !declared.contains(byte)) {
+            let mut bytes = RetireRecordInstructionV1::new(1)
+                .to_bytes()
+                .expect("encode");
+            put(&mut bytes, ACTION_OFFSET, &[action]).expect("action");
+            assert_eq!(
+                RelayInstructionV1::decode(&bytes),
+                Err(Error::UnknownInstructionAction),
+                "action byte {action} is not one this family declares"
+            );
+        }
     }
 
     #[test]

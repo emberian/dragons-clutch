@@ -109,7 +109,7 @@ pub const VERIFIED_CANDIDATE_TAIL_BASE_OFFSET_V2: u32 = 160;
 /// Exact byte width of one runtime tail cell.
 pub const VERIFIED_CANDIDATE_TAIL_STRIDE_V2: u32 = 8;
 /// Number of runtime-width tails after the fixed header.
-pub const VERIFIED_CANDIDATE_TAIL_COUNT_V2: usize = 3;
+pub const VERIFIED_CANDIDATE_TAIL_COUNT_V2: usize = 2;
 /// Byte offset of the `magic` field.
 pub const VERIFIED_CANDIDATE_MAGIC_OFFSET_V2: u32 = 0;
 /// Exact byte width of the `magic` field.
@@ -172,7 +172,7 @@ pub const VERIFIED_CANDIDATE_PRICE_SCALE_OFFSET_V2: u32 = 152;
 pub const VERIFIED_CANDIDATE_PRICE_SCALE_BYTES_V2: usize = 8;
 
 /// Exact fixed bytes before the Candidate simplex tail.
-pub const CANDIDATE_HEADER_BYTES_V2: usize = 136;
+pub const CANDIDATE_HEADER_BYTES_V2: usize = 128;
 /// Canonical Candidate magic.
 pub const CANDIDATE_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x43, 0x41, 0x4e, 0x30, 0x32];
 /// Phase tag of a Candidate record.
@@ -221,14 +221,6 @@ pub const CANDIDATE_PRODUCT_ID_BYTES_V2: usize = 32;
 pub const CANDIDATE_BATCH_ID_OFFSET_V2: u32 = 96;
 /// Exact byte width of the `batch_id` field.
 pub const CANDIDATE_BATCH_ID_BYTES_V2: usize = 32;
-/// Byte offset of the `live_order_count` field.
-pub const CANDIDATE_LIVE_ORDER_COUNT_OFFSET_V2: u32 = 128;
-/// Exact byte width of the `live_order_count` field.
-pub const CANDIDATE_LIVE_ORDER_COUNT_BYTES_V2: usize = 4;
-/// Byte offset of the `reserved_live` field.
-pub const CANDIDATE_RESERVED_LIVE_OFFSET_V2: u32 = 132;
-/// Exact byte width of the `reserved_live` field.
-pub const CANDIDATE_RESERVED_LIVE_BYTES_V2: usize = 4;
 
 /// Exact fixed bytes before the Execution receive and deliver tails.
 pub const EXECUTION_HEADER_BYTES_V2: usize = 112;

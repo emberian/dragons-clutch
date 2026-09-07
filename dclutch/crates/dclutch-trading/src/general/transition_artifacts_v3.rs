@@ -34,7 +34,7 @@ use dclutch_vm::v3::{
 use crate::general::{
     candidate_v1::{GeneralCandidateLayoutV1, GeneralCandidateStatusV1},
     collection_v1::{
-        BatchStatusV1, GeneralBatchLayoutV2, GeneralOrderLayoutV2, GeneralOrderPhaseV1,
+        BatchStatusV1, GeneralBatchLayoutV1, GeneralOrderLayoutV1, GeneralOrderPhaseV1,
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
@@ -104,9 +104,7 @@ pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, 
         // Zero item instructions: no tail, so no bound check. See `append_item`.
         Action::OpenBatch => (26, 0, 0),
         Action::CloseBatch => (27, 0, 0),
-        // 46 -> 47: the order record's version no longer shares the `ONE`
-        // register with the literal one, so the program reloads it last.
-        Action::PlaceOrder => (47, 4, 0),
+        Action::PlaceOrder => (46, 4, 0),
         Action::CancelOrder => (50, 4, 0),
         Action::ReleaseOrder => (42, 4, 0),
         Action::CloseCandidate => (34, 1, 0),
@@ -711,12 +709,12 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                 ),
                 InstructionV3::load_const(
                     s(scalar::ONE)?,
-                    u64::from(GeneralBatchLayoutV2::version_value()),
+                    u64::from(GeneralBatchLayoutV1::version_value()),
                 ),
-                InstructionV3::load_const(s(scalar::SCRATCH_A)?, GeneralBatchLayoutV2::magic_u64()),
+                InstructionV3::load_const(s(scalar::SCRATCH_A)?, GeneralBatchLayoutV1::magic_u64()),
                 InstructionV3::load_const(
                     s(scalar::SCRATCH_B)?,
-                    u64::from(GeneralBatchLayoutV2::phase_value()),
+                    u64::from(GeneralBatchLayoutV1::phase_value()),
                 ),
             ] {
                 push(output, cursor, instruction)?;
@@ -866,9 +864,9 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                 ),
                 InstructionV3::load_const(
                     s(scalar::SCRATCH_B)?,
-                    u64::from(GeneralOrderLayoutV2::phase_value()),
+                    u64::from(GeneralOrderLayoutV1::phase_value()),
                 ),
-                InstructionV3::load_const(s(scalar::SCRATCH_A)?, GeneralOrderLayoutV2::magic_u64()),
+                InstructionV3::load_const(s(scalar::SCRATCH_A)?, GeneralOrderLayoutV1::magic_u64()),
                 // The quote-deposit route's guard is a PROVEN consequence of
                 // the signed terms: active exactly when the reserve is
                 // nonzero.
@@ -923,13 +921,6 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                 InstructionV3::load_const(
                     s(scalar::CUSTODY_OPERATION)?,
                     OperationV1::Transfer as u64,
-                ),
-                // LAST, and it must be last: the PlaceOrder effect writes the
-                // order record's version out of `ONE`, and every conjunct
-                // above that needs `ONE` to be the literal one has run.
-                InstructionV3::load_const(
-                    s(scalar::ONE)?,
-                    u64::from(GeneralOrderLayoutV2::version_value()),
                 ),
             ] {
                 push(output, cursor, instruction)?;

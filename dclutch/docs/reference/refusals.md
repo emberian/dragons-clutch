@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **448** codes, with meanings taken
+The tables below carry all **451** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**73 of 448** codes have been observed refusing a real
+**73 of 451** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,7 +54,7 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-448 codes belonging to the programs the route census enumerates.
+451 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -450,47 +450,50 @@ The 22 campaigns contributing:
 
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
-| `0x8000` | `ResolutionError::AccountFrame` | Account count, order, privilege, executable state, or aliasing was invalid. | resolution-pre-market-funding-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:50` |
-| `0x8001` | `ResolutionError::Instruction` | The generated fixed-layout request refused hostile bytes. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:52` |
-| `0x8002` | `ResolutionError::OutputState` | A writable Source state or certificate account was not canonical. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:54` |
-| `0x8003` | `ResolutionError::MarketAuthority` | Market owner, root, lifecycle, generation, or Source binding was invalid. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:56` |
-| `0x8004` | `ResolutionError::FinalizedRecord` | A finalized raw-record owner, PDA, digest, rent, or vacancy proof was invalid. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:58` |
-| `0x8005` | `ResolutionError::ResolutionRelease` | The Market-selected Registry activation did not authorize this Resolution release. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:60` |
-| `0x8006` | `ResolutionError::ResolutionDeployment` | Current Loader V3 Program, ProgramData, ELF, slot, or upgrade policy was substituted. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:62` |
-| `0x8007` | `ResolutionError::SourceMaterial` | Source material or one of its embedded content identities was inconsistent. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:64` |
-| `0x8008` | `ResolutionError::ProductDomain` | The external Product-owned result-domain identity or bytes differed. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:66` |
-| `0x8009` | `ResolutionError::ProviderRelease` | The selected Pyth provider-release record or Loader accounts differed. | resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:68` |
-| `0x800A` | `ResolutionError::ProviderObservation` | Fully verified update authentication failed: the posted bytes, their digest, the write authority, the posted slot, or an evidence identity was not the one this frame committed to. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:78` |
-| `0x800B` | `ResolutionError::Sysvar` | Clock or Rent sysvar identity or bytes were invalid. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:80` |
-| `0x800C` | `ResolutionError::Transition` | Provider-neutral Source admission or Product mapping refused. | resolution-relayed-programtest; resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:82` |
-| `0x800D` | `ResolutionError::Arithmetic` | Checked physical arithmetic or signed timestamp conversion failed. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:84` |
-| `0x800E` | `ResolutionError::Funding` | Canonical capability funding, typed custody, or exact bounty debit failed. | resolution-pre-market-funding-programtest; resolution-relayed-programtest; resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:86` |
-| `0x800F` | `ResolutionError::RelayedRecord` | The sealed relayed observation record was not consumable against this Market's authenticated Source graph. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:89` |
-| `0x8010` | `ResolutionError::RelayedWindow` | The relayed observation was admissible but did not satisfy the Product's own window: it is no answer rather than a wrong one, and the market is still live. Distinct from every "the bytes were wrong" refusal on purpose, because "come back later" and "something is broken" are not the same message to whoever is holding the position. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:95` |
-| `0x8011` | `ResolutionError::ProviderWindow` | The provider's observation is not ABOUT the period this Market sold: its publication time is outside `[window.start, window.end]`. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:102` |
-| `0x8012` | `ResolutionError::ProviderFreshness` | The provider's observation is about the right period and this cluster will not act on it: its publication time is outside `[now - max_age, now + max_future_skew]`. | resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:110` |
-| `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:117` |
-| `0x8014` | `ResolutionError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:125` |
-| `0x8015` | `ResolutionError::SponsoredPush` | Sponsored-push candidate, head, release, or deadline authentication failed. | resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:127` |
-| `0x8016` | `ResolutionError::RecordStillConsumable` | `RetireRecord` was aimed at evidence a still-live market could consume. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:142` |
-| `0x8017` | `ResolutionError::SubmissionStillConsumable` | `AbandonSubmission` was aimed at a submission a Source could still consume. | resolution-core-v3-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:157` |
-| `0x8018` | `ResolutionError::ActivationCache` | The account offered as this Market's activation is not the canonical Registry-owned cache for the release set the frame names. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:169` |
-| `0x8019` | `ResolutionError::ActivatedRole` | The activation is canonical, and the program brought for a role OTHER than Resolution is not the one that activation selected for it. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:182` |
-| `0x801A` | `ResolutionError::CallerAuthority` | The calling role's authority PDA is not the one the frame's own seeds derive. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:190` |
-| `0x801B` | `ResolutionError::InfrastructureProfile` | The Core-owned protocol infrastructure profile, or the Registry release it names, did not authenticate. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:199` |
-| `0x801C` | `ResolutionError::ProviderScale` | This market's own StatisticSpec and adapter configuration disagree about the source-to-result decimal scale. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:209` |
-| `0x801D` | `ResolutionError::SourceLadder` | The rung this capture names is not the rung the market stands on. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:231` |
-| `0x801E` | `ResolutionError::FundedRent` | The rent a funding ledger was FUNDED at did not price its balance. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:242` |
-| `0x801F` | `ResolutionError::DerivedParentNotTerminal` | A parent the child's branch depends on has no terminal certificate: its Source is still live, or its seat is absent, or the seat's bytes are not the certificate the parent's own state implies (`parentNotTerminal`; `admit_refuses_a_live_parent`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:247` |
-| `0x8020` | `ResolutionError::DerivedWrongParent` | The account offered as a parent is not the Core Market the reference names, or its Source state is not that Market's (`wrongParent`; `admit_refuses_a_stranger`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:251` |
-| `0x8021` | `ResolutionError::DerivedParentGeneration` | The parent's certificate is of another generation: the parent was replaced after the child founded (`parentGenerationMismatch`; `admit_refuses_a_replaced_parent`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:255` |
-| `0x8022` | `ResolutionError::DerivedParentRecord` | The parent's certificate binds a Product record the reference does not (`parentRecordMismatch`; `admit_refuses_a_moved_record`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:258` |
-| `0x8023` | `ResolutionError::DerivedParentWidth` | The reference's ordinary count is not the width the parent's certificate was admitted under (`parentWidthMismatch`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:261` |
-| `0x8024` | `ResolutionError::DerivedSelectorOutOfRange` | The parent's selector is past its own width (`selectorOutOfRange`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:263` |
-| `0x8025` | `ResolutionError::DerivedReference` | The `ParentReferenceV1` record did not authenticate, is not the one the child's spec names, or does not describe this child: its `settle_by` is not the window's end, or its width is not the domain's. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:267` |
-| `0x8026` | `ResolutionError::DerivedWindowClosed` | The child's primary deadline has passed. Not a wrong answer: no answer, and the funded deadline walk owns the market from here. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:270` |
-| `0x8027` | `ResolutionError::DerivedParentFailed` | A parent resolved to its own failure coordinate, so the child's answer is the child's failure coordinate -- which only the deadline walk may select (design §4.3). The route refuses and the walk refunds. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:274` |
-| `0x8028` | `ResolutionError::RelayedVenueKind` | The consumption frame carried a venue-release pair the selected decoding-rules row has no deployment to put in it, or omitted the pair a row that pins one requires. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:284` |
+| `0x8000` | `ResolutionError::AccountFrame` | Account count, order, privilege, executable state, or aliasing was invalid. | resolution-pre-market-funding-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:52` |
+| `0x8001` | `ResolutionError::Instruction` | The generated fixed-layout request refused hostile bytes. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:54` |
+| `0x8002` | `ResolutionError::OutputState` | A writable Source state or certificate account was not canonical. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:56` |
+| `0x8003` | `ResolutionError::MarketAuthority` | Market owner, root, lifecycle, generation, or Source binding was invalid. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:58` |
+| `0x8004` | `ResolutionError::FinalizedRecord` | A finalized raw-record owner, PDA, digest, rent, or vacancy proof was invalid. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:60` |
+| `0x8005` | `ResolutionError::ResolutionRelease` | The Market-selected Registry activation did not authorize this Resolution release. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:62` |
+| `0x8006` | `ResolutionError::ResolutionDeployment` | Current Loader V3 Program, ProgramData, ELF, slot, or upgrade policy was substituted. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:64` |
+| `0x8007` | `ResolutionError::SourceMaterial` | Source material or one of its embedded content identities was inconsistent. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:66` |
+| `0x8008` | `ResolutionError::ProductDomain` | The external Product-owned result-domain identity or bytes differed. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:68` |
+| `0x8009` | `ResolutionError::ProviderRelease` | The selected Pyth provider-release record or Loader accounts differed. | resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:70` |
+| `0x800A` | `ResolutionError::ProviderObservation` | Fully verified update authentication failed: the posted bytes, their digest, the write authority, the posted slot, or an evidence identity was not the one this frame committed to. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:80` |
+| `0x800B` | `ResolutionError::Sysvar` | Clock or Rent sysvar identity or bytes were invalid. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:82` |
+| `0x800C` | `ResolutionError::Transition` | Provider-neutral Source admission or Product mapping refused. | resolution-relayed-programtest; resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:84` |
+| `0x800D` | `ResolutionError::Arithmetic` | Checked physical arithmetic or signed timestamp conversion failed. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:86` |
+| `0x800E` | `ResolutionError::Funding` | Canonical capability funding, typed custody, or exact bounty debit failed. | resolution-pre-market-funding-programtest; resolution-relayed-programtest; resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:88` |
+| `0x800F` | `ResolutionError::RelayedRecord` | The sealed relayed observation record was not consumable against this Market's authenticated Source graph. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:91` |
+| `0x8010` | `ResolutionError::RelayedWindow` | The relayed observation was admissible but did not satisfy the Product's own window: it is no answer rather than a wrong one, and the market is still live. Distinct from every "the bytes were wrong" refusal on purpose, because "come back later" and "something is broken" are not the same message to whoever is holding the position. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:97` |
+| `0x8011` | `ResolutionError::ProviderWindow` | The provider's observation is not ABOUT the period this Market sold: its publication time is outside `[window.start, window.end]`. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:104` |
+| `0x8012` | `ResolutionError::ProviderFreshness` | The provider's observation is about the right period and this cluster will not act on it: its publication time is outside `[now - max_age, now + max_future_skew]`. | resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:112` |
+| `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:119` |
+| `0x8014` | `ResolutionError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:127` |
+| `0x8015` | `ResolutionError::SponsoredPush` | Sponsored-push candidate, head, release, or deadline authentication failed. | resolution-sponsored-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:129` |
+| `0x8016` | `ResolutionError::RecordStillConsumable` | `RetireRecord` was aimed at evidence a still-live market could consume. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:144` |
+| `0x8017` | `ResolutionError::SubmissionStillConsumable` | `AbandonSubmission` was aimed at a submission a Source could still consume. | resolution-core-v3-programtest | `programs/dclutch-resolution-proof-sbf/src/lib.rs:159` |
+| `0x8018` | `ResolutionError::ActivationCache` | The account offered as this Market's activation is not the canonical Registry-owned cache for the release set the frame names. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:171` |
+| `0x8019` | `ResolutionError::ActivatedRole` | The activation is canonical, and the program brought for a role OTHER than Resolution is not the one that activation selected for it. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:184` |
+| `0x801A` | `ResolutionError::CallerAuthority` | The calling role's authority PDA is not the one the frame's own seeds derive. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:192` |
+| `0x801B` | `ResolutionError::InfrastructureProfile` | The Core-owned protocol infrastructure profile, or the Registry release it names, did not authenticate. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:201` |
+| `0x801C` | `ResolutionError::ProviderScale` | This market's own StatisticSpec and adapter configuration disagree about the source-to-result decimal scale. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:211` |
+| `0x801D` | `ResolutionError::SourceLadder` | The rung this capture names is not the rung the market stands on. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:233` |
+| `0x801E` | `ResolutionError::FundedRent` | The rent a funding ledger was FUNDED at did not price its balance. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:244` |
+| `0x801F` | `ResolutionError::DerivedParentNotTerminal` | A parent the child's branch depends on has no terminal certificate: its Source is still live, or its seat is absent, or the seat's bytes are not the certificate the parent's own state implies (`parentNotTerminal`; `admit_refuses_a_live_parent`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:249` |
+| `0x8020` | `ResolutionError::DerivedWrongParent` | The account offered as a parent is not the Core Market the reference names, or its Source state is not that Market's (`wrongParent`; `admit_refuses_a_stranger`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:253` |
+| `0x8021` | `ResolutionError::DerivedParentGeneration` | The parent's certificate is of another generation: the parent was replaced after the child founded (`parentGenerationMismatch`; `admit_refuses_a_replaced_parent`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:257` |
+| `0x8022` | `ResolutionError::DerivedParentRecord` | The parent's certificate binds a Product record the reference does not (`parentRecordMismatch`; `admit_refuses_a_moved_record`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:260` |
+| `0x8023` | `ResolutionError::DerivedParentWidth` | The reference's ordinary count is not the width the parent's certificate was admitted under (`parentWidthMismatch`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:263` |
+| `0x8024` | `ResolutionError::DerivedSelectorOutOfRange` | The parent's selector is past its own width (`selectorOutOfRange`). | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:265` |
+| `0x8025` | `ResolutionError::DerivedReference` | The `ParentReferenceV1` record did not authenticate, is not the one the child's spec names, or does not describe this child: its `settle_by` is not the window's end, or its width is not the domain's. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:269` |
+| `0x8026` | `ResolutionError::DerivedWindowClosed` | The child's primary deadline has passed. Not a wrong answer: no answer, and the funded deadline walk owns the market from here. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:272` |
+| `0x8027` | `ResolutionError::DerivedParentFailed` | A parent resolved to its own failure coordinate, so the child's answer is the child's failure coordinate -- which only the deadline walk may select (design §4.3). The route refuses and the walk refunds. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:276` |
+| `0x8028` | `ResolutionError::RelayedVenueKind` | The consumption frame carried a venue-release pair the selected decoding-rules row has no deployment to put in it, or omitted the pair a row that pins one requires. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:286` |
+| `0x8029` | `ResolutionError::EnsembleMember` | A fragment named a member the material does not declare. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:292` |
+| `0x802A` | `ResolutionError::EnsembleQuorum` | Fewer fragments than the quorum: the fold is not the admissible move. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:298` |
+| `0x802B` | `ResolutionError::EnsembleQuorumMet` | At least the quorum answered: the crank or the failure walk is not the admissible move, the fold is. | -- | `programs/dclutch-resolution-proof-sbf/src/lib.rs:304` |
 
 ## trading
 

@@ -356,10 +356,10 @@ impl RelayedSetLayoutV1 {
         let positions = self.positions();
         let mut remaining = positions.as_slice();
         while let [role, rest @ ..] = remaining {
-            if let Some(role) = role {
-                if *role >= cardinality || rest.contains(&Some(*role)) {
-                    return Err(Error::InvalidSetGeometry);
-                }
+            if let Some(role) = role
+                && (*role >= cardinality || rest.contains(&Some(*role)))
+            {
+                return Err(Error::InvalidSetGeometry);
             }
             remaining = rest;
         }

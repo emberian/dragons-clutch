@@ -1578,6 +1578,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
                     window_value,
                     GENERATION,
                     FAILURE_TIME,
+                    0,
                 )
                 .expect("a primary deadline reached with no answer exhausts the Source");
             let decision = source_value

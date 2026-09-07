@@ -3,11 +3,14 @@
 use core::convert::TryInto;
 
 use super::{
-    ContentId, Error, ManipulationFloorV1, MarketPrincipalCapSetsV1, RecoveryAttemptV2,
-    RecoveryPolicyV2, Result, SourceCapacityProfileV1, SourceSpecV1, StatisticSpecV1, WindowSpecV1,
+    ContentId, Error, ManipulationFloorV1, MarketPrincipalCapSetsV1,
+    RECOVERY_POLICY_MAX_ATTEMPTS_V2, RecoveryAttemptV2, RecoveryPolicyV2, Result,
+    SourceCapacityProfileV1, SourceSpecV1, StatisticSpecV1, WindowSpecV1,
     derive_market_principal_cap,
     generated_source_material_v3::{
         SOURCE_MATERIAL_V3_BOUNDED_BY_FLOOR_TAG, SOURCE_MATERIAL_V3_BYTES,
+        SOURCE_MATERIAL_V3_ENSEMBLE_MAX_MEMBERS, SOURCE_MATERIAL_V3_ENSEMBLE_MEMBERS_OFFSET,
+        SOURCE_MATERIAL_V3_ENSEMBLE_QUORUM_OFFSET, SOURCE_MATERIAL_V3_ENSEMBLE_RUNGS_OFFSET,
         SOURCE_MATERIAL_V3_EXPLICITLY_UNBOUNDED_TAG,
         SOURCE_MATERIAL_V3_FAILURE_POLICY_RELEASE_OFFSET, SOURCE_MATERIAL_V3_MAGIC,
         SOURCE_MATERIAL_V3_MAGIC_OFFSET, SOURCE_MATERIAL_V3_MANIPULATION_FLOOR_OFFSET,
@@ -20,7 +23,81 @@ use super::{
 };
 
 const ID_BYTES: usize = 32;
-const RESERVED_BYTES: usize = 4;
+const RESERVED_BYTES: usize = 1;
+
+/// How many sources answer one window, and how many of them the fold needs.
+///
+/// Read off the material's own bytes (`k - 1` and `q - 1`, so zero bytes are
+/// today's single-source market) and never off a request. `Spec` in
+/// `EnsembleResolutionV1.lean` is this value, and every theorem there is
+/// proven for the whole range this constructor admits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnsembleSpecV1 {
+    members: u8,
+    quorum: u8,
+}
+
+impl EnsembleSpecV1 {
+    /// Today's market: one source, one observation.
+    pub const SINGLE: Self = Self {
+        members: 1,
+        quorum: 1,
+    };
+
+    /// Construct `k` sources under a quorum `q`, with `1 <= q <= k <= 5`.
+    pub const fn new(members: u8, quorum: u8) -> Result<Self> {
+        if members == 0
+            || members > SOURCE_MATERIAL_V3_ENSEMBLE_MAX_MEMBERS
+            || quorum == 0
+            || quorum > members
+        {
+            return Err(Error::NonCanonicalEnsemble);
+        }
+        Ok(Self { members, quorum })
+    }
+
+    /// `k`.
+    pub const fn members(self) -> u8 {
+        self.members
+    }
+
+    /// `q`.
+    pub const fn quorum(self) -> u8 {
+        self.quorum
+    }
+
+    /// Whether this is the single-source market, byte-identical to before the
+    /// ensemble existed.
+    pub const fn is_single(self) -> bool {
+        self.members == 1
+    }
+
+    /// The attempt slot the crank enters from `Primary`: the one after the
+    /// `k - 1` member slots. Zero for a single-source market, which is the
+    /// transition as it was written.
+    pub const fn first_rung_index(self) -> u8 {
+        self.members - 1
+    }
+
+    /// Decision 0034 ruling 2b: a founding admits an odd quorum only. The even
+    /// case has a one-directional manipulation edge no fold conjunct refuses
+    /// (`exactly_half_can_move_the_cell_up_and_not_down`), so it is refused
+    /// where the bytes are authored. A decoder still admits it -- the theorems
+    /// hold for every `q` -- which is why this is not a clause of `new`.
+    pub const fn validate_foundable(self) -> Result<()> {
+        if self.quorum % 2 == 1 {
+            Ok(())
+        } else {
+            Err(Error::EnsembleQuorumEven)
+        }
+    }
+
+    /// Whether `member` names a source this spec declares. Member zero is the
+    /// primary; members `1..k` are the leading attempt slots.
+    pub const fn declares_member(self, member: u8) -> bool {
+        member < self.members
+    }
+}
 
 /// The sole principal-policy selection carried by [`SourceMaterialV3`].
 ///
@@ -49,6 +126,8 @@ pub struct SourceMaterialV3 {
     recovery_policy: Option<ContentId>,
     failure_policy_release: ContentId,
     principal_policy: SourcePrincipalPolicyV1,
+    ensemble: EnsembleSpecV1,
+    ensemble_rungs: u8,
 }
 
 impl SourceMaterialV3 {
@@ -71,6 +150,8 @@ impl SourceMaterialV3 {
             recovery_policy,
             failure_policy_release,
             principal_policy: SourcePrincipalPolicyV1::BoundedByFloor(manipulation_floor),
+            ensemble: EnsembleSpecV1::SINGLE,
+            ensemble_rungs: 0,
         }
     }
 
@@ -92,7 +173,40 @@ impl SourceMaterialV3 {
             recovery_policy,
             failure_policy_release,
             principal_policy: SourcePrincipalPolicyV1::ExplicitlyUnbounded,
+            ensemble: EnsembleSpecV1::SINGLE,
+            ensemble_rungs: 0,
         }
+    }
+
+    /// Declare an ensemble on this material: `k` sources under quorum `q`,
+    /// with `rungs` attempt slots of the ladder after the `k - 1` member slots.
+    ///
+    /// The members need a policy to hold them, and the members and rungs
+    /// together must fit the policy's capacity. A single-source material
+    /// states no rungs because for it the policy IS the rungs, which is what
+    /// keeps every material founded before this method existed byte-identical.
+    /// The quorum's parity is a FOUNDING question and is not asked here; see
+    /// [`EnsembleSpecV1::validate_foundable`].
+    pub fn with_ensemble(mut self, ensemble: EnsembleSpecV1, rungs: u8) -> Result<Self> {
+        self.ensemble = ensemble;
+        self.ensemble_rungs = rungs;
+        self.validate_ensemble()?;
+        Ok(self)
+    }
+
+    /// The Lean `Material.ensembleValid` rule, over the decoded fields.
+    fn validate_ensemble(self) -> Result<()> {
+        let members = self.ensemble.first_rung_index();
+        let attempts = members
+            .checked_add(self.ensemble_rungs)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if usize::from(attempts) > RECOVERY_POLICY_MAX_ATTEMPTS_V2
+            || (members == 0 && self.ensemble_rungs != 0)
+            || (members != 0 && self.recovery_policy.is_none())
+        {
+            return Err(Error::NonCanonicalEnsemble);
+        }
+        Ok(())
     }
 
     /// Hostile-decode one exact canonical 240-byte V3 record.
@@ -119,6 +233,15 @@ impl SourceMaterialV3 {
         {
             return Err(Error::NonCanonicalReservedBytes);
         }
+        let ensemble = EnsembleSpecV1::new(
+            byte(bytes, SOURCE_MATERIAL_V3_ENSEMBLE_MEMBERS_OFFSET)?
+                .checked_add(1)
+                .ok_or(Error::NonCanonicalEnsemble)?,
+            byte(bytes, SOURCE_MATERIAL_V3_ENSEMBLE_QUORUM_OFFSET)?
+                .checked_add(1)
+                .ok_or(Error::NonCanonicalEnsemble)?,
+        )?;
+        let ensemble_rungs = byte(bytes, SOURCE_MATERIAL_V3_ENSEMBLE_RUNGS_OFFSET)?;
 
         let recovery_bytes = array::<ID_BYTES>(bytes, SOURCE_MATERIAL_V3_RECOVERY_POLICY_OFFSET)?;
         let recovery_policy = match byte(bytes, SOURCE_MATERIAL_V3_RECOVERY_PRESENT_OFFSET)? {
@@ -139,7 +262,7 @@ impl SourceMaterialV3 {
             _ => return Err(Error::NonCanonicalSourceMaterial),
         };
 
-        Ok(Self {
+        let value = Self {
             product_record_digest: content(bytes, SOURCE_MATERIAL_V3_PRODUCT_RECORD_DIGEST_OFFSET)?,
             primary_source_spec: content(bytes, SOURCE_MATERIAL_V3_PRIMARY_SOURCE_SPEC_OFFSET)?,
             window_spec: content(bytes, SOURCE_MATERIAL_V3_WINDOW_SPEC_OFFSET)?,
@@ -150,7 +273,11 @@ impl SourceMaterialV3 {
                 SOURCE_MATERIAL_V3_FAILURE_POLICY_RELEASE_OFFSET,
             )?,
             principal_policy,
-        })
+            ensemble,
+            ensemble_rungs,
+        };
+        value.validate_ensemble()?;
+        Ok(value)
     }
 
     /// Encode the exact canonical V3 record.
@@ -167,6 +294,10 @@ impl SourceMaterialV3 {
             SOURCE_MATERIAL_V3_VERSION_OFFSET,
             &SOURCE_MATERIAL_V3_SCHEMA_VERSION.to_le_bytes(),
         );
+        output[SOURCE_MATERIAL_V3_ENSEMBLE_MEMBERS_OFFSET] = self.ensemble.first_rung_index();
+        output[SOURCE_MATERIAL_V3_ENSEMBLE_QUORUM_OFFSET] =
+            self.ensemble.quorum().saturating_sub(1);
+        output[SOURCE_MATERIAL_V3_ENSEMBLE_RUNGS_OFFSET] = self.ensemble_rungs;
         put(
             &mut output,
             SOURCE_MATERIAL_V3_PRODUCT_RECORD_DIGEST_OFFSET,
@@ -383,6 +514,36 @@ impl SourceMaterialV3 {
         self.recovery_policy
     }
 
+    /// The ensemble this material declares; [`EnsembleSpecV1::SINGLE`] for
+    /// every material founded before the bytes existed.
+    #[must_use]
+    pub const fn ensemble(self) -> EnsembleSpecV1 {
+        self.ensemble
+    }
+
+    /// The attempt slots after the members that are rungs of the ladder.
+    ///
+    /// For a single-source material this byte is zero by canon and the answer
+    /// is the whole policy; ask [`Self::ladder_has_rung`] rather than this.
+    #[must_use]
+    pub const fn ensemble_rungs(self) -> u8 {
+        self.ensemble_rungs
+    }
+
+    /// Whether the ladder this material selects has a rung to enter from
+    /// `Primary` -- the predicate the funded failure walk and the crank read
+    /// off the material alone, without the policy in frame. For a
+    /// single-source material a policy IS the ladder; for an ensemble the
+    /// members are not rungs and the third byte says whether any follow.
+    #[must_use]
+    pub const fn ladder_has_rung(self) -> bool {
+        if self.ensemble.is_single() {
+            self.recovery_policy.is_some()
+        } else {
+            self.ensemble_rungs != 0
+        }
+    }
+
     /// Release defining exhaustion-to-explicit-failure semantics.
     #[must_use]
     pub const fn failure_policy_release(self) -> ContentId {
@@ -425,8 +586,9 @@ mod tests {
         BONDING_CURVE_FLOOR_DERIVATION_ID_V1, CapacityEnvelope, ManipulationFloorBasis,
         SourceAccessProfile,
         generated_source_material_v3::{
-            SOURCE_MATERIAL_V3_BOUNDED_EXAMPLE, SOURCE_MATERIAL_V3_REFUSAL_CORPUS,
-            SOURCE_MATERIAL_V3_REFUSAL_COUNT, SOURCE_MATERIAL_V3_UNBOUNDED_EXAMPLE,
+            SOURCE_MATERIAL_V3_BOUNDED_EXAMPLE, SOURCE_MATERIAL_V3_ENSEMBLE_EXAMPLE,
+            SOURCE_MATERIAL_V3_REFUSAL_CORPUS, SOURCE_MATERIAL_V3_REFUSAL_COUNT,
+            SOURCE_MATERIAL_V3_UNBOUNDED_EXAMPLE,
         },
     };
 
@@ -478,6 +640,23 @@ mod tests {
         let unbounded =
             SourceMaterialV3::explicitly_unbounded(id(1), id(2), id(3), id(4), None, id(6));
         assert_eq!(unbounded.to_bytes(), SOURCE_MATERIAL_V3_UNBOUNDED_EXAMPLE);
+        // Decision 0034's fallback shape on the bounded example: three
+        // sources, a quorum of three, one rung after the two member slots.
+        let ensemble = bounded
+            .with_ensemble(EnsembleSpecV1::new(3, 3).expect("k = q = 3"), 1)
+            .expect("an ensemble with a policy to hold it");
+        assert_eq!(ensemble.to_bytes(), SOURCE_MATERIAL_V3_ENSEMBLE_EXAMPLE);
+        assert_eq!(
+            SourceMaterialV3::decode(&SOURCE_MATERIAL_V3_ENSEMBLE_EXAMPLE),
+            Ok(ensemble)
+        );
+        assert_eq!(ensemble.ensemble().first_rung_index(), 2);
+        assert!(ensemble.ladder_has_rung());
+        // A single-source material carries four zero bytes where it always
+        // did, and its policy is its rungs.
+        assert_eq!(&SOURCE_MATERIAL_V3_BOUNDED_EXAMPLE[12..16], &[0, 0, 0, 0]);
+        assert!(bounded.ensemble().is_single() && bounded.ladder_has_rung());
+        assert!(unbounded.ensemble().is_single() && !unbounded.ladder_has_rung());
         assert_eq!(
             SourceMaterialV3::decode(&unbounded.to_bytes()),
             Ok(unbounded)
@@ -493,6 +672,60 @@ mod tests {
         for hostile in SOURCE_MATERIAL_V3_REFUSAL_CORPUS {
             assert!(SourceMaterialV3::decode(&hostile).is_err());
         }
+    }
+
+    /// The ensemble rule, each clause a refusal: no members without a policy,
+    /// no rungs on a single-source material, no more attempts than the policy
+    /// holds, and no even quorum at founding.
+    #[test]
+    fn the_ensemble_bytes_refuse_each_clause_by_name() {
+        let bounded = material_bounded(id(7));
+        let unbounded =
+            SourceMaterialV3::explicitly_unbounded(id(1), id(2), id(3), id(4), None, id(6));
+        assert_eq!(EnsembleSpecV1::new(6, 3), Err(Error::NonCanonicalEnsemble));
+        assert_eq!(EnsembleSpecV1::new(3, 4), Err(Error::NonCanonicalEnsemble));
+        assert_eq!(EnsembleSpecV1::new(3, 0), Err(Error::NonCanonicalEnsemble));
+        assert_eq!(
+            unbounded.with_ensemble(EnsembleSpecV1::new(2, 1).expect("k = 2"), 0),
+            Err(Error::NonCanonicalEnsemble),
+            "members need a policy to hold them"
+        );
+        assert_eq!(
+            bounded.with_ensemble(EnsembleSpecV1::SINGLE, 1),
+            Err(Error::NonCanonicalEnsemble),
+            "a single-source material's policy IS its rungs"
+        );
+        assert_eq!(
+            bounded.with_ensemble(EnsembleSpecV1::new(3, 3).expect("k = 3"), 3),
+            Err(Error::NonCanonicalEnsemble),
+            "two members and three rungs do not fit a four-slot policy"
+        );
+        let five = bounded
+            .with_ensemble(EnsembleSpecV1::new(5, 3).expect("the flagship"), 0)
+            .expect("five members and no rung fit exactly");
+        assert!(
+            !five.ladder_has_rung(),
+            "fewer than the quorum exhausts on the primary"
+        );
+        assert_eq!(
+            EnsembleSpecV1::new(4, 4)
+                .expect("k = q = 4")
+                .validate_foundable(),
+            Err(Error::EnsembleQuorumEven)
+        );
+        assert_eq!(
+            EnsembleSpecV1::new(3, 2)
+                .expect("the cheap shape")
+                .validate_foundable(),
+            Err(Error::EnsembleQuorumEven)
+        );
+        assert_eq!(
+            EnsembleSpecV1::new(5, 3)
+                .expect("the flagship")
+                .validate_foundable(),
+            Ok(())
+        );
+        assert_eq!(EnsembleSpecV1::SINGLE.validate_foundable(), Ok(()));
     }
 
     #[test]

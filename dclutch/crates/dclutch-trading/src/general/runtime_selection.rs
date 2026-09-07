@@ -632,12 +632,7 @@ mod tests {
     }
 
     fn verified(width: u32, candidate: u8, coordinate: u32, filled: u64) -> std::vec::Vec<u8> {
-        let count = usize::try_from(width).expect("width");
         let mut output = vec![0; verified_candidate_len(width).expect("verified width")];
-        // Selection reads the aggregates, not the clearing prices; the whole
-        // scale on outcome zero is the simplest vector that is one.
-        let mut prices = vec![0_u64; count];
-        prices[0] = 1;
         VerifiedCandidateV2::encode_into(
             VerifiedCandidateHeaderV2 {
                 outcome_count: width,
@@ -652,9 +647,8 @@ mod tests {
                 quote_credit: 0,
                 price_scale: 1,
             },
-            &prices,
-            &vec![filled; count],
-            &vec![filled; count],
+            &vec![filled; usize::try_from(width).expect("width")],
+            &vec![filled; usize::try_from(width).expect("width")],
             &mut output,
         )
         .expect("verified encode");

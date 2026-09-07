@@ -3173,6 +3173,16 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
     }
     // A no-recovery material published no recovery record, and the evidence
     // says so by absence rather than by a placeholder address.
+    //
+    // The POLICY is here and the sources it names are not. A rung substitutes a
+    // `SourceSpecV1` and its `PythAdapterConfigV1`, and neither of those two
+    // records is published in this map for any market: a caller that needs
+    // them derives them from the compiled market input by content identity,
+    // which is a derivation and not a lookup because a record's address IS the
+    // hash of its body (`tools/gauntlet/ladder/src/ladder.rs`,
+    // `rung_capture_v1`, and `crate::resolution::RecordPairV1::derive` in the
+    // journey). Said here so a reader who expects them beside the policy finds
+    // this sentence instead of a hole.
     if let Some(recovery) = &records.recovery {
         let account = rpc.required_account(recovery.raw, "recovery_policy_record")?;
         accounts.insert(
@@ -14284,6 +14294,23 @@ pub(crate) struct LocalMarketShapeV1 {
     /// answered on this fixture needs a publication the lab can refresh, which
     /// is a fixture question and not a parameter.
     pub(crate) terminal_max_age_seconds: Option<u32>,
+    /// The `PriceUpdateV2` image this market's window and feed facts are read
+    /// off, or `None` for the pinned capture.
+    ///
+    /// `None` is the default and compiles byte-for-byte what every caller
+    /// compiled before this field existed: the market's window ends at the
+    /// captured publication instant, which is the only instant the frozen
+    /// fixture can answer about.
+    ///
+    /// `Some` is a caller that can MINT a publication -- the lab's guardian set
+    /// is derivable, so `pyth_lab_publication.rs` signs a fresh VAA about any
+    /// instant -- handing in the projection of the one it minted. The window
+    /// then ends at that instant instead, which is what makes a rung reachable
+    /// inside a bounded run: the primary leg is due at `end + max_age` and the
+    /// rung a committed interval after that, both inside the hour the campaign
+    /// occupies. The image is read for the feed identity, the exponent and the
+    /// instant; a submission still digests the CHAIN's own posted bytes.
+    pub(crate) price_update_image: Option<Vec<u8>>,
     /// The author's founding band, or `None`.
     ///
     /// `Option` rather than a plain field so `Default` stays constructible
@@ -14385,6 +14412,8 @@ impl Default for LocalMarketShapeV1 {
             )),
             // The fixture's own declared shelf life, unchanged.
             terminal_max_age_seconds: None,
+            // The pinned capture, unchanged.
+            price_update_image: None,
             // NO LADDER BY DEFAULT, which is what every fixture and campaign
             // that takes this shape has founded since there was a shape to
             // take. A ladder is prepaid at founding -- one extra compartment
@@ -14498,8 +14527,17 @@ pub(crate) fn demo_market_input_base_shaped(
     // where those deployments happened, which is not this one.
     let fixture = local_validator_release_v1()
         .map_err(|error| Error::new(format!("local-validator Pyth release: {error:?}")))?;
-    let update = FullPriceUpdateV2::parse(FIXTURE_PRICE_UPDATE)
-        .map_err(|error| Error::new(format!("captured Pyth price update: {error:?}")))?;
+    // THE PUBLICATION THIS MARKET IS ABOUT. The captured fixture unless the
+    // caller minted one, and every fact below -- the feed, the exponent, the
+    // window's end and therefore both legs' deadlines -- is read off that one
+    // image, so a market and the publication that answers it cannot be about
+    // two different instants.
+    let price_update: &[u8] = match &shape.price_update_image {
+        None => FIXTURE_PRICE_UPDATE,
+        Some(image) => image.as_slice(),
+    };
+    let update = FullPriceUpdateV2::parse(price_update)
+        .map_err(|error| Error::new(format!("this market's Pyth price update: {error:?}")))?;
     // The window is a real 300-second terminal period ENDING at the captured
     // publication (TWIN's finding: a window forced to one instant is a market
     // nobody can resolve), and `max_age_seconds` is the fixture's declared
@@ -14527,7 +14565,7 @@ pub(crate) fn demo_market_input_base_shaped(
             product_name: "product/sol-usd-range-protection",
             coordinate_domain_name: "coordinate-domain/usd-cents-per-sol",
             feed_label: b"sol-usd",
-            price_update: FIXTURE_PRICE_UPDATE,
+            price_update,
             window_start: update
                 .publish_time()
                 .checked_sub(shape.terminal_window_width_seconds)

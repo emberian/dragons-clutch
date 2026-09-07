@@ -129,6 +129,17 @@ mod terminal_lifecycle;
 #[allow(dead_code)]
 mod wallet_terminal;
 
+// ---------------------------------------------- the minted publication
+//
+// The producer that makes a rung answerable at all. The lab's Wormhole guardian
+// set is the nineteen derivable dummy keys the pinned upstream test utilities
+// use, so a fresh 13-of-19 VAA over a fresh `PriceFeedMessage` can be signed
+// offline at any instant -- and the real router and receiver ELFs verify it
+// exactly as they verify the capture. Linked from the successor, never forked.
+#[path = "../../../local-validator/bootstrap/successor/src/pyth_lab_publication.rs"]
+#[allow(dead_code)]
+mod pyth_lab_publication;
+
 // ------------------------------------------- the relayed vertical's substrate
 //
 // The one bring-up in this tree that leaves a validator RUNNING for a caller
@@ -137,6 +148,26 @@ mod wallet_terminal;
 #[path = "../../relayed-vertical/src/substrate.rs"]
 #[allow(dead_code)]
 mod substrate;
+
+// ------------------------------------------------ the journey's own modules
+//
+// The capture, the terminal admission and the conservation census are the
+// JOURNEY's, and this tier links them for the same reason it links the crank:
+// a tier that wrote a second Pyth transport would be measuring a second author.
+// The census is what makes the walk a claim about a market rather than about
+// four transactions that happened to land.
+#[path = "../../journey/src/ledger.rs"]
+#[allow(dead_code)]
+mod ledger;
+#[path = "../../journey/src/provider.rs"]
+#[allow(dead_code)]
+mod provider;
+#[path = "../../journey/src/resolution.rs"]
+#[allow(dead_code)]
+mod resolution;
+#[path = "../../journey/src/stages.rs"]
+#[allow(dead_code)]
+mod stages;
 
 // ------------------------------------------------------------- this campaign
 mod ladder;
@@ -275,6 +306,18 @@ fn run_ladder(arguments: Vec<String>) -> Result<()> {
                 .parse()
                 .map_err(|_| Error::new("--max-wait-seconds must be a decimal i64"))?,
         },
+        // THE TIER'S PARAMETER, NEVER THE MARKET'S. It is how old the
+        // publication this campaign MINTS may be before its own transport
+        // refuses it, and it is what sets the distance from the mint instant to
+        // the primary leg's deadline. A market's staleness policy is a thing a
+        // founder authors; this is a thing a lab tolerates about an artifact it
+        // made an hour ago.
+        publication_shelf_life_seconds: match values.get("--publication-shelf-life-seconds") {
+            None => ladder::DEFAULT_PUBLICATION_SHELF_LIFE_SECONDS_V1,
+            Some(raw) => raw.parse().map_err(|_| {
+                Error::new("--publication-shelf-life-seconds must be a decimal i64")
+            })?,
+        },
     };
     ladder::execute(request).map(|_| ())
 }
@@ -286,14 +329,18 @@ fn usage() {
          --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
          --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \
          --expected-source-tree-sha256 HEX64 --seed HEX64 \\\n      \
-         [--recovery-rungs BPS:SECONDS_AFTER_PREVIOUS] [--max-wait-seconds I64]\n\nThe campaign \
+         [--recovery-rungs BPS:SECONDS_AFTER_PREVIOUS] [--max-wait-seconds I64] \\\n      \
+         [--publication-shelf-life-seconds I64]\n\nThe campaign \
          brings up its own checked-mutable loopback substrate from the named\nchecked release \
          gate (local-mutable-prepare-v1), boots a fresh solana-test-validator\nover the prepared \
          account directory, administers it through activation, compiles a\nTWO-SOURCE market \
-         against the LIVE deployment, founds it, and then drives the\nshipped advance-recovery \
-         crank against the market it founded. Everything runs on\n127.0.0.1 and nothing here \
-         touches a public cluster. No clock is warped: the\ncrank's admissibility is read off \
-         the market's own records against the cluster's\nown clock."
+         against a Pyth publication it MINTS at the\ncluster's own block time, founds it, drives \
+         the shipped advance-recovery crank\nagainst it, and -- on the capture walk -- answers \
+         the rung the crank advanced onto\nand admits the terminal state, taking the \
+         conservation census at every stage\nboundary. Everything runs on 127.0.0.1 and nothing \
+         here touches a public cluster.\nNo clock is warped: the crank's admissibility is read \
+         off the market's own\nrecords against the cluster's own clock, and the publication is \
+         stamped with\nthat same clock rather than this host's."
     );
 }
 

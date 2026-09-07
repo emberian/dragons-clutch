@@ -2,8 +2,30 @@
 
 ```sh
 tools/gauntlet/run.sh --mode census          # once, for the inventory
+# BOTH arms, one at a time, in one invocation: the walk where both legs expire
+# unobserved and the ladder exhausts, then the walk where the rung is ANSWERED
 tools/gauntlet/ladder/run-ladder.sh --checked-release-gate ABS/CHECKED_UPGRADE_GATE.json
+# one arm only, when you are iterating on it
+tools/gauntlet/ladder/run-ladder.sh --walk capture \
+    --checked-release-gate ABS/CHECKED_UPGRADE_GATE.json
 ```
+
+Two walks, and both are the tier, which is why `--walk both` is the default —
+the same default `run-relayed-vertical.sh` already carries for the same reason.
+The exhaust arm is where nothing answers; the capture arm is where the market's
+funded alternative does. **Neither arm's witnesses are evaluated against the
+other's transcript.** They used to be: the two rung witnesses lived in
+`witnesses.json` disjoined over `.walk` and returned their expected value on the
+exhaust walk, so a run of the default arm went green having never asked their
+question — and a green that cannot tell a silent instrument from a silent chain
+is not evidence. They now live in `witnesses-capture.json`, without the
+disjunct, behind a witness that pins the arm. `witnesses-exhaust.json` holds the
+two the exhaust arm had never had at all, plus the failure walk's own three,
+which the failure arm had written to be red on the capture walk ON PURPOSE — a
+red nobody is meant to read is a row that trains a reader to ignore reds.
+`witnesses.json` keeps only the ones that are about either arm. Running one arm
+covers one arm, and the other arm's witnesses are then simply not evaluated
+rather than reported green or red.
 
 Decision 0027 built the funded ordered ladder. `6a3079454` taught the
 successor's market compiler to found a market that buys one
@@ -33,7 +55,13 @@ by `#[path]` from somewhere else:
   that leaves a validator RUNNING for a caller to drive more than one command
   against — prepare the checked-mutable substrate, spawn a
   `solana-test-validator` over the prepared account directory, administer
-  through activation, and keep the child.
+  through activation, and keep the child;
+- **`../journey/src/{provider,resolution,stages,ledger}.rs`** — the Pyth
+  transport that answers a leg, the terminal admission that moves the Market's
+  phase byte, and the conservation ledger that closes L1–L8 at every boundary.
+  A tier that wrote a second Pyth transport would be measuring a second author;
+- **`successor/src/pyth_lab_publication.rs`**, the producer that mints the
+  publication this walk resolves against. See below.
 
 If any of them moves, this build breaks. That is the intended tripwire; the
 rule is the journey's rule — **extend the module set, never fork a file.**
@@ -69,7 +97,7 @@ It also names the revision. The campaign binary is built from `git archive` of
 the gate's own `source_revision`, so the host code and the ELFs it drives come
 from one commit rather than two.
 
-## What it does not reach, and why
+## The publication is minted at the run's own hour
 
 **The exhaust walk no longer stops at `Exhausted`.** Decision 0027 says the
 ladder exhausts INTO the failure selector and decision 0025 says what that pays,
@@ -84,38 +112,84 @@ Hoard read before and after. The escrow's own payout is recorded as the
 producer's refusal ("is this Market's own failure escrow"), never sent. The
 transcript's `refund` object carries all of it; on the capture walk it is null.
 
-**A rung CAPTURE cannot be driven on this fixture.** Not for want of a builder:
-`dclutch-provider-transport-v3-operator` derives the execute request's
-`source_index` and its source-spec identity from the Source's own phase and
-active attempt, so the capture that answers a rung is buildable today. The
-obstruction is the fixture's arithmetic. One `WindowSpecV1.max_age_seconds`
-governs **both** the crank's admissibility (`window.end + max_age` is the
-primary leg's deadline) **and** the publication's freshness (an observation is
-admissible only inside `[now - max_age, now + skew]`). `window.end` IS the
-captured publication instant. So a shelf life short enough for the primary leg
-to close inside a lab run is one under which the frozen publication is already
-stale for every rung after it. A rung answered on a loopback needs a
-publication the lab can refresh — a fixture question, not a wiring one.
+**A rung capture used to be unreachable here, and the obstruction was the
+fixture rather than the wiring.** One `WindowSpecV1.max_age_seconds` governs
+*both* the crank's admissibility (`window.end + max_age` is the primary leg's
+deadline) *and* the publication's freshness (an observation is admissible only
+inside `[now - max_age, now + skew]`), and `window.end` *was* the captured
+publication instant. So a shelf life short enough for the primary leg to close
+inside a lab run was one under which the frozen capture was already stale for
+every rung after it. No value of one field satisfies both legs against a frozen
+publication — a field cannot fix a fixture.
 
-**That arithmetic is what leaves one witness red, and the red is named here so
-nobody reads it as a regression.** `every-crank-frame-is-the-relay-contract-eighteen`
-reports *expected 18, chain says null* on every capture walk, because no
-AdvanceRecovery frame is ever BUILT: the crank records `not-yet-due` and the rung
-`unreachable`. Measured on hbox `20260906T112408Z`, 891 s, market `B3xW1XLRDi1c…`,
-founded to Open and funded through the shipped `--recovery-rungs 2500:120`
-parser: the primary leg is due at unix **1,818,967,680** and the chain clock read
-**1,788,694,735** — **30,272,945 seconds**, which is the local Pyth fixture's
-one-year shelf life to the second. The witness measures a frame's WIDTH and is
-right to be red about a frame that was never built; the way to turn it green is a
-publication the lab can refresh, and **not** a `terminal_max_age_seconds` threaded
-through to the market shape. One `max_age` governs both legs, so no value of it
-satisfies both against a frozen capture — a field cannot fix a fixture.
+So this tier **mints one**. `tools/local-validator/bootstrap/successor/src/pyth_lab_publication.rs`
+signs a fresh Pyth publication about any instant a caller names, and the
+mechanism is public test material rather than a secret:
 
-The successor's flagship command is separately unable to *verify* such a
-terminal: `flagship_resolution.rs` pins `route == Primary` and
-`attempt_index == 0` in two places (`:7373-7376`, `:8216`/`:8237`). That is a
-verifier that has not been told the ladder exists, and it is named here so the
-next lane does not go looking for a missing producer.
+- the lab's Wormhole guardian set is the **nineteen dummy guardians** the pinned
+  upstream test utilities derive from `secret_i = [i + 1, 0, …, 0]`, and the
+  fixture's own `guardian-set-0.account.hex` was checked against exactly that
+  derivation, nineteen of nineteen;
+- the campaign signs **thirteen of nineteen** — the router's own strict
+  two-thirds quorum — over the double keccak of the VAA body;
+- the accumulator tree is **single-leaf**, so the root the VAA carries is
+  `keccak256(0x00 ‖ message)[..20]` and the receiver's Merkle proof is empty.
+
+The real Wormhole router and the real Pyth receiver ELFs then verify it exactly
+as they verify the capture: thirteen recovered secp256k1 signatures, then one
+proof against the root. That verification happens **on chain, in this run** —
+`journey: the real router cryptographically verifies the signed VAA` — so a
+producer that had drifted from the upstream wire fails there rather than in an
+assertion it wrote itself.
+
+The instant is the **cluster's own block time**, not the host's wall clock, for
+the same reason nothing here warps a clock: a publication stamped against a
+clock the chain does not keep would be as dishonest as moving the one it does.
+The walk mints two publications about that one instant under two Wormhole
+sequences — the primary leg is offered the first, the rung answers with the
+second — because a rung answered by a *re-post* of the publication its own
+market already declined would answer nothing.
+
+**What remains a lab shape, stated plainly.** The publication is authored by the
+lab and signed by keys anyone can derive. It proves the **wire** — the router's
+verification, the receiver's posting, Resolution's admission, Core's execution —
+and nothing whatever about a price. A guardian set whose keys are derivable is a
+guardian set no release catalog can name, and that is the line between this and
+any evidence about a real feed.
+
+**The shelf life is this TIER's parameter, never the market's.**
+`--publication-shelf-life-seconds` (default 1,200) is how old the campaign will
+let the publication *it just minted* be before its own transport refuses it, and
+therefore how far past the mint instant the primary leg falls due. A market's
+staleness policy is a thing a founder authors and prepays for; this is a
+tolerance a lab holds about an artifact it made twenty minutes ago. The window
+ends at the mint instant, the primary leg is due one shelf life later, and the
+rung `--recovery-rungs` buys is due its own committed interval after that — all
+inside the hour one run occupies.
+
+**The recovery leg's admission rule is not the primary's, and that is written
+down where it is enforced.** `normalize_authenticated_recovery_update` drops the
+age floor rather than widening it: a market stands on a rung only *because*
+`now - max_age` expired, so re-applying the floor would make every rung
+structurally unanswerable. The rung's bound is instead its own committed
+deadline, which the market prepaid at founding. The future-skew ceiling stays on
+both legs.
+
+**One consumer still cannot verify such a terminal**, and it is named here so
+the next lane does not go looking for a missing producer: the successor's
+flagship command pins `route == Primary` and `attempt_index == 0` in two places
+(`flagship_resolution.rs:7373-7376`, `:8216`/`:8237`). That is a verifier that
+has not been told the ladder exists. This tier does not use it — it asserts the
+poststate through `dclutch-provider-transport-v3-operator` and the Source's own
+terminal projection — and the pin is a real gap in a different command.
+
+**What the walk now asserts.** Before the crank advances anything, the
+chain-derived operator is asked to build the rung's capture and must **refuse**,
+off chain, with no key open. After the advance, the same builder handed the
+*primary*-shaped request against the same Source must refuse again — and only
+then is the real capture sent. The Source's terminal projection reads back
+`Recovery` and the certificate reads back attempt index 1, and the journey's
+conservation ledger closes L1–L8 at every boundary of the walk.
 
 ## What this is NOT
 

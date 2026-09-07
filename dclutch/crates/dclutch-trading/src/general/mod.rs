@@ -74,14 +74,6 @@ pub mod runtime_width;
 
 #[rustfmt::skip]
 #[allow(dead_code, missing_docs)]
-#[path = "generated_clearing_price_v1.rs"]
-mod generated_clearing_price_v1;
-#[rustfmt::skip]
-#[allow(dead_code, missing_docs)]
-#[path = "generated_order_v2.rs"]
-mod generated_order_v2;
-#[rustfmt::skip]
-#[allow(dead_code, missing_docs)]
 #[path = "generated_runtime_wire_v2.rs"]
 mod generated_runtime_wire_v2;
 /// Which clause of General's settlement-side conjuncts disagreed.
@@ -237,15 +229,6 @@ pub enum GeneralChildEffectV1 {
     ReleaseClaims = 9,
     /// Return one order's remaining escrowed quote to its maker.
     ReleaseCollateral = 10,
-    /// Burn the joint clearing's residual out of the candidate's settlement
-    /// Position without releasing collateral: decision 0032 §2a, the strand.
-    ///
-    /// A Claims leg with no Custody twin. The residual exists only at an
-    /// outcome the batch priced at zero (`JointClearingV1.residual_worth_nothing`),
-    /// so the atoms behind it stay in the Hoard until the Market terminates.
-    /// `EconomicKernel.strandPost` is the law; `ClaimsAction::StrandResidual`
-    /// the adapter arm.
-    StrandResidual = 11,
 }
 
 impl GeneralChildEffectV1 {
@@ -273,11 +256,7 @@ impl GeneralChildEffectV1 {
     pub const fn moves_collateral(self) -> bool {
         !matches!(
             self,
-            Self::CollectClaims
-                | Self::DistributeClaims
-                | Self::EscrowClaims
-                | Self::ReleaseClaims
-                | Self::StrandResidual
+            Self::CollectClaims | Self::DistributeClaims | Self::EscrowClaims | Self::ReleaseClaims
         )
     }
 

@@ -40,8 +40,8 @@ use dclutch_trading::general::{
     candidate_v1::GeneralCandidateV1,
     candidate_v1::{CandidateVerifyRowViewV1, candidate_verifier_len_v1},
     collection_v1::{
-        GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1, GeneralBatchV2, GeneralOrderV2,
-        GeneralSignedOrderTermsV2,
+        GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderV1,
+        GeneralSignedOrderTermsV1,
     },
     hot_candidate_v3::{
         GeneralHotCandidateErrorV3, GeneralHotEnvironmentV3,
@@ -201,18 +201,18 @@ fn live_state(
 }
 
 /// Decode the exact live Batch a request or projector names.
-fn live_batch(account: &[u8]) -> Result<(GeneralLocalStateV3<'_>, GeneralBatchV2), BuilderError> {
+fn live_batch(account: &[u8]) -> Result<(GeneralLocalStateV3<'_>, GeneralBatchV1), BuilderError> {
     let envelope = live_state(account, GeneralLocalStateKindV3::Batch)?;
-    let batch = GeneralBatchV2::decode(envelope.body()).map_err(|_| BuilderError::Artifact)?;
+    let batch = GeneralBatchV1::decode(envelope.body()).map_err(|_| BuilderError::Artifact)?;
     Ok((envelope, batch))
 }
 
 /// Decode the exact live Order a request names.
 fn live_order(
     account: &[u8],
-) -> Result<(GeneralLocalStateV3<'_>, GeneralOrderV2<'_>), BuilderError> {
+) -> Result<(GeneralLocalStateV3<'_>, GeneralOrderV1<'_>), BuilderError> {
     let envelope = live_state(account, GeneralLocalStateKindV3::Order)?;
-    let order = GeneralOrderV2::decode(envelope.body()).map_err(|_| BuilderError::Artifact)?;
+    let order = GeneralOrderV1::decode(envelope.body()).map_err(|_| BuilderError::Artifact)?;
     Ok((envelope, order))
 }
 
@@ -274,7 +274,7 @@ fn primary_state_seeds(
 
 /// Join one live Batch back to the root, config and Product this request names.
 ///
-/// THE SUBJECT IS READ, NOT PREDICTED. `GeneralBatchV2::batch_id` recomputes
+/// THE SUBJECT IS READ, NOT PREDICTED. `GeneralBatchV1::batch_id` recomputes
 /// the occurrence identity from the batch's own immutable opening, so the
 /// request names the batch the chain holds even where a host-side prediction
 /// of the opening would have differed. The persisted canonical bump and the
@@ -419,7 +419,7 @@ pub fn derive_general_request_v1(
             // of the evidence account rather than a host reconstruction of it,
             // and a campaign that changed one term names a different order.
             let batch_id = joined_batch(&input, live()?)?;
-            let terms = GeneralSignedOrderTermsV2::decode(
+            let terms = GeneralSignedOrderTermsV1::decode(
                 evidence
                     .signed_order_terms
                     .ok_or(BuilderError::Binding(line!()))?,
@@ -950,7 +950,7 @@ enum GeneralActionCorpusV1<'a> {
     },
     /// `VerifyCandidateRow`: the whole row-verification view's corpus.
     VerifyCandidateRow {
-        batch: GeneralBatchV2,
+        batch: GeneralBatchV1,
         submission: GeneralCandidateV1,
         image: &'a [u8],
         page: &'a [u8],
@@ -960,7 +960,7 @@ enum GeneralActionCorpusV1<'a> {
     },
     /// `CloseCandidate`: the live Candidate and the closed Batch it settles.
     CloseCandidate {
-        batch: GeneralBatchV2,
+        batch: GeneralBatchV1,
         submission: GeneralCandidateV1,
     },
     /// `Consider`: the selection policy, the submitted certificate, and the
@@ -1049,7 +1049,7 @@ impl<'a> GeneralActionCorpusV1<'a> {
                 }
             }
             Action::VerifyCandidateRow => Self::VerifyCandidateRow {
-                batch: GeneralBatchV2::decode(live_body(
+                batch: GeneralBatchV1::decode(live_body(
                     evidence.batch_account,
                     GeneralLocalStateKindV3::Batch,
                     line!(),
@@ -1083,7 +1083,7 @@ impl<'a> GeneralActionCorpusV1<'a> {
                     .ok_or(BuilderError::Binding(line!()))?,
             },
             Action::CloseCandidate => Self::CloseCandidate {
-                batch: GeneralBatchV2::decode(live_body(
+                batch: GeneralBatchV1::decode(live_body(
                     evidence.batch_account,
                     GeneralLocalStateKindV3::Batch,
                     line!(),

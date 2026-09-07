@@ -14,14 +14,13 @@ use crate::general_config::root::GeneralRootV2;
 
 use super::*;
 use crate::general::collection_v1::{
-    GeneralBatchOpeningV1, GeneralOrderHeaderV2, GeneralOrderPhaseV1, GeneralOrderStateV1,
-    MakerFundingV1, general_order_len_v2,
+    GeneralBatchOpeningV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1, GeneralOrderStateV1,
+    MakerFundingV1, general_order_len_v1,
 };
 use crate::general::runtime_manifest::settlement_manifest_len_v2;
 use crate::general::runtime_selection::{
     RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2, consider_verified_candidate_v2,
 };
-use crate::general::runtime_verify::OrderSideV2;
 use crate::general::runtime_width::{
     CandidateHeaderV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2, candidate_len,
     execution_len, page_len,
@@ -51,7 +50,7 @@ fn spend_verification_cranks(submission: GeneralCandidateV1, cranks: u32) -> Gen
 
 /// Submit with this module's canonical work-escrow parameters.
 fn submit_at(
-    batch: GeneralBatchV2,
+    batch: GeneralBatchV1,
     candidate: CandidateV2<'_>,
     funded_lamports: u64,
     slot: u64,
@@ -90,45 +89,29 @@ fn opening() -> GeneralBatchOpeningV1 {
 }
 
 /// One maker's order, placed and escrowed against a live batch.
-///
-/// The rows are the ones the shape derives; the vectors are a check.
 fn place(
-    batch: &mut GeneralBatchV2,
+    batch: &mut GeneralBatchV1,
     owner: u8,
     nonce: u64,
-    side: OrderSideV2,
-    outcome: u32,
-    claims_per_lot: u64,
+    receive: &[u64],
+    deliver: &[u64],
 ) -> Vec<u8> {
-    let header = GeneralOrderHeaderV2 {
-        outcome_count: WIDTH,
-        nonce,
-        owner_id: id(owner),
-        market: id(1),
-        batch_id: batch.batch_id(),
-        generation: 7,
-        // Every fixture fills its maximum, so no row sits short of its limit
-        // and the marginal conjunct has nothing to refuse.
-        max_lots: 4,
-        max_quote_debit_per_lot: 5,
-        min_quote_credit_per_lot: 0,
-        valid_until_slot: SETTLEMENT_CLOSE,
-        side,
-        outcome_lo: outcome,
-        outcome_hi: outcome,
-        claims_per_lot,
-    };
-    let receive: Vec<u64> = (0..WIDTH)
-        .map(|index| header.derived_row(index).0)
-        .collect();
-    let deliver: Vec<u64> = (0..WIDTH)
-        .map(|index| header.derived_row(index).1)
-        .collect();
-    let mut bytes = vec![0_u8; general_order_len_v2(WIDTH).expect("order width")];
-    GeneralOrderV2::encode_into(
-        header,
-        &receive,
-        &deliver,
+    let mut bytes = vec![0_u8; general_order_len_v1(WIDTH).expect("order width")];
+    GeneralOrderV1::encode_into(
+        GeneralOrderHeaderV1 {
+            outcome_count: WIDTH,
+            nonce,
+            owner_id: id(owner),
+            market: id(1),
+            batch_id: batch.batch_id(),
+            generation: 7,
+            max_lots: 10,
+            max_quote_debit_per_lot: 5,
+            min_quote_credit_per_lot: 0,
+            valid_until_slot: SETTLEMENT_CLOSE,
+        },
+        receive,
+        deliver,
         GeneralOrderStateV1 {
             phase: GeneralOrderPhaseV1::Placed,
             admitted_slot: ADMISSION_SLOT,
@@ -137,7 +120,7 @@ fn place(
         &mut bytes,
     )
     .expect("order record");
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     let claims: Vec<u64> = (0..WIDTH)
         .map(|index| order.claim_reserve(index).expect("reserve"))
         .collect();
@@ -156,19 +139,13 @@ fn place(
 }
 
 /// Build a candidate whose declared identity IS its own masked digest.
-fn candidate_bytes(
-    batch_id: [u8; 32],
-    page_count: u32,
-    live_order_count: u32,
-    prices: &[u64],
-) -> Vec<u8> {
+fn candidate_bytes(batch_id: [u8; 32], page_count: u32, prices: &[u64]) -> Vec<u8> {
     let mut bytes = vec![0_u8; candidate_len(WIDTH).expect("candidate width")];
     let header = CandidateHeaderV2 {
         outcome_count: WIDTH,
         page_count,
         candidate_coordinate: 1,
         price_scale: PRICE_SCALE,
-        live_order_count,
         // A placeholder: the record is encoded once to fix every other byte,
         // then re-encoded with the digest those bytes produce. That is the only
         // way a self-describing record can carry its own identity, and it is
@@ -197,7 +174,7 @@ fn row_bytes(
     execution_coordinate: u32,
     lots: u64,
 ) -> Vec<u8> {
-    let order = GeneralOrderV2::decode(order_bytes).expect("order");
+    let order = GeneralOrderV1::decode(order_bytes).expect("order");
     let header = order.header();
     let receive: Vec<u64> = (0..WIDTH)
         .map(|index| order.receive_per_lot(index).expect("receive"))
@@ -245,7 +222,7 @@ fn page_bytes(candidate_id: [u8; 32], coordinate: u32, page_count: u32, rows: &[
 
 /// A batch with two escrowed orders whose portfolios net to a complete set.
 struct Fixture {
-    batch: GeneralBatchV2,
+    batch: GeneralBatchV1,
     orders: Vec<Vec<u8>>,
     candidate: Vec<u8>,
     pages: Vec<Vec<u8>>,
@@ -256,21 +233,16 @@ fn fixture() -> Fixture {
     let mut root = GeneralRootV2::active(id(1), id(2), 7).expect("root");
     let revision = root.revision();
     let mut batch =
-        GeneralBatchV2::open(&mut root, opening(), revision, ADMISSION_SLOT).expect("open batch");
+        GeneralBatchV1::open(&mut root, opening(), revision, ADMISSION_SLOT).expect("open batch");
 
-    // Two orders that trade opposite sides of the same outcome, so the
+    // Two orders that trade opposite sides of the same outcome pair, so the
     // candidate's aggregate claim delta is uniform and the balance derives.
-    let first = place(&mut batch, 9, 1, OrderSideV2::Buy, 0, 1);
-    let second = place(&mut batch, 8, 2, OrderSideV2::Sell, 0, 1);
+    let first = place(&mut batch, 9, 1, &[1, 0, 0], &[0, 1, 0]);
+    let second = place(&mut batch, 8, 2, &[0, 1, 0], &[1, 0, 0]);
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close batch");
 
-    // THE LEXICOGRAPHIC MINIMUM OF THE BOOK'S OWN BOX. The buy and the sell
-    // cross at outcome zero and cancel, so the candidate mints nothing and
-    // every outcome's net flow is zero; no outcome carries a residual, the
-    // box is the whole simplex, and its lexicographic minimum puts the whole
-    // scale on the last coordinate.
-    let candidate = candidate_bytes(batch.batch_id(), 1, 2, &[0, 0, PRICE_SCALE]);
+    let candidate = candidate_bytes(batch.batch_id(), 1, &[40, 60, 0]);
     let candidate_id = CandidateV2::decode(&candidate)
         .expect("candidate")
         .header()
@@ -280,8 +252,8 @@ fn fixture() -> Fixture {
     // little-endian, not `[u8; 32]`'s `Ord`.
     let mut order_bytes = vec![first, second];
     order_bytes.sort_by(|left, right| {
-        let left_id = GeneralOrderV2::decode(left).expect("left").order_id();
-        let right_id = GeneralOrderV2::decode(right).expect("right").order_id();
+        let left_id = GeneralOrderV1::decode(left).expect("left").order_id();
+        let right_id = GeneralOrderV1::decode(right).expect("right").order_id();
         if left_id == right_id {
             core::cmp::Ordering::Equal
         } else if crate::general::runtime_verify::runtime_identity_precedes_v2(&left_id, &right_id)
@@ -496,7 +468,7 @@ fn hostile_moving_any_priced_byte_moves_the_identity() {
     let identity = general_candidate_identity_v1(&fixture.candidate).expect("identity");
     // The mask covers exactly the identity field; every other byte is in the
     // digest, so a re-priced candidate is a different candidate.
-    let repriced = candidate_bytes(fixture.batch.batch_id(), 1, 2, &[41, 59, 0]);
+    let repriced = candidate_bytes(fixture.batch.batch_id(), 1, &[41, 59, 0]);
     assert_ne!(
         general_candidate_identity_v1(&repriced).expect("identity"),
         identity
@@ -518,9 +490,9 @@ fn hostile_a_candidate_cannot_be_submitted_against_an_open_batch_or_outside_the_
     let mut root = GeneralRootV2::active(id(1), id(2), 7).expect("root");
     let revision = root.revision();
     let mut batch =
-        GeneralBatchV2::open(&mut root, opening(), revision, ADMISSION_SLOT).expect("open batch");
-    place(&mut batch, 9, 1, OrderSideV2::Buy, 0, 1);
-    let candidate = candidate_bytes(batch.batch_id(), 1, 1, &[40, 60, 0]);
+        GeneralBatchV1::open(&mut root, opening(), revision, ADMISSION_SLOT).expect("open batch");
+    place(&mut batch, 9, 1, &[1, 0, 0], &[0, 1, 0]);
+    let candidate = candidate_bytes(batch.batch_id(), 1, &[40, 60, 0]);
     let decoded = CandidateV2::decode(&candidate).expect("candidate");
 
     let funded = ROW_COUNT as u64 * REWARD_RATE + 2 * REWARD_RATE;
@@ -604,7 +576,7 @@ fn hostile_a_page_from_another_candidate_or_revision_is_refused() {
     let cursor_len = candidate_verifier_len_v1(fixture.submission).expect("cursor width");
     let verified_len = candidate_certificate_len_v1(fixture.submission).expect("certificate width");
 
-    let foreign_candidate = candidate_bytes(fixture.batch.batch_id(), 1, 2, &[41, 59, 0]);
+    let foreign_candidate = candidate_bytes(fixture.batch.batch_id(), 1, &[41, 59, 0]);
     let foreign_id = CandidateV2::decode(&foreign_candidate)
         .expect("foreign")
         .header()
@@ -674,7 +646,7 @@ fn hostile_a_row_cannot_be_verified_against_a_cancelled_order() {
     // candidate was built before that. Its escrow is gone, so no row against it
     // may verify -- and the refusal names the PHASE, because every coordinate
     // in the row still matches the record.
-    let order = GeneralOrderV2::decode(&fixture.orders[0]).expect("order");
+    let order = GeneralOrderV1::decode(&fixture.orders[0]).expect("order");
     let mut cancelled = vec![0_u8; fixture.orders[0].len()];
     order
         .encode_successor_state_into(
@@ -711,9 +683,9 @@ fn hostile_a_row_naming_an_order_from_another_batch_is_refused() {
     let mut other_opening = opening();
     other_opening.sequence = 0;
     other_opening.max_orders = 2;
-    let mut other = GeneralBatchV2::open(&mut other_root, other_opening, revision, ADMISSION_SLOT)
+    let mut other = GeneralBatchV1::open(&mut other_root, other_opening, revision, ADMISSION_SLOT)
         .expect("other batch");
-    let foreign_order = place(&mut other, 9, 1, OrderSideV2::Buy, 0, 1);
+    let foreign_order = place(&mut other, 9, 1, &[1, 0, 0], &[0, 1, 0]);
 
     assert_eq!(
         run_one_with_order(

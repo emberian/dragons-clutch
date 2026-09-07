@@ -20,7 +20,7 @@ export interface RoutePhaseGateV1 {
 }
 
 /** Routes enumerated by the census, gated or not. */
-export const ROUTE_COUNT_V1 = 160 as const;
+export const ROUTE_COUNT_V1 = 162 as const;
 
 export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/affine_batch_v2::process", phases: ["Open"], prestates: [] },
@@ -66,6 +66,8 @@ export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "resolution/process_consume#ConsumeRecord", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_create#CreateFund", phases: ["Founding", "Open"], prestates: [["Founding", "Prepaid"], ["Open", "Consumed"]] },
   { route: "resolution/process_create_record#CreateRecord", phases: ["Open"], prestates: [["Open", "Consumed"]] },
+  { route: "resolution/process_ensemble_fold#EnsembleFold", phases: ["Open"], prestates: [["Open", "Consumed"]] },
+  { route: "resolution/process_reclaim_member_seat#ReclaimMemberSeat", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_settle#Settle", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_submit#magic", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_verify#VerifyFundReady", phases: ["Founding", "Open"], prestates: [["Founding", "Prepaid"], ["Open", "Consumed"]] },

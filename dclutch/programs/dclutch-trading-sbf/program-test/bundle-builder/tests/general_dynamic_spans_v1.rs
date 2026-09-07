@@ -41,9 +41,9 @@ use dclutch_trading::general::{
         GeneralCandidateV1, general_candidate_identity_v1, verify_candidate_row_v1,
     },
     collection_v1::{
-        GeneralBatchOpeningV1, GeneralBatchV2, GeneralOrderHeaderV2, GeneralOrderPhaseV1,
-        GeneralOrderStateV1, GeneralOrderV2, MakerFundingV1, general_order_len_v2,
-        general_signed_order_terms_len_v2,
+        GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1,
+        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, general_order_len_v1,
+        general_signed_order_terms_len_v1,
     },
     effect_artifacts_v3::{
         GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
@@ -511,7 +511,7 @@ fn open_batch_request_refuses_substituted_config_generation_and_zero_coordinates
 
 /// One live Batch envelope exactly as the chain holds it after an `OpenBatch`.
 ///
-/// Built through the semantic owners -- `GeneralBatchV2::open` consumes the
+/// Built through the semantic owners -- `GeneralBatchV1::open` consumes the
 /// root's revision and sequence, `encode_general_local_state_v3_atomic` wraps
 /// the record in its physical lifecycle -- rather than by spelling 224 bytes
 /// here, so a record layout that moved would move this fixture with it.
@@ -541,7 +541,7 @@ fn live_batch_account(
     };
     let expected_revision = root.revision();
     let batch =
-        GeneralBatchV2::open(root, opening, expected_revision, current_slot).expect("open batch");
+        GeneralBatchV1::open(root, opening, expected_revision, current_slot).expect("open batch");
     let batch_id = batch.batch_id();
     let seeds =
         GeneralStateAddressSeedsV3::batch(root_address.to_bytes(), batch_id).expect("Batch seeds");
@@ -907,8 +907,8 @@ struct LiveMarketV1 {
 
 /// Every record one of the fifteen arms reads, produced by the protocol.
 ///
-/// NOT ONE OF THESE IS TYPED HERE. The batch comes out of `GeneralBatchV2::open`
-/// and `close`, the order out of `GeneralOrderV2::encode_into` and the batch's
+/// NOT ONE OF THESE IS TYPED HERE. The batch comes out of `GeneralBatchV1::open`
+/// and `close`, the order out of `GeneralOrderV1::encode_into` and the batch's
 /// own `admit`, the submission out of `GeneralCandidateV1::submit`, and the
 /// verifier cursor, the certificate and the settlement manifest are the three
 /// outputs of ONE run of `verify_candidate_row_v1` -- the manifest has exactly
@@ -1010,13 +1010,13 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
         settlement_close_slot: settlement_close,
         max_orders: config.max_orders_per_candidate(),
     };
-    let mut batch = GeneralBatchV2::open(&mut market.root, opening, revision, LIVE_ADMISSION_SLOT)
+    let mut batch = GeneralBatchV1::open(&mut market.root, opening, revision, LIVE_ADMISSION_SLOT)
         .expect("open batch");
     let batch_id = batch.batch_id();
 
-    let mut order_account = vec![0_u8; general_order_len_v2(width).expect("order width")];
-    GeneralOrderV2::encode_into(
-        GeneralOrderHeaderV2 {
+    let mut order_account = vec![0_u8; general_order_len_v1(width).expect("order width")];
+    GeneralOrderV1::encode_into(
+        GeneralOrderHeaderV1 {
             outcome_count: width,
             nonce: 1,
             owner_id: LIVE_OWNER,
@@ -1038,7 +1038,7 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
         &mut order_account,
     )
     .expect("order record");
-    let order = GeneralOrderV2::decode(&order_account).expect("order record");
+    let order = GeneralOrderV1::decode(&order_account).expect("order record");
     let order_id = order.order_id();
     batch
         .admit(
@@ -1052,7 +1052,7 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
         )
         .expect("admit order");
     let mut signed_terms =
-        vec![0_u8; general_signed_order_terms_len_v2(width).expect("signed terms width")];
+        vec![0_u8; general_signed_order_terms_len_v1(width).expect("signed terms width")];
     order
         .encode_signed_terms_into(&mut signed_terms)
         .expect("signed terms");

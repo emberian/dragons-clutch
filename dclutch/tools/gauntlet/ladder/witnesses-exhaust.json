@@ -1,0 +1,48 @@
+{
+  "campaign": "ladder",
+  "note": "The witnesses of the EXHAUST arm, evaluated only against an exhaust transcript. Two of them are new -- the arm had none of its own until this file existed, because every entry in the shared file held on both arms -- and three came out of the shared file, where the failure arm had written them to be red on the capture walk ON PURPOSE. A red nobody is meant to read is a row that trains a reader to ignore reds; here they are simply not evaluated against the arm they are not about.",
+  "witnesses": [
+    {
+      "id": "this-transcript-is-the-exhaust-arm",
+      "kind": "plan-jq",
+      "query": ".walk",
+      "expect": "exhaust",
+      "provenance": "The campaign writes its own `walk` into the transcript from the `--walk` it was given (`tools/gauntlet/ladder/src/ladder.rs`, `WalkV1`). The positive control for the two witnesses below, on the same reasoning as the capture file's: this file against a capture transcript is red here rather than vacuously green."
+    },
+    {
+      "id": "the-exhaust-arm-cranked-onto-the-rung-and-then-off-it",
+      "kind": "plan-jq",
+      "query": "[.cranks[] | .sequence] | sort | map(tostring) | join(\",\")",
+      "expect": "2,3",
+      "provenance": "The exhaust arm's whole subject: a market that bought a named alternative and whose alternative also goes unanswered must still reach a terminal, so this arm drives TWO cranks -- terminal sequence 2 onto the rung and terminal sequence 3 off it (`ADVANCE_SEQUENCE_V1` and `EXHAUST_SEQUENCE_V1` in `tools/gauntlet/ladder/src/ladder.rs`), the second decided by `SourceResolutionStateV2::crank_recovery_ladder`'s exhaustion arm, the one reached when `policy.attempt(entering)` funds no further leg. The capture arm drives only the first, so this reads `2` there and is red, which is what makes it a witness of THIS arm. What it deliberately does not assert is that the second crank LANDED: a leg further away than `--max-wait-seconds` is reported not-yet-due by design and that is a measurement of the market, not a failure of the walk; `a-crank-runs-strictly-after-its-legs-deadline` in the shared file is what holds whichever outcome each crank had."
+    },
+    {
+      "id": "the-exhaust-arm-answered-nothing",
+      "kind": "plan-jq",
+      "query": "if .capture == null then \"answered-nothing\" else \"answered-something\" end",
+      "expect": "answered-nothing",
+      "provenance": "The complement of `the-rung-was-answered-by-the-source-it-paid-for`, and the reason the two arms are not one walk: this arm's property is that BOTH legs expire unobserved, so a transcript carrying a capture object is an arm that answered a leg it was supposed to let lapse and its exhaustion proves nothing about a silent provider. The field is written only inside the capture branch of `execute` (`tools/gauntlet/ladder/src/ladder.rs`), so its absence is the campaign's own record of what it did rather than a claim about it."
+    },
+    {
+      "id": "the-failure-selector-was-committed",
+      "kind": "plan-jq",
+      "query": ".refund.failureWalk.arm // \"not-driven\"",
+      "expect": "ladder-exhausted",
+      "provenance": "Decision 0027: 'only when the ladder is exhausted, and only after the last window's maximum age, does the failure selector resolve'. The shipped commit-deadline-failure driver takes the arm off the Source's own phase (dclutch_operator::deadline_failure_v1::deadline_failure_decision_v1) and writes it into its evidence; `ladder-exhausted` is the arm a walked ladder selects, `primary-deadline` the arm a market with no ladder selects, and a market standing on a rung is refused by name before a key opens. The transcript copies the driver's word rather than restating it. It is EVALUATED ONLY against the exhaust arm's own transcript, which `this-transcript-is-the-exhaust-arm` pins: it used to live in the shared file and be red on the capture walk on purpose, and a red nobody is meant to read is a row that trains a reader to ignore reds."
+    },
+    {
+      "id": "the-founder-drew-the-hoard-and-nothing-else",
+      "kind": "plan-jq",
+      "query": "if .refund.hoardDrained == true then \"drained\" else \"not-drained\" end",
+      "expect": "drained",
+      "provenance": "Decision 0025 section 5: 'a founder with no ordinary claims receives zero on an outage' and the refunding arm pays one atom to every ordinary claim. The ladder's market never fills, so the founder holds every ordinary claim and the escrow the whole failure column; the tier reads the Hoard before the first refund and after the last, and `hoardDrained` is true only when the sum of the payout drivers' own `payout` fields equals the Hoard's fall AND the Hoard reads zero -- the founder drew exactly their holdings and the escrow's column was worth nothing to anybody (EconomicKernel.lean: a_stranger_and_the_founder_draw_the_hoard_between_them). It is EVALUATED ONLY against the exhaust arm's own transcript, which `this-transcript-is-the-exhaust-arm` pins: it used to live in the shared file and be red on the capture walk on purpose, and a red nobody is meant to read is a row that trains a reader to ignore reds."
+    },
+    {
+      "id": "the-escrow-payout-was-a-recorded-no-op",
+      "kind": "plan-jq",
+      "query": ".refund.escrow.payout // \"absent\"",
+      "expect": "recorded-no-op",
+      "provenance": "The escrow's owner is the ClaimsCapability PDA at (market, failure selector): a program-derived address with no key, so no party can sign coordinate 0 of a terminal settlement for it, and its column is owed nothing under every certificate (runtime_v3 FailureCoordinateNotPayable; EconomicKernel.lean the_failure_column_is_owed_nothing_under_every_certificate). The tier asks wallet-terminal-payout-input for that owner and records the producer's refusal by name -- 'is this Market's own failure escrow' -- as the payout that never was; the column is the residue decision 0025 shape A burns inside the retirement's prepare packet. It is EVALUATED ONLY against the exhaust arm's own transcript, which `this-transcript-is-the-exhaust-arm` pins: it used to live in the shared file and be red on the capture walk on purpose, and a red nobody is meant to read is a row that trains a reader to ignore reds."
+    }
+  ]
+}

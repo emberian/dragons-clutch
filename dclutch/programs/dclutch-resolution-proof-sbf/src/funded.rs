@@ -97,6 +97,136 @@ pub enum FundedWalkErrorV1 {
     Transition,
     /// The escrowed compartment was missing, misbound, or empty.
     Funding,
+    /// The ensemble's quorum answered, so the fold is the admissible move and
+    /// this walk is not.
+    QuorumMet,
+}
+
+/// The crank's and the exhaustion's refusals, with the one that names the
+/// fold kept apart from the deadline's.
+const fn map_crank_error(error: dclutch_source::Error) -> FundedWalkErrorV1 {
+    match error {
+        dclutch_source::Error::EnsembleQuorumMet => FundedWalkErrorV1::QuorumMet,
+        _ => FundedWalkErrorV1::Transition,
+    }
+}
+
+/// One member's bounty, released at the fold to the captor its fragment named.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemberBountyReleaseV1 {
+    /// The member whose row was released.
+    pub member: u8,
+    /// The manifest entry the row sits at.
+    pub entry_index: u16,
+    /// Lamports released to the captor.
+    pub work_paid: u64,
+}
+
+/// What the fold pays, over the whole ledger.
+pub struct MemberBountyPlanV1 {
+    /// The complete ledger after every consumed member's row was released.
+    pub next_funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    /// One release per consumed member with an attempt row, in member order.
+    pub releases: [Option<MemberBountyReleaseV1>; 5],
+    /// Exact lamports the ledger holds after every release.
+    pub funding_lamports_after: u64,
+}
+
+/// Release each consumed member's bounty in one pass over the one ledger.
+///
+/// Member `m` (`1..k`) is paid from the row configured by its attempt's
+/// `funding_allocation` -- the same row a crank onto that slot would spend,
+/// selected by configuration and never by position -- and member zero, the
+/// primary, has no row and is paid nothing, as every primary capture has been.
+/// Rows are released sequentially on the same bytes so a ledger that pays
+/// two members pays each once; `release_in_place` refuses a row already
+/// released.
+pub fn plan_member_bounty_releases_v1(
+    escrow: &AuthenticatedFailureFundingV2<'_>,
+    policy: RecoveryPolicyV2,
+    ensemble: dclutch_source::EnsembleSpecV1,
+    consumed_bitmap: u8,
+) -> Result<MemberBountyPlanV1, FundedWalkErrorV1> {
+    let mut next_funding = escrow.ledger_bytes;
+    let mut releases = [None; 5];
+    let mut lamports_after = escrow.ledger_account_lamports;
+    let mut member = 1_u8;
+    while member < ensemble.members() {
+        if (consumed_bitmap >> member) & 1 == 1 {
+            let attempt = policy
+                .member_attempt(ensemble, member)
+                .map_err(|_| FundedWalkErrorV1::Source)?;
+            let config = attempt.funding_allocation_id().to_bytes();
+            let entry_index = selected_entry_for_config(escrow, config)?;
+            let entry = escrow
+                .manifest
+                .entry(entry_index)
+                .map_err(|_| FundedWalkErrorV1::Funding)?;
+            let quote = entry.funding_quote().amounts().bounty();
+            if quote.asset_class() != FundingAssetClassV1::NativeLamports || quote.amount() == 0 {
+                return Err(FundedWalkErrorV1::Funding);
+            }
+            let released = FundingLedgerV2::release_in_place(
+                &mut next_funding,
+                escrow.manifest_id,
+                escrow.manifest,
+                entry_index,
+                FundingCompartment::Bounty,
+                quote.amount(),
+            )
+            .map_err(|_| FundedWalkErrorV1::Funding)?;
+            if released.amount() != quote.amount() {
+                return Err(FundedWalkErrorV1::Funding);
+            }
+            lamports_after = lamports_after
+                .checked_sub(quote.amount())
+                .ok_or(FundedWalkErrorV1::Funding)?;
+            releases[usize::from(member)] = Some(MemberBountyReleaseV1 {
+                member,
+                entry_index,
+                work_paid: quote.amount(),
+            });
+        }
+        member = member.checked_add(1).ok_or(FundedWalkErrorV1::Funding)?;
+    }
+    FundingLedgerV2::decode(&next_funding)
+        .and_then(|ledger| ledger.authenticate(escrow.manifest_id, escrow.manifest))
+        .map_err(|_| FundedWalkErrorV1::Funding)?;
+    Ok(MemberBountyPlanV1 {
+        next_funding,
+        releases,
+        funding_lamports_after: lamports_after,
+    })
+}
+
+/// The selected manifest entry whose configuration is `config`, found by
+/// comparison over the ledger's selected mask -- exactly one, or a refusal.
+fn selected_entry_for_config(
+    escrow: &AuthenticatedFailureFundingV2<'_>,
+    config: [u8; 32],
+) -> Result<u16, FundedWalkErrorV1> {
+    let ledger =
+        FundingLedgerV2::decode(&escrow.ledger_bytes).map_err(|_| FundedWalkErrorV1::Funding)?;
+    let mut found = None;
+    let mut entry_index = 0_u16;
+    while entry_index < escrow.manifest.entry_count() {
+        if ledger.selected_mask() & (1_u16 << u32::from(entry_index)) != 0 {
+            let entry = escrow
+                .manifest
+                .entry(entry_index)
+                .map_err(|_| FundedWalkErrorV1::Funding)?;
+            if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7
+                && entry.config_id().to_bytes() == config
+                && found.replace(entry_index).is_some()
+            {
+                return Err(FundedWalkErrorV1::Funding);
+            }
+        }
+        entry_index = entry_index
+            .checked_add(1)
+            .ok_or(FundedWalkErrorV1::Funding)?;
+    }
+    found.ok_or(FundedWalkErrorV1::Funding)
 }
 
 /// The exact coordinates the physical outer authenticated before calling.
@@ -357,6 +487,7 @@ pub fn process_funded_transition(
     source: &AuthenticatedWalkSourceV1,
     ladder: &AuthenticatedRecoveryPolicyV1,
     escrow: &AuthenticatedFailureFundingV2<'_>,
+    observed_fragments: u8,
 ) -> Result<FundedTransitionPlanV1, FundedWalkErrorV1> {
     if source_state.market() != request.market
         || source_state.generation() != request.generation
@@ -382,8 +513,9 @@ pub fn process_funded_transition(
             ladder.policy,
             request.generation,
             request.current_unix_seconds,
+            observed_fragments,
         )
-        .map_err(|_| FundedWalkErrorV1::Transition)?;
+        .map_err(map_crank_error)?;
 
     // Which compartment pays is a function of which rung was taken, and both
     // identities come out of records the market finalized before it opened.
@@ -471,6 +603,7 @@ pub fn plan_deadline_failure_v1(
     product_runtime: &AuthenticatedProductRuntimeV2,
     result_domain: ResultDomainV2<'_>,
     escrow: &AuthenticatedFailureFundingV2<'_>,
+    observed_fragments: u8,
 ) -> Result<DeadlineFailurePlanV1, FundedWalkErrorV1> {
     if source_state.market() != request.market
         || source_state.generation() != request.generation
@@ -523,8 +656,9 @@ pub fn plan_deadline_failure_v1(
                 source.window,
                 request.generation,
                 request.current_unix_seconds,
+                observed_fragments,
             )
-            .map_err(|_| FundedWalkErrorV1::Transition)?;
+            .map_err(map_crank_error)?;
     }
     let decision = next_source
         .commit_failure_from_authenticated_domain(

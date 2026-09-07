@@ -41,9 +41,9 @@ use dclutch_trading::general::{
         authenticate_candidate_identity_v1, general_candidate_identity_v1,
     },
     collection_v1::{
-        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV2, GeneralOrderHeaderV2,
-        GeneralOrderPhaseV1, GeneralOrderStateV1, GeneralOrderV2, authenticate_batch_candidate_v1,
-        general_order_len_v2, general_signed_order_terms_len_v2,
+        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV1, GeneralOrderHeaderV1,
+        GeneralOrderPhaseV1, GeneralOrderStateV1, GeneralOrderV1, authenticate_batch_candidate_v1,
+        general_order_len_v1, general_signed_order_terms_len_v1,
     },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len},
@@ -1377,7 +1377,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         "the isolated protocol payer funds exactly the new Batch principal"
     );
     let local = GeneralLocalStateV3::decode(&batch_after.data).expect("local Batch envelope");
-    let decoded_batch = GeneralBatchV2::decode(local.body()).expect("Batch");
+    let decoded_batch = GeneralBatchV1::decode(local.body()).expect("Batch");
     let occurrence = GeneralBatchOccurrenceTermsV1::new(decoded_batch.opening())
         .expect("Batch occurrence")
         .occurrence_id();
@@ -1914,9 +1914,9 @@ async fn produce_seal(
 }
 
 /// Decode the live Batch envelope exactly as the bank holds it.
-fn decode_batch(account: &Account) -> (GeneralLocalStateV3<'_>, GeneralBatchV2) {
+fn decode_batch(account: &Account) -> (GeneralLocalStateV3<'_>, GeneralBatchV1) {
     let envelope = GeneralLocalStateV3::decode(&account.data).expect("local Batch envelope");
-    let batch = GeneralBatchV2::decode(envelope.body()).expect("Batch");
+    let batch = GeneralBatchV1::decode(envelope.body()).expect("Batch");
     (envelope, batch)
 }
 
@@ -1947,7 +1947,7 @@ fn root_tail_of(account: &Account) -> GeneralRootV2 {
 /// and consumes root revision 1; `CloseBatch` names the Batch by the identity
 /// the CHAIN holds, consumes revision 2, and is admitted only once the
 /// config-derived collection window has elapsed
-/// (`GeneralBatchV2::close_is_permissionless`). Neither can be run first and
+/// (`GeneralBatchV1::close_is_permissionless`). Neither can be run first and
 /// neither can be run twice, and both facts are executed below rather than
 /// asserted in prose.
 ///
@@ -2066,7 +2066,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // `identity_eq(PAYER, OWNER)`: whoever signs the placement IS the maker the
     // record names, exactly as SubmitCandidate's solver is the account that
     // funds the candidate.
-    let order_header = GeneralOrderHeaderV2 {
+    let order_header = GeneralOrderHeaderV1 {
         outcome_count: OUTCOME_COUNT,
         nonce: 1,
         owner_id: payer.pubkey().to_bytes(),
@@ -2079,14 +2079,14 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         valid_until_slot: opened_batch.opening().settlement_close_slot,
     };
     // One lot of outcome zero received against one lot of outcome one
-    // delivered: the smallest order `GeneralOrderV2::decode` admits, since a
+    // delivered: the smallest order `GeneralOrderV1::decode` admits, since a
     // record that moves no claim in either direction is refused `ZeroIdentity`.
     let mut receive_per_lot = vec![0_u64; usize::try_from(OUTCOME_COUNT).expect("width")];
     let mut deliver_per_lot = receive_per_lot.clone();
     receive_per_lot[0] = 1;
     deliver_per_lot[1] = 1;
-    let mut order_bytes = vec![0_u8; general_order_len_v2(OUTCOME_COUNT).expect("order width")];
-    GeneralOrderV2::encode_into(
+    let mut order_bytes = vec![0_u8; general_order_len_v1(OUTCOME_COUNT).expect("order width")];
+    GeneralOrderV1::encode_into(
         order_header,
         &receive_per_lot,
         &deliver_per_lot,
@@ -2098,9 +2098,9 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         &mut order_bytes,
     )
     .expect("canonical maker order against the open batch");
-    let order_record = GeneralOrderV2::decode(&order_bytes).expect("order record");
+    let order_record = GeneralOrderV1::decode(&order_bytes).expect("order record");
     let mut signed_terms =
-        vec![0_u8; general_signed_order_terms_len_v2(OUTCOME_COUNT).expect("terms width")];
+        vec![0_u8; general_signed_order_terms_len_v1(OUTCOME_COUNT).expect("terms width")];
     order_record
         .encode_signed_terms_into(&mut signed_terms)
         .expect("the signed projection keeps the record identity");
@@ -2263,7 +2263,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     //
     // AN ACTION OUT OF SEQUENCE, stated the only way a same-bank campaign can
     // state it. The host cannot BUILD a second `CloseBatch` -- the projector
-    // decodes the batch the bank now holds and `GeneralBatchV2::close` refuses a
+    // decodes the batch the bank now holds and `GeneralBatchV1::close` refuses a
     // batch that is not `Collecting` -- so the out-of-order execution that
     // reaches the chain is this one: the exact bundle that just committed,
     // resubmitted against the poststate it produced. Its `expected_revision` is

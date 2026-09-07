@@ -36,7 +36,7 @@ use dclutch_trading::general::{
         CandidateVerifyRowViewV1, GeneralCandidateErrorV1, GeneralCandidateV1,
         candidate_verifier_len_v1,
     },
-    collection_v1::GeneralBatchV2,
+    collection_v1::GeneralBatchV1,
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GeneralHotCandidateErrorV3,
         authenticate_general_close_candidate_v3, general_hot_candidate_bank_len_v3,
@@ -1011,7 +1011,7 @@ fn evaluate_close_candidate(
     if batch_state.header().kind != GeneralLocalStateKindV3::Batch {
         return Err(GeneralAcceleratorSemanticErrorV3::State);
     }
-    let batch = GeneralBatchV2::decode(batch_state.body())
+    let batch = GeneralBatchV1::decode(batch_state.body())
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     authenticate_general_close_candidate_v3(
         family_request,
@@ -1138,7 +1138,7 @@ fn evaluate_verify_candidate(
     if batch_state.header().kind != GeneralLocalStateKindV3::Batch {
         return Err(GeneralAcceleratorSemanticErrorV3::State);
     }
-    let batch = GeneralBatchV2::decode(batch_state.body())
+    let batch = GeneralBatchV1::decode(batch_state.body())
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     let candidate_data = data(
         runtime,
@@ -1490,7 +1490,7 @@ fn evaluate_selection(
             // `Freeze` gained the closed Batch as readonly evidence so its
             // transition could compare the clock against
             // `collection_close + selectionSlots`. That account is
-            // caller-supplied, and `GeneralBatchV2::batch_id` recomputes the
+            // caller-supplied, and `GeneralBatchV1::batch_id` recomputes the
             // occurrence identity from the batch's own immutable opening, so
             // this is the one place the presented batch is joined to the
             // selection it claims to be closing. Without it the window conjunct
@@ -1504,7 +1504,7 @@ fn evaluate_selection(
             if batch_state.header().kind != GeneralLocalStateKindV3::Batch {
                 return Err(GeneralAcceleratorSemanticErrorV3::State);
             }
-            let batch = GeneralBatchV2::decode(batch_state.body())
+            let batch = GeneralBatchV1::decode(batch_state.body())
                 .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
             if batch.batch_id() != header.batch_id {
                 return Err(GeneralAcceleratorSemanticErrorV3::SelectionBatch);

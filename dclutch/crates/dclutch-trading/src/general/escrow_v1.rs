@@ -70,7 +70,7 @@ use crate::general::candidate_v1::{
     GeneralCandidateOpeningV1, GeneralCandidateV1, WorkCompartmentV1, WorkRewardV1,
 };
 use crate::general::collection_v1::{
-    EscrowDirectionV1, GeneralBatchV2, GeneralOrderPhaseV1, GeneralOrderV2, OrderEscrowV1,
+    EscrowDirectionV1, GeneralBatchV1, GeneralOrderPhaseV1, GeneralOrderV1, OrderEscrowV1,
 };
 
 // ---------------------------------------------------------------------------
@@ -171,10 +171,7 @@ pub const fn general_child_custody_movement_v1(
         GeneralChildEffectV1::CollectClaims
         | GeneralChildEffectV1::DistributeClaims
         | GeneralChildEffectV1::EscrowClaims
-        | GeneralChildEffectV1::ReleaseClaims
-        // The strand burns claims and moves NO atom: the collateral behind a
-        // stranded residual stays in the Hoard (decision 0032 §2a, §6).
-        | GeneralChildEffectV1::StrandResidual => None,
+        | GeneralChildEffectV1::ReleaseClaims => None,
         // THE ESCROW RULING, in the one place it is now written. Decision 0010
         // §2: a `Collect` draws on collateral the protocol is already holding in
         // the ORDER's own vault. The `External` source this replaced could reach
@@ -825,8 +822,8 @@ impl OrderEscrowPlanV1 {
     /// is the balance each direction requires, which is the difference between
     /// an accounted escrow and a held one.
     pub fn new(
-        batch: GeneralBatchV2,
-        order: GeneralOrderV2<'_>,
+        batch: GeneralBatchV1,
+        order: GeneralOrderV1<'_>,
         escrow: OrderEscrowV1,
         observation: OrderEscrowObservationV1,
     ) -> GeneralEscrowResultV1<Self> {
@@ -964,7 +961,7 @@ impl OrderEscrowPlanV1 {
 /// Called once per runtime outcome so no fixed-capacity array enters an SBF
 /// frame. `escrowed` is the escrow Position's observed magnitude at `outcome`.
 pub fn authenticate_order_escrow_claims_v1(
-    order: GeneralOrderV2<'_>,
+    order: GeneralOrderV1<'_>,
     direction: EscrowDirectionV1,
     outcome: u32,
     escrowed: u64,
@@ -996,8 +993,8 @@ pub fn authenticate_order_escrow_claims_v1(
 /// this a candidate could be verified against an escrow, and settled against a
 /// vault that had been emptied or that belongs to another order entirely.
 pub fn authenticate_collect_from_escrow_v1(
-    batch: GeneralBatchV2,
-    order: GeneralOrderV2<'_>,
+    batch: GeneralBatchV1,
+    order: GeneralOrderV1<'_>,
     observation: OrderEscrowObservationV1,
     quote_debit: u64,
 ) -> GeneralEscrowResultV1<()> {

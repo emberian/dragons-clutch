@@ -26,6 +26,8 @@ mod derived_transport_v1;
 /// Current-ABI derived-family evidence composition: a child market settled
 /// from its parents' certificates.
 pub mod derived_v1;
+/// The ensemble fold: fragments in member seats folded to one terminal.
+pub mod ensemble_v1;
 /// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
 /// compartment a deadline-driven terminal spends.
 pub mod funded;
@@ -282,6 +284,24 @@ pub enum ResolutionError {
     /// Loader V3 frame, or the reverse -- and the fix is the market's
     /// configuration, not the caller's account list.
     RelayedVenueKind = 0x8028,
+    /// A fragment named a member the material does not declare.
+    ///
+    /// The ensemble's members are the material's own `k`; a member byte at or
+    /// above it names no seat, and the route refuses BEFORE deriving one so a
+    /// hostile cannot learn a seat address it has no member for.
+    EnsembleMember = 0x8029,
+    /// Fewer fragments than the quorum: the fold is not the admissible move.
+    ///
+    /// The ladder's crank is, and the two are exclusive by construction
+    /// (`the_fold_never_stalls`), so a fold that reads this should turn the
+    /// crank rather than wait for a member that already had its window.
+    EnsembleQuorum = 0x802A,
+    /// At least the quorum answered: the crank or the failure walk is not the
+    /// admissible move, the fold is.
+    ///
+    /// The other half of the same exclusivity, counted over the same seats in
+    /// the same frame, so no second can hold both moves.
+    EnsembleQuorumMet = 0x802B,
 }
 
 /// Split the recorded-rate conjuncts out of the generic funding refusal.
@@ -353,7 +373,10 @@ dclutch_refusal_registry::pin_refusal_band!(
         DerivedReference,
         DerivedWindowClosed,
         DerivedParentFailed,
-        RelayedVenueKind
+        RelayedVenueKind,
+        EnsembleMember,
+        EnsembleQuorum,
+        EnsembleQuorumMet
     ]
 );
 

@@ -1163,6 +1163,13 @@ fn campaign(
             &provider_plan,
             &capture_dir,
             &mut session.transactions,
+            // THE PINNED CAPTURE, AND THE PRIMARY LEG. This journey's market
+            // sells the window that ENDS at the captured publication instant,
+            // so the capture is the publication that answers it, and the
+            // market's first choice is the source that answers.
+            &provider::PublicationV1::captured(),
+            None,
+            1,
         ) {
             Ok((report, lamports)) => (report, lamports, ClassClaimV1::unchanged()),
             Err(error) => {

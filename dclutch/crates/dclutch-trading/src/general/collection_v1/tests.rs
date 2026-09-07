@@ -41,9 +41,9 @@ fn opening() -> GeneralBatchOpeningV1 {
 }
 
 /// Open one batch at the root's exact revision and sequence.
-fn open_batch(root: &mut GeneralRootV2) -> GeneralBatchV2 {
+fn open_batch(root: &mut GeneralRootV2) -> GeneralBatchV1 {
     let revision = root.revision();
-    GeneralBatchV2::open(root, opening(), revision, 10).expect("open batch")
+    GeneralBatchV1::open(root, opening(), revision, 10).expect("open batch")
 }
 
 fn placed(admitted_slot: u64) -> GeneralOrderStateV1 {
@@ -54,20 +54,14 @@ fn placed(admitted_slot: u64) -> GeneralOrderStateV1 {
     }
 }
 
-/// One order's shape: which way the claims flow, the single outcome it moves
-/// them at, and how many it moves per lot.
-///
-/// Since the joint clearing the rows are DERIVED from this, so a test states
-/// the shape and reads the vectors back rather than authoring both.
-type OrderShapeV2 = (OrderSideV2, u32, u64);
-
 fn order_bytes(
     batch_id: [u8; 32],
     owner: u8,
     nonce: u64,
     max_lots: u64,
     max_quote_debit_per_lot: u64,
-    shape: OrderShapeV2,
+    receive: &[u64],
+    deliver: &[u64],
 ) -> Vec<u8> {
     order_bytes_with_floor(
         batch_id,
@@ -76,17 +70,19 @@ fn order_bytes(
         max_lots,
         max_quote_debit_per_lot,
         0,
-        shape,
+        receive,
+        deliver,
     )
 }
 
 /// One order carrying a SELLER'S FLOOR, which `order_bytes` leaves at zero.
 ///
-/// Written as a sibling rather than one more parameter on `order_bytes` so that
+/// Written as a sibling rather than a ninth parameter on `order_bytes` so that
 /// every existing caller keeps saying exactly what it said: a zero floor is the
 /// record's reserved-zero bytes and its old `order_id`, and a test that had to
 /// pass `0` to keep its meaning would be evidence that the field was not
 /// additive after all.
+#[allow(clippy::too_many_arguments)]
 fn order_bytes_with_floor(
     batch_id: [u8; 32],
     owner: u8,
@@ -94,46 +90,39 @@ fn order_bytes_with_floor(
     max_lots: u64,
     max_quote_debit_per_lot: u64,
     min_quote_credit_per_lot: u64,
-    shape: OrderShapeV2,
+    receive: &[u64],
+    deliver: &[u64],
 ) -> Vec<u8> {
-    let (side, outcome, claims_per_lot) = shape;
-    let header = GeneralOrderHeaderV2 {
-        outcome_count: WIDTH,
-        nonce,
-        owner_id: id(owner),
-        market: id(1),
-        batch_id,
-        generation: 7,
-        max_lots,
-        max_quote_debit_per_lot,
-        min_quote_credit_per_lot,
-        valid_until_slot: SETTLEMENT_CLOSE,
-        side,
-        outcome_lo: outcome,
-        outcome_hi: outcome,
-        claims_per_lot,
-    };
-    let (receive, deliver) = derived_vectors(header);
-    let mut bytes = vec![0_u8; general_order_len_v2(WIDTH).expect("order width")];
-    GeneralOrderV2::encode_into(header, &receive, &deliver, placed(10), &mut bytes)
-        .expect("order bytes");
+    let mut bytes = vec![0_u8; general_order_len_v1(WIDTH).expect("order width")];
+    GeneralOrderV1::encode_into(
+        GeneralOrderHeaderV1 {
+            outcome_count: WIDTH,
+            nonce,
+            owner_id: id(owner),
+            market: id(1),
+            batch_id,
+            generation: 7,
+            max_lots,
+            max_quote_debit_per_lot,
+            min_quote_credit_per_lot,
+            valid_until_slot: SETTLEMENT_CLOSE,
+        },
+        receive,
+        deliver,
+        placed(10),
+        &mut bytes,
+    )
+    .expect("order bytes");
     bytes
-}
-
-/// The `(receive, deliver)` vectors one header's shape derives.
-fn derived_vectors(header: GeneralOrderHeaderV2) -> (Vec<u64>, Vec<u64>) {
-    (0..header.outcome_count)
-        .map(|outcome| header.derived_row(outcome))
-        .unzip()
 }
 
 /// Build a real Execution row, tails included.
 ///
-/// The tails are not decoration: `authenticate_order_execution_v2` binds them
+/// The tails are not decoration: `authenticate_order_execution_v1` binds them
 /// to the order record, so a helper that fabricated a header alone could not
 /// express the substitution these tests refuse.
 fn execution_bytes(
-    order: GeneralOrderV2<'_>,
+    order: GeneralOrderV1<'_>,
     lots: u64,
     receive: &[u64],
     deliver: &[u64],
@@ -173,15 +162,9 @@ fn row(bytes: &[u8]) -> ExecutionV2<'_> {
     ExecutionV2::decode(bytes).expect("row")
 }
 
-/// The module's one canonical maker: a sell of two claims at outcome one.
 fn simple_order(batch_id: [u8; 32], owner: u8, nonce: u64) -> Vec<u8> {
-    order_bytes(batch_id, owner, nonce, 10, 5, SIMPLE_SHAPE)
+    order_bytes(batch_id, owner, nonce, 10, 5, &[1, 0, 0], &[0, 2, 0])
 }
-
-/// `simple_order`'s shape, and the `(receive, deliver)` vectors it derives.
-const SIMPLE_SHAPE: OrderShapeV2 = (OrderSideV2::Sell, 1, 2);
-const SIMPLE_RECEIVE: [u64; WIDTH as usize] = [0, 0, 0];
-const SIMPLE_DELIVER: [u64; WIDTH as usize] = [0, 2, 0];
 
 fn funding(owner: u8, quote: u64, claims: &[u64]) -> MakerFundingV1<'_> {
     MakerFundingV1 {
@@ -199,15 +182,9 @@ fn funding(owner: u8, quote: u64, claims: &[u64]) -> MakerFundingV1<'_> {
 fn batch_bytes_round_trip_through_a_hostile_decode() {
     let mut root = active_root();
     let batch = open_batch(&mut root);
-    let mut bytes = vec![0_u8; general_batch_len_v2(WIDTH).expect("batch width")];
-    batch.encode_into(&mut bytes).expect("encode");
-    assert_eq!(GeneralBatchV2::decode(&bytes).expect("decode"), batch);
-    // `to_bytes` is the V1 prefix the OpenBatch and CloseBatch effects write,
-    // and it is exactly the record's first 224 bytes: the clearing tail behind
-    // it is zero by the vacancy law while the batch collects.
-    let prefix = batch.to_bytes();
-    assert_eq!(prefix.len(), GENERAL_BATCH_BYTES_V1);
-    assert_eq!(&bytes[..GENERAL_BATCH_BYTES_V1], &prefix[..]);
+    let bytes = batch.to_bytes();
+    assert_eq!(bytes.len(), GENERAL_BATCH_BYTES_V1);
+    assert_eq!(GeneralBatchV1::decode(&bytes).expect("decode"), batch);
 }
 
 #[test]
@@ -215,15 +192,11 @@ fn order_bytes_round_trip_and_carry_their_own_identity() {
     let mut root = active_root();
     let batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("decode");
-    assert_eq!(bytes.len(), general_order_len_v2(WIDTH).expect("width"));
+    let order = GeneralOrderV1::decode(&bytes).expect("decode");
+    assert_eq!(bytes.len(), general_order_len_v1(WIDTH).expect("width"));
     assert_eq!(order.order_id(), order.terms().order_id);
-    // The rows are the shape's, at every outcome: nothing moves off the
-    // interval and a sell receives nothing on it.
-    assert_eq!(order.receive_per_lot(1).expect("receive"), 0);
-    assert_eq!(order.deliver_per_lot(0).expect("off interval"), 0);
+    assert_eq!(order.receive_per_lot(0).expect("receive"), 1);
     assert_eq!(order.deliver_per_lot(1).expect("deliver"), 2);
-    assert_eq!(order.deliver_per_lot(2).expect("off interval"), 0);
     assert_eq!(order.quote_reserve().expect("quote"), 50);
     assert_eq!(order.claim_reserve(1).expect("claim"), 20);
 }
@@ -238,7 +211,7 @@ fn the_batch_identity_is_fixed_at_open_and_admission_does_not_move_it() {
     let bytes = simple_order(identity, 9, 1);
     batch
         .admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
+            GeneralOrderV1::decode(&bytes).expect("order"),
             funding(9, 100, &[0, 20, 0]),
             10,
         )
@@ -329,7 +302,7 @@ fn the_same_batch_occurrence_cannot_reopen_with_a_substituted_runtime_window() {
     let mut root = active_root();
     let first_revision = root.revision();
     let first =
-        GeneralBatchV2::open(&mut root, opening(), first_revision, 10).expect("first occurrence");
+        GeneralBatchV1::open(&mut root, opening(), first_revision, 10).expect("first occurrence");
     let root_after_first = root;
     let mut replay = opening();
     replay.collection_close_slot += 100;
@@ -341,7 +314,7 @@ fn the_same_batch_occurrence_cannot_reopen_with_a_substituted_runtime_window() {
         first.batch_id()
     );
     assert_eq!(
-        GeneralBatchV2::open(&mut root, replay, first_revision, 20),
+        GeneralBatchV1::open(&mut root, replay, first_revision, 20),
         Err(GeneralCollectionErrorV1::Substitution)
     );
     assert_eq!(root, root_after_first);
@@ -352,16 +325,16 @@ fn atomic_physical_admission_matches_funded_semantics_and_refuses_a_closed_windo
     let mut funded_root = active_root();
     let mut funded_batch = open_batch(&mut funded_root);
     let bytes = simple_order(funded_batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
-    let mut signed_bytes = vec![0; general_signed_order_terms_len_v2(WIDTH).expect("signed width")];
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let mut signed_bytes = vec![0; general_signed_order_terms_len_v1(WIDTH).expect("signed width")];
     order
         .encode_signed_terms_into(&mut signed_bytes)
         .expect("signed immutable terms");
-    let signed = GeneralSignedOrderTermsV2::decode(&signed_bytes).expect("signed terms");
+    let signed = GeneralSignedOrderTermsV1::decode(&signed_bytes).expect("signed terms");
     assert_eq!(signed.order_id(), order.order_id());
 
     assert_eq!(
-        GeneralSignedOrderTermsV2::decode(&signed_bytes[..signed_bytes.len() - 1]),
+        GeneralSignedOrderTermsV1::decode(&signed_bytes[..signed_bytes.len() - 1]),
         Err(GeneralCollectionErrorV1::InvalidLength)
     );
     // Byte 24 was the reserved window and refused nonzero; since 2026-09-04 it
@@ -370,15 +343,15 @@ fn atomic_physical_admission_matches_funded_semantics_and_refuses_a_closed_windo
     // that could be attached to it without moving `order_id` would be a term
     // the maker never agreed to.
     let mut floored = signed_bytes.clone();
-    floored[GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT] = 1;
-    let floored_terms = GeneralSignedOrderTermsV2::decode(&floored).expect("floored signed terms");
+    floored[GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT] = 1;
+    let floored_terms = GeneralSignedOrderTermsV1::decode(&floored).expect("floored signed terms");
     assert_eq!(floored_terms.header().min_quote_credit_per_lot, 1);
     assert_ne!(floored_terms.order_id(), order.order_id());
     let mut substituted_row = signed_bytes.clone();
     let last = substituted_row.len() - 1;
     substituted_row[last] ^= 1;
     let substituted =
-        GeneralSignedOrderTermsV2::decode(&substituted_row).expect("canonical substituted row");
+        GeneralSignedOrderTermsV1::decode(&substituted_row).expect("canonical substituted row");
     assert_ne!(substituted.order_id(), order.order_id());
 
     let mut physical_batch = funded_batch;
@@ -408,7 +381,7 @@ fn two_batches_differing_only_in_sequence_have_different_identities() {
     let revision = root.revision();
     let mut next = opening();
     next.sequence = 1;
-    let second = GeneralBatchV2::open(&mut root, next, revision, 10)
+    let second = GeneralBatchV1::open(&mut root, next, revision, 10)
         .expect("second batch")
         .batch_id();
     assert_ne!(first, second);
@@ -418,7 +391,7 @@ fn two_batches_differing_only_in_sequence_have_different_identities() {
 fn a_degenerate_order_moving_no_claim_is_refused() {
     let mut root = active_root();
     let batch = open_batch(&mut root);
-    let header = GeneralOrderHeaderV2 {
+    let header = GeneralOrderHeaderV1 {
         outcome_count: WIDTH,
         nonce: 1,
         owner_id: id(9),
@@ -429,27 +402,17 @@ fn a_degenerate_order_moving_no_claim_is_refused() {
         max_quote_debit_per_lot: 5,
         min_quote_credit_per_lot: 0,
         valid_until_slot: SETTLEMENT_CLOSE,
-        side: OrderSideV2::Sell,
-        outcome_lo: 1,
-        outcome_hi: 1,
-        claims_per_lot: 0,
     };
-    let mut bytes = vec![0_u8; general_order_len_v2(WIDTH).expect("order width")];
+    let mut bytes = vec![0_u8; general_order_len_v1(WIDTH).expect("order width")];
     // The encoder hostile-decodes its own candidate, so a record that would not
-    // survive `decode` is refused before any caller can hold one. Since the
-    // joint clearing the degenerate order is refused BY ITS SHAPE -- a zero
-    // magnitude is not an interval -- rather than by its all-zero rows.
+    // survive `decode` is refused before any caller can hold one.
     assert_eq!(
-        GeneralOrderV2::encode_into(header, &[0, 0, 0], &[0, 0, 0], placed(10), &mut bytes),
-        Err(GeneralCollectionErrorV1::ShapeNotInterval)
+        GeneralOrderV1::encode_into(header, &[0, 0, 0], &[0, 0, 0], placed(10), &mut bytes),
+        Err(GeneralCollectionErrorV1::ZeroIdentity)
     );
-    // And a canonical record whose magnitude is zeroed on the wire is refused
-    // at decode rather than read as an order that moves nothing.
-    let mut zeroed = order_bytes(batch.batch_id(), 9, 1, 10, 5, SIMPLE_SHAPE);
-    zeroed[GeneralOrderLayoutV2::CLAIMS_PER_LOT..GeneralOrderLayoutV2::CLAIMS_PER_LOT + 8].fill(0);
     assert_eq!(
-        GeneralOrderV2::decode(&zeroed),
-        Err(GeneralCollectionErrorV1::ShapeNotInterval)
+        GeneralOrderV1::decode(&bytes),
+        Err(GeneralCollectionErrorV1::ZeroIdentity)
     );
 }
 
@@ -457,84 +420,41 @@ fn a_degenerate_order_moving_no_claim_is_refused() {
 fn a_truncated_or_repadded_record_is_refused() {
     let mut root = active_root();
     let batch = open_batch(&mut root);
-    let mut bytes = vec![0_u8; general_batch_len_v2(WIDTH).expect("batch width")];
-    batch.encode_into(&mut bytes).expect("encode");
+    let bytes = batch.to_bytes();
     assert_eq!(
-        GeneralBatchV2::decode(&bytes[..bytes.len() - 1]),
+        GeneralBatchV1::decode(&bytes[..GENERAL_BATCH_BYTES_V1 - 1]),
         Err(GeneralCollectionErrorV1::InvalidLength)
     );
-    // The V1 prefix is a record's beginning, never a whole record: an account
-    // sized before the clearing tail existed is refused rather than read as a
-    // batch that priced nothing.
-    assert_eq!(
-        GeneralBatchV2::decode(&batch.to_bytes()),
-        Err(GeneralCollectionErrorV1::InvalidLength)
-    );
-    let mut noncanonical = bytes.clone();
+    let mut noncanonical = bytes;
     noncanonical[196] = 1;
     assert_eq!(
-        GeneralBatchV2::decode(&noncanonical),
+        GeneralBatchV1::decode(&noncanonical),
         Err(GeneralCollectionErrorV1::InvalidHeader)
     );
     // 192..196 is `cancelled_count` now, not padding, and it is bounded by the
     // admission count rather than by a zero rule.
-    let mut impossible_cancellations = bytes.clone();
+    let mut impossible_cancellations = bytes;
     impossible_cancellations[192] = 1;
     assert_eq!(
-        GeneralBatchV2::decode(&impossible_cancellations),
+        GeneralBatchV1::decode(&impossible_cancellations),
         Err(GeneralCollectionErrorV1::BatchFull)
     );
     let mut wrong_phase = bytes;
     wrong_phase[10] = ORDER_PHASE;
     assert_eq!(
-        GeneralBatchV2::decode(&wrong_phase),
+        GeneralBatchV1::decode(&wrong_phase),
         Err(GeneralCollectionErrorV1::InvalidHeader)
     );
 }
 
-/// A record that says `DCGORD02` is refused by its HEADER, not by its length.
-///
-/// Both records are runtime-width now, and their widths meet: an order record
-/// is `216 + 16N` and a batch record `296 + 16M`, so every order at `N = M + 5`
-/// is exactly as long as a batch at `M`. Length can no longer separate the two
-/// record kinds at all, and naming it here would be naming a coincidence. The
-/// header is the conjunct that says what is actually wrong.
 #[test]
 fn an_order_record_is_not_accepted_as_a_batch_record() {
     let mut root = active_root();
     let batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
     assert_eq!(
-        GeneralBatchV2::decode(&bytes),
-        Err(GeneralCollectionErrorV1::InvalidHeader)
-    );
-    let header = GeneralOrderHeaderV2 {
-        outcome_count: WIDTH + 5,
-        nonce: 1,
-        owner_id: id(9),
-        market: id(1),
-        batch_id: batch.batch_id(),
-        generation: 7,
-        max_lots: 10,
-        max_quote_debit_per_lot: 5,
-        min_quote_credit_per_lot: 0,
-        valid_until_slot: SETTLEMENT_CLOSE,
-        side: OrderSideV2::Sell,
-        outcome_lo: 1,
-        outcome_hi: 1,
-        claims_per_lot: 2,
-    };
-    let (receive, deliver) = derived_vectors(header);
-    let mut coincident = vec![0_u8; general_order_len_v2(header.outcome_count).expect("width")];
-    GeneralOrderV2::encode_into(header, &receive, &deliver, placed(10), &mut coincident)
-        .expect("order at the coincident width");
-    assert_eq!(
-        coincident.len(),
-        general_batch_len_v2(WIDTH).expect("batch width")
-    );
-    assert_eq!(
-        GeneralBatchV2::decode(&coincident),
-        Err(GeneralCollectionErrorV1::InvalidHeader)
+        GeneralBatchV1::decode(&bytes),
+        Err(GeneralCollectionErrorV1::InvalidLength)
     );
 }
 
@@ -597,7 +517,7 @@ fn hostile_an_order_into_a_closed_batch_is_refused() {
     let bytes = simple_order(identity, 9, 1);
     assert_eq!(
         batch.admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
+            GeneralOrderV1::decode(&bytes).expect("order"),
             funding(9, 100, &[0, 20, 0]),
             10,
         ),
@@ -613,7 +533,7 @@ fn hostile_an_order_after_the_collection_window_is_refused() {
     let bytes = simple_order(batch.batch_id(), 9, 1);
     assert_eq!(
         batch.admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
+            GeneralOrderV1::decode(&bytes).expect("order"),
             funding(9, 100, &[0, 20, 0]),
             COLLECTION_CLOSE,
         ),
@@ -662,18 +582,18 @@ fn hostile_a_closed_batch_cannot_be_closed_twice() {
 fn hostile_sequence_replay_is_refused_by_the_root_guards() {
     let mut root = active_root();
     let revision = root.revision();
-    GeneralBatchV2::open(&mut root, opening(), revision, 10).expect("first open");
+    GeneralBatchV1::open(&mut root, opening(), revision, 10).expect("first open");
     // Replaying the same opening -- same sequence 0 -- after the root advanced.
     let revision = root.revision();
     assert_eq!(
-        GeneralBatchV2::open(&mut root, opening(), revision, 10),
+        GeneralBatchV1::open(&mut root, opening(), revision, 10),
         Err(GeneralCollectionErrorV1::Substitution)
     );
     // And replaying the stale revision with the correct next sequence.
     let mut next = opening();
     next.sequence = 1;
     assert_eq!(
-        GeneralBatchV2::open(&mut root, next, 1, 10),
+        GeneralBatchV1::open(&mut root, next, 1, 10),
         Err(GeneralCollectionErrorV1::Root(
             RootError::CoordinateMismatch
         ))
@@ -687,7 +607,7 @@ fn hostile_a_refused_open_does_not_advance_the_root() {
     let mut wrong = opening();
     wrong.sequence = 9;
     assert_eq!(
-        GeneralBatchV2::open(&mut root, wrong, revision, 10),
+        GeneralBatchV1::open(&mut root, wrong, revision, 10),
         Err(GeneralCollectionErrorV1::Substitution)
     );
     assert_eq!(root.revision(), 1);
@@ -702,7 +622,7 @@ fn hostile_a_cross_market_batch_is_refused_at_open_and_at_close() {
     let mut foreign = opening();
     foreign.market = id(0x5a);
     assert_eq!(
-        GeneralBatchV2::open(&mut root, foreign, revision, 10),
+        GeneralBatchV1::open(&mut root, foreign, revision, 10),
         Err(GeneralCollectionErrorV1::Substitution)
     );
 
@@ -726,12 +646,20 @@ fn hostile_a_cross_market_order_is_refused_at_admission() {
     let mut foreign_opening = opening();
     foreign_opening.market = id(0x5a);
     let revision = foreign_root.revision();
-    let foreign_batch = GeneralBatchV2::open(&mut foreign_root, foreign_opening, revision, 10)
+    let foreign_batch = GeneralBatchV1::open(&mut foreign_root, foreign_opening, revision, 10)
         .expect("foreign batch");
-    let bytes = order_bytes(foreign_batch.batch_id(), 9, 1, 10, 5, SIMPLE_SHAPE);
+    let bytes = order_bytes(
+        foreign_batch.batch_id(),
+        9,
+        1,
+        10,
+        5,
+        &[1, 0, 0],
+        &[0, 2, 0],
+    );
     assert_eq!(
         batch.admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
+            GeneralOrderV1::decode(&bytes).expect("order"),
             funding(9, 100, &[0, 20, 0]),
             10,
         ),
@@ -748,7 +676,7 @@ fn hostile_an_order_naming_a_foreign_generation_is_refused() {
     bytes[128..136].copy_from_slice(&9_u64.to_le_bytes());
     assert_eq!(
         batch.admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
+            GeneralOrderV1::decode(&bytes).expect("order"),
             funding(9, 100, &[0, 20, 0]),
             10,
         ),
@@ -761,7 +689,7 @@ fn hostile_an_unfunded_order_is_refused_on_quote_and_on_claims_separately() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     // Worst case is 10 lots * 5 quote = 50, and 10 lots * 2 claims at outcome 1.
     assert_eq!(
         batch.admit(order, funding(9, 49, &[0, 20, 0]), 10),
@@ -791,7 +719,7 @@ fn hostile_an_order_expiring_before_settlement_closes_is_refused() {
     bytes[152..160].copy_from_slice(&(SETTLEMENT_CLOSE - 1).to_le_bytes());
     assert_eq!(
         batch.admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
+            GeneralOrderV1::decode(&bytes).expect("order"),
             funding(9, 100, &[0, 20, 0]),
             10,
         ),
@@ -808,7 +736,7 @@ fn hostile_the_immutable_order_maximum_is_enforced() {
     for bytes in orders.iter().take(4) {
         batch
             .admit(
-                GeneralOrderV2::decode(bytes).expect("order"),
+                GeneralOrderV1::decode(bytes).expect("order"),
                 funding(9, 1_000, &[0, 200, 0]),
                 10,
             )
@@ -817,7 +745,7 @@ fn hostile_the_immutable_order_maximum_is_enforced() {
     assert_eq!(batch.state().order_count, 4);
     assert_eq!(
         batch.admit(
-            GeneralOrderV2::decode(&orders[4]).expect("order"),
+            GeneralOrderV1::decode(&orders[4]).expect("order"),
             funding(9, 1_000, &[0, 200, 0]),
             10,
         ),
@@ -842,14 +770,6 @@ fn a_partly_filled_batch_is_not_permissionlessly_closable_before_its_window() {
 fn a_candidate_naming_the_closed_batch_authenticates() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
-    let bytes = simple_order(batch.batch_id(), 9, 1);
-    batch
-        .admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
-            funding(9, 100, &[0, 20, 0]),
-            10,
-        )
-        .expect("admit");
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close");
     let candidate = CandidateHeaderV2 {
@@ -860,7 +780,6 @@ fn a_candidate_naming_the_closed_batch_authenticates() {
         candidate_id: id(0x11),
         product_id: id(3),
         batch_id: batch.batch_id(),
-        live_order_count: batch.live_order_count(),
     };
     authenticate_batch_candidate_v1(batch, candidate).expect("candidate authenticates");
 }
@@ -868,15 +787,7 @@ fn a_candidate_naming_the_closed_batch_authenticates() {
 #[test]
 fn hostile_a_candidate_naming_a_still_open_batch_is_refused() {
     let mut root = active_root();
-    let mut batch = open_batch(&mut root);
-    let bytes = simple_order(batch.batch_id(), 9, 1);
-    batch
-        .admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
-            funding(9, 100, &[0, 20, 0]),
-            10,
-        )
-        .expect("admit");
+    let batch = open_batch(&mut root);
     let candidate = CandidateHeaderV2 {
         outcome_count: WIDTH,
         page_count: 1,
@@ -885,7 +796,6 @@ fn hostile_a_candidate_naming_a_still_open_batch_is_refused() {
         candidate_id: id(0x11),
         product_id: id(3),
         batch_id: batch.batch_id(),
-        live_order_count: batch.live_order_count(),
     };
     assert_eq!(
         authenticate_batch_candidate_v1(batch, candidate),
@@ -897,14 +807,6 @@ fn hostile_a_candidate_naming_a_still_open_batch_is_refused() {
 fn hostile_a_candidate_substituting_product_or_scale_is_refused() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
-    let bytes = simple_order(batch.batch_id(), 9, 1);
-    batch
-        .admit(
-            GeneralOrderV2::decode(&bytes).expect("order"),
-            funding(9, 100, &[0, 20, 0]),
-            10,
-        )
-        .expect("admit");
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close");
     let base = CandidateHeaderV2 {
@@ -915,17 +817,10 @@ fn hostile_a_candidate_substituting_product_or_scale_is_refused() {
         candidate_id: id(0x11),
         product_id: id(3),
         batch_id: batch.batch_id(),
-        live_order_count: batch.live_order_count(),
     };
     for mutate in [
         |mut header: CandidateHeaderV2| {
             header.product_id = id(0x44);
-            header
-        },
-        // The completeness conjunct's number: a certificate that enumerates
-        // fewer orders than the batch holds live is a different batch's.
-        |mut header: CandidateHeaderV2| {
-            header.live_order_count += 1;
             header
         },
         |mut header: CandidateHeaderV2| {
@@ -954,16 +849,16 @@ fn an_execution_row_projects_the_terms_the_verifier_consumes() {
     let mut batch = open_batch(&mut root);
     let identity = batch.batch_id();
     let bytes = simple_order(identity, 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close");
 
-    let execution = execution_bytes(order, 4, &SIMPLE_RECEIVE, &SIMPLE_DELIVER);
+    let execution = execution_bytes(order, 4, &[1, 0, 0], &[0, 2, 0]);
     let terms =
-        authenticate_order_execution_v2(batch, order, row(&execution)).expect("terms authenticate");
+        authenticate_order_execution_v1(batch, order, row(&execution)).expect("terms authenticate");
     // The terms are exactly the record's projection, and the record's digest is
     // the identity the row named -- not a caller assertion.
     assert_eq!(terms, order.terms());
@@ -991,23 +886,23 @@ fn the_sellers_floor_rides_the_order_identity_and_a_floorless_order_is_unmoved()
     let batch = open_batch(&mut root);
     let identity = batch.batch_id();
 
-    let floorless = order_bytes(identity, 9, 1, 10, 5, SIMPLE_SHAPE);
+    let floorless = order_bytes(identity, 9, 1, 10, 5, &[1, 0, 0], &[0, 2, 0]);
     assert_eq!(
         floorless
             .get(
-                GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT
-                    ..GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT + 8
+                GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT
+                    ..GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT + 8
             )
             .expect("floor window"),
         &[0; 8],
         "a zero floor must write the bytes the reserved window held",
     );
-    let without = GeneralOrderV2::decode(&floorless).expect("floorless order");
+    let without = GeneralOrderV1::decode(&floorless).expect("floorless order");
     assert_eq!(without.header().min_quote_credit_per_lot, 0);
     assert_eq!(without.terms().min_quote_credit_per_lot, 0);
 
-    let floored = order_bytes_with_floor(identity, 9, 1, 10, 5, 3, SIMPLE_SHAPE);
-    let with = GeneralOrderV2::decode(&floored).expect("floored order");
+    let floored = order_bytes_with_floor(identity, 9, 1, 10, 5, 3, &[1, 0, 0], &[0, 2, 0]);
+    let with = GeneralOrderV1::decode(&floored).expect("floored order");
     assert_eq!(with.header().min_quote_credit_per_lot, 3);
     assert_eq!(with.terms().min_quote_credit_per_lot, 3);
     assert_ne!(
@@ -1020,10 +915,10 @@ fn the_sellers_floor_rides_the_order_identity_and_a_floorless_order_is_unmoved()
     // terms ARE the record's header plus its rows, so a floor stated to the
     // chain and a floor stated to the maker cannot differ.
     let mut signed =
-        vec![0_u8; general_signed_order_terms_len_v2(WIDTH).expect("signed terms width")];
+        vec![0_u8; general_signed_order_terms_len_v1(WIDTH).expect("signed terms width")];
     with.encode_signed_terms_into(&mut signed)
         .expect("signed terms");
-    let terms = GeneralSignedOrderTermsV2::decode(&signed).expect("signed terms decode");
+    let terms = GeneralSignedOrderTermsV1::decode(&signed).expect("signed terms decode");
     assert_eq!(terms.header().min_quote_credit_per_lot, 3);
     assert_eq!(terms.order_id(), with.order_id());
 }
@@ -1040,7 +935,7 @@ fn hostile_a_row_cannot_fill_an_order_with_a_portfolio_its_maker_never_signed() 
     let mut batch = open_batch(&mut root);
     let identity = batch.batch_id();
     let bytes = simple_order(identity, 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1048,23 +943,23 @@ fn hostile_a_row_cannot_fill_an_order_with_a_portfolio_its_maker_never_signed() 
     batch.close(&mut root, revision).expect("close");
 
     // Honest row: exactly the record's vectors.
-    let honest = execution_bytes(order, 4, &SIMPLE_RECEIVE, &SIMPLE_DELIVER);
-    authenticate_order_execution_v2(batch, order, row(&honest)).expect("honest row");
+    let honest = execution_bytes(order, 4, &[1, 0, 0], &[0, 2, 0]);
+    authenticate_order_execution_v1(batch, order, row(&honest)).expect("honest row");
 
     for (receive, deliver) in [
-        // The maker's own vectors, swapped: a seller turned into a buyer.
-        (vec![0, 2, 0], vec![0, 0, 0]),
+        // The maker's own vectors, swapped.
+        (vec![0, 2, 0], vec![1, 0, 0]),
         // The maker delivers an outcome their order never mentioned.
-        (vec![0, 0, 0], vec![0, 2, 3]),
-        // The maker receives an outcome their order never mentioned.
-        (vec![1, 0, 0], vec![0, 2, 0]),
+        (vec![1, 0, 0], vec![0, 2, 3]),
+        // The maker receives strictly less than they signed for.
+        (vec![0, 0, 0], vec![0, 2, 0]),
         // The maker delivers strictly more than they signed for, which is also
         // strictly more than admission escrowed.
-        (vec![0, 0, 0], vec![0, 20, 0]),
+        (vec![1, 0, 0], vec![0, 20, 0]),
     ] {
         let hostile = execution_bytes(order, 4, &receive, &deliver);
         assert_eq!(
-            authenticate_order_execution_v2(batch, order, row(&hostile)),
+            authenticate_order_execution_v1(batch, order, row(&hostile)),
             Err(GeneralCollectionErrorV1::Substitution)
         );
     }
@@ -1075,10 +970,10 @@ fn hostile_an_execution_row_cannot_import_terms_from_another_order() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let identity = batch.batch_id();
-    let generous = order_bytes(identity, 9, 1, 1_000, 5_000, SIMPLE_SHAPE);
+    let generous = order_bytes(identity, 9, 1, 1_000, 5_000, &[1, 0, 0], &[0, 2, 0]);
     let modest = simple_order(identity, 9, 2);
-    let generous = GeneralOrderV2::decode(&generous).expect("generous");
-    let modest = GeneralOrderV2::decode(&modest).expect("modest");
+    let generous = GeneralOrderV1::decode(&generous).expect("generous");
+    let modest = GeneralOrderV1::decode(&modest).expect("modest");
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close");
 
@@ -1094,11 +989,11 @@ fn hostile_an_execution_row_cannot_import_terms_from_another_order() {
             max_lots: 10,
             lots: 4,
         },
-        &SIMPLE_RECEIVE,
-        &SIMPLE_DELIVER,
+        &[1, 0, 0],
+        &[0, 2, 0],
     );
     assert_eq!(
-        authenticate_order_execution_v2(batch, generous, row(&execution)),
+        authenticate_order_execution_v1(batch, generous, row(&execution)),
         Err(GeneralCollectionErrorV1::Substitution)
     );
 }
@@ -1109,7 +1004,7 @@ fn hostile_an_execution_row_overstating_max_lots_or_fill_is_refused() {
     let mut batch = open_batch(&mut root);
     let identity = batch.batch_id();
     let bytes = simple_order(identity, 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close");
 
@@ -1140,32 +1035,29 @@ fn hostile_an_execution_row_overstating_max_lots_or_fill_is_refused() {
             header
         },
     ] {
-        let hostile = execution_bytes_from(mutate(base), &SIMPLE_RECEIVE, &SIMPLE_DELIVER);
+        let hostile = execution_bytes_from(mutate(base), &[1, 0, 0], &[0, 2, 0]);
         assert_eq!(
-            authenticate_order_execution_v2(batch, order, row(&hostile)),
+            authenticate_order_execution_v1(batch, order, row(&hostile)),
             Err(GeneralCollectionErrorV1::Substitution)
         );
     }
-    // Overfilling is refused one level lower -- the Execution record itself
-    // will not encode it -- so this states where that refusal actually lives
+    // Two mutations are refused one level lower -- the Execution record itself
+    // will not encode them -- so this states where each refusal actually lives
     // instead of asserting the same thing at two layers.
     let mut buffer =
         vec![0_u8; crate::general::runtime_width::execution_len(WIDTH).expect("row width")];
+    let mut zero_fill = base;
+    zero_fill.lots = 0;
+    assert_eq!(
+        ExecutionV2::encode_into(zero_fill, &[1, 0, 0], &[0, 2, 0], &mut buffer),
+        Err(crate::general::runtime_width::RuntimeWidthErrorV2::ZeroCoordinate)
+    );
     let mut overfilled = base;
     overfilled.lots = 11;
     assert_eq!(
-        ExecutionV2::encode_into(overfilled, &SIMPLE_RECEIVE, &SIMPLE_DELIVER, &mut buffer),
+        ExecutionV2::encode_into(overfilled, &[1, 0, 0], &[0, 2, 0], &mut buffer),
         Err(crate::general::runtime_width::RuntimeWidthErrorV2::InvalidCursor)
     );
-    // A ZERO FILL IS NOT A MUTATION SINCE THE JOINT CLEARING. An order left
-    // unfilled is still a row of the certificate -- that is what carries the
-    // marginal conjunct -- so the record encodes it and the join authenticates
-    // it, rather than the row being unrepresentable.
-    let mut zero_fill = base;
-    zero_fill.lots = 0;
-    ExecutionV2::encode_into(zero_fill, &SIMPLE_RECEIVE, &SIMPLE_DELIVER, &mut buffer)
-        .expect("an unfilled row is a row");
-    authenticate_order_execution_v2(batch, order, row(&buffer)).expect("an unfilled row is a row");
 }
 
 #[test]
@@ -1173,10 +1065,10 @@ fn hostile_an_execution_row_against_an_open_batch_is_refused() {
     let mut root = active_root();
     let batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
-    let execution = execution_bytes(order, 4, &SIMPLE_RECEIVE, &SIMPLE_DELIVER);
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let execution = execution_bytes(order, 4, &[1, 0, 0], &[0, 2, 0]);
     assert_eq!(
-        authenticate_order_execution_v2(batch, order, row(&execution)),
+        authenticate_order_execution_v1(batch, order, row(&execution)),
         Err(GeneralCollectionErrorV1::NotClosed)
     );
 }
@@ -1185,8 +1077,16 @@ fn hostile_an_execution_row_against_an_open_batch_is_refused() {
 fn the_worst_case_reserve_cannot_overflow_silently() {
     let mut root = active_root();
     let batch = open_batch(&mut root);
-    let bytes = order_bytes(batch.batch_id(), 9, 1, u64::MAX, u64::MAX, SIMPLE_SHAPE);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let bytes = order_bytes(
+        batch.batch_id(),
+        9,
+        1,
+        u64::MAX,
+        u64::MAX,
+        &[1, 0, 0],
+        &[0, 2, 0],
+    );
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     assert_eq!(
         order.quote_reserve(),
         Err(GeneralCollectionErrorV1::ArithmeticOverflow)
@@ -1212,7 +1112,7 @@ fn admission_escrows_the_exact_worst_case_and_says_so() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     let escrow = batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1235,7 +1135,7 @@ fn cancellation_returns_the_whole_escrow_and_only_the_maker_may_ask() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1264,7 +1164,7 @@ fn the_cancelled_successor_record_keeps_the_identity_a_candidate_names() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1280,7 +1180,7 @@ fn the_cancelled_successor_record_keeps_the_identity_a_candidate_names() {
             &mut successor,
         )
         .expect("cancelled successor");
-    let cancelled = GeneralOrderV2::decode(&successor).expect("cancelled");
+    let cancelled = GeneralOrderV1::decode(&successor).expect("cancelled");
     // The identity is the digest of the immutable prefix, so writing the
     // lifecycle tail cannot move what a manifest and a settlement row name.
     assert_eq!(cancelled.order_id(), order.order_id());
@@ -1294,7 +1194,7 @@ fn hostile_a_cancelled_order_can_never_be_settled_against() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1309,7 +1209,7 @@ fn hostile_a_cancelled_order_can_never_be_settled_against() {
             &mut successor,
         )
         .expect("cancelled successor");
-    let cancelled = GeneralOrderV2::decode(&successor).expect("cancelled");
+    let cancelled = GeneralOrderV1::decode(&successor).expect("cancelled");
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close");
 
@@ -1317,9 +1217,9 @@ fn hostile_a_cancelled_order_can_never_be_settled_against() {
     // this order. Its escrow has been returned, so the row must refuse -- and
     // it refuses on the PHASE, not on any coordinate, because every coordinate
     // still matches.
-    let execution = execution_bytes(cancelled, 4, &SIMPLE_RECEIVE, &SIMPLE_DELIVER);
+    let execution = execution_bytes(cancelled, 4, &[1, 0, 0], &[0, 2, 0]);
     assert_eq!(
-        authenticate_order_execution_v2(batch, cancelled, row(&execution)),
+        authenticate_order_execution_v1(batch, cancelled, row(&execution)),
         Err(GeneralCollectionErrorV1::InvalidOrderPhase)
     );
 }
@@ -1329,7 +1229,7 @@ fn hostile_a_second_cancellation_or_a_late_one_is_refused() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1344,7 +1244,7 @@ fn hostile_a_second_cancellation_or_a_late_one_is_refused() {
             &mut successor,
         )
         .expect("cancelled successor");
-    let cancelled = GeneralOrderV2::decode(&successor).expect("cancelled");
+    let cancelled = GeneralOrderV1::decode(&successor).expect("cancelled");
 
     // The double refund: the record has already left the Placed phase.
     assert_eq!(
@@ -1378,7 +1278,7 @@ fn hostile_a_cancellation_cannot_cross_batches() {
     let mut root = active_root();
     let mut first = open_batch(&mut root);
     let bytes = simple_order(first.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     first
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1389,7 +1289,7 @@ fn hostile_a_cancellation_cannot_cross_batches() {
     second_opening.sequence = 1;
     let revision = root.revision();
     let mut second =
-        GeneralBatchV2::open(&mut root, second_opening, revision, 10).expect("second batch");
+        GeneralBatchV1::open(&mut root, second_opening, revision, 10).expect("second batch");
     // A refund is a debit against the escrow of the batch that holds it.
     assert_eq!(
         second.cancel(order, id(9), 11),
@@ -1403,7 +1303,7 @@ fn a_release_after_the_settlement_window_returns_whatever_is_left() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1430,7 +1330,7 @@ fn a_candidate_cannot_debit_more_quote_than_the_batch_escrowed() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = simple_order(batch.batch_id(), 9, 1);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     batch
         .admit(order, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit");
@@ -1468,8 +1368,8 @@ fn a_cancellation_lowers_the_ceiling_a_candidate_must_fit_inside() {
     let identity = batch.batch_id();
     let first = simple_order(identity, 9, 1);
     let second = simple_order(identity, 8, 2);
-    let first = GeneralOrderV2::decode(&first).expect("first");
-    let second = GeneralOrderV2::decode(&second).expect("second");
+    let first = GeneralOrderV1::decode(&first).expect("first");
+    let second = GeneralOrderV1::decode(&second).expect("second");
     batch
         .admit(first, funding(9, 100, &[0, 20, 0]), 10)
         .expect("admit first");
@@ -1509,70 +1409,49 @@ fn a_cancellation_lowers_the_ceiling_a_candidate_must_fit_inside() {
 
 /// Pin the wire the order-action EffectPrograms write by.
 ///
-/// The shape sits between the immutable terms and the escrow window, the
-/// mutable escrow window sits at the FIXED offsets `GeneralOrderLayoutV2`
-/// names, and every per-outcome row lies at `216 + 16 * i` with the receive
+/// The mutable escrow window sits at the FIXED offsets `GeneralOrderLayoutV1`
+/// names, and every per-outcome row lies at `192 + 16 * i` with the receive
 /// and deliver quantities at fixed intra-row offsets. If any of these move,
 /// the fixed-offset artifact writes silently write the wrong field, so this
 /// test states the coordinates as bytes rather than trusting the codec to
 /// agree with itself.
-///
-/// Both sides are driven because the rows are derived now: a buy puts its
-/// magnitude at the receive offset and a sell at the deliver offset, and only
-/// running both pins both halves of the row.
 #[test]
 fn the_order_wire_is_fixed_state_then_interleaved_rows() {
-    for shape in [(OrderSideV2::Buy, 0, 11), (OrderSideV2::Sell, 2, 22)] {
-        let bytes = order_bytes(id(9), 4, 5, 6, 7, shape);
-        assert_eq!(bytes.len(), 216 + 16 * WIDTH as usize);
-        assert_eq!(
-            bytes[GeneralOrderLayoutV2::STATE_PHASE],
-            GeneralOrderPhaseV1::Placed.tag()
-        );
-        assert_eq!(GeneralOrderLayoutV2::SIDE, 160);
-        assert_eq!(GeneralOrderLayoutV2::OUTCOME_LO, 164);
-        assert_eq!(GeneralOrderLayoutV2::OUTCOME_HI, 168);
-        assert_eq!(GeneralOrderLayoutV2::CLAIMS_PER_LOT, 176);
-        assert_eq!(GeneralOrderLayoutV2::STATE_PHASE, 184);
-        assert_eq!(GeneralOrderLayoutV2::STATE_ADMITTED_SLOT, 192);
-        assert_eq!(GeneralOrderLayoutV2::STATE_RELEASED_SLOT, 200);
-        assert_eq!(bytes[160], shape.0.tag());
-        assert_eq!(bytes[164..168], shape.1.to_le_bytes());
-        assert_eq!(bytes[168..172], shape.1.to_le_bytes());
-        assert_eq!(bytes[176..184], shape.2.to_le_bytes());
-        assert_eq!(bytes[192..200], 10_u64.to_le_bytes());
-        assert_eq!(bytes[200..208], 0_u64.to_le_bytes());
-        assert!(bytes[161..164].iter().all(|byte| *byte == 0));
-        assert!(bytes[172..176].iter().all(|byte| *byte == 0));
-        assert!(bytes[185..192].iter().all(|byte| *byte == 0));
-        assert!(bytes[208..216].iter().all(|byte| *byte == 0));
-        assert!(bytes[24..32].iter().all(|byte| *byte == 0));
-        let header = GeneralOrderV2::decode(&bytes).expect("order").header();
-        let (receive, deliver) = derived_vectors(header);
-        for outcome in 0..WIDTH as usize {
-            let row = 216 + 16 * outcome;
-            assert_eq!(bytes[row..row + 8], receive[outcome].to_le_bytes());
-            assert_eq!(bytes[row + 8..row + 16], deliver[outcome].to_le_bytes());
-        }
+    let receive = [11_u64, 0, 13];
+    let deliver = [0_u64, 22, 23];
+    let bytes = order_bytes(id(9), 4, 5, 6, 7, &receive, &deliver);
+    assert_eq!(bytes.len(), 192 + 16 * WIDTH as usize);
+    assert_eq!(
+        bytes[GeneralOrderLayoutV1::STATE_PHASE],
+        GeneralOrderPhaseV1::Placed.tag()
+    );
+    assert_eq!(GeneralOrderLayoutV1::STATE_PHASE, 160);
+    assert_eq!(GeneralOrderLayoutV1::STATE_ADMITTED_SLOT, 168);
+    assert_eq!(GeneralOrderLayoutV1::STATE_RELEASED_SLOT, 176);
+    assert_eq!(bytes[168..176], 10_u64.to_le_bytes());
+    assert_eq!(bytes[176..184], 0_u64.to_le_bytes());
+    assert!(bytes[161..168].iter().all(|byte| *byte == 0));
+    assert!(bytes[184..192].iter().all(|byte| *byte == 0));
+    assert!(bytes[24..32].iter().all(|byte| *byte == 0));
+    for outcome in 0..WIDTH as usize {
+        let row = 192 + 16 * outcome;
+        assert_eq!(bytes[row..row + 8], receive[outcome].to_le_bytes());
+        assert_eq!(bytes[row + 8..row + 16], deliver[outcome].to_le_bytes());
     }
 }
 
-/// The identity masks exactly the mutable window and the derived rows.
+/// The identity masks exactly the 32-byte mutable window and nothing more.
 ///
 /// The successor half proves the mask covers the window: a lifecycle write
-/// leaves the identity fixed. The header flip proves the mask starts exactly
-/// at the window and not one byte earlier, so no signed term is forgeable.
-///
-/// The rows are behind the mask too, and since the joint clearing that costs
-/// nothing: they are a FUNCTION of the shape the header carries, so a flipped
-/// row byte cannot express a different order. `decode` is what holds them --
-/// it refuses the record by `RowsDisagreeWithShape` rather than handing back an
-/// order whose portfolio disagrees with its own identity.
+/// leaves the identity fixed. The two flip halves prove it covers NOTHING
+/// more: the last header byte before the window and the first row byte after
+/// it both move the digest, so a mask one byte too wide on either side is a
+/// red test rather than a silently forgeable coordinate.
 #[test]
 fn the_order_identity_masks_exactly_the_mutable_window() {
-    let bytes = order_bytes(id(9), 4, 5, 6, 7, SIMPLE_SHAPE);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
-    let identity = general_order_identity_v2(&bytes).expect("identity");
+    let bytes = order_bytes(id(9), 4, 5, 6, 7, &[1, 0, 0], &[0, 2, 0]);
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let identity = general_order_identity_v1(&bytes).expect("identity");
     assert_eq!(order.order_id(), identity);
 
     let mut released = bytes.clone();
@@ -1588,26 +1467,22 @@ fn the_order_identity_masks_exactly_the_mutable_window() {
         .expect("successor");
     assert_ne!(released, bytes);
     assert_eq!(
-        general_order_identity_v2(&released).expect("identity"),
+        general_order_identity_v1(&released).expect("identity"),
         identity
     );
 
     let mut header_flip = bytes.clone();
-    header_flip[GENERAL_ORDER_STATE_OFFSET_V2 - 1] ^= 1;
+    header_flip[GENERAL_ORDER_STATE_OFFSET_V1 - 1] ^= 1;
     assert_ne!(
-        general_order_identity_v2(&header_flip).expect("identity"),
+        general_order_identity_v1(&header_flip).expect("identity"),
         identity
     );
 
     let mut row_flip = bytes;
-    row_flip[GENERAL_ORDER_ROW_BASE_V2] ^= 1;
-    assert_eq!(
-        general_order_identity_v2(&row_flip).expect("identity"),
+    row_flip[GENERAL_ORDER_ROW_BASE_V1] ^= 1;
+    assert_ne!(
+        general_order_identity_v1(&row_flip).expect("identity"),
         identity
-    );
-    assert_eq!(
-        GeneralOrderV2::decode(&row_flip),
-        Err(GeneralCollectionErrorV1::RowsDisagreeWithShape)
     );
 }
 
@@ -1623,11 +1498,11 @@ fn the_order_identity_masks_exactly_the_mutable_window() {
 /// decode to is a different order.
 #[test]
 fn the_range_behind_the_nonce_is_the_floor_and_moves_the_identity() {
-    let bytes = order_bytes(id(9), 4, 5, 6, 7, SIMPLE_SHAPE);
+    let bytes = order_bytes(id(9), 4, 5, 6, 7, &[1, 0, 0], &[0, 2, 0]);
     let mut floored = bytes.clone();
-    floored[GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT] = 1;
-    let without = GeneralOrderV2::decode(&bytes).expect("floorless order");
-    let with = GeneralOrderV2::decode(&floored).expect("floored order");
+    floored[GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT] = 1;
+    let without = GeneralOrderV1::decode(&bytes).expect("floorless order");
+    let with = GeneralOrderV1::decode(&floored).expect("floored order");
     assert_eq!(without.header().min_quote_credit_per_lot, 0);
     assert_eq!(with.header().min_quote_credit_per_lot, 1);
     assert_ne!(with.order_id(), without.order_id());
@@ -1635,8 +1510,8 @@ fn the_range_behind_the_nonce_is_the_floor_and_moves_the_identity() {
 
 #[test]
 fn physical_residual_release_uses_the_orders_pinned_window_without_a_batch_projection() {
-    let bytes = order_bytes(id(9), 4, 5, 6, 7, SIMPLE_SHAPE);
-    let order = GeneralOrderV2::decode(&bytes).expect("order");
+    let bytes = order_bytes(id(9), 4, 5, 6, 7, &[1, 0, 0], &[0, 2, 0]);
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
     assert_eq!(
         authenticate_order_residual_release_v1(order, SETTLEMENT_CLOSE - 1),
         Err(GeneralCollectionErrorV1::OutsideWindow)
@@ -1661,7 +1536,7 @@ fn physical_residual_release_uses_the_orders_pinned_window_without_a_batch_proje
         .expect("cancelled successor");
     assert_eq!(
         authenticate_order_residual_release_v1(
-            GeneralOrderV2::decode(&cancelled).expect("cancelled order"),
+            GeneralOrderV1::decode(&cancelled).expect("cancelled order"),
             SETTLEMENT_CLOSE,
         ),
         Err(GeneralCollectionErrorV1::InvalidOrderPhase)

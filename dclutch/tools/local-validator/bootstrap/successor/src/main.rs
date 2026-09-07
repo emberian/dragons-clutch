@@ -60,6 +60,7 @@ mod ledger;
 mod market;
 mod model;
 mod plan;
+mod pyth_lab_publication;
 mod pyth_vaa_provisioning;
 mod rational_market;
 mod recovery_crank;

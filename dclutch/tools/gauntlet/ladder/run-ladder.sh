@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 # LADDER: a market's funded ordered recovery ladder, on ONE live validator.
 #
-#   archive -> campaign binary -> checked-mutable substrate (ONE validator)
-#     -> two-source market -> founding -> crank -> witnesses -> census
+#   archive -> campaign binary -> per arm: checked-mutable substrate
+#     (ONE validator) -> two-source market -> founding -> crank
+#     -> witnesses -> census
 #
-# ONE validator per walk, loopback, on a per-run port block. Nothing here
-# signs with a persisted key outside its own --work root, funds an external
-# account, publishes, or observes any public cluster.
+# BOTH ARMS BY DEFAULT, one at a time. The exhaust arm's witnesses and the
+# capture arm's witnesses are about different walks, and a witness evaluated
+# against the walk that did not run reads its default -- which is an absent
+# signal with no way to tell "nothing fired" from "my instrument was
+# disconnected". Running both is the only version where every witness of this
+# tier bites on some transcript of every run. `--walk exhaust` and
+# `--walk capture` still select one arm, and then that run covers one arm and
+# the other arm's witnesses are simply not evaluated rather than green.
+#
+# ONE validator per arm, loopback, on a per-run port block; the campaign owns
+# its validator's lifetime and kills it on exit, so the arms reuse the block in
+# turn. Nothing here signs with a persisted key outside its own --work root,
+# funds an external account, publishes, or observes any public cluster.
 #
 # WHAT THIS PRODUCES IS LOCAL-VALIDATOR EVIDENCE at the exact revision the
 # checked release gate names.
@@ -16,7 +27,11 @@ usage() {
     cat <<'USAGE'
 usage: tools/gauntlet/ladder/run-ladder.sh --checked-release-gate PATH [options]
 
-  --walk MODE           exhaust | capture   (default: exhaust)
+  --walk MODE           exhaust | capture | both   (default: both)
+                        `both` runs the two arms in turn against one port
+                        block, each with its own validator, market, transcript
+                        and witness evaluation. See the note at the top of this
+                        file for why that is the default.
   --checked-release-gate PATH
                         REQUIRED. A CHECKED_UPGRADE_GATE.json built by
                         tools/release/checked-release-candidate.sh. The gate is
@@ -45,6 +60,13 @@ usage: tools/gauntlet/ladder/run-ladder.sh --checked-release-gate PATH [options]
   --max-wait-seconds N  the whole budget a walk may spend waiting for a leg's
                         deadline (default: 600). A leg further away than this
                         is REPORTED, never slept for and never warped past.
+  --publication-shelf-life-seconds N
+                        how old the publication this run MINTS may be before
+                        the transport refuses it (default: 1200), and therefore
+                        how far past the mint instant the market's primary leg
+                        falls due. A parameter of this TIER and of the lab that
+                        holds the publication; never a market's staleness
+                        policy, which is a thing a founder authors.
   --census              fold this run's evidence into the shared census ledger
   --gauntlet-work PATH  the shared gauntlet root whose inventory and ledger the
                         census fold reads (default: /private/tmp/dclutch-gauntlet)
@@ -63,13 +85,14 @@ sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GAUNTLET="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO="$(cd "$GAUNTLET/../.." && pwd)"
-WALK="exhaust"
+WALK="both"
 GATE=""
 RPC_PORT="auto"
 WORK="/private/tmp/dclutch-ladder"
 WORKTREE=0
 RUNGS=""
 MAX_WAIT="600"
+SHELF_LIFE="1200"
 CENSUS=0
 GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
 
@@ -83,13 +106,19 @@ while [ $# -gt 0 ]; do
         --work) WORK="${2:?}"; shift 2 ;;
         --recovery-rungs) RUNGS="${2:?}"; shift 2 ;;
         --max-wait-seconds) MAX_WAIT="${2:?}"; shift 2 ;;
+        --publication-shelf-life-seconds) SHELF_LIFE="${2:?}"; shift 2 ;;
         --census) CENSUS=1; shift ;;
         --gauntlet-work) GAUNTLET_WORK="${2:?}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
-case "$WALK" in exhaust|capture) ;; *) die "--walk must be exhaust or capture" ;; esac
+case "$WALK" in
+    exhaust) ARMS=(exhaust) ;;
+    capture) ARMS=(capture) ;;
+    both)    ARMS=(exhaust capture) ;;
+    *) die "--walk must be exhaust, capture or both" ;;
+esac
 [ -n "$GATE" ] || { usage >&2; die "--checked-release-gate is required"; }
 [ -f "$GATE" ] || die "--checked-release-gate is not a readable file: $GATE"
 case "$GATE" in /*) ;; *) die "--checked-release-gate must be an absolute path" ;; esac
@@ -182,55 +211,70 @@ BASE="$RPC_PORT"
 [ "$BASE" = "auto" ] && BASE="$(allocate_rpc_port)"
 RUN="$WORK/runs/$(date -u '+%Y%m%dT%H%M%SZ')-$WALK"
 mkdir -p "$RUN"
-say "walk: $WALK (validator base $BASE, run $RUN)"
+say "walk: $WALK (arms: ${ARMS[*]}; validator base $BASE, run $RUN)"
+printf '%s\n' "$RUN" > "$WORK/last-run"
 
 # The prepare seed: a STATED derivation rather than a number somebody typed.
 SEED="$(printf 'dclutch/gauntlet/ladder/prepare-seed/v1' | shasum -a 256 | cut -d' ' -f1)"
 
-ARGS=(run --walk "$WALK" --transcript "$RUN/transcript.json" --work "$RUN/campaign"
-      --rpc-port "$BASE" --checked-release-gate "$GATE"
-      --expected-gate-sha256 "$GATE_SHA256"
-      --expected-source-revision "$GATE_REVISION"
-      --expected-source-tree-sha256 "$GATE_TREE"
-      --seed "$SEED" --max-wait-seconds "$MAX_WAIT")
-[ -n "$RUNGS" ] && ARGS+=(--recovery-rungs "$RUNGS")
-
 STATUS=0
-if ! "$CAMPAIGN_BIN" "${ARGS[@]}" > "$RUN/campaign.stdout" 2> "$RUN/campaign.stderr"; then
-    tail -n 40 "$RUN/campaign.stderr" >&2
-    echo "ladder: $WALK walk FAILED; artifacts under $RUN" >&2
-    printf '%s\n' "$RUN" > "$WORK/last-run"
-    exit 1
-fi
-printf '%s\n' "$RUN" > "$WORK/last-run"
-[ -f "$RUN/transcript.json" ] || die "transcript missing: $RUN/transcript.json"
-[ -f "$RUN/campaign/evidence.json" ] || die "evidence missing: $RUN/campaign/evidence.json"
+for ARM in "${ARMS[@]}"; do
+    say "arm: $ARM"
+    ARM_RUN="$RUN/$ARM"
+    mkdir -p "$ARM_RUN"
+    ARGS=(run --walk "$ARM" --transcript "$ARM_RUN/transcript.json" --work "$ARM_RUN/campaign"
+          --rpc-port "$BASE" --checked-release-gate "$GATE"
+          --expected-gate-sha256 "$GATE_SHA256"
+          --expected-source-revision "$GATE_REVISION"
+          --expected-source-tree-sha256 "$GATE_TREE"
+          --seed "$SEED" --max-wait-seconds "$MAX_WAIT"
+          --publication-shelf-life-seconds "$SHELF_LIFE")
+    [ -n "$RUNGS" ] && ARGS+=(--recovery-rungs "$RUNGS")
 
-say "witnesses"
-"$GAUNTLET/tier1/check-witnesses.sh" "$SCRIPT_DIR/witnesses.json" \
-    "$RUN/campaign/evidence.json" "$RUN/transcript.json" || STATUS=1
+    # An arm that fails STOPS THE RUN. The two arms are about the same market
+    # shape on two histories, so an exhaust arm that could not reach its
+    # terminal is not a reason to go on and ask whether a rung answers.
+    if ! "$CAMPAIGN_BIN" "${ARGS[@]}" > "$ARM_RUN/campaign.stdout" 2> "$ARM_RUN/campaign.stderr"; then
+        tail -n 40 "$ARM_RUN/campaign.stderr" >&2
+        echo "ladder: $ARM arm FAILED; artifacts under $ARM_RUN" >&2
+        exit 1
+    fi
+    [ -f "$ARM_RUN/transcript.json" ] || die "transcript missing: $ARM_RUN/transcript.json"
+    [ -f "$ARM_RUN/campaign/evidence.json" ] || die "evidence missing: $ARM_RUN/campaign/evidence.json"
 
-if [ "$CENSUS" = 1 ]; then
-    say "census fold"
-    INVENTORY="$GAUNTLET_WORK/out/inventory.json"
-    CENSUS_LEDGER="$GAUNTLET_WORK/out/ledger.json"
-    [ -f "$INVENTORY" ] || die "--census needs $INVENTORY; run 'tools/gauntlet/run.sh --mode census' first"
-    jq '{registry:.registry.program_id, core:.core.program_id, claims:.claims.program_id,
-         trading:.trading.program_id, resolution:.resolution.program_id,
-         custody:.custody.program_id, rent:.rent_credit.program_id}' \
-        "$RUN/campaign/substrate/plan.json" > "$RUN/programs.json"
-    ledger_lock "$CENSUS_LEDGER"
-    cargo run --quiet --manifest-path "$GAUNTLET/census/Cargo.toml" -- observe \
-        --inventory "$INVENTORY" --ledger "$CENSUS_LEDGER" \
-        --bindings "$SCRIPT_DIR/bindings.json" --programs "$RUN/programs.json" \
-        --evidence "$RUN/campaign/evidence.json" || STATUS=1
-    ledger_unlock
-fi
+    # The arm-independent witnesses, then the ones about THIS arm. The second
+    # file is the whole point of running both: its witnesses carry no disjunct
+    # over `.walk`, so each of them is red on the arm it is not about and green
+    # only on a transcript of the walk it names.
+    say "witnesses (shared)"
+    "$GAUNTLET/tier1/check-witnesses.sh" "$SCRIPT_DIR/witnesses.json" \
+        "$ARM_RUN/campaign/evidence.json" "$ARM_RUN/transcript.json" || STATUS=1
+    say "witnesses ($ARM)"
+    "$GAUNTLET/tier1/check-witnesses.sh" "$SCRIPT_DIR/witnesses-$ARM.json" \
+        "$ARM_RUN/campaign/evidence.json" "$ARM_RUN/transcript.json" || STATUS=1
 
-say "$WALK walk transcript summary"
-jq -r '
-    "walk: \(.walk)   market: \(.market)   rungs: \(.recovery_rungs)",
-    (.stages[] | "  \(.outcome | ascii_upcase)  \(.stage)"),
-    (.cranks[] | "  crank seq \(.sequence): \(.outcome)\(if .secondsUntilDue then "  (due in \(.secondsUntilDue)s)" else "" end)\(if .computeUnitsConsumed then "  \(.computeUnitsConsumed) CU" else "" end)")
-' "$RUN/transcript.json"
+    if [ "$CENSUS" = 1 ]; then
+        say "census fold ($ARM)"
+        INVENTORY="$GAUNTLET_WORK/out/inventory.json"
+        CENSUS_LEDGER="$GAUNTLET_WORK/out/ledger.json"
+        [ -f "$INVENTORY" ] || die "--census needs $INVENTORY; run 'tools/gauntlet/run.sh --mode census' first"
+        jq '{registry:.registry.program_id, core:.core.program_id, claims:.claims.program_id,
+             trading:.trading.program_id, resolution:.resolution.program_id,
+             custody:.custody.program_id, rent:.rent_credit.program_id}' \
+            "$ARM_RUN/campaign/substrate/plan.json" > "$ARM_RUN/programs.json"
+        ledger_lock "$CENSUS_LEDGER"
+        cargo run --quiet --manifest-path "$GAUNTLET/census/Cargo.toml" -- observe \
+            --inventory "$INVENTORY" --ledger "$CENSUS_LEDGER" \
+            --bindings "$SCRIPT_DIR/bindings.json" --programs "$ARM_RUN/programs.json" \
+            --evidence "$ARM_RUN/campaign/evidence.json" || STATUS=1
+        ledger_unlock
+    fi
+
+    say "$ARM arm transcript summary"
+    jq -r '
+        "walk: \(.walk)   market: \(.market)   rungs: \(.recovery_rungs)",
+        (.stages[] | "  \(.outcome | ascii_upcase)  \(.stage)"),
+        (.cranks[] | "  crank seq \(.sequence): \(.outcome)\(if .secondsUntilDue then "  (due in \(.secondsUntilDue)s)" else "" end)\(if .computeUnitsConsumed then "  \(.computeUnitsConsumed) CU" else "" end)")
+    ' "$ARM_RUN/transcript.json"
+done
 exit "$STATUS"

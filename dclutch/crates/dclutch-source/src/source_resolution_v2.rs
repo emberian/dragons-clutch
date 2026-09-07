@@ -174,6 +174,18 @@ pub enum RecoveryCrankV2 {
     },
 }
 
+/// What one ensemble fold decided.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnsembleFoldV1 {
+    /// The terminal decision, on the primary route with the median as its
+    /// reading.
+    pub decision: SourceResolutionDecisionV2,
+    /// The median reading on the material's one scale.
+    pub median: i128,
+    /// How many fragments the fold consumed: `n`, at least the quorum.
+    pub consumed: u8,
+}
+
 /// Persisted Source state whose selector covers the full Product Runtime V2 domain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceResolutionStateV2 {
@@ -508,6 +520,7 @@ impl SourceResolutionStateV2 {
     /// walk is `FailNext` per leg, it must debit the leg's own funding
     /// allocation, and it belongs to the funded controller rather than to this
     /// transition.
+    #[allow(clippy::too_many_arguments)]
     pub fn exhaust_after_primary_deadline(
         &mut self,
         material_id: ContentId,
@@ -516,6 +529,7 @@ impl SourceResolutionStateV2 {
         window: WindowSpecV1,
         expected_generation: u64,
         current_unix_seconds: i64,
+        observed_fragments: u8,
     ) -> Result<()> {
         self.validate_material_and_generation(material_id, expected_generation)?;
         // `window` is a value the caller authenticated against this identity by
@@ -524,12 +538,18 @@ impl SourceResolutionStateV2 {
         if material.window_spec() != authenticated_window_spec_id {
             return Err(Error::LinkageMismatch);
         }
-        if material.recovery_policy().is_some() {
+        // A ladder with a rung is walked, never skipped: the refusal is the
+        // ladder's own correctness condition. An ensemble whose members were
+        // its whole policy has no rung and exhausts here like a no-policy
+        // market -- unless the quorum answered, in which case the fold is the
+        // admissible move and this is the wrong one.
+        if material.ladder_has_rung() {
             return Err(Error::RecoveryNotExhausted);
         }
         if self.phase != SourceResolutionPhaseV1::Primary || current_unix_seconds <= 0 {
             return Err(Error::InvalidRecoveryTransition);
         }
+        self.require_primary_is_the_ladders(material, observed_fragments)?;
         let deadline = window
             .end_unix_seconds()
             .checked_add(i64::from(window.max_age_seconds()))
@@ -626,6 +646,7 @@ impl SourceResolutionStateV2 {
         policy: RecoveryPolicyV2,
         expected_generation: u64,
         current_unix_seconds: i64,
+        observed_fragments: u8,
     ) -> Result<RecoveryCrankV2> {
         self.validate_material_and_generation(material_id, expected_generation)?;
         let active = self.authenticate_ladder(
@@ -634,6 +655,18 @@ impl SourceResolutionStateV2 {
             authenticated_recovery_policy_id,
             policy,
         )?;
+        // An ensemble market on `Primary` is the FOLD's if the quorum answered
+        // (`the_fold_never_stalls`: from a closed window exactly one of the two
+        // fires), and a ladder with no rung to enter has the failure walk as
+        // its terminal, not this crank. Both are decided after the ladder's
+        // own linkage and before the clock is read, so a crank that would be
+        // the wrong move refuses by name rather than as a deadline complaint.
+        if self.phase == SourceResolutionPhaseV1::Primary {
+            self.require_primary_is_the_ladders(material, observed_fragments)?;
+            if !material.ladder_has_rung() {
+                return Err(Error::InvalidRecoveryTransition);
+            }
+        }
         if current_unix_seconds <= 0 {
             return Err(Error::InvalidRecoveryTransition);
         }
@@ -656,8 +689,11 @@ impl SourceResolutionStateV2 {
             return Err(Error::DeadlineNotReached);
         }
 
+        // The slot after the members: zero for a single-source market, which is
+        // the transition as it was written, and `k - 1` for an ensemble whose
+        // leading slots answered the window and are not rungs.
         let entering = match self.phase {
-            SourceResolutionPhaseV1::Primary => 0_u8,
+            SourceResolutionPhaseV1::Primary => material.ensemble().first_rung_index(),
             _ => active
                 .ok_or(Error::InvalidRecoveryTransition)?
                 .0
@@ -796,11 +832,12 @@ impl SourceResolutionStateV2 {
     /// compartments were created.
     pub fn next_crank_funding_config(
         self,
+        material: SourceMaterialV3,
         authenticated_recovery_policy_id: ContentId,
         policy: RecoveryPolicyV2,
     ) -> Result<ContentId> {
         let entering = match self.phase {
-            SourceResolutionPhaseV1::Primary => 0_u8,
+            SourceResolutionPhaseV1::Primary => material.ensemble().first_rung_index(),
             SourceResolutionPhaseV1::Recovery => self
                 .active_attempt
                 .checked_add(1)
@@ -811,6 +848,98 @@ impl SourceResolutionStateV2 {
             Ok(attempt) => Ok(attempt.funding_allocation_id()),
             Err(_) => Ok(authenticated_recovery_policy_id),
         }
+    }
+
+    /// The crank/fold exclusivity, as one conjunct both the crank and the
+    /// failure walk state on `Primary`: an ensemble whose quorum answered is
+    /// the fold's to decide. A single-source market observes no fragments and
+    /// passes trivially.
+    fn require_primary_is_the_ladders(
+        self,
+        material: SourceMaterialV3,
+        observed_fragments: u8,
+    ) -> Result<()> {
+        let ensemble = material.ensemble();
+        if !ensemble.is_single() && observed_fragments >= ensemble.quorum() {
+            return Err(Error::EnsembleQuorumMet);
+        }
+        Ok(())
+    }
+
+    /// Decide an ensemble market from the fragments its members wrote.
+    ///
+    /// Admissible strictly after the window's closed deadline, on `Primary`,
+    /// for a material that declares more than one source; refuses fewer
+    /// readings than the quorum by name, because the ladder's crank is then the
+    /// move. The median is the scan the scheduled statistic already runs
+    /// (`exact_median_by`, one median in the crate), and the commit is
+    /// [`Self::resolve_primary_from_authenticated_domain`] with that median as
+    /// its numerator -- so an ensemble of one is today's selection to the bit
+    /// (`the_single_source_market_is_today`), and the honest-majority bracket
+    /// (`an_attacker_below_the_bound_cannot_move_the_cell`) is a statement
+    /// about exactly this function.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fold_ensemble_from_authenticated_domain(
+        &mut self,
+        material_id: ContentId,
+        material: SourceMaterialV3,
+        authenticated_window_spec_id: ContentId,
+        window: WindowSpecV1,
+        authenticated_product_record_digest: ContentId,
+        domain: ResultDomainV2<'_>,
+        resolution_evidence_id: ContentId,
+        readings: &[i128],
+        source_scale_exponent: i32,
+        expected_generation: u64,
+        current_unix_seconds: i64,
+        terminal_sequence: u64,
+    ) -> Result<EnsembleFoldV1> {
+        self.validate_material_and_generation(material_id, expected_generation)?;
+        if material.window_spec() != authenticated_window_spec_id {
+            return Err(Error::LinkageMismatch);
+        }
+        let ensemble = material.ensemble();
+        if ensemble.is_single() || self.phase != SourceResolutionPhaseV1::Primary {
+            return Err(Error::InvalidRecoveryTransition);
+        }
+        if current_unix_seconds <= 0 {
+            return Err(Error::InvalidRecoveryTransition);
+        }
+        let deadline = window
+            .end_unix_seconds()
+            .checked_add(i64::from(window.max_age_seconds()))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if current_unix_seconds <= deadline {
+            return Err(Error::DeadlineNotReached);
+        }
+        let count = u8::try_from(readings.len()).map_err(|_| Error::ArithmeticOverflow)?;
+        if count > ensemble.members() {
+            return Err(Error::NonCanonicalEnsemble);
+        }
+        if count < ensemble.quorum() {
+            return Err(Error::EnsembleQuorumNotMet);
+        }
+        let median = crate::scheduled_median_v1::exact_median_by(readings.len(), |index| {
+            readings.get(index).copied().unwrap_or(0)
+        })?;
+        let decision = self.resolve_primary_from_authenticated_domain(
+            material_id,
+            material,
+            authenticated_product_record_digest,
+            domain,
+            resolution_evidence_id,
+            median,
+            1,
+            source_scale_exponent,
+            expected_generation,
+            current_unix_seconds,
+            terminal_sequence,
+        )?;
+        Ok(EnsembleFoldV1 {
+            decision,
+            median,
+            consumed: count,
+        })
     }
 
     /// Join the material, its window and its recovery policy, and project the
@@ -1100,6 +1229,7 @@ mod tests {
     extern crate alloc;
 
     use super::*;
+    use crate::EnsembleSpecV1;
     use crate::generated_source_resolution_state_v2::{
         SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2_GENERATED, SOURCE_RESOLUTION_STATE_V2_FRESH_EXAMPLE,
         SOURCE_RESOLUTION_STATE_V2_REFUSAL_CORPUS, SOURCE_RESOLUTION_STATE_V2_REFUSAL_COUNT,
@@ -1183,13 +1313,21 @@ mod tests {
             .expect("fresh")
             .state();
         assert_eq!(
-            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 9, deadline),
+            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 9, deadline, 0),
             Err(Error::DeadlineNotReached),
             "the last admissible second for an honest resolution is not a failure second"
         );
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
         assert_eq!(
-            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 9, deadline + 1),
+            state.exhaust_after_primary_deadline(
+                id(2),
+                material,
+                id(5),
+                window,
+                9,
+                deadline + 1,
+                0
+            ),
             Ok(())
         );
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Exhausted);
@@ -1225,7 +1363,15 @@ mod tests {
             .expect("fresh")
             .state();
         assert_eq!(
-            state.exhaust_after_primary_deadline(id(2), with_recovery, id(5), window, 9, 2_000_000),
+            state.exhaust_after_primary_deadline(
+                id(2),
+                with_recovery,
+                id(5),
+                window,
+                9,
+                2_000_000,
+                0
+            ),
             Err(Error::RecoveryNotExhausted)
         );
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
@@ -1292,7 +1438,8 @@ mod tests {
                 policy_id,
                 policy,
                 9,
-                PRIMARY_DEADLINE
+                PRIMARY_DEADLINE,
+                0
             ),
             Err(Error::DeadlineNotReached)
         );
@@ -1309,6 +1456,7 @@ mod tests {
                 policy,
                 9,
                 PRIMARY_DEADLINE + 1,
+                0,
             )
             .expect("the funded alternative is enterable");
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Recovery);
@@ -1331,7 +1479,8 @@ mod tests {
                 policy_id,
                 policy,
                 9,
-                RECOVERY_DEADLINE
+                RECOVERY_DEADLINE,
+                0
             ),
             Err(Error::DeadlineNotReached)
         );
@@ -1349,6 +1498,7 @@ mod tests {
                 policy,
                 9,
                 RECOVERY_DEADLINE + 1,
+                0,
             )
             .expect("the last funded window closed");
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Exhausted);
@@ -1401,6 +1551,7 @@ mod tests {
                 policy,
                 9,
                 PRIMARY_DEADLINE + 1,
+                0,
             )
             .expect("advance");
 
@@ -1454,6 +1605,7 @@ mod tests {
                 policy,
                 9,
                 PRIMARY_DEADLINE + 1,
+                0,
             )
             .expect("advance");
 
@@ -1535,7 +1687,8 @@ mod tests {
                 id(0x9a),
                 policy,
                 9,
-                PRIMARY_DEADLINE + 1
+                PRIMARY_DEADLINE + 1,
+                0
             ),
             Err(Error::LinkageMismatch)
         );
@@ -1548,7 +1701,8 @@ mod tests {
                 policy_id,
                 policy,
                 9,
-                PRIMARY_DEADLINE + 1
+                PRIMARY_DEADLINE + 1,
+                0
             ),
             Err(Error::LinkageMismatch)
         );
@@ -1564,7 +1718,8 @@ mod tests {
                 policy_id,
                 policy,
                 9,
-                PRIMARY_DEADLINE + 1
+                PRIMARY_DEADLINE + 1,
+                0
             ),
             Err(Error::LinkageMismatch),
             "a material that selects no policy cannot be walked with one"
@@ -1608,6 +1763,7 @@ mod tests {
                 policy,
                 9,
                 RECOVERY_DEADLINE + 1,
+                0,
             ),
             Err(Error::InvalidRecoveryTransition)
         );
@@ -1649,15 +1805,15 @@ mod tests {
             .expect("fresh")
             .state();
         assert_eq!(
-            state.exhaust_after_primary_deadline(id(2), material, id(90), window, 9, 2_000_000),
+            state.exhaust_after_primary_deadline(id(2), material, id(90), window, 9, 2_000_000, 0),
             Err(Error::LinkageMismatch)
         );
         assert_eq!(
-            state.exhaust_after_primary_deadline(id(91), material, id(5), window, 9, 2_000_000),
+            state.exhaust_after_primary_deadline(id(91), material, id(5), window, 9, 2_000_000, 0),
             Err(Error::StateBindingMismatch)
         );
         assert_eq!(
-            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 8, 2_000_000),
+            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 8, 2_000_000, 0),
             Err(Error::StateBindingMismatch)
         );
     }
@@ -1691,10 +1847,395 @@ mod tests {
             .expect("primary resolution");
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
         assert_eq!(
-            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 9, 9_000_000),
+            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 9, 9_000_000, 0),
             Err(Error::InvalidRecoveryTransition)
         );
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
+    }
+
+    // ---------------------------------------------------------------- the
+    // ensemble's laws, executed against the Rust fold.
+    //
+    // `EnsembleResolutionV1.lean` proves them over an abstract `fold`; these
+    // carry the same names and run the same arithmetic through
+    // `fold_ensemble_from_authenticated_domain`, so a divergence between the
+    // proof's model and the transition the chain runs is a red test rather
+    // than a reading of two documents.
+
+    /// The one-cut domain every ensemble witness shares: cut `100` over
+    /// denominator one, so cell `0` is "below a hundred" and cell `1` is not.
+    ///
+    /// The ladder tests' `runtime_domain_bytes` cuts at `1`, which cannot
+    /// separate a manipulated reading from an honest one; the whole point of
+    /// these witnesses is that the manipulated readings sit on the far side of
+    /// a cut, and `witnessDomain` in Lean is this same `⟨1, [100]⟩`.
+    fn ensemble_witness_domain_bytes() -> alloc::vec::Vec<u8> {
+        let cuts = [100_i128];
+        let input = ResultDomainInputV2 {
+            product_id: product_id(1),
+            coordinate_domain_id: product_id(2),
+            result_unit_id: product_id(3),
+            liability_basis_id: product_id(4),
+            representation_release_id: product_id(5),
+            mapping_release_id: product_id(6),
+            cut_denominator: 1,
+            cuts: &cuts,
+        };
+        let mut output =
+            alloc::vec![0_u8; dclutch_product::result_domain_record_bytes(1).expect("width")];
+        dclutch_product::compile_result_domain_v2(input, &mut output).expect("domain");
+        output
+    }
+
+    /// `k` sources under quorum `q`, with `rungs` ladder slots after the
+    /// members. The rest of the material is the two-source one every ladder
+    /// test uses, so the only thing these witnesses vary is the ensemble.
+    fn ensemble_material(members: u8, quorum: u8, rungs: u8) -> SourceMaterialV3 {
+        two_source_material()
+            .0
+            .with_ensemble(EnsembleSpecV1::new(members, quorum).expect("spec"), rungs)
+            .expect("ensemble")
+    }
+
+    /// Fold `readings` as the fragments a `k`-source, `q`-quorum market
+    /// observed, one second after its window's closed deadline.
+    fn fold_readings(members: u8, quorum: u8, readings: &[i128]) -> Result<super::EnsembleFoldV1> {
+        let material = ensemble_material(members, quorum, 0);
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let domain_bytes = ensemble_witness_domain_bytes();
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let mut state = ladder_state();
+        state.fold_ensemble_from_authenticated_domain(
+            id(2),
+            material,
+            id(5),
+            window,
+            id(3),
+            domain,
+            id(20),
+            readings,
+            0,
+            9,
+            PRIMARY_DEADLINE + 1,
+            1,
+        )
+    }
+
+    #[test]
+    fn an_attacker_below_the_bound_cannot_move_the_cell() {
+        // Three honest sources of five read `50`, `55` and `60` -- all in cell
+        // zero -- and two manipulated sources read whatever they like. Two of
+        // five is a strict minority (`2 * 2 < 5`), so the median stays
+        // bracketed by the honest readings and the cell does not move, at
+        // either end. `a_strict_minority_moves_nothing` is the Lean witness
+        // and this is the same arithmetic through the transition.
+        let up = fold_readings(5, 5, &[50, 55, 60, 200, 300]).expect("a full ensemble decides");
+        assert_eq!(
+            (up.median, up.decision.selector(), up.consumed),
+            (60, 0, 5),
+            "two manipulated readings above the cut do not move the cell"
+        );
+        let down = fold_readings(5, 5, &[50, 55, 60, -5, -7]).expect("a full ensemble decides");
+        assert_eq!(
+            (down.median, down.decision.selector(), down.consumed),
+            (50, 0, 5),
+            "and two below it do not either"
+        );
+    }
+
+    #[test]
+    fn exactly_half_can_move_the_cell_up_and_not_down() {
+        // The bound is exact, and at exactly half it is one-directional. Two
+        // honest sources read `50` and `60`; two manipulated ones -- exactly
+        // half of four -- move the fold to cell one from above and cannot move
+        // it out of the honest range from below.
+        //
+        // The asymmetry is `exact_median_by`'s rank, `count / 2`, which for an
+        // even count is the UPPER of the two middles. It is not a defect of
+        // the median; it is the reason the parity of `q` is a founding
+        // question, which `an_even_quorum_is_not_foundable` below states.
+        let up = fold_readings(4, 4, &[50, 60, 200, 300]).expect("a full ensemble decides");
+        assert_eq!(
+            (up.median, up.decision.selector()),
+            (200, 1),
+            "exactly half, from above, moves the cell"
+        );
+        let down = fold_readings(4, 4, &[50, 60, -5, -7]).expect("a full ensemble decides");
+        assert_eq!(
+            (down.median, down.decision.selector()),
+            (50, 0),
+            "exactly half, from below, does not"
+        );
+    }
+
+    #[test]
+    fn an_even_quorum_is_not_foundable() {
+        // Where the asymmetry above is refused: at the founding, where the
+        // bytes are authored, and not at the decoder. Every `1 <= q <= k <= 5`
+        // decodes -- the theorems are proven for all of them and a decoder
+        // that refused some of them would be refusing a record the proof
+        // admits -- so the parity is a separate conjunct with its own name.
+        assert_eq!(
+            EnsembleSpecV1::new(4, 4)
+                .expect("decodable")
+                .validate_foundable(),
+            Err(Error::EnsembleQuorumEven),
+            "the even quorum of the witness above cannot be founded"
+        );
+        assert_eq!(
+            EnsembleSpecV1::new(5, 3)
+                .expect("flagship")
+                .validate_foundable(),
+            Ok(()),
+            "the flagship's odd quorum can"
+        );
+        assert_eq!(
+            EnsembleSpecV1::SINGLE.validate_foundable(),
+            Ok(()),
+            "and so can today's single-source market"
+        );
+        assert_eq!(
+            ensemble_material(4, 4, 0).ensemble().quorum(),
+            4,
+            "while the material still carries the even quorum, which is what \
+             makes the refusal a founding one rather than a decode one"
+        );
+    }
+
+    #[test]
+    fn fewer_than_the_quorum_engages_the_ladder() {
+        // With a rung after its members, an ensemble short of its quorum is
+        // the LADDER's: the fold refuses by its own name, the state is
+        // untouched, and the crank enters the slot after the members -- the
+        // first rung, index `k - 1`, never slot zero, because slots zero and
+        // one are the members and nobody cranks onto a source that already had
+        // the window.
+        let material = ensemble_material(3, 3, 1);
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let (policy, policy_id) = ensemble_policy_with_one_rung();
+        let domain_bytes = ensemble_witness_domain_bytes();
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+
+        let mut state = ladder_state();
+        assert_eq!(
+            state.fold_ensemble_from_authenticated_domain(
+                id(2),
+                material,
+                id(5),
+                window,
+                id(3),
+                domain,
+                id(20),
+                &[50, 55],
+                0,
+                9,
+                PRIMARY_DEADLINE + 1,
+                1,
+            ),
+            Err(Error::EnsembleQuorumNotMet),
+            "two of a quorum of three is not a fold"
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
+        assert_eq!(
+            state.crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                PRIMARY_DEADLINE + 1,
+                2,
+            ),
+            Ok(RecoveryCrankV2::Advanced {
+                attempt_index: 2,
+                attempt: policy.attempt(2).expect("the rung"),
+            }),
+            "and the ladder takes the rung after the two member slots"
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Recovery);
+
+        // The other half of the same exclusivity: with the quorum answered the
+        // crank is not the admissible move, and it says so rather than
+        // complaining about a deadline.
+        let mut met = ladder_state();
+        assert_eq!(
+            met.crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                PRIMARY_DEADLINE + 1,
+                3,
+            ),
+            Err(Error::EnsembleQuorumMet)
+        );
+        assert_eq!(met.phase(), SourceResolutionPhaseV1::Primary);
+    }
+
+    /// A three-source ensemble's policy: two member slots at the window's
+    /// closed deadline, staggered by the one second the record's strictly
+    /// increasing deadlines require, and one rung after them.
+    fn ensemble_policy_with_one_rung() -> (RecoveryPolicyV2, ContentId) {
+        let policy = RecoveryPolicyV2::new(
+            id(0x60),
+            [
+                Some(
+                    RecoveryAttemptV2::new(id(0x61), id(0x62), PRIMARY_DEADLINE, id(0x63))
+                        .expect("member one"),
+                ),
+                Some(
+                    RecoveryAttemptV2::new(id(0x65), id(0x66), PRIMARY_DEADLINE + 1, id(0x67))
+                        .expect("member two"),
+                ),
+                Some(
+                    RecoveryAttemptV2::new(id(0x68), id(0x69), RECOVERY_DEADLINE, id(0x6a))
+                        .expect("the rung"),
+                ),
+                None,
+            ],
+            3,
+        )
+        .expect("policy");
+        (policy, id(0x64))
+    }
+
+    #[test]
+    fn the_fold_never_stalls() {
+        // Exhaustively, over every number of fragments a five-source market
+        // under a quorum of three can observe: below the quorum exactly the
+        // fallback fires and the fold refuses; at or above it exactly the fold
+        // decides and the fallback refuses. There is no `n` where both fire
+        // and none where neither does, which is the whole content of the
+        // theorem -- a member that never answers cannot leave a market with no
+        // move.
+        //
+        // This ensemble declares no rung (its four member slots are the
+        // policy's whole capacity), so its fallback is the primary
+        // exhaustion rather than a crank; `fewer_than_the_quorum_engages_the_ladder`
+        // is the same dichotomy for an ensemble that bought one.
+        let material = ensemble_material(5, 3, 0);
+        assert!(
+            !material.ladder_has_rung(),
+            "four members exhaust the policy's capacity, so there is no rung"
+        );
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let readings = [50_i128, 55, 60, 200, 300];
+        for observed in 0..=5_usize {
+            let domain_bytes = ensemble_witness_domain_bytes();
+            let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+            let mut folding = ladder_state();
+            let folded = folding.fold_ensemble_from_authenticated_domain(
+                id(2),
+                material,
+                id(5),
+                window,
+                id(3),
+                domain,
+                id(20),
+                readings.get(..observed).expect("at most five"),
+                0,
+                9,
+                PRIMARY_DEADLINE + 1,
+                1,
+            );
+            let mut falling = ladder_state();
+            let fell = falling.exhaust_after_primary_deadline(
+                id(2),
+                material,
+                id(5),
+                window,
+                9,
+                PRIMARY_DEADLINE + 1,
+                u8::try_from(observed).expect("at most five"),
+            );
+            if observed < 3 {
+                assert_eq!(
+                    folded,
+                    Err(Error::EnsembleQuorumNotMet),
+                    "{observed} of a quorum of three is not a fold"
+                );
+                assert_eq!(folding.phase(), SourceResolutionPhaseV1::Primary);
+                assert_eq!(fell, Ok(()), "and the fallback is the move that fires");
+                assert_eq!(falling.phase(), SourceResolutionPhaseV1::Exhausted);
+            } else {
+                let decided = folded.expect("the quorum answered");
+                assert_eq!(
+                    decided.consumed,
+                    u8::try_from(observed).expect("at most five")
+                );
+                assert_eq!(
+                    decided.decision.selector(),
+                    0,
+                    "three honest readings hold cell zero however many joined them"
+                );
+                assert_eq!(folding.phase(), SourceResolutionPhaseV1::Resolved);
+                assert_eq!(
+                    fell,
+                    Err(Error::EnsembleQuorumMet),
+                    "and the fallback refuses, naming the fold"
+                );
+                assert_eq!(falling.phase(), SourceResolutionPhaseV1::Primary);
+            }
+        }
+    }
+
+    #[test]
+    fn a_single_source_market_folds_to_todays_selection() {
+        // The migration statement, executed: `k = q = 1` is not a special case
+        // of the fold, it is refused BY the fold -- a single-source material
+        // has no ensemble to fold and takes today's primary transition
+        // unchanged. `the_single_source_market_is_today` in Lean is the
+        // statement that the two agree where both are defined; here the point
+        // is that the ensemble route cannot be used to re-decide a market that
+        // never declared one.
+        let material = material(id(3));
+        assert!(material.ensemble().is_single());
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let domain_bytes = ensemble_witness_domain_bytes();
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let mut state = ladder_state();
+        assert_eq!(
+            state.fold_ensemble_from_authenticated_domain(
+                id(2),
+                material,
+                id(5),
+                window,
+                id(3),
+                domain,
+                id(20),
+                &[60],
+                0,
+                9,
+                PRIMARY_DEADLINE + 1,
+                1,
+            ),
+            Err(Error::InvalidRecoveryTransition),
+            "a market that declared one source is not folded"
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
+
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let decision = state
+            .resolve_primary_from_authenticated_domain(
+                id(2),
+                material,
+                id(3),
+                domain,
+                id(20),
+                60,
+                1,
+                0,
+                9,
+                PRIMARY_DEADLINE + 1,
+                1,
+            )
+            .expect("today's primary transition still answers it");
+        assert_eq!(decision.selector(), 0);
     }
 
     #[test]

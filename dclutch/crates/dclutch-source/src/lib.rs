@@ -24,6 +24,9 @@ use dclutch_product::contract::{
     result_domain::{FINITE_RESULT_DOMAIN_BYTES, FiniteResultDomainV1},
 };
 
+mod ensemble_fold_receipt_v1;
+#[allow(missing_docs)]
+mod generated_ensemble_fold_receipt_v1;
 #[allow(missing_docs)]
 mod generated_parent_reference_v1;
 #[allow(missing_docs)]
@@ -96,7 +99,10 @@ pub use generated_source_material_v2::{
 pub use generated_source_material_v3::{
     SOURCE_MATERIAL_DERIVATION_RELEASE_ID_V3, SOURCE_MATERIAL_DERIVATION_RELEASE_PREIMAGE_V3,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V3,
-    SOURCE_MATERIAL_V3_BYTES, SOURCE_MATERIAL_V3_MAGIC, SOURCE_MATERIAL_V3_SCHEMA_VERSION,
+    SOURCE_MATERIAL_V3_BYTES, SOURCE_MATERIAL_V3_ENSEMBLE_MAX_MEMBERS,
+    SOURCE_MATERIAL_V3_ENSEMBLE_MEMBERS_OFFSET, SOURCE_MATERIAL_V3_ENSEMBLE_QUORUM_OFFSET,
+    SOURCE_MATERIAL_V3_ENSEMBLE_RUNGS_OFFSET, SOURCE_MATERIAL_V3_MAGIC,
+    SOURCE_MATERIAL_V3_SCHEMA_VERSION,
 };
 pub use generated_source_recovery_policy_v2::{
     RECOVERY_ATTEMPT_BYTES_V2, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_MAGIC_V2,
@@ -127,6 +133,13 @@ pub use generated_statistic_spec_v1::{
 // `SourceScheduledMedianV1` owned the last eight bytes from a cursor it had
 // asserted. The tail's offset is the width of the eleven fields in front of it
 // now, so the two ends of the record are the same object.
+pub use ensemble_fold_receipt_v1::EnsembleFoldReceiptV1;
+pub use generated_ensemble_fold_receipt_v1::{
+    ENSEMBLE_EVIDENCE_DOMAIN_V1, ENSEMBLE_FOLD_RECEIPT_PDA_DOMAIN_V1,
+    ENSEMBLE_FOLD_RECEIPT_V1_BYTES, ENSEMBLE_FOLD_RECEIPT_V1_MAGIC,
+    ENSEMBLE_FOLD_RECEIPT_V1_SCHEMA_VERSION, ENSEMBLE_FRAGMENT_PDA_DOMAIN_V1,
+    ENSEMBLE_MAX_MEMBERS_V1,
+};
 pub use generated_window_spec_v1::{
     WINDOW_SPEC_BYTES, WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1,
     WINDOW_SPEC_HEADER_RESERVED_BYTES_V1, WINDOW_SPEC_HEADER_RESERVED_OFFSET_V1,
@@ -145,10 +158,10 @@ pub use provider_join_v2::{
     WINDOW_SPEC_SCHEMA_ID_V1, WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
 };
 pub use source_material_v2::SourceMaterialV2;
-pub use source_material_v3::{SourceMaterialV3, SourcePrincipalPolicyV1};
+pub use source_material_v3::{EnsembleSpecV1, SourceMaterialV3, SourcePrincipalPolicyV1};
 pub use source_recovery_policy_v2::{RecoveryAttemptV2, RecoveryPolicyV2};
 pub use source_resolution_v2::{
-    RecoveryCrankV2, SourceResolutionCreationPlanV2, SourceResolutionDecisionV2,
+    EnsembleFoldV1, RecoveryCrankV2, SourceResolutionCreationPlanV2, SourceResolutionDecisionV2,
     SourceResolutionPdaSeedsV2, SourceResolutionStateV2, SourceResolutionTerminalProjectionV2,
 };
 
@@ -474,6 +487,24 @@ pub enum Error {
     /// The adapter's required feed exponent was not the source-to-result shift
     /// the statistic declares.
     SourceScaleMismatch,
+    /// The material's ensemble bytes, or a receipt's ensemble fields, were
+    /// not canonical: a quorum above the members, more members than the
+    /// policy can hold, rungs on a single-source material, members with no
+    /// policy, or a bitmap disagreeing with its count.
+    NonCanonicalEnsemble,
+    /// A founding declared an even quorum. Decision 0034 ruling 2b: the even
+    /// case has a one-directional manipulation edge no fold refuses.
+    EnsembleQuorumEven,
+    /// A capture named a member the material does not declare.
+    EnsembleMemberOutOfRange,
+    /// A member attempt's deadline was not the window's closed deadline.
+    EnsembleWindowMismatch,
+    /// Fewer fragments than the quorum: the ladder's crank is the admissible
+    /// move, not the fold.
+    EnsembleQuorumNotMet,
+    /// At least the quorum answered: the fold is the admissible move, not the
+    /// crank or the failure walk.
+    EnsembleQuorumMet,
 }
 
 /// Result alias for source-contract operations.

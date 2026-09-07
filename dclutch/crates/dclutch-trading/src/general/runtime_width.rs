@@ -253,13 +253,6 @@ pub struct CandidateHeaderV2 {
     pub product_id: [u8; 32],
     /// Batch content identity.
     pub batch_id: [u8; 32],
-    /// Orders the certificate enumerates: the batch's admitted less cancelled.
-    ///
-    /// Copied by the solver, authenticated against the closed batch at
-    /// `SubmitCandidate` (`collection_v1::authenticate_batch_candidate_v1`),
-    /// and held to the verifier's distinct order count at the terminal row
-    /// (`RuntimeVerifyErrorV2::OrderOmitted`).
-    pub live_order_count: u32,
 }
 
 /// Sole fixed-header byte-layout authority for [`CandidateV2`].
@@ -280,8 +273,6 @@ impl CandidateLayoutV2 {
     pub const PRODUCT_ID: usize = wire::CANDIDATE_PRODUCT_ID_OFFSET_V2 as usize;
     /// Batch-identity field offset.
     pub const BATCH_ID: usize = wire::CANDIDATE_BATCH_ID_OFFSET_V2 as usize;
-    /// Live-order-count field offset.
-    pub const LIVE_ORDER_COUNT: usize = wire::CANDIDATE_LIVE_ORDER_COUNT_OFFSET_V2 as usize;
 }
 
 /// Borrowed Candidate record with an exact `u64` simplex tail.
@@ -308,7 +299,6 @@ impl<'a> CandidateV2<'a> {
             candidate_id: array32_at(bytes, CandidateLayoutV2::CANDIDATE_ID)?,
             product_id: array32_at(bytes, CandidateLayoutV2::PRODUCT_ID)?,
             batch_id: array32_at(bytes, CandidateLayoutV2::BATCH_ID)?,
-            live_order_count: u32_at(bytes, CandidateLayoutV2::LIVE_ORDER_COUNT)?,
         };
         exact_width(bytes, candidate_len(header.outcome_count)?)?;
         validate_candidate_header(header)?;
@@ -352,11 +342,6 @@ impl<'a> CandidateV2<'a> {
             output,
             CandidateLayoutV2::OUTCOME_COUNT,
             header_value.outcome_count,
-        )?;
-        put_u32(
-            output,
-            CandidateLayoutV2::LIVE_ORDER_COUNT,
-            header_value.live_order_count,
         )?;
         put_u32(
             output,
@@ -1124,49 +1109,20 @@ impl<'a> VerifiedCandidateV2<'a> {
         };
         exact_width(bytes, verified_candidate_len(header.outcome_count)?)?;
         validate_verified_candidate_header(header)?;
-        let mut total = 0_u64;
-        for index in 0..outcome_len(header.outcome_count)? {
-            total = total
-                .checked_add(u64_at(
-                    bytes,
-                    tail_offset(
-                        VERIFIED_CANDIDATE_HEADER_BYTES_V2,
-                        index,
-                        wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
-                    )?,
-                )?)
-                .ok_or(RuntimeWidthErrorV2::ArithmeticOverflow)?;
-        }
-        if total != header.price_scale {
-            return Err(RuntimeWidthErrorV2::InvalidSimplex);
-        }
         Ok(Self { bytes, header })
     }
 
     /// Encode canonical verified-candidate bytes into a caller-owned buffer.
-    ///
-    /// THE PRICES ARE THE FIRST TAIL. The certificate is the clearing --
-    /// prices, fills and sets (`JointClearingV1.Clearing`) -- so it carries
-    /// its own price vector: settlement re-proves complementary slackness
-    /// from it and the close publishes it (`ClearingPriceV1`).
     pub fn encode_into(
         header_value: VerifiedCandidateHeaderV2,
-        prices: &[u64],
         claim_inputs: &[u64],
         claim_outputs: &[u64],
         output: &mut [u8],
     ) -> RuntimeWidthResultV2<()> {
         validate_verified_candidate_header(header_value)?;
         let count = outcome_len(header_value.outcome_count)?;
-        if prices.len() != count || claim_inputs.len() != count || claim_outputs.len() != count {
+        if claim_inputs.len() != count || claim_outputs.len() != count {
             return Err(RuntimeWidthErrorV2::InvalidLength);
-        }
-        let total = prices.iter().try_fold(0_u64, |sum, value| {
-            sum.checked_add(*value)
-                .ok_or(RuntimeWidthErrorV2::ArithmeticOverflow)
-        })?;
-        if total != header_value.price_scale {
-            return Err(RuntimeWidthErrorV2::InvalidSimplex);
         }
         exact_width(output, verified_candidate_len(header_value.outcome_count)?)?;
         output.fill(0);
@@ -1226,24 +1182,28 @@ impl<'a> VerifiedCandidateV2<'a> {
             wire::VERIFIED_CANDIDATE_PRICE_SCALE_OFFSET_V2 as usize,
             header_value.price_scale,
         )?;
-        let inputs = verified_inputs_offset(header_value.outcome_count)?;
         let outputs = verified_outputs_offset(header_value.outcome_count)?;
-        for (base, tail) in [
-            (VERIFIED_CANDIDATE_HEADER_BYTES_V2, prices),
-            (inputs, claim_inputs),
-            (outputs, claim_outputs),
-        ] {
-            for (index, value) in tail.iter().enumerate() {
-                put_u64(
-                    output,
-                    tail_offset(
-                        base,
-                        index,
-                        wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
-                    )?,
-                    *value,
-                )?;
-            }
+        for (index, value) in claim_inputs.iter().enumerate() {
+            put_u64(
+                output,
+                tail_offset(
+                    VERIFIED_CANDIDATE_HEADER_BYTES_V2,
+                    index,
+                    wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
+                )?,
+                *value,
+            )?;
+        }
+        for (index, value) in claim_outputs.iter().enumerate() {
+            put_u64(
+                output,
+                tail_offset(
+                    outputs,
+                    index,
+                    wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
+                )?,
+                *value,
+            )?;
         }
         Ok(())
     }
@@ -1256,7 +1216,6 @@ impl<'a> VerifiedCandidateV2<'a> {
     /// cannot be represented by a fixed Rust array.
     pub fn encode_le_tails_into(
         header_value: VerifiedCandidateHeaderV2,
-        prices_le: &[u8],
         claim_inputs_le: &[u8],
         claim_outputs_le: &[u8],
         output: &mut [u8],
@@ -1267,18 +1226,8 @@ impl<'a> VerifiedCandidateV2<'a> {
             header_value.outcome_count,
             wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
         )?;
-        exact_width(prices_le, tail_bytes)?;
         exact_width(claim_inputs_le, tail_bytes)?;
         exact_width(claim_outputs_le, tail_bytes)?;
-        let mut total = 0_u64;
-        for index in 0..outcome_len(header_value.outcome_count)? {
-            total = total
-                .checked_add(u64_at(prices_le, tail_offset(0, index, 8)?)?)
-                .ok_or(RuntimeWidthErrorV2::ArithmeticOverflow)?;
-        }
-        if total != header_value.price_scale {
-            return Err(RuntimeWidthErrorV2::InvalidSimplex);
-        }
         exact_width(output, verified_candidate_len(header_value.outcome_count)?)?;
         output.fill(0);
         write_header(output, &VERIFIED_CANDIDATE_MAGIC, VERIFIED_PHASE)?;
@@ -1337,12 +1286,7 @@ impl<'a> VerifiedCandidateV2<'a> {
             wire::VERIFIED_CANDIDATE_PRICE_SCALE_OFFSET_V2 as usize,
             header_value.price_scale,
         )?;
-        put(output, VERIFIED_CANDIDATE_HEADER_BYTES_V2, prices_le)?;
-        put(
-            output,
-            verified_inputs_offset(header_value.outcome_count)?,
-            claim_inputs_le,
-        )?;
+        put(output, VERIFIED_CANDIDATE_HEADER_BYTES_V2, claim_inputs_le)?;
         put(
             output,
             verified_outputs_offset(header_value.outcome_count)?,
@@ -1355,26 +1299,13 @@ impl<'a> VerifiedCandidateV2<'a> {
         self.header
     }
 
-    /// Return one exact simplex price at a checked outcome index.
-    pub fn price(self, index: u32) -> RuntimeWidthResultV2<u64> {
-        index_at(self.header.outcome_count, index)?;
-        u64_at(
-            self.bytes,
-            tail_offset(
-                VERIFIED_CANDIDATE_HEADER_BYTES_V2,
-                usize_from_u32(index)?,
-                wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
-            )?,
-        )
-    }
-
     /// Return an exact aggregate claim input at a checked outcome index.
     pub fn claim_input(self, index: u32) -> RuntimeWidthResultV2<u64> {
         index_at(self.header.outcome_count, index)?;
         u64_at(
             self.bytes,
             tail_offset(
-                verified_inputs_offset(self.header.outcome_count)?,
+                VERIFIED_CANDIDATE_HEADER_BYTES_V2,
                 usize_from_u32(index)?,
                 wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
             )?,
@@ -1439,7 +1370,6 @@ pub fn verified_candidate_len(outcome_count: u32) -> RuntimeWidthResultV2<usize>
 
 fn validate_candidate_header(value: CandidateHeaderV2) -> RuntimeWidthResultV2<()> {
     if value.outcome_count == 0
-        || value.live_order_count == 0
         || value.page_count == 0
         || value.candidate_coordinate == 0
         || value.price_scale == 0
@@ -1457,9 +1387,7 @@ fn validate_execution_header(value: ExecutionHeaderV2) -> RuntimeWidthResultV2<(
         || value.page_coordinate == 0
         || value.execution_coordinate == 0
         || value.max_lots == 0
-        // `lots == 0` is admitted since the joint clearing: an unfilled order
-        // is still a row of the certificate (design note §1.4, the unfilled
-        // row), and `RationedInsideLimit` is a statement about exactly it.
+        || value.lots == 0
         || zero(&value.order_id)
         || zero(&value.owner_id)
     {
@@ -1533,19 +1461,11 @@ fn execution_deliver_offset(outcome_count: u32) -> RuntimeWidthResultV2<usize> {
     derived_len(EXECUTION_HEADER_BYTES_V2, outcome_count, 8)
 }
 
-fn verified_inputs_offset(outcome_count: u32) -> RuntimeWidthResultV2<usize> {
-    derived_len(
-        VERIFIED_CANDIDATE_HEADER_BYTES_V2,
-        outcome_count,
-        wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
-    )
-}
-
 fn verified_outputs_offset(outcome_count: u32) -> RuntimeWidthResultV2<usize> {
     derived_len(
         VERIFIED_CANDIDATE_HEADER_BYTES_V2,
         outcome_count,
-        2 * wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
+        wire::VERIFIED_CANDIDATE_TAIL_STRIDE_V2 as usize,
     )
 }
 
@@ -1791,8 +1711,6 @@ mod tests {
             candidate_id: CANDIDATE,
             product_id: PRODUCT,
             batch_id: BATCH,
-            // Three orders, the same three the settlement cursor below counts.
-            live_order_count: 3,
         }
     }
 
@@ -1873,8 +1791,6 @@ mod tests {
             );
 
             let mut verified = vec![0; verified_candidate_len(width).expect("verified width")];
-            let mut prices = vec![0_u64; usize::try_from(width).expect("test width")];
-            prices[0] = 1;
             VerifiedCandidateV2::encode_into(
                 VerifiedCandidateHeaderV2 {
                     outcome_count: width,
@@ -1889,14 +1805,12 @@ mod tests {
                     quote_credit: 3,
                     price_scale: 1,
                 },
-                &prices,
                 &vec![13; usize::try_from(width).expect("test width")],
                 &vec![17; usize::try_from(width).expect("test width")],
                 &mut verified,
             )
             .expect("verified encode");
             let decoded = VerifiedCandidateV2::decode(&verified).expect("verified decode");
-            assert_eq!(decoded.price(0).expect("first price"), 1);
             assert_eq!(decoded.claim_input(width - 1).expect("input"), 13);
             assert_eq!(decoded.claim_output(width - 1).expect("output"), 17);
         }
@@ -1940,10 +1854,8 @@ mod tests {
             CandidateV2::decode(&padding),
             Err(RuntimeWidthErrorV2::NonCanonicalPadding)
         );
-        // The first price, raised by one: sixteen ones sum to the scale, and
-        // seventeen do not.
         let mut simplex = valid.clone();
-        simplex[CANDIDATE_HEADER_BYTES_V2] = 2;
+        simplex[128] = 2;
         assert_eq!(
             CandidateV2::decode(&simplex),
             Err(RuntimeWidthErrorV2::InvalidSimplex)

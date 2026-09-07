@@ -22,9 +22,9 @@
 
 use dclutch_market::{CoreState, Phase, Readiness};
 use dclutch_provider_transport_v3_operator::{
-    ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
-    ProviderSubmitDeploymentV3, ProviderSubmitIntentV3, ProviderSubmitSnapshotV3,
-    build_provider_execute_v3, build_provider_submit_v3,
+    ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteLadderV3,
+    ProviderExecuteSnapshotV3, ProviderSubmitDeploymentV3, ProviderSubmitIntentV3,
+    ProviderSubmitSnapshotV3, build_provider_execute_v3, build_provider_submit_v3,
 };
 use dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2;
 use dclutch_resolution_core_v3_operator::ObservedAccount;
@@ -34,7 +34,8 @@ use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
-    PythAdapterConfigV1, SourceResolutionPhaseV1, SourceResolutionStateV2, WindowSpecV1,
+    PythAdapterConfigV1, SourceResolutionPhaseV1, SourceResolutionRouteV1, SourceResolutionStateV2,
+    WindowSpecV1,
 };
 use solana_program::hash::hash;
 use solana_sdk::{
@@ -75,6 +76,68 @@ const WRITE_CHUNK_BYTES: usize = 600;
 /// Matches `market.rs`'s `FIXTURE_SHELF_LIFE_SECONDS`, and is checked against
 /// the window record the Market actually published rather than assumed.
 const FIXTURE_SHELF_LIFE_SECONDS: i64 = 31_536_000;
+/// The Anchor tag `receiver-post-update.data` carries ahead of its body.
+const POST_UPDATE_TAG_BYTES: usize = 8;
+const _: () = assert!(
+    RECEIVER_POST_UPDATE.len() > POST_UPDATE_TAG_BYTES,
+    "the captured PostUpdate instruction is narrower than its own Anchor tag"
+);
+
+/// One Pyth publication, as this transport consumes it.
+///
+/// WHY THIS IS A PARAMETER AND NOT FOUR CONSTANTS. Everything below used to
+/// read the pinned capture directly, so the whole transport was ABOUT one
+/// instant frozen in August 2026 -- which is fine for a primary leg whose
+/// market's window was compiled to end at that instant, and impossible for a
+/// rung, because a rung is entered only after the primary leg's grace expired
+/// and the capture is stale by construction by then. A caller that can mint a
+/// publication (`pyth_lab_publication.rs`) hands one here; the journey hands
+/// the capture, and [`Self::captured`] is that capture in this shape, so the
+/// primary walk sends exactly the bytes it always sent.
+pub(crate) struct PublicationV1 {
+    /// The complete signed VAA the router verifies, written in chunks.
+    pub(crate) signed_vaa: Vec<u8>,
+    /// `PostUpdateParams` WITHOUT the Anchor tag, which is what both
+    /// `ProviderSubmitIntentV3` and `ProviderExecuteIntentV3` take.
+    pub(crate) post_update_body: Vec<u8>,
+    /// The `PriceUpdateV2` image this publication is about. The transport reads
+    /// only the publication instant off it; the CHAIN's own posted bytes are
+    /// what a submission digests.
+    pub(crate) price_update_image: Vec<u8>,
+    /// How old this publication may be before the transport refuses it.
+    ///
+    /// A fact about the PUBLICATION and the lab that holds it, never about a
+    /// market: the captured fixture's staleness grows by 86,400 every day and a
+    /// minted publication's is zero at the second it is minted.
+    pub(crate) shelf_life_seconds: i64,
+}
+
+impl PublicationV1 {
+    /// The pinned capture, in the shape the transport now takes.
+    pub(crate) fn captured() -> Self {
+        Self {
+            signed_vaa: SIGNED_VAA.to_vec(),
+            post_update_body: RECEIVER_POST_UPDATE[POST_UPDATE_TAG_BYTES..].to_vec(),
+            price_update_image: PRICE_UPDATE.to_vec(),
+            shelf_life_seconds: FIXTURE_SHELF_LIFE_SECONDS,
+        }
+    }
+}
+
+/// The records a capture rides with when the Market is standing on a rung.
+///
+/// A rung substitutes a SOURCE and nothing else, which is why exactly three
+/// coordinates are here: the alternative `SourceSpecV1` and its own
+/// `PythAdapterConfigV1` -- the two positions the execute frame carries the
+/// rung's records in rather than the material's -- and the `RecoveryPolicyV2`
+/// that names them, which the builder authenticates before it will derive a
+/// `source_index` above zero. The window, the statistic, the provider release
+/// and the whole Product graph stay the market's.
+pub(crate) struct RungCaptureV1 {
+    pub(crate) policy: crate::resolution::RecordPairV1,
+    pub(crate) source_spec: crate::resolution::RecordPairV1,
+    pub(crate) adapter_config: crate::resolution::RecordPairV1,
+}
 
 /// The pinned provider deployment, and the accounts its own programs derive.
 #[derive(Clone, Copy)]
@@ -189,6 +252,23 @@ pub(crate) fn watch(ledger: &mut crate::ledger::ConservationLedgerV1, plan: &Pro
 pub(crate) const PYTH_TRANSPORT_STAGE_V1: &str =
     "resolution: the Pyth transport resolves the Source and mints the terminal certificate";
 
+/// The same transport, answering on the rung the market advanced onto.
+///
+/// A SEPARATE LABEL BECAUSE IT IS A SEPARATE CLAIM. The primary label says the
+/// market's first choice answered; a run that read that sentence off a capture
+/// which actually answered on the funded alternative would be reporting the
+/// leg the holders paid for as the leg they never needed.
+pub(crate) const PYTH_RECOVERY_TRANSPORT_STAGE_V1: &str = "resolution: the Pyth transport answers the market's funded rung and mints the terminal \
+     certificate";
+
+/// Which leg a capture is about to answer on, in one place.
+pub(crate) const fn transport_stage_v1(rung: Option<&RungCaptureV1>) -> &'static str {
+    match rung {
+        None => PYTH_TRANSPORT_STAGE_V1,
+        Some(_) => PYTH_RECOVERY_TRANSPORT_STAGE_V1,
+    }
+}
+
 pub(crate) fn resolve_through_pyth(
     rpc: &mut Rpc,
     payer: &Keypair,
@@ -197,6 +277,9 @@ pub(crate) fn resolve_through_pyth(
     provider: &ProviderPlanV1,
     capture_dir: &std::path::Path,
     transactions: &mut Vec<TransactionEvidence>,
+    publication: &PublicationV1,
+    rung: Option<&RungCaptureV1>,
+    terminal_sequence: u64,
 ) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
     let mut fees = 0_u64;
     let mut compute_units = 0_u64;
@@ -208,18 +291,19 @@ pub(crate) fn resolve_through_pyth(
     // -- against the record the chain holds and the clock the chain keeps --
     // means this campaign fails with a sentence somebody can act on rather than
     // with an opaque `InvalidPublicationTime` from inside an adapter.
-    let update_view = FullPriceUpdateV2::parse(PRICE_UPDATE)
-        .map_err(|error| Error::new(format!("captured Pyth price update: {error:?}")))?;
+    let update_view = FullPriceUpdateV2::parse(&publication.price_update_image)
+        .map_err(|error| Error::new(format!("this capture's Pyth price update: {error:?}")))?;
     let slot = rpc.finalized_slot()?;
     let chain_now = rpc.block_time(slot)?;
     let age = chain_now.saturating_sub(update_view.publish_time());
-    if age > FIXTURE_SHELF_LIFE_SECONDS {
+    let shelf_life_seconds = publication.shelf_life_seconds;
+    if age > shelf_life_seconds {
         return Err(Error::new(format!(
-            "the pinned Pyth publication is {age} seconds old and this Market's window admits \
-             {FIXTURE_SHELF_LIFE_SECONDS}. The fixture has outlived its declared shelf life. \
-             RECAPTURE IT, or restate the shelf life in market.rs together with the reason -- do \
-             not widen the number to make this run pass, which is exactly the failure the bound \
-             exists to prevent."
+            "the Pyth publication this capture carries is {age} seconds old and its stated shelf \
+             life is {shelf_life_seconds}. A pinned capture that has outlived its shelf life must \
+             be RECAPTURED, or minted at the run's own hour by a producer that can; do not widen \
+             the number to make this run pass, which is exactly the failure the bound exists to \
+             prevent."
         )));
     }
 
@@ -299,7 +383,7 @@ pub(crate) fn resolve_through_pyth(
 
     // ------------------------------------------------------- the signed VAA
     let encoded = &provider.encoded_vaa;
-    let encoded_size = ENCODED_VAA_HEADER_BYTES + SIGNED_VAA.len();
+    let encoded_size = ENCODED_VAA_HEADER_BYTES + publication.signed_vaa.len();
     let encoded_rent = rpc.minimum_balance(encoded_size)?;
     send(
         rpc,
@@ -336,7 +420,7 @@ pub(crate) fn resolve_through_pyth(
         &mut submitted,
         transactions,
     )?;
-    for (index, chunk) in SIGNED_VAA.chunks(WRITE_CHUNK_BYTES).enumerate() {
+    for (index, chunk) in publication.signed_vaa.chunks(WRITE_CHUNK_BYTES).enumerate() {
         let offset = index
             .checked_mul(WRITE_CHUNK_BYTES)
             .ok_or_else(|| Error::new("VAA chunk offset overflowed"))?;
@@ -405,10 +489,7 @@ pub(crate) fn resolve_through_pyth(
         addresses.core_program,
         pubkey(&plan.registry.program_id)?,
     )?;
-    let post_update_body = RECEIVER_POST_UPDATE
-        .get(8..)
-        .ok_or_else(|| Error::new("captured receiver PostUpdate body is narrower than its tag"))?
-        .to_vec();
+    let post_update_body = publication.post_update_body.clone();
     let submit = build_provider_submit_v3(
         &submit_snapshot(rpc, addresses, encoded.pubkey(), plan)?,
         ProviderSubmitDeploymentV3 {
@@ -430,9 +511,10 @@ pub(crate) fn resolve_through_pyth(
             submitter: payer.pubkey(),
             refund_recipient: addresses.rent_beneficiary,
             update_account: provider.update.pubkey(),
-            // Must not precede the window's own end; the window ended at the
-            // captured publication, which is in the past, so any future instant
-            // is admissible and an hour is a plainly-stated one.
+            // Must not precede the window's own end, and the window ends at the
+            // publication this capture carries -- which is at or before the
+            // cluster's clock either way, so an hour ahead of that clock is
+            // admissible for a captured publication and a minted one alike.
             reclaim_after_unix_seconds: chain_now.saturating_add(3_600),
             post_update_body: post_update_body.clone(),
         },
@@ -544,34 +626,56 @@ pub(crate) fn resolve_through_pyth(
     // hold it says that too -- which is the useful half, because it means a
     // 0x800A from here is NOT the window and the next reader can stop looking
     // at it.
-    let window_note = preflight_window_admission(rpc, addresses, provider, chain_now)?;
+    let window_note = preflight_window_admission(rpc, addresses, provider, chain_now, rung)?;
+    // WHICH LEG THE MARKET IS STANDING ON, READ BEFORE THE FRAME MOVES IT. A
+    // rung capture's certificate must name the attempt the Source is actually
+    // on, and the only honest predecessor for that number is the Source's own
+    // active attempt at this instant.
+    let active_attempt_before = SourceResolutionStateV2::decode(
+        &rpc.required_account(addresses.source_state, "Source resolution state")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("Source before the capture: {error:?}")))?
+    .active_attempt();
+    let deployment =
+        execute_deployment_v3(plan, addresses, addresses_p.config, live_registry_artifact)?;
+    // THE MIRROR OF THE LEG THIS CAPTURE IS ABOUT, asked of the builder before
+    // the real request is built. A market standing on a rung is not answerable
+    // on its primary: the same snapshot with no ladder must refuse `State` off
+    // chain, before a transaction exists, by the same rule the program enforces
+    // on chain. It costs no lamports and it is the only thing that distinguishes
+    // "the builder answered on the rung" from "the builder answers whatever it
+    // is handed".
+    let primary_refusal = match rung {
+        None => None,
+        Some(_) => {
+            let primary = build_provider_execute_v3(
+                &execute_snapshot(rpc, addresses, submit.lifecycle, provider, None)?,
+                deployment,
+                &ProviderExecuteIntentV3 {
+                    resolver: provider.resolver.pubkey(),
+                    terminal_sequence,
+                    post_update_body: post_update_body.clone(),
+                },
+            );
+            match primary.err() {
+                None => {
+                    return Err(Error::new(
+                        "the operator BUILT a primary capture against a Market standing on a \
+                         rung: a capture that can answer on a leg the market has left is a leg \
+                         the holders paid for and nobody had to walk",
+                    ));
+                }
+                Some(error) => Some(format!("{error:?}")),
+            }
+        }
+    };
     let execute = build_provider_execute_v3(
-        &execute_snapshot(rpc, addresses, submit.lifecycle, provider)?,
-        ProviderExecuteDeploymentV3 {
-            registry_programdata: pubkey(&plan.registry.programdata_id)?,
-            registry_artifact: live_registry_artifact.0,
-            registry_artifact_staging: live_registry_artifact.1,
-            core_programdata: addresses.core_programdata,
-            // The TRADING role, and it means it. This campaign passed CUSTODY
-            // here first, because that is what the operator's own ProgramTest
-            // campaign passes and the field looked like a readonly role
-            // observation rather than a callee. The chain refused it:
-            // `provider_instruction_v3` authenticates accounts 13/14 against
-            // `activation.role(ExecutionRoleV1::Trading).release().program()`
-            // and raised `ResolutionRelease` (0x8005) after 681,773 CU. The
-            // fixture passes because ITS release set binds Custody's key to the
-            // Trading role; a real five-role activation binds five different
-            // keys, so the confusion is invisible in ProgramTest and fatal on a
-            // validator. The fixture is never the authority.
-            trading_program: pubkey(&plan.trading.program_id)?,
-            trading_programdata: pubkey(&plan.trading.programdata_id)?,
-            resolution_program: addresses.resolution_program,
-            resolution_programdata: addresses.resolution_programdata,
-            receiver_config: addresses_p.config,
-        },
+        &execute_snapshot(rpc, addresses, submit.lifecycle, provider, rung)?,
+        deployment,
         &ProviderExecuteIntentV3 {
             resolver: provider.resolver.pubkey(),
-            terminal_sequence: 1,
+            terminal_sequence,
             post_update_body,
         },
     )
@@ -662,15 +766,59 @@ pub(crate) fn resolve_through_pyth(
              this campaign prepaid",
         ));
     }
+    // WHICH LEG ANSWERED, ASSERTED RATHER THAN NARRATED. The route and the
+    // attempt index are the whole difference between "the market's first choice
+    // answered" and "the alternative the holders prepaid answered", and both are
+    // written by the program rather than by this campaign. A rung capture that
+    // came back Primary would be a run whose whole subject never happened, and
+    // nothing else in the poststate distinguishes the two.
+    let route = source
+        .terminal_projection()
+        .map_err(|error| Error::new(format!("resolved Source terminal projection: {error:?}")))?
+        .route();
+    let leg = match rung {
+        None => {
+            if route != SourceResolutionRouteV1::Primary || certificate.attempt_index != 0 {
+                return Err(Error::new(format!(
+                    "a primary capture resolved on route {route:?} at attempt index {}: the \
+                     market's first choice is attempt zero on the Primary route and nothing else \
+                     is a primary answer",
+                    certificate.attempt_index
+                )));
+            }
+            "the market's PRIMARY source answered (route Primary, attempt index 0)".to_owned()
+        }
+        Some(_) => {
+            let expected = u32::from(active_attempt_before).saturating_add(1);
+            if route != SourceResolutionRouteV1::Recovery || certificate.attempt_index != expected {
+                return Err(Error::new(format!(
+                    "a rung capture resolved on route {route:?} at attempt index {} and the \
+                     Source stood on active attempt {active_attempt_before} before it, so the \
+                     certificate this market paid for names attempt {expected} on the Recovery \
+                     route",
+                    certificate.attempt_index
+                )));
+            }
+            format!(
+                "the market's FUNDED ALTERNATIVE answered (route Recovery, attempt index \
+                 {expected} over active attempt {active_attempt_before}), and the same builder \
+                 refused the primary-shaped request against this same Source by name -- {} -- \
+                 which is what says the rung was ANSWERED rather than merely accepted",
+                primary_refusal
+                    .as_deref()
+                    .unwrap_or("no refusal was recorded")
+            )
+        }
+    };
 
     Ok((
         StageReportV1 {
-            stage: PYTH_TRANSPORT_STAGE_V1.into(),
+            stage: transport_stage_v1(rung).into(),
             outcome: "executed".into(),
             transactions: submitted,
             compute_units,
             note: format!(
-                "THE SOURCE IS RESOLVED AND THE CERTIFICATE IS MINTED. One captured signed VAA \
+                "THE SOURCE IS RESOLVED AND THE CERTIFICATE IS MINTED, and {leg}. One signed VAA \
                  written in chunks and verified by the real Wormhole router, one price update \
                  posted by the real Pyth receiver, one Resolution submission and one Core-driven \
                  execution by a resolver key that is not the submitter -- and the Source is \
@@ -679,11 +827,11 @@ pub(crate) fn resolve_through_pyth(
                  terminal receipt, which is this route's exact contract: a later standalone Core \
                  AdmitTerminal is what commits the Market transition, and it is the next stage. \
                  The publication this resolves against was {age} seconds old at execution against \
-                 a window that admits {FIXTURE_SHELF_LIFE_SECONDS}: the observation is ABOUT a \
-                 time inside the Market's 300-second terminal window, and its PUBLICATION is \
-                 inside the band around the cluster's clock, which is the two-clock shape of the \
-                 admission and not one tolerance doing both jobs. Checked before submission, not \
-                 inferred after: {window_note}.",
+                 a stated shelf life of {shelf_life_seconds}: the observation is ABOUT a time \
+                 inside the Market's terminal window, and its PUBLICATION is inside the band \
+                 around the cluster's clock, which is the two-clock shape of the admission and \
+                 not one tolerance doing both jobs. Checked before submission, not inferred \
+                 after: {window_note}.",
                 addresses.certificate,
                 addresses.generation,
                 certificate.selector,
@@ -738,14 +886,24 @@ fn preflight_window_admission(
     addresses: &ResolutionAddressesV1,
     provider: &ProviderPlanV1,
     chain_now: i64,
+    rung: Option<&RungCaptureV1>,
 ) -> Result<String> {
     let window = WindowSpecV1::decode(
         &rpc.required_account(addresses.window_spec.raw, "window spec record")?
             .data,
     )
     .map_err(|error| Error::new(format!("WindowSpecV1: {error:?}")))?;
+    // THE READING RULE IS THE RUNG'S, and it is the only edge a rung moves. A
+    // rung's whole difference from the primary is the confidence bound inside
+    // its own `PythAdapterConfigV1`, so a preflight that read the market's
+    // configuration while the chain read the attempt's would diagnose a market
+    // nobody was resolving.
+    let config_record = match rung {
+        None => addresses.adapter_config.raw,
+        Some(rung) => rung.adapter_config.raw,
+    };
     let config = PythAdapterConfigV1::decode(
-        &rpc.required_account(addresses.adapter_config.raw, "Pyth adapter config record")?
+        &rpc.required_account(config_record, "Pyth adapter config record")?
             .data,
     )
     .map_err(|error| Error::new(format!("PythAdapterConfigV1: {error:?}")))?;
@@ -764,16 +922,31 @@ fn preflight_window_admission(
             window.end_unix_seconds()
         )));
     }
+    // THE AGE FLOOR IS THE PRIMARY LEG'S ALONE, and on a rung it is dropped
+    // rather than widened. `normalize_authenticated_recovery_update` states why:
+    // a market only ever stands on a rung BECAUSE `now - max_age` expired --
+    // the crank that advanced it is admissible one second after
+    // `window.end + max_age` -- so re-applying the floor here would make every
+    // rung structurally unanswerable. The rung's own bound is its committed
+    // deadline, which `resolve_recovery_from_authenticated_domain` holds, and
+    // the future-skew ceiling stays for both legs because nothing about
+    // advancing a ladder makes a publication from the future admissible.
     let oldest = chain_now.saturating_sub(i64::from(window.max_age_seconds()));
     let newest = chain_now.saturating_add(i64::from(window.max_future_skew_seconds()));
-    if publication < oldest || publication > newest {
+    let too_old = rung.is_none() && publication < oldest;
+    if too_old || publication > newest {
         return Err(Error::new(format!(
             "§12.3 FRESHNESS: the posted publication is at {publication} and this cluster's clock \
-             admits [{oldest}, {newest}] (now {chain_now}, max_age {}, max_future_skew {}). The \
+             admits [{}, {newest}] (now {chain_now}, max_age {}, max_future_skew {}). The \
              observation is about the right period and this cluster will not act on it. If the \
-             publication is too OLD the pinned fixture has outlived its declared shelf life -- \
-             recapture it, do not widen the window. On chain this is InvalidPublicationTime and it \
-             reaches the log as 0x800A.",
+             publication is too OLD the publication this capture carries has outlived its shelf \
+             life -- mint or recapture one, do not widen the window. On chain this is \
+             InvalidPublicationTime and it reaches the log as 0x800A.",
+            if rung.is_none() {
+                oldest.to_string()
+            } else {
+                "no floor: the recovery leg drops it".to_owned()
+            },
             window.max_age_seconds(),
             window.max_future_skew_seconds()
         )));
@@ -802,11 +975,17 @@ fn preflight_window_admission(
     Ok(format!(
         "all three §12.3 predicates hold off-chain before submission: the publication at \
          {publication} is inside the window [{}, {}] (it is ABOUT the right period), inside the \
-         cluster band [{oldest}, {newest}] at clock {chain_now} (it is FRESH ENOUGH), and its feed, \
-         exponent and confidence satisfy the adapter configuration. A 0x800A from this frame is \
-         therefore NOT the window",
+         cluster band {} at clock {chain_now} (it is FRESH ENOUGH), and its feed, exponent and \
+         confidence satisfy the {} adapter configuration at {config_record}. A 0x800A from this \
+         frame is therefore NOT the window",
         window.start_unix_seconds(),
-        window.end_unix_seconds()
+        window.end_unix_seconds(),
+        if rung.is_none() {
+            format!("[{oldest}, {newest}]")
+        } else {
+            format!("(-infinity, {newest}] -- the recovery leg drops the age floor")
+        },
+        if rung.is_none() { "market's" } else { "rung's" }
     ))
 }
 
@@ -848,36 +1027,142 @@ fn submit_snapshot(
     })
 }
 
-fn execute_snapshot(
+/// The deployment coordinates every Core-driven provider execution reauthenticates.
+///
+/// ONE AUTHOR. The real capture and the two hostiles that ask the builder to
+/// refuse must present the SAME deployment, or a hostile that refused for a
+/// deployment reason would be read as a hostile that refused for the reason it
+/// was named after.
+fn execute_deployment_v3(
+    plan: &SuccessorPlan,
+    addresses: &ResolutionAddressesV1,
+    receiver_config: Pubkey,
+    live_registry_artifact: (Pubkey, Pubkey),
+) -> Result<ProviderExecuteDeploymentV3> {
+    Ok(ProviderExecuteDeploymentV3 {
+        registry_programdata: pubkey(&plan.registry.programdata_id)?,
+        registry_artifact: live_registry_artifact.0,
+        registry_artifact_staging: live_registry_artifact.1,
+        core_programdata: addresses.core_programdata,
+        // The TRADING role, and it means it. This campaign passed CUSTODY here
+        // first, because that is what the operator's own ProgramTest campaign
+        // passes and the field looked like a readonly role observation rather
+        // than a callee. The chain refused it: `provider_instruction_v3`
+        // authenticates accounts 13/14 against
+        // `activation.role(ExecutionRoleV1::Trading).release().program()` and
+        // raised `ResolutionRelease` (0x8005) after 681,773 CU. The fixture
+        // passes because ITS release set binds Custody's key to the Trading
+        // role; a real five-role activation binds five different keys, so the
+        // confusion is invisible in ProgramTest and fatal on a validator. The
+        // fixture is never the authority.
+        trading_program: pubkey(&plan.trading.program_id)?,
+        trading_programdata: pubkey(&plan.trading.programdata_id)?,
+        resolution_program: addresses.resolution_program,
+        resolution_programdata: addresses.resolution_programdata,
+        receiver_config,
+    })
+}
+
+/// Ask the builder for a rung capture while the Market still stands on its
+/// primary leg, and report the refusal it answers with.
+///
+/// WHAT THIS CONVICTS AND WHAT IT DOES NOT. It is a hostile against the OPERATOR
+/// at an instant where the market has bought a ladder and not yet advanced onto
+/// it, and it sends nothing and opens no key. The builder's conjuncts are
+/// ordered, and at this instant more than one of them is false -- the Source
+/// stands on Primary while the request brings the ladder, AND no update has been
+/// submitted, so the lifecycle the request names is a System-owned vacancy. It
+/// therefore refuses at whichever conjunct it reaches first, and the sentence it
+/// refuses with is recorded verbatim rather than asserted: a stage that claimed
+/// a particular discriminant here would be naming a conjunct it did not reach.
+/// The phase-versus-ladder conjunct is convicted where it is REACHABLE, inside
+/// [`resolve_through_pyth`], against a Source that really is standing on the
+/// rung and a lifecycle that really was submitted.
+///
+/// `Ok(None)` means the builder BUILT one, which is a finding: a capture that
+/// can answer a rung the market has not reached is a leg the holders paid for
+/// and nobody had to walk.
+/// `#[allow(dead_code)]`: this module is linked by `#[path]` into the ladder
+/// tier as well, and the rung's hostile is that tier's alone -- the journey
+/// founds no ladder and has no rung to ask about. The alternative is a copy of
+/// the transport in the tier that uses more of it, which is the drift this
+/// linking exists to prevent.
+#[allow(dead_code)]
+pub(crate) fn refuse_capture_before_the_rung_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    addresses: &ResolutionAddressesV1,
+    provider: &ProviderPlanV1,
+    publication: &PublicationV1,
+    rung: &RungCaptureV1,
+) -> Result<Option<String>> {
+    let live_registry_artifact = live_registry_artifact_pair_v1(
+        rpc,
+        addresses.core_program,
+        pubkey(&plan.registry.program_id)?,
+    )?;
+    let deployment = execute_deployment_v3(
+        plan,
+        addresses,
+        provider.addresses.config,
+        live_registry_artifact,
+    )?;
+    let snapshot = prospective_execute_snapshot_v1(rpc, addresses, provider, rung)?;
+    let built = build_provider_execute_v3(
+        &snapshot,
+        deployment,
+        &ProviderExecuteIntentV3 {
+            resolver: provider.resolver.pubkey(),
+            terminal_sequence: 1,
+            post_update_body: publication.post_update_body.clone(),
+        },
+    );
+    Ok(built.err().map(|error| format!("{error:?}")))
+}
+
+/// The rung's execute snapshot at an instant where some of its accounts do not
+/// exist yet.
+///
+/// `finalized_observed_accounts` returns PRESENT accounts only, which is right
+/// for a real capture -- an absent account there is a campaign that lost one --
+/// and wrong for a hostile whose whole subject is a prestate. So this observes
+/// by key and presents an absent account as the System-owned vacancy the chain
+/// actually holds, which is what the builder would read on chain.
+/// `#[allow(dead_code)]`: the rung hostile's own helper, on the same footing.
+#[allow(dead_code)]
+fn prospective_execute_snapshot_v1(
     rpc: &mut Rpc,
     addresses: &ResolutionAddressesV1,
-    lifecycle: Pubkey,
     provider: &ProviderPlanV1,
+    rung: &RungCaptureV1,
 ) -> Result<ProviderExecuteSnapshotV3> {
-    let (_, present) = rpc.finalized_observed_accounts(
-        &[
-            addresses.market,
-            addresses.source_state,
-            lifecycle,
-            provider.update.pubkey(),
-            addresses.source_material.raw,
-            addresses.source_spec.raw,
-            addresses.provider_release.raw,
-            addresses.adapter_config.raw,
-            addresses.window_spec.raw,
-            addresses.statistic_spec.raw,
-            addresses.pyth_release,
-            addresses.product.raw,
-            addresses.result_domain.raw,
-            addresses.portfolio.raw,
-        ],
-        0,
-    )?;
+    let keys = [
+        addresses.market,
+        addresses.source_state,
+        provider.lifecycle,
+        provider.update.pubkey(),
+        addresses.source_material.raw,
+        rung.source_spec.raw,
+        addresses.provider_release.raw,
+        rung.adapter_config.raw,
+        addresses.window_spec.raw,
+        addresses.statistic_spec.raw,
+        addresses.pyth_release,
+        addresses.product.raw,
+        addresses.result_domain.raw,
+        addresses.portfolio.raw,
+        rung.policy.raw,
+    ];
+    let (observation, present) = rpc.finalized_observed_accounts(&keys, 0)?;
     let at = |index: usize| -> Result<ObservedAccount> {
-        present
-            .get(index)
+        let key = *keys.get(index).ok_or_else(|| {
+            Error::new("prospective snapshot asked for an address it does not name")
+        })?;
+        Ok(present
+            .iter()
+            .find(|account| account.key == key)
             .cloned()
-            .ok_or_else(|| Error::new("finalized observation lost an account"))
+            .unwrap_or_else(|| crate::resolution::vacant(observation, key)))
     };
     Ok(ProviderExecuteSnapshotV3 {
         market: at(0)?,
@@ -894,13 +1179,90 @@ fn execute_snapshot(
         product: at(11)?,
         result_domain: at(12)?,
         portfolio: at(13)?,
-        // `None` is what a primary capture has always sent: this journey founds
-        // through `local-private-validator-market-v1` with no `--recovery-rungs`,
-        // so the market buys no ladder and there is no `RecoveryPolicyV2` record
-        // pair to bring. A journey that founds a rung-bearing market would
-        // observe the policy and its staging cursor here, and the three
-        // finalized-record positions above would carry the RUNG's source.
-        recovery_ladder: None,
+        recovery_ladder: Some(ProviderExecuteLadderV3 {
+            policy: at(14)?,
+            policy_staging: crate::resolution::vacant(observation, rung.policy.staging),
+        }),
+    })
+}
+
+fn execute_snapshot(
+    rpc: &mut Rpc,
+    addresses: &ResolutionAddressesV1,
+    lifecycle: Pubkey,
+    provider: &ProviderPlanV1,
+    rung: Option<&RungCaptureV1>,
+) -> Result<ProviderExecuteSnapshotV3> {
+    // THREE POSITIONS MOVE AND NOTHING ELSE DOES. A rung capture carries the
+    // attempt's own SourceSpec and adapter configuration in the positions the
+    // primary capture carries the material's, and brings the `RecoveryPolicyV2`
+    // that names them at the tail. The window, the statistic, the provider
+    // release and the whole Product graph are the market's on either leg, which
+    // is why they are read once, above, for both.
+    let (source_spec_record, adapter_config_record) = match rung {
+        None => (addresses.source_spec.raw, addresses.adapter_config.raw),
+        Some(rung) => (rung.source_spec.raw, rung.adapter_config.raw),
+    };
+    // The policy is observed only when a rung brings it, so a primary capture's
+    // observation set is the one it has always been.
+    let mut observed = vec![
+        addresses.market,
+        addresses.source_state,
+        lifecycle,
+        provider.update.pubkey(),
+        addresses.source_material.raw,
+        source_spec_record,
+        addresses.provider_release.raw,
+        adapter_config_record,
+        addresses.window_spec.raw,
+        addresses.statistic_spec.raw,
+        addresses.pyth_release,
+        addresses.product.raw,
+        addresses.result_domain.raw,
+        addresses.portfolio.raw,
+    ];
+    if let Some(rung) = rung {
+        observed.push(rung.policy.raw);
+    }
+    let (observation, present) = rpc.finalized_observed_accounts(&observed, 0)?;
+    let at = |index: usize| -> Result<ObservedAccount> {
+        present
+            .get(index)
+            .cloned()
+            .ok_or_else(|| Error::new("finalized observation lost an account"))
+    };
+    // `None` is what a primary capture has always sent, and it is what a market
+    // standing on its primary source MUST send: the builder refuses `State` off
+    // chain for either mismatch, so this field IS the claim about which leg the
+    // capture answers on.
+    //
+    // The staging cursor is a VACANCY rather than an observation, for the same
+    // reason every other finalized record's is: finalizing a record CLOSES its
+    // cursor, so `finalized_observed_accounts` -- which returns present accounts
+    // only -- would drop it and shift every index after it.
+    let recovery_ladder = match rung {
+        None => None,
+        Some(rung) => Some(ProviderExecuteLadderV3 {
+            policy: at(14)?,
+            policy_staging: crate::resolution::vacant(observation, rung.policy.staging),
+        }),
+    };
+    Ok(ProviderExecuteSnapshotV3 {
+        market: at(0)?,
+        source_state: at(1)?,
+        lifecycle: at(2)?,
+        update: at(3)?,
+        source_material: at(4)?,
+        source_spec: at(5)?,
+        source_provider_release: at(6)?,
+        adapter_config: at(7)?,
+        window: at(8)?,
+        statistic: at(9)?,
+        pyth_release: at(10)?,
+        product: at(11)?,
+        result_domain: at(12)?,
+        portfolio: at(13)?,
+        recovery_ladder,
     })
 }
 
@@ -1248,4 +1610,110 @@ fn authenticate_frame_records_v1(
         absent.len(),
         absent.join(" ")
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The primary walk's bytes did not move when the transport stopped being
+    /// about one frozen instant.
+    ///
+    /// `resolve_through_pyth` used to read the four pinned constants directly;
+    /// it now takes a [`PublicationV1`], and the journey hands it
+    /// [`PublicationV1::captured`]. That refactor is only safe if the captured
+    /// publication IS those constants, and this is the only place that can say
+    /// so -- the journey itself cannot, because a transport that quietly sent
+    /// different bytes would still resolve a market and still go green.
+    #[test]
+    fn the_captured_publication_is_the_pinned_fixture_byte_for_byte() {
+        let captured = PublicationV1::captured();
+        assert_eq!(captured.signed_vaa, SIGNED_VAA);
+        assert_eq!(
+            captured.post_update_body,
+            &RECEIVER_POST_UPDATE[POST_UPDATE_TAG_BYTES..],
+            "the body is the captured PostUpdate WITHOUT its Anchor tag, which is what both \
+             provider intents take"
+        );
+        assert_eq!(captured.price_update_image, PRICE_UPDATE);
+        assert_eq!(captured.shelf_life_seconds, FIXTURE_SHELF_LIFE_SECONDS);
+        assert!(
+            captured.post_update_body.len() + POST_UPDATE_TAG_BYTES == RECEIVER_POST_UPDATE.len(),
+            "exactly the tag was dropped, not a byte more"
+        );
+    }
+
+    /// A capture that answers the funded rung does not report the sentence a
+    /// capture on the market's first choice reports.
+    ///
+    /// The stage label is what a reader of a transcript sees, and the two legs
+    /// are the whole difference between a market whose first choice answered
+    /// and a market whose holders paid for an alternative that did. One label
+    /// for both would report the leg they paid for as the leg they never
+    /// needed.
+    #[test]
+    fn a_rung_capture_and_a_primary_capture_do_not_share_a_stage_label() {
+        let rung = RungCaptureV1 {
+            policy: crate::resolution::RecordPairV1::derive(Pubkey::new_unique(), [1; 32], b"p"),
+            source_spec: crate::resolution::RecordPairV1::derive(
+                Pubkey::new_unique(),
+                [2; 32],
+                b"s",
+            ),
+            adapter_config: crate::resolution::RecordPairV1::derive(
+                Pubkey::new_unique(),
+                [3; 32],
+                b"a",
+            ),
+        };
+        assert_eq!(transport_stage_v1(None), PYTH_TRANSPORT_STAGE_V1);
+        assert_eq!(
+            transport_stage_v1(Some(&rung)),
+            PYTH_RECOVERY_TRANSPORT_STAGE_V1
+        );
+        assert_ne!(PYTH_TRANSPORT_STAGE_V1, PYTH_RECOVERY_TRANSPORT_STAGE_V1);
+    }
+
+    /// A rung's three record pairs are three distinct addresses, and each is a
+    /// function of BOTH the schema and the body.
+    ///
+    /// This is what makes deriving them by content identity safe where the
+    /// founding's evidence map does not publish them: the alternative
+    /// `SourceSpecV1` and its `PythAdapterConfigV1` are two different schemas
+    /// over two different bodies, so neither can be reached by presenting the
+    /// other, and a body that changed by one byte lands somewhere else rather
+    /// than shadowing the record the market founded.
+    #[test]
+    fn a_rungs_records_are_addressed_by_both_their_schema_and_their_body() {
+        let registry = Pubkey::new_unique();
+        let spec_schema = dclutch_source::SOURCE_SPEC_SCHEMA_ID_V1;
+        let adapter_schema = dclutch_source::PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1;
+        assert_ne!(
+            spec_schema, adapter_schema,
+            "the two schemas a rung's records live under are not one schema"
+        );
+        let body = b"the same bytes under two schemas".as_slice();
+        let spec = crate::resolution::RecordPairV1::derive(registry, spec_schema, body);
+        let adapter = crate::resolution::RecordPairV1::derive(registry, adapter_schema, body);
+        assert_ne!(
+            spec.raw, adapter.raw,
+            "one body under two schemas is two records"
+        );
+        assert_ne!(
+            spec.raw, spec.staging,
+            "a record and its staging cursor are two accounts"
+        );
+        let mut moved = body.to_vec();
+        moved.push(0);
+        assert_ne!(
+            spec.raw,
+            crate::resolution::RecordPairV1::derive(registry, spec_schema, &moved).raw,
+            "a body that changed by one byte is a different record"
+        );
+        assert_ne!(
+            spec.raw,
+            crate::resolution::RecordPairV1::derive(Pubkey::new_unique(), spec_schema, body).raw,
+            "and a record of one registry is not a record of another"
+        );
+    }
 }

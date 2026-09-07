@@ -179,6 +179,18 @@ impl RelayAddressBookV1 {
                     "this campaign's material selects no recovery policy, so it has no ladder frame",
                 ));
             }
+            // A single-source material declares an ensemble of one, whose
+            // fold frame has no member seats and whose fold is not a move it
+            // can make. Refused by name here rather than mapped to some
+            // address, so a campaign that started building an ensemble frame
+            // stops at the first position instead of sending one.
+            RelayAccountNameV1::EnsembleFoldReceipt
+            | RelayAccountNameV1::EnsembleFragmentSeat
+            | RelayAccountNameV1::EnsembleCaptor => {
+                return Err(Error::new(
+                    "this campaign's material declares one source, so it has no ensemble frame",
+                ));
+            }
         })
     }
 

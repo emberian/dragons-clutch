@@ -545,8 +545,6 @@ mod tests {
     fn verified_candidate(width: u32) -> Vec<u8> {
         let count = usize::try_from(width).expect("test width");
         let mut output = vec![0; verified_candidate_len(width).expect("verified width")];
-        let mut prices = vec![0_u64; count];
-        prices[0] = 10;
         VerifiedCandidateV2::encode_into(
             VerifiedCandidateHeaderV2 {
                 outcome_count: width,
@@ -561,7 +559,6 @@ mod tests {
                 quote_credit: 1,
                 price_scale: 10,
             },
-            &prices,
             &vec![11; count],
             &vec![13; count],
             &mut output,

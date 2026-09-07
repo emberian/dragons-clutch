@@ -49,7 +49,27 @@ verify EmitSourceMaterialV2AbiRust.lean generated_source_material_v2.rs 200
 )
 grep -q '^pub const SOURCE_MATERIAL_V3_BYTES: usize = 240;$' "$candidate"
 grep -q '^pub const SOURCE_MATERIAL_V3_SCHEMA_VERSION: u16 = 3;$' "$candidate"
+# The three ensemble bytes in the leading three of the four reserved bytes
+# (decision 0034): a layout that moved them would silently re-read every
+# founded material's zero bytes as a different ensemble.
+grep -q '^pub const SOURCE_MATERIAL_V3_ENSEMBLE_MEMBERS_OFFSET: usize = 12;$' "$candidate"
+grep -q '^pub const SOURCE_MATERIAL_V3_ENSEMBLE_QUORUM_OFFSET: usize = 13;$' "$candidate"
+grep -q '^pub const SOURCE_MATERIAL_V3_ENSEMBLE_RUNGS_OFFSET: usize = 14;$' "$candidate"
+grep -q '^pub const SOURCE_MATERIAL_V3_RESERVED_OFFSET: usize = 15;$' "$candidate"
+grep -q '^pub const SOURCE_MATERIAL_V3_ENSEMBLE_MAX_MEMBERS: u8 = 5;$' "$candidate"
 verify EmitSourceMaterialV3AbiRust.lean generated_source_material_v3.rs 280
+
+# The ensemble fold's receipt: the record that survives the fragment seats'
+# retirement and says which members answered.
+(
+  cd "$formal_dir"
+  lake build DClutchSemantics.EnsembleFoldReceiptV1Abi >/dev/null
+  lake env lean --run EmitEnsembleFoldReceiptV1AbiRust.lean >"$candidate"
+)
+grep -q '^pub const ENSEMBLE_FOLD_RECEIPT_V1_BYTES: usize = 280;$' "$candidate"
+grep -q '^pub const ENSEMBLE_MAX_MEMBERS_V1: u8 = 5;$' "$candidate"
+grep -q '^pub const ENSEMBLE_FOLD_RECEIPT_V1_FRAGMENT_DIGEST_0_OFFSET: usize = 120;$' "$candidate"
+verify EmitEnsembleFoldReceiptV1AbiRust.lean generated_ensemble_fold_receipt_v1.rs 380
 
 (
   cd "$formal_dir"

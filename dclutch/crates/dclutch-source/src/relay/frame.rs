@@ -104,6 +104,13 @@ pub enum RelayAccountNameV1 {
     /// -- in one three-row ledger, and the funded ladder debits the other two.
     /// One account class, one name.
     ResolutionFunding,
+    /// The `EnsembleFoldReceiptV1` seat the fold writes beside the certificate.
+    EnsembleFoldReceipt,
+    /// One member's fragment seat: a kind-1 certificate under the fragment
+    /// domain, or a System-owned vacancy for a member that did not answer.
+    EnsembleFragmentSeat,
+    /// The captor a consumed fragment names, paid its member's bounty.
+    EnsembleCaptor,
 }
 
 /// One ordered SDK-free account-role requirement.
@@ -225,6 +232,16 @@ const RECOVERY_POLICY_STAGE: RelayAccountRoleV1 = role(
     false,
     false,
 );
+const SOURCE_STATE_READ: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::SourceResolutionState, false, false);
+const FOLD_RECEIPT: RelayAccountRoleV1 = role(RelayAccountNameV1::EnsembleFoldReceipt, false, true);
+/// A member seat the fold READS; the fragment route wrote it.
+const FRAGMENT_SEAT_READ: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::EnsembleFragmentSeat, false, false);
+/// A member seat the reclaim CLOSES.
+const FRAGMENT_SEAT_WRITE: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::EnsembleFragmentSeat, false, true);
+const CAPTOR: RelayAccountRoleV1 = role(RelayAccountNameV1::EnsembleCaptor, false, true);
 const RESOLUTION_FUNDING: RelayAccountRoleV1 =
     role(RelayAccountNameV1::ResolutionFunding, false, true);
 
@@ -504,6 +521,70 @@ pub const COMMIT_DEADLINE_FAILURE_FRAME_V1: [RelayAccountRoleV1; 22] = [
     SYSTEM,
 ];
 
+/// The fixed prefix of the ensemble fold's frame; `k` member seats and then
+/// `k` captors follow it, one pair per declared member in member order
+/// (`ensemble_fold_tail_v1`), because the width is the material's `k` and a
+/// frame table cannot state it.
+///
+/// The failure walk's twenty-two, plus the receipt seat, the policy pair (the
+/// members are its leading slots), the primary `SourceSpecV1` pair (its
+/// provider release is member zero's route, and the fragment in member zero's
+/// seat is admitted against it) and the `StatisticSpecV1` pair (the
+/// source-to-result shift the median reaches the selector on). The certificate
+/// is the market's own terminal seat, untouched by any fragment.
+pub const ENSEMBLE_FOLD_FRAME_PREFIX_V1: [RelayAccountRoleV1; 29] = [
+    WORKER,
+    MARKET_READ,
+    CORE_PROGRAM,
+    ACTIVATION,
+    SOURCE_STATE,
+    CERTIFICATE,
+    FOLD_RECEIPT,
+    MATERIAL,
+    MATERIAL_STAGE,
+    SPEC,
+    SPEC_STAGE,
+    WINDOW,
+    WINDOW_STAGE,
+    STATISTIC,
+    STATISTIC_STAGE,
+    RECOVERY_POLICY,
+    RECOVERY_POLICY_STAGE,
+    PRODUCT,
+    PRODUCT_STAGE,
+    RESULT_DOMAIN,
+    RESULT_DOMAIN_STAGE,
+    PORTFOLIO,
+    PORTFOLIO_STAGE,
+    MANIFEST,
+    MANIFEST_STAGE,
+    RESOLUTION_FUNDING,
+    CLOCK,
+    RENT,
+    SYSTEM,
+];
+/// Exact reclaim frame: the worker, the Market and the two accounts that pin
+/// it as a Core Market of this Program's Resolution role, its terminal Source
+/// state, the material pair whose `k` says which member bytes name a seat at
+/// all, the vacant seat, the Source's own rent beneficiary, and the System
+/// program.
+///
+/// The material is in frame for one conjunct: a member byte at or above the
+/// ensemble's `k` names no seat, and the route refuses on it before deriving
+/// an address, so a caller cannot use this route to learn where a seat it has
+/// no member for would live.
+pub const RECLAIM_MEMBER_SEAT_FRAME_V1: [RelayAccountRoleV1; 10] = [
+    WORKER,
+    MARKET_READ,
+    CORE_PROGRAM,
+    ACTIVATION,
+    SOURCE_STATE_READ,
+    MATERIAL,
+    MATERIAL_STAGE,
+    FRAGMENT_SEAT_WRITE,
+    BENEFICIARY_WRITE,
+    SYSTEM,
+];
 /// Exact funded ordered-recovery frame: one crank of the ladder.
 ///
 /// Eighteen positions, and it is shorter than the failure frame by the whole
@@ -565,6 +646,10 @@ pub enum RelayFrameKindV1 {
     CommitDeadlineFailure,
     /// [`ADVANCE_RECOVERY_FRAME_V1`].
     AdvanceRecovery,
+    /// [`ENSEMBLE_FOLD_FRAME_PREFIX_V1`], then [`ensemble_fold_tail_v1`].
+    EnsembleFold,
+    /// [`RECLAIM_MEMBER_SEAT_FRAME_V1`].
+    ReclaimMemberSeat,
 }
 
 /// Return the exact ordered roles for one relay operation.
@@ -578,7 +663,78 @@ pub const fn relay_frame_roles_v1(kind: RelayFrameKindV1) -> &'static [RelayAcco
         RelayFrameKindV1::ConsumeRecordNativeVenue => &CONSUME_RECORD_NATIVE_VENUE_FRAME_V1,
         RelayFrameKindV1::CommitDeadlineFailure => &COMMIT_DEADLINE_FAILURE_FRAME_V1,
         RelayFrameKindV1::AdvanceRecovery => &ADVANCE_RECOVERY_FRAME_V1,
+        RelayFrameKindV1::EnsembleFold => &ENSEMBLE_FOLD_FRAME_PREFIX_V1,
+        RelayFrameKindV1::ReclaimMemberSeat => &RECLAIM_MEMBER_SEAT_FRAME_V1,
     }
+}
+
+/// The role of position `index` in an ensemble fold's tail of `2k` accounts:
+/// `k` read-only member seats in member order, then `k` writable captors in
+/// the same order. A captor position for a member that did not answer is
+/// still in the frame (the founding's recorded payer, or any key -- nothing is
+/// paid to it), so the frame's width is a function of `k` alone.
+pub const fn ensemble_fold_tail_v1(members: u8, index: usize) -> Option<RelayAccountRoleV1> {
+    let members = members as usize;
+    if index < members {
+        Some(FRAGMENT_SEAT_READ)
+    } else if index < 2 * members {
+        Some(CAPTOR)
+    } else {
+        None
+    }
+}
+
+/// The role of position `index` in the `k` read-only member seats a crank or
+/// a failure walk carries after its fixed frame when the material declares an
+/// ensemble: the seats are counted so the crank/fold exclusivity is a fact of
+/// the frame rather than a caller's word.
+pub const fn ensemble_seat_tail_v1(members: u8, index: usize) -> Option<RelayAccountRoleV1> {
+    if index < members as usize {
+        Some(FRAGMENT_SEAT_READ)
+    } else {
+        None
+    }
+}
+
+/// Validate a fixed prefix followed by a tail whose roles a function names.
+///
+/// The prefix is exact; the tail's length is `tail_len` and every position's
+/// signer and writable flags are the ones `tail_role` states; and the no-alias
+/// rule spans the whole frame, so a seat cannot be passed twice to answer
+/// twice, and a captor cannot be the funding ledger.
+pub fn validate_relay_frame_with_tail_v1(
+    kind: RelayFrameKindV1,
+    accounts: &[RelayAccountPrivilegeV1],
+    tail_len: usize,
+    tail_role: impl Fn(usize) -> Option<RelayAccountRoleV1>,
+) -> Result<()> {
+    let prefix = relay_frame_roles_v1(kind);
+    let expected = prefix
+        .len()
+        .checked_add(tail_len)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if accounts.len() != expected {
+        return Err(Error::InvalidAccountFrame);
+    }
+    for (index, account) in accounts.iter().enumerate() {
+        let role = match prefix.get(index) {
+            Some(role) => *role,
+            None => {
+                tail_role(index.saturating_sub(prefix.len())).ok_or(Error::InvalidAccountFrame)?
+            }
+        };
+        if account.is_signer != role.is_signer() || account.is_writable != role.is_writable() {
+            return Err(Error::InvalidAccountFrame);
+        }
+    }
+    for (index, account) in accounts.iter().enumerate() {
+        for other in accounts.iter().skip(index.saturating_add(1)) {
+            if account.key == other.key {
+                return Err(Error::InvalidAccountFrame);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// SDK-free observed account key and privileges.
@@ -656,6 +812,8 @@ mod tests {
             RelayFrameKindV1::ConsumeRecord,
             RelayFrameKindV1::ConsumeRecordNativeVenue,
             RelayFrameKindV1::CommitDeadlineFailure,
+            RelayFrameKindV1::AdvanceRecovery,
+            RelayFrameKindV1::ReclaimMemberSeat,
         ] {
             let built = frame(kind);
             let width = relay_frame_roles_v1(kind).len();
@@ -835,6 +993,165 @@ mod tests {
                 .iter()
                 .any(|role| role.name() == RelayAccountNameV1::CapabilityManifest),
             "the bounty amount has to come from the market's own quote"
+        );
+    }
+
+    /// A fold frame for `k` members: the fixed prefix, then `k` read-only seats
+    /// and `k` writable captors, every key distinct. Thirty-nine is the widest
+    /// this frame ever is, at `k = 5`.
+    fn ensemble_fold_frame(members: u8) -> [RelayAccountPrivilegeV1; 39] {
+        let mut built = [RelayAccountPrivilegeV1 {
+            key: [0u8; 32],
+            is_signer: false,
+            is_writable: false,
+        }; 39];
+        let prefix = relay_frame_roles_v1(RelayFrameKindV1::EnsembleFold);
+        for (index, slot) in built.iter_mut().enumerate() {
+            let mut key = [0u8; 32];
+            let first = key.get_mut(0).expect("first byte");
+            *first = u8::try_from(index).expect("small") + 1;
+            slot.key = key;
+            let role = match prefix.get(index) {
+                Some(role) => Some(*role),
+                None => ensemble_fold_tail_v1(members, index.saturating_sub(prefix.len())),
+            };
+            if let Some(role) = role {
+                slot.is_signer = role.is_signer();
+                slot.is_writable = role.is_writable();
+            }
+        }
+        built
+    }
+
+    fn fold_tail_len(members: u8) -> usize {
+        usize::from(members).saturating_mul(2)
+    }
+
+    #[test]
+    fn a_fold_frame_is_its_prefix_and_two_positions_per_declared_member() {
+        // The one frame in this family whose WIDTH is a fact of a record: `k`
+        // comes off the authenticated material, so the outer validates the
+        // fixed prefix and a tail it computed rather than a table it looked up.
+        for members in 1..=5_u8 {
+            let built = ensemble_fold_frame(members);
+            let tail = fold_tail_len(members);
+            let width = ENSEMBLE_FOLD_FRAME_PREFIX_V1.len().saturating_add(tail);
+            let exact = built.get(..width).expect("frame");
+            assert_eq!(
+                validate_relay_frame_with_tail_v1(
+                    RelayFrameKindV1::EnsembleFold,
+                    exact,
+                    tail,
+                    |index| ensemble_fold_tail_v1(members, index)
+                ),
+                Ok(())
+            );
+            let short = built.get(..width.saturating_sub(1)).expect("short");
+            assert_eq!(
+                validate_relay_frame_with_tail_v1(
+                    RelayFrameKindV1::EnsembleFold,
+                    short,
+                    tail,
+                    |index| ensemble_fold_tail_v1(members, index)
+                ),
+                Err(Error::InvalidAccountFrame),
+                "a frame one position short of {members} members is not that ensemble's frame"
+            );
+            if let Some(grown) = built.get(..width.saturating_add(1)) {
+                assert_eq!(
+                    validate_relay_frame_with_tail_v1(
+                        RelayFrameKindV1::EnsembleFold,
+                        grown,
+                        tail,
+                        |index| ensemble_fold_tail_v1(members, index)
+                    ),
+                    Err(Error::InvalidAccountFrame)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_member_seat_passed_twice_cannot_answer_twice() {
+        // The no-alias rule spans the WHOLE frame, tail included, which is what
+        // stops one written seat from being presented at two member positions
+        // and counted as two fragments toward the quorum.
+        let members = 3_u8;
+        let prefix = ENSEMBLE_FOLD_FRAME_PREFIX_V1.len();
+        let tail = fold_tail_len(members);
+        let width = prefix.saturating_add(tail);
+        let mut built = ensemble_fold_frame(members);
+        let seat = built.get(prefix).expect("member zero's seat").key;
+        built
+            .get_mut(prefix.saturating_add(1))
+            .expect("member one's seat")
+            .key = seat;
+        let exact = built.get(..width).expect("frame");
+        assert_eq!(
+            validate_relay_frame_with_tail_v1(
+                RelayFrameKindV1::EnsembleFold,
+                exact,
+                tail,
+                |index| ensemble_fold_tail_v1(members, index)
+            ),
+            Err(Error::InvalidAccountFrame)
+        );
+
+        // And a captor cannot be the funding ledger it is paid out of.
+        let mut built = ensemble_fold_frame(members);
+        let funding = built.get(21).expect("resolution funding").key;
+        built
+            .get_mut(prefix.saturating_add(usize::from(members)))
+            .expect("member zero's captor")
+            .key = funding;
+        let exact = built.get(..width).expect("frame");
+        assert_eq!(
+            validate_relay_frame_with_tail_v1(
+                RelayFrameKindV1::EnsembleFold,
+                exact,
+                tail,
+                |index| ensemble_fold_tail_v1(members, index)
+            ),
+            Err(Error::InvalidAccountFrame)
+        );
+    }
+
+    #[test]
+    fn a_writable_member_seat_and_a_read_only_captor_both_refuse() {
+        // The fold READS every seat and WRITES every captor, and the frame says
+        // so in both directions: a writable seat is asking for an authority
+        // over a fragment the fold does not have, and a read-only captor is a
+        // position no bounty could be paid into.
+        let members = 2_u8;
+        let prefix = ENSEMBLE_FOLD_FRAME_PREFIX_V1.len();
+        let tail = fold_tail_len(members);
+        let width = prefix.saturating_add(tail);
+
+        let mut built = ensemble_fold_frame(members);
+        built.get_mut(prefix).expect("seat").is_writable = true;
+        assert_eq!(
+            validate_relay_frame_with_tail_v1(
+                RelayFrameKindV1::EnsembleFold,
+                built.get(..width).expect("frame"),
+                tail,
+                |index| ensemble_fold_tail_v1(members, index)
+            ),
+            Err(Error::InvalidAccountFrame)
+        );
+
+        let mut built = ensemble_fold_frame(members);
+        built
+            .get_mut(prefix.saturating_add(usize::from(members)))
+            .expect("captor")
+            .is_writable = false;
+        assert_eq!(
+            validate_relay_frame_with_tail_v1(
+                RelayFrameKindV1::EnsembleFold,
+                built.get(..width).expect("frame"),
+                tail,
+                |index| ensemble_fold_tail_v1(members, index)
+            ),
+            Err(Error::InvalidAccountFrame)
         );
     }
 

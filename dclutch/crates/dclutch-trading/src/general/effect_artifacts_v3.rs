@@ -70,9 +70,9 @@ use crate::general::hot_candidate_v3::{
 use crate::general::{
     candidate_v1::GeneralCandidateLayoutV1,
     collection_v1::{
-        GENERAL_ORDER_ROW_BASE_V2, GENERAL_ORDER_ROW_DELIVER_OFFSET_V2,
-        GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2, GENERAL_ORDER_ROW_STRIDE_V2, GeneralBatchLayoutV2,
-        GeneralOrderLayoutV2,
+        GENERAL_ORDER_ROW_BASE_V1, GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
+        GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1, GENERAL_ORDER_ROW_STRIDE_V1, GeneralBatchLayoutV1,
+        GeneralOrderLayoutV1,
     },
     local_state_v3::GeneralLocalStateLayoutV3,
     runtime_selection::RuntimeSelectionLayoutV2,
@@ -1543,20 +1543,20 @@ fn append_general_state_patches(
         let order = AccountCoordinateV3::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3);
         append_local_state_header(instructions, fixed, order, true)?;
         for (offset, coordinate) in [
-            (GeneralOrderLayoutV2::MAGIC, scalar::SCRATCH_A),
-            (GeneralOrderLayoutV2::NONCE, scalar::ORDER_NONCE),
-            (GeneralOrderLayoutV2::GENERATION, scalar::GENERATION),
-            (GeneralOrderLayoutV2::MAX_LOTS, scalar::ORDER_MAX_LOTS),
+            (GeneralOrderLayoutV1::MAGIC, scalar::SCRATCH_A),
+            (GeneralOrderLayoutV1::NONCE, scalar::ORDER_NONCE),
+            (GeneralOrderLayoutV1::GENERATION, scalar::GENERATION),
+            (GeneralOrderLayoutV1::MAX_LOTS, scalar::ORDER_MAX_LOTS),
             (
-                GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT,
+                GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT,
                 scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT,
             ),
             (
-                GeneralOrderLayoutV2::VALID_UNTIL_SLOT,
+                GeneralOrderLayoutV1::VALID_UNTIL_SLOT,
                 scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
             ),
             (
-                GeneralOrderLayoutV2::STATE_ADMITTED_SLOT,
+                GeneralOrderLayoutV1::STATE_ADMITTED_SLOT,
                 scalar::CURRENT_SLOT,
             ),
         ] {
@@ -1575,13 +1575,13 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u16(
                 order,
-                state_body_offset(offset_u32(GeneralOrderLayoutV2::VERSION)?)?,
+                state_body_offset(offset_u32(GeneralOrderLayoutV1::VERSION)?)?,
                 scalar_common(scalar::ONE)?,
             ),
         )?;
         for (offset, coordinate) in [
-            (GeneralOrderLayoutV2::PHASE, scalar::SCRATCH_B),
-            (GeneralOrderLayoutV2::STATE_PHASE, scalar::ORDER_POST_PHASE),
+            (GeneralOrderLayoutV1::PHASE, scalar::SCRATCH_B),
+            (GeneralOrderLayoutV1::STATE_PHASE, scalar::ORDER_POST_PHASE),
         ] {
             push_fixed(
                 instructions,
@@ -1598,14 +1598,14 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u32(
                 order,
-                state_body_offset(offset_u32(GeneralOrderLayoutV2::OUTCOME_COUNT)?)?,
+                state_body_offset(offset_u32(GeneralOrderLayoutV1::OUTCOME_COUNT)?)?,
                 scalar_common(scalar::OUTCOME_COUNT)?,
             ),
         )?;
         for (offset, coordinate) in [
-            (GeneralOrderLayoutV2::OWNER_ID, identity::OWNER),
-            (GeneralOrderLayoutV2::MARKET, identity::MARKET),
-            (GeneralOrderLayoutV2::BATCH_ID, identity::SELECTION_BATCH),
+            (GeneralOrderLayoutV1::OWNER_ID, identity::OWNER),
+            (GeneralOrderLayoutV1::MARKET, identity::MARKET),
+            (GeneralOrderLayoutV1::BATCH_ID, identity::SELECTION_BATCH),
         ] {
             push_fixed(
                 instructions,
@@ -1626,9 +1626,9 @@ fn append_general_state_patches(
             EffectInstructionV3::write_u64_affine(
                 order,
                 state_body_offset(offset_u32(
-                    GENERAL_ORDER_ROW_BASE_V2 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2,
+                    GENERAL_ORDER_ROW_BASE_V1 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
                 )?)?,
-                offset_u32(GENERAL_ORDER_ROW_STRIDE_V2)?,
+                offset_u32(GENERAL_ORDER_ROW_STRIDE_V1)?,
                 ScalarCoordinateV3::item(scalar_u16(item_scalar::CURSOR_INVENTORY)?),
             ),
         )?;
@@ -1638,9 +1638,9 @@ fn append_general_state_patches(
             EffectInstructionV3::write_u64_affine(
                 order,
                 state_body_offset(offset_u32(
-                    GENERAL_ORDER_ROW_BASE_V2 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V2,
+                    GENERAL_ORDER_ROW_BASE_V1 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
                 )?)?,
-                offset_u32(GENERAL_ORDER_ROW_STRIDE_V2)?,
+                offset_u32(GENERAL_ORDER_ROW_STRIDE_V1)?,
                 ScalarCoordinateV3::item(scalar_u16(item_scalar::QUANTITY)?),
             ),
         )?;
@@ -1652,7 +1652,7 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u32(
                 batch,
-                state_body_offset(offset_u32(GeneralBatchLayoutV2::ORDER_COUNT)?)?,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::ORDER_COUNT)?)?,
                 scalar_common(scalar::BATCH_POST_ORDER_COUNT)?,
             ),
         )?;
@@ -1661,7 +1661,7 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u64(
                 batch,
-                state_body_offset(offset_u32(GeneralBatchLayoutV2::COMMITTED_QUOTE_RESERVE)?)?,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE)?)?,
                 scalar_common(scalar::BATCH_POST_QUOTE_RESERVE)?,
             ),
         );
@@ -1683,7 +1683,7 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u8(
                 order,
-                state_body_offset(offset_u32(GeneralOrderLayoutV2::STATE_PHASE)?)?,
+                state_body_offset(offset_u32(GeneralOrderLayoutV1::STATE_PHASE)?)?,
                 scalar_common(scalar::ORDER_POST_PHASE)?,
             ),
         )?;
@@ -1692,7 +1692,7 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u64(
                 order,
-                state_body_offset(offset_u32(GeneralOrderLayoutV2::STATE_RELEASED_SLOT)?)?,
+                state_body_offset(offset_u32(GeneralOrderLayoutV1::STATE_RELEASED_SLOT)?)?,
                 scalar_common(scalar::ORDER_POST_RELEASED_SLOT)?,
             ),
         )?;
@@ -1707,7 +1707,7 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u32(
                 batch,
-                state_body_offset(offset_u32(GeneralBatchLayoutV2::CANCELLED_COUNT)?)?,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::CANCELLED_COUNT)?)?,
                 scalar_common(scalar::BATCH_POST_CANCELLED_COUNT)?,
             ),
         )?;
@@ -1716,7 +1716,7 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u64(
                 batch,
-                state_body_offset(offset_u32(GeneralBatchLayoutV2::COMMITTED_QUOTE_RESERVE)?)?,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE)?)?,
                 scalar_common(scalar::BATCH_POST_QUOTE_RESERVE)?,
             ),
         );
@@ -2442,26 +2442,26 @@ fn append_batch_action_patches(
     if action == Action::OpenBatch {
         append_local_state_header(instructions, fixed, state, false)?;
         for (offset, coordinate) in [
-            (GeneralBatchLayoutV2::MAGIC, scalar::SCRATCH_A),
+            (GeneralBatchLayoutV1::MAGIC, scalar::SCRATCH_A),
             (
-                GeneralBatchLayoutV2::SEQUENCE,
+                GeneralBatchLayoutV1::SEQUENCE,
                 scalar::ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION,
             ),
-            (GeneralBatchLayoutV2::GENERATION, scalar::GENERATION),
+            (GeneralBatchLayoutV1::GENERATION, scalar::GENERATION),
             (
-                GeneralBatchLayoutV2::PRICE_SCALE,
+                GeneralBatchLayoutV1::PRICE_SCALE,
                 scalar::SELECTION_PRICE_SCALE,
             ),
             (
-                GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT,
+                GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT,
                 scalar::BATCH_COLLECTION_CLOSE_SLOT,
             ),
             (
-                GeneralBatchLayoutV2::SETTLEMENT_CLOSE_SLOT,
+                GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT,
                 scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
             ),
             (
-                GeneralBatchLayoutV2::OPENED_ROOT_REVISION,
+                GeneralBatchLayoutV1::OPENED_ROOT_REVISION,
                 scalar::ROOT_REVISION_OBSERVATION,
             ),
         ] {
@@ -2480,13 +2480,13 @@ fn append_batch_action_patches(
             fixed,
             EffectInstructionV3::write_u16(
                 state,
-                state_body_offset(offset_u32(GeneralBatchLayoutV2::VERSION)?)?,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::VERSION)?)?,
                 scalar_common(scalar::ONE)?,
             ),
         )?;
         for (offset, coordinate) in [
-            (GeneralBatchLayoutV2::PHASE, scalar::SCRATCH_B),
-            (GeneralBatchLayoutV2::STATUS, scalar::BATCH_POST_STATUS),
+            (GeneralBatchLayoutV1::PHASE, scalar::SCRATCH_B),
+            (GeneralBatchLayoutV1::STATUS, scalar::BATCH_POST_STATUS),
         ] {
             push_fixed(
                 instructions,
@@ -2499,8 +2499,8 @@ fn append_batch_action_patches(
             )?;
         }
         for (offset, coordinate) in [
-            (GeneralBatchLayoutV2::OUTCOME_COUNT, scalar::OUTCOME_COUNT),
-            (GeneralBatchLayoutV2::MAX_ORDERS, scalar::CONFIG_MAX_ORDERS),
+            (GeneralBatchLayoutV1::OUTCOME_COUNT, scalar::OUTCOME_COUNT),
+            (GeneralBatchLayoutV1::MAX_ORDERS, scalar::CONFIG_MAX_ORDERS),
         ] {
             push_fixed(
                 instructions,
@@ -2513,12 +2513,12 @@ fn append_batch_action_patches(
             )?;
         }
         for (offset, coordinate) in [
-            (GeneralBatchLayoutV2::MARKET, identity::MARKET),
+            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
             (
-                GeneralBatchLayoutV2::PRODUCT_ID,
+                GeneralBatchLayoutV1::PRODUCT_ID,
                 identity::SELECTION_PRODUCT,
             ),
-            (GeneralBatchLayoutV2::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
         ] {
             push_fixed(
                 instructions,
@@ -2539,7 +2539,7 @@ fn append_batch_action_patches(
         fixed,
         EffectInstructionV3::write_u8(
             state,
-            state_body_offset(offset_u32(GeneralBatchLayoutV2::STATUS)?)?,
+            state_body_offset(offset_u32(GeneralBatchLayoutV1::STATUS)?)?,
             scalar_common(scalar::BATCH_POST_STATUS)?,
         ),
     )?;
@@ -2548,7 +2548,7 @@ fn append_batch_action_patches(
         fixed,
         EffectInstructionV3::write_u64(
             state,
-            state_body_offset(offset_u32(GeneralBatchLayoutV2::CLOSED_ROOT_REVISION)?)?,
+            state_body_offset(offset_u32(GeneralBatchLayoutV1::CLOSED_ROOT_REVISION)?)?,
             scalar_common(scalar::ROOT_POST_REVISION)?,
         ),
     )

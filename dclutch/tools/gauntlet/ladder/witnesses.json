@@ -1,6 +1,6 @@
 {
   "campaign": "ladder",
-  "note": "The context file this tier hands the shared evaluator is its own transcript, so a `plan-jq` witness here queries the transcript and an `evidence-jq` witness queries the campaign evidence.",
+  "note": "The context file this tier hands the shared evaluator is ONE ARM's transcript, so a `plan-jq` witness here queries that transcript and an `evidence-jq` witness queries that arm's campaign evidence. These are the witnesses that hold on EITHER arm; the arm-specific ones live in `witnesses-exhaust.json` and `witnesses-capture.json` and are evaluated only against the arm they are about. Nothing here is disjoined over `.walk`: a witness that reads its default on the walk that did not run is an absent signal with no way to tell \"nothing fired\" from \"my instrument was disconnected\", and `run-ladder.sh` runs BOTH arms by default so that every witness in all three files bites on some transcript of every run.",
   "witnesses": [
     {
       "id": "the-market-bought-a-named-alternative",
@@ -14,7 +14,7 @@
       "kind": "plan-jq",
       "query": "[.cranks[] | .frameAccounts] | unique | map(tostring) | join(\",\")",
       "expect": "18",
-      "provenance": "`dclutch-source`'s `relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery)` declares the frame's positions, and the AdvanceRecovery frame the deployed Resolution program parses is 18 accounts wide. The driver builds its metas FROM those roles and never from a typed list; this counts what it built and compares it against the contract's own width, so a frame that grew or shrank on either side is caught rather than assumed. RED ON PURPOSE ON THIS FIXTURE, and `README.md`'s \"What it does not reach\" is the register: no AdvanceRecovery frame is ever built here, so this reads `null` rather than a width. One `WindowSpecV1.max_age_seconds` governs both the crank's admissibility and the publication's freshness, and `window.end` IS the captured publication instant, so on hbox `20260906T112408Z` the primary leg was due at unix 1,818,967,680 against a chain clock of 1,788,694,735 -- 30,272,945 seconds, the fixture's one-year shelf life exactly. A refreshable publication turns this green; threading `terminal_max_age_seconds` cannot, because no value of one field satisfies both legs against a frozen capture."
+      "provenance": "`dclutch-source`'s `relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery)` declares the frame's positions, and the AdvanceRecovery frame the deployed Resolution program parses is 18 accounts wide. The driver builds its metas FROM those roles and never from a typed list; this counts what it built and compares it against the contract's own width, so a frame that grew or shrank on either side is caught rather than assumed. GREEN NOW, and the reason is a producer rather than a parameter: the campaign MINTS its own Pyth publication at the cluster's own block time (`pyth_lab_publication.rs`), so the market's window ends at the run's own hour and both legs fall due inside it, which is what lets an AdvanceRecovery frame be built at all. It was red for as long as the publication was frozen at the capture date, because one `WindowSpecV1.max_age_seconds` governs both the crank's admissibility and the publication's freshness and no value of one field satisfies both legs against a frozen capture."
     },
     {
       "id": "no-clock-was-warped",
@@ -38,25 +38,25 @@
       "provenance": "The successor campaign this tier drives submits deliberate expected-failure transactions -- 'Found37 refuses a substituted Market coordinate and rolls the transaction back' is one -- and every one of them SAYS SO in its own label, which is the campaign's own convention and not this tier's. So a finalized transaction carrying a structured InstructionError whose label does not say it refuses is an UNPLANNED refusal, and this counts them. It is not a claim that nothing refused; it is a claim that nothing refused by surprise."
     },
     {
-      "id": "the-failure-selector-was-committed",
+      "id": "the-publication-was-minted-inside-the-run",
       "kind": "plan-jq",
-      "query": ".refund.failureWalk.arm // \"not-driven\"",
-      "expect": "ladder-exhausted",
-      "provenance": "Decision 0027: 'only when the ladder is exhausted, and only after the last window's maximum age, does the failure selector resolve'. The shipped commit-deadline-failure driver takes the arm off the Source's own phase (dclutch_operator::deadline_failure_v1::deadline_failure_decision_v1) and writes it into its evidence; `ladder-exhausted` is the arm a walked ladder selects, `primary-deadline` the arm a market with no ladder selects, and a market standing on a rung is refused by name before a key opens. The transcript copies the driver's word rather than restating it. On the capture walk the transcript's `refund` object is null and this witness reads its default, so it is red there ON PURPOSE: it asserts the exhaust walk's continuation and nothing about the capture walk."
+      "query": ". as $run | if ($run.publications | length) > 0 and ([$run.publications[] | select(.publishTime >= $run.started_unix_seconds and .publishTime <= $run.finished_unix_seconds)] | length) == ($run.publications | length) then \"minted-inside-the-run\" else \"minted-outside-the-run\" end",
+      "expect": "minted-inside-the-run",
+      "provenance": "The publication is the one artifact this tier AUTHORS, so it is the one a reader has most reason to distrust. Its instant is the CLUSTER's own block time, and `started_unix_seconds`/`finished_unix_seconds` are this campaign's own HOST wall clock -- two independent clocks again, exactly as `no-clock-was-warped` uses them. A publication stamped outside the interval the campaign occupied would be one minted about a period the chain was not living through, which is the same defect as moving the validator's clock and is caught the same way. It also says the mint is a producer and not a fixture: a frozen capture could never satisfy this."
     },
     {
-      "id": "the-founder-drew-the-hoard-and-nothing-else",
+      "id": "the-census-conserved-across-this-walk",
       "kind": "plan-jq",
-      "query": "if .refund.hoardDrained == true then \"drained\" else \"not-drained\" end",
-      "expect": "drained",
-      "provenance": "Decision 0025 section 5: 'a founder with no ordinary claims receives zero on an outage' and the refunding arm pays one atom to every ordinary claim. The ladder's market never fills, so the founder holds every ordinary claim and the escrow the whole failure column; the tier reads the Hoard before the first refund and after the last, and `hoardDrained` is true only when the sum of the payout drivers' own `payout` fields equals the Hoard's fall AND the Hoard reads zero -- the founder drew exactly their holdings and the escrow's column was worth nothing to anybody (EconomicKernel.lean: a_stranger_and_the_founder_draw_the_hoard_between_them). On the capture walk the transcript's `refund` object is null and this witness reads its default, so it is red there ON PURPOSE: it asserts the exhaust walk's continuation and nothing about the capture walk."
+      "query": "(.conservation.violations | length) | tostring",
+      "expect": "0",
+      "provenance": "The journey's conservation ledger (`tools/gauntlet/journey/src/ledger.rs`), linked rather than reimplemented, evaluating laws L1-L8 at every stage boundary of this walk: after the founding, after each crank, and -- on the capture walk -- after the capture and after the terminal admission. Both walks are censused, which is why this witness is one of the arm-independent ones and is evaluated against each arm\u2019s own transcript in turn. Every account the walk touches -- the market's compartments, the Resolution funding subset ledger, the certificate seats, the provider's own accounts and the stranger who cranks -- is registered BEFORE the first census, so a boundary that reports a green has a predecessor to difference against; a boundary that admitted a new account reports `inapplicable` and names it. A violated law is a lamport or an atom this walk cannot account for, and zero is the only value that says the ladder moved a market rather than merely a set of accounts."
     },
     {
-      "id": "the-escrow-payout-was-a-recorded-no-op",
+      "id": "no-crank-was-refused-before-it-was-built",
       "kind": "plan-jq",
-      "query": ".refund.escrow.payout // \"absent\"",
-      "expect": "recorded-no-op",
-      "provenance": "The escrow's owner is the ClaimsCapability PDA at (market, failure selector): a program-derived address with no key, so no party can sign coordinate 0 of a terminal settlement for it, and its column is owed nothing under every certificate (runtime_v3 FailureCoordinateNotPayable; EconomicKernel.lean the_failure_column_is_owed_nothing_under_every_certificate). The tier asks wallet-terminal-payout-input for that owner and records the producer's refusal by name -- 'is this Market's own failure escrow' -- as the payout that never was; the column is the residue decision 0025 shape A burns inside the retirement's prepare packet. On the capture walk the transcript's `refund` object is null and this witness reads its default, so it is red there ON PURPOSE: it asserts the exhaust walk's continuation and nothing about the capture walk."
+      "query": "[.cranks[] | select(.outcome == \"refused-in-preflight\")] | length | tostring",
+      "expect": "0",
+      "provenance": "`drive_crank` in `tools/gauntlet/ladder/src/ladder.rs` distinguishes two refusals of the shipped `dclutch-successor-bootstrap recovery-crank` driver and treats them oppositely on purpose. A refusal carrying `a crank is admissible STRICTLY after the deadline` is the tier's own HOSTILE satisfied and the walk goes on; every other preflight refusal is a real stop, recorded as `refused-in-preflight` with the driver's sentence verbatim, and the arm returns having built no frame at all. Zero is the only value that says every crank this walk reports was a crank the driver was willing to build -- and a nonzero one is also why `every-crank-frame-is-the-relay-contract-eighteen` would read an empty width, since a refused preflight has no frame to count."
     }
   ]
 }

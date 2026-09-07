@@ -1657,3 +1657,65 @@ fn legacy_v1_occupied_output_cannot_reenable_removed_dispatch() {
     }
     assert_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
+
+/// Every refusal the ensemble fold can raise reaches a distinct published code,
+/// and the three codes the fold's own band added each have exactly one raiser.
+///
+/// The band was pinned with `EnsembleMember`, `EnsembleQuorum` and
+/// `EnsembleQuorumMet` before any route could raise the first two: the pure
+/// fold existed and its physical outer did not, so the codes were declared,
+/// documented and unreachable. This is the assertion that they are reachable,
+/// and that the mapping did not quietly send two different accusations to one
+/// code -- a fold that answered `SourceMaterial` for a hostile seat would be
+/// telling a reader to go and look at the material.
+#[test]
+fn each_ensemble_refusal_reaches_its_own_published_code() {
+    use crate::ensemble_v1::EnsembleFoldErrorV1;
+    use crate::funded::FundedWalkErrorV1;
+    use crate::relay_transport_v1::{map_ensemble_fold_error, map_funded_walk_error};
+
+    let fold = [
+        (EnsembleFoldErrorV1::Request, ResolutionError::Instruction),
+        (EnsembleFoldErrorV1::Source, ResolutionError::SourceMaterial),
+        (EnsembleFoldErrorV1::Product, ResolutionError::ProductDomain),
+        (
+            EnsembleFoldErrorV1::Fragment,
+            ResolutionError::EnsembleMember,
+        ),
+        (EnsembleFoldErrorV1::Quorum, ResolutionError::EnsembleQuorum),
+        (EnsembleFoldErrorV1::Transition, ResolutionError::Transition),
+        (EnsembleFoldErrorV1::Funding, ResolutionError::Funding),
+        (EnsembleFoldErrorV1::Arithmetic, ResolutionError::Arithmetic),
+    ];
+    let mut seen: Vec<u32> = Vec::new();
+    for (error, expected) in fold {
+        let code = map_ensemble_fold_error(error);
+        assert_eq!(
+            code as u32, expected as u32,
+            "{error:?} names its own field"
+        );
+        assert!(
+            !seen.contains(&(code as u32)),
+            "{error:?} shares a code with an accusation already mapped, which is the coarse \
+             refusal this tree forbids"
+        );
+        seen.push(code as u32);
+    }
+    assert_eq!(seen.len(), 8, "every variant of the fold's error is mapped");
+
+    // The other half of the crank/fold exclusivity, on the walk's own map.
+    assert_eq!(
+        map_funded_walk_error(FundedWalkErrorV1::QuorumMet) as u32,
+        ResolutionError::EnsembleQuorumMet as u32
+    );
+    assert_ne!(
+        map_funded_walk_error(FundedWalkErrorV1::Transition) as u32,
+        ResolutionError::EnsembleQuorumMet as u32,
+        "a met quorum is not a deadline complaint"
+    );
+
+    // And the three codes are three, in the band's own contiguous run.
+    assert_eq!(ResolutionError::EnsembleMember as u32, 0x8029);
+    assert_eq!(ResolutionError::EnsembleQuorum as u32, 0x802A);
+    assert_eq!(ResolutionError::EnsembleQuorumMet as u32, 0x802B);
+}

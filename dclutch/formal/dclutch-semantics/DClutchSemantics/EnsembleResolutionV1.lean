@@ -1,6 +1,7 @@
 import DClutchSemantics.ProductRuntimeV2
 import DClutchSemantics.SourceScheduledMedianV1
 import DClutchSemantics.SourceResolutionStateV2Abi
+import DClutchSemantics.SourceMaterialV3Abi
 import Std.Tactic
 
 /-!
@@ -54,8 +55,8 @@ open DClutch.SourceScheduledMedianV1
 
 /-- The greatest ensemble a material can declare: the primary source plus every
 attempt slot of `RecoveryPolicyV2`.  It is the policy's capacity plus one rather
-than a fresh number, because a member IS an attempt slot whose deadline is the
-primary window's own (`membersShareTheWindow` below). -/
+than a fresh number, because a member IS an attempt slot sitting at the primary
+window's own closed deadline (`membersShareTheWindow` below). -/
 def maxMembers : Nat := SourceRecoveryPolicyV2Abi.maxAttempts + 1
 
 /-- The two numbers an ensemble adds to a material: how many sources, and how
@@ -665,12 +666,39 @@ theorem members_and_rungs_partition_the_attempts
     members spec policy ++ rungs spec policy = policy.attempts :=
   List.take_append_drop _ _
 
-/-- A member is an attempt whose deadline IS the window's closed deadline: the
-same second the primary source's own capture stops being admitted.  Founding
-refuses a member that says otherwise. -/
+/-- A member is an attempt slot at the window's closed deadline, STAGGERED BY
+ONE SECOND: member `m` (1-based, so index `m - 1` here) sits at
+`window.deadline + m - 1`.
+
+The design says every member sits at the window's own deadline exactly, and
+that is unencodable: `RecoveryPolicyV2` requires strictly increasing deadlines
+over its whole attempt list (`deadlinesIncreasing`), so two members at one
+second are not a policy any founding can write down.  A member's deadline is
+never READ by a route -- a member is captured under the window's own clock
+rule, exactly as the primary is -- so the stagger is informational, and it is
+CANONICAL so that one founding input has one policy body.  It is inside the
+seconds the window's own liveness grace already spans.
+
+`RecoveryPolicyV2::validate_ensemble_membership` in `dclutch-source` is the
+same rule, and this is the fact it implements. -/
 def membersShareTheWindow (spec : Spec) (window : Window)
     (policy : SourceRecoveryPolicyV2Abi.Policy) : Bool :=
-  (members spec policy).all fun attempt => decide (attempt.deadline = window.deadline)
+  let slots := members spec policy
+  (List.range slots.length).all fun index =>
+    match slots[index]? with
+    | some attempt => attempt.deadline == window.deadline + index
+    | none => false
+
+/-- The stagger, on the shape the flagship founds: three members at the window's
+deadline, the next second, and the one after. -/
+theorem the_members_are_staggered_by_one_second :
+    membersShareTheWindow ⟨4, 3⟩ ⟨0, 10⟩
+        { capacityProfile := 1, attempts := [⟨1, 2, 10, 3⟩, ⟨4, 5, 11, 6⟩, ⟨7, 8, 12, 9⟩] }
+      = true ∧
+      membersShareTheWindow ⟨4, 3⟩ ⟨0, 10⟩
+        { capacityProfile := 1, attempts := [⟨1, 2, 10, 3⟩, ⟨4, 5, 10, 6⟩, ⟨7, 8, 12, 9⟩] }
+      = false := by
+  native_decide
 
 /-- The ladder the fold falls back to: the market's window deadline and the
 rungs.  For `Spec.single` it is the ladder over the whole policy, today's. -/
@@ -764,5 +792,68 @@ theorem cohort15_market3_as_an_ensemble_of_one :
     fold ⟨100, [10200, 10600]⟩ ⟨-8⟩ Spec.single ⟨1788499895, 1788508895⟩
       [⟨0, 10397222400, 1788499916⟩] = some (.decided 10397222400 1) := by
   native_decide
+
+/-! ## The spec on the material's own bytes
+
+`SourceMaterialV3Abi` carries `k - 1` and `q - 1` in the bytes it used to hold
+in reserve, and a third byte for the rungs after the members.  The spec the fold
+runs under is READ off those bytes and nothing else, so a market's ensemble is a
+fact of its founded material and never of a request. -/
+
+def Spec.ofMaterial (material : SourceMaterialV3Abi.Material) : Spec :=
+  ⟨material.ensembleMembers + 1, material.ensembleQuorum + 1⟩
+
+/-- A material with zero ensemble bytes is today's single-source market. -/
+theorem the_zero_bytes_are_the_single_source_spec :
+    Spec.ofMaterial SourceMaterialV3Abi.unboundedExample = Spec.single ∧
+      Spec.ofMaterial SourceMaterialV3Abi.boundedExample = Spec.single := by
+  native_decide
+
+/-- A material the decoder admits declares a spec the fold admits. -/
+theorem a_valid_material_declares_a_valid_spec (material : SourceMaterialV3Abi.Material)
+    (valid : material.ensembleValid = true) : (Spec.ofMaterial material).valid = true := by
+  simp only [SourceMaterialV3Abi.Material.ensembleValid, Bool.and_eq_true, decide_eq_true_eq,
+    SourceMaterialV3Abi.ensembleMaxMembers] at valid
+  simp only [Spec.valid, Spec.ofMaterial, Bool.and_eq_true, decide_eq_true_eq, maxMembers]
+  omega
+
+/-- Decision 0034 ruling 2b, on the spec: a founding admits an odd quorum only.
+`exactly_half_can_move_the_cell_up_and_not_down` is the reason. -/
+def Spec.foundable (spec : Spec) : Bool := spec.valid && decide (spec.quorum % 2 = 1)
+
+theorem single_is_foundable : Spec.single.foundable = true := by native_decide
+theorem the_flagship_is_foundable : Spec.foundable ⟨5, 3⟩ = true := by native_decide
+theorem the_fallback_is_foundable : Spec.foundable ⟨3, 3⟩ = true := by native_decide
+theorem the_cheap_shape_is_not_foundable : Spec.foundable ⟨3, 2⟩ = false := by native_decide
+theorem an_even_quorum_is_not_foundable : Spec.foundable ⟨4, 4⟩ = false := by native_decide
+
+/-- The first attempt slot the crank enters from `Primary`: the one after the
+members.  Zero for the single-source market, which is the transition as it was
+written. -/
+def Spec.firstRungIndex (spec : Spec) : Nat := spec.members - 1
+
+theorem rungs_begin_at_the_first_rung_index
+    (spec : Spec) (policy : SourceRecoveryPolicyV2Abi.Policy) :
+    rungs spec policy = policy.attempts.drop spec.firstRungIndex := rfl
+
+theorem the_single_source_crank_enters_slot_zero : Spec.single.firstRungIndex = 0 := by
+  native_decide
+
+/-- The material's rung byte and the policy's attempts agree exactly when the
+attempts are the members followed by that many rungs. -/
+def Spec.rungsAgree (spec : Spec) (rungByte : Nat)
+    (policy : SourceRecoveryPolicyV2Abi.Policy) : Bool :=
+  (rungs spec policy).length = rungByte
+
+theorem the_example_material_holds_its_members_and_one_rung :
+    Spec.rungsAgree (Spec.ofMaterial SourceMaterialV3Abi.ensembleExample)
+      SourceMaterialV3Abi.ensembleExample.ensembleRungs
+      { capacityProfile := 1, attempts := [
+          { sourceSpec := 2, providerRelease := 3, deadline := 100, fundingAllocation := 4 },
+          { sourceSpec := 5, providerRelease := 6, deadline := 100, fundingAllocation := 7 },
+          { sourceSpec := 8, providerRelease := 9, deadline := 200, fundingAllocation := 10 }
+        ] } = true := by
+  native_decide
+
 
 end DClutch.EnsembleResolutionV1
