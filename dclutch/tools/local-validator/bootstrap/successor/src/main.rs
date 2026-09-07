@@ -170,6 +170,12 @@ fn run() -> Result<()> {
         Some(command) if command == upgrade::ALREADY_CURRENT_COMMAND_V1 => {
             upgrade::run_already_current(arguments.collect())
         }
+        Some(command) if command == upgrade::BIND_UPGRADE_ROW_COMMAND_V1 => {
+            upgrade::run_bind_upgrade_row(arguments.collect())
+        }
+        Some(command) if command == upgrade::BIND_BASELINE_COMMAND_V1 => {
+            upgrade::run_bind_baseline(arguments.collect())
+        }
         Some("devnet-carry-forward-capture-v1") => {
             release_capture::run_carry_forward(arguments.collect())
         }

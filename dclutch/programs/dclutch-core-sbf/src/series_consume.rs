@@ -321,7 +321,7 @@ pub(crate) fn process(
     let admitted = authenticate_series(&frame, request, proof_bytes, program_id, &prepared)?;
     authenticate_root_and_replay(&frame, request, &admitted, program_id)?;
     let (funding_span, suffix_accounts) =
-        split_funding_prefix(&frame, &admitted, request, &rent, &prepared)?;
+        split_funding_prefix(&frame, &admitted, request, &prepared)?;
     let suffix = SeriesFoundSuffix::parse(suffix_accounts)?;
     release_admissions.require(Role::Claims)?;
     release_admissions.require(Role::Custody)?;
@@ -705,7 +705,6 @@ fn split_funding_prefix<'a, 'info>(
     frame: &'a SeriesConsumeAccounts<'a, 'info>,
     admitted: &AdmittedSeries,
     request: SeriesCoreRequestV1,
-    rent: &Rent,
     prepared: &PreparedFound,
 ) -> Result<(FundingSpanEvidence, &'a [AccountInfo<'info>]), CoreSbfError> {
     let maximum = min(frame.tail.len(), MAXIMUM_FUNDING_STATES_V1);
@@ -729,7 +728,7 @@ fn split_funding_prefix<'a, 'info>(
     let (count, list_id) = matched.ok_or(CoreSbfError::Funding)?;
     let funding = frame.tail.get(..count).ok_or(CoreSbfError::AccountFrame)?;
     let claims = frame.tail.get(count..).ok_or(CoreSbfError::AccountFrame)?;
-    authenticate_funding(frame, admitted, request, funding, rent, prepared)?;
+    authenticate_funding(frame, admitted, request, funding, prepared)?;
     Ok((
         FundingSpanEvidence {
             count: u8::try_from(count).map_err(|_| CoreSbfError::Arithmetic)?,
@@ -744,7 +743,6 @@ fn authenticate_funding(
     admitted: &AdmittedSeries,
     request: SeriesCoreRequestV1,
     accounts: &[AccountInfo<'_>],
-    rent: &Rent,
     prepared: &PreparedFound,
 ) -> Result<(), CoreSbfError> {
     let manifest_data = frame
@@ -788,11 +786,25 @@ fn authenticate_funding(
         {
             return Err(CoreSbfError::Funding);
         }
-        let custody = FundingCustodyObservationV1::native_only(
+        // The rent this state was FUNDED at, recovered from its own balance
+        // and its own principal, never the sysvar of the moment (decision
+        // 0030). A prepared series is consumed in a later transaction and can
+        // be consumed in a later EPOCH: pricing it at today's rate refuses
+        // every state the cluster has since re-rated, by exactly the rate
+        // difference. `FundingStateV1`'s layout predates the ruling and is
+        // frozen, so the rate is recovered by exact division or refused --
+        // never rounded to a plausible cluster.
+        let custody = FundingCustodyObservationV1::recovered_native_only(
             account.lamports(),
-            rent.minimum_balance(FUNDING_STATE_BYTES),
+            funding.remaining().native_lamports_total(),
+            FUNDING_STATE_BYTES,
         )
-        .map_err(|_| CoreSbfError::Funding)?;
+        .map_err(|error| match error {
+            dclutch_market::capability_manifest::Error::UnrepresentableRentRate => {
+                CoreSbfError::FundedRent
+            }
+            _ => CoreSbfError::Funding,
+        })?;
         funding
             .validate_against(manifest_id, manifest, custody)
             .map_err(|_| CoreSbfError::Funding)?;

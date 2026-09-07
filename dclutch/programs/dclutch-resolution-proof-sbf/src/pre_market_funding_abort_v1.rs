@@ -61,7 +61,12 @@ pub fn process_pre_market_funding_abort_v1(
     let request = PreMarketFundingAbortRequestV1::decode(instruction_data)
         .map_err(|_| ResolutionError::Instruction)?;
     authenticate_frame(program_id, accounts, request)?;
-    let rent = authenticate_rent(account(accounts, RENT)?)?;
+    // The Rent sysvar account stays in the frame and is still authenticated as
+    // itself, so a substituted or unparseable rent account refuses as it always
+    // did. Nothing on this route prices off it: the abort's refund is the rent
+    // the ledger records. Removing the account from the frame is a wire change
+    // and is owed, not taken here.
+    authenticate_rent(account(accounts, RENT)?)?;
     let clock = authenticate_clock(account(accounts, CLOCK)?)?;
     let expected_resolution_ledger_digest =
         authenticate_live_cleanup_checkpoint(program_id, accounts, request, clock.slot)?;
@@ -131,13 +136,20 @@ pub fn process_pre_market_funding_abort_v1(
     if Pubkey::find_program_address(&derivation.seed_components(), program_id).0 != *ledger.key {
         return Err(ResolutionError::Funding.into());
     }
-    let exact_rent = rent.minimum_balance(ledger_data.len());
+    // The rent this ledger was FUNDED at, from its own header (decision 0030).
+    // An abort refunds what the founding parked, to the lamport, and it stays
+    // that across every rate the cluster later adopts: the same figure is the
+    // custody conjunct below, the `close_ledger` refund and the receipt's
+    // `rent_refund_lamports`, so a sysvar read here would move all three.
+    let exact_rent = authenticated
+        .funded_rent_minimum(ledger_data.len())
+        .map_err(crate::funded_rent_refusal)?;
     let native_principal = authenticated
         .remaining_native_lamports_total()
         .map_err(|_| ResolutionError::Funding)?;
     authenticated
         .validate_native_custody(ledger.lamports(), exact_rent, false)
-        .map_err(|_| ResolutionError::Funding)?;
+        .map_err(crate::funded_rent_refusal)?;
     drop(ledger_data);
 
     close_ledger(

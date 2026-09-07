@@ -8,7 +8,7 @@
   record keyed by the predecessor, authored by the roles' upgrade authority
   (`registry/lineage_v1::process`, `DCLRLND1`, executed on tier 1 and the
   lineage-loopback campaign); the walk that turns links into a chain
-  (`crates/dclutch-registry-contract/src/lineage_walk.rs`, mirrored by
+  (`crates/dclutch-registry/src/lineage_walk.rs`, mirrored by
   `packages/dclutch-sdk/lib/releaseLineage.ts`), with its own gap refusal and
   a hop bound that refuses only when a further hop is offered; the Registry
   refusal codes. Retroactive authoring is admitted and asserted in both
@@ -1400,7 +1400,7 @@ five and are accurate as they now read.
 **Commits 1-3 left the record with no reader, and that was the real gap.**
 `release_lineage_address_v1` and `is_lineage_account_v1` had zero production
 callers, because a link is not a history: nothing in the tree could follow two
-hops. `crates/dclutch-registry-contract/src/lineage_walk.rs` is now the single
+hops. `crates/dclutch-registry/src/lineage_walk.rs` is now the single
 authority for turning links into a chain, and
 `packages/dclutch-sdk/lib/releaseLineage.ts` mirrors it for the SDK and the
 site. The walk deliberately is not a fetcher — its three callers (an on-chain

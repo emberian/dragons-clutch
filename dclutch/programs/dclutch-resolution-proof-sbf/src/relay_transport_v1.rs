@@ -1181,7 +1181,6 @@ fn process_advance_recovery(
         manifest,
         generation,
         selecting_config,
-        &rent,
     )?);
 
     let outputs = plan_and_encode_funded_transition(
@@ -1397,7 +1396,6 @@ pub(crate) fn process_deadline_failure_coordinates(
         manifest,
         generation,
         material_id.to_bytes(),
-        &rent,
     )?);
 
     let domain_data = account(accounts, 12)?
@@ -1601,7 +1599,6 @@ fn authenticate_failure_funding<'a>(
     manifest: CapabilityManifestV1<'a>,
     generation: u64,
     selecting_config: [u8; 32],
-    rent: &Rent,
 ) -> Result<AuthenticatedFailureFundingV2<'a>, ProgramError> {
     if account_info.owner != program_id
         || account_info.executable
@@ -1646,10 +1643,15 @@ fn authenticate_failure_funding<'a>(
             .ok_or(ResolutionError::Arithmetic)?;
     }
     let failure_entry_index = failure_entry_index.ok_or(ResolutionError::Funding)?;
-    let exact_ledger_rent_lamports = rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES_V2);
+    // The rent the failure ledger RECORDS, never the sysvar of the moment
+    // (decision 0030). This figure is the custody conjunct and the refund the
+    // relay plans, and the ledger was funded when the market was founded.
+    let exact_ledger_rent_lamports = authenticated
+        .funded_rent_minimum(RESOLUTION_FUNDING_LEDGER_BYTES_V2)
+        .map_err(crate::funded_rent_refusal)?;
     authenticated
         .validate_native_custody(account_info.lamports(), exact_ledger_rent_lamports, false)
-        .map_err(|_| ResolutionError::Funding)?;
+        .map_err(crate::funded_rent_refusal)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         program_id.to_bytes(),
         market.key.to_bytes(),

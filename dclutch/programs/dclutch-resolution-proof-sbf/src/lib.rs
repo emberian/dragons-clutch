@@ -225,6 +225,42 @@ pub enum ResolutionError {
     /// reading this should re-read the market's phase, not the provider's
     /// bytes.
     SourceLadder = 0x801D,
+    /// The rent a funding ledger was FUNDED at did not price its balance.
+    ///
+    /// Split from `Funding` on 2026-09-06, in the shape
+    /// `CoreSbfError::FundedRent = 0x301D` and
+    /// `TradingSbfError::FundedRent = 0x4029` were split on 2026-09-04.
+    /// `Funding` covers every conjunct of the custody arithmetic; this names
+    /// the one term a reader cannot see from the account -- the
+    /// exemption-scaled rate the ledger's own header records. A cluster that
+    /// changes its rent-exempt rate under a live cohort refuses here and
+    /// nowhere else (decision 0030).
+    FundedRent = 0x801E,
+}
+
+/// Split the recorded-rate conjuncts out of the generic funding refusal.
+///
+/// `validate_recorded_native_custody` distinguishes two causes that no reader
+/// can see from the account: the ledger's own header does not evidence the rent
+/// it was funded at, and the rate that header records is missing. Everything
+/// else it can refuse is one accusation about the custody arithmetic, which
+/// `Funding` already carries. A cluster that moves its rent-exempt rate under a
+/// live cohort refuses here and nowhere else (decision 0030).
+///
+/// The same split, in the same shape, is at
+/// `programs/dclutch-core-sbf/src/capability.rs`, `resolution.rs` and
+/// `generic_founding_v1.rs`.
+pub(crate) fn funded_rent_refusal(
+    error: dclutch_market::capability_manifest::Error,
+) -> ProgramError {
+    match error {
+        dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
+        | dclutch_market::capability_manifest::Error::FundedRentRateMissing => {
+            ResolutionError::FundedRent
+        }
+        _ => ResolutionError::Funding,
+    }
+    .into()
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -260,7 +296,8 @@ dclutch_refusal_registry::pin_refusal_band!(
         CallerAuthority,
         InfrastructureProfile,
         ProviderScale,
-        SourceLadder
+        SourceLadder,
+        FundedRent
     ]
 );
 

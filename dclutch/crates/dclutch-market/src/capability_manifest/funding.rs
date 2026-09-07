@@ -999,6 +999,42 @@ impl FundingCustodyObservationV1 {
         Self::new(state_account_lamports, exact_state_rent_lamports, None)
     }
 
+    /// Observe a native-only PRE-EXISTING V1 funding state, recovering the
+    /// rent it was funded at from its own balance.
+    ///
+    /// A [`FundingStateV1`] records no rent rate -- its layout predates
+    /// decision 0030 and is frozen -- so the only figure a reader has is the
+    /// balance, and the balance is `principal + (128 + len) x rate` for the
+    /// rate in force when the state was funded. The principal is the state's
+    /// own `remaining.native_lamports_total()`, so the rent term is the
+    /// remainder, and it is admitted only when the division back to a rate is
+    /// EXACT ([`funded_rent_rate_from_minimum_v1`]): a balance no integral
+    /// rate reproduces is refused `UnrepresentableRentRate` rather than
+    /// rounded to a plausible cluster.
+    ///
+    /// What this cannot tell apart, stated plainly: a stranger's donation of
+    /// exactly `k x (128 + len)` lamports reads as a rate `k` higher. Such a
+    /// donation is classified as RENT -- it flows to the rent beneficiary at
+    /// close and never into principal -- which is the same place a rent top-up
+    /// already goes. The V2 ledger closed this by recording the rate; this is
+    /// the recovery form decision 0030 §3 admits for records that predate the
+    /// field, and it is weaker provenance than the record by exactly that
+    /// granularity.
+    pub fn recovered_native_only(
+        state_account_lamports: u64,
+        expected_native_principal: u64,
+        account_bytes: usize,
+    ) -> Result<Self> {
+        let recovered_rent = state_account_lamports
+            .checked_sub(expected_native_principal)
+            .ok_or(Error::UnderfundedPhysicalCustody)?;
+        // The rate is recovered and immediately discarded: the value of the
+        // call is the refusal, which says the remainder is an affine rent at
+        // this width and not an arbitrary number that happened to be left.
+        let _rate = funded_rent_rate_from_minimum_v1(recovered_rent, account_bytes)?;
+        Self::new(state_account_lamports, recovered_rent, None)
+    }
+
     /// Observe the funding-state account and its Realm token vault.
     pub fn with_realm_collateral(
         state_account_lamports: u64,
@@ -2312,6 +2348,50 @@ impl FundingLedgerCloseCustodyV2 {
         )?;
         value.crank_reward_cap = crank_reward_cap;
         Ok(value)
+    }
+
+    /// Observe one native-only row with the rent term the ledger RECORDS.
+    ///
+    /// This is [`Self::native_only`] with its rent supplied by the ledger's
+    /// own header rather than by the caller's reading of the Rent sysvar, and
+    /// it is the form every close over a pre-existing ledger takes. A close
+    /// prices what the account was FUNDED at (decision 0030): the refund it
+    /// plans is the rent the founding parked, to the lamport, and it stays
+    /// that across every rate the cluster later adopts. A close that quoted
+    /// today's rate would, after a fall, strand the difference in the account
+    /// it was closing, and after a rise plan a refund the balance cannot pay.
+    pub fn recorded_native_only(
+        ledger: AuthenticatedFundingLedgerV2<'_, '_>,
+        ledger_account_lamports: u64,
+        account_bytes: usize,
+        native_rent_credit: [u8; 32],
+    ) -> Result<Self> {
+        Self::native_only(
+            ledger_account_lamports,
+            ledger.funded_rent_minimum(account_bytes)?,
+            native_rent_credit,
+        )
+    }
+
+    /// [`Self::native_with_crank`] with the rent term the ledger RECORDS.
+    ///
+    /// The crank's cap stays chain-derived by the adapter (one empty
+    /// account's Rent, read now, because the reward is paid now); only the
+    /// ledger's own rent term moves to the record. Passing zero is exactly
+    /// [`Self::recorded_native_only`].
+    pub fn recorded_native_with_crank(
+        ledger: AuthenticatedFundingLedgerV2<'_, '_>,
+        ledger_account_lamports: u64,
+        account_bytes: usize,
+        native_rent_credit: [u8; 32],
+        crank_reward_cap: u64,
+    ) -> Result<Self> {
+        Self::native_with_crank(
+            ledger_account_lamports,
+            ledger.funded_rent_minimum(account_bytes)?,
+            native_rent_credit,
+            crank_reward_cap,
+        )
     }
 
     /// Observe one row's independently derived Realm vault.

@@ -1,18 +1,46 @@
 //! Following a release-set lineage forward: links into a chain.
 //!
 //! [`ReleaseLineageV1`] names exactly one hop. A market founded three cuts ago
-//! is three hops behind the world, and every reader that needs its history --
-//! the SDK, the site, the lifecycle rent credit whose close must reach the
-//! *live* activation cache -- needs the whole chain rather than one link. This
-//! module is the single authority for walking one into the other.
+//! is three hops behind the world, and a reader that needs its history needs
+//! the whole chain rather than one link. This module is the single authority
+//! for walking one into the other.
 //!
 //! It is deliberately **not** a fetcher. Each caller supplies its own lookup,
-//! because the three callers cannot share one: an on-chain route reads accounts
-//! already present in its frame, a host tool reads RPC, a test reads a fixture.
-//! What they must share is the *rule* -- when a chain has been followed
-//! correctly, and by what name it refuses when it has not -- and the rule is
-//! what lives here. A second copy of this walk anywhere else is a second author
-//! for one fact.
+//! because callers cannot share one: an on-chain route reads accounts already
+//! present in its frame, a host tool reads RPC, a test reads a fixture. What
+//! they must share is the *rule* -- when a chain has been followed correctly,
+//! and by what name it refuses when it has not -- and the rule is what lives
+//! here. A second copy of this walk anywhere else is a second author for one
+//! fact.
+//!
+//! # Who reads this (censused 2026-09-07)
+//!
+//! One caller outside this crate:
+//! `programs/dclutch-registry-sbf/tests/lineage_program_test.rs`. It uses
+//! [`walk_lineage_to_head`], [`walk_lineage_to`] and [`LineageAt`] to turn "two
+//! `DeclareSuccessor` records landed" into "the chain they form is walkable
+//! across BOTH hops, on a Registry that upgraded under it", and it is the guard
+//! for the live-measured trap in
+//! `docs/evidence/RELEASE_SET_COHORT_LINEAGE_2026_08_31.md`: a walk that asks
+//! [`LineageWalkV1::is_already_current`] answers about the wrong endpoint, so a
+//! chain must be crossed with [`walk_lineage_to`] and never inferred.
+//!
+//! No production route calls it, and the paragraph above used to name three
+//! readers -- the SDK, the site, and the lifecycle rent credit's close -- that
+//! a census does not find. `Core::MigrateMarket`, the route this was written
+//! for, never landed, and under decision 0012 as amended it cannot: an upgrade
+//! IS a re-found, and a market's `release_set_id` is seed component 6 of 9,
+//! written once by `initialize_market`, so carrying a market forward would need
+//! a second, mutable pin, a Core width move and the route that goes with it.
+//!
+//! It stays, and the reason is the one consumer rather than the absent route:
+//! this is the only author of what several lineage records mean TOGETHER. The
+//! Registry program validates each record alone; nothing else checks that a
+//! chain is a chain. Deleting it would delete that check and leave
+//! `packages/dclutch-sdk/lib/releaseLineage.ts` -- a hand-written mirror read by
+//! nothing but its own test -- as the tree's last statement of the rule. Cost of
+//! keeping: 268 lines here and [`Error::LineageWalkTooLong`], which no
+//! production path can produce.
 //!
 //! # What the walk reads, and what it cannot
 //!

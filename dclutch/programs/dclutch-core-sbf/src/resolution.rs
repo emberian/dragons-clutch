@@ -478,7 +478,12 @@ fn authenticate_activation_accept(
     request: ResolutionRoleRequestV2,
     target_admission: dclutch_market::Admission,
 ) -> Result<(), CoreSbfError> {
-    let rent = read_rent(account(accounts, VERIFY_RENT)?)?;
+    // The Rent sysvar account stays in the frame and is still authenticated as
+    // itself, so a substituted or unparseable rent account refuses exactly as it
+    // did. Nothing on this route prices off it any more: the receipt's rent term
+    // is the ledger's own record. Removing the account from the frame is a wire
+    // change with a redeploy behind it and is owed, not taken here.
+    read_rent(account(accounts, VERIFY_RENT)?)?;
     authenticate_live_poststate(
         frame,
         accounts,
@@ -539,7 +544,22 @@ fn authenticate_activation_accept(
     let remaining_native_principal_lamports = active
         .remaining_native_lamports_total()
         .map_err(|_| CoreSbfError::Funding)?;
-    let ledger_rent_lamports = rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES);
+    // The same figure the RECEIPT'S PRODUCER derived, and from the same author:
+    // `core_effect.rs`'s activation arm writes the rent the ledger RECORDS into
+    // `receipt.ledger_rent_lamports` (decision 0030), and the conjunct below
+    // requires this to equal it. Reading the sysvar here instead would refuse
+    // every acknowledgment made after the cluster re-rated -- the cohort-15
+    // wall, in the other direction, and across a program boundary where no
+    // compiler can see the two sides disagree.
+    let ledger_rent_lamports = active
+        .funded_rent_minimum(RESOLUTION_FUNDING_LEDGER_BYTES)
+        .map_err(|error| match error {
+            dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
+            | dclutch_market::capability_manifest::Error::FundedRentRateMissing => {
+                CoreSbfError::FundedRent
+            }
+            _ => CoreSbfError::Funding,
+        })?;
     // The receipt binds the exact Prepaid Market observed by Resolution. Once
     // Core commits Ready, a repeated Accept must reauthenticate that immutable
     // predecessor instead of treating the current Ready bytes as a new

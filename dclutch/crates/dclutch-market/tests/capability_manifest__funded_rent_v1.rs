@@ -392,3 +392,113 @@ fn a_recorded_principal_recovers_the_rate_that_wrote_it() {
         "cohort-15 was funded at neither the rate of the moment nor the genesis constant"
     );
 }
+
+/// (e) A CLOSE PRICES THE RENT THE FOUNDING PARKED, NOT TODAY'S.
+///
+/// The close is the other exact site: it plans the refund of the ledger's
+/// rent to the beneficiary. Priced from the sysvar of the moment it would,
+/// after a fall, leave the difference stranded in the account being closed,
+/// and after a rise plan a refund the balance cannot pay. The recorded form
+/// takes its rent term from the ledger's header and nothing else.
+#[test]
+fn a_close_prices_the_rent_the_founding_parked_not_todays() {
+    use dclutch_market::capability_manifest::funding::FundingLedgerCloseCustodyV2;
+
+    let (bytes, lamports) = funded_ledger(FUNDED_RATE);
+    let mut storage = [0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    let (authenticated,) = authenticate(&bytes, &mut storage);
+
+    let funded = funded_rent_minimum_v2(FUNDED_RATE, ONE_ROW_BYTES).expect("funded minimum");
+    let today = funded_rent_minimum_v2(LATER_RATE, ONE_ROW_BYTES).expect("today's minimum");
+    assert_ne!(today, funded, "the fixture must straddle a rate change");
+
+    let recorded = FundingLedgerCloseCustodyV2::recorded_native_only(
+        authenticated,
+        lamports,
+        ONE_ROW_BYTES,
+        [9; 32],
+    )
+    .expect("a close priced from the record");
+    assert_eq!(recorded.exact_ledger_rent_lamports(), funded);
+    assert_eq!(recorded.ledger_account_lamports(), lamports);
+
+    // The crank form moves only the cap; the rent term is still the record's.
+    let cranked = FundingLedgerCloseCustodyV2::recorded_native_with_crank(
+        authenticated,
+        lamports,
+        ONE_ROW_BYTES,
+        [9; 32],
+        7,
+    )
+    .expect("a cranked close priced from the record");
+    assert_eq!(cranked.exact_ledger_rent_lamports(), funded);
+
+    // What the old close did: the caller's sysvar reading, which after the
+    // move names a rent the account does not hold.
+    let sysvar_priced = FundingLedgerCloseCustodyV2::native_only(lamports, today, [9; 32])
+        .expect("the raw constructor still accepts any number");
+    assert_ne!(sysvar_priced.exact_ledger_rent_lamports(), funded);
+}
+
+/// (f) A V1 STATE, WHICH RECORDS NO RATE, RECOVERS ITS RENT FROM ITS OWN
+/// BALANCE -- AND ONLY WHEN THE REMAINDER IS AN AFFINE RENT.
+///
+/// The granularity the recovery cannot see is asserted here rather than left
+/// to the doc comment: a donation of exactly one `(128 + len)` reads as a rate
+/// one higher and is classified as rent, never as principal.
+#[test]
+fn a_v1_state_recovers_its_rent_only_when_the_remainder_is_affine() {
+    use dclutch_market::capability_manifest::funding::{
+        FUNDING_STATE_BYTES, FundingCustodyObservationV1,
+    };
+
+    let principal = 5_000_u64;
+    let funded = funded_rent_minimum_v2(FUNDED_RATE, FUNDING_STATE_BYTES).expect("funded");
+    let observed = FundingCustodyObservationV1::recovered_native_only(
+        principal + funded,
+        principal,
+        FUNDING_STATE_BYTES,
+    )
+    .expect("a balance that is principal plus an affine rent");
+    assert_eq!(observed.exact_state_rent_lamports(), funded);
+    assert_eq!(
+        observed.present_native_lamports().expect("present"),
+        principal,
+        "the recovered rent leaves exactly the principal as custody"
+    );
+
+    // One lamport over: no integral rate reproduces the remainder.
+    assert_eq!(
+        FundingCustodyObservationV1::recovered_native_only(
+            principal + funded + 1,
+            principal,
+            FUNDING_STATE_BYTES,
+        )
+        .map(|_| ()),
+        Err(Error::UnrepresentableRentRate)
+    );
+    // Below principal: no rent at all could be parked.
+    assert_eq!(
+        FundingCustodyObservationV1::recovered_native_only(
+            principal - 1,
+            principal,
+            FUNDING_STATE_BYTES,
+        )
+        .map(|_| ()),
+        Err(Error::UnderfundedPhysicalCustody)
+    );
+    // The stated cost: a donation of one rent unit is admitted as rent.
+    let unit = ACCOUNT_STORAGE_OVERHEAD_BYTES + FUNDING_STATE_BYTES as u64;
+    let donated = FundingCustodyObservationV1::recovered_native_only(
+        principal + funded + unit,
+        principal,
+        FUNDING_STATE_BYTES,
+    )
+    .expect("a whole rent unit is indistinguishable from a higher rate");
+    assert_eq!(donated.exact_state_rent_lamports(), funded + unit);
+    assert_eq!(
+        donated.present_native_lamports().expect("present"),
+        principal,
+        "the donation is read as rent, never as principal"
+    );
+}

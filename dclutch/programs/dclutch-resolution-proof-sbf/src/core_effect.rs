@@ -54,6 +54,7 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
+use crate::funded_rent_refusal;
 use crate::market_admission_v1::{
     RESOLUTION_CLOSE_FUND_ADMISSIBLE_PRESTATES_V1, RESOLUTION_FUND_ADMISSIBLE_PRESTATES_V1,
     RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1,
@@ -288,7 +289,6 @@ fn commit_direct_activation(
             request_digest,
             manifest_id,
             manifest,
-            rent,
         );
     }
 
@@ -316,7 +316,6 @@ fn commit_direct_activation(
         FundingLedgerStatusV2::Pending,
         ledger_bytes.as_ref(),
         direct.funding_ledger.lamports(),
-        &rent,
         false,
     )?;
     let mut beneficiary_credit = 0_u64;
@@ -358,13 +357,16 @@ fn commit_direct_activation(
         FundingLedgerStatusV2::Active,
         ledger_bytes.as_ref(),
         post_ledger_lamports,
-        &rent,
         false,
     )?;
     let active = FundingLedgerV2::decode(ledger_bytes.as_ref())
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
         .map_err(|_| ResolutionError::Funding)?;
-    let ledger_rent_lamports = rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES);
+    // The receipt records the rent the ledger was FUNDED at, which is the
+    // figure every later reader of this receipt must agree with.
+    let ledger_rent_lamports = active
+        .funded_rent_minimum(RESOLUTION_FUNDING_LEDGER_BYTES)
+        .map_err(|_| ResolutionError::FundedRent)?;
     let remaining_native_principal_lamports = active
         .remaining_native_lamports_total()
         .map_err(|_| ResolutionError::Funding)?;
@@ -516,6 +518,14 @@ fn commit_direct_close(
         .map_err(|_| ResolutionError::Transition)?;
 
     let mut closed_ledger = Box::new(copy_ledger_bytes(direct.funding_ledger)?);
+    // The prestate, authenticated once and held across the close loop: the
+    // loop mutates `closed_ledger`, and the rent term every row's close is
+    // priced at is the prestate's own record (decision 0030), never the
+    // sysvar. One ledger-width heap copy; the frame ratchet is owed.
+    let prestate_bytes = Box::new(*closed_ledger);
+    let prestate = FundingLedgerV2::decode(prestate_bytes.as_ref())
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .map_err(|_| ResolutionError::Funding)?;
     let ledger_account_digest = funding_lifecycle_account_digest_v1(
         direct.funding_ledger.owner.to_bytes(),
         direct.funding_ledger.key.to_bytes(),
@@ -535,7 +545,6 @@ fn commit_direct_close(
         FundingLedgerStatusV2::Active,
         closed_ledger.as_ref(),
         direct.funding_ledger.lamports(),
-        rent,
         true,
     )?;
     let funding_set_digest = funding_set_digest(closed_ledger.as_ref());
@@ -554,12 +563,13 @@ fn commit_direct_close(
             manifest_id,
             manifest,
             entry_index,
-            FundingLedgerCloseCustodyV2::native_only(
+            FundingLedgerCloseCustodyV2::recorded_native_only(
+                prestate,
                 planned_ledger_lamports,
-                rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES),
+                RESOLUTION_FUNDING_LEDGER_BYTES,
                 request.role.beneficiary,
             )
-            .map_err(|_| ResolutionError::Funding)?,
+            .map_err(funded_rent_refusal)?,
         )
         .map_err(|_| ResolutionError::Funding)?;
         if plan.native_rent_credit() != request.role.beneficiary
@@ -1050,7 +1060,6 @@ fn authenticate_direct_close_ledger(
     expected_status: FundingLedgerStatusV2,
     bytes: &[u8],
     observed_lamports: u64,
-    rent: &Rent,
     admit_donations: bool,
 ) -> ProgramResult {
     if direct.funding_ledger.owner != program_id
@@ -1069,7 +1078,6 @@ fn authenticate_direct_close_ledger(
         expected_status,
         bytes,
         observed_lamports,
-        rent,
         admit_donations,
     )
 }
@@ -1265,7 +1273,6 @@ fn authenticate_direct_ledger(
     expected_status: FundingLedgerStatusV2,
     bytes: &[u8],
     observed_lamports: u64,
-    rent: &Rent,
     admit_donations: bool,
 ) -> ProgramResult {
     if direct.funding_ledger.owner != program_id
@@ -1284,7 +1291,6 @@ fn authenticate_direct_ledger(
         expected_status,
         bytes,
         observed_lamports,
-        rent,
         admit_donations,
     )
 }
@@ -1297,7 +1303,6 @@ fn authenticate_completed_activation(
     request_digest: [u8; 32],
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
-    rent: &Rent,
 ) -> ProgramResult {
     let receipt_data = direct
         .receipt
@@ -1321,7 +1326,6 @@ fn authenticate_completed_activation(
         FundingLedgerStatusV2::Active,
         &ledger_bytes,
         direct.funding_ledger.lamports(),
-        rent,
         false,
     )?;
     let active_digest = funding_lifecycle_account_digest_v1(
@@ -1501,7 +1505,6 @@ pub(crate) fn process_core_effect(
             envelope,
             request,
             authenticated,
-            &rent,
         ),
         ResolutionCoreActionV1::AdmitTerminal => process_admit(
             program_id,
@@ -1510,7 +1513,6 @@ pub(crate) fn process_core_effect(
             envelope,
             request,
             authenticated,
-            &rent,
         ),
         ResolutionCoreActionV1::CloseFund => process_close(
             program_id,
@@ -1976,7 +1978,6 @@ fn process_create<'info>(
         FundingLedgerStatusV2::Pending,
         &ledger_bytes,
         ledger_lamports,
-        rent,
         false,
     )?;
     let source_bytes = source.to_bytes();
@@ -2024,7 +2025,6 @@ fn process_verify(
     envelope: CoreEffectEnvelopeV1,
     request: ResolutionRoleRequestV2,
     authenticated: AuthenticatedCore,
-    rent: &Rent,
 ) -> ProgramResult {
     require_revisions(&envelope, 0, 0)?;
     let beneficiary = accounts.get(14).ok_or(ResolutionError::AccountFrame)?;
@@ -2084,7 +2084,6 @@ fn process_verify(
         FundingLedgerStatusV2::Pending,
         &ledger_bytes,
         common.funding_ledger.lamports(),
-        rent,
         false,
     )?;
     let mut total_debit = 0_u64;
@@ -2125,7 +2124,6 @@ fn process_verify(
         FundingLedgerStatusV2::Active,
         &ledger_bytes,
         ledger_lamports,
-        rent,
         false,
     )?;
     let post_digest = poststate_digest(request.action, &source_bytes, &ledger_bytes, None)?;
@@ -2159,7 +2157,6 @@ fn process_admit(
     envelope: CoreEffectEnvelopeV1,
     request: ResolutionRoleRequestV2,
     authenticated: AuthenticatedCore,
-    rent: &Rent,
 ) -> ProgramResult {
     let certificate_account = accounts.get(14).ok_or(ResolutionError::AccountFrame)?;
     if certificate_account.key.to_bytes() != request.receipt
@@ -2213,7 +2210,6 @@ fn process_admit(
         FundingLedgerStatusV2::Active,
         &ledger_bytes,
         common.funding_ledger.lamports(),
-        rent,
         false,
     )?;
     let certificate_data = certificate_account
@@ -2345,9 +2341,16 @@ fn process_close<'info>(
         FundingLedgerStatusV2::Active,
         &ledger_prestate,
         common.funding_ledger.lamports(),
-        rent,
         true,
     )?;
+    // The prestate, authenticated once and held across the close loop; the
+    // rent term every row's close is priced at is its own record (decision
+    // 0030), never the sysvar. One ledger-width heap copy; the frame ratchet
+    // is owed.
+    let prestate_bytes = Box::new(ledger_prestate);
+    let prestate = FundingLedgerV2::decode(prestate_bytes.as_ref())
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .map_err(|_| ResolutionError::Funding)?;
     let mut closed_ledger = ledger_prestate;
     let mut ledger_can_close = false;
     let mut planned_ledger_lamports = common.funding_ledger.lamports();
@@ -2364,12 +2367,13 @@ fn process_close<'info>(
             manifest_id,
             manifest,
             entry_index,
-            FundingLedgerCloseCustodyV2::native_only(
+            FundingLedgerCloseCustodyV2::recorded_native_only(
+                prestate,
                 planned_ledger_lamports,
-                rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES),
+                RESOLUTION_FUNDING_LEDGER_BYTES,
                 request.beneficiary,
             )
-            .map_err(|_| ResolutionError::Funding)?,
+            .map_err(funded_rent_refusal)?,
         )
         .map_err(|_| ResolutionError::Funding)?;
         if plan.native_rent_credit() != request.beneficiary
@@ -2711,7 +2715,6 @@ fn authenticate_live_ledger(
     expected_status: FundingLedgerStatusV2,
     bytes: &[u8],
     observed_lamports: u64,
-    rent: &Rent,
     admit_donations: bool,
 ) -> ProgramResult {
     if common.funding_ledger.owner != program_id
@@ -2731,7 +2734,6 @@ fn authenticate_live_ledger(
         expected_status,
         bytes,
         observed_lamports,
-        rent,
         admit_donations,
     )
 }
@@ -2748,7 +2750,6 @@ fn authenticate_ledger_value(
     expected_status: FundingLedgerStatusV2,
     bytes: &[u8],
     observed_lamports: u64,
-    rent: &Rent,
     admit_donations: bool,
 ) -> ProgramResult {
     if bytes.len() != funding_ledger_bytes_v2(3).map_err(|_| ResolutionError::Funding)? {
@@ -2779,13 +2780,16 @@ fn authenticate_ledger_value(
             return Err(ResolutionError::Funding.into());
         }
     }
+    // Priced from the rent the ledger RECORDS, never the sysvar of the moment
+    // (decision 0030): the account was funded when it was founded, and the
+    // cluster's rate has moved under a live cohort before.
     authenticated
-        .validate_native_custody(
+        .validate_recorded_native_custody(
             observed_lamports,
-            rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES),
+            RESOLUTION_FUNDING_LEDGER_BYTES,
             admit_donations,
         )
-        .map_err(|_| ResolutionError::Funding)?;
+        .map_err(funded_rent_refusal)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         program_id.to_bytes(),
         market.key.to_bytes(),

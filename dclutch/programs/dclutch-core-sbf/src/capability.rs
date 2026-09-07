@@ -92,7 +92,12 @@ pub(crate) fn process(
     validate_envelope(program_id, request, envelope, role_request, &state_bytes)?;
     validate_selection(envelope, selection, state)?;
 
-    let rent = Rent::from_account_info(route.rent).map_err(|_| CoreSbfError::Funding)?;
+    // The Rent sysvar is still decoded here, so a frame whose rent account is
+    // unparseable is refused as it always was -- but nothing on this route
+    // prices off it any more. Every close is priced from the rent the ledger's
+    // own header records (decision 0030). Removing the account from the frame
+    // is a wire change with a redeploy behind it and is owed, not done here.
+    Rent::from_account_info(route.rent).map_err(|_| CoreSbfError::Funding)?;
     let realm_raw = route.realm_raw;
     let realm_staging = route.realm_staging;
     let manifest_raw = route.manifest;
@@ -166,7 +171,6 @@ pub(crate) fn process(
         manifest_id,
         manifest,
         realm,
-        &rent,
         selected_mask,
         selection.entry_index(),
         now,
@@ -451,7 +455,6 @@ fn validate_ledgers_pre(
     manifest_id: ContentId,
     manifest: CapabilityManifestV1<'_>,
     realm: RealmV1,
-    rent: &Rent,
     required_union: u16,
     selected_entry_index: u16,
     current_slot: u64,
@@ -537,9 +540,23 @@ fn validate_ledgers_pre(
             entry_index = entry_index.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
         }
         let pre_bytes = ledger_data.to_vec();
+        // The rent term the close prices at is the ledger's own record, not the
+        // sysvar of the moment (decision 0030): the account was funded when it
+        // was founded, and the cluster's rate has moved under a live cohort
+        // before. Read here, while `authenticated` still borrows the account
+        // data, and carried past the drop as a lamport figure.
+        let exact_ledger_rent =
+            authenticated
+                .funded_rent_minimum(pre_bytes.len())
+                .map_err(|error| match error {
+                    dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
+                    | dclutch_market::capability_manifest::Error::FundedRentRateMissing => {
+                        CoreSbfError::FundedRent
+                    }
+                    _ => CoreSbfError::Funding,
+                })?;
         drop(ledger_data);
         let mut expected_post_bytes = pre_bytes.clone();
-        let exact_ledger_rent = rent.minimum_balance(pre_bytes.len());
         let mut expected_post_lamports = ledger_account.lamports();
         let mut entry_index = 0_u16;
         while entry_index < manifest.entry_count() {

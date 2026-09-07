@@ -2046,6 +2046,29 @@ pub(crate) fn usage() -> &'static str {
      finalized observation rather than the journal's own claim; a role whose live payload \
      differs is refused by name with both digests and told to run a real Upgrade instead. \
      Without --execute it reports the comparison and writes nothing.\n\n\
+  dclutch-local-successor-bootstrap devnet-deployment-set-bind-upgrade-row-v1 \\
+     --journal ABSOLUTE_JSON --role ROLE [--execute]\n\n\
+     Bind a COMPLETED Upgrade row's receipt and dump digests into the deployment-set \
+     journal. devnet-upgrade-v1 writes both files and nothing wrote their digests back, \
+     so the journal a successful Upgrade belongs to could not be LOADED by anything -- \
+     the loader refuses a dump that exists while the journal pins no digest -- and the \
+     audit was locked out by the success of its own upgrade. This is a PIN, not an \
+     authority: the audit and prepare re-read the receipt, the dump, the baseline and \
+     the gate and re-authenticate every claim against a fresh finalized observation. \
+     KEY-FREE, CLUSTER-FREE and OFFLINE: every fact it reads is already on disk, and it \
+     opens no RPC. It refuses a row already carrying digests, a CarryForward row, a row \
+     pinning no baseline, a receipt that is not Complete for this exact role and program, \
+     and a dump that disagrees with its own receipt. The rewritten journal must LOAD \
+     under the full closure before anything is replaced. Without --execute it reports the \
+     digests and writes nothing.\n\n\
+  dclutch-local-successor-bootstrap devnet-deployment-set-bind-baseline-v1 \\
+     --journal ABSOLUTE_JSON --role ROLE [--execute]\n\n\
+     Re-pin an INCOMPLETE Upgrade row's baseline digest after devnet-upgrade-extend-v1 \
+     has forced a fresh capture. Same reason and same discipline as the row binder above, \
+     and the same offline, key-free, cluster-free shape. It refuses a row whose Upgrade \
+     already ran under the baseline it names -- re-pointing that pin would rewrite \
+     evidence -- and a baseline that still names a pending extension. Without --execute \
+     it reports the old and new digests and writes nothing.\n\n\
   dclutch-local-successor-bootstrap devnet-deployment-set-journal-v2 \
      --rpc-url HTTPS_URL \
      --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
@@ -2361,17 +2384,12 @@ fn journal_already_current_with_runner(
         observed_slot: observation.context_slot,
         live_elf_sha256,
     });
-    let rendered = serde_json::to_vec_pretty(&journal)?;
-    let mut rendered = rendered;
-    rendered.push(b'\n');
-    // Reject before replacing: the journal we are about to write must load.
-    let _: UpgradeSetJournalV1 = serde_json::from_slice(&rendered)
-        .map_err(|error| Error::new(format!("rewritten set journal does not reload: {error}")))?;
-    let temporary = args.journal_path.with_extension("json.already-current.tmp");
-    fs::write(&temporary, &rendered)?;
-    fs::rename(&temporary, &args.journal_path)?;
+    report.journal_sha256_after = Some(replace_set_journal(
+        &journal,
+        &args.journal_path,
+        "json.already-current.tmp",
+    )?);
     report.journaled = true;
-    report.journal_sha256_after = Some(digest(&rendered));
     Ok(report)
 }
 
@@ -2393,6 +2411,414 @@ impl CliRunner for ReadOnlyRpcRunnerV1 {
 pub(crate) fn run_already_current(arguments: Vec<String>) -> Result<()> {
     let args = parse_already_current_args(arguments)?;
     let report = journal_already_current_v1(&args)?;
+    let mut stdout = std::io::stdout();
+    serde_json::to_writer_pretty(&mut stdout, &report)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+/// The `devnet-deployment-set-bind-upgrade-row-v1` command name.
+pub(crate) const BIND_UPGRADE_ROW_COMMAND_V1: &str = "devnet-deployment-set-bind-upgrade-row-v1";
+
+/// The `devnet-deployment-set-bind-baseline-v1` command name.
+pub(crate) const BIND_BASELINE_COMMAND_V1: &str = "devnet-deployment-set-bind-baseline-v1";
+
+/// What either binder reports, whether or not it wrote.
+#[derive(Clone, Debug, Serialize)]
+struct SetRowBindReportV1 {
+    schema: String,
+    command: String,
+    role: String,
+    program_id: String,
+    programdata_id: String,
+    /// The receipt digest the row would carry, or now carries.
+    receipt_sha256: Option<String>,
+    /// The dump digest the row would carry, or now carries.
+    dump_sha256: Option<String>,
+    /// The baseline digest the row would carry, or now carries.
+    baseline_sha256: Option<String>,
+    /// The baseline digest the row carried before, when it moved.
+    baseline_sha256_before: Option<String>,
+    journaled: bool,
+    journal_sha256_before: String,
+    journal_sha256_after: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct SetRowBindArgsV1 {
+    journal_path: PathBuf,
+    role: String,
+    execute: bool,
+}
+
+fn parse_set_row_bind_args(command: &str, arguments: Vec<String>) -> Result<SetRowBindArgsV1> {
+    let mut values = std::collections::BTreeMap::<String, String>::new();
+    let mut execute = false;
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        if argument == "--execute" {
+            execute = true;
+            continue;
+        }
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if !matches!(argument.as_str(), "--journal" | "--role") {
+            return Err(Error::new(format!("unknown {command} argument: {argument}")));
+        }
+        if values.insert(argument.clone(), value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let take = |label: &str| {
+        values
+            .get(label)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("{label} is required")))
+    };
+    Ok(SetRowBindArgsV1 {
+        journal_path: absolute(&take("--journal")?, "--journal")?,
+        role: take("--role")?,
+        execute,
+    })
+}
+
+/// Read a deployment-set journal WITHOUT its pinned-file closure.
+///
+/// [`load_set_journal_path`] re-digests every pinned file and refuses a journal
+/// whose baseline pin has moved -- which is exactly the state
+/// [`bind_baseline_v1`] exists to repair, so that command cannot use it to
+/// READ. What it authenticates here is the journal's own shape; what makes the
+/// write safe is that [`replace_set_journal`] proves the REWRITTEN journal
+/// loads under the full closure before anything is replaced.
+fn parse_set_journal_unpinned(journal_path: &Path) -> Result<(UpgradeSetJournalV1, String)> {
+    let path = exact_reference_path(
+        journal_path
+            .to_str()
+            .ok_or_else(|| Error::new("--journal path is not UTF-8"))?,
+        "set journal",
+    )?;
+    let bytes = read_regular_reference(&path, "set journal")?;
+    let journal_sha256 = digest(&bytes);
+    let journal: UpgradeSetJournalV1 = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::new(format!(
+            "set journal is not canonical {SET_JOURNAL_SCHEMA} JSON: {error}"
+        ))
+    })?;
+    if journal.schema != SET_JOURNAL_SCHEMA || journal.devnet_genesis_hash != DEVNET_GENESIS_HASH {
+        return Err(Error::new(
+            "set journal schema or exact devnet genesis is invalid",
+        ));
+    }
+    if journal.roles.len() != CHECKED_ROLE_ORDER_V1.len()
+        || journal
+            .roles
+            .iter()
+            .zip(CHECKED_ROLE_ORDER_V1)
+            .any(|(row, role)| row.role != role)
+    {
+        return Err(Error::new(
+            "set journal must carry exactly the seven canonical roles in their canonical order",
+        ));
+    }
+    Ok((journal, journal_sha256))
+}
+
+/// Replace a deployment-set journal atomically, refusing before it replaces.
+///
+/// The temporary is fsynced before the rename, so a crash between the two
+/// leaves either the old journal or the whole new one and never a half-written
+/// file. Between them the rewritten journal must LOAD -- under the full loader,
+/// not merely the parser, because the loader re-reads every pinned file and is
+/// the only thing that says what a journal is. A writer that left a journal the
+/// loader refuses would strand the whole set.
+fn replace_set_journal(
+    journal: &UpgradeSetJournalV1,
+    journal_path: &Path,
+    temporary_extension: &str,
+) -> Result<String> {
+    let mut rendered = serde_json::to_vec_pretty(journal)?;
+    rendered.push(b'\n');
+    let temporary = journal_path.with_extension(temporary_extension);
+    let mut file = fs::File::create(&temporary)?;
+    file.write_all(&rendered)?;
+    file.sync_all()?;
+    drop(file);
+    if let Err(error) = load_set_journal_path(&temporary) {
+        let _ = fs::remove_file(&temporary);
+        return Err(Error::new(format!(
+            "the rewritten set journal does not load: {error}"
+        )));
+    }
+    fs::rename(&temporary, journal_path)?;
+    Ok(digest(&rendered))
+}
+
+/// The index of one Upgrade row, refusing every other kind of row by name.
+///
+/// Rows 0 and 1 are the CarryForward pair and are never written by a binder;
+/// an `AlreadyCurrent` row carries no receipt, no dump and a frozen baseline,
+/// and `devnet-deployment-set-already-current-v1` is its only author.
+fn upgrade_row_index(
+    journal: &UpgradeSetJournalV1,
+    role: &str,
+    command: &str,
+) -> Result<usize> {
+    let index = journal
+        .roles
+        .iter()
+        .position(|row| row.role == role)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "deployment-set journal has no role {role}; it names {}",
+                journal
+                    .roles
+                    .iter()
+                    .map(|row| row.role.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+    if index < 2 {
+        return Err(Error::new(format!(
+            "role {role} is a CarryForward row, which {command} never writes"
+        )));
+    }
+    if journal.roles[index].disposition != CheckedDeploymentDispositionV1::Upgrade {
+        return Err(Error::new(format!(
+            "role {role} is {:?}, and {command} writes an Upgrade row only",
+            journal.roles[index].disposition
+        )));
+    }
+    Ok(index)
+}
+
+/// Bind a COMPLETED Upgrade row's receipt and dump digests into the journal.
+///
+/// `devnet-upgrade-v1` writes the receipt and the dump; until this existed
+/// nothing wrote their digests back into the deployment-set journal, and the
+/// only code in the tree that renamed a temporary onto a journal was the
+/// `AlreadyCurrent` writer -- the OTHER disposition. Cohorts 14, 15 and 16
+/// never exercised an Upgrade row (a genesis cohort's owned roles are all
+/// `AlreadyCurrent`), so the gap was invisible for three cohorts and cohort-16.1
+/// bound its two rows with a script that lived in a job directory.
+///
+/// It is a PIN, not an authority. Every claim it copies is re-read and
+/// re-authenticated by the audit and by `prepare`: `read_optional_reference`
+/// re-digests the receipt and the dump against these pins, and the receipt
+/// itself is re-checked against the gate, the baseline and a fresh finalized
+/// observation. What the pin adds is that the journal now NAMES which bytes it
+/// meant, so a substituted receipt is a refusal instead of a silent read.
+///
+/// The journal it reads does not LOAD, and that is the wall this closes rather
+/// than a shortcut it takes: `devnet-upgrade-v1` writes both the receipt and
+/// the dump, and `read_optional_reference` refuses a dump that exists while the
+/// journal pins no digest. So the moment an Upgrade completed, its own journal
+/// was unreadable by every command in the tree, including the audit -- which is
+/// why the only Upgrade-row author was a script that parsed the JSON directly.
+/// This reads it the same way and then proves the REWRITTEN journal loads under
+/// the full closure before replacing anything.
+///
+/// Key-free, cluster-free and offline: every fact it reads is already on disk.
+fn bind_upgrade_row_v1(args: &SetRowBindArgsV1) -> Result<SetRowBindReportV1> {
+    let (mut journal, journal_sha256_before) = parse_set_journal_unpinned(&args.journal_path)?;
+    let index = upgrade_row_index(&journal, &args.role, BIND_UPGRADE_ROW_COMMAND_V1)?;
+    let row = journal.roles[index].clone();
+    if row.receipt.sha256.is_some() || row.dump.sha256.is_some() {
+        return Err(Error::new(format!(
+            "role {} already carries bound digests; a binder never rewrites one",
+            args.role
+        )));
+    }
+    if row.baseline.is_none() {
+        return Err(Error::new(format!(
+            "role {} pins no baseline, so no Upgrade under it can be audited",
+            args.role
+        )));
+    }
+
+    let receipt_path = exact_reference_path(&row.receipt.canonical_path, "Upgrade receipt")?;
+    let receipt_bytes = read_regular_reference(&receipt_path, "Upgrade receipt")?;
+    let receipt: UpgradeReceiptV1 = serde_json::from_slice(&receipt_bytes).map_err(|error| {
+        Error::new(format!(
+            "role {} receipt is not canonical {SCHEMA} JSON: {error}",
+            args.role
+        ))
+    })?;
+    if receipt.schema != SCHEMA
+        || receipt.role != row.role
+        || receipt.program_id != row.program_id
+        || receipt.programdata_id != row.programdata_id
+    {
+        return Err(Error::new(format!(
+            "role {} receipt names {} / {} / {}, and the row names {} / {} / {}",
+            args.role,
+            receipt.schema,
+            receipt.role,
+            receipt.program_id,
+            SCHEMA,
+            row.role,
+            row.program_id
+        )));
+    }
+    if receipt.phase != ReceiptPhaseV1::Complete {
+        return Err(Error::new(format!(
+            "role {} receipt is {:?}, and only a Complete receipt has a dump to bind",
+            args.role, receipt.phase
+        )));
+    }
+    let expected_dump = receipt.dump_sha256.clone().ok_or_else(|| {
+        Error::new(format!(
+            "role {} receipt is Complete and names no dump digest",
+            args.role
+        ))
+    })?;
+
+    let dump_path = exact_reference_path(&row.dump.canonical_path, "Upgrade dump")?;
+    let dump_bytes = read_regular_reference(&dump_path, "Upgrade dump")?;
+    let dump_sha256 = digest(&dump_bytes);
+    if dump_sha256 != expected_dump {
+        return Err(Error::new(format!(
+            "role {} dump on disk is {dump_sha256} and its own receipt says {expected_dump}",
+            args.role
+        )));
+    }
+    let receipt_sha256 = digest(&receipt_bytes);
+
+    let mut report = SetRowBindReportV1 {
+        schema: "dclutch-devnet-deployment-set-row-bind-v1".into(),
+        command: BIND_UPGRADE_ROW_COMMAND_V1.into(),
+        role: row.role.clone(),
+        program_id: row.program_id.clone(),
+        programdata_id: row.programdata_id.clone(),
+        receipt_sha256: Some(receipt_sha256.clone()),
+        dump_sha256: Some(dump_sha256.clone()),
+        baseline_sha256: row.baseline.as_ref().map(|pin| pin.sha256.clone()),
+        baseline_sha256_before: None,
+        journaled: false,
+        journal_sha256_before,
+        journal_sha256_after: None,
+    };
+    if !args.execute {
+        return Ok(report);
+    }
+
+    let target = &mut journal.roles[index];
+    target.receipt.sha256 = Some(receipt_sha256);
+    target.dump.sha256 = Some(dump_sha256);
+    report.journal_sha256_after = Some(replace_set_journal(
+        &journal,
+        &args.journal_path,
+        "json.bind-upgrade-row.tmp",
+    )?);
+    report.journaled = true;
+    Ok(report)
+}
+
+/// Re-pin an INCOMPLETE Upgrade row's baseline digest after an extension.
+///
+/// `devnet-upgrade-extend-v1`'s own usage says "after it completes, capture a
+/// new baseline: the Upgrade refuses the old one", and nothing wrote the new
+/// baseline's digest back into the journal, for the same reason the receipt
+/// binder above did not exist. The row is still incomplete by construction: a
+/// bound receipt means the Upgrade already ran under the baseline it names, and
+/// re-pointing that pin afterwards would rewrite the evidence.
+///
+/// It is a PIN, not an authority: the audit and `prepare` re-read the baseline
+/// and re-authenticate every fact in it against a fresh finalized observation.
+///
+/// Key-free, cluster-free and offline.
+fn bind_baseline_v1(args: &SetRowBindArgsV1) -> Result<SetRowBindReportV1> {
+    let (mut journal, journal_sha256_before) = parse_set_journal_unpinned(&args.journal_path)?;
+    let index = upgrade_row_index(&journal, &args.role, BIND_BASELINE_COMMAND_V1)?;
+    let row = journal.roles[index].clone();
+    if row.receipt.sha256.is_some() || row.dump.sha256.is_some() {
+        return Err(Error::new(format!(
+            "role {} carries a bound Upgrade receipt: its baseline is the one that Upgrade ran \
+             under and re-pinning it would rewrite evidence",
+            args.role
+        )));
+    }
+    let pin = row.baseline.clone().ok_or_else(|| {
+        Error::new(format!(
+            "role {} names no baseline file to re-pin",
+            args.role
+        ))
+    })?;
+
+    let baseline_path = exact_reference_path(&pin.canonical_path, "Upgrade baseline")?;
+    let baseline_bytes = read_regular_reference(&baseline_path, "Upgrade baseline")?;
+    let baseline: UpgradeBaselineV1 =
+        serde_json::from_slice(&baseline_bytes).map_err(|error| {
+            Error::new(format!(
+                "role {} baseline is not canonical {BASELINE_SCHEMA} JSON: {error}",
+                args.role
+            ))
+        })?;
+    if baseline.schema != BASELINE_SCHEMA
+        || baseline.role != row.role
+        || baseline.program_id != row.program_id
+        || baseline.programdata_id != row.programdata_id
+    {
+        return Err(Error::new(format!(
+            "role {} baseline at {} is not a baseline for this row",
+            args.role,
+            baseline_path.display()
+        )));
+    }
+    if baseline.extension_additional_bytes != 0 {
+        return Err(Error::new(format!(
+            "role {} baseline still names a pending extension of {} bytes; run \
+             devnet-upgrade-extend-v1 and capture a fresh baseline before pinning one",
+            args.role, baseline.extension_additional_bytes
+        )));
+    }
+    let baseline_sha256 = digest(&baseline_bytes);
+
+    let mut report = SetRowBindReportV1 {
+        schema: "dclutch-devnet-deployment-set-row-bind-v1".into(),
+        command: BIND_BASELINE_COMMAND_V1.into(),
+        role: row.role.clone(),
+        program_id: row.program_id.clone(),
+        programdata_id: row.programdata_id.clone(),
+        receipt_sha256: None,
+        dump_sha256: None,
+        baseline_sha256: Some(baseline_sha256.clone()),
+        baseline_sha256_before: Some(pin.sha256.clone()),
+        journaled: false,
+        journal_sha256_before,
+        journal_sha256_after: None,
+    };
+    if !args.execute || baseline_sha256 == pin.sha256 {
+        return Ok(report);
+    }
+
+    let target = &mut journal.roles[index];
+    target.baseline = Some(SetPinnedFileV1 {
+        canonical_path: pin.canonical_path,
+        sha256: baseline_sha256,
+    });
+    report.journal_sha256_after = Some(replace_set_journal(
+        &journal,
+        &args.journal_path,
+        "json.bind-baseline.tmp",
+    )?);
+    report.journaled = true;
+    Ok(report)
+}
+
+pub(crate) fn run_bind_upgrade_row(arguments: Vec<String>) -> Result<()> {
+    let args = parse_set_row_bind_args(BIND_UPGRADE_ROW_COMMAND_V1, arguments)?;
+    let report = bind_upgrade_row_v1(&args)?;
+    let mut stdout = std::io::stdout();
+    serde_json::to_writer_pretty(&mut stdout, &report)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+pub(crate) fn run_bind_baseline(arguments: Vec<String>) -> Result<()> {
+    let args = parse_set_row_bind_args(BIND_BASELINE_COMMAND_V1, arguments)?;
+    let report = bind_baseline_v1(&args)?;
     let mut stdout = std::io::stdout();
     serde_json::to_writer_pretty(&mut stdout, &report)?;
     stdout.write_all(b"\n")?;
@@ -3194,20 +3620,48 @@ fn authenticate_mutation_boundary(
     Ok(Some(report.journal_sha256))
 }
 
+/// Whether a phase still stands BEFORE the Loader-action boundary, so the
+/// continuation loop owes a fresh seven-role set audit before going on.
+///
+/// The boundary is the `getLatestBlockhash` that the `BufferReady` arm
+/// (Upgrade) and the `Prepared` arm (Extension) perform. Every phase after it
+/// -- `MessagePrepared`, `SignedNotSubmitted` -- is a pure local transition
+/// over an fsynced receipt: no account is read and nothing is sent until the
+/// `SignedNotSubmitted` arm's one `sendTransaction`. The audit that admitted
+/// the phase BEFORE the fetch is therefore the audit the packet is signed and
+/// sent under, and re-running it inside the window buys nothing the packet
+/// can act on -- the journal's plan digest is still pinned at every phase by
+/// `require_mutation_permit`, which is local and cheap.
+///
+/// What it cost to do otherwise, measured: COHORT-16C re-audited all seven
+/// roles at each of those phases, ~44 s from `getLatestBlockhash` to
+/// `sendTransaction` against devnet at 6.13 blocks/s -- a 24.5 s window --
+/// and three attempts died `BlockhashNotFound` at simulation having spent
+/// nothing. `the_send_window_is_entered_with_no_audit_after_the_blockhash`
+/// holds the shape; `a_seven_role_audit_per_phase_cannot_beat_a_fast_cluster`
+/// holds the numbers.
+///
+/// `Submitted` and `Complete` are past the send boundary for the reason the
+/// old arm gave: a fresh audit may legitimately see either the old prestate
+/// or the new poststate, and exact packet/status/account recovery owns that
+/// ambiguity. If a null expired packet is archived, the loop re-enters at
+/// `BufferReady` and audits again before it can prepare a replacement.
+fn phase_precedes_loader_action_boundary_v1(phase: &ReceiptPhaseV1) -> bool {
+    matches!(
+        phase,
+        ReceiptPhaseV1::Prepared | ReceiptPhaseV1::BufferWriteArmed | ReceiptPhaseV1::BufferReady
+    )
+}
+
 fn authenticate_phase_mutation_boundary(
     args: &UpgradeArgsV1,
     runner: &mut impl CliRunner,
     phase: ReceiptPhaseV1,
 ) -> Result<Option<String>> {
-    if matches!(phase, ReceiptPhaseV1::Submitted | ReceiptPhaseV1::Complete) {
-        // Submitted is already past the sole send boundary. A fresh set audit
-        // may legitimately see either its old prestate or its new poststate;
-        // exact packet/status/account recovery owns that ambiguity. If a null
-        // expired packet is archived, the continuation loop audits again
-        // before it can prepare or send a replacement.
-        Ok(None)
-    } else {
+    if phase_precedes_loader_action_boundary_v1(&phase) {
         authenticate_mutation_boundary(args, runner)
+    } else {
+        Ok(None)
     }
 }
 
@@ -10321,6 +10775,14 @@ mod tests {
         calls: Vec<Vec<String>>,
         snapshot_minimum_slots: Vec<u64>,
         forced: VecDeque<CliOutput>,
+        /// How many times the continuation loop asked whether a fresh
+        /// deployment-set audit is owed. The fake enforces none, so this counts
+        /// the loop's DECISIONS, which is the shape the fast-cluster test pins.
+        boundary_checks: std::cell::Cell<u64>,
+        /// The value `boundary_checks` held when the FIRST blockhash was
+        /// fetched. The claim under test is that it never moves afterwards, and
+        /// sampling it here measures that rather than modelling it.
+        boundary_checks_at_blockhash: std::cell::Cell<Option<u64>>,
     }
 
     impl FakeRunner {
@@ -10376,6 +10838,8 @@ mod tests {
                 calls: Vec::new(),
                 snapshot_minimum_slots: Vec::new(),
                 forced: VecDeque::new(),
+                boundary_checks: std::cell::Cell::new(0),
+                boundary_checks_at_blockhash: std::cell::Cell::new(None),
             }
         }
 
@@ -10435,6 +10899,11 @@ mod tests {
     }
 
     impl CliRunner for FakeRunner {
+        fn enforces_fresh_deployment_set_boundary(&self) -> bool {
+            self.boundary_checks.set(self.boundary_checks.get() + 1);
+            false
+        }
+
         fn run(&mut self, arguments: &[String]) -> Result<CliOutput> {
             self.calls.push(arguments.to_vec());
             if let Some(output) = self.forced.pop_front() {
@@ -10673,6 +11142,10 @@ mod tests {
             query: &LoaderActionQueryV1<'_>,
         ) -> Result<UnsignedLoaderActionV1> {
             self.prepare_count += 1;
+            if self.boundary_checks_at_blockhash.get().is_none() {
+                self.boundary_checks_at_blockhash
+                    .set(Some(self.boundary_checks.get()));
+            }
             let mut blockhash_bytes = [44; 32];
             blockhash_bytes[0] = u8::try_from(self.finalized_height % 251).expect("height byte");
             let blockhash = Hash::new_from_array(blockhash_bytes);
@@ -12908,6 +13381,302 @@ mod tests {
         );
     }
 
+    /// Every command this module dispatches names itself in the help, with the
+    /// flags its own parser accepts.
+    ///
+    /// A command reachable from `main` and absent from `usage()` is a command
+    /// nobody finds; a flag in the help its parser refuses is worse. The two
+    /// binders were written after `tools/gate commands` was already reading this
+    /// text, so this test is what keeps them inside it.
+    #[test]
+    fn the_help_names_every_deployment_set_command_and_its_own_flags() {
+        let help = usage();
+        for command in [
+            ALREADY_CURRENT_COMMAND_V1,
+            BIND_UPGRADE_ROW_COMMAND_V1,
+            BIND_BASELINE_COMMAND_V1,
+            "devnet-deployment-set-journal-v2",
+        ] {
+            assert!(help.contains(command), "help omits {command}");
+        }
+        for binder in [BIND_UPGRADE_ROW_COMMAND_V1, BIND_BASELINE_COMMAND_V1] {
+            let block = help
+                .split(binder)
+                .nth(1)
+                .expect("the binder's own help block");
+            for flag in ["--journal", "--role", "--execute"] {
+                assert!(block.contains(flag), "{binder} help omits {flag}");
+            }
+            // And the two flags a reader might expect from its neighbours and
+            // which these parsers refuse: they touch no cluster.
+            let parsed = parse_set_row_bind_args(
+                binder,
+                std::vec!["--rpc-url".into(), "https://example.invalid".into()],
+            )
+            .expect_err("an offline binder takes no RPC");
+            assert!(
+                parsed.to_string().contains("unknown"),
+                "{binder}: {parsed}"
+            );
+        }
+    }
+
+    /// Binder arguments for one role of a mixed set journal.
+    fn set_row_bind_args(fixture: &MixedSetFixture, role: &str, execute: bool) -> SetRowBindArgsV1 {
+        SetRowBindArgsV1 {
+            journal_path: fixture.args.journal_path.clone(),
+            role: role.into(),
+            execute,
+        }
+    }
+
+    /// Take the digests off a completed Upgrade row and rewrite the journal.
+    ///
+    /// This is the state EVERY real cohort's journal is in the moment
+    /// `devnet-upgrade-v1` returns: the receipt and the dump are on disk and
+    /// nothing in the tree has ever written their digests into the journal.
+    /// Cohort-16.1 bound its two rows with a script in a job directory.
+    fn unbound_completed_row(role: &str) -> (MixedSetFixture, String, String) {
+        let mut fixture = MixedSetFixture::new(1);
+        let row = fixture
+            .journal
+            .roles
+            .iter_mut()
+            .find(|row| row.role == role)
+            .expect("upgrade row");
+        let receipt = row.receipt.sha256.take().expect("fixture receipt digest");
+        let dump = row.dump.sha256.take().expect("fixture dump digest");
+        let mut rendered = serde_json::to_vec_pretty(&fixture.journal).expect("journal JSON");
+        rendered.push(b'\n');
+        fs::write(&fixture.args.journal_path, &rendered).expect("rewrite journal");
+        (fixture, receipt, dump)
+    }
+
+    #[test]
+    fn a_completed_upgrade_row_binds_the_two_digests_the_audit_re_reads() {
+        let (fixture, receipt, dump) = unbound_completed_row("custody");
+        let args = set_row_bind_args(&fixture, "custody", true);
+        // The positive control, and the wall itself: a journal whose Upgrade
+        // has completed does not LOAD until this command has run, because the
+        // dump exists and nothing pins it.
+        let stranded = load_set_journal_path(&args.journal_path)
+            .err()
+            .expect("an unbound completed row strands its own journal");
+        assert!(
+            stranded.to_string().contains("custody dump exists"),
+            "{stranded}"
+        );
+        let report = bind_upgrade_row_v1(&args).expect("a completed row binds");
+        assert!(report.journaled, "{report:?}");
+        // The fixture computed these two digests itself, from the same receipt
+        // and dump files, for every OTHER test that reads a completed row. The
+        // binder has to reproduce them exactly or the audit reads a pin nobody
+        // else agrees with.
+        assert_eq!(report.receipt_sha256.as_deref(), Some(receipt.as_str()));
+        assert_eq!(report.dump_sha256.as_deref(), Some(dump.as_str()));
+
+        // And the journal loads under the FULL closure, which re-digests both
+        // files against the pins this command just wrote.
+        let (journal, journal_sha256) =
+            load_set_journal_path(&args.journal_path).expect("rewritten journal loads");
+        assert_eq!(report.journal_sha256_after.as_deref(), Some(journal_sha256.as_str()));
+        assert_ne!(journal_sha256, report.journal_sha256_before);
+        let row = journal
+            .roles
+            .iter()
+            .find(|row| row.role == "custody")
+            .expect("custody row");
+        assert_eq!(row.disposition, CheckedDeploymentDispositionV1::Upgrade);
+        assert_eq!(row.receipt.sha256.as_deref(), Some(receipt.as_str()));
+        assert_eq!(row.dump.sha256.as_deref(), Some(dump.as_str()));
+        assert!(row.already_current.is_none(), "an Upgrade row is not AlreadyCurrent");
+    }
+
+    #[test]
+    fn without_execute_the_row_binder_writes_nothing() {
+        let (fixture, receipt, dump) = unbound_completed_row("custody");
+        let args = set_row_bind_args(&fixture, "custody", false);
+        let before = fs::read(&args.journal_path).expect("journal before");
+        let report = bind_upgrade_row_v1(&args).expect("preflight reports the digests");
+        assert!(!report.journaled);
+        assert!(report.journal_sha256_after.is_none());
+        assert_eq!(report.receipt_sha256.as_deref(), Some(receipt.as_str()));
+        assert_eq!(report.dump_sha256.as_deref(), Some(dump.as_str()));
+        assert_eq!(
+            fs::read(&args.journal_path).expect("journal after"),
+            before,
+            "a preflight must write nothing"
+        );
+    }
+
+    #[test]
+    fn the_row_binder_refuses_a_bound_row_a_carry_forward_and_an_unfinished_upgrade() {
+        // Already bound: the fixture's own completed row.
+        let mut bound = MixedSetFixture::new(1);
+        let refusal = bind_upgrade_row_v1(&set_row_bind_args(&bound, "custody", true))
+            .expect_err("a bound row is never rewritten");
+        assert!(
+            refusal.to_string().contains("already carries bound digests"),
+            "{refusal}"
+        );
+
+        // A CarryForward row is neither an Upgrade nor this command's business.
+        let refusal = bind_upgrade_row_v1(&set_row_bind_args(&bound, "registry", true))
+            .expect_err("a CarryForward row is refused");
+        assert!(refusal.to_string().contains("CarryForward row"), "{refusal}");
+
+        // A role the journal does not name.
+        let refusal = bind_upgrade_row_v1(&set_row_bind_args(&bound, "dealer", true))
+            .expect_err("an unknown role is refused");
+        assert!(refusal.to_string().contains("has no role dealer"), "{refusal}");
+        let _ = &mut bound;
+
+        // An Upgrade that has not run: no receipt file at all.
+        let unfinished = MixedSetFixture::new(0);
+        let refusal = bind_upgrade_row_v1(&set_row_bind_args(&unfinished, "custody", true))
+            .expect_err("an unfinished Upgrade has no receipt to bind");
+        assert!(
+            refusal.to_string().contains("Upgrade receipt"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_dump_that_disagrees_with_its_own_receipt_is_refused_and_writes_nothing() {
+        let (fixture, _, dump) = unbound_completed_row("custody");
+        let args = set_row_bind_args(&fixture, "custody", true);
+        let row = fixture
+            .journal
+            .roles
+            .iter()
+            .find(|row| row.role == "custody")
+            .expect("custody row");
+        let dump_path = PathBuf::from(&row.dump.canonical_path);
+        let mut bytes = fs::read(&dump_path).expect("dump bytes");
+        assert_eq!(digest(&bytes), dump);
+        bytes[0] ^= 1;
+        fs::write(&dump_path, &bytes).expect("substitute the dump");
+        let before = fs::read(&args.journal_path).expect("journal before");
+
+        let refusal =
+            bind_upgrade_row_v1(&args).expect_err("a substituted dump is refused by name");
+        let text = refusal.to_string();
+        assert!(text.contains("dump on disk is"), "{text}");
+        assert!(text.contains(&dump), "the receipt's own digest is named: {text}");
+        assert_eq!(
+            fs::read(&args.journal_path).expect("journal after"),
+            before,
+            "a refused row must leave the journal byte-identical"
+        );
+    }
+
+    #[test]
+    fn a_moved_baseline_is_re_pinned_and_the_journal_it_stranded_loads_again() {
+        // An in-flight Upgrade row whose baseline file was recaptured after an
+        // extension: the pin names the OLD bytes, and until this command existed
+        // the journal could not even be loaded, because the loader re-digests
+        // every pinned file.
+        let fixture = MixedSetFixture::new(0);
+        let row = fixture
+            .journal
+            .roles
+            .iter()
+            .find(|row| row.role == "custody")
+            .expect("custody row");
+        let pin = row.baseline.clone().expect("custody baseline");
+        let baseline_path = PathBuf::from(&pin.canonical_path);
+        let mut baseline: UpgradeBaselineV1 =
+            serde_json::from_slice(&fs::read(&baseline_path).expect("baseline bytes"))
+                .expect("baseline JSON");
+        baseline.context_slot += 1;
+        baseline.baseline_sha256 = baseline_digest(&baseline).expect("baseline digest");
+        fs::write(
+            &baseline_path,
+            serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
+        )
+        .expect("recapture the baseline");
+        let recaptured = digest(&fs::read(&baseline_path).expect("baseline bytes"));
+        assert_ne!(recaptured, pin.sha256);
+
+        // The positive control: the journal is stranded before the re-pin.
+        let stranded = load_set_journal_path(&fixture.args.journal_path)
+            .err()
+            .expect("a moved baseline pin strands the journal");
+        assert!(stranded.to_string().contains("custody baseline"), "{stranded}");
+
+        let args = set_row_bind_args(&fixture, "custody", true);
+        let report = bind_baseline_v1(&args).expect("the moved pin is re-pinned");
+        assert!(report.journaled, "{report:?}");
+        assert_eq!(report.baseline_sha256.as_deref(), Some(recaptured.as_str()));
+        assert_eq!(
+            report.baseline_sha256_before.as_deref(),
+            Some(pin.sha256.as_str())
+        );
+        assert!(report.receipt_sha256.is_none(), "no receipt is bound here");
+
+        let (journal, _) =
+            load_set_journal_path(&args.journal_path).expect("the re-pinned journal loads");
+        let row = journal
+            .roles
+            .iter()
+            .find(|row| row.role == "custody")
+            .expect("custody row");
+        assert_eq!(
+            row.baseline.as_ref().expect("baseline").sha256,
+            recaptured
+        );
+        assert_eq!(
+            row.baseline.as_ref().expect("baseline").canonical_path,
+            pin.canonical_path
+        );
+    }
+
+    #[test]
+    fn a_baseline_is_never_re_pinned_under_a_completed_upgrade_or_a_pending_extension() {
+        // A bound receipt means the Upgrade already ran under the baseline the
+        // row names; re-pointing that pin would rewrite evidence.
+        let bound = MixedSetFixture::new(1);
+        let refusal = bind_baseline_v1(&set_row_bind_args(&bound, "custody", true))
+            .expect_err("a completed row's baseline is frozen");
+        assert!(
+            refusal.to_string().contains("would rewrite evidence"),
+            "{refusal}"
+        );
+
+        // A baseline that still names a pending extension is not the baseline
+        // the Upgrade will run under either.
+        let fixture = MixedSetFixture::new(0);
+        let row = fixture
+            .journal
+            .roles
+            .iter()
+            .find(|row| row.role == "custody")
+            .expect("custody row");
+        let baseline_path =
+            PathBuf::from(&row.baseline.as_ref().expect("baseline").canonical_path);
+        let mut baseline: UpgradeBaselineV1 =
+            serde_json::from_slice(&fs::read(&baseline_path).expect("baseline bytes"))
+                .expect("baseline JSON");
+        baseline.extension_additional_bytes = 10_240;
+        baseline.baseline_sha256 = baseline_digest(&baseline).expect("baseline digest");
+        fs::write(
+            &baseline_path,
+            serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
+        )
+        .expect("pending-extension baseline");
+        let args = set_row_bind_args(&fixture, "custody", true);
+        let before = fs::read(&args.journal_path).expect("journal before");
+        let refusal = bind_baseline_v1(&args).expect_err("a pending extension is refused");
+        let text = refusal.to_string();
+        assert!(text.contains("pending extension of 10240 bytes"), "{text}");
+        assert!(text.contains("devnet-upgrade-extend-v1"), "{text}");
+        assert_eq!(
+            fs::read(&args.journal_path).expect("journal after"),
+            before,
+            "a refused re-pin must leave the journal byte-identical"
+        );
+    }
+
     /// Build writer arguments for the custody row of a mixed set journal.
     fn already_current_args(fixture: &MixedSetFixture, execute: bool) -> AlreadyCurrentArgsV1 {
         let row = fixture
@@ -13031,6 +13800,116 @@ mod tests {
             fs::read(&args.journal_path).expect("journal after"),
             before,
             "a preflight must write nothing"
+        );
+    }
+
+    /// Devnet's measured block rate on 2026-09-05 (COHORT-16C), in blocks per
+    /// second, scaled by a thousand so the arithmetic stays integral.
+    const DEVNET_MILLIBLOCKS_PER_SECOND_V1: u64 = 6_130;
+    /// A recent blockhash lives for 150 blocks; at 6.13 blocks/s that is the
+    /// 24.5 s window the phase loop has to sign and send inside.
+    const BLOCKHASH_LIFETIME_BLOCKS_V1: u64 = 150;
+    /// One seven-role deployment-set audit, measured from `getLatestBlockhash`
+    /// to `sendTransaction` on cohort-16.1: about 44 s.
+    const SEVEN_ROLE_AUDIT_SECONDS_V1: u64 = 44;
+
+    /// Blocks the cluster produces while `seconds` of audit run.
+    fn blocks_elapsed(seconds: u64) -> u64 {
+        seconds * DEVNET_MILLIBLOCKS_PER_SECOND_V1 / 1_000
+    }
+
+    /// THE NUMBERS. A seven-role audit per phase after the blockhash cannot
+    /// beat a 6.13-block/s cluster; the audit before it can.
+    ///
+    /// The old loop audited at `MessagePrepared` and again at
+    /// `SignedNotSubmitted`, both after the blockhash was fetched: two audits
+    /// of ~44 s against a window of 24.5 s, which is why three cohort-16.1
+    /// attempts died `BlockhashNotFound` having spent nothing. The predicate
+    /// now says which phases stand before the boundary, and the window is
+    /// consumed by nothing but the sign and the send.
+    #[test]
+    fn a_seven_role_audit_per_phase_cannot_beat_a_fast_cluster() {
+        let after_blockhash = [
+            ReceiptPhaseV1::MessagePrepared,
+            ReceiptPhaseV1::SignedNotSubmitted,
+        ];
+        let old_rule = |phase: &ReceiptPhaseV1| {
+            !matches!(phase, ReceiptPhaseV1::Submitted | ReceiptPhaseV1::Complete)
+        };
+        let consumed = |rule: &dyn Fn(&ReceiptPhaseV1) -> bool| -> u64 {
+            after_blockhash
+                .iter()
+                .filter(|phase| rule(phase))
+                .map(|_| blocks_elapsed(SEVEN_ROLE_AUDIT_SECONDS_V1))
+                .sum()
+        };
+        let old = consumed(&old_rule);
+        let new = consumed(&phase_precedes_loader_action_boundary_v1);
+        assert!(
+            old > BLOCKHASH_LIFETIME_BLOCKS_V1,
+            "the old shape must exceed the window or the test proves nothing: {old} blocks"
+        );
+        assert_eq!(new, 0, "no audit stands between the blockhash and the send");
+        assert!(new < BLOCKHASH_LIFETIME_BLOCKS_V1);
+        // The audit still runs, exactly once per Loader action, before the
+        // fetch: every pre-boundary phase owes it.
+        for phase in [
+            ReceiptPhaseV1::Prepared,
+            ReceiptPhaseV1::BufferWriteArmed,
+            ReceiptPhaseV1::BufferReady,
+        ] {
+            assert!(phase_precedes_loader_action_boundary_v1(&phase), "{phase:?}");
+        }
+        for phase in [ReceiptPhaseV1::Submitted, ReceiptPhaseV1::Complete] {
+            assert!(!phase_precedes_loader_action_boundary_v1(&phase), "{phase:?}");
+        }
+    }
+
+    /// THE SHAPE, on the whole Upgrade path: the loop asks for a boundary
+    /// audit at each pre-boundary phase and never after the blockhash.
+    ///
+    /// The fake counts the loop's decisions. A fresh receipt asks once before
+    /// it exists at all -- the walk audits before it writes a `Prepared`
+    /// receipt (`:5168`, unconditional on `existing == None`) -- and then at
+    /// `Prepared`, `BufferWriteArmed` and `BufferReady`: FOUR asks, every one of
+    /// them before the blockhash. It then fetches the blockhash and signs and
+    /// sends with no further ask, and the second `execute_with_runner` call at
+    /// `Complete` verifies live and asks nothing.
+    ///
+    /// The four is measured, not modelled. It was written as three by counting
+    /// receipt phases and forgetting that the first audit precedes the first
+    /// receipt; the count that matters is not how many phases ask but that the
+    /// number stops moving at the blockhash, which the fake now samples.
+    #[test]
+    fn the_send_window_is_entered_with_no_audit_after_the_blockhash() {
+        let fixture = Fixture::new();
+        let mut runner = FakeRunner::new(&fixture);
+        let receipt =
+            execute_with_runner(&fixture.args, &mut runner).expect("checked Upgrade completes");
+        assert_eq!(receipt.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(runner.prepare_count, 1, "one blockhash fetch");
+        assert_eq!(runner.send_count, 1, "one send");
+        assert_eq!(
+            runner.boundary_checks.get(),
+            4,
+            "the pre-receipt audit plus Prepared, BufferWriteArmed and BufferReady; \
+             MessagePrepared and SignedNotSubmitted do not ask"
+        );
+        // The claim itself, measured end to end: the counter had already
+        // reached its final value when the blockhash was fetched.
+        assert_eq!(
+            runner.boundary_checks_at_blockhash.get(),
+            Some(4),
+            "every audit this walk owes is spent before the blockhash it must beat"
+        );
+        let asked_before = runner.boundary_checks.get();
+        let verified = execute_with_runner(&fixture.args, &mut runner)
+            .expect("a complete receipt verifies live");
+        assert_eq!(verified.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(
+            runner.boundary_checks.get(),
+            asked_before,
+            "verifying a complete receipt is past the boundary and asks for no audit"
         );
     }
 
