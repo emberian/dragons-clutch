@@ -1,10 +1,10 @@
 {
   "bound_bytes": 4096,
-  "commit": "1dd18be91c441f0f2d44e7c36057cc82027c0c5a",
+  "commit": "dcbd96cead903f45522e6393fecc1dfdbb1bc943",
   "link_count": 8,
   "links": [
     {
-      "frame_count": 47,
+      "frame_count": 49,
       "functions": [
         {
           "frames_bytes": [
@@ -74,6 +74,12 @@
         },
         {
           "frames_bytes": [
+            1088
+          ],
+          "symbol": "_ZN23dclutch_accelerator_sbf6dealer22process_scoring_row_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
             320
           ],
           "symbol": "_ZN23dclutch_accelerator_sbf6dealer27evaluate_selected_family_v417h<hash>E"
@@ -89,6 +95,12 @@
             1024
           ],
           "symbol": "_ZN23dclutch_accelerator_sbf6dealer7process17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN23dclutch_accelerator_sbf6series26refused_shadow_callback_v417h<hash>E"
         },
         {
           "frames_bytes": [
@@ -292,7 +304,7 @@
       "package": "dclutch-accelerator-sbf"
     },
     {
-      "frame_count": 288,
+      "frame_count": 303,
       "functions": [
         {
           "frames_bytes": [
@@ -460,6 +472,12 @@
           "frames_bytes": [
             128
           ],
+          "symbol": "_ZN18dclutch_claims_sbf11founding_v525authenticate_founder_bond17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            128
+          ],
           "symbol": "_ZN18dclutch_claims_sbf11founding_v525authenticate_lock_receipt17h<hash>E"
         },
         {
@@ -596,7 +614,7 @@
         },
         {
           "frames_bytes": [
-            64
+            128
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v312apply_deltas17h<hash>E"
         },
@@ -662,7 +680,7 @@
         },
         {
           "frames_bytes": [
-            0
+            64
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v326burn_failure_coordinate_v117h<hash>E"
         },
@@ -800,7 +818,7 @@
         },
         {
           "frames_bytes": [
-            2752
+            2432
           ],
           "symbol": "_ZN18dclutch_claims_sbf17market_closure_v126process_checkpoint_handoff17h<hash>E"
         },
@@ -818,6 +836,12 @@
         },
         {
           "frames_bytes": [
+            640
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf17market_closure_v133admit_founder_bond_disposition_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
             704
           ],
           "symbol": "_ZN18dclutch_claims_sbf17market_closure_v134authenticate_continuation_releases17h<hash>E"
@@ -830,7 +854,7 @@
         },
         {
           "frames_bytes": [
-            2752
+            2432
           ],
           "symbol": "_ZN18dclutch_claims_sbf17market_closure_v17process17h<hash>E"
         },
@@ -1250,21 +1274,45 @@
         },
         {
           "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v113derive_hinted17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v113token_balance17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             2560
           ],
           "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v114invoke_custody17h<hash>E"
         },
         {
           "frames_bytes": [
-            256
-          ],
-          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v115apply_economics17h<hash>E"
-        },
-        {
-          "frames_bytes": [
             1408
           ],
           "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v115move_collateral17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v116build_candidates17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            448
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v117authenticate_core17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v117commit_candidates17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -1298,6 +1346,24 @@
         },
         {
           "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v121verify_balances_after17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            832
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v122authenticate_aggregate17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v125authenticate_basis_record17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             0
           ],
           "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v125is_claims_conservation_v117h<hash>E"
@@ -1310,13 +1376,13 @@
         },
         {
           "frames_bytes": [
-            704
+            128
           ],
-          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v131authenticate_market_and_records17h<hash>E"
+          "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v133authenticate_balances_and_backing17h<hash>E"
         },
         {
           "frames_bytes": [
-            448
+            576
           ],
           "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v133authenticate_positions_and_escrow17h<hash>E"
         },
@@ -1340,6 +1406,12 @@
         },
         {
           "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v312shared_frame17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             1024
           ],
           "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v317authenticate_core17h<hash>E"
@@ -1358,7 +1430,13 @@
         },
         {
           "frames_bytes": [
-            3520
+            64
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v323apply_founder_bond_draw17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            3584
           ],
           "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v324authenticate_and_prepare17h<hash>E"
         },
@@ -1376,6 +1454,12 @@
         },
         {
           "frames_bytes": [
+            1152
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v329authenticate_founder_bond_arm17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             768
           ],
           "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v330execute_claim_check_compaction17h<hash>E"
@@ -1388,7 +1472,7 @@
         },
         {
           "frames_bytes": [
-            2432
+            2496
           ],
           "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v37execute17h<hash>E"
         },
@@ -1574,13 +1658,19 @@
         },
         {
           "frames_bytes": [
-            2176
+            2112
           ],
           "symbol": "_ZN18dclutch_claims_sbf25claim_check_compaction_v117commit_compaction17h<hash>E"
         },
         {
           "frames_bytes": [
-            2304
+            1472
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf25claim_check_compaction_v117write_claim_check17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2368
           ],
           "symbol": "_ZN18dclutch_claims_sbf25claim_check_compaction_v118process_compaction17h<hash>E"
         },
@@ -1936,6 +2026,12 @@
         },
         {
           "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN5alloc3vec16Vec$LT$T$C$A$GT$14extend_trusted17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             0
           ],
           "symbol": "_ZN5alloc7raw_vec11finish_grow17h<hash>E"
@@ -1948,6 +2044,12 @@
             64
           ],
           "symbol": "_ZN5alloc7raw_vec19RawVec$LT$T$C$A$GT$8grow_one17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN5alloc7raw_vec20RawVecInner$LT$A$GT$16with_capacity_in17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -1996,7 +2098,7 @@
       "package": "dclutch-claims-sbf"
     },
     {
-      "frame_count": 274,
+      "frame_count": 279,
       "functions": [
         {
           "frames_bytes": [
@@ -2221,6 +2323,30 @@
             704
           ],
           "symbol": "_ZN16dclutch_core_sbf10fixed_role27authenticate_fixed_role_ack17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            832
+          ],
+          "symbol": "_ZN16dclutch_core_sbf10parents_v119authenticate_parent17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN16dclutch_core_sbf10parents_v126authenticate_child_records17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            256
+          ],
+          "symbol": "_ZN16dclutch_core_sbf10parents_v129authenticate_reference_record17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            384
+          ],
+          "symbol": "_ZN16dclutch_core_sbf10parents_v132authenticate_parent_reference_v117h<hash>E"
         },
         {
           "frames_bytes": [
@@ -2584,13 +2710,13 @@
         },
         {
           "frames_bytes": [
-            832
+            768
           ],
           "symbol": "_ZN16dclutch_core_sbf14series_consume20split_funding_prefix17h<hash>E"
         },
         {
           "frames_bytes": [
-            768
+            960
           ],
           "symbol": "_ZN16dclutch_core_sbf14series_consume21SeriesConsumeAccounts5parse17h<hash>E"
         },
@@ -2656,7 +2782,7 @@
         },
         {
           "frames_bytes": [
-            3840
+            3904
           ],
           "symbol": "_ZN16dclutch_core_sbf14series_consume7process17h<hash>E"
         },
@@ -3100,7 +3226,7 @@
         },
         {
           "frames_bytes": [
-            640
+            896
           ],
           "symbol": "_ZN16dclutch_core_sbf5found13process_frame17h<hash>E"
         },
@@ -3204,7 +3330,7 @@
         },
         {
           "frames_bytes": [
-            2880
+            3008
           ],
           "symbol": "_ZN16dclutch_core_sbf5found7project17h<hash>E"
         },
@@ -3216,9 +3342,15 @@
         },
         {
           "frames_bytes": [
-            256
+            448
           ],
           "symbol": "_ZN16dclutch_core_sbf5frame13FoundAccounts15parse_with_mode17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN16dclutch_core_sbf5frame13FoundAccounts15parse_with_mode28_$u7b$$u7b$closure$u7d$$u7d$17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -3601,7 +3733,7 @@
       "package": "dclutch-core-sbf"
     },
     {
-      "frame_count": 111,
+      "frame_count": 125,
       "functions": [
         {
           "frames_bytes": [
@@ -3689,6 +3821,42 @@
         },
         {
           "frames_bytes": [
+            448
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf15upkeep_vault_v112credit_route17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf15upkeep_vault_v112write_record17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            256
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf15upkeep_vault_v113deposit_frame17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            832
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf15upkeep_vault_v114protocol_frame17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            704
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf15upkeep_vault_v15found17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            576
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf15upkeep_vault_v17process17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             1152
           ],
           "symbol": "_ZN19dclutch_custody_sbf16execute_transfer17h<hash>E"
@@ -3739,7 +3907,7 @@
         },
         {
           "frames_bytes": [
-            3840
+            3904
           ],
           "symbol": "_ZN19dclutch_custody_sbf19process_instruction17h<hash>E"
         },
@@ -3766,6 +3934,48 @@
             0
           ],
           "symbol": "_ZN19dclutch_custody_sbf21require_account_count28_$u7b$$u7b$closure$u7d$$u7d$17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            384
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf22protocol_parameters_v111read_record17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf22protocol_parameters_v112write_record17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1280
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf22protocol_parameters_v15apply17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            640
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf22protocol_parameters_v15found17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf22protocol_parameters_v17process17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            704
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf22protocol_parameters_v17propose17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            704
+          ],
+          "symbol": "_ZN19dclutch_custody_sbf22protocol_parameters_v18withdraw17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4241,6 +4451,12 @@
             0
           ],
           "symbol": "_ZN87_$LT$T$u20$as$u20$alloc..slice..$LT$impl$u20$$u5b$T$u5d$$GT$..to_vec_in..ConvertVec$GT$6to_vec17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN98_$LT$dclutch_market..protocol_parameters..ProtocolParametersV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4770,7 +4986,7 @@
       "package": "dclutch-rent-sbf"
     },
     {
-      "frame_count": 179,
+      "frame_count": 201,
       "functions": [
         {
           "frames_bytes": [
@@ -4805,6 +5021,7 @@
         },
         {
           "frames_bytes": [
+            0,
             0
           ],
           "symbol": "_ZN111_$LT$core..iter..adapters..zip..Zip$LT$A$C$B$GT$$u20$as$u20$core..iter..adapters..zip..ZipImpl$LT$A$C$B$GT$$GT$4next17h<hash>E"
@@ -4833,6 +5050,18 @@
             0
           ],
           "symbol": "_ZN21dclutch_core_contract9ContentId3new17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf10derived_v118authenticate_graph17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1408
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf10derived_v126plan_derived_resolution_v117h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4890,7 +5119,7 @@
         },
         {
           "frames_bytes": [
-            2560
+            2816
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect19commit_direct_close17h<hash>E"
         },
@@ -5028,7 +5257,7 @@
         },
         {
           "frames_bytes": [
-            2176
+            2240
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect40authenticate_direct_material_and_funding17h<hash>E"
         },
@@ -5037,6 +5266,18 @@
             768
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect45authenticate_admitted_terminal_certificate_v217h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf11ensemble_v114admit_fragment17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2624
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf11ensemble_v121plan_ensemble_fold_v117h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5262,7 +5503,7 @@
         },
         {
           "frames_bytes": [
-            3392
+            3136
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v115process_consume17h<hash>E"
         },
@@ -5271,6 +5512,12 @@
             1152
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v117persisted_binding17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            832
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v118boxed_member_seats17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5289,6 +5536,12 @@
             64
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v120close_to_beneficiary17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v120commit_ensemble_fold17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5316,6 +5569,12 @@
         },
         {
           "frames_bytes": [
+            1856
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v121process_ensemble_fold17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             2240
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v122consume_source_records17h<hash>E"
@@ -5328,7 +5587,13 @@
         },
         {
           "frames_bytes": [
-            2752
+            1920
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v123encode_ensemble_fold_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            3008
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v124process_advance_recovery17h<hash>E"
         },
@@ -5337,6 +5602,18 @@
             128
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v124recompute_account_set_id17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v124validate_frame_with_tail17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1472
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v126boxed_ensemble_fold_source17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5352,6 +5629,18 @@
         },
         {
           "frames_bytes": [
+            1344
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v127plan_ensemble_fold_boxed_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1024
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v127process_reclaim_member_seat17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             1216
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v128authenticate_failure_funding17h<hash>E"
@@ -5361,6 +5650,18 @@
             2624
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v128boxed_consume_source_records17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            256
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v128initialize_fold_receipt_seat17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v129plan_and_encode_ensemble_fold17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5421,6 +5722,42 @@
             3008
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf19process_instruction17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            832
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf20derived_transport_v112boxed_parent17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2112
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf20derived_transport_v114source_records17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf20derived_transport_v117commit_settlement17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1152
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf20derived_transport_v119authenticate_parent17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2368
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf20derived_transport_v120boxed_source_records17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            3072
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf20derived_transport_v125process_derived_settle_v117h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5730,7 +6067,7 @@
         },
         {
           "frames_bytes": [
-            3456
+            3392
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf27pre_market_funding_abort_v135process_pre_market_funding_abort_v117h<hash>E"
         },
@@ -5772,13 +6109,19 @@
         },
         {
           "frames_bytes": [
+            1152
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf6funded30plan_member_bounty_releases_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
             0
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf8relay_v118authenticate_graph17h<hash>E"
         },
         {
           "frames_bytes": [
-            1728
+            1792
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf8relay_v126plan_relayed_resolution_v117h<hash>E"
         },
@@ -5840,7 +6183,7 @@
       "package": "dclutch-resolution-proof-sbf"
     },
     {
-      "frame_count": 766,
+      "frame_count": 807,
       "functions": [
         {
           "frames_bytes": [
@@ -6012,6 +6355,228 @@
             128
           ],
           "symbol": "_ZN19dclutch_trading_sbf16native_signature51seed_native_signatures_at_authenticated_instruction17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2112
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v111accelerator21decode_scoring_row_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2368
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v111accelerator30evaluate_scoring_dealer_row_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v114child_metas_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            960
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v114commit_fund_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v114read_replay_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            768
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v114write_quote_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            768
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v115emit_receipt_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            576
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v120authenticate_fund_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            320
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v120authenticate_rule_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            256
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v121authenticate_vault_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2304
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v122authenticate_market_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            576
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v123authenticate_release_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            384
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v126authenticate_claim_unit_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v126claims_admit_privileges_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            3776
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v126invoke_custody_transfer_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v130custody_transfer_privileges_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v132custody_open_vault_privileges_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v133claims_signed_delta_privileges_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v133custody_close_vault_privileges_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v134custody_close_replay_privileges_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v139custody_initialize_replay_privileges_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1216
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v14fill10net_leg_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1280
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v14fill13admit_fill_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            512
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v14fill16hoard_context_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            256
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v14fill19settle_cash_legs_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1024
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v14fill20fund_to_hoard_leg_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1024
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v14fill21taker_to_hoard_leg_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            3456
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v14fill22process_dealer_fill_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2432
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v14fill27invoke_claims_fill_delta_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            384
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v15found10prefund_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            384
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v15found13create_pda_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            3008
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v15found17invoke_custody_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2496
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v15found22invoke_claims_admit_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            3136
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v15found23process_dealer_found_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1920
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v15quote23process_dealer_quote_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            576
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v15quote30read_inventory_for_withdraw_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2688
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf17scoring_dealer_v18withdraw26process_dealer_withdraw_v117h<hash>E"
         },
         {
           "frames_bytes": [
@@ -6373,9 +6938,21 @@
         },
         {
           "frames_bytes": [
-            192
+            320
           ],
           "symbol": "_ZN19dclutch_trading_sbf21direct_close_maker_v120reauthenticate_roles17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1280
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf21direct_close_maker_v121receipt_upkeep_credit17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            256
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf21direct_close_maker_v122authenticate_economics17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -6397,7 +6974,7 @@
         },
         {
           "frames_bytes": [
-            3072
+            3520
           ],
           "symbol": "_ZN19dclutch_trading_sbf21direct_close_maker_v129process_direct_close_maker_v117h<hash>E"
         },
@@ -8347,7 +8924,7 @@
         },
         {
           "frames_bytes": [
-            2304
+            1984
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v313series_expiry51authenticate_series_expiry_vacant_permit_request_v117h<hash>E"
         },
@@ -8407,7 +8984,7 @@
         },
         {
           "frames_bytes": [
-            1344
+            1472
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v324process_hot_execution_v317h<hash>E"
         },
@@ -8713,7 +9290,7 @@
         },
         {
           "frames_bytes": [
-            3776
+            3840
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v37execute28execute_authenticated_hot_v317h<hash>E"
         },
@@ -8731,7 +9308,7 @@
         },
         {
           "frames_bytes": [
-            3904
+            3968
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v37execute31authenticate_and_execute_hot_v317h<hash>E"
         },
@@ -8966,7 +9543,7 @@
         },
         {
           "frames_bytes": [
-            3392
+            3456
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v38children23execute_child_routes_v317h<hash>E"
         },
@@ -8990,7 +9567,7 @@
         },
         {
           "frames_bytes": [
-            2560
+            2624
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v38children25preflight_child_routes_v317h<hash>E"
         },
@@ -9669,7 +10246,7 @@
         },
         {
           "frames_bytes": [
-            2560
+            2688
           ],
           "symbol": "_ZN19dclutch_trading_sbf6series28prepare_funding_artifacts_v540emit_series_prepare_funding_artifacts_v517h<hash>E"
         },
@@ -9918,6 +10495,12 @@
           "frames_bytes": [
             0
           ],
+          "symbol": "_ZN4core3ptr74drop_in_place$LT$$u5b$solana_account_info..AccountInfo$u3b$$u20$8$u5d$$GT$17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
           "symbol": "_ZN4core3ptr76drop_in_place$LT$alloc..vec..Vec$LT$solana_account_info..AccountInfo$GT$$GT$17h<hash>E"
         },
         {
@@ -10062,7 +10645,8 @@
         {
           "frames_bytes": [
             64,
-            64
+            64,
+            0
           ],
           "symbol": "_ZN67_$LT$alloc..vec..Vec$LT$T$C$A$GT$$u20$as$u20$core..clone..Clone$GT$5clone17h<hash>E"
         },

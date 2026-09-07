@@ -141,7 +141,7 @@ use crate::{
     authenticate_rent,
     ensemble_v1::{
         AuthenticatedEnsembleSourceV1, ENSEMBLE_MAX_MEMBERS, EnsembleFoldErrorV1,
-        EnsembleFoldRequestV1, MemberSeatV1, plan_ensemble_fold_v1,
+        EnsembleFoldPlanV1, EnsembleFoldRequestV1, MemberSeatV1, plan_ensemble_fold_v1,
     },
     funded::{
         AuthenticatedFailureFundingV2, AuthenticatedRecoveryPolicyV1, AuthenticatedWalkSourceV1,
@@ -1670,7 +1670,7 @@ struct EncodedEnsembleFoldV1 {
     captors: [Option<[u8; 32]>; ENSEMBLE_MAX_MEMBERS],
 }
 
-/// Plan the fold and encode every byte it writes, on a frame of its own.
+/// Plan the fold and encode every byte it writes, one stage per frame.
 ///
 /// The same reason the failure walk and the crank do it here: the plan carries
 /// a Source state, a certificate, a receipt and a complete three-row ledger
@@ -1678,10 +1678,16 @@ struct EncodedEnsembleFoldV1 {
 /// beside them, which does not fit in the caller's four-kilobyte frame
 /// alongside the authenticated Market, Source graph, seats and escrow.
 ///
-/// The encoding happens here rather than at the commit, and that ordering is
-/// the point: `to_bytes` runs the Lean-owned schema's own `validate_shape` for
-/// the certificate and for the receipt, so a shape either schema would refuse
-/// never reaches an account and no lamport has moved when it is refused.
+/// The plan and the encoded image do not fit in ONE frame either. Holding both
+/// measured exactly 4,096 bytes against SBPF v0's 4,096 -- at the wall, which
+/// the backend reports as a call that overwrites its own locals -- so each gets
+/// a frame of its own and this function holds two pointers. `hot_v3::frame`
+/// draws the same boundary for the same reason.
+///
+/// The encoding happens before the commit, and that ordering is the point:
+/// `to_bytes` runs the Lean-owned schema's own `validate_shape` for the
+/// certificate and for the receipt, so a shape either schema would refuse never
+/// reaches an account and no lamport has moved when it is refused.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn plan_and_encode_ensemble_fold(
@@ -1693,7 +1699,32 @@ fn plan_and_encode_ensemble_fold(
     seats: &[MemberSeatV1],
     escrow: &AuthenticatedFailureFundingV2<'_>,
 ) -> Result<Box<EncodedEnsembleFoldV1>, ProgramError> {
-    let plan = plan_ensemble_fold_v1(
+    let funding_prestate_digest = hash(&escrow.ledger_bytes).to_bytes();
+    let plan = plan_ensemble_fold_boxed_v1(
+        request,
+        source_state,
+        source,
+        product_runtime,
+        result_domain,
+        seats,
+        escrow,
+    )?;
+    encode_ensemble_fold_v1(&plan, funding_prestate_digest)
+}
+
+/// The plan, on a frame of its own. See [`plan_and_encode_ensemble_fold`].
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn plan_ensemble_fold_boxed_v1(
+    request: &EnsembleFoldRequestV1,
+    source_state: &SourceResolutionStateV2,
+    source: &AuthenticatedEnsembleSourceV1,
+    product_runtime: &AuthenticatedProductRuntimeV2,
+    result_domain: ResultDomainV2<'_>,
+    seats: &[MemberSeatV1],
+    escrow: &AuthenticatedFailureFundingV2<'_>,
+) -> Result<Box<EnsembleFoldPlanV1>, ProgramError> {
+    plan_ensemble_fold_v1(
         request,
         source_state,
         source,
@@ -1702,13 +1733,23 @@ fn plan_and_encode_ensemble_fold(
         seats,
         escrow,
     )
-    .map_err(map_ensemble_fold_error)?;
+    .map(Box::new)
+    .map_err(|error| map_ensemble_fold_error(error).into())
+}
+
+/// Every byte the fold writes, on a frame of its own. See
+/// [`plan_and_encode_ensemble_fold`].
+#[inline(never)]
+fn encode_ensemble_fold_v1(
+    plan: &EnsembleFoldPlanV1,
+    funding_prestate_digest: [u8; 32],
+) -> Result<Box<EncodedEnsembleFoldV1>, ProgramError> {
     let mut encoded = Box::new(EncodedEnsembleFoldV1 {
         source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
         certificate: [0; RESOLUTION_CERTIFICATE_BYTES_V2],
         receipt: [0; ENSEMBLE_FOLD_RECEIPT_V1_BYTES],
         funding: [0; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
-        funding_prestate_digest: hash(&escrow.ledger_bytes).to_bytes(),
+        funding_prestate_digest,
         funding_lamports_after: plan.funding_lamports_after,
         bounties: plan.bounties,
         captors: plan.captors,
