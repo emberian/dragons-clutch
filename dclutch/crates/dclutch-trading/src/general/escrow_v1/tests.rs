@@ -15,14 +15,15 @@ use dclutch_vm::effect::v3::ProgramV3;
 use super::*;
 use crate::general::candidate_v1::{GeneralCandidateStatusV1, GeneralCandidateV1};
 use crate::general::collection_v1::{
-    GeneralBatchOpeningV1, GeneralOrderHeaderV1, GeneralOrderStateV1, MakerFundingV1,
-    general_order_len_v1,
+    GeneralBatchOpeningV1, GeneralOrderHeaderV2, GeneralOrderStateV1, MakerFundingV1,
+    general_order_len_v2,
 };
 use crate::general::effect_artifacts_v3::{
     GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
     general_effect_instruction_count_v3, general_effect_program_bytes_v3,
     general_effect_template_bytes_v3,
 };
+use crate::general::runtime_verify::OrderSideV2;
 use crate::general::runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len};
 
 const WIDTH: u32 = 3;
@@ -232,29 +233,44 @@ fn batch_opening() -> GeneralBatchOpeningV1 {
     }
 }
 
-fn open_batch(root: &mut GeneralRootV2) -> GeneralBatchV1 {
+fn open_batch(root: &mut GeneralRootV2) -> GeneralBatchV2 {
     let revision = root.revision();
-    GeneralBatchV1::open(root, batch_opening(), revision, ADMISSION_SLOT).expect("open batch")
+    GeneralBatchV2::open(root, batch_opening(), revision, ADMISSION_SLOT).expect("open batch")
 }
 
 /// One maker's order, placed and escrowed against a live batch.
-fn place(batch: &mut GeneralBatchV1, owner: u8, nonce: u64) -> Vec<u8> {
-    let mut bytes = vec![0_u8; general_order_len_v1(WIDTH).expect("order width")];
-    GeneralOrderV1::encode_into(
-        GeneralOrderHeaderV1 {
-            outcome_count: WIDTH,
-            nonce,
-            owner_id: id(owner),
-            market: id(1),
-            batch_id: batch.batch_id(),
-            generation: 7,
-            max_lots: MAX_LOTS,
-            max_quote_debit_per_lot: MAX_QUOTE_DEBIT_PER_LOT,
-            min_quote_credit_per_lot: 0,
-            valid_until_slot: SETTLEMENT_CLOSE,
-        },
-        &[1, 0, 0],
-        &[0, 1, 0],
+///
+/// A sell of one claim at outcome one, so the maker escrows both a quote
+/// worst case and a claim worst case and every direction below has something
+/// to move. The rows are the shape's, read back rather than authored.
+fn place(batch: &mut GeneralBatchV2, owner: u8, nonce: u64) -> Vec<u8> {
+    let header = GeneralOrderHeaderV2 {
+        outcome_count: WIDTH,
+        nonce,
+        owner_id: id(owner),
+        market: id(1),
+        batch_id: batch.batch_id(),
+        generation: 7,
+        max_lots: MAX_LOTS,
+        max_quote_debit_per_lot: MAX_QUOTE_DEBIT_PER_LOT,
+        min_quote_credit_per_lot: 0,
+        valid_until_slot: SETTLEMENT_CLOSE,
+        side: OrderSideV2::Sell,
+        outcome_lo: 1,
+        outcome_hi: 1,
+        claims_per_lot: 1,
+    };
+    let receive: Vec<u64> = (0..WIDTH)
+        .map(|index| header.derived_row(index).0)
+        .collect();
+    let deliver: Vec<u64> = (0..WIDTH)
+        .map(|index| header.derived_row(index).1)
+        .collect();
+    let mut bytes = vec![0_u8; general_order_len_v2(WIDTH).expect("order width")];
+    GeneralOrderV2::encode_into(
+        header,
+        &receive,
+        &deliver,
         GeneralOrderStateV1 {
             phase: GeneralOrderPhaseV1::Placed,
             admitted_slot: ADMISSION_SLOT,
@@ -263,7 +279,7 @@ fn place(batch: &mut GeneralBatchV1, owner: u8, nonce: u64) -> Vec<u8> {
         &mut bytes,
     )
     .expect("order record");
-    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let order = GeneralOrderV2::decode(&bytes).expect("order");
     let claims: Vec<u64> = (0..WIDTH)
         .map(|index| order.claim_reserve(index).expect("reserve"))
         .collect();
@@ -281,7 +297,7 @@ fn place(batch: &mut GeneralBatchV1, owner: u8, nonce: u64) -> Vec<u8> {
     bytes
 }
 
-fn candidate_bytes(batch_id: [u8; 32]) -> Vec<u8> {
+fn candidate_bytes(batch_id: [u8; 32], live_order_count: u32) -> Vec<u8> {
     let mut bytes = vec![0_u8; candidate_len(WIDTH).expect("candidate width")];
     let header = CandidateHeaderV2 {
         outcome_count: WIDTH,
@@ -291,6 +307,7 @@ fn candidate_bytes(batch_id: [u8; 32]) -> Vec<u8> {
         candidate_id: id(0xff),
         product_id: id(3),
         batch_id,
+        live_order_count,
     };
     let prices = [50_u64, 30, 20];
     CandidateV2::encode_into(header, &prices, &mut bytes).expect("draft candidate");
@@ -309,13 +326,13 @@ fn candidate_bytes(batch_id: [u8; 32]) -> Vec<u8> {
 }
 
 /// A real closed batch and a real submission funded to its exact capacity.
-fn submitted() -> (GeneralBatchV1, Vec<u8>, GeneralCandidateV1) {
+fn submitted() -> (GeneralBatchV2, Vec<u8>, GeneralCandidateV1) {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let order = place(&mut batch, 4, 1);
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close batch");
-    let candidate = candidate_bytes(batch.batch_id());
+    let candidate = candidate_bytes(batch.batch_id(), batch.live_order_count());
     let opening = GeneralCandidateOpeningV1 {
         batch_id: batch.batch_id(),
         ..candidate_opening()
@@ -569,7 +586,7 @@ fn admission_moves_the_makers_worst_case_into_a_vault_keyed_by_the_order() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = place(&mut batch, 4, 1);
-    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let order = GeneralOrderV2::decode(&bytes).expect("order");
     // `place` already admitted; re-run the transition on a fresh batch to hold
     // the escrow value this movement is built from.
     let escrow = OrderEscrowV1 {
@@ -607,8 +624,8 @@ fn an_escrow_keyed_by_another_order_is_refused() {
     let mut batch = open_batch(&mut root);
     let first = place(&mut batch, 4, 1);
     let second = place(&mut batch, 5, 2);
-    let order = GeneralOrderV1::decode(&first).expect("order");
-    let other = GeneralOrderV1::decode(&second).expect("other order");
+    let order = GeneralOrderV2::decode(&first).expect("order");
+    let other = GeneralOrderV2::decode(&second).expect("other order");
     assert_ne!(order.order_id(), other.order_id());
     let escrow = OrderEscrowV1 {
         order_id: order.order_id(),
@@ -635,12 +652,12 @@ fn an_order_from_another_batch_cannot_reach_this_batchs_escrow() {
     let mut root = active_root();
     let mut first = open_batch(&mut root);
     let bytes = place(&mut first, 4, 1);
-    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let order = GeneralOrderV2::decode(&bytes).expect("order");
     // A second batch at the next sequence: a different identity, same shape.
     let revision = root.revision();
     first.close(&mut root, revision).expect("close first");
     let revision = root.revision();
-    let second = GeneralBatchV1::open(
+    let second = GeneralBatchV2::open(
         &mut root,
         GeneralBatchOpeningV1 {
             sequence: 1,
@@ -676,7 +693,7 @@ fn a_refunded_escrow_cannot_be_refunded_again() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = place(&mut batch, 4, 1);
-    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let order = GeneralOrderV2::decode(&bytes).expect("order");
     let escrow = batch
         .cancel(order, order.header().owner_id, ADMISSION_SLOT)
         .expect("cancel");
@@ -710,7 +727,7 @@ fn a_residual_release_returns_the_balance_and_can_never_exceed_the_reserve() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = place(&mut batch, 4, 1);
-    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let order = GeneralOrderV2::decode(&bytes).expect("order");
     let escrow = batch
         .release(order, SETTLEMENT_CLOSE)
         .expect("post-window release");
@@ -764,7 +781,7 @@ fn a_collect_cannot_draw_on_an_escrow_that_does_not_hold_the_debit() {
     let mut root = active_root();
     let mut batch = open_batch(&mut root);
     let bytes = place(&mut batch, 4, 1);
-    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let order = GeneralOrderV2::decode(&bytes).expect("order");
     let revision = root.revision();
     batch.close(&mut root, revision).expect("close batch");
     authenticate_collect_from_escrow_v1(

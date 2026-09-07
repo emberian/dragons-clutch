@@ -131,9 +131,13 @@ def verifiedCandidateHeaderFields : List Field := prologueFields ++ [
 /-- One eight-byte cell per outcome. -/
 def tailStride : Nat := 8
 
-/-- Two runtime-width tails follow the header: claim inputs, then claim
-outputs. -/
-def tailCount : Nat := 2
+/-- Three runtime-width tails follow the header: the PRICE VECTOR, then claim
+inputs, then claim outputs. The prices were two until the joint clearing: the
+certificate is the clearing (`JointClearingV1.Clearing` is prices, fills and
+sets), and a certificate without its prices could neither re-prove
+complementary slackness at settlement nor publish the price series the close
+now writes (`ClearingPriceV1Abi`). -/
+def tailCount : Nat := 3
 
 def verifiedCandidateBytes (outcomeCount : Nat) : Nat :=
   recordBytes verifiedCandidateHeaderFields + tailCount * tailStride * outcomeCount
@@ -153,7 +157,15 @@ def candidateFields : List Field := prologueFields ++ [
   { name := "price_scale", bytes := 8 },
   { name := "candidate_id", bytes := 32 },
   { name := "product_id", bytes := 32 },
-  { name := "batch_id", bytes := 32 }
+  { name := "batch_id", bytes := 32 },
+  -- THE COMPLETENESS CONJUNCT'S RECORD. A joint-clearing certificate must
+  -- enumerate every live order of its batch (`JointClearingV1.Batch.clear?`,
+  -- `orderOmitted`); the count it is held to is the batch's
+  -- `order_count - cancelled_count`, copied here by the solver and
+  -- AUTHENTICATED against the closed batch at `SubmitCandidate`, so the
+  -- nineteen-account `VerifyCandidateRow` frame need not carry the batch.
+  { name := "live_order_count", bytes := 4 },
+  { name := "reserved_live", bytes := 4 }
 ]
 
 def executionFields : List Field := prologueFields ++ [
@@ -228,9 +240,9 @@ theorem selection_cursor_is_two_hundred_twenty_four_bytes :
 theorem verified_candidate_header_is_one_hundred_sixty_bytes :
     recordBytes verifiedCandidateHeaderFields = 160 := by native_decide
 
-theorem verified_candidate_width_is_header_plus_sixteen_per_outcome
+theorem verified_candidate_width_is_header_plus_twenty_four_per_outcome
     (outcomeCount : Nat) :
-    verifiedCandidateBytes outcomeCount = 160 + 16 * outcomeCount := by
+    verifiedCandidateBytes outcomeCount = 160 + 24 * outcomeCount := by
   simp [verifiedCandidateBytes, tailCount, tailStride,
     verified_candidate_header_is_one_hundred_sixty_bytes]
 
@@ -256,7 +268,7 @@ theorem every_record_begins_with_the_prologue :
 /-- The four records the prologue helper serves are exactly as wide as the
 Rust constants they replace. -/
 theorem the_four_helper_records_have_their_declared_widths :
-    recordBytes candidateFields = 128 ∧ recordBytes executionFields = 112 ∧
+    recordBytes candidateFields = 136 ∧ recordBytes executionFields = 112 ∧
       recordBytes pageFields = 64 ∧ recordBytes settlementCursorFields = 88 := by
   native_decide
 

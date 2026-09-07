@@ -41,9 +41,9 @@ use dclutch_trading::general::{
         GeneralCandidateV1, general_candidate_identity_v1, verify_candidate_row_v1,
     },
     collection_v1::{
-        GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1,
-        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, general_order_len_v1,
-        general_signed_order_terms_len_v1,
+        GeneralBatchOpeningV1, GeneralBatchV2, GeneralOrderHeaderV2, GeneralOrderPhaseV1,
+        GeneralOrderStateV1, GeneralOrderV2, MakerFundingV1, general_batch_len_v2,
+        general_order_len_v2, general_signed_order_terms_len_v2,
     },
     effect_artifacts_v3::{
         GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
@@ -59,7 +59,7 @@ use dclutch_trading::general::{
     runtime_manifest::settlement_manifest_len_v2,
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, consider_verified_candidate_v2},
     runtime_settlement::initialize_runtime_settlement_in_place_v2,
-    runtime_verify::runtime_verifier_len_v2,
+    runtime_verify::{OrderSideV2, runtime_verifier_len_v2},
     runtime_width::{
         CandidateHeaderV2, CandidateV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2,
         candidate_len, execution_len, page_len, settlement_cursor_len, verified_candidate_len,
@@ -511,7 +511,7 @@ fn open_batch_request_refuses_substituted_config_generation_and_zero_coordinates
 
 /// One live Batch envelope exactly as the chain holds it after an `OpenBatch`.
 ///
-/// Built through the semantic owners -- `GeneralBatchV1::open` consumes the
+/// Built through the semantic owners -- `GeneralBatchV2::open` consumes the
 /// root's revision and sequence, `encode_general_local_state_v3_atomic` wraps
 /// the record in its physical lifecycle -- rather than by spelling 224 bytes
 /// here, so a record layout that moved would move this fixture with it.
@@ -541,7 +541,7 @@ fn live_batch_account(
     };
     let expected_revision = root.revision();
     let batch =
-        GeneralBatchV1::open(root, opening, expected_revision, current_slot).expect("open batch");
+        GeneralBatchV2::open(root, opening, expected_revision, current_slot).expect("open batch");
     let batch_id = batch.batch_id();
     let seeds =
         GeneralStateAddressSeedsV3::batch(root_address.to_bytes(), batch_id).expect("Batch seeds");
@@ -550,7 +550,13 @@ fn live_batch_account(
         &trading_program,
     )
     .1;
-    let body = batch.to_bytes();
+    // THE WHOLE RECORD, NOT THE PREFIX. `to_bytes` returns the 224-byte V1
+    // prefix the OpenBatch and CloseBatch effects write; the account is
+    // `general_batch_len_v2(N)` wide, because the joint arm gave the batch a
+    // per-outcome clearing tail, and the envelope refuses `InvalidBody` for
+    // anything shorter.
+    let mut body = vec![0_u8; general_batch_len_v2(outcome_count).expect("batch record width")];
+    batch.encode_into(&mut body).expect("whole batch record");
     let bytes = general_local_state_len_v3(GeneralLocalStateKindV3::Batch, outcome_count)
         .expect("Batch envelope width");
     let mut scratch = vec![0_u8; bytes];
@@ -907,8 +913,8 @@ struct LiveMarketV1 {
 
 /// Every record one of the fifteen arms reads, produced by the protocol.
 ///
-/// NOT ONE OF THESE IS TYPED HERE. The batch comes out of `GeneralBatchV1::open`
-/// and `close`, the order out of `GeneralOrderV1::encode_into` and the batch's
+/// NOT ONE OF THESE IS TYPED HERE. The batch comes out of `GeneralBatchV2::open`
+/// and `close`, the order out of `GeneralOrderV2::encode_into` and the batch's
 /// own `admit`, the submission out of `GeneralCandidateV1::submit`, and the
 /// verifier cursor, the certificate and the settlement manifest are the three
 /// outputs of ONE run of `verify_candidate_row_v1` -- the manifest has exactly
@@ -1010,26 +1016,39 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
         settlement_close_slot: settlement_close,
         max_orders: config.max_orders_per_candidate(),
     };
-    let mut batch = GeneralBatchV1::open(&mut market.root, opening, revision, LIVE_ADMISSION_SLOT)
+    let mut batch = GeneralBatchV2::open(&mut market.root, opening, revision, LIVE_ADMISSION_SLOT)
         .expect("open batch");
     let batch_id = batch.batch_id();
 
-    let mut order_account = vec![0_u8; general_order_len_v1(width).expect("order width")];
-    GeneralOrderV1::encode_into(
-        GeneralOrderHeaderV1 {
-            outcome_count: width,
-            nonce: 1,
-            owner_id: LIVE_OWNER,
-            market: market.root.market(),
-            batch_id,
-            generation: market.root.generation(),
-            max_lots: 10,
-            max_quote_debit_per_lot: 2,
-            min_quote_credit_per_lot: 0,
-            valid_until_slot: settlement_close,
-        },
-        &vec![1_u64; count],
-        &vec![0_u64; count],
+    // ONE SINGLE-OUTCOME BUY, FILLED TO ITS MAXIMUM. Cohort-18's joint arm
+    // makes an order an interval on one side, and `runtime_verify::current_shape`
+    // refuses a row that moves claims at more than one outcome. Filling it to
+    // `max_lots` is what keeps the marginal conjunct
+    // (`RationedInsideLimit`) satisfied without pinning the price to the cap.
+    let order_header = GeneralOrderHeaderV2 {
+        outcome_count: width,
+        nonce: 1,
+        owner_id: LIVE_OWNER,
+        market: market.root.market(),
+        batch_id,
+        generation: market.root.generation(),
+        max_lots: 2,
+        max_quote_debit_per_lot: 2,
+        min_quote_credit_per_lot: 0,
+        valid_until_slot: settlement_close,
+        side: OrderSideV2::Buy,
+        outcome_lo: 0,
+        outcome_hi: 0,
+        claims_per_lot: 1,
+    };
+    let derived: Vec<(u64, u64)> = (0..width)
+        .map(|outcome| order_header.derived_row(outcome))
+        .collect();
+    let mut order_account = vec![0_u8; general_order_len_v2(width).expect("order width")];
+    GeneralOrderV2::encode_into(
+        order_header,
+        &derived.iter().map(|row| row.0).collect::<Vec<u64>>(),
+        &derived.iter().map(|row| row.1).collect::<Vec<u64>>(),
         GeneralOrderStateV1 {
             phase: GeneralOrderPhaseV1::Placed,
             admitted_slot: LIVE_ADMISSION_SLOT,
@@ -1038,7 +1057,7 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
         &mut order_account,
     )
     .expect("order record");
-    let order = GeneralOrderV1::decode(&order_account).expect("order record");
+    let order = GeneralOrderV2::decode(&order_account).expect("order record");
     let order_id = order.order_id();
     batch
         .admit(
@@ -1052,7 +1071,7 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
         )
         .expect("admit order");
     let mut signed_terms =
-        vec![0_u8; general_signed_order_terms_len_v1(width).expect("signed terms width")];
+        vec![0_u8; general_signed_order_terms_len_v2(width).expect("signed terms width")];
     order
         .encode_signed_terms_into(&mut signed_terms)
         .expect("signed terms");
@@ -1069,14 +1088,17 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
     // The candidate carries its OWN digest, and `CandidateV2` checks nothing
     // about that field: encode once to fix every other byte, then re-encode
     // with the digest those bytes produce.
-    let prices = {
-        let mut values = vec![config.price_scale() / u64::from(width); count];
-        let remainder = config.price_scale() - values.iter().sum::<u64>();
-        if let Some(first) = values.first_mut() {
-            *first += remainder;
-        }
-        values
-    };
+    //
+    // THE PRICES ARE THE ONES THIS BOOK FORCES, not a uniform vector. A lone
+    // buyer takes claims nobody sold, so the clearing MINTS a complete set --
+    // and the claims it mints at the three outcomes with no taker are a
+    // residual that complementary slackness admits only at price zero
+    // (`PricedResidual`). The whole scale therefore lands on outcome zero,
+    // which is also decision 0032's lexicographic minimum for that box. This
+    // walk stops at settlement initialization; a book that mints like this one
+    // would strand at close, and a stranding close has no frame yet.
+    let mut prices = vec![0_u64; count];
+    prices[0] = config.price_scale();
     let mut candidate_image = vec![0_u8; candidate_len(width).expect("candidate width")];
     let header = CandidateHeaderV2 {
         outcome_count: width,
@@ -1086,6 +1108,10 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
         candidate_id: [0xb5; 32],
         product_id: market.product_id,
         batch_id,
+        // The batch's own count, never a literal: `authenticate_batch_candidate_v1`
+        // refuses a candidate that disagrees with the batch about how many
+        // orders are live.
+        live_order_count: batch.live_order_count(),
     };
     CandidateV2::encode_into(header, &prices, &mut candidate_image).expect("draft candidate");
     let candidate_id = general_candidate_identity_v1(&candidate_image).expect("candidate identity");
@@ -1137,8 +1163,8 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
             max_lots: order.header().max_lots,
             lots: 2,
         },
-        &vec![1_u64; count],
-        &vec![0_u64; count],
+        &derived.iter().map(|row| row.0).collect::<Vec<u64>>(),
+        &derived.iter().map(|row| row.1).collect::<Vec<u64>>(),
         &mut row,
     )
     .expect("execution row");
@@ -1233,12 +1259,21 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
     initialize_runtime_settlement_in_place_v2(&cursor_output, &verified_output, 0, &mut settlement)
         .expect("initialize settlement");
 
+    // THE WHOLE RECORD, NOT THE PREFIX. `to_bytes` returns the 224-byte V1
+    // prefix the OpenBatch and CloseBatch effects write; the account is
+    // `general_batch_len_v2(N)` wide, because the joint arm gave the batch a
+    // per-outcome clearing tail, and the envelope refuses `InvalidBody` for
+    // anything shorter.
+    let mut batch_body = vec![0_u8; general_batch_len_v2(width).expect("batch record width")];
+    batch
+        .encode_into(&mut batch_body)
+        .expect("whole batch record");
     let batch_account = envelope(
         GeneralLocalStateKindV3::Batch,
         width,
         GeneralStateAddressSeedsV3::batch(root_seed, batch_id).expect("Batch seeds"),
         market.trading_program,
-        &batch.to_bytes(),
+        &batch_body,
     );
     let candidate_account = envelope(
         GeneralLocalStateKindV3::Candidate,

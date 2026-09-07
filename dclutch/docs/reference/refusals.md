@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **451** codes, with meanings taken
+The tables below carry all **452** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**73 of 451** codes have been observed refusing a real
+**73 of 452** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,7 +54,7 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-451 codes belonging to the programs the route census enumerates.
+452 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -159,6 +159,7 @@ The 22 campaigns contributing:
 | `0x5011` | `ClaimsSbfError::FailureEscrowUnseated` | The escrow account is the Market's own, and this Market's failure supply is not seated in it. | -- | `programs/dclutch-claims-sbf/src/lib.rs:339` |
 | `0x5012` | `ClaimsSbfError::Overdraw` | The terminal payout asked for more claims than the Position holds at that index, or more than the aggregate owes there. | -- | `programs/dclutch-claims-sbf/src/lib.rs:353` |
 | `0x5013` | `ClaimsSbfError::FounderBondFrame` | A terminal settlement that must draw the founder bond was handed no escrow to draw it from. | -- | `programs/dclutch-claims-sbf/src/lib.rs:371` |
+| `0x5014` | `ClaimsSbfError::StrandUnseated` | A residual strand was submitted and this program has no seat to burn it from. | -- | `programs/dclutch-claims-sbf/src/lib.rs:395` |
 | `0x5100` | `LiabilityBasisSbfErrorV2::ClaimsState` | Claims aggregate or Position bytes/PDA/revision refused. | -- | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:82` |
 | `0x5140` | `ProtocolPositionSbfErrorV2::Instruction` | Instruction bytes did not decode as the canonical lifecycle ABI. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:111` |
 | `0x5141` | `ProtocolPositionSbfErrorV2::Accounts` | Account count, privilege, executable, or alias facts refused. | -- | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:113` |

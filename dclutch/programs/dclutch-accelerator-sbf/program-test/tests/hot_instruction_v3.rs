@@ -15,10 +15,10 @@
 
 use std::borrow::Cow;
 
-use dclutch_vm::account_profile::v2::encode::AccountAliasInputV2;
-use dclutch_vm::account_profile::v2::{
-    AccountProfileV2, PhysicalAccountDataGeometryV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID,
+use dclutch_accelerator_program_test::joined_artifacts::{
+    JoinedGeneralArtifactInputV5, JoinedGeneralArtifactsV5, build_joined_general_artifacts_v5,
 };
+use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market::capability_program::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
     HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
@@ -41,8 +41,6 @@ use dclutch_market::capability_program::v4::{
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
-use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_vm::effect::v3::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID;
 use dclutch_market::execution_strategy::admitted_v3::ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
 use dclutch_market::execution_strategy::shadow_digest_v3::family_request_digest_v3;
 use dclutch_market::execution_strategy::v2::{
@@ -50,9 +48,28 @@ use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     classify_bank_transport_v2,
 };
-use dclutch_accelerator_program_test::joined_artifacts::{
-    JoinedGeneralArtifactInputV5, JoinedGeneralArtifactsV5, build_joined_general_artifacts_v5,
+use dclutch_market::{
+    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
+use dclutch_operator::general_hot_v3::{
+    CheckedGeneralHotReleaseV3, GeneralHotArtifactDigestsV3, GeneralHotInstructionV3,
+    GeneralHotOperatorErrorV3, GeneralHotStateV3, GeneralObservedAccountMetaV3,
+    build_general_hot_instruction_v3, canonical_general_lookup_addresses_v3,
+    compile_general_hot_v0,
+};
+use dclutch_operator::resolution_core_v3::product_graph_observation_v3::ProductGraphObservationErrorV3;
+use dclutch_operator::versioned::PACKET_DATA_BYTES;
+use dclutch_operator::{Finality, Observation, ObservedAccount};
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
+use dclutch_product::{
+    ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
+    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
+};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 use dclutch_trading::general::account_rules_v3::{
     GeneralExternalAccountWidthsV3, general_account_profile_fixed_count_v3,
     general_account_profile_rule_v3,
@@ -75,9 +92,7 @@ use dclutch_trading::general::runtime_width::{
 use dclutch_trading::general::state_artifacts_v3::{
     GeneralReadonlyEvidenceKindV3, general_child_account_start_v3, general_readonly_evidence_v3,
 };
-use dclutch_trading::general::state_seeds_v3::{
-    GeneralStateAddressSeedsV3, GeneralStateRecipeV3,
-};
+use dclutch_trading::general::state_seeds_v3::{GeneralStateAddressSeedsV3, GeneralStateRecipeV3};
 use dclutch_trading::general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
@@ -85,28 +100,11 @@ use dclutch_trading::general_codec::{
 use dclutch_trading::general_config::root::{GeneralRootV2, general_root_creation_tail_v2};
 use dclutch_trading::general_config::v3::GENERAL_CONFIG_SCHEMA_ID_V3;
 use dclutch_trading::general_config::{GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2};
-use dclutch_market::{
-    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
+use dclutch_vm::account_profile::v2::encode::AccountAliasInputV2;
+use dclutch_vm::account_profile::v2::{
+    AccountProfileV2, PhysicalAccountDataGeometryV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID,
 };
-use dclutch_operator::general_hot_v3::{
-    CheckedGeneralHotReleaseV3, GeneralHotArtifactDigestsV3, GeneralHotInstructionV3,
-    GeneralHotOperatorErrorV3, GeneralHotStateV3, GeneralObservedAccountMetaV3,
-    build_general_hot_instruction_v3, canonical_general_lookup_addresses_v3,
-    compile_general_hot_v0,
-};
-use dclutch_operator::resolution_core_v3::product_graph_observation_v3::ProductGraphObservationErrorV3;
-use dclutch_operator::versioned::PACKET_DATA_BYTES;
-use dclutch_operator::{Finality, Observation, ObservedAccount};
-use dclutch_product::{
-    ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
-    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
-};
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+use dclutch_vm::effect::v3::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID;
 use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID;
 use dclutch_vm::v3::SCHEMA_RELEASE_ID as TRANSITION_PROGRAM_SCHEMA_ID;
 use solana_address_lookup_table_interface::{
@@ -408,6 +406,17 @@ fn verified_candidate_naming_the_batch() -> Vec<u8> {
             quote_debit: 1,
             quote_credit: 0,
             price_scale: 1,
+        },
+        // THE PRICES ARE THE CERTIFICATE'S FIRST TAIL and must be on the
+        // simplex: `VerifiedCandidateV2` refuses `InvalidSimplex` unless they
+        // sum to exactly `price_scale`, which is one here. All of it at
+        // outcome zero is the only such vector this fixture needs; nothing on
+        // this path streams the certificate through the verifier, so the
+        // vector has to be admissible rather than forced by a book.
+        &{
+            let mut prices = vec![0_u64; width];
+            prices[0] = 1;
+            prices
         },
         &vec![1; width],
         &vec![1; width],

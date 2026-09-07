@@ -2,10 +2,12 @@
 
 use std::{vec, vec::Vec};
 
+use dclutch_accelerator_sbf::general::GeneralAcceleratorSbfErrorV3;
+use dclutch_core_contract::ContentId;
+use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_INSTRUCTIONS_ACCOUNT_V3, ADMITTED_RUNTIME_ACCOUNTS_START_V3,
     ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
@@ -15,11 +17,10 @@ use dclutch_market::execution_strategy::v2::{
     AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
     SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
-use dclutch_accelerator_sbf::general::GeneralAcceleratorSbfErrorV3;
-use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
+use dclutch_program_test_evidence::{TransactionEvidence, record};
 use dclutch_trading::general::{
     account_rules_v3::general_account_profile_fixed_count_v3,
-    collection_v1::{GeneralBatchOpeningV1, GeneralBatchV1},
+    collection_v1::{GeneralBatchOpeningV1, GeneralBatchV2},
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
         general_hot_scalar_count_v3, identity, scalar,
@@ -42,7 +43,6 @@ use dclutch_trading::general_config::{
     root::GeneralRootV2,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
-use dclutch_program_test_evidence::{TransactionEvidence, record};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
@@ -161,7 +161,7 @@ fn batch_opening(outcome_count: u32, sequence: u64) -> GeneralBatchOpeningV1 {
 }
 
 /// One batch opened against one real root, closed the way selection requires.
-fn opened_batch(outcome_count: u32, sequence: u64) -> GeneralBatchV1 {
+fn opened_batch(outcome_count: u32, sequence: u64) -> GeneralBatchV2 {
     let mut root = GeneralRootV2::active(MARKET, hash(&config()).to_bytes(), CONFIG_GENERATION)
         .expect("active General root");
     for _ in 0..sequence {
@@ -170,7 +170,7 @@ fn opened_batch(outcome_count: u32, sequence: u64) -> GeneralBatchV1 {
             .expect("advance the root to the sequence under test");
     }
     let revision = root.revision();
-    GeneralBatchV1::open(
+    GeneralBatchV2::open(
         &mut root,
         batch_opening(outcome_count, sequence),
         revision,
@@ -205,6 +205,15 @@ fn batch_account(outcome_count: u32, sequence: u64) -> Vec<u8> {
     state
 }
 
+/// The one-unit price simplex at a given runtime width.
+fn unit_simplex(count: usize) -> Vec<u64> {
+    let mut prices = vec![0_u64; count];
+    if let Some(first) = prices.first_mut() {
+        *first = 1;
+    }
+    prices
+}
+
 fn open_selection(outcome_count: u32) -> Vec<u8> {
     let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
     criteria[1] = SelectionCriterion::MinimizeQuoteSurplus;
@@ -230,6 +239,13 @@ fn open_selection(outcome_count: u32) -> Vec<u8> {
             quote_credit: 0,
             price_scale: 1,
         },
+        // THE PRICES ARE THE CERTIFICATE'S FIRST TAIL and must be on the
+        // simplex: `VerifiedCandidateV2` refuses `InvalidSimplex` unless they
+        // sum to exactly `price_scale`, which is one here. All of it at
+        // outcome zero is the only such vector this fixture needs; nothing on
+        // this path streams the certificate through the verifier, so the
+        // vector has to be admissible rather than forced by a book.
+        &unit_simplex(candidate_count),
         &vec![7; candidate_count],
         &vec![7; candidate_count],
         &mut verified,
@@ -676,7 +692,7 @@ async fn real_sbf_freeze_accepts_runtime_widths_one_and_258() {
 /// compare the clock against `collection_close + selectionSlots`. That account
 /// is caller-supplied, and a deadline read out of an account nobody bound is
 /// not a deadline: present any batch whose window has long elapsed and the
-/// conjunct passes on a stranger's clock. `GeneralBatchV1::batch_id` recomputes
+/// conjunct passes on a stranger's clock. `GeneralBatchV2::batch_id` recomputes
 /// the occurrence identity from the batch's own immutable opening, so the join
 /// against the cursor's `batch_id` is the one place a substitution can be
 /// caught.

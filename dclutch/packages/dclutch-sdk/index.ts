@@ -65,6 +65,10 @@ export * from './lib/walletTerminalPayoutV3';
 export * from './lib/resolutionCertificateV2';
 export * from './lib/aggregateRetirement';
 
+// The joint clearing (General, cohort-18): the batch record's clearing tail
+// and the order record's derived shape, hostile-decoded client-side.
+export * from './lib/generalClearingV1';
+
 // Founding and infrastructure: the record graph a market stands on.
 export * from './lib/coreFound';
 export * from './lib/splineProductAuthoring';

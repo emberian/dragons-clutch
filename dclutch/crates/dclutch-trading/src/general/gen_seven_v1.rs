@@ -19,7 +19,7 @@ use crate::general_codec::successor_request_v3::{ControllerActionV3, ControllerR
 
 use crate::general::{
     candidate_v1::{GeneralCandidateErrorV1, GeneralCandidateStatusV1, GeneralCandidateV1},
-    collection_v1::GeneralBatchV1,
+    collection_v1::GeneralBatchV2,
     escrow_v1::{
         ActionCustodyTransferV1, GeneralEscrowErrorV1, WorkEscrowClosePlanV1,
         WorkEscrowObservationV1, general_action_custody_transfer_v1,
@@ -465,7 +465,7 @@ pub fn authenticate_general_seven_request_v1(bytes: &[u8]) -> Result<GeneralSeve
 /// is part of the solver credit rather than a fee.
 pub fn plan_candidate_work_escrow_close_v1(
     action_plan: GeneralSevenPlanV1,
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     mut submission: GeneralCandidateV1,
     current_slot: u64,
     observation: WorkEscrowObservationV1,
@@ -506,7 +506,11 @@ mod tests {
     use super::*;
     use crate::general::{
         candidate_v1::{GeneralCandidateOpeningV1, general_candidate_identity_v1},
-        collection_v1::GeneralBatchOpeningV1,
+        collection_v1::{
+            GeneralBatchOpeningV1, GeneralOrderHeaderV2, GeneralOrderPhaseV1, GeneralOrderStateV1,
+            GeneralOrderV2, MakerFundingV1, general_order_len_v2,
+        },
+        runtime_verify::OrderSideV2,
         runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len},
     };
 
@@ -735,12 +739,12 @@ mod tests {
         output
     }
 
-    fn closed_batch_and_submission() -> (GeneralBatchV1, GeneralCandidateV1) {
+    fn closed_batch_and_submission() -> (GeneralBatchV2, GeneralCandidateV1) {
         const COLLECTION_CLOSE: u64 = 100;
         const SETTLEMENT_CLOSE: u64 = 200;
         let mut root = GeneralRootV2::active(id(1), id(2), 7).expect("active root");
         let revision = root.revision();
-        let mut batch = GeneralBatchV1::open(
+        let mut batch = GeneralBatchV2::open(
             &mut root,
             GeneralBatchOpeningV1 {
                 outcome_count: 1,
@@ -758,6 +762,49 @@ mod tests {
             10,
         )
         .expect("open batch");
+        // A certificate enumerates the batch's live orders, so the batch must
+        // hold one: `live_order_count` is zero on an empty batch and no
+        // candidate header with a zero there can encode.
+        let order_header = GeneralOrderHeaderV2 {
+            outcome_count: 1,
+            nonce: 1,
+            owner_id: id(6),
+            market: id(1),
+            batch_id: batch.batch_id(),
+            generation: 7,
+            max_lots: 1,
+            max_quote_debit_per_lot: 100,
+            min_quote_credit_per_lot: 0,
+            valid_until_slot: SETTLEMENT_CLOSE,
+            side: OrderSideV2::Buy,
+            outcome_lo: 0,
+            outcome_hi: 0,
+            claims_per_lot: 1,
+        };
+        let mut order_bytes = vec![0_u8; general_order_len_v2(1).expect("order width")];
+        GeneralOrderV2::encode_into(
+            order_header,
+            &[order_header.derived_row(0).0],
+            &[order_header.derived_row(0).1],
+            GeneralOrderStateV1 {
+                phase: GeneralOrderPhaseV1::Placed,
+                admitted_slot: 10,
+                released_slot: 0,
+            },
+            &mut order_bytes,
+        )
+        .expect("order record");
+        batch
+            .admit(
+                GeneralOrderV2::decode(&order_bytes).expect("order"),
+                MakerFundingV1 {
+                    owner_id: id(6),
+                    available_quote: 1_000,
+                    available_claims: &[0],
+                },
+                10,
+            )
+            .expect("admit and escrow");
         let revision = root.revision();
         batch.close(&mut root, revision).expect("close batch");
         let mut candidate_bytes = vec![0_u8; candidate_len(1).expect("candidate width")];
@@ -769,6 +816,7 @@ mod tests {
             candidate_id: id(9),
             product_id: id(3),
             batch_id: batch.batch_id(),
+            live_order_count: batch.live_order_count(),
         };
         CandidateV2::encode_into(header, &[100], &mut candidate_bytes).expect("draft candidate");
         let candidate_id = general_candidate_identity_v1(&candidate_bytes).expect("identity");
@@ -853,7 +901,7 @@ mod tests {
         let (batch, submission) = closed_batch_and_submission();
         let mut foreign_root = GeneralRootV2::active(id(5), id(2), 7).expect("foreign root");
         let revision = foreign_root.revision();
-        let mut foreign_batch = GeneralBatchV1::open(
+        let mut foreign_batch = GeneralBatchV2::open(
             &mut foreign_root,
             GeneralBatchOpeningV1 {
                 market: id(5),

@@ -859,3 +859,242 @@ example : ({ closedBatch with phase := .collecting } : Batch).clear? jointMint =
 end Examples
 
 end DClutch.JointClearing
+
+/-! # The tie-break as a conjunct, and the strand
+
+Decision 0032 §2b rules the tie-break: among certified candidates, the
+lexicographically minimal price vector. It was written as a selection-policy
+criterion because the note assumed the chain could only COMPARE certificates.
+It can do better. For a fixed primal optimum `(f, M)` the set of price vectors
+that certify with it is, for a book of single-outcome orders, a BOX
+intersected with the simplex: each row bounds its own outcome's price from
+one side (a filled buy caps it, an unfilled buy floors it, a sell the
+reverse), complementary slackness pins a residual outcome to zero, and
+nothing else about `p` is constrained. By LP duality every dual optimum is
+complementary to every primal optimum, so that box IS the dual optimal face,
+and its lexicographic minimum is a greedy the verifier computes in `O(K)` at
+the terminal row: `p_i = max(lo_i, s - Σ_{j>i} hi_j)`, clipped to `hi_i`.
+
+The verifier therefore REFUSES a certificate whose vector is not that
+minimum (`RuntimeVerifyErrorV2::NonMinimalPriceVector`), and the selection
+policy needs no price criterion: every certified candidate for one book
+carries one vector. What the certificate still leaves to the solver is the
+rationing among orders exactly marginal at the price; decision 0032 §2b
+names pro-rata by lots with remainder by order id, and that rule needs the
+marginal quantity BEFORE the rows stream, which the one-pass verifier does
+not have. It stays a selection tie-break (`MinimizeCandidateId`) and is named
+as owed in `BUILD_JOINT-CLEARING.md`.
+
+The box characterisation is exact for single-outcome orders only. An
+interval bundle constrains a SUM of prices, the optimal face is a polytope
+and its lexicographic minimum is a sequence of LPs, so `PlaceOrder` admits
+single-outcome orders in cohort-18 (`GeneralOrderV2Abi.Shape.isSingleOutcome`). -/
+
+namespace DClutch.JointClearing
+
+/-- The greedy lexicographic minimum over `{p | lo ≤ p ≤ hi, Σ p = scale}`.
+Each coordinate takes the least value that leaves the suffix able to absorb
+the rest of the scale. `Nat` subtraction saturates, which is exactly the
+"nothing left to force" case. -/
+def lexMinFrom : Nat → List Nat → List Nat → List Nat
+  | _, [], _ => []
+  | _, _ :: _, [] => []
+  | scale, l :: ls, h :: hs =>
+      let price := min h (max l (scale - hs.sum))
+      price :: lexMinFrom (scale - price) ls hs
+
+def lexMin (scale : Nat) (lo hi : List Nat) : List Nat := lexMinFrom scale lo hi
+
+theorem sum_le_of_valueAt_le (left right : List Nat) (same : left.length = right.length)
+    (pointwise : ∀ i, i < left.length → valueAt left i ≤ valueAt right i) :
+    left.sum ≤ right.sum := by
+  induction left generalizing right with
+  | nil => simp
+  | cons x xs ih =>
+      cases right with
+      | nil => simp at same
+      | cons y ys =>
+          simp only [List.sum_cons]
+          have head := pointwise 0 (by simp)
+          simp only [valueAt, List.getElem?_cons_zero, Option.getD_some] at head
+          have rest := ih ys (by simpa using same) (fun i hi => by
+            have := pointwise (i + 1) (by simp; omega)
+            simpa [valueAt] using this)
+          omega
+
+theorem lexMinFrom_length (scale : Nat) (lo hi : List Nat) (same : lo.length = hi.length) :
+    (lexMinFrom scale lo hi).length = lo.length := by
+  induction lo generalizing scale hi with
+  | nil => cases hi <;> simp [lexMinFrom]
+  | cons l ls ih =>
+      cases hi with
+      | nil => simp at same
+      | cons h hs =>
+          simp only [lexMinFrom, List.length_cons]
+          rw [ih _ hs (by simpa using same)]
+
+/-- A box the scale can be spread over: pointwise ordered, and the scale
+between the two sums. A passing certificate's own vector witnesses it. -/
+structure Feasible (scale : Nat) (lo hi : List Nat) : Prop where
+  same : lo.length = hi.length
+  pointwise : ∀ i, i < lo.length → valueAt lo i ≤ valueAt hi i
+  atLeast : lo.sum ≤ scale
+  atMost : scale ≤ hi.sum
+
+/-- The greedy lands on the simplex whenever the box is feasible. -/
+theorem lexMinFrom_sum (scale : Nat) (lo hi : List Nat) (feasible : Feasible scale lo hi) :
+    (lexMinFrom scale lo hi).sum = scale := by
+  induction lo generalizing scale hi with
+  | nil =>
+      cases hi with
+      | nil =>
+          have := feasible.atLeast
+          have := feasible.atMost
+          simp [lexMinFrom] at *
+          omega
+      | cons h hs => have := feasible.same; simp at this
+  | cons l ls ih =>
+      cases hi with
+      | nil => have := feasible.same; simp at this
+      | cons h hs =>
+          have tails : ls.sum ≤ hs.sum := sum_le_of_valueAt_le ls hs
+            (by have := feasible.same; simpa using this)
+            (fun i hi => by
+              have := feasible.pointwise (i + 1) (by simp; omega)
+              simpa [valueAt] using this)
+          have head := feasible.pointwise 0 (by simp)
+          simp only [valueAt, List.getElem?_cons_zero, Option.getD_some] at head
+          have atLeast := feasible.atLeast
+          have atMost := feasible.atMost
+          simp only [List.sum_cons] at atLeast atMost
+          simp only [lexMinFrom, List.sum_cons]
+          have step : Feasible (scale - min h (max l (scale - hs.sum))) ls hs := {
+            same := by have := feasible.same; simpa using this
+            pointwise := fun i hi => by
+              have := feasible.pointwise (i + 1) (by simp; omega)
+              simpa [valueAt] using this
+            atLeast := by omega
+            atMost := by omega }
+          rw [ih _ hs step]
+          omega
+
+/-- THE HEAD IS LEAST. Any vector in the box on the simplex has a first
+coordinate at least the greedy's; the greedy recurses on the same statement
+for the suffix, which is what lexicographic minimality means. -/
+theorem lexMin_head_is_least
+    (scale l h q : Nat) (hs rest : List Nat)
+    (inBox : l ≤ q ∧ q ≤ h) (same : rest.length = hs.length)
+    (restInBox : ∀ i, i < rest.length → valueAt rest i ≤ valueAt hs i)
+    (onSimplex : q + rest.sum = scale) :
+    min h (max l (scale - hs.sum)) ≤ q := by
+  have := sum_le_of_valueAt_le rest hs same restInBox
+  omega
+
+/-! ## The box a single-outcome book induces at a fixed allocation -/
+
+def ceilDiv (dividend divisor : Nat) : Nat := (dividend + divisor - 1) / divisor
+
+/-- The one coordinate a single-outcome order moves: `(outcome, magnitude,
+isBuy)`, or nothing for a bundle. -/
+def Order.singleOutcome? (o : Order) : Option (Nat × Nat × Bool) :=
+  let receives := (List.range o.receivePerLot.length).filter fun i => valueAt o.receivePerLot i != 0
+  let delivers := (List.range o.deliverPerLot.length).filter fun i => valueAt o.deliverPerLot i != 0
+  match receives, delivers with
+  | [i], [] => some (i, valueAt o.receivePerLot i, true)
+  | [], [i] => some (i, valueAt o.deliverPerLot i, false)
+  | _, _ => none
+
+/-- The interval of prices at its outcome that keeps one row admissible:
+a filled buy caps the price at its limit per claim, an unfilled buy floors it
+there; a sell the reverse. The whole range where the row constrains nothing. -/
+def Fill.priceBounds (f : Fill) (scale : Nat) : Option (Nat × Nat × Nat) :=
+  match f.order.singleOutcome? with
+  | none => none
+  | some (outcome, magnitude, isBuy) =>
+      if isBuy then
+        let cap := f.order.limit.toNat
+        some (outcome,
+          if f.lots < f.order.quantity then ceilDiv cap magnitude else 0,
+          if 0 < f.lots then cap / magnitude else scale)
+      else
+        let floor := (-f.order.limit).toNat
+        some (outcome,
+          if 0 < f.lots then ceilDiv floor magnitude else 0,
+          if f.lots < f.order.quantity then floor / magnitude else scale)
+
+/-- The box: every row's bound folded in, and a residual outcome pinned to
+zero by complementary slackness. -/
+def Clearing.box (c : Clearing) : List Nat × List Nat :=
+  let lo := List.replicate c.outcomeCount 0
+  let hi := (List.range c.outcomeCount).map fun i => if c.net i < c.sets then 0 else c.scale
+  c.fills.foldl (fun acc f =>
+    match acc, f.priceBounds c.scale with
+    | (lo, hi), none => (lo, hi)
+    | (lo, hi), some (i, l, h) =>
+        (lo.set i (max (valueAt lo i) l), hi.set i (min (valueAt hi i) h))) (lo, hi)
+
+/-- The minimality conjunct: the certificate's vector IS the greedy's. -/
+def Clearing.minimal (c : Clearing) : Bool :=
+  let (lo, hi) := c.box
+  c.prices == lexMin c.scale lo hi
+
+/-! ## The strand
+
+Decision 0032 §2a: the residual is burned without releasing collateral. After
+the close, outcome `i`'s supply from this batch is exactly `net i`, the Hoard
+moved by `sets`, and `net i = sets` wherever the price was positive. -/
+
+def Clearing.strandedSupply (c : Clearing) (i : Nat) : Int := c.net i
+
+theorem stranded_supply_never_exceeds_the_sets
+    (c : Clearing) (h : c.valid = true) (i : Nat) (inBounds : i < c.outcomeCount) :
+    c.strandedSupply i ≤ c.sets :=
+  (certified_of_valid c h).covered i inBounds
+
+theorem stranded_supply_is_the_sets_wherever_priced
+    (c : Clearing) (h : c.valid = true) (i : Nat) (inBounds : i < c.outcomeCount)
+    (priced : c.price i ≠ 0) : c.strandedSupply i = c.sets := by
+  rcases (certified_of_valid c h).slack i inBounds with hp | hn
+  · exact absurd hp priced
+  · exact hn
+
+theorem the_strand_is_the_residual (c : Clearing) (i : Nat) :
+    c.sets - c.strandedSupply i = c.residual i := rfl
+
+namespace Examples
+
+/-- `jointMint`'s box: both buyers full at limit 60, so `[0, 60] × [0, 60]`,
+and the greedy puts the first price as low as the second's cap allows. -/
+example : jointMint.box = ([0, 0], [60, 60]) := by native_decide
+example : lexMin 100 [0, 0] [60, 60] = [40, 60] := by native_decide
+
+/-- HOSTILE: a non-minimal tie. Both `[50, 50]` and `[60, 40]` certify and
+neither is the minimum; `[40, 60]` is, and it certifies too. -/
+example : jointMint.minimal = false ∧ jointMintSkewed.minimal = false := by native_decide
+def jointMintMinimal : Clearing := { jointMint with prices := [40, 60] }
+example : jointMintMinimal.valid = true ∧ jointMintMinimal.minimal = true := by native_decide
+
+/-- `zeroPriced`'s third outcome is pinned to zero by its residual; the
+minimum shifts the two priced outcomes toward the later one. -/
+example : zeroPriced.box = ([0, 0, 0], [60, 60, 0]) := by native_decide
+def zeroPricedMinimal : Clearing := { zeroPriced with prices := [40, 60, 0] }
+example : zeroPriced.minimal = false := by native_decide
+example : zeroPricedMinimal.valid = true ∧ zeroPricedMinimal.minimal = true := by native_decide
+example : collectedQuote zeroPricedMinimal zeroPricedMinimal.fills = 1000 := by native_decide
+
+/-- A transfer at the seller's floor: the seller filled floors the price at
+30, the buyer filled caps it at 50, so the minimum is 30 and not the 40 the
+witness chose. -/
+example : transfer.box = ([30, 0], [50, 100]) := by native_decide
+example : transfer.minimal = false := by native_decide
+example : ({ transfer with prices := [30, 70] } : Clearing).valid = true ∧
+    ({ transfer with prices := [30, 70] } : Clearing).minimal = true := by native_decide
+
+/-- The strand on `zeroPriced`: outcome 2 keeps two claims of the ten
+minted, outcomes 0 and 1 keep all ten. -/
+example : zeroPriced.strandedSupply 0 = 10 ∧ zeroPriced.strandedSupply 1 = 10 ∧
+    zeroPriced.strandedSupply 2 = 2 := by native_decide
+
+end Examples
+
+end DClutch.JointClearing

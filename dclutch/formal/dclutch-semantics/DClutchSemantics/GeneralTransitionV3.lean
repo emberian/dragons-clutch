@@ -69,12 +69,21 @@ def kindOrder : Nat := 4
 def kindCandidate : Nat := 5
 /-- `GeneralLocalStateKindV3::Verifier.tag()`. -/
 def kindVerifier : Nat := 6
-/-- `GeneralBatchV1::record_magic_u64()` -- little-endian `DCGBAT01`. -/
-def batchRecordMagicWord : Nat := 3544425546002154308
-/-- `GeneralBatchV1::record_version_value()`; also the constant one the
-transition loads into the `one` register, and they are deliberately the same
-value so one `loadConst` serves both. -/
-def batchRecordVersion : Nat := 1
+/-- `GeneralBatchLayoutV2::magic_u64()` -- little-endian `DCGBTCH2`.
+
+The joint clearing appended the `ClearingPriceV1` tail to the batch record, so
+the record's magic and version moved together (`ClearingPriceV1Abi`). The
+program that WRITES the record moves with them, or `OpenBatch` creates an
+account the decoder refuses. -/
+def batchRecordMagicWord : Nat := 3623219929387844420
+/-- `GeneralBatchLayoutV2::version_value()`.
+
+It USED to be 1, and the `one` register doubled as both the record version and
+the literal one because they were the same value. They are no longer: the
+`openBatch` program loads this into `one` and never reads `one` as a count, so
+the register carries the version alone. Every other program that needs the
+literal loads it itself (`closeBatch`, `placeOrder`, `submitCandidate`, ...). -/
+def batchRecordVersion : Nat := 2
 /-- `GeneralBatchV1::record_phase_value()`. -/
 def batchRecordPhase : Nat := 20
 /-- `BatchStatusV1::Collecting.tag()`. -/
@@ -91,9 +100,21 @@ def candidateStatusSubmitted : Nat := 1
 def candidateStatusConsidered : Nat := 3
 /-- `GeneralOrderPhaseV1::Placed.tag()`. -/
 def orderPhasePlaced : Nat := 1
-/-- `GeneralOrderLayoutV1::magic_u64()` -- little-endian `DCGORD01`. -/
-def orderRecordMagicWord : Nat := 3544408027048657732
-/-- `GeneralOrderLayoutV1::phase_value()`. -/
+/-- `GeneralOrderLayoutV2::magic_u64()` -- little-endian `DCGSORD2`.
+
+The order record gained its shape (`side`, `outcome_lo`, `outcome_hi`,
+`claims_per_lot`) at 160..184 and moved its state window and rows
+(`GeneralOrderV2Abi`), so its magic moved with the layout. -/
+def orderRecordMagicWord : Nat := 3622110500965794628
+/-- `GeneralOrderLayoutV2::version_value()`.
+
+The order record's version was 1 while `one` was 1, so the PlaceOrder effect
+wrote it from the `one` register and nobody had to say so. The clearing cohort
+moved it to 2, and `one` is still the literal one that `placeOrder` compares
+the batch status against; the program therefore RELOADS `one` with the version
+as its last instruction, after every use of it as a count. -/
+def orderRecordVersion : Nat := 2
+/-- `GeneralOrderLayoutV2::phase_value()`. -/
 def orderRecordPhase : Nat := 21
 /-- `GeneralOrderPhaseV1::Cancelled.tag()`. -/
 def orderPhaseCancelled : Nat := 2
@@ -675,7 +696,8 @@ def actionOps (action : Action) : List Op :=
       .checkedAddInto (s .scratchA) (s .configSettlementSlots) (s .batchSettlementCloseSlot),
       -- The record constants the EffectProgram writes into the vacant account:
       -- status Collecting, and the batch record's own magic/version/phase.
-      -- `one` doubles as the record version, which is 1.
+      -- `one` carries the record version, which the clearing tail moved to 2;
+      -- `openBatch` never reads it as a count.
       .loadConst (s .batchPostStatus) batchStatusCollecting,
       .loadConst (s .one) batchRecordVersion,
       .loadConst (s .scratchA) batchRecordMagicWord,
@@ -882,7 +904,11 @@ def actionOps (action : Action) : List Op :=
       -- `submitCandidate` above for why this join cannot live in the
       -- AccountProfile as a `RequireKey`.
       .identityEq (d .payer) (d .owner),
-      .loadConst (s .custodyOperation) custodyOperationTransfer
+      .loadConst (s .custodyOperation) custodyOperationTransfer,
+      -- LAST, and it must be last: the PlaceOrder effect writes the order
+      -- record's version out of `one`, and every conjunct above that needs
+      -- `one` to be the literal one has already run.
+      .loadConst (s .one) orderRecordVersion
     ]
   | .cancelOrder => [
       -- The second derived state: the order the maker is cancelling. Its bump
@@ -1127,8 +1153,10 @@ theorem authored_section_counts :
       -- freeze 17 -> 21: the selection-window conjunct is four instructions,
       -- two fail-closed `nonzero`s on its projected sources, the sum, and the
       -- comparison.
+      -- placeOrder 46 -> 47: the order record's version no longer shares the
+      -- `one` register with the literal one, so the program reloads it last.
       [(15, 1, 0), (21, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0),
-        (26, 0, 0), (46, 4, 0), (50, 4, 0), (27, 0, 0), (46, 1, 0), (23, 1, 0),
+        (26, 0, 0), (47, 4, 0), (50, 4, 0), (27, 0, 0), (46, 1, 0), (23, 1, 0),
         (42, 4, 0), (34, 1, 0)] := by
   native_decide
 
@@ -1167,7 +1195,9 @@ theorem authored_encoded_widths :
       -- each, the bound check that had no register to bound. The 32-byte header
       -- is unchanged; only the two zero-stride actions move.
       -- freeze 464 -> 560: four more 24-byte instructions for the window.
-      [416, 560, 584, 632, 440, 632, 824, 656, 1232, 1328, 680, 1160, 608, 1136,
+      -- placeOrder 1232 -> 1256: the order-version reload, one 24-byte
+      -- instruction.
+      [416, 560, 584, 632, 440, 632, 824, 656, 1256, 1328, 680, 1160, 608, 1136,
         872] := by
   native_decide
 

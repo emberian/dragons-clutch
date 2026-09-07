@@ -4,20 +4,6 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_market::capability_manifest::{
-    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-    FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
-    funding::{CompartmentFundingV1, FundingAmountsV1},
-};
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
-    hot_v3::{
-        DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
-    },
-    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
-    v4::CapabilityProgramV4,
-};
-use dclutch_vm::capability_seal::{CAPABILITY_SEAL_BYTES_V1, SealedDescriptorClosureV1};
 use dclutch_chain_bundle_builder::{
     BuilderError, WaistFactsV1,
     admitted::AdmittedAotInputV1,
@@ -35,28 +21,26 @@ use dclutch_chain_bundle_builder::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_direct_hot_program_test_support::waist;
-use dclutch_trading::general::{
-    candidate_v1::{
-        GeneralCandidateOpeningV1, GeneralCandidateStatusV1, GeneralCandidateV1,
-        authenticate_candidate_identity_v1, general_candidate_identity_v1,
+use dclutch_market::capability_manifest::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
+    FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    funding::{CompartmentFundingV1, FundingAmountsV1},
+};
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+    hot_v3::{
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
     },
-    collection_v1::{
-        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV1, GeneralOrderHeaderV1,
-        GeneralOrderPhaseV1, GeneralOrderStateV1, GeneralOrderV1, authenticate_batch_candidate_v1,
-        general_order_len_v1, general_signed_order_terms_len_v1,
-    },
-    local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
-    runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len},
-    state_artifacts_v3::{
-        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_STATE_ACCOUNT_V3,
-        GeneralReadonlyEvidenceKindV3, general_create_payer_account_v3,
-        general_readonly_evidence_v3, general_rent_credit_account_v3,
-        general_system_program_account_v3,
+    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+    v4::CapabilityProgramV4,
+};
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1};
+use dclutch_market::rent::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_trading::general_codec::Action;
-use dclutch_trading::general_config::v3::GeneralConfigV3;
-use dclutch_trading::general_config::{GENERAL_ROOT_BYTES_V2, GeneralRootV2};
 use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     StateBumpsV1,
@@ -69,6 +53,10 @@ use dclutch_operator::general_selected_release_v1::{
     GeneralSelectedReleaseV1, general_external_account_widths_v3,
     general_selected_entry_descriptor_v1, general_selected_release_v1,
 };
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
@@ -78,20 +66,33 @@ use dclutch_product::payoff::{
 use dclutch_product::{
     ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1};
 use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry::release_set::{ArtifactReleaseIdV1, CapabilityExecutionSelectionV1};
-use dclutch_market::rent::{
-    RefundAuthority,
-    lifecycle_v2::{
-        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+use dclutch_trading::general::{
+    candidate_v1::{
+        GeneralCandidateOpeningV1, GeneralCandidateStatusV1, GeneralCandidateV1,
+        authenticate_candidate_identity_v1, general_candidate_identity_v1,
+    },
+    collection_v1::{
+        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV2, GeneralOrderHeaderV2,
+        GeneralOrderPhaseV1, GeneralOrderStateV1, GeneralOrderV2, authenticate_batch_candidate_v1,
+        general_order_len_v2, general_signed_order_terms_len_v2,
+    },
+    local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
+    runtime_verify::OrderSideV2,
+    runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len},
+    state_artifacts_v3::{
+        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+        GeneralReadonlyEvidenceKindV3, general_create_payer_account_v3,
+        general_readonly_evidence_v3, general_rent_credit_account_v3,
+        general_system_program_account_v3,
     },
 };
+use dclutch_trading::general_codec::Action;
+use dclutch_trading::general_config::v3::GeneralConfigV3;
+use dclutch_trading::general_config::{GENERAL_ROOT_BYTES_V2, GeneralRootV2};
+use dclutch_vm::capability_seal::{CAPABILITY_SEAL_BYTES_V1, SealedDescriptorClosureV1};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
@@ -349,16 +350,22 @@ fn manifest_selection(
     )
     .expect("funding compartments");
     let entry = CapabilityEntryV1::new(
-        dclutch_market::capability_manifest::ContentId::new(descriptor.kind().to_bytes()).expect("kind"),
+        dclutch_market::capability_manifest::ContentId::new(descriptor.kind().to_bytes())
+            .expect("kind"),
         dclutch_market::capability_manifest::ContentId::new(digest(&release.program_set))
             .expect("ProgramSet"),
-        dclutch_market::capability_manifest::ContentId::new(digest(&release.config)).expect("config"),
-        dclutch_market::capability_manifest::ContentId::new(descriptor.capacity_profile().to_bytes())
-            .expect("capacity"),
+        dclutch_market::capability_manifest::ContentId::new(digest(&release.config))
+            .expect("config"),
+        dclutch_market::capability_manifest::ContentId::new(
+            descriptor.capacity_profile().to_bytes(),
+        )
+        .expect("capacity"),
         dclutch_market::capability_manifest::ContentId::new(descriptor.root_schema().to_bytes())
             .expect("root schema"),
-        dclutch_market::capability_manifest::ContentId::new(descriptor.derivation_policy().to_bytes())
-            .expect("lifecycle"),
+        dclutch_market::capability_manifest::ContentId::new(
+            descriptor.derivation_policy().to_bytes(),
+        )
+        .expect("lifecycle"),
         ActivationPolicy::PrepaidLazy,
         clock_slot.checked_add(100).expect("activation deadline"),
         0,
@@ -1377,7 +1384,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         "the isolated protocol payer funds exactly the new Batch principal"
     );
     let local = GeneralLocalStateV3::decode(&batch_after.data).expect("local Batch envelope");
-    let decoded_batch = GeneralBatchV1::decode(local.body()).expect("Batch");
+    let decoded_batch = GeneralBatchV2::decode(local.body()).expect("Batch");
     let occurrence = GeneralBatchOccurrenceTermsV1::new(decoded_batch.opening())
         .expect("Batch occurrence")
         .occurrence_id();
@@ -1914,9 +1921,9 @@ async fn produce_seal(
 }
 
 /// Decode the live Batch envelope exactly as the bank holds it.
-fn decode_batch(account: &Account) -> (GeneralLocalStateV3<'_>, GeneralBatchV1) {
+fn decode_batch(account: &Account) -> (GeneralLocalStateV3<'_>, GeneralBatchV2) {
     let envelope = GeneralLocalStateV3::decode(&account.data).expect("local Batch envelope");
-    let batch = GeneralBatchV1::decode(envelope.body()).expect("Batch");
+    let batch = GeneralBatchV2::decode(envelope.body()).expect("Batch");
     (envelope, batch)
 }
 
@@ -1947,7 +1954,7 @@ fn root_tail_of(account: &Account) -> GeneralRootV2 {
 /// and consumes root revision 1; `CloseBatch` names the Batch by the identity
 /// the CHAIN holds, consumes revision 2, and is admitted only once the
 /// config-derived collection window has elapsed
-/// (`GeneralBatchV1::close_is_permissionless`). Neither can be run first and
+/// (`GeneralBatchV2::close_is_permissionless`). Neither can be run first and
 /// neither can be run twice, and both facts are executed below rather than
 /// asserted in prose.
 ///
@@ -2066,7 +2073,15 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // `identity_eq(PAYER, OWNER)`: whoever signs the placement IS the maker the
     // record names, exactly as SubmitCandidate's solver is the account that
     // funds the candidate.
-    let order_header = GeneralOrderHeaderV1 {
+    // ONE CLAIM AT ONE OUTCOME, ON ONE SIDE. Cohort-18's joint arm makes an
+    // order an INTERVAL: it moves `claims_per_lot` claims at every outcome of
+    // `[outcome_lo, outcome_hi]` and nothing off it, and the record's per-lot
+    // vectors must be the ones that shape derives (`RowsDisagreeWithShape`).
+    // A single-outcome buy of one claim per lot is the smallest order
+    // `GeneralOrderV2::decode` admits: `validate_shape` refuses a
+    // `claims_per_lot` of zero, so a record that moves no claim in either
+    // direction cannot be encoded at all.
+    let order_header = GeneralOrderHeaderV2 {
         outcome_count: OUTCOME_COUNT,
         nonce: 1,
         owner_id: payer.pubkey().to_bytes(),
@@ -2077,16 +2092,18 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         max_quote_debit_per_lot: opened_batch.opening().price_scale,
         min_quote_credit_per_lot: 0,
         valid_until_slot: opened_batch.opening().settlement_close_slot,
+        side: OrderSideV2::Buy,
+        outcome_lo: 0,
+        outcome_hi: 0,
+        claims_per_lot: 1,
     };
-    // One lot of outcome zero received against one lot of outcome one
-    // delivered: the smallest order `GeneralOrderV1::decode` admits, since a
-    // record that moves no claim in either direction is refused `ZeroIdentity`.
-    let mut receive_per_lot = vec![0_u64; usize::try_from(OUTCOME_COUNT).expect("width")];
-    let mut deliver_per_lot = receive_per_lot.clone();
-    receive_per_lot[0] = 1;
-    deliver_per_lot[1] = 1;
-    let mut order_bytes = vec![0_u8; general_order_len_v1(OUTCOME_COUNT).expect("order width")];
-    GeneralOrderV1::encode_into(
+    let derived_rows: Vec<(u64, u64)> = (0..OUTCOME_COUNT)
+        .map(|outcome| order_header.derived_row(outcome))
+        .collect();
+    let receive_per_lot: Vec<u64> = derived_rows.iter().map(|row| row.0).collect();
+    let deliver_per_lot: Vec<u64> = derived_rows.iter().map(|row| row.1).collect();
+    let mut order_bytes = vec![0_u8; general_order_len_v2(OUTCOME_COUNT).expect("order width")];
+    GeneralOrderV2::encode_into(
         order_header,
         &receive_per_lot,
         &deliver_per_lot,
@@ -2098,9 +2115,9 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         &mut order_bytes,
     )
     .expect("canonical maker order against the open batch");
-    let order_record = GeneralOrderV1::decode(&order_bytes).expect("order record");
+    let order_record = GeneralOrderV2::decode(&order_bytes).expect("order record");
     let mut signed_terms =
-        vec![0_u8; general_signed_order_terms_len_v1(OUTCOME_COUNT).expect("terms width")];
+        vec![0_u8; general_signed_order_terms_len_v2(OUTCOME_COUNT).expect("terms width")];
     order_record
         .encode_signed_terms_into(&mut signed_terms)
         .expect("the signed projection keeps the record identity");
@@ -2263,7 +2280,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     //
     // AN ACTION OUT OF SEQUENCE, stated the only way a same-bank campaign can
     // state it. The host cannot BUILD a second `CloseBatch` -- the projector
-    // decodes the batch the bank now holds and `GeneralBatchV1::close` refuses a
+    // decodes the batch the bank now holds and `GeneralBatchV2::close` refuses a
     // batch that is not `Collecting` -- so the out-of-order execution that
     // reaches the chain is this one: the exact bundle that just committed,
     // resubmitted against the poststate it produced. Its `expected_revision` is
@@ -2475,6 +2492,11 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         candidate_id: [0x7c; 32],
         product_id: campaign.product.product_id,
         batch_id: closed_batch.batch_id(),
+        // The batch's own count, never a literal: `authenticate_batch_candidate_v1`
+        // refuses a candidate that disagrees with the batch about how many
+        // orders are live, and this batch closed holding the one order this
+        // walk placed.
+        live_order_count: closed_batch.live_order_count(),
     };
     let mut candidate_image = vec![0_u8; candidate_len(OUTCOME_COUNT).expect("candidate width")];
     CandidateV2::encode_into(draft, &uniform_price, &mut candidate_image).expect("draft candidate");

@@ -10,10 +10,6 @@ import {
   type MarketProvenanceV1,
 } from './marketDiscovery';
 import { decodeClaimsPositionV2, type MarketCorePhaseV2 } from './marketCoreV2';
-import {
-  PROTOCOL_POSITION_ADMISSION_SEED_V2,
-  PROTOCOL_POSITION_STATE_SEED_V2,
-} from './generated/directParticipantV1';
 import { type RequiredBackingBasisV2 } from './marketDiscovery';
 import { lamportsAsSolV1 } from './openerTerms';
 import { type SolanaRpcClient } from './rpc';

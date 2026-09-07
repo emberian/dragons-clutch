@@ -203,6 +203,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x5011, name: "ClaimsSbfError::FailureEscrowUnseated", meaning: "The escrow account is the Market's own, and this Market's failure supply is not seated in it.", band: "claims" },
   { code: 0x5012, name: "ClaimsSbfError::Overdraw", meaning: "The terminal payout asked for more claims than the Position holds at that index, or more than the aggregate owes there.", band: "claims" },
   { code: 0x5013, name: "ClaimsSbfError::FounderBondFrame", meaning: "A terminal settlement that must draw the founder bond was handed no escrow to draw it from.", band: "claims" },
+  { code: 0x5014, name: "ClaimsSbfError::StrandUnseated", meaning: "A residual strand was submitted and this program has no seat to burn it from.", band: "claims" },
   { code: 0x5100, name: "LiabilityBasisSbfErrorV2::ClaimsState", meaning: "Claims aggregate or Position bytes/PDA/revision refused.", band: "claims" },
   { code: 0x5140, name: "ProtocolPositionSbfErrorV2::Instruction", meaning: "Instruction bytes did not decode as the canonical lifecycle ABI.", band: "claims" },
   { code: 0x5141, name: "ProtocolPositionSbfErrorV2::Accounts", meaning: "Account count, privilege, executable, or alias facts refused.", band: "claims" },

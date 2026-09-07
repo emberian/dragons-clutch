@@ -62,7 +62,6 @@ crates/dclutch-rational-open-wasm/src/wire.rs
 tools/dclutch-cli/src/capability.rs
 tools/fractional-exterior/src/narrow_fixture.rs
 tools/fractional-exterior/src/stage.rs
-tools/gauntlet/census/src/magics.rs
 tools/gauntlet/census/src/main.rs
 tools/gauntlet/census/src/preimages.rs
 tools/gauntlet/journey/src/ledger.rs
@@ -83,7 +82,6 @@ tools/local-validator/bootstrap/successor/src/direct_ticket.rs
 tools/local-validator/bootstrap/successor/src/direct_trade_producer.rs
 tools/local-validator/bootstrap/successor/src/direct_trade_setup.rs
 tools/local-validator/bootstrap/successor/src/direct_trade_token_setup.rs
-tools/local-validator/bootstrap/successor/src/family_hot_campaign.rs
 tools/local-validator/bootstrap/successor/src/flagship_resolution.rs
 tools/local-validator/bootstrap/successor/src/funding_readiness.rs
 tools/local-validator/bootstrap/successor/src/general_devnet_market.rs
@@ -116,9 +114,6 @@ programs/dclutch-accelerator-sbf/generator/src/manifest/tests.rs
 programs/dclutch-accelerator-sbf/generator/src/source_operator.rs
 programs/dclutch-accelerator-sbf/generator/src/source_operator/tests.rs
 programs/dclutch-accelerator-sbf/program-test/src/joined_artifacts.rs
-programs/dclutch-accelerator-sbf/program-test/tests/freeze.rs
-programs/dclutch-accelerator-sbf/program-test/tests/hot_instruction_v3.rs
-programs/dclutch-accelerator-sbf/program-test/tests/lifecycle.rs
 programs/dclutch-accelerator-sbf/test-programs/dealer-caller/src/lib.rs
 programs/dclutch-claims-sbf/program-test/affine-batch/src/fixture.rs
 programs/dclutch-claims-sbf/program-test/affine-batch/src/lib.rs
@@ -130,14 +125,12 @@ programs/dclutch-claims-sbf/program-test/fractional-signed-delta/tests/fractiona
 programs/dclutch-claims-sbf/program-test/protocol-position/tests/lifecycle.rs
 programs/dclutch-claims-sbf/program-test/rational-lifecycle/tests/lifecycle.rs
 programs/dclutch-claims-sbf/program-test/sparse-chain/tests/sparse_chain.rs
-programs/dclutch-claims-sbf/src/lib.rs
 programs/dclutch-claims-sbf/test-programs/fractional-atomic-caller/src/lib.rs
 programs/dclutch-claims-sbf/test-programs/fractional-compaction-caller/src/lib.rs
 programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller/src/lib.rs
 programs/dclutch-claims-sbf/test-programs/liability-basis-caller/src/lib.rs
 programs/dclutch-claims-sbf/test-programs/rational-v2-caller/src/lib.rs
 programs/dclutch-core-sbf/test-programs/series-consume-caller/src/lib.rs
-programs/dclutch-trading-sbf/program-test/general-hot/tests/open_batch.rs
 programs/dclutch-trading-sbf/program-test/test-programs/registry/src/lib.rs
 programs/dclutch-trading-sbf/program-test/tests/activation.rs
 programs/dclutch-trading-sbf/program-test/tests/capability_seal_close.rs

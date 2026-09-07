@@ -3,10 +3,37 @@
 //! The compact page row is only a transport projection. Generic Trading must
 //! authenticate the immutable order identified by the row before constructing
 //! [`AuthenticatedOrderTermsV2`]. This evaluator then derives quote debit and
-//! credit itself, enforces the signed debit limit, aggregates claim movement,
-//! and emits one complete runtime-width verified-candidate record. It owns no
+//! credit itself, enforces the signed limits, aggregates claim movement, and
+//! emits one complete runtime-width verified-candidate record. It owns no
 //! accounts, performs no CPI, and copies caller-owned candidate outputs only
 //! after the complete row transition accepts.
+//!
+//! # The joint arm (cohort-18)
+//!
+//! `MECHANISM_JOINT_CLEARING_2026_09_04.md` §1.2 states the clearing as a
+//! CERTIFICATE: eight integer KKT conjuncts, which is what this streamed
+//! verifier now checks, one row per transaction and the rest at the terminal
+//! row. Row by row: bounded (`ExcessLots`), at-or-better (`QuoteLimit`,
+//! `CreditLimit`), and the dual half the shipping verifier could not state
+//! because it never saw an unfilled order -- an order rationed strictly inside
+//! its limit (`RationedInsideLimit`), which is why a row may now fill ZERO
+//! lots. At the terminal row: every live order enumerated (`OrderOmitted`,
+//! held to the candidate's `live_order_count` that `SubmitCandidate`
+//! authenticated against the batch), the cover and complementary-slackness
+//! pair that replaced the uniform complete-set delta (`net_i ≤ M` everywhere,
+//! `net_i = M` wherever `p_i > 0`, else `PricedResidual`), and decision 0032
+//! §2b's tie-break as a conjunct rather than a preference
+//! (`NonMinimalPriceVector`): the cursor accumulates the box every row places
+//! on its outcome's price and the terminal row computes the box's
+//! lexicographic minimum, which is the ONE vector any certified candidate for
+//! this book may carry (`JointClearingV1.lexMinFrom`, and the LP-duality
+//! argument in that module's header). The simplex conjunct is the Candidate
+//! decoder's (`InvalidSimplex`); distinctness is `NonCanonicalOrder`.
+//!
+//! What the terminal row leaves behind is the clearing itself: the verified
+//! certificate carries the price vector as its first tail, so settlement can
+//! re-derive the sets and the residual it must strand, and the close can
+//! publish the prices (`ClearingPriceV1`).
 
 use crate::general_codec::{SelectionCriterion, SelectionPolicyV1};
 
@@ -20,8 +47,12 @@ use crate::general::runtime_width::{
     VerifiedCandidateV2, verified_candidate_len,
 };
 
-/// Exact fixed bytes before five runtime-width `u64` tails in the verifier.
+/// Exact fixed bytes before seven runtime-width `u64` tails in the verifier.
 pub const RUNTIME_VERIFIER_HEADER_BYTES_V2: usize = 288;
+/// Runtime-width tails after the fixed header: prices, the current order's
+/// receive and deliver vectors, aggregate claim inputs and outputs, and the
+/// price box's floor and ceiling.
+pub const RUNTIME_VERIFIER_TAIL_COUNT_V2: usize = 7;
 
 const VERIFIER_MAGIC: [u8; 8] = *b"DCGVFY02";
 const VERSION: u16 = 2;
@@ -30,6 +61,10 @@ const CURRENT_RECEIVE_TAIL: usize = 1;
 const CURRENT_DELIVER_TAIL: usize = 2;
 const CLAIM_INPUTS_TAIL: usize = 3;
 const CLAIM_OUTPUTS_TAIL: usize = 4;
+/// The least price each outcome may carry given the rows so far.
+const PRICE_FLOOR_TAIL: usize = 5;
+/// The greatest price each outcome may carry given the rows so far.
+const PRICE_CEILING_TAIL: usize = 6;
 
 /// Typed canonical verifier-cursor coordinates for generic Effect writes.
 ///
@@ -74,7 +109,8 @@ impl RuntimeVerifierLayoutV2 {
         24
     }
 
-    /// Distinct completed-order count offset.
+    /// Distinct completed-order count offset: every order the certificate
+    /// enumerated, filled or not.
     pub const fn order_count() -> u32 {
         28
     }
@@ -87,6 +123,14 @@ impl RuntimeVerifierLayoutV2 {
     /// Candidate coordinate offset.
     pub const fn candidate_coordinate() -> u32 {
         40
+    }
+
+    /// Filled-order count offset: the orders that emitted a settlement
+    /// manifest row. The four bytes at 44 were reserved zero until the joint
+    /// clearing; an unfilled order is a row of the certificate and not a row
+    /// of the settlement, so the two counts parted here.
+    pub const fn filled_order_count() -> u32 {
+        44
     }
 
     /// Candidate identity offset.
@@ -184,6 +228,11 @@ impl RuntimeVerifierLayoutV2 {
     pub const fn tail_item_stride() -> u32 {
         8
     }
+
+    /// Runtime-width tails after the fixed header.
+    pub const fn tail_count() -> u32 {
+        RUNTIME_VERIFIER_TAIL_COUNT_V2 as u32
+    }
 }
 
 /// Stable refusal from runtime-width candidate verification.
@@ -218,7 +267,27 @@ pub enum RuntimeVerifyErrorV2 {
     /// a reader who cannot tell those apart has to re-derive the fill to know
     /// which side of the book refused.
     CreditLimit,
+    /// An order left short of its maximum while the price was strictly inside
+    /// its limit: the marginal conjunct, `f_o < q_o ⇒ ℓ_o ≤ a_o·p`.
+    RationedInsideLimit,
+    /// The certificate enumerated fewer distinct orders than the batch holds
+    /// live: the completeness conjunct, at the terminal row.
+    OrderOmitted,
+    /// Sets were claimed on a priced outcome nobody funded: the batch would
+    /// hold a residual at `p_i > 0`. Complementary slackness, and the exact
+    /// form of "the minted sets are funded".
+    PricedResidual,
+    /// The price vector is not the lexicographic minimum of the box the rows
+    /// induce: decision 0032 §2b's tie-break, refused rather than preferred.
+    NonMinimalPriceVector,
+    /// A row's claim vectors are not the single-outcome shape its authenticated
+    /// order names, or the shape is not an interval inside the width.
+    ShapeNotInterval,
     /// Aggregate claim inputs and outputs had no uniform complete-set delta.
+    ///
+    /// Retired by the joint arm -- cover and slackness replaced uniformity --
+    /// and kept as a word so a reader of an older log still finds it. Nothing
+    /// raises it.
     ClaimImbalance,
     /// Derived quote inventory could not fund the complete-set move and credits.
     QuoteImbalance,
@@ -235,21 +304,13 @@ impl RuntimeVerifyErrorV2 {
     /// semantic refusal it can raise, on purpose, so that Trading can tell a
     /// transport fault from a failure-atomic refusal. The consequence is that
     /// the wire cannot carry which conjunct of row verification refused, and
-    /// until 2026-09-04 nothing else did either: a `CreditLimit` and a
-    /// `NonCanonicalOrder` reached a reader as the same six words, and the only
-    /// way to tell them apart was to re-derive the fill by hand. That is the
-    /// `map_err` that discards its cause, one CPI boundary out.
+    /// until 2026-09-04 nothing else did either. This line is what does.
     ///
     /// A `&'static str` per variant rather than a `{:?}`: the caller is a
     /// `no_std` program whose peak heap already binds at runtime width 258, and
     /// `sol_log` takes a `&str` with no allocation at all. The match is
-    /// exhaustive, so a seventeenth variant does not compile until its author
-    /// says what a reader should see.
-    ///
-    /// It lives here, beside the enum, rather than in the program: a second
-    /// module that spelled these lines would be a second author for what each
-    /// refusal means, and would silently keep the old wording when a variant is
-    /// split.
+    /// exhaustive, so a new variant does not compile until its author says
+    /// what a reader should see.
     #[must_use]
     pub const fn log_line(self) -> &'static str {
         match self {
@@ -266,6 +327,19 @@ impl RuntimeVerifyErrorV2 {
             Self::ExcessLots => "general-verify: refused, fill exceeds the signed maximum lots",
             Self::QuoteLimit => "general-verify: refused, buyer charged above the signed cap",
             Self::CreditLimit => "general-verify: refused, seller paid below the signed floor",
+            Self::RationedInsideLimit => {
+                "general-verify: refused, an order rationed strictly inside its limit"
+            }
+            Self::OrderOmitted => "general-verify: refused, the certificate omits a live order",
+            Self::PricedResidual => {
+                "general-verify: refused, sets claimed on a priced outcome nobody funded"
+            }
+            Self::NonMinimalPriceVector => {
+                "general-verify: refused, the price vector is not the book's minimum"
+            }
+            Self::ShapeNotInterval => {
+                "general-verify: refused, a row is not the single-outcome shape it names"
+            }
             Self::ClaimImbalance => "general-verify: refused, no uniform complete-set delta",
             Self::QuoteImbalance => "general-verify: refused, quote inventory does not fund it",
             Self::InvalidCursor => "general-verify: refused, the persisted cursor is hostile",
@@ -276,6 +350,37 @@ impl RuntimeVerifyErrorV2 {
 
 /// Result alias for runtime-width candidate verification.
 pub type RuntimeVerifyResultV2<T> = core::result::Result<T, RuntimeVerifyErrorV2>;
+
+/// Which way one order's claims flow.
+///
+/// `GeneralOrderV2Abi.Side`: a buy receives claims on its interval, a sell
+/// delivers them. The tags are the wire's (`ORDER_SIDE_BUY_V2`, `_SELL_V2`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum OrderSideV2 {
+    /// The maker receives claims and pays quote, bounded above by the cap.
+    Buy = crate::general::generated_order_v2::ORDER_SIDE_BUY_V2,
+    /// The maker delivers claims and is paid quote, bounded below by the floor.
+    Sell = crate::general::generated_order_v2::ORDER_SIDE_SELL_V2,
+}
+
+impl OrderSideV2 {
+    /// Decode one side tag; zero is not a side.
+    #[must_use]
+    pub const fn decode(tag: u8) -> Option<Self> {
+        match tag {
+            crate::general::generated_order_v2::ORDER_SIDE_BUY_V2 => Some(Self::Buy),
+            crate::general::generated_order_v2::ORDER_SIDE_SELL_V2 => Some(Self::Sell),
+            _ => None,
+        }
+    }
+
+    /// The canonical one-byte tag.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+}
 
 /// Already-authenticated immutable order terms omitted from the compact row.
 ///
@@ -302,10 +407,30 @@ pub struct AuthenticatedOrderTermsV2 {
     /// bounded only the direction in which the maker PAYS.
     ///
     /// Zero is "no floor", which is exactly the behaviour every order signed
-    /// before this field existed had, so a zero here is not a defaulted value
-    /// standing in for a missing one -- it is the same sentence the record used
-    /// to make, said out loud.
+    /// before this field existed had.
     pub min_quote_credit_per_lot: u64,
+    /// Which way the claims flow.
+    pub side: OrderSideV2,
+    /// First outcome of the inclusive interval.
+    pub outcome_lo: u32,
+    /// Last outcome of the inclusive interval.
+    pub outcome_hi: u32,
+    /// Claims one lot moves at every coordinate of the interval.
+    pub claims_per_lot: u64,
+}
+
+impl AuthenticatedOrderTermsV2 {
+    /// The `(receive, deliver)` row the shape derives at one outcome.
+    #[must_use]
+    pub const fn derived_row(self, outcome: u32) -> (u64, u64) {
+        if outcome < self.outcome_lo || outcome > self.outcome_hi {
+            return (0, 0);
+        }
+        match self.side {
+            OrderSideV2::Buy => (self.claims_per_lot, 0),
+            OrderSideV2::Sell => (0, self.claims_per_lot),
+        }
+    }
 }
 
 /// Fixed fields decoded from one persisted runtime-width verifier cursor.
@@ -319,8 +444,11 @@ pub struct RuntimeVerifierHeaderV2 {
     pub next_page_index: u32,
     /// Zero-based next row index inside the next page.
     pub next_row_index: u32,
-    /// Number of distinct globally grouped orders consumed.
+    /// Number of distinct globally grouped orders consumed, filled or not.
     pub order_count: u32,
+    /// Number of consumed orders that filled at least one lot: the settlement
+    /// manifest's row count.
+    pub filled_order_count: u32,
     /// Optimistic revision, advanced exactly once per row.
     pub revision: u64,
     /// Immutable candidate coordinate in its Batch.
@@ -374,13 +502,12 @@ pub struct RuntimeCandidateVerifierV2<'a> {
 }
 
 impl<'a> RuntimeCandidateVerifierV2<'a> {
-    /// Hostile-decode one exact `288 + 40N` verifier cursor.
+    /// Hostile-decode one exact `288 + 56N` verifier cursor.
     pub fn decode(bytes: &'a [u8]) -> RuntimeVerifyResultV2<Self> {
         if bytes.len() < RUNTIME_VERIFIER_HEADER_BYTES_V2
             || bytes.get(..8) != Some(VERIFIER_MAGIC.as_slice())
             || read_u16(bytes, 8)? != VERSION
             || !zero_range(bytes, 11, 1)?
-            || !zero_range(bytes, 44, 4)?
         {
             return Err(RuntimeVerifyErrorV2::InvalidCursor);
         }
@@ -397,6 +524,7 @@ impl<'a> RuntimeCandidateVerifierV2<'a> {
             order_count: read_u32(bytes, 28)?,
             revision: read_u64(bytes, 32)?,
             candidate_coordinate: read_u32(bytes, 40)?,
+            filled_order_count: read_u32(bytes, 44)?,
             candidate_id: read_array32(bytes, 48)?,
             product_id: read_array32(bytes, 80)?,
             batch_id: read_array32(bytes, 112)?,
@@ -444,6 +572,26 @@ impl<'a> RuntimeCandidateVerifierV2<'a> {
             self.bytes,
             self.header.outcome_count,
             CLAIM_OUTPUTS_TAIL,
+            index,
+        )
+    }
+
+    /// Return the least price the rows so far admit at one outcome.
+    pub fn price_floor(self, index: u32) -> RuntimeVerifyResultV2<u64> {
+        read_tail_u64(
+            self.bytes,
+            self.header.outcome_count,
+            PRICE_FLOOR_TAIL,
+            index,
+        )
+    }
+
+    /// Return the greatest price the rows so far admit at one outcome.
+    pub fn price_ceiling(self, index: u32) -> RuntimeVerifyResultV2<u64> {
+        read_tail_u64(
+            self.bytes,
+            self.header.outcome_count,
+            PRICE_CEILING_TAIL,
             index,
         )
     }
@@ -555,7 +703,7 @@ struct RuntimeManifestInnerBuffersV2<'a> {
 pub struct RuntimeConsiderRowSummaryV2 {
     /// Whether the row completed every declared candidate page.
     pub complete: bool,
-    /// Exact distinct globally grouped order count.
+    /// Exact distinct globally grouped order count, filled or not.
     pub order_count: u32,
     /// Exact successor verifier revision.
     pub revision: u64,
@@ -564,11 +712,11 @@ pub struct RuntimeConsiderRowSummaryV2 {
 /// Complete-set direction derived from a verified candidate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeCompleteSetMoveV2 {
-    /// Claim inputs and outputs are equal.
+    /// The greatest net claim flow is zero: no set moves.
     None,
-    /// Outputs exceed inputs uniformly and require one complete-set mint.
+    /// Net claims leave the batch: the batch mints that many sets.
     Mint,
-    /// Inputs exceed outputs uniformly and require one complete-set merge.
+    /// Net claims enter the batch: the batch merges that many sets.
     Merge,
 }
 
@@ -577,7 +725,7 @@ pub enum RuntimeCompleteSetMoveV2 {
 pub struct RuntimeCandidateBalanceV2 {
     /// Sole complete-set direction.
     pub complete_set_move: RuntimeCompleteSetMoveV2,
-    /// Uniform quantity minted or merged.
+    /// Uniform quantity minted or merged: `|M|`, the greatest net flow.
     pub complete_set_quantity: u64,
     /// Exact quote remainder after materialization and credits.
     pub quote_surplus: u64,
@@ -588,6 +736,8 @@ pub struct RuntimeCandidateBalanceV2 {
 /// These are exactly the three facts interpreted by [`SelectionPolicyV1`].
 /// Persisting this key lets later submissions be compared without requiring an
 /// optional incumbent-certificate account in the authenticated runtime frame.
+/// The joint arm adds no price criterion on purpose: every certified candidate
+/// for one book carries the same, minimal, vector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeCandidateComparisonKeyV2 {
     /// Candidate-wide filled-lots objective.
@@ -598,7 +748,7 @@ pub struct RuntimeCandidateComparisonKeyV2 {
     pub candidate_id: [u8; 32],
 }
 
-/// Return the exact `288 + 40N` runtime verifier cursor width.
+/// Return the exact `288 + 56N` runtime verifier cursor width.
 pub fn runtime_verifier_len_v2(outcome_count: u32) -> RuntimeVerifyResultV2<usize> {
     if outcome_count == 0 {
         return Err(RuntimeVerifyErrorV2::InvalidLength);
@@ -608,7 +758,7 @@ pub fn runtime_verifier_len_v2(outcome_count: u32) -> RuntimeVerifyResultV2<usiz
     RUNTIME_VERIFIER_HEADER_BYTES_V2
         .checked_add(
             count
-                .checked_mul(40)
+                .checked_mul(8 * RUNTIME_VERIFIER_TAIL_COUNT_V2)
                 .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)?,
         )
         .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)
@@ -646,9 +796,10 @@ pub fn evaluate_runtime_consider_row_v2(
 /// Evaluate one exact row and also emit every newly completed order manifest.
 ///
 /// The manifest capacity must equal the exact zero-, one-, or two-row semantic
-/// result derived from the authenticated cursor and selected execution. It can
-/// never truncate the plan. Generic Trading persists these rows into its own
-/// authenticated scratch pages before later settlement actions consume them.
+/// result derived from the authenticated cursor and selected execution
+/// ([`runtime_manifest_orders_for_row_v2`]). It can never truncate the plan.
+/// Generic Trading persists these rows into its own authenticated scratch
+/// pages before later settlement actions consume them.
 #[inline(never)]
 pub fn evaluate_runtime_consider_row_with_manifest_v2(
     view: RuntimeConsiderRowViewV2<'_>,
@@ -783,6 +934,7 @@ fn evaluate_runtime_consider_row_inner_v2(
     let manifest_order_count = measure_manifest_orders_v2(
         buffers.cursor_scratch,
         execution.header().order_id,
+        execution.header().lots,
         terminal_step,
     )?;
     let successor_revision = view
@@ -855,8 +1007,17 @@ fn evaluate_runtime_consider_row_inner_v2(
     if reached_terminal_page {
         finalize_current_order(buffers.cursor_scratch, &mut manifest_writer)?;
         let completed = RuntimeCandidateVerifierV2::decode(buffers.cursor_scratch)?;
-        let balance = balance_from_cursor(completed)?;
         let header = completed.header();
+        // THE COMPLETENESS CONJUNCT. The candidate's live order count was
+        // authenticated against the closed batch at `SubmitCandidate`; a
+        // certificate that enumerated fewer distinct orders has omitted one,
+        // and omission is how a solver would evade the marginal conjunct.
+        if header.order_count != candidate_header.live_order_count {
+            return Err(RuntimeVerifyErrorV2::OrderOmitted);
+        }
+        let balance = balance_from_cursor(completed)?;
+        require_minimal_price_vector(completed, balance)?;
+        let prices = tail_bytes(buffers.cursor_scratch, header.outcome_count, PRICES_TAIL)?;
         let inputs = tail_bytes(
             buffers.cursor_scratch,
             header.outcome_count,
@@ -881,6 +1042,7 @@ fn evaluate_runtime_consider_row_inner_v2(
                 quote_credit: header.quote_credit,
                 price_scale: header.price_scale,
             },
+            prices,
             inputs,
             outputs,
             buffers.verified_scratch,
@@ -922,7 +1084,9 @@ fn evaluate_runtime_consider_row_inner_v2(
     })
 }
 
-/// Derive the unique complete-set movement and exact quote surplus.
+/// Derive the unique complete-set movement and exact quote surplus from a
+/// verified certificate, re-proving cover and complementary slackness from
+/// the prices it carries.
 pub fn runtime_verified_balance_v2(
     verified_bytes: &[u8],
 ) -> RuntimeVerifyResultV2<RuntimeCandidateBalanceV2> {
@@ -930,6 +1094,7 @@ pub fn runtime_verified_balance_v2(
     let header = verified.header();
     derive_balance(
         header.outcome_count,
+        |index| verified.price(index).map_err(map_codec),
         |index| verified.claim_input(index).map_err(map_codec),
         |index| verified.claim_output(index).map_err(map_codec),
         header.quote_debit,
@@ -937,11 +1102,33 @@ pub fn runtime_verified_balance_v2(
     )
 }
 
+/// The residual the clearing leaves at one outcome: `M − net_i`, the claims
+/// the close STRANDS (decision 0032 §2a). Zero wherever the price is positive
+/// for any certificate that passed [`runtime_verified_balance_v2`].
+pub fn runtime_verified_residual_v2(
+    verified_bytes: &[u8],
+    outcome: u32,
+) -> RuntimeVerifyResultV2<u64> {
+    let verified = VerifiedCandidateV2::decode(verified_bytes).map_err(map_codec)?;
+    let header = verified.header();
+    let sets = signed_sets(
+        header.outcome_count,
+        |index| verified.claim_input(index).map_err(map_codec),
+        |index| verified.claim_output(index).map_err(map_codec),
+    )?;
+    let net = net_flow(
+        verified.claim_input(outcome).map_err(map_codec)?,
+        verified.claim_output(outcome).map_err(map_codec)?,
+    );
+    u64::try_from(sets - net).map_err(|_| RuntimeVerifyErrorV2::InvalidCursor)
+}
+
 /// Compare two valid submitted candidates under immutable interpreted policy.
 ///
-/// This does not claim global optimality. It implements only the exact
-/// lexicographic comparison used to maintain the best valid submitted
-/// candidate among candidates the protocol has actually verified.
+/// This does not claim global optimality on its own; `JointClearingV1.certificate_is_optimal`
+/// does, for every candidate that passed the terminal row. It implements only
+/// the exact lexicographic comparison used to maintain the best valid
+/// submitted candidate among candidates the protocol has actually verified.
 pub fn runtime_candidate_better_v2(
     policy: &SelectionPolicyV1,
     left_bytes: &[u8],
@@ -1031,7 +1218,18 @@ fn initialize_cursor(candidate: CandidateV2<'_>, output: &mut [u8]) -> RuntimeVe
         output,
         tail_offset(header.outcome_count, PRICES_TAIL)?,
         prices,
-    )
+    )?;
+    // The box opens as wide as the simplex: no row has constrained anything.
+    for outcome in 0..header.outcome_count {
+        write_tail_u64(
+            output,
+            header.outcome_count,
+            PRICE_CEILING_TAIL,
+            outcome,
+            header.price_scale,
+        )?;
+    }
+    Ok(())
 }
 
 fn require_candidate(
@@ -1099,7 +1297,10 @@ impl ManifestWriterV2<'_> {
             self.next,
             SettlementOrderHeaderV2 {
                 outcome_count: header.outcome_count,
-                order_coordinate: header.order_count,
+                // The settlement row's coordinate counts FILLED orders: an
+                // unfilled order has nothing to collect or distribute and
+                // emits no row, so it must not occupy a coordinate either.
+                order_coordinate: header.filled_order_count,
                 source_page_index: read_u32(cursor, 272)?,
                 nonce: read_u64(cursor, 240)?,
                 candidate_id: header.candidate_id,
@@ -1122,15 +1323,27 @@ impl ManifestWriterV2<'_> {
     }
 }
 
+/// How many manifest rows one row step emits: one for the preceding order it
+/// closes, if that order filled anything, and one for the terminal order, if
+/// it fills anything once this row is in.
 fn measure_manifest_orders_v2(
     cursor: &[u8],
     execution_order: [u8; 32],
+    execution_lots: u64,
     terminal_step: bool,
 ) -> RuntimeVerifyResultV2<u32> {
     let decoded = RuntimeCandidateVerifierV2::decode(cursor)?;
-    let closes_preceding =
-        decoded.header().has_current_order && read_array32(cursor, 176)? != execution_order;
-    Ok(u32::from(closes_preceding) + u32::from(terminal_step))
+    let header = decoded.header();
+    let current_id = read_array32(cursor, 176)?;
+    let current_lots = read_u64(cursor, 264)?;
+    let same_order = header.has_current_order && current_id == execution_order;
+    let closes_preceding = header.has_current_order && !same_order && current_lots != 0;
+    let terminal_lots = if same_order {
+        add(current_lots, execution_lots)?
+    } else {
+        execution_lots
+    };
+    Ok(u32::from(closes_preceding) + u32::from(terminal_step && terminal_lots != 0))
 }
 
 fn ingest_execution(
@@ -1214,6 +1427,25 @@ fn start_current_order(
     max_orders: u32,
 ) -> RuntimeVerifyResultV2<()> {
     let header = RuntimeCandidateVerifierV2::decode(cursor)?.header();
+    // THE SHAPE, re-derived by the second opinion: a single-outcome interval
+    // inside the width, and a row whose vectors are exactly what the shape
+    // says. The collection half checked the row against the record; the
+    // accelerator cannot reach the record and checks it against the terms.
+    let count = header.outcome_count;
+    if order.outcome_lo != order.outcome_hi
+        || order.outcome_hi >= count
+        || order.claims_per_lot == 0
+    {
+        return Err(RuntimeVerifyErrorV2::ShapeNotInterval);
+    }
+    for outcome in 0..count {
+        let expected = order.derived_row(outcome);
+        if execution.receive_per_lot(outcome).map_err(map_codec)? != expected.0
+            || execution.deliver_per_lot(outcome).map_err(map_codec)? != expected.1
+        {
+            return Err(RuntimeVerifyErrorV2::ShapeNotInterval);
+        }
+    }
     let next_count = header
         .order_count
         .checked_add(1)
@@ -1232,7 +1464,6 @@ fn start_current_order(
     put_u64(cursor, 264, 0)?;
     put_u32(cursor, 272, source_page_index)?;
     put_u32(cursor, 276, source_execution_index)?;
-    let count = header.outcome_count;
     for outcome in 0..count {
         write_tail_u64(
             cursor,
@@ -1279,6 +1510,49 @@ fn require_same_order(
     Ok(())
 }
 
+/// The one outcome the current order moves, its magnitude, and its side --
+/// recovered from the current tails, which `start_current_order` proved are
+/// the shape.
+fn current_shape(cursor: &[u8], count: u32) -> RuntimeVerifyResultV2<(u32, u64, OrderSideV2)> {
+    let mut found: Option<(u32, u64, OrderSideV2)> = None;
+    for outcome in 0..count {
+        let receive = read_tail_u64(cursor, count, CURRENT_RECEIVE_TAIL, outcome)?;
+        let deliver = read_tail_u64(cursor, count, CURRENT_DELIVER_TAIL, outcome)?;
+        let here = match (receive, deliver) {
+            (0, 0) => continue,
+            (magnitude, 0) => (outcome, magnitude, OrderSideV2::Buy),
+            (0, magnitude) => (outcome, magnitude, OrderSideV2::Sell),
+            _ => return Err(RuntimeVerifyErrorV2::ShapeNotInterval),
+        };
+        if found.is_some() {
+            return Err(RuntimeVerifyErrorV2::ShapeNotInterval);
+        }
+        found = Some(here);
+    }
+    found.ok_or(RuntimeVerifyErrorV2::ShapeNotInterval)
+}
+
+/// `limit × scale / magnitude`, rounded down or up, clamped to the scale: the
+/// price bound a limit in atoms per lot induces in scale units per claim.
+fn price_bound(
+    limit: u64,
+    scale: u64,
+    magnitude: u64,
+    round_up: bool,
+) -> RuntimeVerifyResultV2<u64> {
+    let product = u128::from(limit) * u128::from(scale);
+    let magnitude = u128::from(magnitude);
+    if magnitude == 0 {
+        return Err(RuntimeVerifyErrorV2::ShapeNotInterval);
+    }
+    let quotient = if round_up {
+        product.div_ceil(magnitude)
+    } else {
+        product / magnitude
+    };
+    Ok(u64::try_from(quotient.min(u128::from(scale))).unwrap_or(scale))
+}
+
 fn finalize_current_order(
     cursor: &mut [u8],
     manifest: &mut Option<ManifestWriterV2<'_>>,
@@ -1290,71 +1564,93 @@ fn finalize_current_order(
     }
     let lots = read_u64(cursor, 264)?;
     let max_lots = read_u64(cursor, 248)?;
-    if lots == 0 || lots > max_lots {
+    if lots > max_lots {
         return Err(RuntimeVerifyErrorV2::ExcessLots);
     }
-    let mut received_per_lot = 0_u64;
-    let mut delivered_per_lot = 0_u64;
-    for outcome in 0..header.outcome_count {
-        let price = decoded.price(outcome)?;
-        received_per_lot = add(
-            received_per_lot,
-            multiply(
-                price,
-                read_tail_u64(cursor, header.outcome_count, CURRENT_RECEIVE_TAIL, outcome)?,
-            )?,
-        )?;
-        delivered_per_lot = add(
-            delivered_per_lot,
-            multiply(
-                price,
-                read_tail_u64(cursor, header.outcome_count, CURRENT_DELIVER_TAIL, outcome)?,
-            )?,
-        )?;
-    }
-    let received = multiply(received_per_lot, lots)?;
-    let delivered = multiply(delivered_per_lot, lots)?;
-    let (debit, credit) = if delivered <= received {
-        let difference = received - delivered;
-        let rounded = add(difference, header.price_scale - 1)? / header.price_scale;
-        (rounded, 0)
-    } else {
-        (0, (delivered - received) / header.price_scale)
+    let count = header.outcome_count;
+    let (outcome, magnitude, side) = current_shape(cursor, count)?;
+    let price = decoded.price(outcome)?;
+    // Exactly one side of the pair is priced: `price × magnitude` per lot,
+    // in the debit direction for a buy and the credit direction for a sell.
+    let per_lot = u128::from(price) * u128::from(magnitude);
+    let total = per_lot * u128::from(lots);
+    let scale = u128::from(header.price_scale);
+    let (debit, credit) = match side {
+        OrderSideV2::Buy => (
+            u64::try_from(total.div_ceil(scale))
+                .map_err(|_| RuntimeVerifyErrorV2::ArithmeticOverflow)?,
+            0,
+        ),
+        OrderSideV2::Sell => (
+            0,
+            u64::try_from(total / scale).map_err(|_| RuntimeVerifyErrorV2::ArithmeticOverflow)?,
+        ),
     };
-    let debit_limit = multiply(read_u64(cursor, 256)?, lots)?;
-    if debit > debit_limit {
+    let cap = read_u64(cursor, 256)?;
+    let floor = read_u64(cursor, 280)?;
+    // AT OR BETTER, on the rounded quantities exactly as before the joint arm:
+    // `ceil(x/s) ≤ n ⇔ x ≤ n·s`, so the rounded and exact conjuncts agree.
+    if debit > multiply(cap, lots)? {
         return Err(RuntimeVerifyErrorV2::QuoteLimit);
     }
-    // THE SELLER'S FLOOR, which had no conjunct until 2026-09-04.
-    //
-    // A candidate that fills a maker's order in the credit direction chose the
-    // price; the maker signed a portfolio, a maximum fill and a cap on what
-    // they could be CHARGED, and nothing at all on what they had to be PAID.
-    // `MECHANISM_JOINT_CLEARING_2026_09_04.md` found it by modelling the limit
-    // as a signed quantity and noticing the shipping record could only express
-    // the nonnegative half.
-    //
-    // Zero is no floor, and `0 * lots` is zero for every `lots`, so an order
-    // signed before this field existed reaches exactly the comparison it always
-    // reached. That is the whole reason this is an additive unsigned pair
-    // rather than one signed limit: the signed form embeds into it -- limit L
-    // >= 0 is `(L, 0)` and L < 0 is `(0, -L)` -- and the pair also states the
-    // two combinations the signed form cannot, a maker who caps their debit AND
-    // floors their credit.
-    let credit_floor = multiply(read_u64(cursor, 280)?, lots)?;
-    if credit < credit_floor {
+    if credit < multiply(floor, lots)? {
         return Err(RuntimeVerifyErrorV2::CreditLimit);
     }
-    if let Some(writer) = manifest.as_mut() {
-        writer.emit(cursor, header, lots, debit, credit)?;
+    // THE MARGINAL CONJUNCT: an order left short of its maximum may not sit
+    // strictly inside its limit. `f_o < q_o ⇒ ℓ_o ≤ a_o·p`, exact in scale
+    // units: a buyer rationed only at or above their cap, a seller only at or
+    // below their floor. A floorless seller left short is refused at every
+    // positive price, which is the LP's answer and not a defect.
+    if lots < max_lots {
+        let inside = match side {
+            OrderSideV2::Buy => u128::from(cap) * scale > per_lot,
+            OrderSideV2::Sell => per_lot > u128::from(floor) * scale,
+        };
+        if inside {
+            return Err(RuntimeVerifyErrorV2::RationedInsideLimit);
+        }
+    }
+    // THE BOX. Each row narrows its outcome's admissible price interval from
+    // the side its fill status decides; the terminal row asks the box for its
+    // lexicographic minimum (`JointClearingV1.Fill.priceBounds`).
+    let scale64 = header.price_scale;
+    match side {
+        OrderSideV2::Buy => {
+            if lots > 0 {
+                let ceiling = price_bound(cap, scale64, magnitude, false)?;
+                lower_tail_u64(cursor, count, PRICE_CEILING_TAIL, outcome, ceiling)?;
+            }
+            if lots < max_lots {
+                let floor_bound = price_bound(cap, scale64, magnitude, true)?;
+                raise_tail_u64(cursor, count, PRICE_FLOOR_TAIL, outcome, floor_bound)?;
+            }
+        }
+        OrderSideV2::Sell => {
+            if lots > 0 {
+                let floor_bound = price_bound(floor, scale64, magnitude, true)?;
+                raise_tail_u64(cursor, count, PRICE_FLOOR_TAIL, outcome, floor_bound)?;
+            }
+            if lots < max_lots {
+                let ceiling = price_bound(floor, scale64, magnitude, false)?;
+                lower_tail_u64(cursor, count, PRICE_CEILING_TAIL, outcome, ceiling)?;
+            }
+        }
+    }
+    if lots != 0 {
+        let filled = header
+            .filled_order_count
+            .checked_add(1)
+            .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)?;
+        put_u32(cursor, 44, filled)?;
+        if let Some(writer) = manifest.as_mut() {
+            let mut counted = header;
+            counted.filled_order_count = filled;
+            writer.emit(cursor, counted, lots, debit, credit)?;
+        }
     }
     put_u64(cursor, 160, add(header.quote_debit, debit)?)?;
     put_u64(cursor, 168, add(header.quote_credit, credit)?)?;
     put_byte(cursor, 10, 0)?;
-    // 104 until 2026-09-04, which left the eight bytes at 280 out of the
-    // current-order window because nothing lived there. The floor does now, and
-    // a window that does not clear all of itself leaves one order's terms
-    // readable while the next one's are being written.
     zero_mut(cursor, 176, 112)?;
     zero_tail(cursor, header.outcome_count, CURRENT_RECEIVE_TAIL)?;
     zero_tail(cursor, header.outcome_count, CURRENT_DELIVER_TAIL)
@@ -1366,6 +1662,7 @@ fn balance_from_cursor(
     let header = cursor.header();
     derive_balance(
         header.outcome_count,
+        |index| cursor.price(index),
         |index| cursor.claim_input(index),
         |index| cursor.claim_output(index),
         header.quote_debit,
@@ -1373,41 +1670,58 @@ fn balance_from_cursor(
     )
 }
 
+fn net_flow(input: u64, output: u64) -> i128 {
+    i128::from(output) - i128::from(input)
+}
+
+/// `M`, the signed complete-set count: the greatest net claim flow over the
+/// outcomes. Cover (`net_i ≤ M`) holds by construction; slackness is checked
+/// against it.
+fn signed_sets(
+    count: u32,
+    mut input: impl FnMut(u32) -> RuntimeVerifyResultV2<u64>,
+    mut output: impl FnMut(u32) -> RuntimeVerifyResultV2<u64>,
+) -> RuntimeVerifyResultV2<i128> {
+    if count == 0 {
+        return Err(RuntimeVerifyErrorV2::InvalidCursor);
+    }
+    let mut sets = i128::MIN;
+    for outcome in 0..count {
+        sets = sets.max(net_flow(input(outcome)?, output(outcome)?));
+    }
+    Ok(sets)
+}
+
+/// The cover-and-slackness pair, and the quote consequence.
 fn derive_balance(
     count: u32,
+    mut price: impl FnMut(u32) -> RuntimeVerifyResultV2<u64>,
     mut input: impl FnMut(u32) -> RuntimeVerifyResultV2<u64>,
     mut output: impl FnMut(u32) -> RuntimeVerifyResultV2<u64>,
     quote_debit: u64,
     quote_credit: u64,
 ) -> RuntimeVerifyResultV2<RuntimeCandidateBalanceV2> {
-    if count == 0 {
-        return Err(RuntimeVerifyErrorV2::InvalidCursor);
-    }
-    let first_input = input(0)?;
-    let first_output = output(0)?;
-    let (complete_set_move, quantity) = if first_input == first_output {
-        (RuntimeCompleteSetMoveV2::None, 0)
-    } else if first_input < first_output {
-        (RuntimeCompleteSetMoveV2::Mint, first_output - first_input)
-    } else {
-        (RuntimeCompleteSetMoveV2::Merge, first_input - first_output)
-    };
+    let sets = signed_sets(count, &mut input, &mut output)?;
     for outcome in 0..count {
-        let observed_input = input(outcome)?;
-        let observed_output = output(outcome)?;
-        let valid = match complete_set_move {
-            RuntimeCompleteSetMoveV2::None => observed_input == observed_output,
-            RuntimeCompleteSetMoveV2::Mint => {
-                observed_input.checked_add(quantity) == Some(observed_output)
-            }
-            RuntimeCompleteSetMoveV2::Merge => {
-                observed_output.checked_add(quantity) == Some(observed_input)
-            }
-        };
-        if !valid {
-            return Err(RuntimeVerifyErrorV2::ClaimImbalance);
+        // COMPLEMENTARY SLACKNESS: a residual (`net_i < M`) is admitted only
+        // where the batch priced the outcome at zero.
+        if price(outcome)? != 0 && net_flow(input(outcome)?, output(outcome)?) != sets {
+            return Err(RuntimeVerifyErrorV2::PricedResidual);
         }
     }
+    let (complete_set_move, quantity) = if sets == 0 {
+        (RuntimeCompleteSetMoveV2::None, 0)
+    } else if sets > 0 {
+        (
+            RuntimeCompleteSetMoveV2::Mint,
+            u64::try_from(sets).map_err(|_| RuntimeVerifyErrorV2::ArithmeticOverflow)?,
+        )
+    } else {
+        (
+            RuntimeCompleteSetMoveV2::Merge,
+            u64::try_from(-sets).map_err(|_| RuntimeVerifyErrorV2::ArithmeticOverflow)?,
+        )
+    };
     let available = match complete_set_move {
         RuntimeCompleteSetMoveV2::None => quote_debit,
         RuntimeCompleteSetMoveV2::Mint => quote_debit
@@ -1425,17 +1739,63 @@ fn derive_balance(
     })
 }
 
+/// THE TIE-BREAK AS A CONJUNCT. The box the rows induced, with every
+/// residual outcome pinned to zero, has one lexicographic minimum on the
+/// simplex; the certificate's vector must be it.
+fn require_minimal_price_vector(
+    cursor: RuntimeCandidateVerifierV2<'_>,
+    balance: RuntimeCandidateBalanceV2,
+) -> RuntimeVerifyResultV2<()> {
+    let header = cursor.header();
+    let count = header.outcome_count;
+    let scale = header.price_scale;
+    let sets = match balance.complete_set_move {
+        RuntimeCompleteSetMoveV2::None => 0_i128,
+        RuntimeCompleteSetMoveV2::Mint => i128::from(balance.complete_set_quantity),
+        RuntimeCompleteSetMoveV2::Merge => -i128::from(balance.complete_set_quantity),
+    };
+    // Suffix sums of the ceilings, then the greedy front to back:
+    // `p_i = min(hi_i, max(lo_i, remaining − Σ_{j>i} hi_j))`.
+    let ceiling_at = |outcome: u32| -> RuntimeVerifyResultV2<u128> {
+        let residual = net_flow(cursor.claim_input(outcome)?, cursor.claim_output(outcome)?) < sets;
+        Ok(if residual {
+            0
+        } else {
+            u128::from(cursor.price_ceiling(outcome)?)
+        })
+    };
+    let mut suffix = 0_u128;
+    for outcome in 0..count {
+        suffix += ceiling_at(outcome)?;
+    }
+    let mut remaining = u128::from(scale);
+    for outcome in 0..count {
+        let ceiling = ceiling_at(outcome)?;
+        suffix -= ceiling;
+        let floor = u128::from(cursor.price_floor(outcome)?);
+        let forced = remaining.saturating_sub(suffix);
+        let minimum = ceiling.min(floor.max(forced));
+        if u128::from(cursor.price(outcome)?) != minimum {
+            return Err(RuntimeVerifyErrorV2::NonMinimalPriceVector);
+        }
+        remaining -= minimum;
+    }
+    Ok(())
+}
+
 fn validate_cursor(bytes: &[u8], header: RuntimeVerifierHeaderV2) -> RuntimeVerifyResultV2<()> {
     let initial = header.revision == 0
         && header.next_page_index == 0
         && header.next_row_index == 0
         && header.order_count == 0
+        && header.filled_order_count == 0
         && header.filled_lots == 0
         && header.quote_debit == 0
         && header.quote_credit == 0
         && !header.has_current_order
         && tail_is_zero(bytes, header.outcome_count, CLAIM_INPUTS_TAIL)?
-        && tail_is_zero(bytes, header.outcome_count, CLAIM_OUTPUTS_TAIL)?;
+        && tail_is_zero(bytes, header.outcome_count, CLAIM_OUTPUTS_TAIL)?
+        && tail_is_zero(bytes, header.outcome_count, PRICE_FLOOR_TAIL)?;
     if header.outcome_count == 0
         || header.page_count == 0
         || header.candidate_coordinate == 0
@@ -1447,15 +1807,24 @@ fn validate_cursor(bytes: &[u8], header: RuntimeVerifierHeaderV2) -> RuntimeVeri
         || (header.next_page_index == header.page_count && header.next_row_index != 0)
         || (header.revision == 0) != initial
         || (!initial && header.order_count == 0)
+        || header.filled_order_count > header.order_count
     {
         return Err(RuntimeVerifyErrorV2::InvalidCursor);
     }
     let mut price_total = 0_u64;
     for outcome in 0..header.outcome_count {
-        price_total = add(
-            price_total,
-            read_tail_u64(bytes, header.outcome_count, PRICES_TAIL, outcome)?,
-        )?;
+        let price = read_tail_u64(bytes, header.outcome_count, PRICES_TAIL, outcome)?;
+        price_total = add(price_total, price)?;
+        // The box always contains the certificate's own vector: every row that
+        // narrowed it also proved the price at or inside its limit.
+        let floor = read_tail_u64(bytes, header.outcome_count, PRICE_FLOOR_TAIL, outcome)?;
+        let ceiling = read_tail_u64(bytes, header.outcome_count, PRICE_CEILING_TAIL, outcome)?;
+        if floor > price || price > ceiling || ceiling > header.price_scale {
+            return Err(RuntimeVerifyErrorV2::InvalidCursor);
+        }
+        if initial && ceiling != header.price_scale {
+            return Err(RuntimeVerifyErrorV2::InvalidCursor);
+        }
     }
     if price_total != header.price_scale {
         return Err(RuntimeVerifyErrorV2::InvalidCursor);
@@ -1471,13 +1840,12 @@ fn validate_cursor(bytes: &[u8], header: RuntimeVerifierHeaderV2) -> RuntimeVeri
         if zero_identity(&read_array32(bytes, 176)?)
             || zero_identity(&read_array32(bytes, 208)?)
             || max_lots == 0
-            || current_lots == 0
             || current_lots > max_lots
             || !source_precedes_cursor
         {
             return Err(RuntimeVerifyErrorV2::InvalidCursor);
         }
-    } else if !zero_range(bytes, 176, 104)?
+    } else if !zero_range(bytes, 176, 112)?
         || !tail_is_zero(bytes, header.outcome_count, CURRENT_RECEIVE_TAIL)?
         || !tail_is_zero(bytes, header.outcome_count, CURRENT_DELIVER_TAIL)?
     {
@@ -1566,6 +1934,28 @@ fn add_tail_u64(
     write_tail_u64(bytes, count, tail, index, successor)
 }
 
+fn raise_tail_u64(
+    bytes: &mut [u8],
+    count: u32,
+    tail: usize,
+    index: u32,
+    value: u64,
+) -> RuntimeVerifyResultV2<()> {
+    let current = read_tail_u64(bytes, count, tail, index)?;
+    write_tail_u64(bytes, count, tail, index, current.max(value))
+}
+
+fn lower_tail_u64(
+    bytes: &mut [u8],
+    count: u32,
+    tail: usize,
+    index: u32,
+    value: u64,
+) -> RuntimeVerifyResultV2<()> {
+    let current = read_tail_u64(bytes, count, tail, index)?;
+    write_tail_u64(bytes, count, tail, index, current.min(value))
+}
+
 fn zero_tail(bytes: &mut [u8], count: u32, tail: usize) -> RuntimeVerifyResultV2<()> {
     let start = tail_offset(count, tail)?;
     let width = usize::try_from(count)
@@ -1613,18 +2003,23 @@ pub fn runtime_identity_precedes_v2(left: &[u8; 32], right: &[u8; 32]) -> bool {
 /// Return the exact number of manifest order rows one row step will emit.
 ///
 /// A caller must size the manifest bank before evaluating, and the count is a
-/// function of the cursor's open order and whether this is the terminal step.
-/// Without this the sizing rule lives only inside the evaluator, and a caller
-/// has to guess at a capacity the evaluator will then refuse.
+/// function of the cursor's open order, this row's lots, and whether this is
+/// the terminal step: an order that fills nothing emits no settlement row.
 pub fn runtime_manifest_orders_for_row_v2(
     cursor_before: &[u8],
     execution_order_id: [u8; 32],
+    execution_lots: u64,
     terminal_step: bool,
 ) -> RuntimeVerifyResultV2<u32> {
     if cursor_before.iter().all(|byte| *byte == 0) {
-        return Ok(u32::from(terminal_step));
+        return Ok(u32::from(terminal_step && execution_lots != 0));
     }
-    measure_manifest_orders_v2(cursor_before, execution_order_id, terminal_step)
+    measure_manifest_orders_v2(
+        cursor_before,
+        execution_order_id,
+        execution_lots,
+        terminal_step,
+    )
 }
 
 fn le_numeric_id(left: &[u8; 32], right: &[u8; 32]) -> bool {
@@ -1749,779 +2144,4 @@ fn put_u64(bytes: &mut [u8], offset: usize, value: u64) -> RuntimeVerifyResultV2
 }
 
 #[cfg(test)]
-mod tests {
-    extern crate std;
-
-    use super::*;
-    use crate::general::runtime_width::{
-        CandidateHeaderV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, candidate_len,
-        execution_len, page_len,
-    };
-    use crate::general_codec::{MAX_SELECTION_CRITERIA, SelectionCriterion};
-    use std::vec;
-
-    const CANDIDATE: [u8; 32] = [1; 32];
-    const PRODUCT: [u8; 32] = [2; 32];
-    const BATCH: [u8; 32] = [3; 32];
-    const OWNER: [u8; 32] = [4; 32];
-
-    fn order(low: u8) -> [u8; 32] {
-        let mut id = [0_u8; 32];
-        id[0] = low;
-        id
-    }
-
-    fn candidate(width: u32, pages: u32, coordinate: u32) -> std::vec::Vec<u8> {
-        let count = usize::try_from(width).expect("test width");
-        let mut output = vec![0; candidate_len(width).expect("candidate width")];
-        CandidateV2::encode_into(
-            CandidateHeaderV2 {
-                outcome_count: width,
-                page_count: pages,
-                candidate_coordinate: coordinate,
-                price_scale: u64::from(width),
-                candidate_id: CANDIDATE,
-                product_id: PRODUCT,
-                batch_id: BATCH,
-            },
-            &vec![1; count],
-            &mut output,
-        )
-        .expect("candidate");
-        output
-    }
-
-    struct RowFixture {
-        bytes: std::vec::Vec<u8>,
-        order: AuthenticatedOrderTermsV2,
-    }
-
-    fn row(
-        width: u32,
-        page_coordinate: u32,
-        row_coordinate: u32,
-        order_low: u8,
-        lots: u64,
-        vectors: (&[u64], &[u64]),
-        debit_limit: u64,
-        credit_floor: u64,
-    ) -> RowFixture {
-        let (receive, deliver) = vectors;
-        let order_id = order(order_low);
-        let terms = AuthenticatedOrderTermsV2 {
-            order_id,
-            owner_id: OWNER,
-            nonce: u64::from(order_low),
-            max_lots: 10,
-            max_quote_debit_per_lot: debit_limit,
-            min_quote_credit_per_lot: credit_floor,
-        };
-        let mut bytes = vec![0; execution_len(width).expect("execution width")];
-        ExecutionV2::encode_into(
-            ExecutionHeaderV2 {
-                outcome_count: width,
-                page_coordinate,
-                execution_coordinate: row_coordinate,
-                nonce: terms.nonce,
-                order_id,
-                owner_id: OWNER,
-                max_lots: terms.max_lots,
-                lots,
-            },
-            receive,
-            deliver,
-            &mut bytes,
-        )
-        .expect("row");
-        RowFixture {
-            bytes,
-            order: terms,
-        }
-    }
-
-    fn page(
-        width: u32,
-        coordinate: u32,
-        pages: u32,
-        revision: u64,
-        rows: &[&[u8]],
-    ) -> std::vec::Vec<u8> {
-        let mut output =
-            vec![0; page_len(width, u32::try_from(rows.len()).expect("rows")).expect("page width")];
-        PageV2::encode_into(
-            PageHeaderV2 {
-                outcome_count: width,
-                page_coordinate: coordinate,
-                page_count: pages,
-                revision,
-                candidate_id: CANDIDATE,
-            },
-            rows,
-            &mut output,
-        )
-        .expect("page");
-        output
-    }
-
-    fn apply_row(
-        candidate: &[u8],
-        page: &[u8],
-        before: &[u8],
-        verified_before: &[u8],
-        order: AuthenticatedOrderTermsV2,
-        coordinate: (u32, u32, u64),
-    ) -> (
-        RuntimeConsiderRowSummaryV2,
-        std::vec::Vec<u8>,
-        std::vec::Vec<u8>,
-    ) {
-        let (page_index, row_index, revision) = coordinate;
-        let width = CandidateV2::decode(candidate)
-            .expect("candidate")
-            .header()
-            .outcome_count;
-        let mut cursor_scratch = vec![0; runtime_verifier_len_v2(width).expect("cursor")];
-        let mut cursor_output = vec![0; cursor_scratch.len()];
-        let verified_len = verified_candidate_len(width).expect("verified");
-        let mut verified_scratch = vec![0; verified_len];
-        let mut verified_output = vec![0; verified_len];
-        if !verified_before.is_empty() {
-            verified_output.copy_from_slice(verified_before);
-        }
-        let summary = evaluate_runtime_consider_row_v2(
-            RuntimeConsiderRowViewV2 {
-                candidate,
-                page,
-                cursor_before: before,
-                verified_before,
-                authenticated_order: order,
-                expected_page_index: page_index,
-                expected_row_index: row_index,
-                expected_page_revision: 11 + u64::from(page_index),
-                expected_revision: revision,
-                max_orders: 10,
-            },
-            RuntimeConsiderRowBuffersV2 {
-                cursor_scratch: &mut cursor_scratch,
-                cursor_output: &mut cursor_output,
-                verified_scratch: &mut verified_scratch,
-                verified_output: &mut verified_output,
-            },
-        )
-        .expect("row accepts");
-        (summary, cursor_output, verified_output)
-    }
-
-    #[test]
-    fn runtime_width_sixteen_streams_across_pages_without_page_balance() {
-        let width = 16;
-        let candidate = candidate(width, 2, 1);
-        let receive_a = vec![1; 16];
-        let deliver_zero = vec![0; 16];
-        let first = row(width, 1, 1, 1, 2, (&receive_a, &deliver_zero), 2, 0);
-        let second = row(width, 2, 1, 1, 3, (&receive_a, &deliver_zero), 2, 0);
-        let first_page = page(width, 1, 2, 11, &[&first.bytes]);
-        let second_page = page(width, 2, 2, 12, &[&second.bytes]);
-        let cursor_len = runtime_verifier_len_v2(width).expect("cursor");
-        let verified_len = verified_candidate_len(width).expect("verified");
-        let zero_cursor = vec![0; cursor_len];
-        let zero_verified = vec![0; verified_len];
-
-        let (summary, middle, unchanged_verified) = apply_row(
-            &candidate,
-            &first_page,
-            &zero_cursor,
-            &zero_verified,
-            first.order,
-            (0, 0, 0),
-        );
-        assert_eq!(
-            summary,
-            RuntimeConsiderRowSummaryV2 {
-                complete: false,
-                order_count: 1,
-                revision: 1,
-            }
-        );
-        assert_eq!(unchanged_verified, zero_verified);
-        let mut inconsistent_source = middle.clone();
-        inconsistent_source[272..276].copy_from_slice(&1_u32.to_le_bytes());
-        assert_eq!(
-            RuntimeCandidateVerifierV2::decode(&inconsistent_source),
-            Err(RuntimeVerifyErrorV2::InvalidCursor)
-        );
-
-        let (summary, terminal, verified) = apply_row(
-            &candidate,
-            &second_page,
-            &middle,
-            &zero_verified,
-            second.order,
-            (1, 0, 1),
-        );
-        assert!(summary.complete);
-        assert_eq!(summary.revision, 2);
-        let cursor = RuntimeCandidateVerifierV2::decode(&terminal).expect("terminal cursor");
-        assert!(cursor.is_complete());
-        assert!(!cursor.header().has_current_order);
-        let certificate = VerifiedCandidateV2::decode(&verified).expect("certificate");
-        assert_eq!(certificate.header().filled_lots, 5);
-        assert_eq!(certificate.header().quote_debit, 5);
-        assert_eq!(certificate.claim_output(0).expect("output"), 5);
-        assert_eq!(certificate.claim_output(15).expect("output"), 5);
-        assert_eq!(
-            runtime_verified_balance_v2(&verified).expect("balance"),
-            RuntimeCandidateBalanceV2 {
-                complete_set_move: RuntimeCompleteSetMoveV2::Mint,
-                complete_set_quantity: 5,
-                quote_surplus: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn runtime_width_two_fifty_eight_uses_scratch_without_semantic_cap() {
-        let width = 258;
-        let candidate = candidate(width, 1, 9);
-        let receive = vec![1; 258];
-        let deliver = vec![1; 258];
-        let row = row(width, 1, 1, 1, 1, (&receive, &deliver), 0, 0);
-        let page = page(width, 1, 1, 11, &[&row.bytes]);
-        let vacant_cursor = [];
-        let vacant_verified = [];
-        let (summary, cursor, verified) = apply_row(
-            &candidate,
-            &page,
-            &vacant_cursor,
-            &vacant_verified,
-            row.order,
-            (0, 0, 0),
-        );
-        assert!(summary.complete);
-        assert_eq!(cursor.len(), RUNTIME_VERIFIER_HEADER_BYTES_V2 + 40 * 258);
-        let certificate = VerifiedCandidateV2::decode(&verified).expect("verified");
-        assert_eq!(certificate.claim_input(257).expect("tail"), 1);
-        assert_eq!(certificate.claim_output(257).expect("tail"), 1);
-    }
-
-    /// THE SELLER'S FLOOR, at its boundary and one step past it.
-    ///
-    /// A pure seller: it delivers one of each outcome per lot and receives
-    /// nothing, so the fill is priced in the CREDIT direction -- the direction
-    /// that had no conjunct at all until 2026-09-04, which is what
-    /// `MECHANISM_JOINT_CLEARING_2026_09_04.md` found by modelling the limit as
-    /// a signed quantity. At width 2 the candidate prices are `[1, 1]` on a
-    /// scale of 2, so two lots pay exactly two.
-    ///
-    /// THE FLOOR-ZERO ROW IS THIS TEST'S OWN POSITIVE CONTROL, and it is the
-    /// same bytes, the same prices and the same fill as the refusing row.
-    /// Nothing but the signed floor differs, so a `CreditLimit` here cannot be
-    /// the fixture failing to reach the conjunct -- an absent signal that logs
-    /// identically to a disconnected instrument is the failure this shape
-    /// exists to rule out.
-    #[test]
-    fn a_fill_below_the_sellers_floor_refuses_by_name_and_at_the_floor_admits() {
-        let width = 2;
-        let candidate = candidate(width, 1, 1);
-        let vacant_cursor = [];
-        let vacant_verified = [];
-        for floor in [0, 1] {
-            let seller = row(width, 1, 1, 1, 2, (&[0, 0], &[1, 1]), 0, floor);
-            let page = page(width, 1, 1, 11, &[&seller.bytes]);
-            let (summary, _, verified) = apply_row(
-                &candidate,
-                &page,
-                &vacant_cursor,
-                &vacant_verified,
-                seller.order,
-                (0, 0, 0),
-            );
-            assert!(summary.complete, "floor {floor}");
-            let certificate = VerifiedCandidateV2::decode(&verified).expect("verified");
-            assert_eq!(certificate.header().quote_credit, 2, "floor {floor}");
-            assert_eq!(certificate.header().quote_debit, 0, "floor {floor}");
-        }
-
-        let underpaid = row(width, 1, 1, 1, 2, (&[0, 0], &[1, 1]), 0, 2);
-        let page = page(width, 1, 1, 11, &[&underpaid.bytes]);
-        let cursor_len = runtime_verifier_len_v2(width).expect("cursor");
-        let verified_len = verified_candidate_len(width).expect("verified");
-        let mut cursor_scratch = vec![0; cursor_len];
-        let mut cursor_output = vec![0x55; cursor_len];
-        let mut verified_scratch = vec![0; verified_len];
-        let mut verified_output = vec![0xaa; verified_len];
-        let result = evaluate_runtime_consider_row_v2(
-            RuntimeConsiderRowViewV2 {
-                candidate: &candidate,
-                page: &page,
-                cursor_before: &vec![0; cursor_len],
-                verified_before: &vec![0; verified_len],
-                authenticated_order: underpaid.order,
-                expected_page_index: 0,
-                expected_row_index: 0,
-                expected_page_revision: 11,
-                expected_revision: 0,
-                max_orders: 10,
-            },
-            RuntimeConsiderRowBuffersV2 {
-                cursor_scratch: &mut cursor_scratch,
-                cursor_output: &mut cursor_output,
-                verified_scratch: &mut verified_scratch,
-                verified_output: &mut verified_output,
-            },
-        );
-        assert_eq!(result, Err(RuntimeVerifyErrorV2::CreditLimit));
-        assert_eq!(cursor_output, vec![0x55; cursor_len]);
-        assert_eq!(verified_output, vec![0xaa; verified_len]);
-    }
-
-    /// Two fragments of one order may not carry two floors.
-    ///
-    /// The floor joins `require_same_order`'s list for the same reason every
-    /// other immutable term is on it: a candidate that could relax the floor
-    /// between two pages of one order would have a floor only on the fragment
-    /// that happened to be checked first.
-    #[test]
-    fn a_second_fragment_may_not_lower_the_floor_its_first_carried() {
-        let width = 2;
-        let candidate = candidate(width, 2, 1);
-        let first = row(width, 1, 1, 1, 1, (&[0, 0], &[1, 1]), 0, 1);
-        let first_page = page(width, 1, 2, 11, &[&first.bytes]);
-        let vacant_cursor = [];
-        let vacant_verified = [];
-        let (summary, cursor, verified) = apply_row(
-            &candidate,
-            &first_page,
-            &vacant_cursor,
-            &vacant_verified,
-            first.order,
-            (0, 0, 0),
-        );
-        assert!(!summary.complete);
-        assert_eq!(
-            RuntimeCandidateVerifierV2::decode(&cursor)
-                .expect("cursor")
-                .current_order()
-                .expect("current order")
-                .expect("open order")
-                .min_quote_credit_per_lot,
-            1
-        );
-
-        let second = row(width, 2, 1, 1, 1, (&[0, 0], &[1, 1]), 0, 1);
-        let second_page = page(width, 2, 2, 12, &[&second.bytes]);
-        let mut relaxed = second.order;
-        relaxed.min_quote_credit_per_lot = 0;
-        let mut cursor_scratch = vec![0; cursor.len()];
-        let mut cursor_output = vec![0x55; cursor.len()];
-        let mut verified_scratch = vec![0; verified.len()];
-        let mut verified_output = vec![0xaa; verified.len()];
-        let result = evaluate_runtime_consider_row_v2(
-            RuntimeConsiderRowViewV2 {
-                candidate: &candidate,
-                page: &second_page,
-                cursor_before: &cursor,
-                verified_before: &verified,
-                authenticated_order: relaxed,
-                expected_page_index: 1,
-                expected_row_index: 0,
-                expected_page_revision: 12,
-                expected_revision: 1,
-                max_orders: 10,
-            },
-            RuntimeConsiderRowBuffersV2 {
-                cursor_scratch: &mut cursor_scratch,
-                cursor_output: &mut cursor_output,
-                verified_scratch: &mut verified_scratch,
-                verified_output: &mut verified_output,
-            },
-        );
-        assert_eq!(result, Err(RuntimeVerifyErrorV2::OrderSubstitution));
-        assert_eq!(cursor_output, vec![0x55; cursor.len()]);
-    }
-
-    #[test]
-    fn hostile_order_substitution_limit_and_skip_preserve_candidates() {
-        let width = 2;
-        let candidate = candidate(width, 1, 1);
-        let first = row(width, 1, 1, 1, 1, (&[1, 0], &[0, 0]), 0, 0);
-        let page = page(width, 1, 1, 11, &[&first.bytes]);
-        let cursor_len = runtime_verifier_len_v2(width).expect("cursor");
-        let verified_len = verified_candidate_len(width).expect("verified");
-        let zero_cursor = vec![0; cursor_len];
-        let zero_verified = vec![0; verified_len];
-        let mut cursor_scratch = vec![0; cursor_len];
-        let mut cursor_output = vec![0x55; cursor_len];
-        let mut verified_scratch = vec![0; verified_len];
-        let mut verified_output = vec![0xaa; verified_len];
-        let result = evaluate_runtime_consider_row_v2(
-            RuntimeConsiderRowViewV2 {
-                candidate: &candidate,
-                page: &page,
-                cursor_before: &zero_cursor,
-                verified_before: &zero_verified,
-                authenticated_order: first.order,
-                expected_page_index: 0,
-                expected_row_index: 0,
-                expected_page_revision: 11,
-                expected_revision: 0,
-                max_orders: 10,
-            },
-            RuntimeConsiderRowBuffersV2 {
-                cursor_scratch: &mut cursor_scratch,
-                cursor_output: &mut cursor_output,
-                verified_scratch: &mut verified_scratch,
-                verified_output: &mut verified_output,
-            },
-        );
-        assert_eq!(result, Err(RuntimeVerifyErrorV2::QuoteLimit));
-        assert_eq!(cursor_output, vec![0x55; cursor_len]);
-        assert_eq!(verified_output, vec![0xaa; verified_len]);
-
-        let mut substituted = first.order;
-        substituted.owner_id = [9; 32];
-        let result = evaluate_runtime_consider_row_v2(
-            RuntimeConsiderRowViewV2 {
-                candidate: &candidate,
-                page: &page,
-                cursor_before: &zero_cursor,
-                verified_before: &zero_verified,
-                authenticated_order: substituted,
-                expected_page_index: 0,
-                expected_row_index: 0,
-                expected_page_revision: 11,
-                expected_revision: 0,
-                max_orders: 10,
-            },
-            RuntimeConsiderRowBuffersV2 {
-                cursor_scratch: &mut cursor_scratch,
-                cursor_output: &mut cursor_output,
-                verified_scratch: &mut verified_scratch,
-                verified_output: &mut verified_output,
-            },
-        );
-        assert_eq!(
-            result,
-            Err(RuntimeVerifyErrorV2::AuthenticatedOrderMismatch)
-        );
-        assert_eq!(cursor_output, vec![0x55; cursor_len]);
-        assert_eq!(verified_output, vec![0xaa; verified_len]);
-    }
-
-    #[test]
-    fn verifier_emits_exact_order_manifests_across_group_boundaries() {
-        let width = 2;
-        let candidate = candidate(width, 1, 1);
-        let first = row(width, 1, 1, 1, 1, (&[1, 0], &[0, 0]), 1, 0);
-        let second = row(width, 1, 2, 2, 1, (&[0, 1], &[0, 0]), 1, 0);
-        let page = page(width, 1, 1, 11, &[&first.bytes, &second.bytes]);
-        let cursor_len = runtime_verifier_len_v2(width).expect("cursor");
-        let verified_len = verified_candidate_len(width).expect("verified");
-        let zero_cursor = vec![0; cursor_len];
-        let zero_verified = vec![0; verified_len];
-        let mut cursor_scratch = vec![0; cursor_len];
-        let mut cursor_first = vec![0; cursor_len];
-        let mut verified_scratch = vec![0; verified_len];
-        let mut verified_first = vec![0; verified_len];
-        let mut empty_manifest_scratch =
-            vec![0; settlement_manifest_len_v2(width, 0).expect("manifest")];
-        let mut empty_manifest_output = vec![0xaa; empty_manifest_scratch.len()];
-        let summary = evaluate_runtime_consider_row_with_manifest_v2(
-            RuntimeConsiderRowViewV2 {
-                candidate: &candidate,
-                page: &page,
-                cursor_before: &zero_cursor,
-                verified_before: &zero_verified,
-                authenticated_order: first.order,
-                expected_page_index: 0,
-                expected_row_index: 0,
-                expected_page_revision: 11,
-                expected_revision: 0,
-                max_orders: 10,
-            },
-            RuntimeConsiderRowBuffersV2 {
-                cursor_scratch: &mut cursor_scratch,
-                cursor_output: &mut cursor_first,
-                verified_scratch: &mut verified_scratch,
-                verified_output: &mut verified_first,
-            },
-            RuntimeManifestBuffersV2 {
-                manifest_scratch: &mut empty_manifest_scratch,
-                manifest_output: &mut empty_manifest_output,
-            },
-        )
-        .expect("first row");
-        assert!(!summary.complete);
-        assert_eq!(
-            SettlementManifestV2::decode(&empty_manifest_output)
-                .expect("empty manifest")
-                .header()
-                .order_count,
-            0
-        );
-
-        let manifest_len = settlement_manifest_len_v2(width, 2).expect("manifest");
-        let mut manifest_scratch = vec![0; manifest_len];
-        let mut manifest_output = vec![0xbb; manifest_len];
-        let mut cursor_terminal = vec![0; cursor_len];
-        let mut verified_terminal = vec![0; verified_len];
-        let summary = evaluate_runtime_consider_row_with_manifest_v2(
-            RuntimeConsiderRowViewV2 {
-                candidate: &candidate,
-                page: &page,
-                cursor_before: &cursor_first,
-                verified_before: &zero_verified,
-                authenticated_order: second.order,
-                expected_page_index: 0,
-                expected_row_index: 1,
-                expected_page_revision: 11,
-                expected_revision: 1,
-                max_orders: 10,
-            },
-            RuntimeConsiderRowBuffersV2 {
-                cursor_scratch: &mut cursor_scratch,
-                cursor_output: &mut cursor_terminal,
-                verified_scratch: &mut verified_scratch,
-                verified_output: &mut verified_terminal,
-            },
-            RuntimeManifestBuffersV2 {
-                manifest_scratch: &mut manifest_scratch,
-                manifest_output: &mut manifest_output,
-            },
-        )
-        .expect("terminal row");
-        assert!(summary.complete);
-        let manifest = SettlementManifestV2::decode(&manifest_output).expect("manifest");
-        assert_eq!(manifest.header().order_count, 2);
-        assert_eq!(
-            manifest.order(0).expect("first").header().order_coordinate,
-            1
-        );
-        assert_eq!(manifest.order(0).expect("first").claim_output(0), Ok(1));
-        assert_eq!(
-            manifest.order(0).expect("first").header().source_page_index,
-            0
-        );
-        assert_eq!(
-            manifest
-                .order(0)
-                .expect("first")
-                .header()
-                .source_execution_index,
-            0
-        );
-        assert_eq!(
-            manifest.order(1).expect("second").header().order_coordinate,
-            2
-        );
-        assert_eq!(manifest.order(1).expect("second").claim_output(1), Ok(1));
-        assert_eq!(
-            manifest
-                .order(1)
-                .expect("second")
-                .header()
-                .source_page_index,
-            0
-        );
-        assert_eq!(
-            manifest
-                .order(1)
-                .expect("second")
-                .header()
-                .source_execution_index,
-            1
-        );
-        assert!(VerifiedCandidateV2::decode(&verified_terminal).is_ok());
-
-        let mut undersized_scratch = vec![0; manifest_len - 1];
-        let mut undersized_output = vec![0xcc; manifest_len - 1];
-        let cursor_sentinel = vec![0xdd; cursor_len];
-        let verified_sentinel = vec![0xee; verified_len];
-        let mut cursor_output = cursor_sentinel.clone();
-        let mut verified_output = verified_sentinel.clone();
-        let result = evaluate_runtime_consider_row_with_manifest_v2(
-            RuntimeConsiderRowViewV2 {
-                candidate: &candidate,
-                page: &page,
-                cursor_before: &cursor_first,
-                verified_before: &zero_verified,
-                authenticated_order: second.order,
-                expected_page_index: 0,
-                expected_row_index: 1,
-                expected_page_revision: 11,
-                expected_revision: 1,
-                max_orders: 10,
-            },
-            RuntimeConsiderRowBuffersV2 {
-                cursor_scratch: &mut cursor_scratch,
-                cursor_output: &mut cursor_output,
-                verified_scratch: &mut verified_scratch,
-                verified_output: &mut verified_output,
-            },
-            RuntimeManifestBuffersV2 {
-                manifest_scratch: &mut undersized_scratch,
-                manifest_output: &mut undersized_output,
-            },
-        );
-        assert_eq!(result, Err(RuntimeVerifyErrorV2::InvalidLength));
-        assert_eq!(cursor_output, cursor_sentinel);
-        assert_eq!(verified_output, verified_sentinel);
-        assert_eq!(undersized_output, vec![0xcc; manifest_len - 1]);
-    }
-
-    #[test]
-    fn best_valid_submitted_candidate_uses_exact_policy() {
-        let width = 2;
-        let left_candidate = candidate(width, 1, 1);
-        let mut right_candidate = candidate(width, 1, 2);
-        right_candidate[32] = 7;
-        let receive = [1, 1];
-        let deliver = [1, 1];
-        let row = row(width, 1, 1, 1, 1, (&receive, &deliver), 0, 0);
-        let left_page = page(width, 1, 1, 11, &[&row.bytes]);
-        let mut right_page = left_page.clone();
-        right_page[32] = 7;
-        let zero_cursor = vec![0; runtime_verifier_len_v2(width).expect("cursor")];
-        let zero_verified = vec![0; verified_candidate_len(width).expect("verified")];
-        let (_, _, left) = apply_row(
-            &left_candidate,
-            &left_page,
-            &zero_cursor,
-            &zero_verified,
-            row.order,
-            (0, 0, 0),
-        );
-        let (_, _, right) = apply_row(
-            &right_candidate,
-            &right_page,
-            &zero_cursor,
-            &zero_verified,
-            row.order,
-            (0, 0, 0),
-        );
-        let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
-        criteria[0] = SelectionCriterion::MinimizeCandidateId;
-        let policy = SelectionPolicyV1 {
-            policy_id: [8; 32],
-            criterion_count: 1,
-            criteria,
-        };
-        assert_eq!(
-            runtime_candidate_better_v2(&policy, &left, &right),
-            Ok(true)
-        );
-    }
-
-    /// The two live authors of the selection comparison law agree exactly.
-    ///
-    /// C-05's whole vocabulary rests on one predicate: which of two verified
-    /// candidates is the better valid submitted one. That predicate has TWO
-    /// implementations in this crate, and both are live.
-    /// `runtime_candidate_key_better_v2` above is the persisted-key interpreter
-    /// the admitted accelerator and the operator both call through
-    /// `consider_verified_candidate_v2`. `crate::general::candidate_better` is the
-    /// V1-record copy, reached from `crate::general::consider_verified_input` and
-    /// therefore from `plan.rs`, which is the stateless differential oracle the
-    /// accelerator is checked against. Each carries its own private
-    /// `le_numeric_id`, and the tie-break is little-endian -- byte 31 is most
-    /// significant -- which is exactly the kind of detail one copy drifts on.
-    ///
-    /// Nothing joined them. An oracle that has quietly stopped agreeing with
-    /// the thing it is the oracle FOR does not fail; it certifies. This walks
-    /// every criterion prefix over a corpus that separates each criterion in
-    /// turn, ties on it, and ties on all three.
-    #[test]
-    fn the_oracle_and_the_runtime_agree_on_which_candidate_is_better() {
-        let keys = [
-            (7_u64, 5_u64, [3_u8; 32]),
-            (7, 5, [4; 32]),
-            (7, 9, [3; 32]),
-            (11, 5, [3; 32]),
-            (0, 0, [0; 32]),
-            (u64::MAX, u64::MAX, [0xff; 32]),
-            // A pair separated only in the MOST significant tie-break byte,
-            // and one separated only in the least, so a big-endian copy of
-            // `le_numeric_id` would disagree here rather than nowhere.
-            (7, 5, {
-                let mut id = [3_u8; 32];
-                id[31] = 9;
-                id
-            }),
-            (7, 5, {
-                let mut id = [3_u8; 32];
-                id[0] = 9;
-                id
-            }),
-        ];
-        let orders = [
-            [SelectionCriterion::MinimizeCandidateId; 3],
-            [
-                SelectionCriterion::MaximizeFilledLots,
-                SelectionCriterion::MinimizeQuoteSurplus,
-                SelectionCriterion::MinimizeCandidateId,
-            ],
-            [
-                SelectionCriterion::MinimizeQuoteSurplus,
-                SelectionCriterion::MaximizeFilledLots,
-                SelectionCriterion::MinimizeCandidateId,
-            ],
-        ];
-        let record = |key: (u64, u64, [u8; 32])| crate::general::VerifiedCandidateV1 {
-            candidate_id: key.2,
-            product_id: PRODUCT,
-            batch_id: BATCH,
-            outcome_count: 2,
-            page_count: 1,
-            filled_lots: key.0,
-            quote_surplus: key.1,
-            quote_inputs: 0,
-            quote_outputs: 0,
-            complete_set_move: crate::general::CompleteSetMoveV1::None,
-            complete_set_quantity: 0,
-            claim_inputs: [0; crate::general_codec::MAX_OUTCOMES],
-            claim_outputs: [0; crate::general_codec::MAX_OUTCOMES],
-        };
-        let mut compared = 0_usize;
-        for order in orders {
-            for count in 1..=order.len() {
-                let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
-                criteria[..count].copy_from_slice(&order[..count]);
-                let policy = SelectionPolicyV1 {
-                    policy_id: [8; 32],
-                    criterion_count: u8::try_from(count).expect("criterion prefix"),
-                    criteria,
-                };
-                for left in keys {
-                    for right in keys {
-                        let runtime = runtime_candidate_key_better_v2(
-                            &policy,
-                            RuntimeCandidateComparisonKeyV2 {
-                                filled_lots: left.0,
-                                quote_surplus: left.1,
-                                candidate_id: left.2,
-                            },
-                            RuntimeCandidateComparisonKeyV2 {
-                                filled_lots: right.0,
-                                quote_surplus: right.1,
-                                candidate_id: right.2,
-                            },
-                        )
-                        .expect("runtime comparison");
-                        let oracle = crate::general::candidate_better(
-                            &policy,
-                            &record(left),
-                            &record(right),
-                        );
-                        assert_eq!(
-                            runtime, oracle,
-                            "the runtime and the oracle disagree at {count} criteria on \
-                             {left:?} against {right:?}",
-                        );
-                        compared += 1;
-                    }
-                }
-            }
-        }
-        assert_eq!(compared, 3 * 3 * keys.len() * keys.len());
-    }
-}
+mod tests;

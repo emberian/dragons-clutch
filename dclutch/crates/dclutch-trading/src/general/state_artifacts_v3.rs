@@ -28,8 +28,8 @@ use dclutch_vm::account_profile::lifecycle_v3::{
 use crate::general::{
     candidate_v1::GENERAL_CANDIDATE_BYTES_V1,
     collection_v1::{
-        GENERAL_BATCH_BYTES_V1, GENERAL_ORDER_ROW_BASE_V1, GENERAL_ORDER_ROW_STRIDE_V1,
-        GeneralBatchLayoutV1, GeneralOrderLayoutV1,
+        GENERAL_BATCH_ROW_BASE_V2, GENERAL_BATCH_ROW_STRIDE_V2, GENERAL_ORDER_ROW_BASE_V2,
+        GENERAL_ORDER_ROW_STRIDE_V2, GeneralBatchLayoutV2, GeneralOrderLayoutV2,
     },
     hot_candidate_v3::{identity, scalar},
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
@@ -968,10 +968,12 @@ fn primary_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
         GeneralStateRecipeV3::Settlement | GeneralStateRecipeV3::Terminal => {
             SETTLEMENT_CURSOR_HEADER_BYTES_V2
         }
-        GeneralStateRecipeV3::Batch => GENERAL_BATCH_BYTES_V1,
+        // The batch record's fixed span: prefix and clearing header; the
+        // per-outcome `(price, residual)` cells are the stride past it.
+        GeneralStateRecipeV3::Batch => GENERAL_BATCH_ROW_BASE_V2,
         // The order record's fixed span: header and mutable window; the
         // per-outcome rows are the stride past it.
-        GeneralStateRecipeV3::Order => GENERAL_ORDER_ROW_BASE_V1,
+        GeneralStateRecipeV3::Order => GENERAL_ORDER_ROW_BASE_V2,
         GeneralStateRecipeV3::Candidate => GENERAL_CANDIDATE_BYTES_V1,
         GeneralStateRecipeV3::Verifier => RUNTIME_VERIFIER_HEADER_BYTES_V2,
         GeneralStateRecipeV3::VerifiedCandidate => VERIFIED_CANDIDATE_HEADER_BYTES_V2,
@@ -992,7 +994,8 @@ fn primary_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
         bump_offset: state_recipe.bump_offset(),
         data_base,
         data_stride: match state_recipe {
-            GeneralStateRecipeV3::Selection | GeneralStateRecipeV3::Batch => 0,
+            GeneralStateRecipeV3::Selection => 0,
+            GeneralStateRecipeV3::Batch => batch_row_stride()?,
             GeneralStateRecipeV3::Candidate => 0,
             GeneralStateRecipeV3::Verifier => 40,
             GeneralStateRecipeV3::VerifiedCandidate => 16,
@@ -1312,13 +1315,13 @@ fn batch_and_order_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
     let order_recipe = GeneralStateRecipeV3::Order;
     let batch_base = u32::try_from(
         GENERAL_LOCAL_STATE_HEADER_BYTES_V3
-            .checked_add(GENERAL_BATCH_BYTES_V1)
+            .checked_add(GENERAL_BATCH_ROW_BASE_V2)
             .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
     )
     .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
     let order_base = u32::try_from(
         GENERAL_LOCAL_STATE_HEADER_BYTES_V3
-            .checked_add(GENERAL_ORDER_ROW_BASE_V1)
+            .checked_add(GENERAL_ORDER_ROW_BASE_V2)
             .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
     )
     .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
@@ -1329,7 +1332,7 @@ fn batch_and_order_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
             seed_count: batch_recipe.seed_count(),
             bump_offset: batch_recipe.bump_offset(),
             data_base: batch_base,
-            data_stride: 0,
+            data_stride: batch_row_stride()?,
         },
         LifecycleRecipeInputV3 {
             state: LifecycleAccountCoordinateV3::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
@@ -1537,12 +1540,12 @@ fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
         // Product record, and the root's config selection. A live batch whose
         // bytes disagree with any of the three is a substituted window.
         for (slot, (offset, canonical)) in [
-            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (GeneralBatchLayoutV2::MARKET, identity::MARKET),
             (
-                GeneralBatchLayoutV1::PRODUCT_ID,
+                GeneralBatchLayoutV2::PRODUCT_ID,
                 identity::SELECTION_PRODUCT,
             ),
-            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+            (GeneralBatchLayoutV2::CONFIG_ID, identity::GENERAL_CONFIG_ID),
         ]
         .into_iter()
         .enumerate()
@@ -1558,7 +1561,7 @@ fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
     if action == Action::ReleaseOrder {
         output.values[0] = binding(
             0,
-            u32::try_from(GeneralOrderLayoutV1::MARKET)
+            u32::try_from(GeneralOrderLayoutV2::MARKET)
                 .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
             identity::MARKET,
         )?;
@@ -1566,12 +1569,12 @@ fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
     }
     if action == Action::PlaceOrder {
         for (slot, (offset, canonical)) in [
-            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (GeneralBatchLayoutV2::MARKET, identity::MARKET),
             (
-                GeneralBatchLayoutV1::PRODUCT_ID,
+                GeneralBatchLayoutV2::PRODUCT_ID,
                 identity::SELECTION_PRODUCT,
             ),
-            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+            (GeneralBatchLayoutV2::CONFIG_ID, identity::GENERAL_CONFIG_ID),
         ]
         .into_iter()
         .enumerate()
@@ -1592,12 +1595,12 @@ fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
         // profile projects out of those bytes, so a substituted window cannot
         // even be presented.
         for (slot, (offset, canonical)) in [
-            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (GeneralBatchLayoutV2::MARKET, identity::MARKET),
             (
-                GeneralBatchLayoutV1::PRODUCT_ID,
+                GeneralBatchLayoutV2::PRODUCT_ID,
                 identity::SELECTION_PRODUCT,
             ),
-            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+            (GeneralBatchLayoutV2::CONFIG_ID, identity::GENERAL_CONFIG_ID),
         ]
         .into_iter()
         .enumerate()
@@ -1610,7 +1613,7 @@ fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
         }
         output.values[3] = binding(
             1,
-            u32::try_from(GeneralOrderLayoutV1::MARKET)
+            u32::try_from(GeneralOrderLayoutV2::MARKET)
                 .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
             identity::MARKET,
         )?;
@@ -1663,7 +1666,12 @@ fn close_bindings() -> Result<[LifecycleImmutableIdentityBindingInputV4; 1]> {
 }
 
 fn order_row_stride() -> Result<u32> {
-    u32::try_from(GENERAL_ORDER_ROW_STRIDE_V1).map_err(|_| GeneralStateArtifactErrorV3::Geometry)
+    u32::try_from(GENERAL_ORDER_ROW_STRIDE_V2).map_err(|_| GeneralStateArtifactErrorV3::Geometry)
+}
+
+/// The batch record's per-outcome stride: one `(price, residual)` cell pair.
+fn batch_row_stride() -> Result<u32> {
+    u32::try_from(GENERAL_BATCH_ROW_STRIDE_V2).map_err(|_| GeneralStateArtifactErrorV3::Geometry)
 }
 
 fn binding(

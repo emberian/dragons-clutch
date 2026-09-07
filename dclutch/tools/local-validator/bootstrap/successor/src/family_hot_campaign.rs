@@ -65,8 +65,8 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_market::capability_program::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2, AcceleratorDispositionV2,
     AcceleratorRequestV2, RequestTransportV2,
@@ -888,6 +888,13 @@ fn general_verified_candidate_v1(
             quote_credit,
             price_scale: u64::from(width),
         },
+        // THE PRICES ARE THE CERTIFICATE'S FIRST TAIL, and they must be on the
+        // simplex: `VerifiedCandidateV2` refuses `InvalidSimplex` unless they
+        // sum to exactly `price_scale`, which is the runtime width here. One
+        // unit at every outcome is the uniform vector at that scale. This
+        // certificate is a selection-fold fixture and never streamed through
+        // the verifier, so the vector needs to be admissible, not forced.
+        &vec![1; count],
         &vec![7; count],
         &vec![7; count],
         &mut verified,

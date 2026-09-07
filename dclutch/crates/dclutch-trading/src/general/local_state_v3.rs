@@ -7,7 +7,7 @@
 
 use crate::general::{
     candidate_v1::{GENERAL_CANDIDATE_BYTES_V1, GeneralCandidateV1},
-    collection_v1::{GENERAL_BATCH_BYTES_V1, GeneralBatchV1, GeneralOrderV1, general_order_len_v1},
+    collection_v1::{GeneralBatchV2, GeneralOrderV2, general_batch_len_v2, general_order_len_v2},
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2},
     runtime_verify::{RuntimeCandidateVerifierV2, runtime_verifier_len_v2},
     runtime_width::{SettlementCursorV2, settlement_cursor_len},
@@ -123,7 +123,7 @@ impl GeneralLocalStateKindV3 {
     /// header plus a per-outcome stride.
     #[must_use]
     pub const fn is_fixed_width(self) -> bool {
-        matches!(self, Self::Selection | Self::Batch | Self::Candidate)
+        matches!(self, Self::Selection | Self::Candidate)
     }
 
     fn decode(value: u8) -> Result<Self> {
@@ -204,16 +204,20 @@ impl<'a> GeneralLocalStateV3<'a> {
             // owner. The envelope asserts no field of a body it does not own;
             // what it adds is the physical lifecycle the record never had.
             GeneralLocalStateKindV3::Batch => {
-                if body.len() != GENERAL_BATCH_BYTES_V1 {
-                    return Err(GeneralLocalStateErrorV3::InvalidLength);
-                }
-                GeneralBatchV1::decode(body).map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?;
-            }
-            GeneralLocalStateKindV3::Order => {
-                let order = GeneralOrderV1::decode(body)
+                let batch = GeneralBatchV2::decode(body)
                     .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?;
                 if body.len()
-                    != general_order_len_v1(order.header().outcome_count)
+                    != general_batch_len_v2(batch.opening().outcome_count)
+                        .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?
+                {
+                    return Err(GeneralLocalStateErrorV3::InvalidLength);
+                }
+            }
+            GeneralLocalStateKindV3::Order => {
+                let order = GeneralOrderV2::decode(body)
+                    .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?;
+                if body.len()
+                    != general_order_len_v2(order.header().outcome_count)
                         .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?
                 {
                     return Err(GeneralLocalStateErrorV3::InvalidLength);
@@ -278,8 +282,9 @@ pub fn general_local_state_len_v3(
         GeneralLocalStateKindV3::Selection => RUNTIME_SELECTION_CURSOR_BYTES_V2,
         GeneralLocalStateKindV3::Settlement => settlement_cursor_len(outcome_count)
             .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?,
-        GeneralLocalStateKindV3::Batch => GENERAL_BATCH_BYTES_V1,
-        GeneralLocalStateKindV3::Order => general_order_len_v1(outcome_count)
+        GeneralLocalStateKindV3::Batch => general_batch_len_v2(outcome_count)
+            .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?,
+        GeneralLocalStateKindV3::Order => general_order_len_v2(outcome_count)
             .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?,
         GeneralLocalStateKindV3::Candidate => GENERAL_CANDIDATE_BYTES_V1,
         GeneralLocalStateKindV3::Verifier => runtime_verifier_len_v2(outcome_count)
@@ -309,13 +314,19 @@ pub fn encode_general_local_state_v3_atomic(
                 .header()
                 .outcome_count
         }
-        // The two fixed-width records carry an outcome count of their own and
-        // it does not size the body; one is the width every other coordinate
-        // in the batch agrees on, and asserting it here would make the
-        // envelope a second authority over a field the record already owns.
-        GeneralLocalStateKindV3::Batch | GeneralLocalStateKindV3::Candidate => 1,
+        // The candidate record carries an outcome count of its own and it
+        // does not size the body: it is the width every other coordinate in
+        // the batch agrees on, and asserting it here would make the envelope a
+        // second authority over a field the record already owns.
+        GeneralLocalStateKindV3::Candidate => 1,
+        GeneralLocalStateKindV3::Batch => {
+            GeneralBatchV2::decode(body)
+                .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?
+                .opening()
+                .outcome_count
+        }
         GeneralLocalStateKindV3::Order => {
-            GeneralOrderV1::decode(body)
+            GeneralOrderV2::decode(body)
                 .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?
                 .header()
                 .outcome_count
@@ -421,10 +432,12 @@ mod tests {
 
     use super::*;
     use crate::general::collection_v1::{
-        GeneralBatchOpeningV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1, GeneralOrderStateV1,
+        GeneralBatchOpeningV1, GeneralOrderHeaderV2, GeneralOrderPhaseV1, GeneralOrderStateV1,
     };
+    use crate::general::runtime_verify::OrderSideV2;
     use crate::general::runtime_width::{SettlementCursorHeaderV2, SettlementPhaseV2};
     use crate::general_config::root::GeneralRootV2;
+    use std::vec::Vec;
 
     const ALL_KINDS: [GeneralLocalStateKindV3; 6] = [
         GeneralLocalStateKindV3::Selection,
@@ -444,7 +457,7 @@ mod tests {
     fn batch_body(width: u32) -> std::vec::Vec<u8> {
         let mut root = GeneralRootV2::active(id(1), id(2), 7).expect("active root");
         let revision = root.revision();
-        let batch = crate::general::collection_v1::GeneralBatchV1::open(
+        let batch = crate::general::collection_v1::GeneralBatchV2::open(
             &mut root,
             GeneralBatchOpeningV1 {
                 outcome_count: width,
@@ -462,29 +475,43 @@ mod tests {
             10,
         )
         .expect("open batch");
-        batch.to_bytes().to_vec()
+        // The whole `296 + 16N` account, vacant clearing tail included.
+        // `to_bytes` is only the V1 prefix the two batch effects write.
+        let mut bytes = vec![
+            0_u8;
+            crate::general::collection_v1::general_batch_len_v2(width)
+                .expect("batch width")
+        ];
+        batch.encode_into(&mut bytes).expect("batch record");
+        bytes
     }
 
     fn order_body(width: u32) -> std::vec::Vec<u8> {
-        let count = usize::try_from(width).expect("width");
-        let mut receive = vec![0_u64; count];
-        let mut deliver = vec![0_u64; count];
-        receive[0] = 1;
-        deliver[count - 1] = 2;
-        let mut bytes = vec![0_u8; general_order_len_v1(width).expect("order width")];
-        GeneralOrderV1::encode_into(
-            GeneralOrderHeaderV1 {
-                outcome_count: width,
-                nonce: 5,
-                owner_id: id(9),
-                market: id(1),
-                batch_id: id(4),
-                generation: 7,
-                max_lots: 10,
-                max_quote_debit_per_lot: 5,
-                min_quote_credit_per_lot: 0,
-                valid_until_slot: 2_000,
-            },
+        let header = GeneralOrderHeaderV2 {
+            outcome_count: width,
+            nonce: 5,
+            owner_id: id(9),
+            market: id(1),
+            batch_id: id(4),
+            generation: 7,
+            max_lots: 10,
+            max_quote_debit_per_lot: 5,
+            min_quote_credit_per_lot: 0,
+            valid_until_slot: 2_000,
+            side: OrderSideV2::Sell,
+            outcome_lo: width - 1,
+            outcome_hi: width - 1,
+            claims_per_lot: 2,
+        };
+        let receive: Vec<u64> = (0..width)
+            .map(|index| header.derived_row(index).0)
+            .collect();
+        let deliver: Vec<u64> = (0..width)
+            .map(|index| header.derived_row(index).1)
+            .collect();
+        let mut bytes = vec![0_u8; general_order_len_v2(width).expect("order width")];
+        GeneralOrderV2::encode_into(
+            header,
             &receive,
             &deliver,
             GeneralOrderStateV1 {

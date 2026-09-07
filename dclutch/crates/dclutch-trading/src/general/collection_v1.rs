@@ -8,76 +8,119 @@
 //! Nothing bound either to a batch that was opened or to an order a maker
 //! actually placed.
 //!
-//! This module supplies the two missing immutable records and the three pure
-//! transitions over them.  A batch is a *window*, not a ledger: it counts its
-//! orders and bounds them, but it does not enumerate them.  Each order is an
-//! independent content-addressed record, and the Candidate carries the exact
-//! execution set naming them.  That is deliberately the weakest binding that
-//! still refuses a substituted batch, a substituted order, or an order admitted
-//! outside the window it was signed for.
+//! This module supplies the two immutable records and the pure transitions
+//! over them.  A batch is a *window*, not a ledger: it counts its orders and
+//! bounds them, but it does not enumerate them.  Each order is an independent
+//! content-addressed record, and the Candidate carries the exact execution set
+//! naming them.  That is deliberately the weakest binding that still refuses a
+//! substituted batch, a substituted order, or an order admitted outside the
+//! window it was signed for.
+//!
+//! # The joint clearing's re-digest (cohort-18)
+//!
+//! Two records moved under `MECHANISM_JOINT_CLEARING_2026_09_04.md`, and each
+//! has one Lean author:
+//!
+//! - **The order** (`DCGSORD2`, `DClutchSemantics.GeneralOrderV2Abi`). An
+//!   order names a SIDE, an inclusive outcome INTERVAL and the claims one lot
+//!   moves on it; the V1 header is a byte-identical prefix, the shape is the
+//!   sixteen bytes before the state window, the identity is the digest of the
+//!   184-byte header alone, and the interleaved rows are DERIVED from the
+//!   shape -- `decode` refuses a record whose rows disagree with it. The rows
+//!   stay on the wire because the emitted PlaceOrder effect program writes
+//!   them; deleting them is the named follow-on. `PlaceOrder` admits a
+//!   single-outcome shape in this cohort (`BundleNotAdmitted` otherwise), and
+//!   an execution row may fill ZERO lots, which is how a certificate accounts
+//!   for an order it leaves unfilled.
+//! - **The batch** (`DCGBTCH2`, `DClutchSemantics.ClearingPriceV1Abi`). The
+//!   V1 record is a byte-identical 224-byte prefix followed by the clearing
+//!   tail: the candidate that cleared, the sets it minted or merged, the price
+//!   vector and the residual the close STRANDED per outcome. The tail is
+//!   vacant until the third status, `Cleared`, which only the settlement
+//!   close writes and which no later close can write again. The `batch_id`
+//!   identity preimage is unchanged.
 //!
 //! Authorization is not in this module.  These are pure record transitions; the
 //! privileges that make them safe -- the maker signing their own order, the
 //! writable root, the vacant successor PDA -- are declared by General's
 //! AccountProfile and enforced by the family-neutral Trading executor.  See
-//! `docs/decisions/0009-general-batch-collection.md`.
+//! `docs/decisions/0009-general-batch-collection.md` and decision 0032.
 
 use crate::general_config::root::{GeneralRootV2, RootError};
-use dclutch_sha256_adapter::{digest, digestv};
+use dclutch_sha256_adapter::digest;
 
-use crate::general::runtime_verify::AuthenticatedOrderTermsV2;
+use crate::general::generated_clearing_price_v1 as clearing_wire;
+use crate::general::generated_order_v2 as order_wire;
+use crate::general::runtime_verify::{AuthenticatedOrderTermsV2, OrderSideV2};
 use crate::general::runtime_width::{CandidateHeaderV2, ExecutionV2, VerifiedCandidateHeaderV2};
 
 /// Exact immutable batch prefix persisted before the mutable state tail.
 pub const GENERAL_BATCH_PREFIX_BYTES_V1: usize = 160;
 /// Exact canonical slot-independent preimage of one batch occurrence identity.
 pub const GENERAL_BATCH_OCCURRENCE_TERMS_BYTES_V1: usize = 144;
-/// Exact total batch record width, immutable prefix then mutable tail.
-pub const GENERAL_BATCH_BYTES_V1: usize = 224;
-/// Exact immutable fixed-header bytes of one order record.
-pub const GENERAL_ORDER_HEADER_BYTES_V1: usize = 160;
+/// Exact width of the V1 batch record, which is the V2 record's fixed prefix.
+///
+/// The clearing tail begins exactly here (`ClearingPriceV1Abi.the_tail_begins_where_v1_ended`).
+pub const GENERAL_BATCH_BYTES_V1: usize = clearing_wire::BATCH_V1_BYTES;
+/// Exact fixed bytes of the clearing tail before its two runtime vectors.
+pub const GENERAL_BATCH_CLEARING_FIXED_BYTES_V2: usize = clearing_wire::CLEARING_FIXED_BYTES_V1;
+/// Exact fixed byte span of one batch record before its per-outcome tail.
+///
+/// The account is Product-width, not `GENERAL_BATCH_BYTES_V1`: the joint arm
+/// gave the batch a clearing tail, and this pair -- base and stride -- is what
+/// every physical account rule and lifecycle recipe declares for it, exactly
+/// as the Order recipe declares `GENERAL_ORDER_ROW_BASE_V2` beside
+/// `GENERAL_ORDER_ROW_STRIDE_V2`. [`general_batch_len_v2`] is the same two
+/// numbers, so a rule and the envelope cannot disagree about the width.
+pub const GENERAL_BATCH_ROW_BASE_V2: usize = GeneralBatchLayoutV2::PRICES_BASE;
+/// Exact byte stride of one per-outcome `(price, residual)` cell pair.
+pub const GENERAL_BATCH_ROW_STRIDE_V2: usize = 2 * GeneralBatchLayoutV2::TAIL_STRIDE;
+/// Exact immutable fixed-header bytes of one order record: the signed terms.
+///
+/// This is the whole identity preimage. `DClutchSemantics.GeneralOrderV2Abi`
+/// walks the field sequence and this is where the header ends.
+pub const GENERAL_ORDER_HEADER_BYTES_V2: usize = order_wire::ORDER_HEADER_BYTES_V2;
 /// Exact mutable escrow-state window between the header and the per-lot rows.
-pub const GENERAL_ORDER_STATE_BYTES_V1: usize = 32;
+pub const GENERAL_ORDER_STATE_BYTES_V2: usize = order_wire::ORDER_STATE_BYTES_V2;
 /// Exact fixed offset of the mutable escrow-state window.
 ///
-/// THE WIRE REPAIR THIS IS: the state block used to trail the two runtime-width
-/// per-lot tails at `160 + 16N`, an offset no fixed-offset EffectProgram write
-/// can address because `N` is a runtime width. Every mutable byte now lives at
-/// a fixed coordinate, and the runtime-width rows follow it. The identity
-/// digest masks exactly this window -- see [`general_order_identity_v1`] --
-/// the same construction [`crate::general::candidate_v1::general_candidate_identity_v1`]
-/// uses for a self-describing record.
-pub const GENERAL_ORDER_STATE_OFFSET_V1: usize = GENERAL_ORDER_HEADER_BYTES_V1;
+/// Every mutable byte lives at a fixed coordinate an EffectProgram write can
+/// address; the runtime-width rows follow it. The identity digest masks
+/// exactly this window and the rows -- see [`general_order_identity_v2`].
+pub const GENERAL_ORDER_STATE_OFFSET_V2: usize = order_wire::ORDER_STATE_OFFSET_V2 as usize;
 /// Exact fixed offset of the first per-outcome `(receive, deliver)` row.
-pub const GENERAL_ORDER_ROW_BASE_V1: usize =
-    GENERAL_ORDER_STATE_OFFSET_V1 + GENERAL_ORDER_STATE_BYTES_V1;
-/// Fixed offset of the first per-outcome row in the signed immutable terms.
-///
-/// The signed form omits the 32-byte mutable state window. It is therefore
-/// exactly the identity preimage `header || rows` that one order ID commits.
-pub const GENERAL_SIGNED_ORDER_TERMS_ROW_BASE_V1: usize = GENERAL_ORDER_HEADER_BYTES_V1;
+pub const GENERAL_ORDER_ROW_BASE_V2: usize = order_wire::ORDER_ROW_BASE_V2 as usize;
 /// Exact byte stride of one per-outcome `(receive, deliver)` row.
 ///
-/// The two per-lot quantities are INTERLEAVED per outcome rather than laid out
-/// as two whole tails, because a second tail would begin at `base + 8N` -- a
-/// runtime-width offset again -- while an interleaved row gives both fields a
-/// fixed base and a fixed stride, which is exactly the shape one affine
-/// per-item EffectProgram write can produce.
-pub const GENERAL_ORDER_ROW_STRIDE_V1: usize = 16;
+/// Interleaved per outcome so both fields have a fixed base and a fixed
+/// stride, which is the shape one affine per-item EffectProgram write produces.
+pub const GENERAL_ORDER_ROW_STRIDE_V2: usize = order_wire::ORDER_ROW_STRIDE_V2;
 /// Offset of `receive_per_lot` inside one per-outcome row.
-pub const GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1: usize = 0;
+pub const GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2: usize = 0;
 /// Offset of `deliver_per_lot` inside one per-outcome row.
-pub const GENERAL_ORDER_ROW_DELIVER_OFFSET_V1: usize = 8;
+pub const GENERAL_ORDER_ROW_DELIVER_OFFSET_V2: usize = 8;
 
-const BATCH_MAGIC: [u8; 8] = *b"DCGBAT01";
+const BATCH_MAGIC: [u8; 8] = clearing_wire::BATCH_MAGIC_V2;
 const BATCH_OCCURRENCE_TERMS_MAGIC: [u8; 8] = *b"DCGBOC01";
-const ORDER_MAGIC: [u8; 8] = *b"DCGORD01";
-const VERSION: u16 = 1;
+const ORDER_MAGIC: [u8; 8] = order_wire::ORDER_MAGIC_V2;
+/// One version for both records: the joint clearing moved both digests in
+/// one cohort, and the Lean authors of each agree on the number.
+const VERSION: u16 = 2;
+const _: () = assert!(
+    VERSION == order_wire::ORDER_VERSION_V2 && VERSION == clearing_wire::BATCH_VERSION_V2,
+    "the collection half's record version must be the one both Lean authors emit"
+);
+/// The occurrence-terms preimage did not move: its own version stays one.
+const OCCURRENCE_TERMS_VERSION: u16 = 1;
 const BATCH_PHASE: u8 = 20;
-const ORDER_PHASE: u8 = 21;
+const ORDER_PHASE: u8 = order_wire::ORDER_PHASE_V2;
 
-const STATUS_COLLECTING: u8 = 1;
-const STATUS_CLOSED: u8 = 2;
+const MOVE_NONE: u8 = clearing_wire::CLEARING_MOVE_NONE_V1;
+const MOVE_MINT: u8 = clearing_wire::CLEARING_MOVE_MINT_V1;
+const MOVE_MERGE: u8 = clearing_wire::CLEARING_MOVE_MERGE_V1;
+const STATUS_COLLECTING: u8 = clearing_wire::BATCH_STATUS_COLLECTING_V2;
+const STATUS_CLOSED: u8 = clearing_wire::BATCH_STATUS_CLOSED_V2;
+const STATUS_CLEARED: u8 = clearing_wire::BATCH_STATUS_CLEARED_V2;
 
 const ORDER_PHASE_PLACED: u8 = 1;
 const ORDER_PHASE_CANCELLED: u8 = 2;
@@ -86,12 +129,13 @@ const ORDER_PHASE_RELEASED: u8 = 3;
 /// Canonical byte coordinates of one batch record.
 ///
 /// The hostile decoder and encoder below are the authority for accepting and
-/// producing the complete wire; these exist so the OpenBatch/CloseBatch
+/// producing the complete wire; these exist so the OpenBatch/CloseBatch/Close
 /// artifact builders can write the same bytes without restating the layout,
 /// and both codec directions read them so a moved field moves everywhere.
-pub struct GeneralBatchLayoutV1;
+/// The first 224 bytes are V1's, byte for byte.
+pub struct GeneralBatchLayoutV2;
 
-impl GeneralBatchLayoutV1 {
+impl GeneralBatchLayoutV2 {
     /// Record magic.
     pub const MAGIC: usize = 0;
     /// Record ABI version.
@@ -130,6 +174,31 @@ impl GeneralBatchLayoutV1 {
     pub const COMMITTED_QUOTE_RESERVE: usize = 184;
     /// Mutable cancelled-order count.
     pub const CANCELLED_COUNT: usize = 192;
+    /// Candidate the settlement close cleared this batch with.
+    pub const CLEARED_CANDIDATE_ID: usize =
+        clearing_wire::CLEARING_CLEARED_CANDIDATE_ID_OFFSET_V1 as usize;
+    /// Slot the close executed at.
+    pub const CLEARED_SLOT: usize = clearing_wire::CLEARING_CLEARED_SLOT_OFFSET_V1 as usize;
+    /// Complete-set move of the clearing: none, mint or merge.
+    pub const SETS_MOVE: usize = clearing_wire::CLEARING_SETS_MOVE_OFFSET_V1 as usize;
+    /// Uniform complete-set quantity the clearing materialised.
+    pub const SETS_QUANTITY: usize = clearing_wire::CLEARING_SETS_QUANTITY_OFFSET_V1 as usize;
+    /// Candidate-wide filled lots of the clearing.
+    pub const FILLED_LOTS: usize = clearing_wire::CLEARING_FILLED_LOTS_OFFSET_V1 as usize;
+    /// Live orders the certificate was held to.
+    pub const LIVE_ORDER_COUNT: usize = clearing_wire::CLEARING_LIVE_ORDER_COUNT_OFFSET_V1 as usize;
+    /// First price cell.
+    pub const PRICES_BASE: usize = clearing_wire::CLEARING_PRICES_OFFSET_V1 as usize;
+    /// Byte width of one price or residual cell.
+    pub const TAIL_STRIDE: usize = clearing_wire::CLEARING_TAIL_STRIDE_V1 as usize;
+
+    /// First residual cell, after the runtime-width price vector.
+    pub fn residual_base(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
+        usize_from_u32(outcome_count)?
+            .checked_mul(Self::TAIL_STRIDE)
+            .and_then(|prices| Self::PRICES_BASE.checked_add(prices))
+            .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
+    }
 
     /// Little-endian record magic as one register-width word.
     #[must_use]
@@ -191,55 +260,53 @@ impl GeneralBatchOccurrenceTermsLayoutV1 {
 
 /// Canonical byte coordinates of one order record.
 ///
-/// The hostile decoder and encoder below are the authority for accepting and
-/// producing the complete wire; these exist so the order-action artifact
-/// builders can write the same bytes without restating the layout, and both
-/// codec directions read them so a moved field moves everywhere.
-pub struct GeneralOrderLayoutV1;
+/// Every coordinate is `DClutchSemantics.GeneralOrderV2Abi`'s, through the
+/// emitted `generated_order_v2`. The first 160 bytes are V1's field for field.
+pub struct GeneralOrderLayoutV2;
 
-impl GeneralOrderLayoutV1 {
+impl GeneralOrderLayoutV2 {
     /// Record magic.
-    pub const MAGIC: usize = 0;
+    pub const MAGIC: usize = order_wire::ORDER_MAGIC_OFFSET_V2 as usize;
     /// Record ABI version.
-    pub const VERSION: usize = 8;
+    pub const VERSION: usize = order_wire::ORDER_VERSION_OFFSET_V2 as usize;
     /// Record phase byte.
-    pub const PHASE: usize = 10;
+    pub const PHASE: usize = order_wire::ORDER_PHASE_OFFSET_V2 as usize;
     /// Runtime outcome width.
-    pub const OUTCOME_COUNT: usize = 12;
+    pub const OUTCOME_COUNT: usize = order_wire::ORDER_OUTCOME_COUNT_OFFSET_V2 as usize;
     /// Owner-scoped replay nonce.
-    pub const NONCE: usize = 16;
-    /// Candidate-wide minimum derived quote credit per filled lot.
-    ///
-    /// THE EIGHT RESERVED-ZERO BYTES, spent. `decode` required 24..32 zero from
-    /// the day this record was written, which is what makes the field additive
-    /// in the strongest sense available: a floor of zero is not merely the old
-    /// BEHAVIOUR, it is the old BYTES, so every order already signed keeps its
-    /// `order_id` and every fixture that spells the record keeps passing. A
-    /// reserved window becoming an authenticated field is the only way to spend
-    /// one -- AGENTS.md's rule is that an unused byte must not become an
-    /// UNAUTHENTICATED extension point, and this one is covered by the record's
-    /// own digest.
-    pub const MIN_QUOTE_CREDIT_PER_LOT: usize = 24;
+    pub const NONCE: usize = order_wire::ORDER_NONCE_OFFSET_V2 as usize;
+    /// Candidate-wide minimum derived quote credit per filled lot: the seller's floor.
+    pub const MIN_QUOTE_CREDIT_PER_LOT: usize =
+        order_wire::ORDER_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2 as usize;
     /// Maker identity; the account that must sign the placement.
-    pub const OWNER_ID: usize = 32;
+    pub const OWNER_ID: usize = order_wire::ORDER_OWNER_ID_OFFSET_V2 as usize;
     /// Canonical Core Market key.
-    pub const MARKET: usize = 64;
+    pub const MARKET: usize = order_wire::ORDER_MARKET_OFFSET_V2 as usize;
     /// Exact immutable identity of the batch this order may execute in.
-    pub const BATCH_ID: usize = 96;
+    pub const BATCH_ID: usize = order_wire::ORDER_BATCH_ID_OFFSET_V2 as usize;
     /// Immutable Market generation.
-    pub const GENERATION: usize = 128;
+    pub const GENERATION: usize = order_wire::ORDER_GENERATION_OFFSET_V2 as usize;
     /// Candidate-wide maximum fill.
-    pub const MAX_LOTS: usize = 136;
+    pub const MAX_LOTS: usize = order_wire::ORDER_MAX_LOTS_OFFSET_V2 as usize;
     /// Candidate-wide maximum derived quote debit per filled lot.
-    pub const MAX_QUOTE_DEBIT_PER_LOT: usize = 144;
+    pub const MAX_QUOTE_DEBIT_PER_LOT: usize =
+        order_wire::ORDER_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2 as usize;
     /// Last slot at which this order may still be settled.
-    pub const VALID_UNTIL_SLOT: usize = 152;
+    pub const VALID_UNTIL_SLOT: usize = order_wire::ORDER_VALID_UNTIL_SLOT_OFFSET_V2 as usize;
+    /// Side tag: buy or sell.
+    pub const SIDE: usize = order_wire::ORDER_SIDE_OFFSET_V2 as usize;
+    /// First outcome of the inclusive interval.
+    pub const OUTCOME_LO: usize = order_wire::ORDER_OUTCOME_LO_OFFSET_V2 as usize;
+    /// Last outcome of the inclusive interval.
+    pub const OUTCOME_HI: usize = order_wire::ORDER_OUTCOME_HI_OFFSET_V2 as usize;
+    /// Claims one lot moves at every coordinate of the interval.
+    pub const CLAIMS_PER_LOT: usize = order_wire::ORDER_CLAIMS_PER_LOT_OFFSET_V2 as usize;
     /// Mutable escrow phase byte.
-    pub const STATE_PHASE: usize = GENERAL_ORDER_STATE_OFFSET_V1;
+    pub const STATE_PHASE: usize = order_wire::ORDER_STATE_PHASE_OFFSET_V2 as usize;
     /// Mutable admission slot.
-    pub const STATE_ADMITTED_SLOT: usize = GENERAL_ORDER_STATE_OFFSET_V1 + 8;
+    pub const STATE_ADMITTED_SLOT: usize = order_wire::ORDER_STATE_ADMITTED_SLOT_OFFSET_V2 as usize;
     /// Mutable release slot; zero while placed.
-    pub const STATE_RELEASED_SLOT: usize = GENERAL_ORDER_STATE_OFFSET_V1 + 16;
+    pub const STATE_RELEASED_SLOT: usize = order_wire::ORDER_STATE_RELEASED_SLOT_OFFSET_V2 as usize;
 
     /// Little-endian record magic as one register-width word.
     #[must_use]
@@ -311,6 +378,19 @@ pub enum GeneralCollectionErrorV1 {
     NotTheMaker,
     /// The escrow could not fund the movement an authenticated row requires.
     EscrowShortfall,
+    /// The shape is not a nonempty interval inside the width moving a positive
+    /// number of claims per lot (`GeneralOrderV2Abi.Shape.isInterval`).
+    ShapeNotInterval,
+    /// The interval is wider than one outcome. Admitted once the verifier's
+    /// minimality conjunct covers interval books; refused by name until then.
+    BundleNotAdmitted,
+    /// The record's rows are not the rows its own shape derives.
+    RowsDisagreeWithShape,
+    /// The clearing tail is not vacant on an uncleared batch, or is not a
+    /// clearing on a cleared one (`ClearingPriceV1Abi.tailAdmissible`).
+    InvalidClearing,
+    /// The batch has already been cleared; a batch clears once.
+    AlreadyCleared,
     /// The root refused the batch-count transition.
     Root(RootError),
 }
@@ -332,6 +412,8 @@ pub enum BatchStatusV1 {
     Collecting = STATUS_COLLECTING,
     /// The order set is final and candidates may name this batch.
     Closed = STATUS_CLOSED,
+    /// The settlement close published one clearing; nothing follows.
+    Cleared = STATUS_CLEARED,
 }
 
 impl BatchStatusV1 {
@@ -339,6 +421,7 @@ impl BatchStatusV1 {
         match value {
             STATUS_COLLECTING => Ok(Self::Collecting),
             STATUS_CLOSED => Ok(Self::Closed),
+            STATUS_CLEARED => Ok(Self::Cleared),
             _ => Err(GeneralCollectionErrorV1::InvalidStatus),
         }
     }
@@ -385,10 +468,12 @@ pub struct GeneralBatchOpeningV1 {
 ///
 /// This value is not a second persisted record. It is the exact derivation
 /// shared by the runtime and operator for the PDA occurrence identity of the
-/// existing [`GeneralBatchV1`] record. It is deliberately not described as the
+/// existing [`GeneralBatchV2`] record. It is deliberately not described as the
 /// digest of that record's complete immutable prefix: collection and settlement
 /// deadlines remain persisted there, but they are runtime-owned clock facts and
-/// do not participate in this pre-executable identity.
+/// do not participate in this pre-executable identity. The clearing tail does
+/// not participate either: an order signed against a batch keeps its identity
+/// through the clearing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralBatchOccurrenceTermsV1 {
     opening: GeneralBatchOpeningV1,
@@ -409,7 +494,7 @@ impl GeneralBatchOccurrenceTermsV1 {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         if bytes.get(..8) != Some(BATCH_OCCURRENCE_TERMS_MAGIC.as_slice())
-            || read_u16(bytes, Self::version_offset())? != VERSION
+            || read_u16(bytes, Self::version_offset())? != OCCURRENCE_TERMS_VERSION
             || read_u8(bytes, GeneralBatchOccurrenceTermsLayoutV1::PHASE)? != BATCH_PHASE
         {
             return Err(GeneralCollectionErrorV1::InvalidHeader);
@@ -443,7 +528,7 @@ impl GeneralBatchOccurrenceTermsV1 {
         put(
             &mut output,
             GeneralBatchOccurrenceTermsLayoutV1::VERSION,
-            &VERSION.to_le_bytes(),
+            &OCCURRENCE_TERMS_VERSION.to_le_bytes(),
         );
         output[GeneralBatchOccurrenceTermsLayoutV1::PHASE] = BATCH_PHASE;
         put(
@@ -506,9 +591,97 @@ impl GeneralBatchOccurrenceTermsV1 {
     }
 }
 
-/// Mutable batch counters advanced by admission, cancellation and closure.
+/// Which complete-set movement one clearing made.
+///
+/// The tag is on the wire (`ClearingPriceV1Abi`), so it needs a name a caller
+/// outside this module can say: a `u8` field whose admissible values are
+/// private constants is a public field nobody else can fill.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralBatchStateV1 {
+#[repr(u8)]
+pub enum GeneralClearingMoveV1 {
+    /// The book cleared by transfer alone; no set moved.
+    None = MOVE_NONE,
+    /// The close minted `sets_quantity` complete sets.
+    Mint = MOVE_MINT,
+    /// The close merged `sets_quantity` complete sets.
+    Merge = MOVE_MERGE,
+}
+
+impl GeneralClearingMoveV1 {
+    fn decode(value: u8) -> GeneralCollectionResultV1<Self> {
+        match value {
+            MOVE_NONE => Ok(Self::None),
+            MOVE_MINT => Ok(Self::Mint),
+            MOVE_MERGE => Ok(Self::Merge),
+            _ => Err(GeneralCollectionErrorV1::InvalidClearing),
+        }
+    }
+
+    /// Return the canonical one-byte movement tag.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Whether this movement moves any set at all.
+    #[must_use]
+    pub const fn moves_sets(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
+/// The fixed half of one batch's clearing: what the settlement close wrote.
+///
+/// The runtime-width price and residual vectors are read off the record by
+/// [`general_batch_price_v2`] and [`general_batch_residual_v2`] and written
+/// by [`GeneralBatchV2::encode_clearing_into`]; a `Copy` value cannot hold a
+/// runtime width and the batch record has always been one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralClearingFixedV1 {
+    /// Candidate content identity the close settled.
+    pub cleared_candidate_id: [u8; 32],
+    /// Slot the close executed at.
+    pub cleared_slot: u64,
+    /// Which complete-set movement the close made.
+    pub sets_move: GeneralClearingMoveV1,
+    /// Uniform complete-set quantity minted or merged.
+    pub sets_quantity: u64,
+    /// Candidate-wide filled lots.
+    pub filled_lots: u64,
+    /// Live orders the certificate enumerated.
+    pub live_order_count: u32,
+}
+
+impl GeneralClearingFixedV1 {
+    const VACANT: Self = Self {
+        cleared_candidate_id: [0; 32],
+        cleared_slot: 0,
+        sets_move: GeneralClearingMoveV1::None,
+        sets_quantity: 0,
+        filled_lots: 0,
+        live_order_count: 0,
+    };
+
+    fn is_vacant(self) -> bool {
+        self == Self::VACANT
+    }
+
+    fn validate_cleared(self) -> GeneralCollectionResultV1<()> {
+        let canonical_move = self.sets_move.moves_sets() == (self.sets_quantity != 0);
+        if is_zero(&self.cleared_candidate_id)
+            || self.cleared_slot == 0
+            || self.live_order_count == 0
+            || !canonical_move
+        {
+            return Err(GeneralCollectionErrorV1::InvalidClearing);
+        }
+        Ok(())
+    }
+}
+
+/// Mutable batch counters advanced by admission, cancellation, closure and the clearing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralBatchStateV2 {
     /// Current canonical status.
     pub status: BatchStatusV1,
     /// Number of admitted orders. Cancellation never returns a coordinate:
@@ -530,20 +703,22 @@ pub struct GeneralBatchStateV1 {
     pub committed_quote_reserve: u64,
     /// Number of admitted orders whose maker cancelled before the close.
     pub cancelled_count: u32,
+    /// The clearing's fixed half; vacant until the status is `Cleared`.
+    pub clearing: GeneralClearingFixedV1,
 }
 
-/// One complete General batch: immutable opening then mutable counters.
+/// One complete General batch: immutable opening, mutable counters, and the
+/// clearing the close writes once.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralBatchV1 {
+pub struct GeneralBatchV2 {
     opening: GeneralBatchOpeningV1,
-    state: GeneralBatchStateV1,
+    state: GeneralBatchStateV2,
 }
 
-impl GeneralBatchV1 {
+impl GeneralBatchV2 {
     /// Open one batch against the live root, consuming its exact next sequence.
     ///
-    /// This is the first non-test caller of [`GeneralRootV2::open_batch`]. The
-    /// root's own replay guards -- exact revision and exact next sequence --
+    /// The root's own replay guards -- exact revision and exact next sequence --
     /// remain the sole authority for whether the open may happen at all; this
     /// function refuses its own coordinates first so a refused batch never
     /// advances the root.
@@ -568,20 +743,26 @@ impl GeneralBatchV1 {
         root.open_batch(expected_revision, opening.sequence)?;
         Ok(Self {
             opening,
-            state: GeneralBatchStateV1 {
+            state: GeneralBatchStateV2 {
                 status: BatchStatusV1::Collecting,
                 order_count: 0,
                 opened_root_revision: expected_revision,
                 closed_root_revision: 0,
                 committed_quote_reserve: 0,
                 cancelled_count: 0,
+                clearing: GeneralClearingFixedV1::VACANT,
             },
         })
     }
 
-    /// Hostile-decode one exact 224-byte batch record.
+    /// Hostile-decode one exact `296 + 16N` batch record.
+    ///
+    /// The clearing tail must be VACANT while the batch collects or is closed,
+    /// and a clearing -- prices on the simplex, residual only at zero price --
+    /// once it is cleared. A batch cannot present a price it was never
+    /// settled to.
     pub fn decode(bytes: &[u8]) -> GeneralCollectionResultV1<Self> {
-        if bytes.len() != GENERAL_BATCH_BYTES_V1 {
+        if bytes.len() < GENERAL_BATCH_BYTES_V1 {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         require_header(bytes, &BATCH_MAGIC, BATCH_PHASE)?;
@@ -589,122 +770,252 @@ impl GeneralBatchV1 {
         require_zero(bytes, 161, 3)?;
         require_zero(bytes, 196, 28)?;
         let opening = GeneralBatchOpeningV1 {
-            outcome_count: read_u32(bytes, GeneralBatchLayoutV1::OUTCOME_COUNT)?,
-            sequence: read_u64(bytes, GeneralBatchLayoutV1::SEQUENCE)?,
-            generation: read_u64(bytes, GeneralBatchLayoutV1::GENERATION)?,
-            market: read_array(bytes, GeneralBatchLayoutV1::MARKET)?,
-            product_id: read_array(bytes, GeneralBatchLayoutV1::PRODUCT_ID)?,
-            config_id: read_array(bytes, GeneralBatchLayoutV1::CONFIG_ID)?,
-            price_scale: read_u64(bytes, GeneralBatchLayoutV1::PRICE_SCALE)?,
-            collection_close_slot: read_u64(bytes, GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
-            max_orders: read_u32(bytes, GeneralBatchLayoutV1::MAX_ORDERS)?,
-            settlement_close_slot: read_u64(bytes, GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT)?,
+            outcome_count: read_u32(bytes, GeneralBatchLayoutV2::OUTCOME_COUNT)?,
+            sequence: read_u64(bytes, GeneralBatchLayoutV2::SEQUENCE)?,
+            generation: read_u64(bytes, GeneralBatchLayoutV2::GENERATION)?,
+            market: read_array(bytes, GeneralBatchLayoutV2::MARKET)?,
+            product_id: read_array(bytes, GeneralBatchLayoutV2::PRODUCT_ID)?,
+            config_id: read_array(bytes, GeneralBatchLayoutV2::CONFIG_ID)?,
+            price_scale: read_u64(bytes, GeneralBatchLayoutV2::PRICE_SCALE)?,
+            collection_close_slot: read_u64(bytes, GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT)?,
+            max_orders: read_u32(bytes, GeneralBatchLayoutV2::MAX_ORDERS)?,
+            settlement_close_slot: read_u64(bytes, GeneralBatchLayoutV2::SETTLEMENT_CLOSE_SLOT)?,
         };
         validate_opening(opening)?;
-        let state = GeneralBatchStateV1 {
-            status: BatchStatusV1::decode(read_u8(bytes, GeneralBatchLayoutV1::STATUS)?)?,
-            order_count: read_u32(bytes, GeneralBatchLayoutV1::ORDER_COUNT)?,
-            opened_root_revision: read_u64(bytes, GeneralBatchLayoutV1::OPENED_ROOT_REVISION)?,
-            closed_root_revision: read_u64(bytes, GeneralBatchLayoutV1::CLOSED_ROOT_REVISION)?,
+        if bytes.len() != general_batch_len_v2(opening.outcome_count)? {
+            return Err(GeneralCollectionErrorV1::InvalidLength);
+        }
+        require_zero(bytes, GeneralBatchLayoutV2::SETS_MOVE + 1, 7)?;
+        require_zero(bytes, GeneralBatchLayoutV2::LIVE_ORDER_COUNT + 4, 4)?;
+        let clearing = GeneralClearingFixedV1 {
+            cleared_candidate_id: read_array(bytes, GeneralBatchLayoutV2::CLEARED_CANDIDATE_ID)?,
+            cleared_slot: read_u64(bytes, GeneralBatchLayoutV2::CLEARED_SLOT)?,
+            sets_move: GeneralClearingMoveV1::decode(read_u8(
+                bytes,
+                GeneralBatchLayoutV2::SETS_MOVE,
+            )?)?,
+            sets_quantity: read_u64(bytes, GeneralBatchLayoutV2::SETS_QUANTITY)?,
+            filled_lots: read_u64(bytes, GeneralBatchLayoutV2::FILLED_LOTS)?,
+            live_order_count: read_u32(bytes, GeneralBatchLayoutV2::LIVE_ORDER_COUNT)?,
+        };
+        let state = GeneralBatchStateV2 {
+            status: BatchStatusV1::decode(read_u8(bytes, GeneralBatchLayoutV2::STATUS)?)?,
+            order_count: read_u32(bytes, GeneralBatchLayoutV2::ORDER_COUNT)?,
+            opened_root_revision: read_u64(bytes, GeneralBatchLayoutV2::OPENED_ROOT_REVISION)?,
+            closed_root_revision: read_u64(bytes, GeneralBatchLayoutV2::CLOSED_ROOT_REVISION)?,
             committed_quote_reserve: read_u64(
                 bytes,
-                GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE,
+                GeneralBatchLayoutV2::COMMITTED_QUOTE_RESERVE,
             )?,
-            cancelled_count: read_u32(bytes, GeneralBatchLayoutV1::CANCELLED_COUNT)?,
+            cancelled_count: read_u32(bytes, GeneralBatchLayoutV2::CANCELLED_COUNT)?,
+            clearing,
         };
         let value = Self { opening, state };
         value.validate()?;
+        value.validate_clearing_tails(bytes)?;
         Ok(value)
     }
 
-    /// Encode the exact canonical batch layout.
+    /// The vacancy and clearing laws over the two runtime-width vectors.
+    fn validate_clearing_tails(self, bytes: &[u8]) -> GeneralCollectionResultV1<()> {
+        let count = self.opening.outcome_count;
+        match self.state.status {
+            BatchStatusV1::Collecting | BatchStatusV1::Closed => {
+                let start = GeneralBatchLayoutV2::PRICES_BASE;
+                let width = usize_from_u32(count)?
+                    .checked_mul(2 * GeneralBatchLayoutV2::TAIL_STRIDE)
+                    .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
+                require_zero(bytes, start, width)
+                    .map_err(|_| GeneralCollectionErrorV1::InvalidClearing)
+            }
+            BatchStatusV1::Cleared => {
+                let mut total = 0_u64;
+                for outcome in 0..count {
+                    let price = general_batch_price_v2(bytes, outcome)?;
+                    total = total
+                        .checked_add(price)
+                        .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
+                    // THE STRAND LAW, read back off the record: a residual sits
+                    // only where the batch priced the outcome at zero.
+                    if price != 0 && general_batch_residual_v2(bytes, outcome)? != 0 {
+                        return Err(GeneralCollectionErrorV1::InvalidClearing);
+                    }
+                }
+                if total != self.opening.price_scale {
+                    return Err(GeneralCollectionErrorV1::InvalidClearing);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Encode the fixed 224-byte V1 prefix: the whole record while the batch
+    /// collects or is closed, because the clearing tail is then zero by law.
+    ///
+    /// The OpenBatch and CloseBatch effects write exactly these bytes into an
+    /// account sized by [`general_batch_len_v2`]; only [`Self::encode_clearing_into`]
+    /// writes past them.
     #[must_use]
     pub fn to_bytes(self) -> [u8; GENERAL_BATCH_BYTES_V1] {
         let mut output = [0_u8; GENERAL_BATCH_BYTES_V1];
-        put(&mut output, GeneralBatchLayoutV1::MAGIC, &BATCH_MAGIC);
+        self.write_prefix(&mut output);
+        output
+    }
+
+    fn write_prefix(self, output: &mut [u8]) {
+        put(output, GeneralBatchLayoutV2::MAGIC, &BATCH_MAGIC);
         put(
-            &mut output,
-            GeneralBatchLayoutV1::VERSION,
+            output,
+            GeneralBatchLayoutV2::VERSION,
             &VERSION.to_le_bytes(),
         );
-        output[GeneralBatchLayoutV1::PHASE] = BATCH_PHASE;
+        output[GeneralBatchLayoutV2::PHASE] = BATCH_PHASE;
         put(
-            &mut output,
-            GeneralBatchLayoutV1::OUTCOME_COUNT,
+            output,
+            GeneralBatchLayoutV2::OUTCOME_COUNT,
             &self.opening.outcome_count.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::SEQUENCE,
+            output,
+            GeneralBatchLayoutV2::SEQUENCE,
             &self.opening.sequence.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::GENERATION,
+            output,
+            GeneralBatchLayoutV2::GENERATION,
             &self.opening.generation.to_le_bytes(),
         );
+        put(output, GeneralBatchLayoutV2::MARKET, &self.opening.market);
         put(
-            &mut output,
-            GeneralBatchLayoutV1::MARKET,
-            &self.opening.market,
-        );
-        put(
-            &mut output,
-            GeneralBatchLayoutV1::PRODUCT_ID,
+            output,
+            GeneralBatchLayoutV2::PRODUCT_ID,
             &self.opening.product_id,
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::CONFIG_ID,
+            output,
+            GeneralBatchLayoutV2::CONFIG_ID,
             &self.opening.config_id,
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::PRICE_SCALE,
+            output,
+            GeneralBatchLayoutV2::PRICE_SCALE,
             &self.opening.price_scale.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT,
+            output,
+            GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT,
             &self.opening.collection_close_slot.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::MAX_ORDERS,
+            output,
+            GeneralBatchLayoutV2::MAX_ORDERS,
             &self.opening.max_orders.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT,
+            output,
+            GeneralBatchLayoutV2::SETTLEMENT_CLOSE_SLOT,
             &self.opening.settlement_close_slot.to_le_bytes(),
         );
-        output[GeneralBatchLayoutV1::STATUS] = self.state.status.tag();
+        output[GeneralBatchLayoutV2::STATUS] = self.state.status.tag();
         put(
-            &mut output,
-            GeneralBatchLayoutV1::ORDER_COUNT,
+            output,
+            GeneralBatchLayoutV2::ORDER_COUNT,
             &self.state.order_count.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::OPENED_ROOT_REVISION,
+            output,
+            GeneralBatchLayoutV2::OPENED_ROOT_REVISION,
             &self.state.opened_root_revision.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::CLOSED_ROOT_REVISION,
+            output,
+            GeneralBatchLayoutV2::CLOSED_ROOT_REVISION,
             &self.state.closed_root_revision.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE,
+            output,
+            GeneralBatchLayoutV2::COMMITTED_QUOTE_RESERVE,
             &self.state.committed_quote_reserve.to_le_bytes(),
         );
         put(
-            &mut output,
-            GeneralBatchLayoutV1::CANCELLED_COUNT,
+            output,
+            GeneralBatchLayoutV2::CANCELLED_COUNT,
             &self.state.cancelled_count.to_le_bytes(),
         );
-        output
+    }
+
+    /// Encode the whole `296 + 16N` record of a batch that has NOT cleared.
+    ///
+    /// [`Self::to_bytes`] returns the 224-byte V1 prefix, which is what the
+    /// OpenBatch and CloseBatch effects write; it is not a whole account and
+    /// [`Self::decode`] refuses it by length. This is the whole account, with
+    /// the vacant tail the vacancy law requires while a batch collects or is
+    /// closed. A cleared batch refuses here — its tail is not zero — and
+    /// [`Self::encode_clearing_into`] is the function that writes one.
+    pub fn encode_into(self, output: &mut [u8]) -> GeneralCollectionResultV1<()> {
+        self.encode_clearing_into(|_| Ok(0), |_| Ok(0), output)
+    }
+
+    /// Encode the whole `296 + 16N` record, the clearing tail included.
+    ///
+    /// `price` and `residual` are read per outcome so no runtime-width array
+    /// enters an SBF frame. The output is hostile-decoded before success, so a
+    /// tail that breaks the vacancy or strand law never leaves this function.
+    pub fn encode_clearing_into(
+        self,
+        mut price: impl FnMut(u32) -> GeneralCollectionResultV1<u64>,
+        mut residual: impl FnMut(u32) -> GeneralCollectionResultV1<u64>,
+        output: &mut [u8],
+    ) -> GeneralCollectionResultV1<()> {
+        if output.len() != general_batch_len_v2(self.opening.outcome_count)? {
+            return Err(GeneralCollectionErrorV1::InvalidLength);
+        }
+        output.fill(0);
+        self.write_prefix(output);
+        let clearing = self.state.clearing;
+        put(
+            output,
+            GeneralBatchLayoutV2::CLEARED_CANDIDATE_ID,
+            &clearing.cleared_candidate_id,
+        );
+        put(
+            output,
+            GeneralBatchLayoutV2::CLEARED_SLOT,
+            &clearing.cleared_slot.to_le_bytes(),
+        );
+        output[GeneralBatchLayoutV2::SETS_MOVE] = clearing.sets_move.tag();
+        put(
+            output,
+            GeneralBatchLayoutV2::SETS_QUANTITY,
+            &clearing.sets_quantity.to_le_bytes(),
+        );
+        put(
+            output,
+            GeneralBatchLayoutV2::FILLED_LOTS,
+            &clearing.filled_lots.to_le_bytes(),
+        );
+        put(
+            output,
+            GeneralBatchLayoutV2::LIVE_ORDER_COUNT,
+            &clearing.live_order_count.to_le_bytes(),
+        );
+        let residual_base = GeneralBatchLayoutV2::residual_base(self.opening.outcome_count)?;
+        for outcome in 0..self.opening.outcome_count {
+            let cell = usize_from_u32(outcome)?
+                .checked_mul(GeneralBatchLayoutV2::TAIL_STRIDE)
+                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
+            put(
+                output,
+                GeneralBatchLayoutV2::PRICES_BASE + cell,
+                &price(outcome)?.to_le_bytes(),
+            );
+            put(
+                output,
+                residual_base + cell,
+                &residual(outcome)?.to_le_bytes(),
+            );
+        }
+        Self::decode(output).map(|_| ())
     }
 
     /// Validate every cross-field invariant of one complete batch.
@@ -720,10 +1031,25 @@ impl GeneralBatchV1 {
                 if self.state.closed_root_revision != 0 {
                     return Err(GeneralCollectionErrorV1::InvalidStatus);
                 }
+                if !self.state.clearing.is_vacant() {
+                    return Err(GeneralCollectionErrorV1::InvalidClearing);
+                }
             }
             BatchStatusV1::Closed => {
                 if self.state.closed_root_revision <= self.state.opened_root_revision {
                     return Err(GeneralCollectionErrorV1::InvalidStatus);
+                }
+                if !self.state.clearing.is_vacant() {
+                    return Err(GeneralCollectionErrorV1::InvalidClearing);
+                }
+            }
+            BatchStatusV1::Cleared => {
+                if self.state.closed_root_revision <= self.state.opened_root_revision {
+                    return Err(GeneralCollectionErrorV1::InvalidStatus);
+                }
+                self.state.clearing.validate_cleared()?;
+                if self.state.clearing.live_order_count != self.live_order_count() {
+                    return Err(GeneralCollectionErrorV1::InvalidClearing);
                 }
             }
         }
@@ -747,6 +1073,15 @@ impl GeneralBatchV1 {
         .occurrence_id()
     }
 
+    /// Orders a certificate for this batch must enumerate: admitted less cancelled.
+    ///
+    /// The completeness conjunct's number. A candidate copies it into its
+    /// header and [`authenticate_batch_candidate_v1`] holds the copy to this.
+    #[must_use]
+    pub const fn live_order_count(self) -> u32 {
+        self.state.order_count - self.state.cancelled_count
+    }
+
     /// Admit one signed order, ESCROWING its exact worst-case obligation.
     ///
     /// The order must already be bound to this exact batch identity; the maker's
@@ -761,7 +1096,7 @@ impl GeneralBatchV1 {
     /// one the protocol is already holding.
     pub fn admit(
         &mut self,
-        order: GeneralOrderV1<'_>,
+        order: GeneralOrderV2<'_>,
         funding: MakerFundingV1<'_>,
         current_slot: u64,
     ) -> GeneralCollectionResultV1<OrderEscrowV1> {
@@ -800,7 +1135,7 @@ impl GeneralBatchV1 {
     /// public [`Self::admit`] remains the pure balance-checking API.
     pub(crate) fn admit_signed_for_atomic_physical_escrow(
         &mut self,
-        terms: GeneralSignedOrderTermsV1<'_>,
+        terms: GeneralSignedOrderTermsV2<'_>,
         current_slot: u64,
     ) -> GeneralCollectionResultV1<OrderEscrowV1> {
         let header = terms.header();
@@ -820,7 +1155,7 @@ impl GeneralBatchV1 {
 
     fn authenticate_admission_terms(
         self,
-        header: GeneralOrderHeaderV1,
+        header: GeneralOrderHeaderV2,
         state: GeneralOrderStateV1,
         current_slot: u64,
         mut claim_reserve: impl FnMut(u32) -> GeneralCollectionResultV1<u64>,
@@ -847,6 +1182,12 @@ impl GeneralBatchV1 {
         {
             return Err(GeneralCollectionErrorV1::Substitution);
         }
+        // THE SHAPE RULE at admission (design note §1.4): a nonempty interval
+        // inside the width, and in this cohort exactly one outcome wide.
+        header.validate_shape()?;
+        if !header.is_single_outcome() {
+            return Err(GeneralCollectionErrorV1::BundleNotAdmitted);
+        }
         // An order that expires before settlement closes is a promise the batch
         // cannot keep: the candidate that fills it may legitimately settle at
         // any slot up to the window's end.
@@ -867,7 +1208,7 @@ impl GeneralBatchV1 {
     fn commit_admission(
         &mut self,
         order_id: [u8; 32],
-        header: GeneralOrderHeaderV1,
+        header: GeneralOrderHeaderV2,
         quote_reserve: u64,
     ) -> GeneralCollectionResultV1<OrderEscrowV1> {
         let next_count = self
@@ -904,7 +1245,7 @@ impl GeneralBatchV1 {
     /// structural rather than an invariant something has to maintain.
     pub fn cancel(
         &mut self,
-        order: GeneralOrderV1<'_>,
+        order: GeneralOrderV2<'_>,
         owner_id: [u8; 32],
         current_slot: u64,
     ) -> GeneralCollectionResultV1<OrderEscrowV1> {
@@ -961,7 +1302,7 @@ impl GeneralBatchV1 {
     /// be a second authority over a balance the chain already holds exactly.
     pub fn release(
         &self,
-        order: GeneralOrderV1<'_>,
+        order: GeneralOrderV2<'_>,
         current_slot: u64,
     ) -> GeneralCollectionResultV1<OrderEscrowV1> {
         if current_slot < self.opening.settlement_close_slot {
@@ -984,8 +1325,6 @@ impl GeneralBatchV1 {
     }
 
     /// Close the batch against the live root, making its order set final.
-    ///
-    /// This is the first non-test caller of [`GeneralRootV2::close_batch`].
     pub fn close(
         &mut self,
         root: &mut GeneralRootV2,
@@ -1004,6 +1343,28 @@ impl GeneralBatchV1 {
         self.state.status = BatchStatusV1::Closed;
         self.state.closed_root_revision = next_revision;
         Ok(self.batch_id())
+    }
+
+    /// Record the clearing the settlement close settled this batch with.
+    ///
+    /// A BATCH CLEARS ONCE (`JointClearingV1.clears_once`): only a closed
+    /// batch may be cleared and a cleared one refuses a second clearing by
+    /// name. The fixed half is recorded here; the settlement close writes the
+    /// two runtime-width vectors through [`Self::encode_clearing_into`], and
+    /// the decoder holds them to the strand law.
+    pub fn clear(&mut self, clearing: GeneralClearingFixedV1) -> GeneralCollectionResultV1<()> {
+        match self.state.status {
+            BatchStatusV1::Collecting => return Err(GeneralCollectionErrorV1::NotClosed),
+            BatchStatusV1::Cleared => return Err(GeneralCollectionErrorV1::AlreadyCleared),
+            BatchStatusV1::Closed => {}
+        }
+        clearing.validate_cleared()?;
+        if clearing.live_order_count != self.live_order_count() {
+            return Err(GeneralCollectionErrorV1::InvalidClearing);
+        }
+        self.state.status = BatchStatusV1::Cleared;
+        self.state.clearing = clearing;
+        Ok(())
     }
 
     /// Whether closing this batch truncates no maker's opportunity to place.
@@ -1025,9 +1386,50 @@ impl GeneralBatchV1 {
 
     /// Mutable counters.
     #[must_use]
-    pub const fn state(self) -> GeneralBatchStateV1 {
+    pub const fn state(self) -> GeneralBatchStateV2 {
         self.state
     }
+}
+
+/// Return exact `296 + 16N` bytes for one whole batch record.
+pub fn general_batch_len_v2(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
+    if outcome_count == 0 {
+        return Err(GeneralCollectionErrorV1::InvalidLength);
+    }
+    usize_from_u32(outcome_count)?
+        .checked_mul(GENERAL_BATCH_ROW_STRIDE_V2)
+        .and_then(|tails| GENERAL_BATCH_ROW_BASE_V2.checked_add(tails))
+        .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
+}
+
+/// Read one clearing price cell off a batch record.
+pub fn general_batch_price_v2(bytes: &[u8], outcome: u32) -> GeneralCollectionResultV1<u64> {
+    let outcome_count = read_u32(bytes, GeneralBatchLayoutV2::OUTCOME_COUNT)?;
+    if outcome >= outcome_count {
+        return Err(GeneralCollectionErrorV1::InvalidLength);
+    }
+    let cell = usize_from_u32(outcome)?
+        .checked_mul(GeneralBatchLayoutV2::TAIL_STRIDE)
+        .and_then(|cell| GeneralBatchLayoutV2::PRICES_BASE.checked_add(cell))
+        .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
+    read_u64(bytes, cell)
+}
+
+/// Read one stranded-residual cell off a batch record.
+pub fn general_batch_residual_v2(bytes: &[u8], outcome: u32) -> GeneralCollectionResultV1<u64> {
+    let outcome_count = read_u32(bytes, GeneralBatchLayoutV2::OUTCOME_COUNT)?;
+    if outcome >= outcome_count {
+        return Err(GeneralCollectionErrorV1::InvalidLength);
+    }
+    let cell = usize_from_u32(outcome)?
+        .checked_mul(GeneralBatchLayoutV2::TAIL_STRIDE)
+        .and_then(|cell| {
+            GeneralBatchLayoutV2::residual_base(outcome_count)
+                .ok()?
+                .checked_add(cell)
+        })
+        .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
+    read_u64(bytes, cell)
 }
 
 /// Authenticate the permissionless physical residual release from its order alone.
@@ -1039,7 +1441,7 @@ impl GeneralBatchV1 {
 /// Custody and Claims move their observed remaining balances and their close
 /// operations refuse unless the escrow is empty afterwards.
 pub fn authenticate_order_residual_release_v1(
-    order: GeneralOrderV1<'_>,
+    order: GeneralOrderV2<'_>,
     current_slot: u64,
 ) -> GeneralCollectionResultV1<OrderEscrowV1> {
     if current_slot < order.header().valid_until_slot {
@@ -1157,9 +1559,9 @@ pub struct GeneralOrderStateV1 {
     pub released_slot: u64,
 }
 
-/// Fixed fields of one immutable signed portfolio order.
+/// Fixed fields of one immutable signed order: the V1 terms and the shape.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralOrderHeaderV1 {
+pub struct GeneralOrderHeaderV2 {
     /// Runtime outcome width.
     pub outcome_count: u32,
     /// Owner-scoped replay nonce.
@@ -1174,44 +1576,99 @@ pub struct GeneralOrderHeaderV1 {
     pub generation: u64,
     /// Candidate-wide maximum fill.
     pub max_lots: u64,
-    /// Candidate-wide maximum derived quote debit per filled lot.
+    /// Candidate-wide maximum derived quote debit per filled lot: the buyer's cap.
     pub max_quote_debit_per_lot: u64,
-    /// Candidate-wide minimum derived quote credit per filled lot.
+    /// Candidate-wide minimum derived quote credit per filled lot: the seller's floor.
     ///
-    /// The seller's floor. Zero is no floor and is what every order signed
-    /// before 2026-09-04 says. See [`GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT`].
+    /// Zero is no floor and is what every order signed before 2026-09-04 says.
     pub min_quote_credit_per_lot: u64,
     /// Last slot at which this order may still be settled.
     pub valid_until_slot: u64,
+    /// Which way the claims flow: a buy receives, a sell delivers.
+    pub side: OrderSideV2,
+    /// First outcome of the inclusive interval.
+    pub outcome_lo: u32,
+    /// Last outcome of the inclusive interval.
+    pub outcome_hi: u32,
+    /// Claims one lot moves at every coordinate of the interval.
+    pub claims_per_lot: u64,
+}
+
+impl GeneralOrderHeaderV2 {
+    /// Whether `outcome` lies on the order's interval.
+    #[must_use]
+    pub const fn covers(self, outcome: u32) -> bool {
+        self.outcome_lo <= outcome && outcome <= self.outcome_hi
+    }
+
+    /// Whether the interval is one outcome wide: what cohort-18 admits.
+    #[must_use]
+    pub const fn is_single_outcome(self) -> bool {
+        self.outcome_lo == self.outcome_hi
+    }
+
+    /// The `(receive, deliver)` row the shape derives at one outcome.
+    ///
+    /// `GeneralOrderV2Abi.Shape.row`, in Rust: a buy receives `claims_per_lot`
+    /// on its interval and delivers nothing, a sell the reverse, and nothing
+    /// moves off the interval.
+    #[must_use]
+    pub const fn derived_row(self, outcome: u32) -> (u64, u64) {
+        if !self.covers(outcome) {
+            return (0, 0);
+        }
+        match self.side {
+            OrderSideV2::Buy => (self.claims_per_lot, 0),
+            OrderSideV2::Sell => (0, self.claims_per_lot),
+        }
+    }
+
+    /// The shape rule of the design note's §1.4: a nonempty interval inside
+    /// the width, moving a positive number of claims per lot.
+    pub fn validate_shape(self) -> GeneralCollectionResultV1<()> {
+        if self.outcome_lo > self.outcome_hi
+            || self.outcome_hi >= self.outcome_count
+            || self.claims_per_lot == 0
+        {
+            return Err(GeneralCollectionErrorV1::ShapeNotInterval);
+        }
+        Ok(())
+    }
 }
 
 /// Borrowed order record: a fixed immutable header, a fixed mutable escrow
-/// window, then the immutable per-outcome rows.
+/// window, then the derived per-outcome rows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralOrderV1<'a> {
+pub struct GeneralOrderV2<'a> {
     bytes: &'a [u8],
-    header: GeneralOrderHeaderV1,
+    header: GeneralOrderHeaderV2,
     state: GeneralOrderStateV1,
 }
 
-impl<'a> GeneralOrderV1<'a> {
-    /// Hostile-decode one exact `192 + 16N` order record.
+impl<'a> GeneralOrderV2<'a> {
+    /// Hostile-decode one exact `216 + 16N` order record.
+    ///
+    /// The rows must be the rows the shape derives. They are on the wire
+    /// because the emitted PlaceOrder effect program writes them; they are
+    /// not a second author of the portfolio.
     pub fn decode(bytes: &'a [u8]) -> GeneralCollectionResultV1<Self> {
-        if bytes.len() < GENERAL_ORDER_ROW_BASE_V1 {
+        if bytes.len() < GENERAL_ORDER_ROW_BASE_V2 {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         require_header(bytes, &ORDER_MAGIC, ORDER_PHASE)?;
         let header = decode_order_header(bytes)?;
-        if bytes.len() != general_order_len_v1(header.outcome_count)? {
+        if bytes.len() != general_order_len_v2(header.outcome_count)? {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         validate_order_header(header)?;
-        require_zero(bytes, GENERAL_ORDER_STATE_OFFSET_V1 + 1, 7)?;
-        require_zero(bytes, GENERAL_ORDER_STATE_OFFSET_V1 + 24, 8)?;
+        require_zero(bytes, GeneralOrderLayoutV2::SIDE + 1, 3)?;
+        require_zero(bytes, GeneralOrderLayoutV2::OUTCOME_HI + 4, 4)?;
+        require_zero(bytes, GENERAL_ORDER_STATE_OFFSET_V2 + 1, 7)?;
+        require_zero(bytes, GENERAL_ORDER_STATE_OFFSET_V2 + 24, 8)?;
         let state = GeneralOrderStateV1 {
-            phase: GeneralOrderPhaseV1::decode(read_u8(bytes, GeneralOrderLayoutV1::STATE_PHASE)?)?,
-            admitted_slot: read_u64(bytes, GeneralOrderLayoutV1::STATE_ADMITTED_SLOT)?,
-            released_slot: read_u64(bytes, GeneralOrderLayoutV1::STATE_RELEASED_SLOT)?,
+            phase: GeneralOrderPhaseV1::decode(read_u8(bytes, GeneralOrderLayoutV2::STATE_PHASE)?)?,
+            admitted_slot: read_u64(bytes, GeneralOrderLayoutV2::STATE_ADMITTED_SLOT)?,
+            released_slot: read_u64(bytes, GeneralOrderLayoutV2::STATE_RELEASED_SLOT)?,
         };
         validate_order_state(state)?;
         let value = Self {
@@ -1219,18 +1676,24 @@ impl<'a> GeneralOrderV1<'a> {
             header,
             state,
         };
-        // A degenerate order that moves no claim in either direction is not a
-        // portfolio order; it would occupy a coordinate and a rent-bearing
-        // account while being unfillable.
-        if !value.has_claim_movement()? {
-            return Err(GeneralCollectionErrorV1::ZeroIdentity);
+        for outcome in 0..header.outcome_count {
+            if (
+                value.receive_per_lot(outcome)?,
+                value.deliver_per_lot(outcome)?,
+            ) != header.derived_row(outcome)
+            {
+                return Err(GeneralCollectionErrorV1::RowsDisagreeWithShape);
+            }
         }
         Ok(value)
     }
 
     /// Encode canonical order bytes into a caller-owned exact-width buffer.
+    ///
+    /// The vectors must be the ones the header's shape derives; they are
+    /// accepted as a check, never as an authority.
     pub fn encode_into(
-        header: GeneralOrderHeaderV1,
+        header: GeneralOrderHeaderV2,
         receive_per_lot: &[u64],
         deliver_per_lot: &[u64],
         state: GeneralOrderStateV1,
@@ -1260,14 +1723,12 @@ impl<'a> GeneralOrderV1<'a> {
 
     /// Encode canonical order bytes from one fallible row projection.
     ///
-    /// This is the runtime-width form of [`Self::encode_into`]. It lets an
-    /// admitted adapter stream authenticated per-outcome terms directly into
-    /// the canonical interleaved wire without first allocating two whole
-    /// runtime-width vectors. The callback remains untrusted: every returned
-    /// row is encoded and the complete output is hostile-decoded before this
-    /// function succeeds.
+    /// This is the runtime-width form of [`Self::encode_into`]. The callback
+    /// remains untrusted: every returned row must equal the row the shape
+    /// derives, every row is encoded, and the complete output is
+    /// hostile-decoded before this function succeeds.
     pub fn encode_rows_into(
-        header: GeneralOrderHeaderV1,
+        header: GeneralOrderHeaderV2,
         state: GeneralOrderStateV1,
         mut row_at: impl FnMut(u32) -> GeneralCollectionResultV1<(u64, u64)>,
         output: &mut [u8],
@@ -1275,84 +1736,43 @@ impl<'a> GeneralOrderV1<'a> {
         validate_order_header(header)?;
         validate_order_state(state)?;
         let count = usize_from_u32(header.outcome_count)?;
-        if output.len() != general_order_len_v1(header.outcome_count)? {
+        if output.len() != general_order_len_v2(header.outcome_count)? {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         output.fill(0);
-        put(output, GeneralOrderLayoutV1::MAGIC, &ORDER_MAGIC);
-        put(
-            output,
-            GeneralOrderLayoutV1::VERSION,
-            &VERSION.to_le_bytes(),
-        );
-        output[GeneralOrderLayoutV1::PHASE] = ORDER_PHASE;
-        put(
-            output,
-            GeneralOrderLayoutV1::OUTCOME_COUNT,
-            &header.outcome_count.to_le_bytes(),
-        );
-        put(
-            output,
-            GeneralOrderLayoutV1::NONCE,
-            &header.nonce.to_le_bytes(),
-        );
-        put(
-            output,
-            GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT,
-            &header.min_quote_credit_per_lot.to_le_bytes(),
-        );
-        put(output, GeneralOrderLayoutV1::OWNER_ID, &header.owner_id);
-        put(output, GeneralOrderLayoutV1::MARKET, &header.market);
-        put(output, GeneralOrderLayoutV1::BATCH_ID, &header.batch_id);
-        put(
-            output,
-            GeneralOrderLayoutV1::GENERATION,
-            &header.generation.to_le_bytes(),
-        );
-        put(
-            output,
-            GeneralOrderLayoutV1::MAX_LOTS,
-            &header.max_lots.to_le_bytes(),
-        );
-        put(
-            output,
-            GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT,
-            &header.max_quote_debit_per_lot.to_le_bytes(),
-        );
-        put(
-            output,
-            GeneralOrderLayoutV1::VALID_UNTIL_SLOT,
-            &header.valid_until_slot.to_le_bytes(),
-        );
+        write_order_header(header, output);
         for outcome in 0..count {
             let outcome_u32 =
                 u32::try_from(outcome).map_err(|_| GeneralCollectionErrorV1::ArithmeticOverflow)?;
-            let (receive_per_lot, deliver_per_lot) = row_at(outcome_u32)?;
-            let row = order_row_offset(outcome)?;
+            let row = row_at(outcome_u32)?;
+            if row != header.derived_row(outcome_u32) {
+                return Err(GeneralCollectionErrorV1::RowsDisagreeWithShape);
+            }
+            let base = order_row_offset(outcome)?;
             put(
                 output,
-                row + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
-                &receive_per_lot.to_le_bytes(),
+                base + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2,
+                &row.0.to_le_bytes(),
             );
             put(
                 output,
-                row + GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
-                &deliver_per_lot.to_le_bytes(),
+                base + GENERAL_ORDER_ROW_DELIVER_OFFSET_V2,
+                &row.1.to_le_bytes(),
             );
         }
         put(
             output,
-            GeneralOrderLayoutV1::STATE_PHASE,
+            GeneralOrderLayoutV2::STATE_PHASE,
             &[state.phase.tag()],
         );
         put(
             output,
-            GeneralOrderLayoutV1::STATE_ADMITTED_SLOT,
+            GeneralOrderLayoutV2::STATE_ADMITTED_SLOT,
             &state.admitted_slot.to_le_bytes(),
         );
         put(
             output,
-            GeneralOrderLayoutV1::STATE_RELEASED_SLOT,
+            GeneralOrderLayoutV2::STATE_RELEASED_SLOT,
             &state.released_slot.to_le_bytes(),
         );
         // Encode then hostile-decode our own candidate: the same total-function
@@ -1362,7 +1782,7 @@ impl<'a> GeneralOrderV1<'a> {
 
     /// Return fixed order coordinates.
     #[must_use]
-    pub const fn header(self) -> GeneralOrderHeaderV1 {
+    pub const fn header(self) -> GeneralOrderHeaderV2 {
         self.header
     }
 
@@ -1372,14 +1792,15 @@ impl<'a> GeneralOrderV1<'a> {
         self.state
     }
 
-    /// Return the canonical `order_id`: the masked digest of the record.
+    /// Return the canonical `order_id`: the digest of the signed header.
     ///
-    /// The mutable escrow window is excluded on purpose. A cancellation writes
-    /// that window, and if it were in the digest the identity a candidate, a
-    /// manifest and every settlement row carry would move underneath them.
+    /// The mutable escrow window and the derived rows are excluded on purpose.
+    /// A cancellation writes the window, and if it were in the digest the
+    /// identity a candidate, a manifest and every settlement row carry would
+    /// move underneath them; the rows are a function of the header.
     #[must_use]
     pub fn order_id(self) -> [u8; 32] {
-        general_order_identity_v1(self.bytes).unwrap_or([0; 32])
+        general_order_identity_v2(self.bytes).unwrap_or([0; 32])
     }
 
     /// Write this order's successor escrow state into an exact-width buffer.
@@ -1409,15 +1830,15 @@ impl<'a> GeneralOrderV1<'a> {
         output.copy_from_slice(self.bytes);
         put(
             output,
-            GeneralOrderLayoutV1::STATE_PHASE,
+            GeneralOrderLayoutV2::STATE_PHASE,
             &[state.phase.tag()],
         );
         put(
             output,
-            GeneralOrderLayoutV1::STATE_RELEASED_SLOT,
+            GeneralOrderLayoutV2::STATE_RELEASED_SLOT,
             &state.released_slot.to_le_bytes(),
         );
-        let successor = GeneralOrderV1::decode(output)?;
+        let successor = GeneralOrderV2::decode(output)?;
         if successor.order_id() != self.order_id() || successor.state() != state {
             return Err(GeneralCollectionErrorV1::Substitution);
         }
@@ -1426,12 +1847,12 @@ impl<'a> GeneralOrderV1<'a> {
 
     /// Return one exact claim quantity received per filled lot.
     pub fn receive_per_lot(self, index: u32) -> GeneralCollectionResultV1<u64> {
-        self.row_field(GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1, index)
+        self.row_field(GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2, index)
     }
 
     /// Return one exact claim quantity delivered per filled lot.
     pub fn deliver_per_lot(self, index: u32) -> GeneralCollectionResultV1<u64> {
-        self.row_field(GENERAL_ORDER_ROW_DELIVER_OFFSET_V1, index)
+        self.row_field(GENERAL_ORDER_ROW_DELIVER_OFFSET_V2, index)
     }
 
     /// Exact worst-case quote obligation if this order fills completely.
@@ -1451,49 +1872,26 @@ impl<'a> GeneralOrderV1<'a> {
 
     /// Project the exact terms the streamed candidate verifier consumes.
     ///
-    /// This is the join the collection half exists to supply.  Before it,
-    /// [`AuthenticatedOrderTermsV2`] had no producer outside tests, so the
-    /// verifier's `max_lots` and quote-limit discipline rested on a value the
-    /// caller simply asserted.  Here the terms are a projection of a record
-    /// whose own digest is the `order_id` they carry.
+    /// This is the join the collection half exists to supply. The terms are a
+    /// projection of a record whose own digest is the `order_id` they carry,
+    /// and they now carry the shape, which is what lets the verifier state the
+    /// marginal conjunct and the price box per row.
     #[must_use]
     pub fn terms(self) -> AuthenticatedOrderTermsV2 {
-        AuthenticatedOrderTermsV2 {
-            order_id: self.order_id(),
-            owner_id: self.header.owner_id,
-            nonce: self.header.nonce,
-            max_lots: self.header.max_lots,
-            max_quote_debit_per_lot: self.header.max_quote_debit_per_lot,
-            min_quote_credit_per_lot: self.header.min_quote_credit_per_lot,
-        }
+        order_terms(self.order_id(), self.header)
     }
 
-    /// Project the exact immutable bytes the maker signs.
-    ///
-    /// The mutable escrow-state window is omitted; header and rows retain their
-    /// canonical order. The projected bytes hostile-decode through
-    /// [`GeneralSignedOrderTermsV1`] and must retain this record's identity.
+    /// Project the exact immutable bytes the maker signs: the header alone.
     pub fn encode_signed_terms_into(self, output: &mut [u8]) -> GeneralCollectionResultV1<()> {
-        if output.len() != general_signed_order_terms_len_v1(self.header.outcome_count)? {
+        if output.len() != GENERAL_ORDER_HEADER_BYTES_V2 {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
-        let header = self
-            .bytes
-            .get(..GENERAL_ORDER_HEADER_BYTES_V1)
-            .ok_or(GeneralCollectionErrorV1::InvalidLength)?;
-        let rows = self
-            .bytes
-            .get(GENERAL_ORDER_ROW_BASE_V1..)
-            .ok_or(GeneralCollectionErrorV1::InvalidLength)?;
-        output
-            .get_mut(..GENERAL_ORDER_HEADER_BYTES_V1)
-            .ok_or(GeneralCollectionErrorV1::InvalidLength)?
-            .copy_from_slice(header);
-        output
-            .get_mut(GENERAL_SIGNED_ORDER_TERMS_ROW_BASE_V1..)
-            .ok_or(GeneralCollectionErrorV1::InvalidLength)?
-            .copy_from_slice(rows);
-        let signed = GeneralSignedOrderTermsV1::decode(output)?;
+        output.copy_from_slice(
+            self.bytes
+                .get(..GENERAL_ORDER_HEADER_BYTES_V2)
+                .ok_or(GeneralCollectionErrorV1::InvalidLength)?,
+        );
+        let signed = GeneralSignedOrderTermsV2::decode(output)?;
         if signed.order_id() != self.order_id() {
             return Err(GeneralCollectionErrorV1::Substitution);
         }
@@ -1515,53 +1913,52 @@ impl<'a> GeneralOrderV1<'a> {
             .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
         read_u64(self.bytes, offset)
     }
-
-    fn has_claim_movement(self) -> GeneralCollectionResultV1<bool> {
-        for outcome in 0..self.header.outcome_count {
-            if self.receive_per_lot(outcome)? != 0 || self.deliver_per_lot(outcome)? != 0 {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
 }
 
 /// Borrowed immutable order terms exactly as the maker signed them.
 ///
-/// This wire is `160 + 16N` bytes: the canonical order header followed by the
-/// canonical interleaved rows, with the mutable 32-byte escrow state window
-/// omitted. Consequently its complete byte string is exactly the masked order
-/// identity preimage. The PlaceOrder runtime can borrow this authenticated
-/// evidence directly instead of allocating a second `192 + 16N` record merely
-/// to insert a state window whose value the action already fixes.
+/// This wire is the 184-byte canonical order header and nothing else: the
+/// mutable escrow window and the derived rows are omitted, so its complete
+/// byte string is exactly the order identity preimage. The PlaceOrder runtime
+/// borrows this authenticated evidence directly; the rows it writes are
+/// derived from it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralSignedOrderTermsV1<'a> {
+pub struct GeneralSignedOrderTermsV2<'a> {
     bytes: &'a [u8],
-    header: GeneralOrderHeaderV1,
+    header: GeneralOrderHeaderV2,
 }
 
-impl<'a> GeneralSignedOrderTermsV1<'a> {
+impl<'a> GeneralSignedOrderTermsV2<'a> {
     /// Hostile-decode one exact signed immutable order image.
     pub fn decode(bytes: &'a [u8]) -> GeneralCollectionResultV1<Self> {
-        if bytes.len() < GENERAL_SIGNED_ORDER_TERMS_ROW_BASE_V1 {
+        if bytes.len() != GENERAL_ORDER_HEADER_BYTES_V2 {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         require_header(bytes, &ORDER_MAGIC, ORDER_PHASE)?;
         let header = decode_order_header(bytes)?;
         validate_order_header(header)?;
-        if bytes.len() != general_signed_order_terms_len_v1(header.outcome_count)? {
+        require_zero(bytes, GeneralOrderLayoutV2::SIDE + 1, 3)?;
+        require_zero(bytes, GeneralOrderLayoutV2::OUTCOME_HI + 4, 4)?;
+        Ok(Self { bytes, header })
+    }
+
+    /// Encode the exact signed image of one header.
+    pub fn encode_into(
+        header: GeneralOrderHeaderV2,
+        output: &mut [u8],
+    ) -> GeneralCollectionResultV1<()> {
+        validate_order_header(header)?;
+        if output.len() != GENERAL_ORDER_HEADER_BYTES_V2 {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
-        let value = Self { bytes, header };
-        if !value.has_claim_movement()? {
-            return Err(GeneralCollectionErrorV1::ZeroIdentity);
-        }
-        Ok(value)
+        output.fill(0);
+        write_order_header(header, output);
+        GeneralSignedOrderTermsV2::decode(&*output).map(|_| ())
     }
 
     /// Return the immutable fixed coordinates.
     #[must_use]
-    pub const fn header(self) -> GeneralOrderHeaderV1 {
+    pub const fn header(self) -> GeneralOrderHeaderV2 {
         self.header
     }
 
@@ -1571,14 +1968,20 @@ impl<'a> GeneralSignedOrderTermsV1<'a> {
         digest(self.bytes)
     }
 
-    /// Return one exact claim quantity received per filled lot.
+    /// Return one exact claim quantity received per filled lot, derived.
     pub fn receive_per_lot(self, index: u32) -> GeneralCollectionResultV1<u64> {
-        self.row_field(GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1, index)
+        if index >= self.header.outcome_count {
+            return Err(GeneralCollectionErrorV1::InvalidLength);
+        }
+        Ok(self.header.derived_row(index).0)
     }
 
-    /// Return one exact claim quantity delivered per filled lot.
+    /// Return one exact claim quantity delivered per filled lot, derived.
     pub fn deliver_per_lot(self, index: u32) -> GeneralCollectionResultV1<u64> {
-        self.row_field(GENERAL_ORDER_ROW_DELIVER_OFFSET_V1, index)
+        if index >= self.header.outcome_count {
+            return Err(GeneralCollectionErrorV1::InvalidLength);
+        }
+        Ok(self.header.derived_row(index).1)
     }
 
     /// Exact worst-case quote obligation if this order fills completely.
@@ -1596,83 +1999,78 @@ impl<'a> GeneralSignedOrderTermsV1<'a> {
             .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
     }
 
+    /// Project the exact terms the streamed candidate verifier consumes.
+    #[must_use]
+    pub fn terms(self) -> AuthenticatedOrderTermsV2 {
+        order_terms(self.order_id(), self.header)
+    }
+
     /// Return the exact authenticated signed bytes.
     #[must_use]
     pub const fn as_bytes(self) -> &'a [u8] {
         self.bytes
     }
+}
 
-    fn row_field(self, field_offset: usize, index: u32) -> GeneralCollectionResultV1<u64> {
-        if index >= self.header.outcome_count {
-            return Err(GeneralCollectionErrorV1::InvalidLength);
-        }
-        let offset = usize_from_u32(index)?
-            .checked_mul(GENERAL_ORDER_ROW_STRIDE_V1)
-            .and_then(|rows| GENERAL_SIGNED_ORDER_TERMS_ROW_BASE_V1.checked_add(rows))
-            .and_then(|row| row.checked_add(field_offset))
-            .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
-        read_u64(self.bytes, offset)
-    }
-
-    fn has_claim_movement(self) -> GeneralCollectionResultV1<bool> {
-        for outcome in 0..self.header.outcome_count {
-            if self.receive_per_lot(outcome)? != 0 || self.deliver_per_lot(outcome)? != 0 {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+fn order_terms(order_id: [u8; 32], header: GeneralOrderHeaderV2) -> AuthenticatedOrderTermsV2 {
+    AuthenticatedOrderTermsV2 {
+        order_id,
+        owner_id: header.owner_id,
+        nonce: header.nonce,
+        max_lots: header.max_lots,
+        max_quote_debit_per_lot: header.max_quote_debit_per_lot,
+        min_quote_credit_per_lot: header.min_quote_credit_per_lot,
+        side: header.side,
+        outcome_lo: header.outcome_lo,
+        outcome_hi: header.outcome_hi,
+        claims_per_lot: header.claims_per_lot,
     }
 }
 
-/// Return exact `192 + 16N` bytes for one whole order record.
-pub fn general_order_len_v1(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
+/// Return exact `216 + 16N` bytes for one whole order record.
+pub fn general_order_len_v2(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
     if outcome_count == 0 {
         return Err(GeneralCollectionErrorV1::InvalidLength);
     }
     usize_from_u32(outcome_count)?
-        .checked_mul(GENERAL_ORDER_ROW_STRIDE_V1)
-        .and_then(|rows| GENERAL_ORDER_ROW_BASE_V1.checked_add(rows))
+        .checked_mul(GENERAL_ORDER_ROW_STRIDE_V2)
+        .and_then(|rows| GENERAL_ORDER_ROW_BASE_V2.checked_add(rows))
         .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
 }
 
-/// Return exact `160 + 16N` bytes for the immutable signed order terms.
-pub fn general_signed_order_terms_len_v1(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
-    if outcome_count == 0 {
-        return Err(GeneralCollectionErrorV1::InvalidLength);
-    }
-    usize_from_u32(outcome_count)?
-        .checked_mul(GENERAL_ORDER_ROW_STRIDE_V1)
-        .and_then(|rows| GENERAL_SIGNED_ORDER_TERMS_ROW_BASE_V1.checked_add(rows))
-        .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
-}
-
-/// Return the canonical identity of one order record.
+/// Return the exact width of the signed immutable order terms.
 ///
-/// The digest covers every byte EXCEPT the 32-byte mutable escrow window,
-/// which is masked by construction here -- the fixed header and the
-/// per-outcome rows are hashed as one split message. This is what lets the
-/// mutable state live at a fixed offset (where an EffectProgram write can
-/// reach it) while the identity stays pinned to exactly the bytes the maker
-/// signed.
-pub fn general_order_identity_v1(order_bytes: &[u8]) -> GeneralCollectionResultV1<[u8; 32]> {
-    let head = order_bytes
-        .get(..GENERAL_ORDER_STATE_OFFSET_V1)
-        .ok_or(GeneralCollectionErrorV1::InvalidLength)?;
-    let rows = order_bytes
-        .get(GENERAL_ORDER_ROW_BASE_V1..)
-        .ok_or(GeneralCollectionErrorV1::InvalidLength)?;
-    Ok(digestv(&[head, rows]))
+/// Width-independent since the re-digest -- the rows are derived -- but it
+/// keeps the width argument so a caller that sizes by outcome count still
+/// refuses a zero width by name.
+pub fn general_signed_order_terms_len_v2(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
+    if outcome_count == 0 {
+        return Err(GeneralCollectionErrorV1::InvalidLength);
+    }
+    Ok(GENERAL_ORDER_HEADER_BYTES_V2)
 }
 
-/// Require one Candidate to name exactly this closed batch's domain.
+/// Return the canonical identity of one order record: the digest of its
+/// 184-byte signed header.
+pub fn general_order_identity_v2(order_bytes: &[u8]) -> GeneralCollectionResultV1<[u8; 32]> {
+    let head = order_bytes
+        .get(..GENERAL_ORDER_HEADER_BYTES_V2)
+        .ok_or(GeneralCollectionErrorV1::InvalidLength)?;
+    Ok(digest(head))
+}
+
+/// Require one Candidate to name exactly this closed batch's domain, and to
+/// enumerate exactly its live orders.
 ///
 /// The settlement half already compares `batch_id` between its own records; what
 /// it could not do was check that the identity denotes a batch that was opened
 /// and closed at all.  Because the identity commits to market, generation,
 /// product and price scale, one digest comparison decides substitution across
-/// all four at once.
+/// all four at once. The live order count is the completeness conjunct's
+/// number: the candidate's copy is held to the batch here, at `SubmitCandidate`,
+/// and the verifier's terminal row holds its distinct order count to the copy.
 pub fn authenticate_batch_candidate_v1(
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     candidate: CandidateHeaderV2,
 ) -> GeneralCollectionResultV1<()> {
     if batch.state().status != BatchStatusV1::Closed {
@@ -1683,6 +2081,7 @@ pub fn authenticate_batch_candidate_v1(
         || candidate.product_id != opening.product_id
         || candidate.outcome_count != opening.outcome_count
         || candidate.price_scale != opening.price_scale
+        || candidate.live_order_count != batch.live_order_count()
     {
         return Err(GeneralCollectionErrorV1::Substitution);
     }
@@ -1698,7 +2097,7 @@ pub fn authenticate_batch_candidate_v1(
 /// could not be paid, and it is refused before any settlement account is
 /// created rather than stranding at the first short `Collect`.
 pub fn authenticate_batch_verified_candidate_v1(
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     verified: VerifiedCandidateHeaderV2,
 ) -> GeneralCollectionResultV1<()> {
     if batch.state().status != BatchStatusV1::Closed {
@@ -1728,18 +2127,18 @@ pub fn authenticate_batch_verified_candidate_v1(
 /// **The per-lot vectors are checked here too, and that is not cosmetic.** The
 /// verifier accumulates `claim_input = deliver_per_lot * lots` and
 /// `claim_output = receive_per_lot * lots` from the vectors the CANDIDATE PAGE
-/// carries, and [`AuthenticatedOrderTermsV2`] has no coordinate for either. So
-/// while only the compact header fields were bound, a candidate author could
-/// fill a maker's order with a portfolio the maker never signed -- the digest
-/// matched, `max_lots` matched, and the claims moved were whatever the row said.
-/// Nothing else in the family closed this: the row's vectors are re-read from
-/// the same page on every step, so they were self-consistent and wrong
-/// together. Binding them to the record is also what makes the admission escrow
-/// a bound at all, since the escrowed claim reserve is computed from the
+/// carries; binding them to the record is what makes the admission escrow a
+/// bound at all, since the escrowed claim reserve is computed from the
 /// record's `deliver_per_lot` and would otherwise bound nothing the row does.
-pub fn authenticate_order_execution_v1(
-    batch: GeneralBatchV1,
-    order: GeneralOrderV1<'_>,
+///
+/// **A row may fill ZERO lots.** The joint clearing's certificate must
+/// enumerate every live order so that `RationedInsideLimit` can speak about
+/// the ones it left unfilled (design note §1.4, "the unfilled row"); until
+/// 2026-09-06 this function refused `lots == 0` and the omission finding was
+/// therefore structural.
+pub fn authenticate_order_execution_v2(
+    batch: GeneralBatchV2,
+    order: GeneralOrderV2<'_>,
     execution: ExecutionV2<'_>,
 ) -> GeneralCollectionResultV1<AuthenticatedOrderTermsV2> {
     if batch.state().status != BatchStatusV1::Closed {
@@ -1765,7 +2164,7 @@ pub fn authenticate_order_execution_v1(
     if terms.order_id != execution_header.order_id {
         return Err(GeneralCollectionErrorV1::Substitution);
     }
-    if execution_header.lots == 0 || execution_header.lots > header.max_lots {
+    if execution_header.lots > header.max_lots {
         return Err(GeneralCollectionErrorV1::Substitution);
     }
     for outcome in 0..header.outcome_count {
@@ -1786,22 +2185,91 @@ pub fn authenticate_order_execution_v1(
 
 /// Hostile-decode a candidate encoding without borrowing it into the result.
 fn decode_checked(bytes: &[u8]) -> GeneralCollectionResultV1<()> {
-    GeneralOrderV1::decode(bytes).map(|_| ())
+    GeneralOrderV2::decode(bytes).map(|_| ())
 }
 
-fn decode_order_header(bytes: &[u8]) -> GeneralCollectionResultV1<GeneralOrderHeaderV1> {
-    Ok(GeneralOrderHeaderV1 {
-        outcome_count: read_u32(bytes, GeneralOrderLayoutV1::OUTCOME_COUNT)?,
-        nonce: read_u64(bytes, GeneralOrderLayoutV1::NONCE)?,
-        owner_id: read_array(bytes, GeneralOrderLayoutV1::OWNER_ID)?,
-        market: read_array(bytes, GeneralOrderLayoutV1::MARKET)?,
-        batch_id: read_array(bytes, GeneralOrderLayoutV1::BATCH_ID)?,
-        generation: read_u64(bytes, GeneralOrderLayoutV1::GENERATION)?,
-        max_lots: read_u64(bytes, GeneralOrderLayoutV1::MAX_LOTS)?,
-        max_quote_debit_per_lot: read_u64(bytes, GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT)?,
-        min_quote_credit_per_lot: read_u64(bytes, GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT)?,
-        valid_until_slot: read_u64(bytes, GeneralOrderLayoutV1::VALID_UNTIL_SLOT)?,
+fn decode_order_header(bytes: &[u8]) -> GeneralCollectionResultV1<GeneralOrderHeaderV2> {
+    Ok(GeneralOrderHeaderV2 {
+        outcome_count: read_u32(bytes, GeneralOrderLayoutV2::OUTCOME_COUNT)?,
+        nonce: read_u64(bytes, GeneralOrderLayoutV2::NONCE)?,
+        owner_id: read_array(bytes, GeneralOrderLayoutV2::OWNER_ID)?,
+        market: read_array(bytes, GeneralOrderLayoutV2::MARKET)?,
+        batch_id: read_array(bytes, GeneralOrderLayoutV2::BATCH_ID)?,
+        generation: read_u64(bytes, GeneralOrderLayoutV2::GENERATION)?,
+        max_lots: read_u64(bytes, GeneralOrderLayoutV2::MAX_LOTS)?,
+        max_quote_debit_per_lot: read_u64(bytes, GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT)?,
+        min_quote_credit_per_lot: read_u64(bytes, GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT)?,
+        valid_until_slot: read_u64(bytes, GeneralOrderLayoutV2::VALID_UNTIL_SLOT)?,
+        side: OrderSideV2::decode(read_u8(bytes, GeneralOrderLayoutV2::SIDE)?)
+            .ok_or(GeneralCollectionErrorV1::ShapeNotInterval)?,
+        outcome_lo: read_u32(bytes, GeneralOrderLayoutV2::OUTCOME_LO)?,
+        outcome_hi: read_u32(bytes, GeneralOrderLayoutV2::OUTCOME_HI)?,
+        claims_per_lot: read_u64(bytes, GeneralOrderLayoutV2::CLAIMS_PER_LOT)?,
     })
+}
+
+fn write_order_header(header: GeneralOrderHeaderV2, output: &mut [u8]) {
+    put(output, GeneralOrderLayoutV2::MAGIC, &ORDER_MAGIC);
+    put(
+        output,
+        GeneralOrderLayoutV2::VERSION,
+        &VERSION.to_le_bytes(),
+    );
+    output[GeneralOrderLayoutV2::PHASE] = ORDER_PHASE;
+    put(
+        output,
+        GeneralOrderLayoutV2::OUTCOME_COUNT,
+        &header.outcome_count.to_le_bytes(),
+    );
+    put(
+        output,
+        GeneralOrderLayoutV2::NONCE,
+        &header.nonce.to_le_bytes(),
+    );
+    put(
+        output,
+        GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT,
+        &header.min_quote_credit_per_lot.to_le_bytes(),
+    );
+    put(output, GeneralOrderLayoutV2::OWNER_ID, &header.owner_id);
+    put(output, GeneralOrderLayoutV2::MARKET, &header.market);
+    put(output, GeneralOrderLayoutV2::BATCH_ID, &header.batch_id);
+    put(
+        output,
+        GeneralOrderLayoutV2::GENERATION,
+        &header.generation.to_le_bytes(),
+    );
+    put(
+        output,
+        GeneralOrderLayoutV2::MAX_LOTS,
+        &header.max_lots.to_le_bytes(),
+    );
+    put(
+        output,
+        GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT,
+        &header.max_quote_debit_per_lot.to_le_bytes(),
+    );
+    put(
+        output,
+        GeneralOrderLayoutV2::VALID_UNTIL_SLOT,
+        &header.valid_until_slot.to_le_bytes(),
+    );
+    output[GeneralOrderLayoutV2::SIDE] = header.side.tag();
+    put(
+        output,
+        GeneralOrderLayoutV2::OUTCOME_LO,
+        &header.outcome_lo.to_le_bytes(),
+    );
+    put(
+        output,
+        GeneralOrderLayoutV2::OUTCOME_HI,
+        &header.outcome_hi.to_le_bytes(),
+    );
+    put(
+        output,
+        GeneralOrderLayoutV2::CLAIMS_PER_LOT,
+        &header.claims_per_lot.to_le_bytes(),
+    );
 }
 
 fn validate_opening(opening: GeneralBatchOpeningV1) -> GeneralCollectionResultV1<()> {
@@ -1842,20 +2310,20 @@ fn validate_order_state(state: GeneralOrderStateV1) -> GeneralCollectionResultV1
     Ok(())
 }
 
-fn validate_order_header(header: GeneralOrderHeaderV1) -> GeneralCollectionResultV1<()> {
+fn validate_order_header(header: GeneralOrderHeaderV2) -> GeneralCollectionResultV1<()> {
     if is_zero(&header.owner_id) || is_zero(&header.market) || is_zero(&header.batch_id) {
         return Err(GeneralCollectionErrorV1::ZeroIdentity);
     }
     if header.outcome_count == 0 || header.max_lots == 0 || header.generation == 0 {
         return Err(GeneralCollectionErrorV1::ZeroIdentity);
     }
-    Ok(())
+    header.validate_shape()
 }
 
 fn order_row_offset(index: usize) -> GeneralCollectionResultV1<usize> {
     index
-        .checked_mul(GENERAL_ORDER_ROW_STRIDE_V1)
-        .and_then(|rows| GENERAL_ORDER_ROW_BASE_V1.checked_add(rows))
+        .checked_mul(GENERAL_ORDER_ROW_STRIDE_V2)
+        .and_then(|rows| GENERAL_ORDER_ROW_BASE_V2.checked_add(rows))
         .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
 }
 

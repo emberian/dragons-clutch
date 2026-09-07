@@ -199,8 +199,24 @@ pub enum SettlementClauseV3 {
     /// Nothing failed to decode: a Materialize with no mint and no merge has no
     /// position geometry to project at all.
     PositionMaterializeMoveNone,
-    /// A Close asked for position geometry it does not have.
-    PositionCloseGeometry,
+    /// A Close that STRANDS a residual, and the burn has no child frame.
+    ///
+    /// Decision 0032 makes the residual at a zero-priced outcome a burn against
+    /// the settlement's own ProtocolPosition, and `runtime_settlement::close`
+    /// sets `claims_active` on exactly the closes that carry one. What does not
+    /// exist is the SEAT: `Action::Close` declares four child frames --
+    /// `Custody(Transfer)`, `ClaimsProtocolPosition(Close)`,
+    /// `Custody(CloseVault)`, `Custody(CloseReplay)` -- and none of them is a
+    /// ProtocolPosition MUTATION. A fifth child frame and a 65 -> 66 account
+    /// count is a cohort-18 AccountProfile change and must land in the same
+    /// commit as the burn.
+    ///
+    /// So this refuses rather than projecting a geometry the frame cannot
+    /// execute. Accepting it would zero the cursor's inventory while the
+    /// Position still held the claims, which is a supply-conservation break
+    /// bought for a green path. `ClaimsSbfError::StrandUnseated` is the same
+    /// accusation one program over, for a strand packet submitted by hand.
+    PositionCloseStrandUnseated,
 }
 
 impl SettlementClauseV3 {
@@ -371,7 +387,9 @@ impl SettlementClauseV3 {
             Self::PositionMaterializeMoveNone => {
                 "settlement-position: a materialize moves no complete set"
             }
-            Self::PositionCloseGeometry => "settlement-position: a close has no position geometry",
+            Self::PositionCloseStrandUnseated => {
+                "settlement-position: a close that strands has no claims child frame to burn from"
+            }
         }
     }
 }

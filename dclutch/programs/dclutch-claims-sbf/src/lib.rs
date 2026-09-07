@@ -369,6 +369,30 @@ pub enum ClaimsSbfError {
     /// posted no bond, and the reader's fix is to append the tail the
     /// operator's payout builder appends on every refunding Market.
     FounderBondFrame = 0x5013,
+    /// A residual strand was submitted and this program has no seat to burn it
+    /// from.
+    ///
+    /// Decision 0032 makes a residual on a zero-priced outcome a burn against
+    /// the settlement's own ProtocolPosition, and `ClaimsPlanV1` already
+    /// accepts the plan shape for it (source present, no destination, an
+    /// uneven quantity vector). What does not exist yet is the FRAME: the
+    /// General settlement's `Action::Close` declares four child frames and
+    /// none of them is a ProtocolPosition MUTATION -- its Claims leg is
+    /// `ProtocolPositionActionV2::Close` -- so a strand submitted today would
+    /// have to execute through a child frame whose accounts were never
+    /// admitted for it. That is a cohort-18 AccountProfile change (a fifth
+    /// child frame and a 65 -> 66 account count), and it must land in the same
+    /// commit as the burn.
+    ///
+    /// Until it does, the plan is refused HERE rather than one layer deeper,
+    /// and by this name rather than by
+    /// [`ClaimsSbfError::Instruction`]: `Instruction` means the packet is not
+    /// a plan this program dispatches at all and sends its reader to the
+    /// encoder, while this one means the plan decoded, its shape is the one
+    /// the kernel accepts, and the SEAT is missing. A reader who saw
+    /// `Instruction` here would go looking for a malformed packet that is
+    /// well-formed.
+    StrandUnseated = 0x5014,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -394,7 +418,8 @@ dclutch_refusal_registry::pin_refusal_band!(
         FailureEscrow,
         FailureEscrowUnseated,
         Overdraw,
-        FounderBondFrame
+        FounderBondFrame,
+        StrandUnseated
     ]
 );
 
@@ -664,6 +689,7 @@ fn process_generic_plan(
         ClaimsAction::MintRefundingCompleteSet => BasketAction::MintRefundingCompleteSet,
         ClaimsAction::MergeRefundingCompleteSet => BasketAction::MergeRefundingCompleteSet,
         ClaimsAction::InitializeCompleteSet => return Err(ClaimsSbfError::Instruction.into()),
+        ClaimsAction::StrandResidual => return Err(ClaimsSbfError::StrandUnseated.into()),
     };
     let core = authenticate_economic_accounts(program_id, &accounts, plan)?;
     authenticate_failure_escrow(program_id, &accounts, plan, basket_action)?;
@@ -1265,8 +1291,8 @@ fn resource_digest(
 mod tests {
     use std::{boxed::Box, vec::Vec};
 
-    use dclutch_market::{MarketIdentity, Readiness};
     use dclutch_market::Identity;
+    use dclutch_market::{MarketIdentity, Readiness};
     use dclutch_product::economic_slice::{
         MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase, SCALAR_BYTES, initialize_market,
         initialize_position,

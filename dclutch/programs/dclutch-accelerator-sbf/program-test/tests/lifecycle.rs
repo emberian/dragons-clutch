@@ -2,11 +2,13 @@
 
 use std::{collections::BTreeMap, vec, vec::Vec};
 
+use dclutch_accelerator_sbf::general::GeneralAcceleratorSbfErrorV3;
+use dclutch_core_contract::ContentId;
+use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
     hot_v3::{DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3},
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
     ADMITTED_OUTPUT_PAGE_ACCOUNT_V3, ADMITTED_RUNTIME_ACCOUNTS_START_V3,
@@ -19,8 +21,7 @@ use dclutch_market::execution_strategy::v2::{
     AcceleratorTransportProfileV2, AdmittedAcceleratorRequestV2, AuthenticatedScratchPageV2,
     RequestTransportV2, SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
-use dclutch_accelerator_sbf::general::GeneralAcceleratorSbfErrorV3;
-use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
+use dclutch_program_test_evidence::{TransactionEvidence, record};
 use dclutch_trading::general::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     artifacts_v3::decode_general_request_v3,
@@ -31,10 +32,10 @@ use dclutch_trading::general::{
         verify_candidate_row_v1,
     },
     collection_v1::{
-        BatchStatusV1, EscrowDirectionV1, GENERAL_ORDER_ROW_BASE_V1, GeneralBatchOpeningV1,
-        GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderLayoutV1, GeneralOrderPhaseV1,
-        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, authenticate_batch_candidate_v1,
-        authenticate_order_execution_v1, general_order_len_v1,
+        BatchStatusV1, EscrowDirectionV1, GENERAL_ORDER_ROW_BASE_V2, GeneralBatchOpeningV1,
+        GeneralBatchV2, GeneralOrderHeaderV2, GeneralOrderLayoutV2, GeneralOrderPhaseV1,
+        GeneralOrderStateV1, GeneralOrderV2, MakerFundingV1, authenticate_batch_candidate_v1,
+        authenticate_order_execution_v2, general_order_len_v2,
     },
     escrow_v1::{
         OrderEscrowObservationV1, OrderEscrowPlanV1, WorkEscrowClosePlanV1, WorkEscrowDrawPlanV1,
@@ -62,7 +63,7 @@ use dclutch_trading::general::{
         runtime_settlement_effect_len_v2,
     },
     runtime_verify::{
-        AuthenticatedOrderTermsV2, RuntimeCandidateVerifierV2, RuntimeVerifyErrorV2,
+        AuthenticatedOrderTermsV2, OrderSideV2, RuntimeCandidateVerifierV2, RuntimeVerifyErrorV2,
         runtime_manifest_orders_for_row_v2, runtime_verifier_len_v2,
     },
     runtime_width::{
@@ -88,7 +89,6 @@ use dclutch_trading::general_config::{
     root::GeneralRootV2,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
-use dclutch_program_test_evidence::{TransactionEvidence, record};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
@@ -157,7 +157,7 @@ struct TerminalFixture {
     submission: GeneralCandidateV1,
     /// The closed batch, so a settlement row can be checked against the escrow
     /// its order actually holds rather than against a declared reserve.
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     /// The order records this batch admitted, in the candidate's row order.
     orders: Vec<Vec<u8>>,
     /// Exact prestate/evidence/successor tuple for every verified row.
@@ -343,6 +343,13 @@ fn verified_candidate(
             quote_credit,
             price_scale: u64::from(width),
         },
+        // THE PRICES ARE THE CERTIFICATE'S FIRST TAIL and must be on the
+        // simplex: `VerifiedCandidateV2` refuses `InvalidSimplex` unless they
+        // sum to exactly `price_scale`, which is the runtime width here, so
+        // one unit per outcome is the uniform vector at that scale. These
+        // certificates are selection fixtures and are never streamed through
+        // the verifier, so the vector must be admissible, not forced.
+        &vec![1; count],
         &vec![1; count],
         &vec![1; count],
         &mut output,
@@ -600,7 +607,7 @@ fn open_batch_bank(width: u32, root: GeneralRootV2) -> Vec<u8> {
     bank
 }
 
-fn close_batch_bank(width: u32, root: GeneralRootV2, batch: GeneralBatchV1) -> Vec<u8> {
+fn close_batch_bank(width: u32, root: GeneralRootV2, batch: GeneralBatchV2) -> Vec<u8> {
     let opening = batch.opening();
     let state = batch.state();
     let mut bank = input_bank(width, Action::CloseBatch);
@@ -657,21 +664,21 @@ fn close_batch_bank(width: u32, root: GeneralRootV2, batch: GeneralBatchV1) -> V
 /// transition, rather than the maker, owns.  The order identity masks precisely
 /// the same window, making this image and the admitted order join on one id.
 fn signed_order_terms(record: &[u8], width: u32) -> Vec<u8> {
-    let expected_record = general_order_len_v1(width).expect("order record width");
+    let expected_record = general_order_len_v2(width).expect("order record width");
     assert_eq!(record.len(), expected_record);
     let mut terms = Vec::with_capacity(
-        GeneralOrderLayoutV1::STATE_PHASE
+        GeneralOrderLayoutV2::STATE_PHASE
             .checked_add(usize::try_from(width).expect("width") * 16)
             .expect("terms width"),
     );
     terms.extend_from_slice(
         record
-            .get(..GeneralOrderLayoutV1::STATE_PHASE)
+            .get(..GeneralOrderLayoutV2::STATE_PHASE)
             .expect("immutable header"),
     );
     terms.extend_from_slice(
         record
-            .get(GENERAL_ORDER_ROW_BASE_V1..)
+            .get(GENERAL_ORDER_ROW_BASE_V2..)
             .expect("interleaved immutable rows"),
     );
     assert_eq!(
@@ -691,8 +698,8 @@ fn signed_order_terms(record: &[u8], width: u32) -> Vec<u8> {
 fn place_order_bank(
     width: u32,
     root: GeneralRootV2,
-    batch: GeneralBatchV1,
-    order: GeneralOrderV1<'_>,
+    batch: GeneralBatchV2,
+    order: GeneralOrderV2<'_>,
     maker: [u8; 32],
     state_bump: u8,
     order_bump: u8,
@@ -796,7 +803,7 @@ fn place_order_bank(
 fn submit_candidate_bank(
     width: u32,
     root: GeneralRootV2,
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     candidate: CandidateV2<'_>,
     submission: GeneralCandidateV1,
     state_bump: u8,
@@ -970,7 +977,7 @@ fn verify_candidate_bank(
 
 fn close_candidate_bank(
     width: u32,
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     submission: GeneralCandidateV1,
     current_slot: u64,
 ) -> Vec<u8> {
@@ -1032,7 +1039,7 @@ fn close_candidate_bank(
     bank
 }
 
-fn submitted_candidate_for_close(width: u32) -> (GeneralBatchV1, GeneralCandidateV1) {
+fn submitted_candidate_for_close(width: u32) -> (GeneralBatchV2, GeneralCandidateV1) {
     let config_id = hash(&config(width)).to_bytes();
     let mut root = GeneralRootV2::active([3; 32], config_id, 9).expect("active root");
     let opening = GeneralBatchOpeningV1 {
@@ -1049,7 +1056,7 @@ fn submitted_candidate_for_close(width: u32) -> (GeneralBatchV1, GeneralCandidat
     };
     let revision = root.revision();
     let mut batch =
-        GeneralBatchV1::open(&mut root, opening, revision, ADMISSION_SLOT).expect("opened batch");
+        GeneralBatchV2::open(&mut root, opening, revision, ADMISSION_SLOT).expect("opened batch");
     let revision = root.revision();
     batch
         .close(&mut root, revision)
@@ -1066,6 +1073,10 @@ fn submitted_candidate_for_close(width: u32) -> (GeneralBatchV1, GeneralCandidat
         candidate_id: [0x71; 32],
         product_id: product_id(),
         batch_id: batch.batch_id(),
+        // The batch's own count, never a literal: `authenticate_batch_candidate_v1`
+        // refuses a candidate that disagrees with the batch about how many
+        // orders are live, and this batch closed with none admitted.
+        live_order_count: batch.live_order_count(),
     };
     CandidateV2::encode_into(header, &prices, &mut candidate_bytes).expect("candidate draft");
     header.candidate_id =
@@ -1833,11 +1844,11 @@ fn batch_opening(width: u32) -> GeneralBatchOpeningV1 {
 /// This is the whole point of the collection half: `batch_id` is no longer a
 /// literal. It is the digest of an opening that consumed the root's exact next
 /// sequence, so a candidate naming it is naming a batch that was really opened.
-fn opened_batch(width: u32) -> (GeneralRootV2, GeneralBatchV1) {
+fn opened_batch(width: u32) -> (GeneralRootV2, GeneralBatchV2) {
     let mut root =
         GeneralRootV2::active(MARKET, CONFIG_IDENTITY, GENERATION).expect("active General root");
     let revision = root.revision();
-    let batch = GeneralBatchV1::open(&mut root, batch_opening(width), revision, ADMISSION_SLOT)
+    let batch = GeneralBatchV2::open(&mut root, batch_opening(width), revision, ADMISSION_SLOT)
         .expect("open batch");
     (root, batch)
 }
@@ -1846,12 +1857,21 @@ fn batch_id(width: u32) -> [u8; 32] {
     opened_batch(width).1.batch_id()
 }
 
-/// One maker's signed portfolio order, as it would be placed into the batch.
+/// One maker's signed single-outcome order, as it would be placed into the
+/// batch.
+///
+/// Cohort-18's joint arm makes an order an INTERVAL on one side: it moves
+/// `claims_per_lot` claims at each outcome of `[outcome_lo, outcome_hi]` and
+/// nothing off it. `runtime_verify::current_shape` refuses a row that moves
+/// claims at more than one outcome (`ShapeNotInterval`), so every order in
+/// this file is one outcome wide and its per-lot vectors are DERIVED from the
+/// shape rather than carried beside it.
 struct OrderSpec {
     nonce: u64,
     lots: u64,
-    receive: Vec<u64>,
-    deliver: Vec<u64>,
+    side: OrderSideV2,
+    outcome: u32,
+    claims_per_lot: u64,
     debit_limit: u64,
     /// The quote per lot this maker signed as the LEAST they may be paid.
     ///
@@ -1864,29 +1884,46 @@ struct OrderSpec {
 }
 
 fn order_record(width: u32, batch_id: [u8; 32], spec: &OrderSpec) -> Vec<u8> {
-    let mut bytes = vec![0_u8; general_order_len_v1(width).expect("order width")];
-    GeneralOrderV1::encode_into(
-        GeneralOrderHeaderV1 {
-            outcome_count: width,
-            nonce: spec.nonce,
-            owner_id: OWNER,
-            market: MARKET,
-            batch_id,
-            generation: GENERATION,
-            max_lots: 10,
-            max_quote_debit_per_lot: spec.debit_limit,
-            // THE FLOOR IS THE MAKER'S, and it is part of what they signed.
-            // `order_id` is the digest of these bytes, so changing this field
-            // moves the order's identity -- and the candidate's rows are sorted
-            // by identity, so it moves the row order too. Nothing downstream may
-            // be typed: `terminal_fixture` re-derives the sort, the candidate's
-            // own digest, and every manifest width from the records this
-            // produces.
-            min_quote_credit_per_lot: spec.credit_floor,
-            valid_until_slot: SETTLEMENT_CLOSE_SLOT,
-        },
-        &spec.receive,
-        &spec.deliver,
+    let mut bytes = vec![0_u8; general_order_len_v2(width).expect("order width")];
+    let header = GeneralOrderHeaderV2 {
+        outcome_count: width,
+        nonce: spec.nonce,
+        owner_id: OWNER,
+        market: MARKET,
+        batch_id,
+        generation: GENERATION,
+        // EVERY ORDER IS FILLED TO ITS OWN MAXIMUM, so the marginal conjunct
+        // is satisfied twice over. `RationedInsideLimit` refuses an order left
+        // short of `max_lots` while the clearing price is strictly inside its
+        // limit; here every maker is BOTH at their limit and filled to the
+        // brim, which is two reasons rather than one.
+        max_lots: spec.lots,
+        max_quote_debit_per_lot: spec.debit_limit,
+        // THE FLOOR IS THE MAKER'S, and it is part of what they signed.
+        // `order_id` is the digest of these bytes, so changing this field
+        // moves the order's identity -- and the candidate's rows are sorted
+        // by identity, so it moves the row order too. Nothing downstream may
+        // be typed: `terminal_fixture` re-derives the sort, the candidate's
+        // own digest, and every manifest width from the records this
+        // produces.
+        min_quote_credit_per_lot: spec.credit_floor,
+        valid_until_slot: SETTLEMENT_CLOSE_SLOT,
+        side: spec.side,
+        outcome_lo: spec.outcome,
+        outcome_hi: spec.outcome,
+        claims_per_lot: spec.claims_per_lot,
+    };
+    // The vectors are the ones the header's shape derives; `GeneralOrderV2`
+    // accepts them as a check and never as an authority.
+    let derived: Vec<(u64, u64)> = (0..width)
+        .map(|outcome| header.derived_row(outcome))
+        .collect();
+    let receive: Vec<u64> = derived.iter().map(|row| row.0).collect();
+    let deliver: Vec<u64> = derived.iter().map(|row| row.1).collect();
+    GeneralOrderV2::encode_into(
+        header,
+        &receive,
+        &deliver,
         GeneralOrderStateV1 {
             phase: GeneralOrderPhaseV1::Placed,
             admitted_slot: ADMISSION_SLOT,
@@ -1901,17 +1938,17 @@ fn order_record(width: u32, batch_id: [u8; 32], spec: &OrderSpec) -> Vec<u8> {
 /// Build one compact Execution row from the immutable order it names.
 ///
 /// The row's terms are not asserted here; they are returned by
-/// `authenticate_order_execution_v1`, which checks every field the row repeats
+/// `authenticate_order_execution_v2`, which checks every field the row repeats
 /// against the record and checks the record's own digest against the `order_id`
 /// the row claims.
 fn execution_row(
     width: u32,
     page_coordinate: u32,
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     order_bytes: &[u8],
     lots: u64,
 ) -> (Vec<u8>, AuthenticatedOrderTermsV2) {
-    let order = GeneralOrderV1::decode(order_bytes).expect("order record");
+    let order = GeneralOrderV2::decode(order_bytes).expect("order record");
     let header = order.header();
     let receive: Vec<u64> = (0..width)
         .map(|index| order.receive_per_lot(index).expect("receive"))
@@ -1934,7 +1971,7 @@ fn execution_row(
     // The row is authenticated as a whole record, tails included: the per-lot
     // vectors are part of what the order record binds, so a header-only
     // authentication could not see a substituted portfolio.
-    let terms = authenticate_order_execution_v1(
+    let terms = authenticate_order_execution_v2(
         batch,
         order,
         ExecutionV2::decode(&bytes).expect("row decodes"),
@@ -1946,12 +1983,17 @@ fn execution_row(
 /// The floor order 2 signs in every walk this file runs, in quote per lot.
 ///
 /// It is one because the fill is one. Order 2 is the fixture's only pure
-/// seller: it delivers one of each outcome per lot and receives nothing, the
-/// candidate prices every outcome at one on a scale of `width`, and its single
-/// lot is therefore paid `width / width = 1` at EVERY runtime width this file
+/// seller: it delivers ONE CLAIM AT OUTCOME ZERO per lot and nothing anywhere
+/// else, the clearing prices outcome zero at the whole scale, and a lot is
+/// therefore paid `scale x 1 / scale = 1` at EVERY runtime width this file
 /// runs. So a floor of one is the floor exactly AT the fill -- the boundary,
 /// where a conjunct that is off by one in either direction shows -- and it
 /// clears.
+///
+/// It is also what FORCES the price. A filled seller raises its outcome's
+/// price floor to `ceil(floor x scale / claims_per_lot)`, which is the whole
+/// scale here, so decision 0032's lexicographic minimum has exactly one vector
+/// to choose and the fixture's prices are derived rather than picked.
 const SELLER_CREDIT_FLOOR_CLEARS: u64 = 1;
 /// One step past the fill, which is what a fill below the floor means here.
 const SELLER_CREDIT_FLOOR_REFUSES: u64 = SELLER_CREDIT_FLOOR_CLEARS + 1;
@@ -1964,7 +2006,7 @@ const SELLER_CREDIT_FLOOR_REFUSES: u64 = SELLER_CREDIT_FLOOR_CLEARS + 1;
 /// value. It carries the one row's prestate and nothing else.
 struct RefusedRowV1 {
     /// The closed batch every row of this walk names.
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     /// The immutable candidate image, carrying its own digest.
     candidate: Vec<u8>,
     /// That digest.
@@ -2021,36 +2063,55 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
 
 fn walk_at_seller_floor(width: u32, seller_floor: u64) -> Result<TerminalFixture, RefusedRowV1> {
     let count = usize::try_from(width).expect("test width");
-    let ones = vec![1; count];
-    let zeros = vec![0; count];
 
     // The real collection half: open a batch, place three signed orders into
     // it, close it. The batch identity below is the digest of that opening and
     // the terms below are projections of those order records.
+    //
+    // THE BOOK BALANCES AT OUTCOME ZERO, AND THAT IS NOT A CONVENIENCE. The
+    // joint arm mints complete sets inside the clearing whenever the net claim
+    // flow is positive, which creates claims at EVERY outcome and hands them
+    // to takers at only the ones that have any; every other outcome is then a
+    // residual the close must STRAND. The strand's Claims burn has no child
+    // frame in `Action::Close` yet, so `hot_candidate_v3::position_geometry`
+    // refuses every Close whose plan says `claims_active` -- fail-closed, and
+    // deliberately. A book with fewer orders than outcomes cannot mint and
+    // still reach a terminal close, and this file walks to a terminal close on
+    // a real ELF at width 258. So the two buyers take exactly the four lots
+    // the seller offers: `M = 0`, no residual anywhere, and the close is
+    // reachable at every runtime width.
     let (mut root, mut batch) = opened_batch(width);
     let specs = [
         OrderSpec {
             nonce: 1,
             lots: 2,
-            receive: ones.clone(),
-            deliver: zeros.clone(),
-            debit_limit: 2,
+            side: OrderSideV2::Buy,
+            outcome: 0,
+            claims_per_lot: 1,
+            // ONE, WHICH IS THE CLEARING PRICE, not two. The buyer's cap
+            // induces a price ceiling of `floor(cap x scale / claims_per_lot)`
+            // and the clearing charges `scale x 1 / scale = 1` per lot, so a
+            // cap of one is the cap exactly AT the fill -- the same boundary
+            // the seller's floor sits on, from the other side.
+            debit_limit: 1,
             credit_floor: 0,
         },
         OrderSpec {
             nonce: 2,
-            lots: 1,
-            receive: zeros.clone(),
-            deliver: ones.clone(),
+            lots: 4,
+            side: OrderSideV2::Sell,
+            outcome: 0,
+            claims_per_lot: 1,
             debit_limit: 0,
             credit_floor: seller_floor,
         },
         OrderSpec {
             nonce: 3,
             lots: 2,
-            receive: ones.clone(),
-            deliver: zeros.clone(),
-            debit_limit: 2,
+            side: OrderSideV2::Buy,
+            outcome: 0,
+            claims_per_lot: 1,
+            debit_limit: 1,
             credit_floor: 0,
         },
     ];
@@ -2060,7 +2121,7 @@ fn walk_at_seller_floor(width: u32, seller_floor: u64) -> Result<TerminalFixture
     let mut placed: Vec<(Vec<u8>, u64)> = Vec::new();
     for spec in &specs {
         let bytes = order_record(width, identity, spec);
-        let order = GeneralOrderV1::decode(&bytes).expect("order record");
+        let order = GeneralOrderV2::decode(&bytes).expect("order record");
         let escrow = batch
             .admit(
                 order,
@@ -2123,8 +2184,8 @@ fn walk_at_seller_floor(width: u32, seller_floor: u64) -> Result<TerminalFixture
     // is zero and both orders agree. A real digest distinguishes them, and
     // sorting the wrong way refuses with `NonCanonicalOrder`.
     placed.sort_by(|left, right| {
-        let left = GeneralOrderV1::decode(&left.0).expect("order").order_id();
-        let right = GeneralOrderV1::decode(&right.0).expect("order").order_id();
+        let left = GeneralOrderV2::decode(&left.0).expect("order").order_id();
+        let right = GeneralOrderV2::decode(&right.0).expect("order").order_id();
         left.iter().rev().cmp(right.iter().rev())
     });
 
@@ -2134,6 +2195,15 @@ fn walk_at_seller_floor(width: u32, seller_floor: u64) -> Result<TerminalFixture
     // could have named any identity at all, including one already verified
     // under other prices. Encode once to fix every other byte, then re-encode
     // with the digest those bytes produce.
+    //
+    // THE PRICES ARE FORCED, not chosen. Outcome zero's floor is the whole
+    // scale (the filled seller's), its ceiling is the whole scale (the filled
+    // buyers' caps), and no other outcome carries a residual or a bound, so
+    // decision 0032's lexicographic minimum has one vector: the scale at
+    // outcome zero and nothing anywhere else. A vector inside the box but off
+    // its minimum refuses `NonMinimalPriceVector`.
+    let mut prices = vec![0_u64; count];
+    prices[0] = u64::from(width);
     let mut candidate = vec![0_u8; candidate_len(width).expect("candidate width")];
     let header = CandidateHeaderV2 {
         outcome_count: width,
@@ -2143,15 +2213,19 @@ fn walk_at_seller_floor(width: u32, seller_floor: u64) -> Result<TerminalFixture
         candidate_id: BEST_CANDIDATE,
         product_id: product_id(),
         batch_id: identity,
+        // The batch's own count, never a literal: the completeness conjunct
+        // (`OrderOmitted`) is exactly the disagreement between what the batch
+        // admitted and what the certificate enumerates.
+        live_order_count: batch.live_order_count(),
     };
-    CandidateV2::encode_into(header, &ones, &mut candidate).expect("draft candidate");
+    CandidateV2::encode_into(header, &prices, &mut candidate).expect("draft candidate");
     let candidate_id = general_candidate_identity_v1(&candidate).expect("candidate identity");
     CandidateV2::encode_into(
         CandidateHeaderV2 {
             candidate_id,
             ..header
         },
-        &ones,
+        &prices,
         &mut candidate,
     )
     .expect("addressed candidate");
@@ -2256,11 +2330,19 @@ fn walk_at_seller_floor(width: u32, seller_floor: u64) -> Result<TerminalFixture
         // refusal. Moving order 2's signed floor moves every `order_id` and so
         // the row sort, and a hand-counted table would have gone on agreeing
         // with a walk it no longer described.
+        // The row's own lots, read off the row: an order the certificate fills
+        // with nothing emits no settlement row, so the count is a function of
+        // the fill as well as the cursor.
+        let row_lots = ExecutionV2::decode(row)
+            .expect("execution row")
+            .header()
+            .lots;
         let manifest_count = runtime_manifest_orders_for_row_v2(
             &cursor,
-            GeneralOrderV1::decode(order_bytes_for(&placed, index))
+            GeneralOrderV2::decode(order_bytes_for(&placed, index))
                 .expect("order")
                 .order_id(),
+            row_lots,
             index == 2,
         )
         .expect("manifest orders for this row");
@@ -2347,7 +2429,7 @@ fn walk_at_seller_floor(width: u32, seller_floor: u64) -> Result<TerminalFixture
         // projected from the same order record.
         assert_eq!(
             *terms,
-            GeneralOrderV1::decode(order_bytes_for(&placed, index))
+            GeneralOrderV2::decode(order_bytes_for(&placed, index))
                 .expect("order")
                 .terms()
         );
@@ -2417,7 +2499,7 @@ fn order_for_id(fixture: &TerminalFixture, order_id: [u8; 32]) -> Vec<u8> {
         .orders
         .iter()
         .find(|bytes| {
-            GeneralOrderV1::decode(bytes)
+            GeneralOrderV2::decode(bytes)
                 .expect("admitted order")
                 .order_id()
                 == order_id
@@ -2892,7 +2974,7 @@ async fn real_sbf_open_batch_at_width_two_writes_one_page_through_one_cpi() {
     runtime.insert(2, PRODUCT_RECORD.to_vec());
     let mut preflight_root = root;
     let preflight_revision = preflight_root.revision();
-    let batch_id = GeneralBatchV1::open(
+    let batch_id = GeneralBatchV2::open(
         &mut preflight_root,
         GeneralBatchOpeningV1 {
             outcome_count: width,
@@ -3002,7 +3084,7 @@ async fn real_sbf_open_batch_advances_the_real_root_and_materializes_batch_facts
         runtime.insert(2, PRODUCT_RECORD.to_vec());
         let mut preflight_root = root;
         let preflight_revision = preflight_root.revision();
-        let batch_id = GeneralBatchV1::open(
+        let batch_id = GeneralBatchV2::open(
             &mut preflight_root,
             GeneralBatchOpeningV1 {
                 outcome_count: width,
@@ -3064,7 +3146,7 @@ async fn real_sbf_close_batch_closes_the_real_root_and_batch_after_the_collectio
         let mut root = GeneralRootV2::active([3; 32], config_id, 9).expect("active root");
         let open_revision = root.revision();
         let batch_sequence = root.next_batch_sequence();
-        let batch = GeneralBatchV1::open(
+        let batch = GeneralBatchV2::open(
             &mut root,
             GeneralBatchOpeningV1 {
                 outcome_count: width,
@@ -3169,7 +3251,7 @@ async fn real_sbf_place_order_admits_canonical_signed_terms_at_runtime_widths() 
             max_orders: 4,
         };
         let open_revision = root.revision();
-        let batch = GeneralBatchV1::open(&mut root, opening, open_revision, ADMISSION_SLOT)
+        let batch = GeneralBatchV2::open(&mut root, opening, open_revision, ADMISSION_SLOT)
             .expect("opened batch");
         let (maker_key, _) = Pubkey::find_program_address(
             &[GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1],
@@ -3177,22 +3259,36 @@ async fn real_sbf_place_order_admits_canonical_signed_terms_at_runtime_widths() 
         );
         let maker = maker_key.to_bytes();
         let count = usize::try_from(width).expect("width");
-        let receive = vec![1_u64; count];
-        let deliver = vec![2_u64; count];
-        let mut order_bytes = vec![0_u8; general_order_len_v1(width).expect("order width")];
-        GeneralOrderV1::encode_into(
-            GeneralOrderHeaderV1 {
-                outcome_count: width,
-                nonce: 41,
-                owner_id: maker,
-                market: root.market(),
-                batch_id: batch.batch_id(),
-                generation: root.generation(),
-                max_lots: 2,
-                max_quote_debit_per_lot: 3,
-                min_quote_credit_per_lot: 0,
-                valid_until_slot: batch.opening().settlement_close_slot,
-            },
+        // A SINGLE-OUTCOME SELL OF TWO CLAIMS PER LOT. This record is admitted
+        // and never streamed through a verifier -- the walk below measures the
+        // escrow the admission moves -- but it must still be a shape the joint
+        // arm admits, and `GeneralOrderV2::decode` refuses rows that disagree
+        // with the header's interval (`RowsDisagreeWithShape`). Two claims per
+        // lot at two lots is exactly the four-claim funding this walk grants.
+        let order_header = GeneralOrderHeaderV2 {
+            outcome_count: width,
+            nonce: 41,
+            owner_id: maker,
+            market: root.market(),
+            batch_id: batch.batch_id(),
+            generation: root.generation(),
+            max_lots: 2,
+            max_quote_debit_per_lot: 3,
+            min_quote_credit_per_lot: 0,
+            valid_until_slot: batch.opening().settlement_close_slot,
+            side: OrderSideV2::Sell,
+            outcome_lo: 0,
+            outcome_hi: 0,
+            claims_per_lot: 2,
+        };
+        let derived: Vec<(u64, u64)> = (0..width)
+            .map(|outcome| order_header.derived_row(outcome))
+            .collect();
+        let receive: Vec<u64> = derived.iter().map(|row| row.0).collect();
+        let deliver: Vec<u64> = derived.iter().map(|row| row.1).collect();
+        let mut order_bytes = vec![0_u8; general_order_len_v2(width).expect("order width")];
+        GeneralOrderV2::encode_into(
+            order_header,
             &receive,
             &deliver,
             GeneralOrderStateV1 {
@@ -3203,7 +3299,7 @@ async fn real_sbf_place_order_admits_canonical_signed_terms_at_runtime_widths() 
             &mut order_bytes,
         )
         .expect("canonical order");
-        let order = GeneralOrderV1::decode(&order_bytes).expect("canonical order decodes");
+        let order = GeneralOrderV2::decode(&order_bytes).expect("canonical order decodes");
         let order_id = order.order_id();
         let terms = signed_order_terms(&order_bytes, width);
         assert_eq!(terms.len(), 160 + 16 * count);
@@ -3452,7 +3548,7 @@ async fn real_sbf_submit_candidate_creates_exactly_funded_candidate_at_runtime_w
             max_orders: 4,
         };
         let open_revision = root.revision();
-        let mut batch = GeneralBatchV1::open(&mut root, opening, open_revision, ADMISSION_SLOT)
+        let mut batch = GeneralBatchV2::open(&mut root, opening, open_revision, ADMISSION_SLOT)
             .expect("opened batch");
         let close_revision = root.revision();
         batch
@@ -3475,6 +3571,10 @@ async fn real_sbf_submit_candidate_creates_exactly_funded_candidate_at_runtime_w
             candidate_id: [0x71; 32],
             product_id: product_id(),
             batch_id: batch.batch_id(),
+            // The batch's own count: this one closed with nothing admitted,
+            // and `authenticate_batch_candidate_v1` refuses a candidate that
+            // says otherwise.
+            live_order_count: batch.live_order_count(),
         };
         CandidateV2::encode_into(header, &prices, &mut candidate_body).expect("candidate draft");
         header.candidate_id =
@@ -3677,6 +3777,7 @@ async fn real_sbf_submit_candidate_creates_exactly_funded_candidate_at_runtime_w
             candidate_id: [0x72; 32],
             product_id: product_id(),
             batch_id: batch.batch_id(),
+            live_order_count: batch.live_order_count(),
         };
         CandidateV2::encode_into(hostile_header, &prices, &mut hostile_body)
             .expect("hostile candidate draft");
@@ -3953,7 +4054,7 @@ async fn execute_named(fixture: RealSbfFixture) -> (AcceleratorDispositionV2, Ve
 /// not about the floor.
 fn verify_runtime_accounts(
     width: u32,
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     candidate: &[u8],
     page_index: u32,
     submission_before: GeneralCandidateV1,
@@ -4027,7 +4128,7 @@ fn verify_controller(candidate_id: [u8; 32], page_index: u32) -> ControllerReque
 
 /// The signed floor a maker carries on the record the row names.
 fn signed_floor_of(order: &[u8]) -> u64 {
-    GeneralOrderV1::decode(order)
+    GeneralOrderV2::decode(order)
         .expect("escrowed order record")
         .header()
         .min_quote_credit_per_lot
@@ -4187,7 +4288,7 @@ async fn real_sbf_verify_candidate_refuses_a_fill_below_the_sellers_floor_at_run
 /// Execute one verified-row step on the real ELF, returning disposition and log.
 async fn execute_verify_row(
     width: u32,
-    batch: GeneralBatchV1,
+    batch: GeneralBatchV2,
     candidate: &[u8],
     candidate_id: [u8; 32],
     page_index: u32,
@@ -4449,7 +4550,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
         let plan = RuntimeSettlementEffectPlanV2::decode(&effect).expect("collect effect");
         let header = plan.header();
         let order_bytes = order_for_id(&fixture, header.order_id);
-        let order = GeneralOrderV1::decode(&order_bytes).expect("collected order");
+        let order = GeneralOrderV2::decode(&order_bytes).expect("collected order");
         let held = *escrow
             .vaults
             .get(&header.order_id)
@@ -4585,7 +4686,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
     // gets one, and the movement is planned against the vault's own balance.
     let batch = fixture.batch;
     for bytes in &fixture.orders {
-        let order = GeneralOrderV1::decode(bytes).expect("admitted order");
+        let order = GeneralOrderV2::decode(bytes).expect("admitted order");
         let order_id = order.order_id();
         let residual = batch
             .release(order, SETTLEMENT_CLOSE_SLOT)
@@ -4669,6 +4770,124 @@ async fn run_full_settlement_lifecycle(width: u32) {
         work_escrow_required_lamports_v1(submission, SUBMISSION_RENT_FLOOR).expect("required"),
         SUBMISSION_RENT_FLOOR,
     );
+}
+
+/// THE FIXTURE'S OWN BOOK IS A JOINT CLEARING, AND ITS CLOSE IS REACHABLE.
+///
+/// Every other test in this file needs the real ELF and therefore an
+/// `SBF_OUT_DIR`. This one needs neither: it drives the protocol's own
+/// evaluators over the same fixture the ELF walks, so a book that stopped
+/// being a valid clearing is caught by `cargo test` rather than by a program
+/// test nobody can run here.
+///
+/// Three facts, and the third is why the book is shaped the way it is:
+///
+/// 1. the certificate exists at all, which means every row streamed through
+///    `runtime_verify` and satisfied all seven conjuncts -- the simplex, the
+///    completeness count, complementary slackness, both limits, the marginal
+///    conjunct and decision 0032's lexicographic tie-break;
+/// 2. its price vector is the ONE the box forces: the whole scale at outcome
+///    zero, zero everywhere else;
+/// 3. the terminal close's plan does NOT strand, so `claims_active` is false
+///    and `hot_candidate_v3::position_geometry` admits it. A minting clearing
+///    at width 258 would leave a residual at 257 outcomes and its close would
+///    be refused fail-closed until `Action::Close` gains a ProtocolPosition
+///    mutation child frame. That refusal is correct and this fixture must not
+///    depend on it being lifted.
+#[test]
+fn the_fixture_book_clears_natively_and_its_close_strands_nothing() {
+    for width in [1_u32, 258] {
+        let fixture = terminal_fixture(width);
+        let verified = VerifiedCandidateV2::decode(&fixture.verified).expect("certificate");
+        assert_eq!(
+            verified.header().price_scale,
+            u64::from(width),
+            "width {width}: the certificate carries the batch's scale",
+        );
+        for outcome in 0..width {
+            let expected = if outcome == 0 { u64::from(width) } else { 0 };
+            assert_eq!(
+                verified.price(outcome).expect("price"),
+                expected,
+                "width {width}: outcome {outcome} is off the forced clearing vector",
+            );
+        }
+
+        let first =
+            SettlementManifestV2::decode(fixture.manifests.first().expect("first manifest"))
+                .expect("first manifest");
+        let last = SettlementManifestV2::decode(fixture.manifests.get(1).expect("final manifest"))
+            .expect("final manifest");
+        let plan = [
+            (first.as_bytes(), 0_u32),
+            (last.as_bytes(), 0),
+            (last.as_bytes(), 1),
+        ];
+        let mut cursor = initialized_cursor(&fixture);
+        for (manifest, order_index) in plan {
+            let (next, _) = settle_native(
+                &fixture,
+                &cursor,
+                RuntimeSettlementActionV2::Collect,
+                Some(manifest),
+                order_index,
+            );
+            cursor = next;
+        }
+        let (next, _) = settle_native(
+            &fixture,
+            &cursor,
+            RuntimeSettlementActionV2::Materialize,
+            None,
+            0,
+        );
+        cursor = next;
+        for (manifest, order_index) in plan {
+            let (next, _) = settle_native(
+                &fixture,
+                &cursor,
+                RuntimeSettlementActionV2::Distribute,
+                Some(manifest),
+                order_index,
+            );
+            cursor = next;
+        }
+        let (closed, effect) =
+            settle_native(&fixture, &cursor, RuntimeSettlementActionV2::Close, None, 0);
+        let close_plan = RuntimeSettlementEffectPlanV2::decode(&effect).expect("close effect");
+        assert!(
+            !close_plan.header().claims_active,
+            "width {width}: the close strands, and a stranding close has no frame to happen in",
+        );
+        assert_eq!(
+            SettlementCursorV2::decode(&closed)
+                .expect("closed cursor")
+                .header()
+                .quote_inventory,
+            0,
+            "width {width}: the settlement closed holding quote",
+        );
+    }
+}
+
+/// The seller's floor, one step past the fill, refused NATIVELY and by name.
+///
+/// This is control 1 of `real_sbf_verify_candidate_refuses_a_fill_below_the_sellers_floor_at_runtime_widths`
+/// standing on its own, because that test cannot run without an ELF and this
+/// one can. Without it the fixture above would be a book that clears with
+/// nothing saying the conjunct it clears past can still fire.
+#[test]
+fn a_fill_below_the_sellers_floor_refuses_natively_at_both_runtime_widths() {
+    for width in [1_u32, 258] {
+        let refused = walk_at_seller_floor(width, SELLER_CREDIT_FLOOR_REFUSES)
+            .err()
+            .expect("a floor one step above the fill must refuse this walk");
+        assert_eq!(
+            refused.cause,
+            GeneralCandidateErrorV1::Verify(RuntimeVerifyErrorV2::CreditLimit),
+            "width {width}",
+        );
+    }
 }
 
 #[tokio::test]

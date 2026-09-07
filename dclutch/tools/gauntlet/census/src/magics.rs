@@ -52,7 +52,6 @@ use std::{
 use serde::Deserialize;
 use syn::{Expr, Item, UnOp};
 
-
 /// Repo-relative path of the adjudicated-collision register.
 pub const EXEMPTIONS_PATH: &str = "tools/gauntlet/magic-collisions.json";
 
@@ -249,7 +248,13 @@ pub fn sweep(sources: &crate::sources::Sources) -> Vec<DeclaredMagic> {
     let mut found = Vec::new();
     for (package, directory) in &sources.packages {
         for source in sources.owned_by(package, directory) {
-            collect(&source.file.items, package, &source.relative, &source.text, &mut found);
+            collect(
+                &source.file.items,
+                package,
+                &source.relative,
+                &source.text,
+                &mut found,
+            );
         }
     }
     found.sort_by(|left, right| {
@@ -779,18 +784,25 @@ mod tests {
     /// A name shared only by file-private constants misleads nobody: no `use`
     /// can reach it, so no import can carry the wrong bytes under it. Counted
     /// and printed, exactly as a mirror is, and NOT a gate failure. This test
-    /// is the record of that decision -- `ORDER_MAGIC` (`DCGORD01`/`DCGORD02`,
+    /// is the record of that decision -- `ORDER_MAGIC` (`DCGSORD2`/`DCGORD02`,
     /// both private, both in `dclutch-trading::general`) is the tree's
     /// live instance, and anyone who makes this fail has to delete an
     /// assertion saying why it did not.
+    ///
+    /// The two values are the ORDER RECORD's and the settlement manifest's
+    /// per-order ROW's, which is why they must stay different here: pointing
+    /// both at one value would destroy the case this fixture exists to test.
+    /// The record's own magic moved off `DCGORD02` for the same reason the
+    /// gate exists -- the manifest row already held it, and a wire magic
+    /// selects one thing.
     #[test]
     fn a_name_shared_only_by_unexported_declarations_does_not_fail_the_gate() {
         let declared = [
             private(
                 "dclutch-trading",
                 "ORDER_MAGIC",
-                "DCGORD01",
-                "crates/dclutch-trading/src/general/collection_v1.rs:74",
+                "DCGSORD2",
+                "crates/dclutch-trading/src/general/collection_v1.rs:105",
             ),
             private(
                 "dclutch-trading",
