@@ -1104,25 +1104,23 @@ fn apply_deltas(
     Ok(())
 }
 
+/// The one live writer of a claim on a live Market, reached through the
+/// LBV2 complete-set executor.
+///
+/// This used to be the arithmetic itself -- one read, one checked movement,
+/// one write -- spelled here and again in `affine_batch_v2`. Both now call
+/// `dclutch_claims::complete_set_v1::apply_coordinate_v1`, which the
+/// conservation route's split and merge run over whole vectors, so a claim
+/// moves by one rule wherever it moves. Only the refusal's band is this
+/// route's: every executor cause is this route's `Candidate`.
 fn apply_coordinate(
     bytes: &mut [u8],
     header: usize,
     outcome: u32,
     delta: SignedDeltaV3,
 ) -> Result<(), ProgramError> {
-    let offset = usize::try_from(outcome)
-        .ok()
-        .and_then(|outcome| outcome.checked_mul(SCALAR_BYTES))
-        .and_then(|relative| header.checked_add(relative))
-        .ok_or(SignedDeltaSbfErrorV3::Candidate)?;
-    let before = read_u64(bytes, offset)?;
-    let after = match delta.direction() {
-        DeltaDirectionV3::Neutral => Some(before),
-        DeltaDirectionV3::Credit => before.checked_add(delta.magnitude()),
-        DeltaDirectionV3::Debit => before.checked_sub(delta.magnitude()),
-    }
-    .ok_or(SignedDeltaSbfErrorV3::Candidate)?;
-    put_u64(bytes, offset, after)
+    dclutch_claims::complete_set_v1::apply_coordinate_v1(bytes, header, outcome, delta.into())
+        .map_err(|_| SignedDeltaSbfErrorV3::Candidate.into())
 }
 
 /// Why the closure's burn refused, before any account byte moved.

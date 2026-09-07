@@ -161,47 +161,12 @@ use dclutch_source::MarketPrincipalCapSetsV1;
 #[cfg(test)]
 extern crate std;
 
-/// Canonical outer-route request magic.
-pub const CLAIMS_CONSERVATION_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLCNS01";
-/// Implemented schema version.
-pub const CLAIMS_CONSERVATION_SCHEMA_VERSION_V1: u16 = 1;
-/// Exact canonical request width.
-pub const CLAIMS_CONSERVATION_REQUEST_BYTES_V1: usize = 592;
-
-const MAGIC_OFFSET: usize = 0;
-const VERSION_OFFSET: usize = 8;
-const DIRECTION_OFFSET: usize = 10;
-const HEADER_RESERVED_OFFSET: usize = 11;
-const HEADER_RESERVED_BYTES: usize = 5;
-const REALM_OFFSET: usize = 16;
-const MARKET_OFFSET: usize = 48;
-const RELEASE_SET_OFFSET: usize = 80;
-const CUSTODY_CONTEXT_OFFSET: usize = 112;
-const AGGREGATE_OFFSET: usize = 144;
-const POSITION_OFFSET: usize = 176;
-const OWNER_OFFSET: usize = 208;
-const EXTERNAL_COLLATERAL_OFFSET: usize = 240;
-const HOARD_VAULT_OFFSET: usize = 272;
-const MINT_OFFSET: usize = 304;
-const TOKEN_PROGRAM_OFFSET: usize = 336;
-const CLAIMS_PROGRAM_OFFSET: usize = 368;
-const PRODUCT_RECORD_DIGEST_OFFSET: usize = 400;
-const LINKED_BASIS_RECORD_DIGEST_OFFSET: usize = 432;
-const SEMANTIC_BASIS_ID_OFFSET: usize = 464;
-const GENERATION_OFFSET: usize = 496;
-const QUANTITY_OFFSET: usize = 504;
-const BASIS_SCALE_OFFSET: usize = 512;
-const COLLATERAL_ATOMS_OFFSET: usize = 520;
-const EXPECTED_MARKET_REVISION_OFFSET: usize = 528;
-const EXPECTED_POSITION_REVISION_OFFSET: usize = 536;
-const EXPECTED_CUSTODY_REVISION_OFFSET: usize = 544;
-const PRE_EXTERNAL_AMOUNT_OFFSET: usize = 552;
-const POST_EXTERNAL_AMOUNT_OFFSET: usize = 560;
-const PRE_HOARD_AMOUNT_OFFSET: usize = 568;
-const POST_HOARD_AMOUNT_OFFSET: usize = 576;
-const CLAIM_COUNT_OFFSET: usize = 584;
-const TAIL_RESERVED_OFFSET: usize = 588;
-const TAIL_RESERVED_BYTES: usize = 4;
+// Every offset, the width, the magic and the two direction tags come from
+// `formal/dclutch-semantics/DClutchSemantics/ClaimsConservationV1Abi.lean`
+// through `EmitClaimsConservationV1Rust.lean`; `check-generated.sh`
+// byte-compares the emission. This module used to write the twenty-nine
+// offsets as decimal literals.
+include!("../generated_conservation_v1.rs");
 
 const IDENTITY_BYTES: usize = 32;
 const SCALAR_BYTES: usize = 8;
@@ -264,16 +229,16 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[repr(u8)]
 pub enum ClaimsConservationDirectionV1 {
     /// Deposit collateral into the Market's Hoard and credit the complete set.
-    Split = 0,
+    Split = CLAIMS_CONSERVATION_SPLIT_TAG_V1,
     /// Debit the complete set and return the same collateral class.
-    Merge = 1,
+    Merge = CLAIMS_CONSERVATION_MERGE_TAG_V1,
 }
 
 impl ClaimsConservationDirectionV1 {
     const fn decode(value: u8) -> Result<Self> {
         match value {
-            0 => Ok(Self::Split),
-            1 => Ok(Self::Merge),
+            CLAIMS_CONSERVATION_SPLIT_TAG_V1 => Ok(Self::Split),
+            CLAIMS_CONSERVATION_MERGE_TAG_V1 => Ok(Self::Merge),
             _ => Err(Error::UnknownDirection),
         }
     }
@@ -843,6 +808,59 @@ impl ClaimsConservationRequestV1 {
             },
         }
     }
+}
+
+/// The conservation route's fixed account frame, in coordinate order.
+///
+/// One author for the twenty-one coordinates the Claims program parses and
+/// the operator's builder fills. The escrow Position rides on EVERY act,
+/// categorical or not, so a caller cannot signal a Market's shape by which
+/// accounts it supplies.
+pub mod frame_v1 {
+    /// Exact physical account count of the sole conservation frame.
+    pub const CLAIMS_CONSERVATION_ACCOUNT_COUNT_V1: usize = 21;
+    /// The Position owner, signing for their own Position and for nothing else.
+    pub const OWNER: usize = 0;
+    /// The LBV2 aggregate.
+    pub const AGGREGATE: usize = 1;
+    /// The owner's Position.
+    pub const POSITION: usize = 2;
+    /// The Market's derived failure escrow Position, seated on a refunding Market.
+    pub const ESCROW_POSITION: usize = 3;
+    /// The Core Market state.
+    pub const CORE_MARKET: usize = 4;
+    /// The finalized linked `ProductBasisV3` record.
+    pub const BASIS_RECORD: usize = 5;
+    /// The Registry activation cache, for Custody.
+    pub const CACHE: usize = 6;
+    /// The Registry program.
+    pub const REGISTRY: usize = 7;
+    /// The Claims program.
+    pub const CLAIMS_PROGRAM: usize = 8;
+    /// The Claims ProgramData, for Custody.
+    pub const CLAIMS_PROGRAMDATA: usize = 9;
+    /// The Core program.
+    pub const CORE_PROGRAM: usize = 10;
+    /// The Claims-role Custody caller authority PDA the program signs for.
+    pub const CUSTODY_CALLER_AUTHORITY: usize = 11;
+    /// The Custody program.
+    pub const CUSTODY_PROGRAM: usize = 12;
+    /// The Claims-role Custody replay.
+    pub const CUSTODY_REPLAY: usize = 13;
+    /// The Market's HoardPrincipal vault.
+    pub const HOARD_VAULT: usize = 14;
+    /// The actor's own collateral token account.
+    pub const EXTERNAL_COLLATERAL: usize = 15;
+    /// The Realm's collateral mint.
+    pub const COLLATERAL_MINT: usize = 16;
+    /// The Realm's token program.
+    pub const TOKEN_PROGRAM: usize = 17;
+    /// The Custody transfer authority.
+    pub const CUSTODY_AUTHORITY: usize = 18;
+    /// The finalized Realm record.
+    pub const REALM_RECORD: usize = 19;
+    /// The Realm record's vacant staging cursor.
+    pub const REALM_STAGING: usize = 20;
 }
 
 // ------------------------------------------------------------------ decoding

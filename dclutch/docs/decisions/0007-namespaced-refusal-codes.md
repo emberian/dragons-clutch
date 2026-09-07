@@ -136,6 +136,7 @@ ones, so the family structure now reads straight off the code.
 | `SignedDeltaSbfErrorV3` | 200–207 | `0x5200`–`0x5207` |
 | `RationalLifecycleSbfErrorV2` | 210–218 | `0x5210`–`0x5218` |
 | `SparseNativeTransferSbfErrorV1` | 260–267 | `0x5260`–`0x5267` |
+| `ClaimsConservationSbfErrorV1` | — | `0x5300`–`0x530C` |
 | `ClaimsMarketClosureSbfErrorV1` | 500–505 | `0x5500`–`0x5505` |
 
 Trading has one sub-band, `0x4100`, for `SeriesAccountErrorV3`. Sub-bands are

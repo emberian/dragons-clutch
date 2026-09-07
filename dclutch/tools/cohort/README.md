@@ -883,6 +883,39 @@ digest. This is the same class `terminal_sequence.rs:8342` had already met and
 exempted, where it was `ResolutionCloseFund` refusing at frame index 18 of 19 on
 its own System Program.
 
+### split
+
+The first user act that moves collateral INTO a market after founding, and the
+route that could not execute until the LBV2 rewrite. CLAIMS-18 proved on the
+shipped ELF that `DCLCNS01` read every subject account with decoders from two
+account families -- the LBV2 aggregate founding writes and the economic slice's
+`DCLTEMK2`, which carries the Hoard scalar LBV2 has no room for -- so no bytes
+satisfied both and cohort-17's evidence deliberately withheld this row until an
+ELF test existed. Under the ruling that an LBV2 market's outstanding principal
+lives in the Custody HoardPrincipal vault, the route now reads the principal off
+the vault's balance and moves claims through the one complete-set executor the
+batch routes share. The row is a stranger's split: participant-2, holding no
+claims, deposits `split_sets * basis_scale` atoms through the delegated Custody
+wire (an `ApproveChecked` of exactly that amount to the Custody transfer
+authority rides in the same transaction and is consumed whole) and holds one
+claim at every ordinary coordinate per set afterwards. On a refunding market the
+failure coordinate is credited to the market's own escrow, never to the actor
+-- the same seating the founding does. The verifier reads the vault, the
+aggregate, the Position, the escrow and the replay back against the split's own
+signature; the exit code proves nothing here, because a route that minted claims
+and moved no atoms would exit zero too, and that is exactly the defect the
+economic-slice mint had.
+
+### merge
+
+The reverse, by the same owner, strictly after `split`, so the two rows together
+are one round trip and the market is left as the split found it: every balance
+the split's evidence recorded before is what the merge's evidence records after,
+to the atom, and the escrow is still seated. A merge burns first and pays second;
+a merge that drained the Position and left the vault unchanged burned claims and
+paid nobody, which is the hole the conservation route was written to close, and
+the verifier is red on it by name.
+
 ### found-two-source
 
 The first cohort market that buys a second answerer. Decision 0027's funded

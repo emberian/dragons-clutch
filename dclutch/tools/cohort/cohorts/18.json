@@ -99,7 +99,10 @@
         "buyer_collateral_account": "",
         "buyer_participant_report": "sim/admissions/participant-2.json",
         "debtor_keypair": "keys/participant-2.json"
-      }
+      },
+      "split_collateral_account": "",
+      "split_sets": "",
+      "linked_basis_record": ""
     },
     {
       "label": "2",
@@ -141,7 +144,10 @@
         "buyer_collateral_account": "",
         "buyer_participant_report": "market-2/sim/admissions/participant-2.json",
         "debtor_keypair": "keys/participant-2.json"
-      }
+      },
+      "split_collateral_account": "",
+      "split_sets": "",
+      "linked_basis_record": ""
     },
     {
       "label": "G",

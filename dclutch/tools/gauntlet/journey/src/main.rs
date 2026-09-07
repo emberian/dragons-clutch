@@ -72,6 +72,9 @@ mod capability_seal_devnet;
 #[path = "../../../local-validator/bootstrap/successor/src/chaos_fault.rs"]
 #[allow(dead_code)]
 mod chaos_fault;
+#[path = "../../../local-validator/bootstrap/successor/src/claims_conservation.rs"]
+#[allow(dead_code)]
+mod claims_conservation;
 #[path = "../../../local-validator/bootstrap/successor/src/claims_custody_replay.rs"]
 #[allow(dead_code)]
 mod claims_custody_replay;

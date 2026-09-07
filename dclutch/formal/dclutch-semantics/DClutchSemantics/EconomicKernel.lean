@@ -1901,4 +1901,147 @@ theorem the_closure_burn_admits_the_retirement_it_foreclosed
   simp only [closureBurnPost] at empty
   simp [commandAccepts, command, burned, closureBurnPost, retiring, drained, empty, settled]
 
+/-! ## The LiabilityBasisV2 instance: the principal lives in the vault
+
+An LBV2 aggregate (`DCLLBM02`) carries a supply vector and NO Hoard scalar.
+The ruling (orchestrator, 2026-09-05) puts an LBV2 Market's outstanding
+principal in the Custody `HoardPrincipal` vault -- the token account -- and
+nowhere in a header, so the kernel's `hoard` (in complete sets) is realised on
+chain as `vault = hoard * basisScale` atoms.  `vaultPrincipal` is that
+projection; the executor in `crates/dclutch-claims/src/complete_set_v1.rs` is
+`splitPost` / `mergePost` on the categorical shape and `refundingSplitPost` /
+`refundingMergePost` on the refunding one, with the Hoard term of
+`commandAccepts` delegated to the vault: a split's Custody transfer credits
+the vault by exactly the set's collateral, a merge's debits it, and Custody
+refuses the transfer the vault cannot cover.
+
+The invariant every complete-set act runs under and leaves true is L4 in its
+LBV2 form -- the vault backs the LARGEST supply at any coordinate at the basis
+scale -- stated as an INEQUALITY because a token account accepts a deposit
+from anybody and an equality would let a stranger's one-atom donation refuse
+every act on the Market for good.
+-/
+
+/-- The vault's atoms, as the kernel's Hoard sees them. -/
+def vaultPrincipal (basisScale : Nat) (state : State) : Nat := state.hoard * basisScale
+
+/-- L4, the LBV2 form: the vault backs every coordinate's supply at the scale. -/
+def vaultBacks (basisScale vault : Nat) (state : State) : Prop :=
+  ∀ outcome, outcome < state.supply.length →
+    valueAt state.supply outcome * basisScale ≤ vault
+
+/-- A split credits the vault by exactly the set's collateral. -/
+theorem the_split_credits_the_vault_by_the_sets_collateral
+    (basisScale : Nat) (pre : State) (holder : Holder) (representation : Representation)
+    (quantity : Nat) :
+    vaultPrincipal basisScale (splitPost pre holder representation quantity)
+      = vaultPrincipal basisScale pre + quantity * basisScale := by
+  simp [vaultPrincipal, splitPost, Nat.add_mul]
+
+/-- A merge debits the vault by exactly the set's collateral, under the merge's
+own admission that the Hoard backs the set. -/
+theorem the_merge_debits_the_vault_by_the_sets_collateral
+    (basisScale : Nat) (pre : State) (holder : Holder) (representation : Representation)
+    (quantity : Nat) (backed : quantity ≤ pre.hoard) :
+    vaultPrincipal basisScale (mergePost pre holder representation quantity)
+        + quantity * basisScale
+      = vaultPrincipal basisScale pre := by
+  simp only [vaultPrincipal, mergePost]
+  rw [← Nat.add_mul, Nat.sub_add_cancel backed]
+
+/-- The refunding shapes move the vault exactly as the categorical ones do:
+the aggregate cannot tell them apart, so neither can the vault. -/
+theorem the_refunding_acts_move_the_vault_as_the_categorical_ones_do
+    (ordinaryCount basisScale : Nat) (pre : State) (quantity : Nat) :
+    vaultPrincipal basisScale (refundingSplitPost ordinaryCount pre quantity)
+      = vaultPrincipal basisScale (splitPost pre .destination .native quantity) ∧
+    vaultPrincipal basisScale (refundingMergePost ordinaryCount pre quantity)
+      = vaultPrincipal basisScale (mergePost pre .destination .native quantity) := by
+  simp [vaultPrincipal, refundingSplitPost, splitPost, refundingMergePost, mergePost]
+
+/-- A split that credits the vault by the set's collateral keeps the vault
+backing: every coordinate's supply grew by `quantity` and the vault by
+`quantity * basisScale`. -/
+theorem the_split_keeps_the_vault_backing
+    (basisScale vault : Nat) (pre : State) (holder : Holder) (representation : Representation)
+    (quantity : Nat) (backs : vaultBacks basisScale vault pre) :
+    vaultBacks basisScale (vault + quantity * basisScale)
+      (splitPost pre holder representation quantity) := by
+  intro outcome present
+  have length : outcome < pre.supply.length := by
+    simpa [splitPost, addEvery] using present
+  simp only [splitPost]
+  rw [valueAt_addEvery_eq pre.supply outcome quantity length, Nat.add_mul]
+  exact Nat.add_le_add_right (backs outcome length) _
+
+/-- A merge that debits the vault by the set's collateral keeps the vault
+backing, under the merge's own admission that every coordinate held the set
+and the vault covered it. -/
+theorem the_merge_keeps_the_vault_backing
+    (basisScale vault : Nat) (pre : State) (holder : Holder) (representation : Representation)
+    (quantity : Nat) (backs : vaultBacks basisScale vault pre)
+    (held : allHas quantity pre.supply = true)
+    (covered : quantity * basisScale ≤ vault) :
+    vaultBacks basisScale (vault - quantity * basisScale)
+      (mergePost pre holder representation quantity) := by
+  intro outcome present
+  have length : outcome < pre.supply.length := by
+    simpa [mergePost, subEvery] using present
+  have holds : quantity ≤ valueAt pre.supply outcome := by
+    have member : valueAt pre.supply outcome ∈ pre.supply := by
+      simp only [valueAt]
+      have := List.getElem?_eq_getElem length
+      rw [this]
+      simp
+    simpa [allHas, List.all_eq_true] using (List.all_eq_true.mp held) _ member
+  simp only [mergePost]
+  rw [valueAt_subEvery_eq pre.supply outcome quantity length, Nat.sub_mul]
+  exact Nat.sub_le_sub_right (backs outcome length) _
+
+/-- The refunding split keeps the vault backing too, by the aggregate
+equivalence. -/
+theorem the_refunding_split_keeps_the_vault_backing
+    (ordinaryCount basisScale vault : Nat) (pre : State) (quantity : Nat)
+    (backs : vaultBacks basisScale vault pre) :
+    vaultBacks basisScale (vault + quantity * basisScale)
+      (refundingSplitPost ordinaryCount pre quantity) := by
+  have categorical := the_split_keeps_the_vault_backing basisScale vault pre .destination .native
+    quantity backs
+  intro outcome present
+  have supply : (refundingSplitPost ordinaryCount pre quantity).supply
+      = (splitPost pre .destination .native quantity).supply :=
+    (escrowed_founding_is_a_complete_set_split_in_the_aggregate ordinaryCount pre quantity).2.1
+  rw [supply] at present ⊢
+  exact categorical outcome present
+
+/-- And the refunding merge, likewise. -/
+theorem the_refunding_merge_keeps_the_vault_backing
+    (ordinaryCount basisScale vault : Nat) (pre : State) (quantity : Nat)
+    (backs : vaultBacks basisScale vault pre)
+    (held : allHas quantity pre.supply = true)
+    (covered : quantity * basisScale ≤ vault) :
+    vaultBacks basisScale (vault - quantity * basisScale)
+      (refundingMergePost ordinaryCount pre quantity) := by
+  have categorical := the_merge_keeps_the_vault_backing basisScale vault pre .destination .native
+    quantity backs held covered
+  intro outcome present
+  have supply : (refundingMergePost ordinaryCount pre quantity).supply
+      = (mergePost pre .destination .native quantity).supply :=
+    (refunding_merge_is_a_complete_set_merge_in_the_aggregate ordinaryCount pre quantity).2.1
+  rw [supply] at present ⊢
+  exact categorical outcome present
+
+/-- A uniform open Market's vault backing is one number: the set count times
+the scale.  This is why the executor's `principal_v1` reads the LARGEST
+coordinate -- on a uniform vector it is every coordinate. -/
+theorem a_uniform_supply_is_backed_by_its_set_count
+    (ordinaryCount basisScale vault sets : Nat) (state : State)
+    (uniform : uniformSupply ordinaryCount state sets)
+    (width : state.supply.length = outcomeWidth ordinaryCount)
+    (covered : sets * basisScale ≤ vault) :
+    vaultBacks basisScale vault state := by
+  intro outcome present
+  rw [uniform outcome (by rw [← width]; exact present)]
+  exact covered
+
 end DClutch.Economic

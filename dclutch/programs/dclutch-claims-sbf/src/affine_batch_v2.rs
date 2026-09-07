@@ -828,25 +828,18 @@ fn apply_position(
     )
 }
 
+/// The one live writer of a claim on a live Market, reached through the
+/// LBV2 complete-set executor (`dclutch_claims::complete_set_v1`); see
+/// `signed_delta_v3::apply_coordinate`. Every executor cause is this route's
+/// `Candidate`.
 fn apply_coordinate(
     bytes: &mut [u8],
     header: usize,
     outcome: u32,
     delta: SignedMagnitudeV2,
 ) -> Result<(), ProgramError> {
-    let offset = usize::try_from(outcome)
-        .ok()
-        .and_then(|outcome| outcome.checked_mul(SCALAR_BYTES))
-        .and_then(|relative| header.checked_add(relative))
-        .ok_or(AffineBatchSbfErrorV2::Candidate)?;
-    let before = read_u64(bytes, offset)?;
-    let after = match delta.direction() {
-        DeltaDirectionV2::Neutral => Some(before),
-        DeltaDirectionV2::Credit => before.checked_add(delta.magnitude()),
-        DeltaDirectionV2::Debit => before.checked_sub(delta.magnitude()),
-    }
-    .ok_or(AffineBatchSbfErrorV2::Candidate)?;
-    put_u64(bytes, offset, after)
+    dclutch_claims::complete_set_v1::apply_coordinate_v1(bytes, header, outcome, delta.into())
+        .map_err(|_| AffineBatchSbfErrorV2::Candidate.into())
 }
 
 fn resource_digest(market: &[u8], positions: &[Vec<u8>]) -> [u8; 32] {

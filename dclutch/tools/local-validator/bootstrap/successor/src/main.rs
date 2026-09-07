@@ -12,6 +12,7 @@ mod campaign;
 mod capability_seal_close;
 mod capability_seal_devnet;
 mod chaos_fault;
+mod claims_conservation;
 mod claims_custody_replay;
 mod closure_receipt_projection;
 mod cluster;
@@ -269,6 +270,18 @@ fn run() -> Result<()> {
         }
         Some(command) if command == admit_terminal::COMMAND_DEVNET_V1 => {
             admit_terminal::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == claims_conservation::SPLIT_COMMAND_V1 => {
+            claims_conservation::run_split_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == claims_conservation::SPLIT_COMMAND_DEVNET_V1 => {
+            claims_conservation::run_split_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == claims_conservation::MERGE_COMMAND_V1 => {
+            claims_conservation::run_merge_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == claims_conservation::MERGE_COMMAND_DEVNET_V1 => {
+            claims_conservation::run_merge_devnet_v1(arguments.collect())
         }
         Some(command) if command == claims_custody_replay::COMMAND_V1 => {
             claims_custody_replay::run_owned_loopback_v1(arguments.collect())
@@ -2356,6 +2369,7 @@ fn usage() {
          --local-validator-profile ABSOLUTE_JSON \
          --finalized-capture ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON\n"
     );
+    println!("{}", claims_conservation::usage());
     println!("{}", claims_custody_replay::usage());
     println!("{}", claims_custody_replay::devnet_usage());
     println!("{}", direct_fee_settlement::usage());

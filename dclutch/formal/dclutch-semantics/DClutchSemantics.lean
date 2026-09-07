@@ -19,6 +19,7 @@ import DClutchSemantics.CapabilityProgramSetV1
 import DClutchSemantics.CapabilityProgramSetV2
 import DClutchSemantics.CapabilityProgramV3Abi
 import DClutchSemantics.CapabilityProgramV4Abi
+import DClutchSemantics.ClaimsConservationV1Abi
 import DClutchSemantics.ClaimsLiabilityBasisStateV2Abi
 import DClutchSemantics.Codec
 import DClutchSemantics.CompiledPhysical

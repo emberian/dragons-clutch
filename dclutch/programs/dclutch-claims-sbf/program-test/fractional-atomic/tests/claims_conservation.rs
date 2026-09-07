@@ -1,990 +1,1577 @@
-//! Real-ELF evidence for the Claims-owned conservation route, `DCLCNS01`.
+//! Real-ELF evidence for the Claims-owned conservation route, `DCLCNS01`:
+//! split and merge as USER ACTS that move collateral.
 //!
-//! # What this campaign found
+//! # What this campaign is, and what it replaced
 //!
-//! **The split/merge user act cannot execute, and no frame can make it.** The
-//! route reads every one of its three subject accounts with TWO decoders that
-//! belong to DIFFERENT account families, and no byte string satisfies both.
+//! CLAIMS-18 stood here and proved, on the shipped ELF, that the route could
+//! not execute: it read the aggregate and both Positions with decoders from
+//! two disjoint account families -- the LBV2 records `founding_v5` writes
+//! (`DCLLBM02`) and the economic slice's `DCLTEMK2` -- so no byte string
+//! satisfied both readers, and the same frame refused two different ways
+//! depending only on which family the aggregate's bytes belonged to.
 //!
-//! - `LiabilityBasisMarketViewV2` / `LiabilityBasisPositionViewV2` — the LBV2
-//!   family. Aggregate magic `DCLLBM02`, header 256, ONE `u64` supplies vector,
-//!   and **no Hoard scalar at all**; Position magic `DCLLBP02`, header 128, one
-//!   balances vector. This is what `founding_v5` creates, at
-//!   `b"dclutch:lbv2:market"`, and what `ProtocolPositionSeedsV2` addresses.
-//! - `dclutch_product::economic_slice::{market_hoard, market_supply,
-//!   position_native, position_revision, execute_basket}` — the economic-slice
-//!   family. Market magic `DCLTEMK2`, header 144, THREE vectors, a Hoard scalar
-//!   at offset 32; Position magic `DCLTEPS2`, header 96, two vectors. This is
-//!   what `programs/dclutch-claims-sbf/src/lib.rs`'s `initialize_market`
-//!   creates, at `b"dclutch:claims-aggregate:v1"`.
+//! That finding is repealed, not forgotten. The route now reads ONE family,
+//! reads the outstanding principal off the Custody `HoardPrincipal` vault
+//! rather than a header scalar, and moves claims through the one LBV2
+//! complete-set executor (`dclutch_claims::complete_set_v1`). Its frame is
+//! twenty-one accounts, not twenty-nine: the linked basis record's own bytes
+//! prove the Market's kind, width and payout scale, so the Product-graph walk
+//! is gone. Its refusals are its own sub-band, `0x5300`-`0x530C`; nothing in
+//! the tree raises `ClaimsSbfError::Economic` any more.
 //!
-//! `claims_conservation_v1.rs` decodes the aggregate as LBV2 at its line 358
-//! and then hands the SAME borrow to `market_hoard` at line 371; it derives the
-//! actor's and the escrow's Positions with `ProtocolPositionSeedsV2`, decodes
-//! them with `PositionViewV2`, and mutates them with `execute_basket`. Whatever
-//! is supplied, one of the two readers refuses first.
+//! # The world this campaign stands on, and what it establishes rather than plants
 //!
-//! # The two-sided proof, on the ELF that is committed
+//! Every account here comes from `founding_world` -- the same fixture
+//! `claims_world.rs` uses -- so the Market this campaign splits and merges
+//! on is one the FOUNDING ROUTE created on the real ELF, not one a fixture
+//! wrote. Three things a founding leaves undone this campaign establishes, in
+//! its own transactions, before any conservation act:
 //!
-//! One frame, twenty-nine accounts, one request. The ONLY thing that differs
-//! between the two campaigns below is the AGGREGATE ACCOUNT'S BYTES, planted at
-//! the same address under the same owner:
+//! 1. **The Claims-role Custody replay.** A founding advances the TRADING-role
+//!    cursor; a split or a merge is a Claims-role Custody effect and needs its
+//!    own. This campaign creates it by driving the Claims program's own
+//!    `DCLCCR01` route, which is what the runbook's
+//!    `devnet-claims-custody-replay-v1` verb drives -- the precondition is
+//!    executed, not planted.
+//! 2. **The Market opens.** A founding consumes a Market in `Phase::Founding`
+//!    and Claims cannot write Core's account. The phase advance is Core's own
+//!    stage and no part of this campaign's subject, so it is applied to the
+//!    Core account directly, through the codec that owns `CoreState`, leaving
+//!    every other field -- including the identity the account's own address
+//!    derives from -- exactly as the founding found it.
+//! 3. **A stranger's donation to the vault.** L4 is an INEQUALITY:
+//!    `vault_atoms >= max_k supply[k] * basis_scale`. A real Token-2022
+//!    transfer from a stranger into the vault, of an amount that is not a
+//!    multiple of the basis scale, is what makes that an inequality under test
+//!    rather than an equality that happens to hold.
 //!
-//! | aggregate bytes | first reader to refuse | observed |
-//! |---|---|---|
-//! | LBV2 `DCLLBM02` (what founding writes) | `market_hoard`, line 371 | `ClaimsSbfError::Economic` |
-//! | economic slice `DCLTEMK2` | `MarketViewV2::decode`, line 358 | `ClaimsSbfError::Identity` |
+//! The actor is the FOUNDER, and that is not a convenience: a Position is
+//! created by admission, so the only holder who can merge on a freshly founded
+//! Market is the one the founding admitted. The founder also PAYS, signing as
+//! a writable fee payer -- the single-wallet shape the route's privilege pass
+//! deliberately admits.
 //!
-//! Two different refusals from one route over one frame is the shape of a
-//! disagreement between two authorities, not of a fixture that is merely wrong:
-//! a fixture can be corrected, and there is no third aggregate.
+//! # The census
 //!
-//! # What the repair needs, which is why this lane did not attempt one
-//!
-//! The identity half CANNOT move to the economic-slice family: the record join
-//! `authenticate_runtime_product_basis_core_with_rent_v3` needs `basis_id`,
-//! `realm_id`, `custody_context` and `generation`, and an economic-slice market
-//! header carries none of the four. The economics half cannot move to LBV2
-//! either: LBV2 has no Hoard scalar to hold outstanding principal, and the tree
-//! has no LBV2 complete-set executor — `signed_delta_v3` and `affine_batch_v2`
-//! each open-code a private `apply_coordinate`, and nothing in the tree mints or
-//! burns a uniform vector against a live LBV2 aggregate. Closing this is a
-//! ruling about where an LBV2 Market's outstanding principal lives, not a
-//! substitution, so this campaign names the wall and stands as the harness the
-//! repair turns green.
-//!
-//! # The fixture join
-//!
-//! This is also the join the refunding work was owed: `affine-batch` had the
-//! LBV2 record set and no Custody, `fractional-atomic` had Token-2022, a real
-//! Custody vault and a HoardPrincipal compartment and no founded LBV2
-//! aggregate. Here they are one world — a width-4 REFUNDING Market (payout
-//! scale `basis_width - 1`, which is what `categorical_refunds_on_failure_v3`
-//! reads), its aggregate carrying a complete set at every coordinate, the
-//! founder holding the three ordinary coordinates, the Market's own derived
-//! failure escrow holding the failure column, a Token-2022 collateral mint, the
-//! Custody-derived HoardPrincipal vault funded, and a stranger with atoms to
-//! spend. Everything past the wall — the Custody replay cursor's state and the
-//! delegated allowance — is planted at the shape the frame requires and is NOT
-//! exercised, because the route refuses four checks earlier; that is stated
-//! rather than dressed up.
+//! The round trip is measured by the journey's eight laws, restated here over
+//! the accounts a program-test can read. `the_census_reads_red_when_a_law_is_broken`
+//! is their positive control: a census that cannot report VIOLATED proves
+//! nothing by reporting HOLDS.
 
-use std::{env, fs, path::PathBuf};
+use std::collections::BTreeMap;
 
+use dclutch_claims::complete_set_v1::{failure_selector_v1, held_complete_sets_v1};
 use dclutch_claims::conservation::{
-    CLAIMS_CONSERVATION_REQUEST_BYTES_V1, ClaimsConservationDirectionV1,
-    ClaimsConservationRequestV1,
+    ClaimsConservationDirectionV1, ClaimsConservationRequestV1, frame_v1,
 };
-use dclutch_claims_sbf::ClaimsSbfError;
-use dclutch_claims::{
-    liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
-    protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2,
+use dclutch_claims::custody_replay_v1::ClaimsCustodyReplayRequestV1;
+use dclutch_claims::liability_basis_state_v2::{
+    LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
-use dclutch_custody::{
-    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1,
-    CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+use dclutch_claims_sbf::claims_conservation_v1::ClaimsConservationSbfErrorV1;
+use dclutch_claims_sbf::custody_replay_v1 as replay_route;
+use dclutch_custody::CUSTODY_REPLAY_BYTES_V1;
+use dclutch_custody::token_svm::instruction::transfer_checked;
+use dclutch_fractional_atomic_program_test::campaign_support::{
+    add_account, mint_supply, programdata_address, token_account_bytes_for, token_amount,
+    token_program_id,
 };
-use dclutch_fractional_atomic_program_test::{
-    campaign_support::{
-        ReleaseSetInputV1, activation_cache, add_account, add_upgradeable_program,
-        collateral_mint_bytes, finalized, programdata_address, token_account_bytes_for,
-        token_program_id,
-    },
-    narrow_fixture::{
-        NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, compile_narrow_fixture_v3,
-        compile_narrow_position_v2, put_narrow_market_supplies_v2,
-    },
+use dclutch_fractional_atomic_program_test::founding_world::{
+    CLAIMS_PROGRAM_ID, CLAIM_COUNT, COLLATERAL_MINT, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID,
+    FoundingShapeV1, FoundingWorld, HostileV1, Outcome, QUANTITY, REGISTRY_PROGRAM_ID,
+    founder_keypair, founding_instruction, submit, submit_with, world_with_extra_collateral,
 };
-use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+use dclutch_market::{CoreState, Phase};
+use dclutch_operator::claims_conservation_v1::{
+    ClaimsConservationActV1, ClaimsConservationObservedV1, ClaimsConservationPlanV1,
+    ClaimsConservationProgramsV1, plan_claims_conservation_v1,
 };
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_custody::token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
-use solana_program::{
-    clock::Clock,
-    hash::hash,
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_account::AccountSharedData;
+use solana_program::instruction::{AccountMeta, Instruction};
+use solana_program::pubkey::Pubkey;
+use solana_program::rent::Rent;
 use solana_program_test::{ProgramTest, ProgramTestContext};
 use solana_sdk::{signature::Keypair, signer::Signer};
-use solana_sdk_ids::system_program;
-use solana_transaction::Transaction;
+use solana_sdk_ids::{system_program, sysvar};
 
 // ---------------------------------------------------------------------------
-// Identities
+// The campaign's own figures
 // ---------------------------------------------------------------------------
 
-const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa1; 32]);
-const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa2; 32]);
-const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa3; 32]);
-const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa4; 32]);
-const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0x74; 32]);
-const STRANGER_COLLATERAL: Pubkey = Pubkey::new_from_array([0xc2; 32]);
-const REFUND_WALLET: [u8; 32] = [0x5f; 32];
+/// Complete sets the split creates and the merge destroys.
+///
+/// Deliberately NOT the founding's `QUANTITY`: an act of the same size as the
+/// issuance would let a poststate that mistook one for the other read correct.
+const SPLIT_SETS: u64 = 2;
 
-/// Runtime complete-set width. Three ordinary coordinates and one failure
-/// coordinate: the narrowest width a categorical record may be founded
-/// refunding at is three (`CATEGORICAL_REFUND_MINIMUM_WIDTH_V3`), and four
-/// leaves the failure coordinate unambiguously distinguishable from the last
-/// ordinary one in every assertion below.
-const CLAIM_COUNT: u32 = 4;
-/// Complete sets the founding issued.
-const FOUNDED_SETS: u64 = 10;
-/// Complete sets the stranger's split would create.
-const SPLIT_SETS: u64 = 5;
-/// Collateral atoms the Hoard already holds against `FOUNDED_SETS`.
-const HOARD_ATOMS: u64 = 30;
-/// Collateral atoms the stranger holds before the split.
-const STRANGER_ATOMS: u64 = 100;
+/// A stranger's donation to the vault, in atoms.
+///
+/// Not a multiple of the basis scale (3), so no reading of it as complete sets
+/// is available and the excess it leaves is unambiguously excess.
+const DONATION_ATOMS: u64 = 5;
+
+/// The collateral mint's decimals, as `founding_world` mints it.
 const COLLATERAL_DECIMALS: u8 = 6;
-const GENERATION: u64 = 41;
-const CUSTODY_CONTEXT: [u8; 32] = [0x62; 32];
-const POSITION_REVISION: u64 = 0;
+
+/// The founder's own collateral account, funded to exactly the split's cost.
+const FOUNDER_COLLATERAL: Pubkey = Pubkey::new_from_array([0xc1; 32]);
+
+/// A stranger's collateral account, funded only to donate.
+const STRANGER_COLLATERAL: Pubkey = Pubkey::new_from_array([0xc2; 32]);
 
 fn stranger_keypair() -> Keypair {
     Keypair::new_from_array([0x21; 32])
 }
 
-// ---------------------------------------------------------------------------
-// Artifacts
-// ---------------------------------------------------------------------------
-
-struct Artifacts {
-    claims: Vec<u8>,
-    registry: Vec<u8>,
-    core: Vec<u8>,
-    custody: Vec<u8>,
-    token: Vec<u8>,
-}
-
-fn artifacts() -> Artifacts {
-    let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
-    let read = |name: &str| {
-        let path = directory.join(name);
-        assert!(path.is_file(), "missing real ELF: {}", path.display());
-        fs::read(path).expect("read real ELF")
-    };
-    Artifacts {
-        claims: read("dclutch_claims_sbf.so"),
-        registry: read("dclutch_registry_sbf.so"),
-        core: read("dclutch_core_sbf.so"),
-        custody: read("dclutch_custody_sbf.so"),
-        token: read("spl_token_2022.so"),
-    }
+/// A refunding Market's payout scale, which is also its basis scale.
+const fn refunding_scale() -> u64 {
+    (CLAIM_COUNT - 1) as u64
 }
 
 // ---------------------------------------------------------------------------
 // The world
 // ---------------------------------------------------------------------------
 
-/// Which aggregate BYTES this campaign plants at the LBV2 aggregate address.
+/// Build the founding world with the extra collateral this campaign spends.
 ///
-/// The address, the owner, the request and the other twenty-eight accounts are
-/// identical either way. This enum is the whole independent variable.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AggregateBodyV1 {
-    /// What `founding_v5` writes: `DCLLBM02`, one supplies vector, no Hoard.
-    LiabilityBasisV2,
-    /// What `lib.rs`'s `initialize_market` writes: `DCLTEMK2`, three vectors,
-    /// a Hoard scalar. Planted at the LBV2 address on purpose — the route's
-    /// privilege pass compares the account's KEY to the request and never asks
-    /// which family the bytes belong to, so this reaches the same reader.
-    EconomicSlice,
-}
-
-struct World {
-    shared: NarrowFixtureV2,
-    activation_cache: Pubkey,
-    release_set: [u8; 32],
-    realm_id: [u8; 32],
-    realm_raw: Pubkey,
-    realm_staging: Pubkey,
-    escrow_position: Pubkey,
-    hoard: Pubkey,
-    custody_authority: Pubkey,
-    custody_replay: Pubkey,
-}
-
-/// The founded refunding Market, the Custody world, and the Token-2022 mint.
-fn world(body: AggregateBodyV1) -> (ProgramTest, World) {
-    let artifacts = artifacts();
-    let mut test = ProgramTest::default();
-    test.prefer_bpf(true);
-    test.set_compute_max_units(1_400_000);
-    for (name, program, elf) in [
-        (
-            "dclutch_claims_sbf",
-            CLAIMS_PROGRAM_ID,
-            artifacts.claims.as_slice(),
-        ),
-        (
-            "dclutch_registry_sbf",
-            REGISTRY_PROGRAM_ID,
-            artifacts.registry.as_slice(),
-        ),
-        (
-            "dclutch_core_sbf",
-            CORE_PROGRAM_ID,
-            artifacts.core.as_slice(),
-        ),
-        (
-            "dclutch_custody_sbf",
-            CUSTODY_PROGRAM_ID,
-            artifacts.custody.as_slice(),
-        ),
-    ] {
-        add_upgradeable_program(&mut test, name, program, elf);
-    }
-    test.add_program("spl_token_2022", token_program_id(), None);
-    let _ = &artifacts.token;
-
-    // The Trading role binds the Registry program. This route never reads the
-    // Trading binding -- its actor signs for their own Position and for nothing
-    // else -- and binding it to a program this world already loads is honest
-    // about that rather than inventing a caller nothing invokes.
-    let (release_set, cache_bytes) = activation_cache(&ReleaseSetInputV1 {
-        core: (CORE_PROGRAM_ID, artifacts.core.as_slice()),
-        claims: (CLAIMS_PROGRAM_ID, artifacts.claims.as_slice()),
-        trading: (REGISTRY_PROGRAM_ID, artifacts.registry.as_slice()),
-        custody: Some((CUSTODY_PROGRAM_ID, artifacts.custody.as_slice())),
-    });
-    let activation_cache_key = Pubkey::find_program_address(
-        &[
-            dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
-            &release_set,
-        ],
-        &REGISTRY_PROGRAM_ID,
-    )
-    .0;
+/// The atoms beyond the founding's own are minted by
+/// `world_with_extra_collateral`; this seats them in two accounts, so the
+/// collateral total the census closes over is the Mint's whole supply.
+fn conservation_world(
+    shape: FoundingShapeV1,
+    founder_atoms: u64,
+    stranger_atoms: u64,
+) -> (ProgramTest, FoundingWorld) {
+    let (mut test, founding) = world_with_extra_collateral(
+        shape,
+        HostileV1::None,
+        founder_atoms
+            .checked_add(stranger_atoms)
+            .expect("extra collateral"),
+    );
     add_account(
         &mut test,
-        activation_cache_key,
-        REGISTRY_PROGRAM_ID,
-        cache_bytes,
-    );
-
-    let adapter = PRODUCTION_ADAPTER_RELEASES
-        .get(1)
-        .copied()
-        .expect("Token-2022 production adapter");
-    let realm_bytes = RealmV1::new(RealmV1Input {
-        token_program: TOKEN_2022_PROGRAM_ID,
-        collateral_mint: COLLATERAL_MINT.to_bytes(),
-        collateral_adapter_release_id: hash(&adapter.to_bytes()).to_bytes(),
-        mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
-        freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
-    })
-    .expect("canonical Realm")
-    .to_bytes()
-    .to_vec();
-    let realm_record = finalized(REGISTRY_PROGRAM_ID, REALM_SCHEMA_RELEASE_ID_V1, realm_bytes);
-
-    let stranger = stranger_keypair().pubkey();
-    let founder = Pubkey::new_from_array([0x31; 32]);
-    let shared = compile_narrow_fixture_v3(
-        NarrowFixtureInputV2 {
-            outcome_count: usize::try_from(CLAIM_COUNT).expect("width"),
-            registry_program: REGISTRY_PROGRAM_ID,
-            core_program: CORE_PROGRAM_ID,
-            claims_program: CLAIMS_PROGRAM_ID,
-            release_set,
-            realm_id: realm_record.digest,
-            custody_context: CUSTODY_CONTEXT,
-            generation: GENERATION,
-            // The STRANGER is the actor: the split under test is a stranger's,
-            // not the founder's, which is the case the failure walk needs.
-            actor_owner: stranger,
-            reserve_owner: founder,
-            funded_coordinate: 0,
-            funded_balance: 0,
-            position_revision: POSITION_REVISION,
-            reserve_balance: 0,
-            terminal: None,
-            rent_beneficiary: Pubkey::new_from_array(REFUND_WALLET),
-            graph_id: [0x34; 32],
-            exposure_id: [0x35; 32],
-        },
-        NarrowBasisInputV3::CategoricalRefunding,
-    )
-    .expect("refunding narrow fixture");
-    assert_eq!(
-        shared.payout_scale,
-        u64::from(CLAIM_COUNT - 1),
-        "a refunding categorical basis pays `basis_width - 1`, which is what \
-         `categorical_refunds_on_failure_v3` reads the shape off",
-    );
-
-    // A FOUNDED Market's aggregate holds a complete set at every coordinate.
-    // The compiler funds one coordinate, which no founding ever leaves behind.
-    let failure_selector = CLAIM_COUNT - 1;
-    let supplies = vec![FOUNDED_SETS; usize::try_from(CLAIM_COUNT).expect("width")];
-    let mut claims_market_bytes = shared.claims_market_bytes.clone();
-    put_narrow_market_supplies_v2(&mut claims_market_bytes, &supplies)
-        .expect("a founded aggregate carries one complete set at every coordinate");
-
-    // The founder holds the ordinary coordinates and no failure claim; the
-    // Market's own derived escrow holds the failure column and nothing else.
-    // Together they are exactly one complete set -- which is founding v6's
-    // `refunding_founding_vectors_v1` seen from the outside.
-    let mut founder_balances = vec![FOUNDED_SETS; usize::try_from(CLAIM_COUNT).expect("width")];
-    *founder_balances
-        .get_mut(usize::try_from(failure_selector).expect("selector"))
-        .expect("failure coordinate") = 0;
-    let founder_position = compile_narrow_position_v2(
-        CLAIMS_PROGRAM_ID,
-        shared.claims_market,
-        founder,
-        shared.semantic_basis_id,
-        &founder_balances,
-        POSITION_REVISION,
-    )
-    .expect("founder Position");
-
-    let escrow_owner = escrow_owner_v1(shared.core_market, failure_selector);
-    let mut escrow_balances = vec![0_u64; usize::try_from(CLAIM_COUNT).expect("width")];
-    *escrow_balances
-        .get_mut(usize::try_from(failure_selector).expect("selector"))
-        .expect("failure coordinate") = FOUNDED_SETS;
-    let escrow_position_body = compile_narrow_position_v2(
-        CLAIMS_PROGRAM_ID,
-        shared.claims_market,
-        escrow_owner,
-        shared.semantic_basis_id,
-        &escrow_balances,
-        POSITION_REVISION,
-    )
-    .expect("failure escrow Position");
-
-    for record in [
-        &shared.product,
-        &shared.result_domain,
-        &shared.portfolio,
-        &shared.linked_basis,
-        &realm_record,
-    ] {
-        add_account(&mut test, record.raw, record.owner, record.bytes.clone());
-        add_account(&mut test, record.staging, system_program::ID, Vec::new());
-    }
-    add_account(
-        &mut test,
-        shared.core_market,
-        CORE_PROGRAM_ID,
-        shared.core_state.clone(),
-    );
-    let aggregate_bytes = match body {
-        AggregateBodyV1::LiabilityBasisV2 => claims_market_bytes,
-        AggregateBodyV1::EconomicSlice => economic_slice_aggregate_bytes(&shared, release_set),
-    };
-    add_account(
-        &mut test,
-        shared.claims_market,
-        CLAIMS_PROGRAM_ID,
-        aggregate_bytes,
-    );
-    for position in [
-        &shared.actor_position,
-        &founder_position,
-        &escrow_position_body,
-    ] {
-        add_account(
-            &mut test,
-            position.account,
-            CLAIMS_PROGRAM_ID,
-            position.bytes.clone(),
-        );
-    }
-
-    // The Custody world, at its own derived coordinates.
-    let custody_authority = Pubkey::find_program_address(
-        &CustodyAuthoritySeedsV1::new(shared.core_market.to_bytes(), release_set).as_slices(),
-        &CUSTODY_PROGRAM_ID,
-    )
-    .0;
-    let hoard = Pubkey::find_program_address(
-        &CustodyVaultSeedsV1::new(
-            shared.core_market.to_bytes(),
-            release_set,
-            CUSTODY_CONTEXT,
-            CompartmentV1::HoardPrincipal,
-        )
-        .as_slices(),
-        &CUSTODY_PROGRAM_ID,
-    )
-    .0;
-    let custody_replay = Pubkey::find_program_address(
-        &CustodyReplaySeedsV1::new(
-            shared.core_market.to_bytes(),
-            release_set,
-            CallerRoleV1::Claims,
-            CUSTODY_CONTEXT,
-        )
-        .as_slices(),
-        &CUSTODY_PROGRAM_ID,
-    )
-    .0;
-    add_account(
-        &mut test,
-        COLLATERAL_MINT,
+        FOUNDER_COLLATERAL,
         token_program_id(),
-        collateral_mint_bytes(HOARD_ATOMS + STRANGER_ATOMS, COLLATERAL_DECIMALS),
-    );
-    add_account(
-        &mut test,
-        hoard,
-        token_program_id(),
-        token_account_bytes_for(COLLATERAL_MINT, custody_authority, HOARD_ATOMS),
+        token_account_bytes_for(COLLATERAL_MINT, founder_keypair().pubkey(), founder_atoms),
     );
     add_account(
         &mut test,
         STRANGER_COLLATERAL,
         token_program_id(),
-        token_account_bytes_for(COLLATERAL_MINT, stranger, STRANGER_ATOMS),
+        token_account_bytes_for(COLLATERAL_MINT, stranger_keypair().pubkey(), stranger_atoms),
     );
-    // PLANTED AND NOT EXERCISED, and said so rather than dressed up: the route
-    // refuses at the aggregate's second reader, four checks before the replay
-    // cursor's body is decoded. The frame needs it writable and at its derived
-    // address; what it holds is the repair's business.
-    add_account(
-        &mut test,
-        custody_replay,
-        CUSTODY_PROGRAM_ID,
-        vec![0_u8; CUSTODY_REPLAY_BYTES_V1],
-    );
-    add_account(&mut test, custody_authority, system_program::ID, Vec::new());
-    test.add_account(
-        stranger,
-        solana_account::Account {
-            lamports: 10_000_000_000,
-            data: Vec::new(),
-            owner: system_program::ID,
-            executable: false,
-            rent_epoch: 0,
-        },
-    );
-
-    (
-        test,
-        World {
-            shared,
-            activation_cache: activation_cache_key,
-            release_set,
-            realm_id: realm_record.digest,
-            realm_raw: realm_record.raw,
-            realm_staging: realm_record.staging,
-            escrow_position: escrow_position_body.account,
-            hoard,
-            custody_authority,
-            custody_replay,
-        },
-    )
+    (test, founding)
 }
 
-/// The Market's own failure-escrow owner, derived exactly as the program does.
-///
-/// `FailureEscrowIdentityV1::derive` is crate-private, so this restates its two
-/// steps -- `refunding_failure_index` and the claims-capability seeds -- from
-/// the same public seed helper the program uses. If they ever disagree the
-/// route refuses `0x5010 FailureEscrow`, which is a louder failure than a
-/// silent mismatch would be.
-fn escrow_owner_v1(core_market: Pubkey, failure_selector: u32) -> Pubkey {
-    Pubkey::find_program_address(
-        &ProtocolPositionClaimsCapabilitySeedsV2::new(core_market.to_bytes(), failure_selector)
-            .expect("claims-capability escrow seeds")
-            .as_slices(),
-        &CLAIMS_PROGRAM_ID,
-    )
-    .0
-}
-
-/// A canonical ECONOMIC-SLICE aggregate for the same Market, at the same width.
-///
-/// This is the other family's answer to the same question, built by that
-/// family's own initializer so it cannot be accused of being a hand-rolled
-/// straw man.
-fn economic_slice_aggregate_bytes(shared: &NarrowFixtureV2, release_set: [u8; 32]) -> Vec<u8> {
-    use dclutch_product::economic_slice::{
-        MARKET_HEADER_BYTES, Phase, SCALAR_BYTES, initialize_market,
-    };
-    let count = usize::try_from(CLAIM_COUNT).expect("width");
-    let width = MARKET_HEADER_BYTES + count * 3 * SCALAR_BYTES;
-    let mut bytes = vec![0_u8; width];
-    initialize_market(
-        &mut bytes,
-        shared.core_market.to_bytes(),
-        release_set,
-        REGISTRY_PROGRAM_ID.to_bytes(),
-        CLAIM_COUNT,
-        Phase::Open,
-        FOUNDED_SETS,
-    )
-    .expect("canonical economic-slice aggregate");
-    bytes
+/// The programs every plan on this world addresses.
+fn programs() -> ClaimsConservationProgramsV1 {
+    ClaimsConservationProgramsV1 {
+        claims: CLAIMS_PROGRAM_ID,
+        claims_programdata: programdata_address(CLAIMS_PROGRAM_ID),
+        custody: CUSTODY_PROGRAM_ID,
+        core: CORE_PROGRAM_ID,
+        registry: REGISTRY_PROGRAM_ID,
+    }
 }
 
 // ---------------------------------------------------------------------------
-// The request and its frame
+// Reading the chain
 // ---------------------------------------------------------------------------
 
-/// One stranger's split of `SPLIT_SETS` complete sets on the founded Market.
-fn split_request(world: &World) -> ClaimsConservationRequestV1 {
-    let collateral_atoms = SPLIT_SETS * world.shared.payout_scale;
-    let request = ClaimsConservationRequestV1 {
-        direction: ClaimsConservationDirectionV1::Split,
-        realm: world.realm_id,
-        market: world.shared.core_market.to_bytes(),
-        release_set: world.release_set,
-        custody_context: CUSTODY_CONTEXT,
-        aggregate: world.shared.claims_market.to_bytes(),
-        position: world.shared.actor_position.account.to_bytes(),
-        owner: stranger_keypair().pubkey().to_bytes(),
-        external_collateral: STRANGER_COLLATERAL.to_bytes(),
-        hoard_vault: world.hoard.to_bytes(),
-        mint: COLLATERAL_MINT.to_bytes(),
-        token_program: token_program_id().to_bytes(),
-        claims_program: CLAIMS_PROGRAM_ID.to_bytes(),
-        product_record_digest: world.shared.product.digest,
-        linked_basis_record_digest: world.shared.linked_basis.digest,
-        semantic_basis_id: world.shared.semantic_basis_id,
-        generation: GENERATION,
-        quantity: SPLIT_SETS,
-        basis_scale: world.shared.payout_scale,
-        collateral_atoms,
-        expected_market_revision: 0,
-        expected_position_revision: POSITION_REVISION,
-        expected_custody_revision: 1,
-        pre_external_amount: STRANGER_ATOMS,
-        post_external_amount: STRANGER_ATOMS - collateral_atoms,
-        pre_hoard_amount: HOARD_ATOMS,
-        post_hoard_amount: HOARD_ATOMS + collateral_atoms,
-        claim_count: CLAIM_COUNT,
-    };
-    request
-        .validate()
-        .expect("the split this campaign submits is a conserving one");
-    request
+async fn account_bytes(context: &mut ProgramTestContext, key: Pubkey) -> Vec<u8> {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("bank read")
+        .unwrap_or_else(|| panic!("account {key} exists"))
+        .data
 }
 
-/// The exact twenty-nine-account conservation frame, in the route's own order.
-fn split_instruction(world: &World, request: ClaimsConservationRequestV1) -> Instruction {
-    let bytes = request.to_bytes().expect("canonical request bytes");
-    let parent_digest = hash(&bytes).to_bytes();
-    let custody = request
-        .custody_request(parent_digest)
-        .expect("derived Custody request");
-    let delegated = request
-        .delegated_custody_request(parent_digest, world.custody_authority.to_bytes())
-        .expect("delegated Custody request")
-        .encode()
-        .expect("delegated Custody wire");
+/// The bytes of an account that may not exist -- a categorical Market's failure
+/// escrow is derived, named in every frame, and never created.
+async fn optional_account_bytes(
+    context: &mut ProgramTestContext,
+    key: Pubkey,
+) -> Option<Vec<u8>> {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("bank read")
+        .map(|account| account.data)
+}
+
+async fn account_lamports(context: &mut ProgramTestContext, key: Pubkey) -> u64 {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("bank read")
+        .map_or(0, |account| account.lamports)
+}
+
+async fn account_exists(context: &mut ProgramTestContext, key: Pubkey) -> bool {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("bank read")
+        .is_some()
+}
+
+/// Every supply coordinate of the LBV2 aggregate.
+fn aggregate_supply(bytes: &[u8]) -> Vec<u64> {
+    let view = LiabilityBasisMarketViewV2::decode(bytes).expect("LBV2 aggregate");
+    (0..view.claim_count)
+        .map(|outcome| view.supply(bytes, outcome).expect("supply"))
+        .collect()
+}
+
+/// Every balance coordinate of one LBV2 Position.
+fn position_balances(bytes: &[u8]) -> Vec<u64> {
+    let view = LiabilityBasisPositionViewV2::decode(bytes).expect("LBV2 Position");
+    (0..view.claim_count)
+        .map(|outcome| view.balance(bytes, outcome).expect("balance"))
+        .collect()
+}
+
+/// The coordinate-wise sum of the Positions this campaign names.
+fn position_totals(positions: &[Vec<u64>], claim_count: u32) -> Vec<u64> {
+    (0..usize::try_from(claim_count).expect("width"))
+        .map(|outcome| {
+            positions
+                .iter()
+                .map(|balances| balances.get(outcome).copied().unwrap_or(0))
+                .sum()
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// The eight laws, over what a program-test can read
+// ---------------------------------------------------------------------------
+
+/// One law's reading at one boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VerdictV1 {
+    law: &'static str,
+    status: &'static str,
+    detail: String,
+}
+
+impl VerdictV1 {
+    fn holds(law: &'static str, detail: String) -> Self {
+        Self {
+            law,
+            status: "holds",
+            detail,
+        }
+    }
+
+    fn violated(law: &'static str, detail: String) -> Self {
+        Self {
+            law,
+            status: "violated",
+            detail,
+        }
+    }
+
+    fn inapplicable(law: &'static str, detail: &str) -> Self {
+        Self {
+            law,
+            status: "inapplicable",
+            detail: detail.to_owned(),
+        }
+    }
+}
+
+/// One observation of the collateral world at one boundary.
+#[derive(Clone, Debug)]
+struct ObservationV1 {
+    stage: &'static str,
+    mint_supply: u64,
+    /// Every collateral token account this campaign names, by label.
+    token_atoms: BTreeMap<&'static str, u64>,
+    /// Atoms in every vault, by the compartment class its PDA seeds name.
+    class_atoms: BTreeMap<&'static str, u64>,
+    /// Lamports and existence of every account whose closure L6 would notice.
+    accounts: BTreeMap<&'static str, (bool, u64)>,
+    aggregate_supply: Vec<u64>,
+    position_totals: Vec<u64>,
+    claim_unit_atoms: u64,
+    payer: Pubkey,
+    payer_lamports: u64,
+    /// What the stage says it moved, per class. L2 reads `HoardPrincipal`.
+    declared_class_deltas: BTreeMap<&'static str, i128>,
+    /// What the stage says the tracked total moved.
+    declared_collateral_delta: i128,
+    /// The fee the bank quoted, when L7 is stated at this boundary at all.
+    declared_fee_lamports: Option<u64>,
+    /// Why L7 does not apply here, when it does not.
+    lamports_inapplicable: Option<&'static str>,
+}
+
+impl ObservationV1 {
+    fn tracked_collateral(&self) -> u64 {
+        self.token_atoms.values().sum()
+    }
+
+    fn hoard_atoms(&self) -> u64 {
+        self.class_atoms
+            .get("HoardPrincipal")
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
+/// The eight laws, evaluated against the previous observation.
+#[derive(Default)]
+struct CensusV1 {
+    observations: Vec<ObservationV1>,
+}
+
+impl CensusV1 {
+    fn evaluate(&self, now: &ObservationV1) -> Vec<VerdictV1> {
+        let previous = self.observations.last();
+        let mut verdicts = Vec::new();
+
+        let tracked = now.tracked_collateral();
+        verdicts.push(if tracked == now.mint_supply {
+            VerdictV1::holds(
+                "L1",
+                format!(
+                    "tracked {tracked} atoms across {} accounts == Mint supply {}",
+                    now.token_atoms.len(),
+                    now.mint_supply
+                ),
+            )
+        } else {
+            VerdictV1::violated(
+                "L1",
+                format!(
+                    "tracked {tracked} atoms across {} accounts != Mint supply {}",
+                    now.token_atoms.len(),
+                    now.mint_supply
+                ),
+            )
+        });
+
+        verdicts.push(match previous {
+            None => VerdictV1::inapplicable("L2", "the first census has no predecessor"),
+            Some(before) => {
+                let observed = i128::from(now.hoard_atoms()) - i128::from(before.hoard_atoms());
+                let declared = now
+                    .declared_class_deltas
+                    .get("HoardPrincipal")
+                    .copied()
+                    .unwrap_or_default();
+                if observed == declared {
+                    VerdictV1::holds(
+                        "L2",
+                        format!(
+                            "the Hoard moved {observed} atoms since `{}`, exactly as declared; it holds {}",
+                            before.stage,
+                            now.hoard_atoms()
+                        ),
+                    )
+                } else {
+                    VerdictV1::violated(
+                        "L2",
+                        format!(
+                            "the Hoard moved {observed} atoms since `{}` and the stage declared {declared}",
+                            before.stage
+                        ),
+                    )
+                }
+            }
+        });
+
+        verdicts.push(if now.position_totals == now.aggregate_supply {
+            VerdictV1::holds(
+                "L3",
+                format!(
+                    "the Positions sum to the aggregate supply vector {:?}",
+                    now.aggregate_supply
+                ),
+            )
+        } else {
+            VerdictV1::violated(
+                "L3",
+                format!(
+                    "the Positions sum to {:?} but the aggregate owes {:?}",
+                    now.position_totals, now.aggregate_supply
+                ),
+            )
+        });
+
+        verdicts.push({
+            let worst = now.aggregate_supply.iter().max().copied().unwrap_or(0);
+            match worst.checked_mul(now.claim_unit_atoms) {
+                None => VerdictV1::violated(
+                    "L4",
+                    format!(
+                        "worst outcome {worst} claims at {} atoms each overflows u64",
+                        now.claim_unit_atoms
+                    ),
+                ),
+                Some(required) if now.hoard_atoms() >= required => VerdictV1::holds(
+                    "L4",
+                    format!(
+                        "Hoard {} >= worst outcome {worst} x unit {} = {required}",
+                        now.hoard_atoms(),
+                        now.claim_unit_atoms
+                    ),
+                ),
+                Some(required) => VerdictV1::violated(
+                    "L4",
+                    format!(
+                        "Hoard {} < worst outcome {worst} x unit {} = {required}; the Market is under-collateralised",
+                        now.hoard_atoms(),
+                        now.claim_unit_atoms
+                    ),
+                ),
+            }
+        });
+
+        verdicts.push(match previous {
+            None => VerdictV1::inapplicable("L5", "the first census has no predecessor"),
+            Some(before) => {
+                let observed =
+                    i128::from(tracked) - i128::from(before.tracked_collateral());
+                if observed == now.declared_collateral_delta {
+                    VerdictV1::holds(
+                        "L5",
+                        format!(
+                            "tracked collateral moved {observed} atoms since `{}`, exactly as declared",
+                            before.stage
+                        ),
+                    )
+                } else {
+                    VerdictV1::violated(
+                        "L5",
+                        format!(
+                            "tracked collateral moved {observed} atoms since `{}`; the stage declared {}",
+                            before.stage, now.declared_collateral_delta
+                        ),
+                    )
+                }
+            }
+        });
+
+        verdicts.push(match previous {
+            None => VerdictV1::inapplicable("L6", "the first census has no predecessor"),
+            Some(before) => {
+                let vanished: Vec<String> = before
+                    .accounts
+                    .iter()
+                    .filter_map(|(label, (existed, lamports))| {
+                        let (exists, _) = now.accounts.get(label)?;
+                        (*existed && !*exists && *lamports > 0)
+                            .then(|| format!("{label} ({lamports} lamports)"))
+                    })
+                    .collect();
+                if vanished.is_empty() {
+                    VerdictV1::holds("L6", "no watched account closed at this boundary".into())
+                } else {
+                    VerdictV1::violated(
+                        "L6",
+                        format!("watched accounts closed unaccounted: {}", vanished.join(", ")),
+                    )
+                }
+            }
+        });
+
+        verdicts.push(match (previous, now.lamports_inapplicable, now.declared_fee_lamports) {
+            (None, _, _) => VerdictV1::inapplicable("L7", "the first census has no predecessor"),
+            (_, Some(reason), _) => VerdictV1::inapplicable("L7", reason),
+            (_, None, None) => VerdictV1::inapplicable(
+                "L7",
+                "the bank quoted no fee for this message, so there is no declared side to hold \
+                 the payer's lamports to",
+            ),
+            (Some(before), None, Some(fee)) => {
+                if before.payer != now.payer {
+                    VerdictV1::inapplicable(
+                        "L7",
+                        "the payer changed at this boundary, and one wallet's delta cannot be \
+                         read against another's",
+                    )
+                } else {
+                    let observed = i128::from(before.payer_lamports) - i128::from(now.payer_lamports);
+                    if observed == i128::from(fee) {
+                        VerdictV1::holds(
+                            "L7",
+                            format!(
+                                "the payer's lamports fell by exactly the {fee}-lamport fee since `{}`",
+                                before.stage
+                            ),
+                        )
+                    } else {
+                        VerdictV1::violated(
+                            "L7",
+                            format!(
+                                "the payer's lamports fell {observed} since `{}` and the fee was {fee}",
+                                before.stage
+                            ),
+                        )
+                    }
+                }
+            }
+        });
+
+        verdicts.push(match previous {
+            None => VerdictV1::inapplicable("L8", "the first census has no predecessor"),
+            Some(before) => {
+                let mut classes: Vec<&str> = before
+                    .class_atoms
+                    .keys()
+                    .chain(now.class_atoms.keys())
+                    .copied()
+                    .collect();
+                classes.sort_unstable();
+                classes.dedup();
+                let mut breaches = Vec::new();
+                let mut held = Vec::new();
+                for class in classes {
+                    let was = i128::from(before.class_atoms.get(class).copied().unwrap_or(0));
+                    let is = i128::from(now.class_atoms.get(class).copied().unwrap_or(0));
+                    let observed = is - was;
+                    let declared = now.declared_class_deltas.get(class).copied().unwrap_or(0);
+                    if observed == declared {
+                        held.push(format!("{class} {observed:+}"));
+                    } else {
+                        breaches.push(format!(
+                            "{class} moved {observed:+} atoms and the stage declared {declared:+}"
+                        ));
+                    }
+                }
+                if breaches.is_empty() {
+                    VerdictV1::holds(
+                        "L8",
+                        format!(
+                            "every compartment moved exactly as declared since `{}`: {}",
+                            before.stage,
+                            held.join(", ")
+                        ),
+                    )
+                } else {
+                    VerdictV1::violated("L8", breaches.join("; "))
+                }
+            }
+        });
+
+        verdicts
+    }
+
+    /// Evaluate, require every law to HOLD or be honestly INAPPLICABLE, and
+    /// keep the observation as the next boundary's predecessor.
+    fn admit(&mut self, now: ObservationV1) {
+        let verdicts = self.evaluate(&now);
+        for verdict in &verdicts {
+            assert_ne!(
+                verdict.status, "violated",
+                "{} VIOLATED at `{}`: {}",
+                verdict.law, now.stage, verdict.detail,
+            );
+            println!("  {} {} at `{}`  {}", verdict.law, verdict.status, now.stage, verdict.detail);
+        }
+        self.observations.push(now);
+    }
+}
+
+/// Observe the whole collateral world at one boundary.
+#[allow(clippy::too_many_arguments)]
+async fn observe(
+    context: &mut ProgramTestContext,
+    world: &FoundingWorld,
+    stage: &'static str,
+    payer: Pubkey,
+    declared_hoard_delta: i128,
+    declared_collateral_delta: i128,
+    declared_fee_lamports: Option<u64>,
+    lamports_inapplicable: Option<&'static str>,
+) -> ObservationV1 {
+    let mint = account_bytes(context, COLLATERAL_MINT).await;
+    let hoard = token_amount(&account_bytes(context, world.hoard).await);
+    let founder = token_amount(&account_bytes(context, FOUNDER_COLLATERAL).await);
+    let stranger = token_amount(&account_bytes(context, STRANGER_COLLATERAL).await);
+    let aggregate = account_bytes(context, world.aggregate).await;
+    let holder = position_balances(&account_bytes(context, world.position).await);
+    let escrow = position_balances(&account_bytes(context, world.escrow_position).await);
+    let supply = aggregate_supply(&aggregate);
+    let claim_count = LiabilityBasisMarketViewV2::decode(&aggregate)
+        .expect("LBV2 aggregate")
+        .claim_count;
+
+    let mut token_atoms = BTreeMap::new();
+    token_atoms.insert("hoard", hoard);
+    token_atoms.insert("founder", founder);
+    token_atoms.insert("stranger", stranger);
+
+    let mut class_atoms = BTreeMap::new();
+    class_atoms.insert("HoardPrincipal", hoard);
+
+    let mut accounts = BTreeMap::new();
+    for (label, key) in [
+        ("aggregate", world.aggregate),
+        ("position", world.position),
+        ("escrow", world.escrow_position),
+        ("hoard", world.hoard),
+        ("founder-collateral", FOUNDER_COLLATERAL),
+        ("stranger-collateral", STRANGER_COLLATERAL),
+    ] {
+        accounts.insert(
+            label,
+            (
+                account_exists(context, key).await,
+                account_lamports(context, key).await,
+            ),
+        );
+    }
+
+    let mut declared_class_deltas = BTreeMap::new();
+    declared_class_deltas.insert("HoardPrincipal", declared_hoard_delta);
+
+    ObservationV1 {
+        stage,
+        mint_supply: mint_supply(&mint),
+        token_atoms,
+        class_atoms,
+        accounts,
+        aggregate_supply: supply,
+        position_totals: position_totals(&[holder, escrow], claim_count),
+        claim_unit_atoms: refunding_scale(),
+        payer,
+        payer_lamports: account_lamports(context, payer).await,
+        declared_class_deltas,
+        declared_collateral_delta,
+        declared_fee_lamports,
+        lamports_inapplicable,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The three preconditions, each in its own transaction
+// ---------------------------------------------------------------------------
+
+/// Drive the founding on the real ELF and require it accepted.
+async fn found(context: &mut ProgramTestContext, world: &FoundingWorld, label: &str) {
+    let outcome = submit(context, label, founding_instruction(world)).await;
+    assert!(
+        outcome.accepted,
+        "the conservation campaign stands on a real founding; it refused {:?}: {:?}",
+        outcome.refusal, outcome.logs,
+    );
+}
+
+/// The Claims-role Custody replay this Market's split and merge serialize on.
+///
+/// The frame is the route's own, by its own coordinate constants, and the
+/// Custody request is built by the route's own `expected_request_v1` -- so the
+/// caller-authority PDA this campaign derives and the one the program derives
+/// have exactly one author.
+async fn claims_replay_instruction(
+    context: &mut ProgramTestContext,
+    world: &FoundingWorld,
+    payer: Pubkey,
+) -> (Instruction, Pubkey) {
+    // The aggregate is read off the CHAIN, not off the fixture: the founding
+    // route writes `custody_context` from the projection it authenticated, and
+    // the fixture body the narrow compiler produced carries a different one.
+    // Every coordinate below hangs off that field.
+    let aggregate_bytes = account_bytes(context, world.aggregate).await;
+    let view = LiabilityBasisMarketViewV2::decode(&aggregate_bytes)
+        .expect("the founded aggregate decodes as LBV2");
+    let request = replay_route::expected_request_v1(
+        view,
+        CLAIMS_PROGRAM_ID.to_bytes(),
+        payer.to_bytes(),
+        world.rent_credit.to_bytes(),
+        Rent::default().minimum_balance(CUSTODY_REPLAY_BYTES_V1),
+    )
+    .expect("the replay route's sole Custody request");
+    let request_bytes = request.to_bytes().expect("Custody request bytes");
+    let request_digest = solana_program::hash::hash(&request_bytes).to_bytes();
     let caller_authority = Pubkey::find_program_address(
-        &CallerAuthoritySeedsV1::from_bytes(
-            custody.release_set,
-            custody.market,
-            ExecutionRoleV1::Claims,
-            custody.context,
-            hash(&delegated).to_bytes(),
+        &dclutch_registry::release_set::CallerAuthoritySeedsV1::from_bytes(
+            request.release_set,
+            request.market,
+            dclutch_registry::release_set::ExecutionRoleV1::Claims,
+            request.context,
+            request_digest,
         )
         .expect("claims-role caller seeds")
         .as_slices(),
         &CLAIMS_PROGRAM_ID,
     )
     .0;
-    let shared = &world.shared;
-    let accounts = vec![
-        AccountMeta::new_readonly(stranger_keypair().pubkey(), true),
-        AccountMeta::new(shared.claims_market, false),
-        AccountMeta::new(shared.actor_position.account, false),
-        AccountMeta::new(world.escrow_position, false),
-        AccountMeta::new_readonly(shared.core_market, false),
-        AccountMeta::new_readonly(shared.linked_basis.raw, false),
-        AccountMeta::new_readonly(shared.linked_basis.staging, false),
-        AccountMeta::new_readonly(shared.product.raw, false),
-        AccountMeta::new_readonly(shared.product.staging, false),
-        AccountMeta::new_readonly(shared.result_domain.raw, false),
-        AccountMeta::new_readonly(shared.result_domain.staging, false),
-        AccountMeta::new_readonly(shared.portfolio.raw, false),
-        AccountMeta::new_readonly(shared.portfolio.staging, false),
-        AccountMeta::new_readonly(world.activation_cache, false),
-        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
-        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
-        AccountMeta::new_readonly(programdata_address(CLAIMS_PROGRAM_ID), false),
-        AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
-        AccountMeta::new_readonly(programdata_address(CORE_PROGRAM_ID), false),
-        AccountMeta::new_readonly(caller_authority, false),
-        AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
-        AccountMeta::new(world.custody_replay, false),
-        AccountMeta::new(world.hoard, false),
-        AccountMeta::new(STRANGER_COLLATERAL, false),
-        AccountMeta::new_readonly(COLLATERAL_MINT, false),
-        AccountMeta::new_readonly(token_program_id(), false),
-        AccountMeta::new_readonly(world.custody_authority, false),
-        AccountMeta::new_readonly(world.realm_raw, false),
-        AccountMeta::new_readonly(world.realm_staging, false),
-    ];
-    assert_eq!(
-        accounts.len(),
-        dclutch_claims_sbf::claims_conservation_v1::CLAIMS_CONSERVATION_ACCOUNT_COUNT_V1,
-        "the frame is the route's own declared width, read off the route",
-    );
-    assert_eq!(bytes.len(), CLAIMS_CONSERVATION_REQUEST_BYTES_V1);
-    Instruction {
-        program_id: CLAIMS_PROGRAM_ID,
-        accounts,
-        data: bytes.to_vec(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Submission
-// ---------------------------------------------------------------------------
-
-struct Outcome {
-    accepted: bool,
-    units: u64,
-    refusal: Option<u32>,
-    logs: Vec<String>,
-}
-
-async fn submit(
-    context: &mut ProgramTestContext,
-    label: &str,
-    instruction: Instruction,
-) -> Outcome {
-    let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
-        .await
-        .expect("blockhash");
-    let payer = context.payer.insecure_clone();
-    let stranger = stranger_keypair();
-    let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
-        Some(&payer.pubkey()),
-        &[&payer, &stranger],
-        blockhash,
-    );
-    let signature = transaction
-        .signatures
-        .first()
-        .map(ToString::to_string)
-        .expect("a submitted transaction carries its own signature");
-    let wire_bytes = 1_usize + transaction.signatures.len() * 64 + transaction.message_data().len();
-    let slot = context
-        .banks_client
-        .get_sysvar::<Clock>()
-        .await
-        .map_or(0, |clock| clock.slot);
-    let processed = context
-        .banks_client
-        .process_transaction_with_metadata(transaction)
-        .await
-        .expect("transaction processing");
-    let units = processed
-        .metadata
-        .clone()
-        .map(|metadata| metadata.compute_units_consumed)
-        .unwrap_or_default();
-    let logs = processed
-        .metadata
-        .clone()
-        .map(|metadata| metadata.log_messages)
-        .unwrap_or_default();
-    let failure = processed
-        .result
-        .clone()
-        .err()
-        .map(|error| format!("{error:?}"));
-    dclutch_program_test_evidence::record(&TransactionEvidence {
-        label,
-        signature: &signature,
-        slot,
-        error: failure.as_deref(),
-        logs: &logs,
-        compute_units_consumed: Some(units),
-        wire_bytes: Some(wire_bytes),
-    })
-    .expect("campaign evidence must be writable when the gauntlet asked for it");
-    let refusal = match &processed.result {
-        Err(solana_sdk::transaction::TransactionError::InstructionError(
-            _,
-            solana_sdk::instruction::InstructionError::Custom(code),
-        )) => Some(*code),
-        _ => None,
+    let replay = Pubkey::find_program_address(
+        &dclutch_custody::CustodyReplaySeedsV1::from_request(request).as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let mut accounts =
+        vec![AccountMeta::new_readonly(Pubkey::default(), false); replay_route::CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1];
+    let put = |accounts: &mut Vec<AccountMeta>, index: usize, meta: AccountMeta| {
+        *accounts.get_mut(index).expect("frame coordinate") = meta;
     };
-    Outcome {
-        accepted: processed.result.is_ok(),
-        units,
-        refusal,
-        logs,
-    }
+    put(
+        &mut accounts,
+        replay_route::CUSTODY_CALLER_AUTHORITY,
+        AccountMeta::new_readonly(caller_authority, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::CORE_MARKET,
+        AccountMeta::new_readonly(world.shared.core_market, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::ACTIVATION_CACHE,
+        AccountMeta::new_readonly(world.activation_cache, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::REGISTRY_PROGRAM,
+        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::CLAIMS_PROGRAM,
+        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::CLAIMS_PROGRAMDATA,
+        AccountMeta::new_readonly(programdata_address(CLAIMS_PROGRAM_ID), false),
+    );
+    put(
+        &mut accounts,
+        replay_route::REALM,
+        AccountMeta::new_readonly(world.realm_raw, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::REALM_STAGING,
+        AccountMeta::new_readonly(world.realm_staging, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::CUSTODY_REPLAY,
+        AccountMeta::new(replay, false),
+    );
+    put(&mut accounts, replay_route::PAYER, AccountMeta::new(payer, true));
+    put(
+        &mut accounts,
+        replay_route::SYSTEM_PROGRAM,
+        AccountMeta::new_readonly(system_program::ID, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::RENT_SYSVAR,
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::RENT_REFUND,
+        AccountMeta::new(world.rent_credit, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::CUSTODY_PROGRAM,
+        AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+    );
+    put(
+        &mut accounts,
+        replay_route::AGGREGATE,
+        AccountMeta::new_readonly(world.aggregate, false),
+    );
+    (
+        Instruction {
+            program_id: CLAIMS_PROGRAM_ID,
+            accounts,
+            data: ClaimsCustodyReplayRequestV1::new(world.shared.core_market.to_bytes())
+                .expect("canonical DCLCCR01 request")
+                .to_bytes()
+                .to_vec(),
+        },
+        replay,
+    )
 }
 
-async fn run(body: AggregateBodyV1, label: &str) -> Outcome {
-    let (test, world) = world(body);
-    let mut context = test.start_with_context().await;
-    let request = split_request(&world);
-    let instruction = split_instruction(&world, request);
-    submit(&mut context, label, instruction).await
+/// Create the Claims-role replay and require it accepted.
+async fn open_claims_replay(
+    context: &mut ProgramTestContext,
+    world: &FoundingWorld,
+    label: &str,
+) -> Pubkey {
+    let payer = context.payer.pubkey();
+    let (instruction, replay) = claims_replay_instruction(context, world, payer).await;
+    let outcome = submit(context, label, instruction).await;
+    assert!(
+        outcome.accepted,
+        "the Claims-role Custody replay is this route's precondition and its own route \
+         creates it; it refused {:?}: {:?}",
+        outcome.refusal, outcome.logs,
+    );
+    replay
 }
 
-// ---------------------------------------------------------------------------
-// The two-sided conviction, on the shipped ELF
-// ---------------------------------------------------------------------------
-
-/// A well-formed split on a FOUNDED REFUNDING Market refuses `Economic`.
+/// Advance the Core Market from `Founding` to `Open`.
 ///
-/// Every account is at its own derived address, the request conserves, the
-/// aggregate is what `founding_v5` writes, and the actor signs. The route still
-/// refuses -- at `market_hoard`, the economic-slice kernel's reader, given the
-/// LBV2 bytes the LBV2 reader on the line above had just accepted.
-#[tokio::test]
-async fn a_conserving_split_on_a_founded_refunding_market_refuses_economic() {
-    let outcome = run(
-        AggregateBodyV1::LiabilityBasisV2,
-        "claims conservation: a conserving split on an LBV2 aggregate",
+/// Core's own stage, and no part of this campaign's subject. Every other field
+/// -- including `identity`, which the Market account's address derives from --
+/// is left exactly as the founding found it.
+async fn open_the_market(context: &mut ProgramTestContext, world: &FoundingWorld) {
+    let key = world.shared.core_market;
+    let mut account = context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("bank read")
+        .expect("the Core Market exists");
+    let mut core = CoreState::decode(&account.data).expect("Core state");
+    core.phase = Phase::Open;
+    account.data = core.encode().expect("an Open Core state").to_vec();
+    context.set_account(&key, &AccountSharedData::from(account));
+}
+
+/// A stranger's real Token-2022 transfer into the Market's vault.
+async fn donate_to_the_vault(
+    context: &mut ProgramTestContext,
+    world: &FoundingWorld,
+    atoms: u64,
+    label: &str,
+) {
+    let spec = transfer_checked(
+        token_program_id().to_bytes(),
+        STRANGER_COLLATERAL.to_bytes(),
+        COLLATERAL_MINT.to_bytes(),
+        world.hoard.to_bytes(),
+        stranger_keypair().pubkey().to_bytes(),
+        atoms,
+        COLLATERAL_DECIMALS,
+    )
+    .expect("a checked transfer of the Realm's own collateral");
+    let instruction = Instruction {
+        program_id: Pubkey::new_from_array(*spec.program_id()),
+        accounts: spec
+            .accounts()
+            .iter()
+            .map(|account| AccountMeta {
+                pubkey: Pubkey::new_from_array(*account.address()),
+                is_signer: account.is_signer(),
+                is_writable: account.is_writable(),
+            })
+            .collect(),
+        data: spec.data().to_vec(),
+    };
+    let payer = context.payer.insecure_clone();
+    let outcome = submit_with(
+        context,
+        label,
+        &[instruction],
+        &payer,
+        &[&stranger_keypair()],
     )
     .await;
     assert!(
-        !outcome.accepted,
-        "the conservation route cannot accept a split: its aggregate has two \
-         readers from two account families",
+        outcome.accepted,
+        "a token account accepts a transfer from anybody, which is why L4 is an inequality; \
+         it refused {:?}: {:?}",
+        outcome.refusal, outcome.logs,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Planning and submitting one conservation act
+// ---------------------------------------------------------------------------
+
+/// Plan one act from the chain's own bytes, through the operator.
+///
+/// The operator is the one author of the twenty-one-account frame and of the
+/// `ApproveChecked` a split owes; this campaign never writes a second copy of
+/// either, so a frame that drifts from the route breaks the operator's own
+/// tests first and this campaign second.
+async fn plan(
+    context: &mut ProgramTestContext,
+    world: &FoundingWorld,
+    direction: ClaimsConservationDirectionV1,
+    quantity: u64,
+) -> ClaimsConservationPlanV1 {
+    let core_state = account_bytes(context, world.shared.core_market).await;
+    let aggregate = account_bytes(context, world.aggregate).await;
+    let position = account_bytes(context, world.position).await;
+    let escrow = optional_account_bytes(context, world.escrow_position).await;
+    let basis = account_bytes(context, world.shared.linked_basis.raw).await;
+    let replay_key = Pubkey::find_program_address(
+        &dclutch_custody::CustodyReplaySeedsV1::new(
+            world.shared.core_market.to_bytes(),
+            world.release_set,
+            dclutch_custody::CallerRoleV1::Claims,
+            LiabilityBasisMarketViewV2::decode(&aggregate)
+                .expect("LBV2 aggregate")
+                .custody_context,
+        )
+        .as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let replay = account_bytes(context, replay_key).await;
+    let hoard = account_bytes(context, world.hoard).await;
+    let external = account_bytes(context, FOUNDER_COLLATERAL).await;
+    let mint = account_bytes(context, COLLATERAL_MINT).await;
+    plan_claims_conservation_v1(
+        programs(),
+        ClaimsConservationObservedV1 {
+            market: world.shared.core_market,
+            core_state: &core_state,
+            aggregate: &aggregate,
+            position: &position,
+            escrow_position: escrow.as_deref(),
+            basis_record: (world.shared.linked_basis.raw, &basis),
+            custody_replay: &replay,
+            hoard_vault: &hoard,
+            external_collateral: (FOUNDER_COLLATERAL, &external),
+            collateral_mint: (COLLATERAL_MINT, &mint),
+            token_program: token_program_id(),
+            realm_raw: world.realm_raw,
+            realm_staging: world.realm_staging,
+        },
+        ClaimsConservationActV1 {
+            direction,
+            owner: founder_keypair().pubkey(),
+            quantity,
+        },
+    )
+    .expect("the operator plans this act from the chain's own bytes")
+}
+
+/// Submit one planned act, paid and signed by the owner alone.
+///
+/// The owner is a WRITABLE SIGNER here on purpose: a wallet that authorizes its
+/// own act pays the transaction's fee, and the route's privilege pass admits
+/// exactly that. An earlier draft of the route pinned the owner `!is_writable`,
+/// which no single-wallet submitter can satisfy.
+async fn submit_act(
+    context: &mut ProgramTestContext,
+    plan: &ClaimsConservationPlanV1,
+    label: &str,
+) -> Outcome {
+    let mut instructions = Vec::new();
+    if let Some(approve) = plan.approve.clone() {
+        instructions.push(approve);
+    }
+    instructions.push(plan.instruction.clone());
+    let owner = founder_keypair();
+    submit_with(context, label, &instructions, &owner, &[]).await
+}
+
+/// Submit one instruction the operator would never build, paid by the owner.
+async fn submit_hostile(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    label: &str,
+) -> Outcome {
+    let owner = founder_keypair();
+    submit_with(context, label, instructions, &owner, &[]).await
+}
+
+/// Stand the world up to the point where a conservation act is admissible.
+async fn founded_and_open(
+    shape: FoundingShapeV1,
+    founder_atoms: u64,
+    stranger_atoms: u64,
+    label: &str,
+) -> (FoundingWorld, ProgramTestContext) {
+    let (test, world) = conservation_world(shape, founder_atoms, stranger_atoms);
+    let mut context = test.start_with_context().await;
+    found(&mut context, &world, &format!("{label}: founding")).await;
+    open_claims_replay(&mut context, &world, &format!("{label}: claims-role replay")).await;
+    open_the_market(&mut context, &world).await;
+    (world, context)
+}
+
+// ---------------------------------------------------------------------------
+// The round trip
+// ---------------------------------------------------------------------------
+
+/// A split moves collateral into the vault and mints a complete set; its merge
+/// undoes both. L1-L8 hold at every boundary.
+///
+/// This is the whole claim of the family: split and merge are user acts that
+/// MOVE COLLATERAL through the Custody transfer, and the round trip is the
+/// identity on every account it touches but for the three revisions.
+#[tokio::test]
+async fn a_split_and_its_merge_are_a_round_trip_over_the_eight_laws() {
+    let split_atoms = SPLIT_SETS * refunding_scale();
+    let (world, mut context) = founded_and_open(
+        FoundingShapeV1::Refunding,
+        split_atoms,
+        DONATION_ATOMS,
+        "conservation round trip",
+    )
+    .await;
+    let founder = founder_keypair().pubkey();
+    let mut census = CensusV1::default();
+
+    census.admit(
+        observe(
+            &mut context,
+            &world,
+            "founded",
+            founder,
+            0,
+            0,
+            None,
+            Some(
+                "the founding and the replay were paid by the bank's payer and created three \
+                 accounts from prepaid rent; that lamport story is the founding campaign's",
+            ),
+        )
+        .await,
+    );
+
+    donate_to_the_vault(
+        &mut context,
+        &world,
+        DONATION_ATOMS,
+        "conservation round trip: a stranger donates to the vault",
+    )
+    .await;
+    census.admit(
+        observe(
+            &mut context,
+            &world,
+            "donated",
+            founder,
+            i128::from(DONATION_ATOMS),
+            0,
+            None,
+            Some("the donation was paid by the bank's payer, not the owner"),
+        )
+        .await,
+    );
+
+    let before = aggregate_supply(&account_bytes(&mut context, world.aggregate).await);
+    let split = plan(
+        &mut context,
+        &world,
+        ClaimsConservationDirectionV1::Split,
+        SPLIT_SETS,
+    )
+    .await;
+    assert_eq!(
+        split.collateral_atoms, split_atoms,
+        "a split's collateral is exactly `quantity * basis_scale` atoms",
+    );
+    assert!(
+        split.refunds_on_failure,
+        "the record, not the caller, says this Market refunds",
+    );
+    assert!(
+        split.approve.is_some(),
+        "a split debits the actor's own account, so it owes the delegated Custody wire and \
+         the ApproveChecked that makes it admissible",
+    );
+    let outcome = submit_act(&mut context, &split, "conservation: the split").await;
+    assert!(
+        outcome.accepted,
+        "the split refused {:?}: {:?}",
+        outcome.refusal, outcome.logs,
+    );
+    println!("conservation split: accepted, {} CU consumed", outcome.units);
+    census.admit(
+        observe(
+            &mut context,
+            &world,
+            "split",
+            founder,
+            i128::from(split_atoms),
+            0,
+            outcome.fee_lamports,
+            None,
+        )
+        .await,
+    );
+
+    let after_split =
+        aggregate_supply(&account_bytes(&mut context, world.aggregate).await);
+    for (coordinate, (was, is)) in before.iter().zip(after_split.iter()).enumerate() {
+        assert_eq!(
+            *is,
+            was + SPLIT_SETS,
+            "the split credited coordinate {coordinate} by exactly the sets it minted",
+        );
+    }
+    let failure = failure_selector_v1(CLAIM_COUNT).expect("failure selector");
+    let holder = position_balances(&account_bytes(&mut context, world.position).await);
+    let escrow =
+        position_balances(&account_bytes(&mut context, world.escrow_position).await);
+    assert_eq!(
+        holder
+            .get(usize::try_from(failure).expect("selector"))
+            .copied(),
+        Some(0),
+        "on a refunding Market the holder never receives the failure coordinate",
     );
     assert_eq!(
+        escrow
+            .get(usize::try_from(failure).expect("selector"))
+            .copied(),
+        Some(QUANTITY + SPLIT_SETS),
+        "the failure coordinate of the split's set is seated in the Market's own escrow",
+    );
+
+    let merge = plan(
+        &mut context,
+        &world,
+        ClaimsConservationDirectionV1::Merge,
+        SPLIT_SETS,
+    )
+    .await;
+    assert_eq!(
+        merge.collateral_atoms, split_atoms,
+        "the merge returns exactly the atoms the split took",
+    );
+    assert!(
+        merge.approve.is_none(),
+        "a merge debits the vault, which Custody's plain V1 Transfer already authorizes",
+    );
+    let outcome = submit_act(&mut context, &merge, "conservation: the merge").await;
+    assert!(
+        outcome.accepted,
+        "the merge refused {:?}: {:?}",
+        outcome.refusal, outcome.logs,
+    );
+    println!("conservation merge: accepted, {} CU consumed", outcome.units);
+    census.admit(
+        observe(
+            &mut context,
+            &world,
+            "merged",
+            founder,
+            -i128::from(split_atoms),
+            0,
+            outcome.fee_lamports,
+            None,
+        )
+        .await,
+    );
+
+    let after_merge =
+        aggregate_supply(&account_bytes(&mut context, world.aggregate).await);
+    assert_eq!(
+        after_merge, before,
+        "the round trip is the identity on the aggregate's supply vector",
+    );
+    assert_eq!(
+        token_amount(&account_bytes(&mut context, FOUNDER_COLLATERAL).await),
+        split_atoms,
+        "and on the actor's own collateral",
+    );
+    assert_eq!(
+        token_amount(&account_bytes(&mut context, world.hoard).await),
+        QUANTITY * refunding_scale() + DONATION_ATOMS,
+        "and on the vault, which keeps the stranger's donation it never owed anybody",
+    );
+    assert_eq!(
+        held_complete_sets_v1(
+            &account_bytes(&mut context, world.position).await,
+            true
+        ),
+        Ok(QUANTITY),
+        "the holder is back to the sets the founding admitted",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The hostiles
+// ---------------------------------------------------------------------------
+
+/// A split whose actor does not hold the collateral refuses `Balances`, before
+/// anything moves.
+///
+/// This is the conjunct that stops claims from existing against a vault that
+/// has not received their backing. The request states a prestate the account
+/// does not hold; every other coordinate is the operator's own.
+#[tokio::test]
+async fn a_split_without_the_collateral_refuses_balances() {
+    let split_atoms = SPLIT_SETS * refunding_scale();
+    let (world, mut context) = founded_and_open(
+        FoundingShapeV1::Refunding,
+        split_atoms,
+        0,
+        "conservation hostile: a split without collateral",
+    )
+    .await;
+    let plan = plan(
+        &mut context,
+        &world,
+        ClaimsConservationDirectionV1::Split,
+        SPLIT_SETS,
+    )
+    .await;
+    // The plan was true when it was made; the actor spends one atom elsewhere
+    // before submitting it, so the stated prestate is one atom too large.
+    let mut account = context
+        .banks_client
+        .get_account(FOUNDER_COLLATERAL)
+        .await
+        .expect("bank read")
+        .expect("the actor's collateral account");
+    account.data = token_account_bytes_for(
+        COLLATERAL_MINT,
+        founder_keypair().pubkey(),
+        split_atoms - 1,
+    );
+    context.set_account(&FOUNDER_COLLATERAL, &AccountSharedData::from(account));
+
+    let mut instructions = Vec::new();
+    if let Some(approve) = plan.approve.clone() {
+        instructions.push(approve);
+    }
+    instructions.push(plan.instruction.clone());
+    let outcome = submit_hostile(
+        &mut context,
+        &instructions,
+        "conservation hostile: a split without collateral",
+    )
+    .await;
+    assert_eq!(
         outcome.refusal,
-        Some(ClaimsSbfError::Economic as u32),
-        "the refusal is the economic-slice kernel's, reached over LBV2 bytes; \
+        Some(ClaimsConservationSbfErrorV1::Balances as u32),
+        "a split whose stated prestate is not what the account holds refuses `Balances` \
+         before the transfer, not after it; logs: {:?}",
+        outcome.logs,
+    );
+}
+
+/// A merge that offers the Market's failure escrow as the actor's own Position
+/// refuses `Identity`.
+///
+/// On a refunding Market the failure coordinate is the ESCROW's and the holder
+/// never touches it. An actor who names it as their own is claiming to be the
+/// Market's own derived escrow owner, and the Position's recorded owner is what
+/// refuses.
+#[tokio::test]
+async fn a_merge_that_names_the_failure_coordinate_as_its_own_refuses_identity() {
+    let (world, mut context) = founded_and_open(
+        FoundingShapeV1::Refunding,
+        0,
+        0,
+        "conservation hostile: a merge naming the failure coordinate",
+    )
+    .await;
+    let plan = plan(
+        &mut context,
+        &world,
+        ClaimsConservationDirectionV1::Merge,
+        SPLIT_SETS,
+    )
+    .await;
+    // The request names the escrow as the actor's Position and the frame seats
+    // it there, so the privilege pass -- which only compares the account's key
+    // to the request -- passes it through to the conjunct under test.
+    let named = ClaimsConservationRequestV1 {
+        position: world.escrow_position.to_bytes(),
+        ..plan.request
+    };
+    let mut accounts = plan.instruction.accounts.clone();
+    *accounts
+        .get_mut(frame_v1::POSITION)
+        .expect("the holder coordinate") = AccountMeta::new(world.escrow_position, false);
+    let hostile = Instruction {
+        program_id: plan.instruction.program_id,
+        accounts,
+        data: named
+            .to_bytes()
+            .expect("canonical request naming the escrow as the holder")
+            .to_vec(),
+    };
+    let outcome = submit_hostile(
+        &mut context,
+        &[hostile],
+        "conservation hostile: a merge naming the failure coordinate",
+    )
+    .await;
+    assert_eq!(
+        outcome.refusal,
+        Some(ClaimsConservationSbfErrorV1::Identity as u32),
+        "the escrow's Position is the Market's, not the signer's, and the route says so by \
+         name; logs: {:?}",
+        outcome.logs,
+    );
+}
+
+/// A merge of more complete sets than the holder holds refuses `Holding`, on a
+/// CATEGORICAL Market.
+///
+/// The other shape, and the control that this route is not a refunding-only
+/// one: a categorical Market's complete set lives in ONE Position, seats no
+/// escrow, and pays at scale 1. The founding admitted `QUANTITY` sets and no
+/// act has added one, so a merge of `QUANTITY + 1` asks the executor to debit
+/// a coordinate that holds less than the quantity.
+///
+/// The stranger's donation is what makes the overreaching request
+/// REPRESENTABLE: without it the vault could not cover `(QUANTITY + 1)` sets'
+/// collateral and the contract would refuse the wire's arithmetic before the
+/// route ever saw it -- which would prove something about `validate`, not about
+/// the holding.
+#[tokio::test]
+async fn a_categorical_merge_of_an_incomplete_set_refuses_holding() {
+    let (world, mut context) = founded_and_open(
+        FoundingShapeV1::Categorical,
+        0,
+        DONATION_ATOMS,
+        "conservation hostile: an incomplete categorical merge",
+    )
+    .await;
+    donate_to_the_vault(
+        &mut context,
+        &world,
+        DONATION_ATOMS,
+        "conservation hostile: the donation that makes the overreach representable",
+    )
+    .await;
+    let plan = plan(
+        &mut context,
+        &world,
+        ClaimsConservationDirectionV1::Merge,
+        QUANTITY,
+    )
+    .await;
+    assert!(
+        !plan.refunds_on_failure,
+        "a categorical Market seats no escrow, and the record is what says so",
+    );
+    let scale = plan.request.basis_scale;
+    let atoms = (QUANTITY + 1) * scale;
+    let overreach = ClaimsConservationRequestV1 {
+        quantity: QUANTITY + 1,
+        collateral_atoms: atoms,
+        post_hoard_amount: plan.request.pre_hoard_amount - atoms,
+        post_external_amount: plan.request.pre_external_amount + atoms,
+        ..plan.request
+    };
+    // The frame stays the plan's own. Raising the quantity moves the request's
+    // digest and therefore the caller-authority PDA the Custody CPI would need,
+    // but the executor runs over candidates BEFORE any collateral moves, so the
+    // holding is what refuses and the stale authority is never read.
+    let hostile = Instruction {
+        program_id: plan.instruction.program_id,
+        accounts: plan.instruction.accounts.clone(),
+        data: overreach
+            .to_bytes()
+            .expect("canonical overreaching request")
+            .to_vec(),
+    };
+    let outcome = submit_hostile(
+        &mut context,
+        &[hostile],
+        "conservation hostile: an incomplete categorical merge",
+    )
+    .await;
+    assert_eq!(
+        outcome.refusal,
+        Some(ClaimsConservationSbfErrorV1::Holding as u32),
+        "a merge finds less than `quantity` at a coordinate it burns and says so; \
          logs: {:?}",
         outcome.logs,
     );
-    println!(
-        "conservation split (LBV2 aggregate): refused {:#06x}, {} CU consumed",
-        ClaimsSbfError::Economic as u32,
-        outcome.units,
-    );
 }
 
-/// The SAME frame with the other family's aggregate refuses one line earlier.
+/// A split whose two token accounts are named in the opposite roles refuses
+/// `Identity`.
 ///
-/// One account's bytes are the only difference, and the refusal moves from the
-/// economic-slice reader to the LBV2 one. Two refusals over one frame is what
-/// makes this a disagreement between two authorities rather than a wrong
-/// fixture: correcting the aggregate for either reader breaks the other, and
-/// there is no third aggregate.
+/// The vault's seeds are DIRECTION-FREE: they come from the Market, the release
+/// set, the custody context and the compartment, never from whichever side of
+/// the transfer happens to be the source. An earlier draft derived them from the
+/// request's source side, which on a split is the External side, so every split
+/// would have refused here. This is that defect's guard on the real ELF, and the
+/// route holds it twice -- the vault's owner must be the Custody transfer
+/// authority, and its address must be the derived one. The first fires.
 #[tokio::test]
-async fn the_same_frame_with_an_economic_slice_aggregate_refuses_identity() {
-    let outcome = run(
-        AggregateBodyV1::EconomicSlice,
-        "claims conservation: the same split on an economic-slice aggregate",
+async fn the_reversed_transfer_pair_refuses_identity() {
+    let split_atoms = SPLIT_SETS * refunding_scale();
+    let (world, mut context) = founded_and_open(
+        FoundingShapeV1::Refunding,
+        split_atoms,
+        0,
+        "conservation hostile: the reversed pair",
     )
     .await;
-    assert!(!outcome.accepted);
+    let plan = plan(
+        &mut context,
+        &world,
+        ClaimsConservationDirectionV1::Split,
+        SPLIT_SETS,
+    )
+    .await;
+    let reversed = ClaimsConservationRequestV1 {
+        hoard_vault: FOUNDER_COLLATERAL.to_bytes(),
+        external_collateral: plan.request.hoard_vault,
+        ..plan.request
+    };
+    let mut accounts = plan.instruction.accounts.clone();
+    *accounts
+        .get_mut(frame_v1::HOARD_VAULT)
+        .expect("the vault coordinate") = AccountMeta::new(FOUNDER_COLLATERAL, false);
+    *accounts
+        .get_mut(frame_v1::EXTERNAL_COLLATERAL)
+        .expect("the external coordinate") = AccountMeta::new(plan.hoard_vault, false);
+    let hostile = Instruction {
+        program_id: plan.instruction.program_id,
+        accounts,
+        data: reversed
+            .to_bytes()
+            .expect("canonical reversed request")
+            .to_vec(),
+    };
+    let outcome = submit_hostile(
+        &mut context,
+        &[hostile],
+        "conservation hostile: the reversed pair",
+    )
+    .await;
     assert_eq!(
         outcome.refusal,
-        Some(ClaimsSbfError::Identity as u32),
-        "with economic-slice bytes the LBV2 reader is the one that refuses, \
-         one line before the kernel's; logs: {:?}",
+        Some(ClaimsConservationSbfErrorV1::Identity as u32),
+        "the account offered as the vault is not owned by the Custody transfer authority; \
+         logs: {:?}",
         outcome.logs,
     );
-    assert_ne!(
-        ClaimsSbfError::Identity as u32,
-        ClaimsSbfError::Economic as u32,
-        "the two refusals must be distinguishable or this pair proves nothing",
-    );
-    println!(
-        "conservation split (economic-slice aggregate): refused {:#06x}, {} CU consumed",
-        ClaimsSbfError::Identity as u32,
-        outcome.units,
-    );
 }
 
 // ---------------------------------------------------------------------------
-// Why no third aggregate exists
+// The census's own control
 // ---------------------------------------------------------------------------
 
-/// No aggregate BYTES satisfy both of the route's two readers.
+/// The census reads VIOLATED when a law is broken, or its greens prove nothing.
 ///
-/// The ELF campaigns above show the route refusing twice; this is the reason,
-/// stated where it can be read without a bank. It is a permanent property of
-/// the two families' encodings, not a fact about this fixture.
+/// Every other test in this file asserts that eight laws HOLD over a round
+/// trip. An instrument that cannot report a breach reports the same thing
+/// whether or not one occurred, so this drives one observation past each law
+/// and requires the exact verdict.
 #[test]
-fn no_aggregate_bytes_satisfy_both_of_the_routes_readers() {
-    use dclutch_product::economic_slice::market_hoard;
-    let (_, world) = world(AggregateBodyV1::LiabilityBasisV2);
-    let mut liability = world.shared.claims_market_bytes.clone();
-    put_narrow_market_supplies_v2(
-        &mut liability,
-        &vec![FOUNDED_SETS; usize::try_from(CLAIM_COUNT).expect("width")],
-    )
-    .expect("founded supplies");
-    let slice = economic_slice_aggregate_bytes(&world.shared, world.release_set);
-
-    LiabilityBasisMarketViewV2::decode(&liability).expect("the LBV2 reader accepts LBV2 bytes");
-    assert!(
-        market_hoard(&liability).is_err(),
-        "the economic-slice reader must refuse LBV2 bytes",
-    );
-    assert_eq!(
-        market_hoard(&slice),
-        Ok(FOUNDED_SETS),
-        "the economic-slice reader accepts economic-slice bytes",
-    );
-    assert!(
-        LiabilityBasisMarketViewV2::decode(&slice).is_err(),
-        "the LBV2 reader must refuse economic-slice bytes",
-    );
-    assert_ne!(
-        liability.len(),
-        slice.len(),
-        "at one width the two families do not even agree on the account's size, \
-         so no allocation can hold both",
-    );
-}
-
-/// And no Position bytes do either.
-///
-/// The aggregate refuses first, so the ELF campaigns above never reach the
-/// Position half. It has the same defect: `ProtocolPositionSeedsV2` addresses
-/// an LBV2 Position, `PositionViewV2` decodes one, and `position_native` /
-/// `position_revision` / `execute_basket` read an economic-slice one.
-#[test]
-fn no_position_bytes_satisfy_both_of_the_routes_readers() {
-    use dclutch_product::economic_slice::{
-        POSITION_HEADER_BYTES, SCALAR_BYTES, initialize_position, position_native,
+fn the_census_reads_red_when_a_law_is_broken() {
+    let sound = |stage: &'static str| ObservationV1 {
+        stage,
+        mint_supply: 32,
+        token_atoms: BTreeMap::from([("hoard", 21), ("founder", 6), ("stranger", 5)]),
+        class_atoms: BTreeMap::from([("HoardPrincipal", 21)]),
+        accounts: BTreeMap::from([("hoard", (true, 2_039_280))]),
+        aggregate_supply: vec![7, 7, 7, 7],
+        position_totals: vec![7, 7, 7, 7],
+        claim_unit_atoms: 3,
+        payer: Pubkey::new_from_array([0x31; 32]),
+        payer_lamports: 10_000_000_000,
+        declared_class_deltas: BTreeMap::from([("HoardPrincipal", 0)]),
+        declared_collateral_delta: 0,
+        declared_fee_lamports: Some(5_000),
+        lamports_inapplicable: None,
     };
-    let (_, world) = world(AggregateBodyV1::LiabilityBasisV2);
-    let count = usize::try_from(CLAIM_COUNT).expect("width");
-    let failure = CLAIM_COUNT - 1;
-    let mut balances = vec![0_u64; count];
-    *balances.get_mut(count - 1).expect("failure coordinate") = FOUNDED_SETS;
-    let escrow_owner = escrow_owner_v1(world.shared.core_market, failure);
-    let liability = compile_narrow_position_v2(
-        CLAIMS_PROGRAM_ID,
-        world.shared.claims_market,
-        escrow_owner,
-        world.shared.semantic_basis_id,
-        &balances,
-        POSITION_REVISION,
-    )
-    .expect("escrow Position")
-    .bytes;
+    let status = |census: &CensusV1, now: &ObservationV1, law: &str| -> &'static str {
+        census
+            .evaluate(now)
+            .into_iter()
+            .find(|verdict| verdict.law == law)
+            .unwrap_or_else(|| panic!("{law} is evaluated"))
+            .status
+    };
 
-    let mut slice = vec![0_u8; POSITION_HEADER_BYTES + count * 2 * SCALAR_BYTES];
-    initialize_position(
-        &mut slice,
-        world.shared.core_market.to_bytes(),
-        escrow_owner.to_bytes(),
-        CLAIM_COUNT,
-    )
-    .expect("canonical economic-slice Position");
-
-    LiabilityBasisPositionViewV2::decode(&liability)
-        .expect("the LBV2 reader accepts LBV2 Position bytes");
-    assert!(
-        position_native(&liability, CLAIM_COUNT, failure).is_err(),
-        "the economic-slice reader must refuse an LBV2 Position",
-    );
-    assert_eq!(
-        position_native(&slice, CLAIM_COUNT, failure),
-        Ok(0),
-        "the economic-slice reader accepts economic-slice Position bytes",
-    );
-    assert!(
-        LiabilityBasisPositionViewV2::decode(&slice).is_err(),
-        "the LBV2 reader must refuse an economic-slice Position",
-    );
-    // THE WIDTHS COINCIDE HERE AND THAT IS NOT REASSURANCE. At `claim_count`
-    // four, `128 + 4*8` and `96 + 4*16` are both 160, so a length check would
-    // pass over two accounts that share not one field. The first draft of this
-    // test asserted the lengths differ, as the aggregates' do, and went red on
-    // its own claim -- which is why the discriminating property is stated as
-    // the MAGIC, the thing that actually separates the two families at every
-    // width.
-    assert_eq!(
-        liability.len(),
-        slice.len(),
-        "at width four, only by accident"
-    );
-    assert_ne!(
-        liability.get(..8),
-        slice.get(..8),
-        "the two Position families are separated by their magic, at every width",
-    );
-}
-
-/// The join itself: a founded refunding Market whose two Positions sum to one
-/// complete set at every coordinate, beside a real Custody HoardPrincipal vault.
-///
-/// This is the fixture the refunding walk was owed and did not have. It asserts
-/// the founding-time layout `founding_v5`'s `refunding_founding_vectors_v1`
-/// produces, read back off the accounts this world plants rather than off the
-/// function -- so the fixture and the route agree about what a founded
-/// refunding Market looks like without either restating the other.
-#[test]
-fn the_joined_fixture_is_a_founded_refunding_market_with_a_custody_hoard() {
-    let (_, world) = world(AggregateBodyV1::LiabilityBasisV2);
-    let count = usize::try_from(CLAIM_COUNT).expect("width");
-    let failure = CLAIM_COUNT - 1;
-    let founder = Pubkey::new_from_array([0x31; 32]);
-    let mut founder_balances = vec![FOUNDED_SETS; count];
-    *founder_balances.get_mut(count - 1).expect("failure") = 0;
-    let founder_position = compile_narrow_position_v2(
-        CLAIMS_PROGRAM_ID,
-        world.shared.claims_market,
-        founder,
-        world.shared.semantic_basis_id,
-        &founder_balances,
-        POSITION_REVISION,
-    )
-    .expect("founder Position");
-    let escrow_owner = escrow_owner_v1(world.shared.core_market, failure);
-    let mut escrow_balances = vec![0_u64; count];
-    *escrow_balances.get_mut(count - 1).expect("failure") = FOUNDED_SETS;
-    let escrow = compile_narrow_position_v2(
-        CLAIMS_PROGRAM_ID,
-        world.shared.claims_market,
-        escrow_owner,
-        world.shared.semantic_basis_id,
-        &escrow_balances,
-        POSITION_REVISION,
-    )
-    .expect("escrow Position");
-
-    let founder_view =
-        LiabilityBasisPositionViewV2::decode(&founder_position.bytes).expect("founder view");
-    let escrow_view = LiabilityBasisPositionViewV2::decode(&escrow.bytes).expect("escrow view");
-    for coordinate in 0..CLAIM_COUNT {
-        let held = founder_view
-            .balance(&founder_position.bytes, coordinate)
-            .expect("founder balance")
-            + escrow_view
-                .balance(&escrow.bytes, coordinate)
-                .expect("escrow balance");
+    let mut census = CensusV1::default();
+    let first = sound("first");
+    for law in ["L1", "L3", "L4"] {
         assert_eq!(
-            held, FOUNDED_SETS,
-            "the two Positions sum to one complete set at coordinate {coordinate}",
+            status(&census, &first, law),
+            "holds",
+            "{law} is stated over one observation and holds on a sound one",
         );
     }
+    for law in ["L2", "L5", "L6", "L7", "L8"] {
+        assert_eq!(
+            status(&census, &first, law),
+            "inapplicable",
+            "{law} needs a predecessor and says so rather than reading green",
+        );
+    }
+    census.observations.push(first);
+
+    let mut untracked = sound("untracked");
+    untracked.mint_supply = 33;
     assert_eq!(
-        founder_view
-            .balance(&founder_position.bytes, failure)
-            .expect("founder failure balance"),
-        0,
-        "the founder holds NO failure claim on a refunding Market",
+        status(&census, &untracked, "L1"),
+        "violated",
+        "L1 sees an atom in an account the census does not name",
+    );
+
+    let mut undeclared = sound("undeclared");
+    undeclared.token_atoms.insert("hoard", 26);
+    undeclared.class_atoms.insert("HoardPrincipal", 26);
+    undeclared.mint_supply = 37;
+    assert_eq!(
+        status(&census, &undeclared, "L2"),
+        "violated",
+        "L2 sees the Hoard move by an amount the stage did not declare",
     );
     assert_eq!(
-        escrow.account, world.escrow_position,
-        "the escrow the world plants is the Market's own derived one",
+        status(&census, &undeclared, "L8"),
+        "violated",
+        "and L8 sees the same movement as the HoardPrincipal class's",
     );
+
+    let mut unbalanced = sound("unbalanced");
+    unbalanced.position_totals = vec![7, 7, 7, 6];
     assert_eq!(
-        world.shared.payout_scale,
-        u64::from(CLAIM_COUNT - 1),
-        "and the record, not a caller, is what says the Market refunds",
+        status(&census, &unbalanced, "L3"),
+        "violated",
+        "L3 sees a claim the aggregate owes that no Position holds",
     );
-    assert_ne!(
-        world.hoard, world.custody_authority,
-        "the HoardPrincipal vault and the Custody transfer authority are two \
-         distinct derived accounts",
+
+    let mut thin = sound("thin");
+    thin.token_atoms.insert("hoard", 20);
+    thin.class_atoms.insert("HoardPrincipal", 20);
+    thin.mint_supply = 31;
+    assert_eq!(
+        status(&census, &thin, "L4"),
+        "violated",
+        "L4 sees a vault that does not back the worst outcome at the basis scale",
+    );
+
+    let mut leaked = sound("leaked");
+    leaked.token_atoms.insert("founder", 5);
+    leaked.mint_supply = 31;
+    assert_eq!(
+        status(&census, &leaked, "L5"),
+        "violated",
+        "L5 sees the tracked total move when the stage declared it would not",
+    );
+
+    let mut closed = sound("closed");
+    closed.accounts.insert("hoard", (false, 0));
+    assert_eq!(
+        status(&census, &closed, "L6"),
+        "violated",
+        "L6 sees a funded watched account vanish",
+    );
+
+    let mut overpaid = sound("overpaid");
+    overpaid.payer_lamports = 10_000_000_000 - 6_000;
+    assert_eq!(
+        status(&census, &overpaid, "L7"),
+        "violated",
+        "L7 sees the payer lose more lamports than the fee it declared",
+    );
+
+    let mut excused = sound("excused");
+    excused.payer_lamports = 10_000_000_000 - 6_000;
+    excused.lamports_inapplicable = Some("a stated reason");
+    assert_eq!(
+        status(&census, &excused, "L7"),
+        "inapplicable",
+        "and an INAPPLICABLE names its reason rather than passing",
     );
 }

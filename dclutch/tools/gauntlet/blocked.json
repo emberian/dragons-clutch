@@ -210,6 +210,12 @@
       "class": "status-report",
       "reason": "The wildcard refusal arm of Core's `Action` dispatch, and a route the census could not see until `DCLTCRQ2` was read at the dispatch guard rather than only inside `Request::decode`. It is reached by an instruction carrying the Core request magic whose decoded action and length match no arm -- a shape every gauntlet campaign builds correctly by construction, so no tier drives it yet. It is not structurally undrivable: a hostile that sends a well-formed `Request` at a length no arm admits reaches it, and that binding is what this entry is waiting for.",
       "owner": "LEAN-TAGS-2, then whoever adds the malformed-Action hostile"
+    },
+    {
+      "route": "claims/claims_conservation_v1::process",
+      "class": "unwired",
+      "reason": "The ELF campaign exists at programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/claims_conservation.rs and has never been executed: the convergence lane that wrote it had no SBF toolchain and the build-wave merge queue was forbidden SBF builds, so SBF_OUT_DIR has never held a dclutch_claims_sbf.so on this machine. It compiles, and every address it derives comes from the program's or the operator's own helper rather than a restatement; three defects in it were caught by reading it against the route. That is not the same as green. Remove this entry once tools/gauntlet/claims-fractional-atomic/run-fractional-atomic.sh runs the campaign and its bindings land.",
+      "owner": "whoever next has an SBF toolchain (the campaign); S11/gauntlet (bindings)"
     }
   ]
 }

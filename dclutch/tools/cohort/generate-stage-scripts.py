@@ -103,6 +103,10 @@ MARKET_KIND = {
     "refund-founder": ("two-source",),
     "refund-census": ("two-source",),
     "escrow-zero": ("two-source",),
+    # Split and merge are a fractional-atomic round trip on the Direct market:
+    # the two-source market carries neither split field.
+    "split": ("direct",),
+    "merge": ("direct",),
     "found-general-family": ("general",),
     "refound-general": ("general",),
     "found-general": ("general",),

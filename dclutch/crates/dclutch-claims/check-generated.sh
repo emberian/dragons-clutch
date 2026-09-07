@@ -51,3 +51,12 @@ grep -q '^pub const LIABILITY_BASIS_MARKET_HEADER_BYTES_V2: usize = 256;$' "$can
 grep -q '^pub const LIABILITY_BASIS_POSITION_HEADER_BYTES_V2: usize = 128;$' "$candidate"
 grep -q '^pub const LIABILITY_BASIS_MARKET_SEED_V2: &\[u8\] = b"dclutch:lbv2:market";$' "$candidate"
 verify EmitClaimsLiabilityBasisStateV2Rust.lean generated_liability_basis_state_v2.rs 40
+
+(
+  cd "$formal_dir"
+  lake build DClutchSemantics.ClaimsConservationV1Abi >/dev/null
+  lake env lean --run EmitClaimsConservationV1Rust.lean >"$candidate"
+)
+grep -q '^pub const CLAIMS_CONSERVATION_REQUEST_BYTES_V1: usize = 592;$' "$candidate"
+grep -q '^pub const CLAIMS_CONSERVATION_SPLIT_TAG_V1: u8 = 0;$' "$candidate"
+verify EmitClaimsConservationV1Rust.lean generated_conservation_v1.rs 40
