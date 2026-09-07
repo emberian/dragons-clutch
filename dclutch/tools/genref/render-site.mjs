@@ -689,22 +689,13 @@ for (const relative of instructionPages) {
 // The posture the whole site is written to, pinned where a reader meets it
 // first. These are not style preferences -- each one replaced a live overclaim.
 //
-// The posture MOVED on 2026-08-30: a market opened that can actually take a
-// trade, which made "there is no open market" false in letter rather than
-// merely narrow, so the pins move with it. Each needle is worded so the page
-// FOOTER cannot satisfy it -- the footer states the same fact in its own
-// words, and a pin a footer satisfies is a pin that checks nothing.
+// These needles name the reader-visible boundaries that remain true across a
+// fresh cohort. A past cohort's open Market or its CLI invocation cannot make a
+// new deployment publicly joinable; that needs the current checked binding.
 const requiredPosture = [
-  [`${DOCS}/guides/README.html`, "one market on it is open for trading"],
-  [`${DOCS}/guides/trader.html`, "one devnet market is open for trading"],
-  // Joining is one third of the chain that works today, and for a long time no
-  // guide mentioned it at all. The needle is the guide's PROSE, not its command
-  // line: the command moved to the `--bootstrap-bin "$SUCCESSOR" join` form,
-  // which puts the program and the verb on different lines, so the old
-  // `dclutch join` needle had stopped matching what the guide says; and the
-  // terminal client's executable is now `dclutch-terminal`, so a needle spelled
-  // from the command line would have to be respelled on every rename.
-  [`${DOCS}/guides/trader.html`, "Today you join from the public command line"],
+  [`${DOCS}/guides/README.html`, "the live cohort's markets are read off the chain by the site"],
+  [`${DOCS}/guides/trader.html`, "Treat a live deployment as a dClutch deployment only when its"],
+  [`${DOCS}/guides/trader.html`, "A browser wallet admission is available only for a market whose public Market"],
 ];
 for (const [relative, needle] of requiredPosture) {
   const rendered = fs.readFileSync(path.join(outDir, relative), "utf8");

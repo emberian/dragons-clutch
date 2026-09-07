@@ -1,216 +1,23 @@
-//! Current-source positive pre-Market Series Expire campaign through the real
-//! Registry, Trading, Core, Custody, and Claims ELFs.
+//! Accepted pre-Market Series Expire and exact hostile rollback through real
+//! Registry, Trading, Core, Custody and Claims ELFs in a ProgramTest bank.
 //!
-//! Fixture construction lives here; the release compiler remains owned by
-//! `dclutch_trading_sbf::series::release_v5`, and the physical evidence joins
-//! remain owned by the adjacent support module.
+//! Measurements, source identities and artifact hashes belong in
+//! `docs/evidence/SERIES_PREMARKET_EXPIRY_PROGRAM_TEST_2026_09_07.md`.
+//! This campaign does not execute real Series founding on a local validator.
 //!
-//! # THREE ROWS ARE UNMEASURED ON THIS BRANCH, AND TWO WALLS ARE REPAIRED
+//! The release compiler is `series::release_v5`; the generated Expire frame is
+//! the authority for its coordinates. The operator and fixture independently
+//! pack the same selected instruction and assert exact agreement here.
 //!
-//! `272fb867d` appended the Custody callee and reported the three rows
-//! moving from `Release` (`0x4001`) to `Content` (`0x4003`) at 530,018 CU in
-//! the FIRST Custody route's preflight, `custody-prepare` case 6. That
-//! measurement was of a working tree: `hot_v3/series_expiry.rs` still pinned
-//! the logical frame at 81 while the profile emitted 82, and `git log -S`
-//! finds no commit in which it ever said 82. On the committed sources the
-//! pre-Market authenticator refused `Content` at its width check, roughly
-//! 200,000 CU before the wall the message named. Both are repaired here and
-//! neither is measured: the build wave builds no SBF, and the number that
-//! belongs in this paragraph is the one the next real-ELF run produces.
+//! Expiry keeps the future Market vacant while closing its transient Custody
+//! projection, refunding recorded rent to RentCredit, consuming the permit,
+//! and committing the Trading replay poststates. Core observes replay accounts
+//! through readonly child views; Trading remains their sole commit authority.
 //!
-//! ## THE FRAME HAS ONE AUTHOR
-//!
-//! `formal/dclutch-semantics/DClutchSemantics/SeriesExpireFrameV5Abi.lean`
-//! owns the eighty-two coordinates, the five windows, every named coordinate,
-//! the privileged representatives and the thirty-seven aliases; the emission
-//! `crates/dclutch-trading/src/series/generated_expire_frame_v5.rs` is what
-//! `expire_funding_artifacts_v5`, `hot_v3::series_expiry`, this fixture, the
-//! operator and the successor read. A CPI's callee is not a member of its own
-//! account list and `CustodyFrameRoleV1` has no `CustodyProgram` role, so the
-//! callee is Expire's own coordinate, appended past every window (81), and the
-//! theorem `the_windows_tile_the_routes_and_the_callee_is_last` says so.
-//!
-//! ## THE CUSTODY CHILDREN BIND TO THE FUTURE MARKET
-//!
-//! `custody-prepare` case 6 was `custody.market != parent.market` and
-//! `custody.semantic.generation != parent.generation`: the escrow requests
-//! name the FUTURE occurrence Market at occurrence + 1 -- the Market whose
-//! PDAs the escrow's replay, vault and transfer authority are, and which every
-//! Expire Custody window presents as its `CoreMarket` (coordinate 7) -- while
-//! the composition parent was the executing envelope's controller Market at
-//! its own generation. RULING (provisional, BUILD-SERIES): the child
-//! composition gains a projected-market authority for the selected pre-Market
-//! Series action and nothing else moves. `try_authenticate_series_expiry_premarket_v1`
-//! now returns `SeriesExpiryPremarketFactsV1` (the RentCredit, the future
-//! Market it proved vacant and PDA-exact, the generation the permit and the
-//! RentCredit are keyed on); `custody_child_market_v3` is the envelope for
-//! every live-Market family and those facts for this one; both child walks
-//! build their `CustodyCompositionParentV3` from it. The Core route keeps the
-//! envelope, whose controller Market its caller authority is seeded from.
-//!
-//! ## THE SERIES ROOT'S CONFIG IDENTITY HAS ONE AUTHOR
-//!
-//! `native_tests::the_series_root_config_identity_has_one_author` proves it
-//! without an ELF, and it was never really a choice between two conventions.
-//! A Registry record's coordinate is `[RAW_RECORD_PDA_SEED_V1, schema,
-//! digest]` with `digest == hash(bytes)`, and `borrow_record_against` refuses
-//! unless `hash(&data) == digest`. So `template_content_id(t) =
-//! sha256("dclutch/series-template-v3" || 0x00 || t)` names a coordinate at
-//! which no Registry record can ever exist. A Series root's
-//! `selection().config()` is `hash(t)` -- the record digest, exactly what
-//! every other family's is, and what `selected_manifest_entry_v1` has always
-//! written for every family including this one.
-//!
-//! Both values still exist and each has one author now:
-//!
-//! - `hash(t)` -- the root's config field, the manifest entry's `config_id`,
-//!   the config record's PDA, and what Core's four Series routes compare the
-//!   root against (`series_open.rs`, `series_consume.rs`,
-//!   `series_permit_expiry.rs`, `series_permit_expiry_precommit_v1.rs`, each
-//!   from the Template record's bytes it already borrowed).
-//! - `template_content_id(t)` -- the family request's `template()`, the
-//!   occurrence proof, the Ticket derivation, and what
-//!   `SeriesArtifactSelectionV3::from_config_record` DERIVES from the config
-//!   record's bytes. Its fields are private and that constructor is the only
-//!   way in, so no caller can hand the artifact join a root's config field
-//!   again.
-//!
-//! The Series config record IS the Template record: every Series action
-//! descriptor pins `config_schema() == SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3`,
-//! the schema the Template is installed under, and the Expire profile's own
-//! `ROUTE_ALIASES` already declares coordinate 71 -- Core's Template raw
-//! record -- an alias of coordinate 1, the config raw. The artifact had said
-//! they were one account all along; only the root's config field disagreed.
-//! `trading-sbf/src/series/accounts.rs::authenticate_root`, the sixth site,
-//! was an orphan with zero callers and is deleted rather than resynchronised.
-//!
-//! ## FOUR MORE WALLS CAME DOWN BEHIND IT, AND ONE WAS A PROGRAM DEFECT
-//!
-//! 1. **The SPL Token program.** The bank deploys it as a Loader-V3 program;
-//!    the fixture modelled an empty native-loader account. Coordinate 19's
-//!    rule is `Exact`, so the projection refused `DataLengthMismatch`.
-//! 2. **The Rent program.** `program_with_view` models a program the BANK
-//!    deploys -- an empty installed stand-in with a 36-byte observed view --
-//!    and nothing deploys `dclutch_rent_sbf` into this ProgramTest, so
-//!    coordinate 57 held zero bytes where the rule declares 36.
-//! 3. **The System builtin.** A native-loader builtin account holds its
-//!    registered name, 21 bytes of `solana_system_program`;
-//!    `system_program_builtin` is the tree's one author for that. It is the
-//!    bank's account, so it is named externally installed, and the installer's
-//!    Rent gate now applies only to accounts this campaign actually installs
-//!    -- a bank-owned builtin's lamports were never this campaign's to fund.
-//! 4. **`sealed_ownership.require` was UNSATISFIABLE for schema V3.** The
-//!    static-ownership verdict is minted from `account_profile_token`, which
-//!    names the whole Registry record; the require site presented
-//!    `funding.base()`, an interior slice 24 bytes in and 24 bytes shorter.
-//!    Pointer identity, so no equality test recovers it: 1,712 against a
-//!    proved 1,736. That is a TRADING DEFECT, not a fixture one, and it had
-//!    gone unnoticed because no schema-V3 family had ever reached the
-//!    statement. `hot_v3.rs` now presents the record the token names.
-//!
-//! Numbers 1 through 3 are one class -- the fixture asserting a width for an
-//! account the BANK owns -- and the campaign no longer has to reach a
-//! 350,000-CU refusal to find them: `audit_expire_profile_data_lengths_v1`
-//! compares every `Exact` rule against the packed frame before a transaction
-//! exists and names the coordinate.
-//!
-//! ## THE INSTRUMENTS THAT FOUND ALL OF IT
-//!
-//! Four `map_err(|_| Content)` sites became `map_err` plus a diagnostic-only
-//! `msg!`, which is AGENTS.md's own prescription and paid for itself four
-//! times in one session. Under `--features hot-cu-profile`:
-//! `dclutch-hot-why:account-projection` names the
-//! `account_profile_contract::v2::Error`;
-//! `dclutch-hot-why:data-length` walks the rules and prints the coordinate,
-//! its declared width and its observed one; and
-//! `dclutch-hot-why:sealed-ownership` names which of the verdict's four
-//! artifact ranges strayed, with both lengths and both pointers. Each turned a
-//! refusal with 2,126 candidate sites into a named line in one run. Nothing
-//! here is compiled into a production ELF.
-//!
-//! ## THE NUMBER NAMES AN ELF
-//!
-//! 533,198 is measured on the Trading ELF built from the sources this file is
-//! committed beside, not on the one the repair was developed against. Those are
-//! different ELFs and they consume different CU: the same three rows read
-//! 527,198 on the build that first cleared the sealed-ownership wall, and
-//! adding the preflight checkpoints and the role-carrier diagnostics moved it
-//! to 533,198 -- 6,000 CU, in a PLAIN build, from code that is entirely behind
-//! `hot-cu-profile` and therefore absent. The frame manifest did not move at
-//! all, so this is a codegen difference and not a new binding; the honest
-//! reading is that the diagnostic scaffolding is not free even when it compiles
-//! to nothing, and that a CU figure is a measurement of one artifact or it is
-//! decoration.
-//!
-//! ## WHAT IS OWED
-//!
-//! The measurement. The three rows on ELFs built from `build/series`, and the
-//! CU and code they report, replace the paragraph above. The TicketStateV3
-//! producer is written (`prepare_funding_artifacts_v5`, four Effect writes
-//! after the lifecycle Create) and proved natively; this route is what
-//! exercises it end to end.
-//!
-//! `precommit_caller_substitutions_...` is RE-BASED and is red for a stated
-//! reason. It used to assert inside its loop, so the first disagreeing leg
-//! ended the run and three legs were never measured. Run together they say:
-//!
-//! | leg | refuses | declared | tx CU | reached the seam |
-//! |---|---|---|---|---|
-//! | `Substitution` | `0x4003` | `0x4001` | 612,713 | no |
-//! | `Writable` | `0x4003` | `0x4003` | 520,935 | no |
-//! | `ForeignOwner` | `0x4003` | `0x4003` | 612,713 | no |
-//! | `NonemptyBody` | `0x4003` | `0x4003` | 520,991 | no |
-//!
-//! THREE OF THE FOUR MATCHED ON THE DISCRIMINANT WITHOUT REACHING COORDINATE
-//! 80. `ForeignOwner` matched the SHARED wall's `Content` at the identical
-//! 612,713 the positive row spends; `Writable` and `NonemptyBody` matched a
-//! DIFFERENT `Content`, 91,778 CU earlier, in the account projection. That is
-//! ledger `M-38` exactly -- a universal-donor code standing in for a seam
-//! nobody had reached -- and the row would have read green on all three the
-//! moment its `Substitution` sibling was fixed. Every leg now has to prove it
-//! reached the seam before its code is believed, and the witness is the log:
-//! each hostile perturbs coordinate 80, which lives in route 4's Core window,
-//! and route 4 is preflighted after all four Custody routes, so a run that
-//! never invoked the Custody program never got there.
-//!
-//! ## WHAT CAME OUT EARLIER TO GET HERE
-//!
-//! Two walls from `8b5d1c96f`, both still gone. The Core route template's
-//! revisions: the conjunct compared the Expire artifact's Core route template
-//! against the live family request and required its two expected revisions to
-//! be EQUAL, where that template is the UN-PATCHED zero placeholder
-//! `encode_request_bank` documents. It now asserts the placeholder under its
-//! own code, `TradingSbfError::SeriesExpireCoreTemplate` (`0x402A`), in 390
-//! CU. And the Ticket's refund owner was the RentCredit's ADDRESS: the kernel,
-//! Core and Trading's pre-CPI mirror all require the RentCredit's
-//! `refund_wallet` to BE the Ticket's refund owner, and the RentCredit is the
-//! account rent lands in, never the beneficiary it is credited to.
-//!
-//! # WHAT THE ARTIFACT REPAIR ACTUALLY WAS, kept because it is not obvious
-//!
-//! The Series kernel had already decided it. `series_proof_count_v3` (formerly
-//! the private `proof_height`) is compared by EQUALITY in
-//! `admit_occurrence_bytes`, not as a floor, and it is a function of immutable
-//! Template config alone. So `128 + 32 * count` is a per-Template CONSTANT
-//! knowable before any request exists, and the artifacts had been written as
-//! if the proof width were a runtime variable. It never was.
-//!
-//! Both spellings of "a borrowed thing is here" are canonically nonempty --
-//! `BorrowedRangeV4::resolve` refuses a zero length and
-//! `BorrowedWitnessPolicyV3::validate` refuses a zero minimum -- so a Template
-//! whose canonical proof is empty declares NO range rather than one that
-//! resolves to zero. Coverage still closes on its own:
-//! `validate_request_coverage` starts its cursor at the 128-byte semantic
-//! prefix and requires it to reach the request's exact end.
-//!
-//! The repair had four authors and this file was none of them: the artifact,
-//! `hot_v3.rs`'s replay-overlap conjunct (which required `ranges.count() == 1`
-//! and would have gone silent), `effect_v4.rs`'s per-route `borrowed_range_count()`
-//! pin, and the shadow generator's source manifest. `consume_artifacts_v4` was
-//! HALF in the same position: its Effect shared the defect, but its
-//! RequestProfile did not -- `authenticate_series_consume_artifacts_v4` splits
-//! the proof off itself and REQUIRES a 128-byte profile, where Expire is
-//! authenticated by the generic Hot path against the complete request.
+//! Caller key, privileges, owner and data have distinct refusal codes. Every
+//! hostile case verifies exact account rollback. A preflight walk can reject a
+//! later child before any CPI, so an earlier Custody invocation is not evidence
+//! that the precommit caller check ran.
 
 #[path = "support/series_premarket_expiry_chain_v1.rs"]
 mod series_premarket_expiry_chain_v1;

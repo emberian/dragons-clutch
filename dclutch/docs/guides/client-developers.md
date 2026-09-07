@@ -238,11 +238,11 @@ position is a fact read from the chain, never assumed from this page.
 Founding is driven by a run spec — a JSON file naming the programs, the
 market recipe, and where the evidence goes. The producer binary does the
 work; wrap it the way `dclutch-terminal found` does
-(`packages/dclutch-cli/src/commands/found.ts`). Do not start from
-`tools/gauntlet/run.sh --mode full`: at HEAD it is intentionally unavailable
-and refuses before work or a build because no supported top-level planner is
-complete. A supported named family runner documents its own inputs and evidence
-boundary.
+(`packages/dclutch-cli/src/commands/found.ts`). The retired aggregate gauntlet
+runner is not a market-founding entry point: it refuses before work or a build
+because no supported top-level planner is complete. Use
+`dclutch-terminal found` or a supported named family runner, whose own command
+documents its inputs and evidence boundary.
 
 ## When a transaction fails
 

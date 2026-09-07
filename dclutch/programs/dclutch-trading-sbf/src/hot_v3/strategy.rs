@@ -1027,6 +1027,7 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
     lifecycle: StateLifecyclePolicyV5<'artifact>,
     profile_join: ValidatedProfileJoinV3<'artifact>,
     action: u32,
+    general_place_order_terms: Option<&[u8]>,
     current_rent_quotes: &[AuthenticatedRentQuoteV5],
     span_counts: &[u32],
     tail_count: u32,
@@ -1126,6 +1127,14 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
     hot_cu_checkpoint!("p5r-account-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
+    if let Some(signed_terms) = general_place_order_terms {
+        seed_general_place_order_rows_from_signed_terms_v3(
+            tail_count,
+            signed_terms,
+            &mut current_scalars,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+    }
     require_projected_tail_count_agreement_v3(
         account_profile,
         authenticated_product_tail_count,

@@ -179,6 +179,7 @@ pub(crate) fn fractional_selected_payload_v1(
         // is the whole config split as the seam sees it.
         config_hex: crate::plan::hex(&closure.config),
         publication_hex: crate::plan::hex(&closure.publication),
+        creation_principal_lamports: 0,
         records: closure
             .records
             .iter()
@@ -298,6 +299,7 @@ mod tests {
             config: &closure.config,
             activation_deadline_slot: u64::MAX,
             root_rent_minimum_lamports: 1_000_000,
+            creation_principal_lamports: 0,
         })
         .expect("seam entry");
         let base = {
@@ -416,6 +418,7 @@ mod tests {
             config: &closure.config,
             activation_deadline_slot: u64::MAX,
             root_rent_minimum_lamports: 1_000_000,
+            creation_principal_lamports: 0,
         })
         .expect("seam entry");
 
@@ -501,6 +504,7 @@ mod tests {
             config: &closure.config,
             activation_deadline_slot: u64::MAX,
             root_rent_minimum_lamports: 1_000_000,
+            creation_principal_lamports: 0,
         })
         .expect("neutral entry");
     }

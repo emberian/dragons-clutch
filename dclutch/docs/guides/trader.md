@@ -59,58 +59,25 @@ worked out from the market and your own wallet, so nobody assigns you one
 and nobody can hand you someone else's — the addresses are yours before
 either account exists. Joining is what creates them.
 
-Today you join from the public command line. Set each path to an absolute path:
+A browser wallet admission is available only for a market whose public Market
+page carries a checked first-admission binding. Connect the wallet that will
+own the Position, open that Market page, and choose the admission action. The
+browser asks the Rust planner to reauthenticate the finalized Market and
+linked-basis record, saves the exact unsigned request before the wallet opens,
+submits the signed bytes once, and reports success only after the signature and
+the Position's finalized poststate agree.
 
-```sh
-dclutch-terminal --rpc "$DEVNET_RPC" \
-  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
-  --bootstrap-bin "$SUCCESSOR" join \
-  --plan "$PLAN" \
-  --campaign-evidence "$CAMPAIGN_EVIDENCE" \
-  --keypair "$POSITION_KEYPAIR" \
-  --output "$ADMISSION_REPORT"
-```
+If a Market has no checked first-admission binding, the public entrance stays
+closed. A market address, an aquarium observation, or an old cohort report is
+not a substitute: wait for the market's checked founding report to be bound and
+published. This is a launch gate, not a wallet error to retry.
 
-Two things worth knowing before you run it.
-
-**It does not send anything unless you tell it to.** Without `--execute` the
-Rust admission child reads finalized state, plans the exact transaction, and
-writes the durable report — then stops. Inspect that report, then rerun the
-same command with `--execute`. If execution is interrupted, rerun with the same
-inputs and report path; the child resumes that operation rather than inventing
-a replacement.
-
-**You need the market's own documents.** The plan and campaign evidence
-describe the market you are joining; they are published alongside a public
-market's evidence, or written by your own local run. You cannot join a
-market by address alone, and that is deliberate: what you sign should be
-checkable against something the market published, not assembled from a
-name.
-
-The key file is also the identity: `dclutch-terminal` derives the Position owner from
-`$POSITION_KEYPAIR`; you do not type a separate address. When you started from
-the web app, verify that the derived public key is the connected address whose
-Position the page displayed.
-
-Against devnet you must pass the full `--i-mean-devnet` value shown above. An
-owned validator must use the exact credential-free
-`http://127.0.0.1:PORT/` endpoint form and omit the acknowledgement. A
-loopback host in any other form is refused as a spelling error; the CLI does
-not guess which chain you meant.
-
-You can fund the Position as you join, with
-`--collateral-source-owner-keypair`, `--collateral-source-account` and
-`--collateral-quantity-atoms`. Give all three or none: a half-specified
-funding is refused instead of being interpreted. Leave them off and you
-join with a Position holding nothing, which is a perfectly good place to
-start.
-
-By default the fee payer is you. Name a different one with
-`--fee-payer-keypair` if somebody else is paying.
-
-The web app shows whether the connected address has a Position, what it holds,
-what joining creates, and the exact command for its selected endpoint.
-Admission itself currently runs through the CLI, not a browser wallet request.
+The CLI remains useful for an operator's or local run's checked plan and
+campaign evidence. Its key file is the Position identity, but an operator
+artifact never authorizes a stranger's public wallet transaction. Against
+devnet, confirm the cluster identity; an owned validator uses its own
+credential-free loopback endpoint. The client does not guess which chain you
+meant.
 
 ## Who gets the trading fee
 

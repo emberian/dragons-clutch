@@ -377,6 +377,45 @@ if command -v rustup >/dev/null 2>&1 && rustup run 1.97.1 rustfmt --version >/de
     bad "fmt: lib.rs untouched by the refused call"
   fi
   expect_success "fmt: --allow-root permits a crate root" "$LANE_SH" fmt --allow-root "$WORK/fmtdir/lib.rs"
+  mkdir -p "$WORK/fmtdir/child"
+  cat >"$WORK/fmtdir/child.rs" <<'EOF'
+pub fn child(){let x=1;}
+EOF
+  cat >"$WORK/fmtdir/child/grandchild.rs" <<'EOF'
+pub fn grandchild(){let x=2;}
+EOF
+  cp "$WORK/fmtdir/child.rs" "$WORK/child-before.rs"
+  cp "$WORK/fmtdir/child/grandchild.rs" "$WORK/grandchild-before.rs"
+  cat >"$WORK/fmtdir/lib.rs" <<'EOF'
+mod child;
+#[path = "child/grandchild.rs"]
+mod grandchild;
+pub fn root(){let x=3;}
+EOF
+  expect_success "fmt: named root with child modules" "$LANE_SH" fmt --allow-root "$WORK/fmtdir/lib.rs"
+  if cmp -s "$WORK/fmtdir/child.rs" "$WORK/child-before.rs" && cmp -s "$WORK/fmtdir/child/grandchild.rs" "$WORK/grandchild-before.rs"; then
+    ok "fmt: normal and path children remain byte-identical"
+  else
+    bad "fmt: normal and path children remain byte-identical"
+  fi
+  cat >"$WORK/fmtdir/leaf.rs" <<'EOF'
+#[path = "child.rs"]
+mod unrelated;
+pub fn leaf(){let x=4;}
+EOF
+  cp "$WORK/child-before.rs" "$WORK/fmtdir/child.rs"
+  expect_success "fmt: named leaf with path child" "$LANE_SH" fmt "$WORK/fmtdir/leaf.rs"
+  if cmp -s "$WORK/fmtdir/child.rs" "$WORK/child-before.rs"; then
+    ok "fmt: leaf path child remains byte-identical"
+  else
+    bad "fmt: leaf path child remains byte-identical"
+  fi
+  expect_success "fmt: child changes only when named" "$LANE_SH" fmt "$WORK/fmtdir/child.rs"
+  if cmp -s "$WORK/fmtdir/child.rs" "$WORK/child-before.rs"; then
+    bad "fmt: explicitly named child was formatted"
+  else
+    ok "fmt: explicitly named child was formatted"
+  fi
 else
   echo "  skip: rustup toolchain 1.97.1 not available in this environment; skipping the two live-format checks" >&2
 fi

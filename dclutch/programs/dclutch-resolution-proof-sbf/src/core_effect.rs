@@ -202,7 +202,8 @@ pub(crate) fn process_direct_funding_activation_v1(
         .map_err(|_| ResolutionError::Funding)?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
-    authenticate_direct_material_and_funding(direct, accounts, request.as_ref(), manifest)?;
+    let expected_mask =
+        authenticate_direct_material_and_funding(direct, accounts, request.as_ref(), manifest)?;
     authenticate_direct_source(program_id, direct, request.as_ref(), state)?;
     let manifest_id = CapabilityContentId::new(request.role.capability_manifest)
         .map_err(|_| ResolutionError::Funding)?;
@@ -218,6 +219,7 @@ pub(crate) fn process_direct_funding_activation_v1(
         manifest,
         clock.slot,
         &rent,
+        expected_mask,
     )
 }
 
@@ -256,7 +258,7 @@ fn authenticate_direct_material_and_funding(
     accounts: &[AccountInfo<'_>],
     request: &FundingActivationRequestV1,
     manifest: CapabilityManifestV1<'_>,
-) -> ProgramResult {
+) -> Result<u16, ProgramError> {
     let material_data = direct
         .source_material
         .try_borrow_data()
@@ -265,7 +267,8 @@ fn authenticate_direct_material_and_funding(
         SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let recovery_policy =
         authenticate_direct_recovery_policy(direct, accounts.get(18), accounts.get(19), material)?;
-    authenticate_funding_entries(material, recovery_policy, manifest, request.role)
+    authenticate_funding_entries(material, recovery_policy, manifest, request.role)?;
+    expected_funding_mask(request.role, recovery_policy)
 }
 
 #[inline(never)]
@@ -280,6 +283,7 @@ fn commit_direct_activation(
     manifest: CapabilityManifestV1<'_>,
     activation_slot: u64,
     rent: &Rent,
+    expected_mask: u16,
 ) -> ProgramResult {
     if direct.receipt.owner == program_id {
         return authenticate_completed_activation(
@@ -289,6 +293,7 @@ fn commit_direct_activation(
             request_digest,
             manifest_id,
             manifest,
+            expected_mask,
         );
     }
 
@@ -296,7 +301,7 @@ fn commit_direct_activation(
         direct.receipt,
         rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1),
     )?;
-    let mut ledger_bytes = Box::new(copy_ledger_bytes(direct.funding_ledger)?);
+    let mut ledger_bytes = copy_ledger_bytes(direct.funding_ledger)?;
     let pending_digest = funding_lifecycle_account_digest_v1(
         direct.funding_ledger.owner.to_bytes(),
         direct.funding_ledger.key.to_bytes(),
@@ -313,17 +318,20 @@ fn commit_direct_activation(
         manifest_id,
         manifest,
         request.role,
+        expected_mask,
         FundingLedgerStatusV2::Pending,
         ledger_bytes.as_ref(),
         direct.funding_ledger.lamports(),
         false,
     )?;
     let mut beneficiary_credit = 0_u64;
-    for entry_index in [
-        request.role.recovery_entry_index,
-        request.role.exhaustion_entry_index,
-        request.role.failure_entry_index,
-    ] {
+    let selected_mask = FundingLedgerV2::decode(ledger_bytes.as_ref())
+        .map_err(|_| ResolutionError::Funding)?
+        .selected_mask();
+    for entry_index in 0_u16..16 {
+        if selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         let debit = FundingLedgerV2::activate_in_place(
             ledger_bytes.as_mut(),
             manifest_id,
@@ -354,6 +362,7 @@ fn commit_direct_activation(
         manifest_id,
         manifest,
         request.role,
+        expected_mask,
         FundingLedgerStatusV2::Active,
         ledger_bytes.as_ref(),
         post_ledger_lamports,
@@ -454,6 +463,7 @@ pub(crate) fn process_direct_funding_close_v1(
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
     authenticate_funding_entries(material, recovery_policy, manifest, request.role)?;
+    let expected_mask = expected_funding_mask(request.role, recovery_policy)?;
     let manifest_id = CapabilityContentId::new(request.role.capability_manifest)
         .map_err(|_| ResolutionError::Funding)?;
 
@@ -464,6 +474,7 @@ pub(crate) fn process_direct_funding_close_v1(
         market,
         manifest_id,
         manifest,
+        expected_mask,
         clock.unix_timestamp,
         &rent,
     )
@@ -478,6 +489,7 @@ fn commit_direct_close(
     market: DirectCloseMarketFacts,
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
+    expected_mask: u16,
     close_time: i64,
     rent: &Rent,
 ) -> ProgramResult {
@@ -517,12 +529,12 @@ fn commit_direct_close(
         .retire(request.generation, close_time, 1, 1)
         .map_err(|_| ResolutionError::Transition)?;
 
-    let mut closed_ledger = Box::new(copy_ledger_bytes(direct.funding_ledger)?);
+    let mut closed_ledger = copy_ledger_bytes(direct.funding_ledger)?;
     // The prestate, authenticated once and held across the close loop: the
     // loop mutates `closed_ledger`, and the rent term every row's close is
     // priced at is the prestate's own record (decision 0030), never the
     // sysvar. One ledger-width heap copy; the frame ratchet is owed.
-    let prestate_bytes = Box::new(*closed_ledger);
+    let prestate_bytes = closed_ledger.clone();
     let prestate = FundingLedgerV2::decode(prestate_bytes.as_ref())
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
         .map_err(|_| ResolutionError::Funding)?;
@@ -542,6 +554,7 @@ fn commit_direct_close(
         manifest_id,
         manifest,
         request.role,
+        expected_mask,
         FundingLedgerStatusV2::Active,
         closed_ledger.as_ref(),
         direct.funding_ledger.lamports(),
@@ -553,11 +566,14 @@ fn commit_direct_close(
     let mut ledger_remaining_native_principal = 0_u64;
     let mut ledger_rent_lamports = 0_u64;
     let mut ledger_lamport_surplus = 0_u64;
-    for entry_index in [
-        request.role.recovery_entry_index,
-        request.role.exhaustion_entry_index,
-        request.role.failure_entry_index,
-    ] {
+    let selected_mask = FundingLedgerV2::decode(closed_ledger.as_ref())
+        .map_err(|_| ResolutionError::Funding)?
+        .selected_mask();
+    let ledger_width = closed_ledger.len();
+    for entry_index in 0_u16..16 {
+        if selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         let plan = FundingLedgerV2::close_slot_in_place(
             closed_ledger.as_mut(),
             manifest_id,
@@ -566,7 +582,7 @@ fn commit_direct_close(
             FundingLedgerCloseCustodyV2::recorded_native_only(
                 prestate,
                 planned_ledger_lamports,
-                RESOLUTION_FUNDING_LEDGER_BYTES,
+                ledger_width,
                 request.role.beneficiary,
             )
             .map_err(funded_rent_refusal)?,
@@ -1057,14 +1073,13 @@ fn authenticate_direct_close_ledger(
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
     request: ResolutionRoleRequestV2,
+    expected_mask: u16,
     expected_status: FundingLedgerStatusV2,
     bytes: &[u8],
     observed_lamports: u64,
     admit_donations: bool,
 ) -> ProgramResult {
-    if direct.funding_ledger.owner != program_id
-        || direct.funding_ledger.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES
-    {
+    if direct.funding_ledger.owner != program_id {
         return Err(ResolutionError::Funding.into());
     }
     authenticate_ledger_value(
@@ -1075,6 +1090,7 @@ fn authenticate_direct_close_ledger(
         manifest_id,
         manifest,
         request,
+        expected_mask,
         expected_status,
         bytes,
         observed_lamports,
@@ -1270,14 +1286,13 @@ fn authenticate_direct_ledger(
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
     request: ResolutionRoleRequestV2,
+    expected_mask: u16,
     expected_status: FundingLedgerStatusV2,
     bytes: &[u8],
     observed_lamports: u64,
     admit_donations: bool,
 ) -> ProgramResult {
-    if direct.funding_ledger.owner != program_id
-        || direct.funding_ledger.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES
-    {
+    if direct.funding_ledger.owner != program_id {
         return Err(ResolutionError::Funding.into());
     }
     authenticate_ledger_value(
@@ -1288,6 +1303,7 @@ fn authenticate_direct_ledger(
         manifest_id,
         manifest,
         request,
+        expected_mask,
         expected_status,
         bytes,
         observed_lamports,
@@ -1303,6 +1319,7 @@ fn authenticate_completed_activation(
     request_digest: [u8; 32],
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
+    expected_mask: u16,
 ) -> ProgramResult {
     let receipt_data = direct
         .receipt
@@ -1323,6 +1340,7 @@ fn authenticate_completed_activation(
         manifest_id,
         manifest,
         request.role,
+        expected_mask,
         FundingLedgerStatusV2::Active,
         &ledger_bytes,
         direct.funding_ledger.lamports(),
@@ -1451,7 +1469,6 @@ pub(crate) fn process_core_effect(
         return Err(ResolutionError::Instruction.into());
     }
     authenticate_action(envelope, request)?;
-    authenticate_funding_header(funding_header, request)?;
     let expected_accounts = match request.action {
         ResolutionCoreActionV1::CreateFund => CREATE_FUND_ACCOUNT_COUNT,
         ResolutionCoreActionV1::VerifyFundReady => VERIFY_FUND_ACCOUNT_COUNT,
@@ -1497,6 +1514,7 @@ pub(crate) fn process_core_effect(
             request,
             authenticated,
             &rent,
+            funding_header,
         ),
         ResolutionCoreActionV1::VerifyFundReady => process_verify(
             program_id,
@@ -1564,16 +1582,40 @@ fn authenticate_action(
     Ok(())
 }
 
+fn expected_funding_mask(
+    request: ResolutionRoleRequestV2,
+    policy: Option<RecoveryPolicyV2>,
+) -> Result<u16, ProgramError> {
+    let mut mask = request
+        .funding_entry_mask()
+        .map_err(|_| ResolutionError::Funding)?;
+    if let Some(policy) = policy {
+        let mut rung = 1_u8;
+        while rung < policy.attempt_count() {
+            let index = request
+                .recovery_entry_index
+                .checked_add(u16::from(rung))
+                .ok_or(ResolutionError::Funding)?;
+            let bit = 1_u16
+                .checked_shl(u32::from(index))
+                .ok_or(ResolutionError::Funding)?;
+            if mask & bit != 0 {
+                return Err(ResolutionError::Funding.into());
+            }
+            mask |= bit;
+            rung = rung.checked_add(1).ok_or(ResolutionError::Arithmetic)?;
+        }
+    }
+    Ok(mask)
+}
+
 fn authenticate_funding_header(
     funding_header: CapabilityFundingHeaderV2,
-    request: ResolutionRoleRequestV2,
+    expected_mask: u16,
 ) -> ProgramResult {
     if funding_header.physical_count() == 1
-        && funding_header.logical_count() == 3
-        && funding_header.selected_mask()
-            == request
-                .funding_entry_mask()
-                .map_err(|_| ResolutionError::Funding)?
+        && u16::from(funding_header.logical_count()) == expected_mask.count_ones() as u16
+        && funding_header.selected_mask() == expected_mask
     {
         Ok(())
     } else {
@@ -1907,6 +1949,7 @@ fn process_create<'info>(
     request: ResolutionRoleRequestV2,
     authenticated: AuthenticatedCore,
     rent: &Rent,
+    funding_header: CapabilityFundingHeaderV2,
 ) -> ProgramResult {
     require_revisions(&envelope, 0, 0)?;
     let system = accounts.get(15).ok_or(ResolutionError::AccountFrame)?;
@@ -1932,6 +1975,8 @@ fn process_create<'info>(
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
     authenticate_funding_entries(material, recovery_policy, manifest, request)?;
+    let expected_mask = expected_funding_mask(request, recovery_policy)?;
+    authenticate_funding_header(funding_header, expected_mask)?;
     let manifest_id = CapabilityContentId::new(request.capability_manifest)
         .map_err(|_| ResolutionError::Funding)?;
 
@@ -1975,6 +2020,7 @@ fn process_create<'info>(
         manifest_id,
         manifest,
         request,
+        expected_mask,
         FundingLedgerStatusV2::Pending,
         &ledger_bytes,
         ledger_lamports,
@@ -1999,7 +2045,7 @@ fn process_create<'info>(
         .funding_ledger
         .try_borrow_data()
         .map_err(|_| ResolutionError::OutputState)?;
-    if observed_ledger.as_ref() != ledger_bytes
+    if observed_ledger.as_ref() != ledger_bytes.as_ref()
         || common.funding_ledger.lamports() != ledger_lamports
     {
         return Err(ResolutionError::OutputState.into());
@@ -2056,6 +2102,7 @@ fn process_verify(
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
     authenticate_funding_entries(material, recovery_policy, manifest, request)?;
+    let expected_mask = expected_funding_mask(request, recovery_policy)?;
     let manifest_id = CapabilityContentId::new(request.capability_manifest)
         .map_err(|_| ResolutionError::Funding)?;
     let source_bytes = common
@@ -2081,17 +2128,20 @@ fn process_verify(
         manifest_id,
         manifest,
         request,
+        expected_mask,
         FundingLedgerStatusV2::Pending,
         &ledger_bytes,
         common.funding_ledger.lamports(),
         false,
     )?;
     let mut total_debit = 0_u64;
-    for entry_index in [
-        request.recovery_entry_index,
-        request.exhaustion_entry_index,
-        request.failure_entry_index,
-    ] {
+    let selected_mask = FundingLedgerV2::decode(ledger_bytes.as_ref())
+        .map_err(|_| ResolutionError::Funding)?
+        .selected_mask();
+    for entry_index in 0_u16..16 {
+        if selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         let debit = FundingLedgerV2::activate_in_place(
             &mut ledger_bytes,
             manifest_id,
@@ -2121,6 +2171,7 @@ fn process_verify(
         manifest_id,
         manifest,
         request,
+        expected_mask,
         FundingLedgerStatusV2::Active,
         &ledger_bytes,
         ledger_lamports,
@@ -2207,6 +2258,9 @@ fn process_admit(
         manifest_id,
         manifest,
         request,
+        FundingLedgerV2::decode(&ledger_bytes)
+            .map_err(|_| ResolutionError::Funding)?
+            .selected_mask(),
         FundingLedgerStatusV2::Active,
         &ledger_bytes,
         common.funding_ledger.lamports(),
@@ -2286,7 +2340,8 @@ fn process_close<'info>(
     if clock.unix_timestamp <= 0 {
         return Err(ResolutionError::Sysvar.into());
     }
-    authenticate_finalized_funding_policy(common, accounts.get(20), accounts.get(21), request)?;
+    let expected_mask =
+        authenticate_finalized_funding_policy(common, accounts.get(20), accounts.get(21), request)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -2338,6 +2393,7 @@ fn process_close<'info>(
         manifest_id,
         manifest,
         *request,
+        expected_mask,
         FundingLedgerStatusV2::Active,
         &ledger_prestate,
         common.funding_ledger.lamports(),
@@ -2347,21 +2403,24 @@ fn process_close<'info>(
     // rent term every row's close is priced at is its own record (decision
     // 0030), never the sysvar. One ledger-width heap copy; the frame ratchet
     // is owed.
-    let prestate_bytes = Box::new(ledger_prestate);
+    let prestate_bytes = ledger_prestate.clone();
     let prestate = FundingLedgerV2::decode(prestate_bytes.as_ref())
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
         .map_err(|_| ResolutionError::Funding)?;
-    let mut closed_ledger = ledger_prestate;
+    let mut closed_ledger = ledger_prestate.clone();
     let mut ledger_can_close = false;
     let mut planned_ledger_lamports = common.funding_ledger.lamports();
     let mut ledger_remaining_native_principal = 0_u64;
     let mut ledger_rent_lamports = 0_u64;
     let mut ledger_lamport_surplus = 0_u64;
-    for entry_index in [
-        request.recovery_entry_index,
-        request.exhaustion_entry_index,
-        request.failure_entry_index,
-    ] {
+    let selected_mask = FundingLedgerV2::decode(closed_ledger.as_ref())
+        .map_err(|_| ResolutionError::Funding)?
+        .selected_mask();
+    let ledger_width = closed_ledger.len();
+    for entry_index in 0_u16..16 {
+        if selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         let plan = FundingLedgerV2::close_slot_in_place(
             &mut closed_ledger,
             manifest_id,
@@ -2370,7 +2429,7 @@ fn process_close<'info>(
             FundingLedgerCloseCustodyV2::recorded_native_only(
                 prestate,
                 planned_ledger_lamports,
-                RESOLUTION_FUNDING_LEDGER_BYTES,
+                ledger_width,
                 request.beneficiary,
             )
             .map_err(funded_rent_refusal)?,
@@ -2637,7 +2696,7 @@ fn authenticate_finalized_funding_policy(
     raw: Option<&AccountInfo<'_>>,
     staging: Option<&AccountInfo<'_>>,
     request: &ResolutionRoleRequestV2,
-) -> ProgramResult {
+) -> Result<u16, ProgramError> {
     let material_data = common
         .source_material
         .try_borrow_data()
@@ -2651,7 +2710,8 @@ fn authenticate_finalized_funding_policy(
         .map_err(|_| ResolutionError::Funding)?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
-    authenticate_funding_entries(material, recovery_policy, manifest, *request)
+    authenticate_funding_entries(material, recovery_policy, manifest, *request)?;
+    expected_funding_mask(*request, recovery_policy)
 }
 
 fn authenticate_recovery_policy(
@@ -2690,18 +2750,17 @@ fn authenticate_recovery_policy(
     }
 }
 
-fn copy_ledger_bytes(
-    account: &AccountInfo<'_>,
-) -> Result<[u8; RESOLUTION_FUNDING_LEDGER_BYTES], ProgramError> {
+fn copy_ledger_bytes(account: &AccountInfo<'_>) -> Result<Box<[u8]>, ProgramError> {
     let data = account
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
-    let mut output = [0_u8; RESOLUTION_FUNDING_LEDGER_BYTES];
-    if data.len() != output.len() {
+    let ledger = FundingLedgerV2::decode(&data).map_err(|_| ResolutionError::Funding)?;
+    let width =
+        funding_ledger_bytes_v2(ledger.slot_count()).map_err(|_| ResolutionError::Funding)?;
+    if data.len() != width {
         return Err(ResolutionError::Funding.into());
     }
-    output.copy_from_slice(&data);
-    Ok(output)
+    Ok(data.to_vec().into_boxed_slice())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2712,15 +2771,13 @@ fn authenticate_live_ledger(
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
     request: ResolutionRoleRequestV2,
+    expected_mask: u16,
     expected_status: FundingLedgerStatusV2,
     bytes: &[u8],
     observed_lamports: u64,
     admit_donations: bool,
 ) -> ProgramResult {
-    if common.funding_ledger.owner != program_id
-        || common.funding_ledger.executable
-        || common.funding_ledger.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES
-    {
+    if common.funding_ledger.owner != program_id || common.funding_ledger.executable {
         return Err(ResolutionError::Funding.into());
     }
     authenticate_ledger_value(
@@ -2731,6 +2788,7 @@ fn authenticate_live_ledger(
         manifest_id,
         manifest,
         request,
+        expected_mask,
         expected_status,
         bytes,
         observed_lamports,
@@ -2747,19 +2805,19 @@ fn authenticate_ledger_value(
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
     request: ResolutionRoleRequestV2,
+    expected_mask: u16,
     expected_status: FundingLedgerStatusV2,
     bytes: &[u8],
     observed_lamports: u64,
     admit_donations: bool,
 ) -> ProgramResult {
-    if bytes.len() != funding_ledger_bytes_v2(3).map_err(|_| ResolutionError::Funding)? {
-        return Err(ResolutionError::Funding.into());
-    }
     let ledger = FundingLedgerV2::decode(bytes).map_err(|_| ResolutionError::Funding)?;
-    let expected_mask = request
-        .funding_entry_mask()
-        .map_err(|_| ResolutionError::Funding)?;
-    if ledger.selected_mask() != expected_mask || ledger.slot_count() != 3 {
+    let width =
+        funding_ledger_bytes_v2(ledger.slot_count()).map_err(|_| ResolutionError::Funding)?;
+    // The three role indices are the compact wire anchor. A recovery policy
+    // can authenticate additional contiguous member rows, so this boundary
+    // requires the anchor as a subset and prices the exact decoded width.
+    if bytes.len() != width || ledger.selected_mask() != expected_mask {
         return Err(ResolutionError::Funding.into());
     }
     let authenticated = ledger
@@ -2784,11 +2842,7 @@ fn authenticate_ledger_value(
     // (decision 0030): the account was funded when it was founded, and the
     // cluster's rate has moved under a live cohort before.
     authenticated
-        .validate_recorded_native_custody(
-            observed_lamports,
-            RESOLUTION_FUNDING_LEDGER_BYTES,
-            admit_donations,
-        )
+        .validate_recorded_native_custody(observed_lamports, width, admit_donations)
         .map_err(funded_rent_refusal)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         program_id.to_bytes(),
@@ -2981,7 +3035,7 @@ fn build_ack(
 
 fn commit_activated_ledger(
     ledger: &AccountInfo<'_>,
-    ledger_bytes: &[u8; RESOLUTION_FUNDING_LEDGER_BYTES],
+    ledger_bytes: &[u8],
     ledger_lamports_after: u64,
     beneficiary: &AccountInfo<'_>,
     beneficiary_lamports_after: u64,
@@ -2995,7 +3049,7 @@ fn commit_activated_ledger(
     let mut beneficiary_lamports = beneficiary
         .try_borrow_mut_lamports()
         .map_err(|_| ResolutionError::OutputState)?;
-    if ledger_data.len() != RESOLUTION_FUNDING_LEDGER_BYTES {
+    if ledger_data.len() != ledger_bytes.len() {
         return Err(ResolutionError::OutputState.into());
     }
     ledger_data.copy_from_slice(ledger_bytes);
@@ -3345,8 +3399,8 @@ mod tests {
     use super::{
         ADMIT_TERMINAL_ACCOUNT_COUNT, CLOSE_FUND_ACCOUNT_COUNT, CORE_EFFECT_INSTRUCTION_BYTES,
         CREATE_FUND_ACCOUNT_COUNT, VERIFY_FUND_ACCOUNT_COUNT, action_byte, authenticate_action,
-        authenticate_funding_entries, authenticate_funding_header, build_ack, is_core_effect,
-        poststate_digest, require_revisions,
+        authenticate_funding_entries, authenticate_funding_header, build_ack,
+        expected_funding_mask, is_core_effect, poststate_digest, require_revisions,
     };
     use crate::ResolutionError;
 
@@ -3470,8 +3524,11 @@ mod tests {
                     .expect("funding header"),
             )
             .expect("composite role bytes");
-            authenticate_funding_header(funding_header, request(action))
-                .expect("exact funding count");
+            authenticate_funding_header(
+                funding_header,
+                request(action).funding_entry_mask().expect("role mask"),
+            )
+            .expect("exact funding count");
             let request_tail = role_bytes
                 .get(CAPABILITY_FUNDING_HEADER_BYTES_V2..)
                 .expect("request tail");
@@ -3503,7 +3560,12 @@ mod tests {
         let exact = role_bytes(ResolutionCoreActionV1::CreateFund);
         let wrong_count = CapabilityFundingHeaderV2::new(1, 2, 0b11).expect("bounded count");
         assert_eq!(
-            authenticate_funding_header(wrong_count, request(ResolutionCoreActionV1::CreateFund),),
+            authenticate_funding_header(
+                wrong_count,
+                request(ResolutionCoreActionV1::CreateFund)
+                    .funding_entry_mask()
+                    .expect("role mask"),
+            ),
             Err(ResolutionError::Instruction.into())
         );
 
@@ -3759,6 +3821,29 @@ mod tests {
         exact.failure_entry_index = 3;
         authenticate_funding_entries(material, Some(policy), manifest, exact)
             .expect("a two-attempt ladder founds when every rung has its compartment");
+        let expected_mask = expected_funding_mask(exact, Some(policy)).expect("four founded rows");
+        assert_eq!(expected_mask, 0b1111);
+        authenticate_funding_header(
+            CapabilityFundingHeaderV2::new(1, 4, expected_mask).expect("exact header"),
+            expected_mask,
+        )
+        .expect("the Core-effect boundary accepts its policy-derived full mask");
+        assert_eq!(
+            authenticate_funding_header(
+                CapabilityFundingHeaderV2::new(1, 3, 0b1101).expect("missing member row"),
+                expected_mask,
+            ),
+            Err(ResolutionError::Instruction.into()),
+            "a policy-funded member omitted from the physical ledger refuses before mutation",
+        );
+        assert_eq!(
+            authenticate_funding_header(
+                CapabilityFundingHeaderV2::new(1, 5, 0b1_1111).expect("extra row"),
+                expected_mask,
+            ),
+            Err(ResolutionError::Instruction.into()),
+            "an extra selected row refuses before mutation",
+        );
 
         // HOSTILE -- an attempt with no funding. The manifest carries the
         // second rung's index and the entry there is configured by something

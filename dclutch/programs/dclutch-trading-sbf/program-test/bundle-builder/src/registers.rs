@@ -122,6 +122,11 @@ pub struct EngineInputV1<'a> {
     pub effect_schema: [u8; 32],
     /// Selected action (for lifecycle plan selection).
     pub action: u32,
+    /// Whether this admitted route is General's typed PlaceOrder action.
+    ///
+    /// `action` is an ordinal shared by capability families, so the host must
+    /// not infer General semantics from that number alone.
+    pub general_place_order: bool,
     /// Release-waist facts.
     pub waist: WaistFactsV1,
     /// Product-authenticated runtime item count.
@@ -327,6 +332,11 @@ pub(crate) fn run_engine_with_admitted_candidate(
     // Phase 2 inputs: the observation bank, with the shared runtime prefix's
     // content-digest projection keys substituted for physical keys.
     let request_digest = digest32(input.family_request);
+    // These two records are authenticated by the shared Hot adapter before
+    // AccountProfile runs: selected config through the finalized selection,
+    // and linked basis through the Product runtime graph. Other child-owned
+    // variable bodies stay opaque to this outer profile and are authenticated
+    // by their own child route.
     let selected_config_is_variable = projected_account_uses_variable_marker(profile, 1)?;
     let linked_basis_is_variable = projected_account_uses_variable_marker(profile, 4)?;
     let projected_keys = [
@@ -465,6 +475,28 @@ pub(crate) fn run_engine_with_admitted_candidate(
     }
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
+
+    // General owns the affine order rows. AccountProfile has authenticated the
+    // exact signed header above; its rows are derived from that header and are
+    // therefore materialized here rather than read from nonexistent evidence
+    // padding. This is the host twin of Trading's typed adapter step.
+    if input.general_place_order {
+        let evidence = dclutch_trading::general::state_artifacts_v3::general_readonly_evidence_v3(
+            dclutch_trading::general_codec::Action::PlaceOrder,
+            0,
+        )
+        .map_err(|_| BuilderError::Projection("general-place-order-evidence"))?;
+        let terms = input
+            .observations
+            .get(usize::from(evidence.coordinate))
+            .ok_or(BuilderError::Projection("general-place-order-evidence"))?;
+        dclutch_trading::general::hot_candidate_v3::seed_general_place_order_rows_from_signed_terms_v3(
+            tail_count,
+            &terms.data,
+            &mut current_scalars,
+        )
+        .map_err(|_| BuilderError::Projection("general-place-order-rows"))?;
+    }
 
     // Phase 3: current-Rent quote projection.
     let quotes = current_rent_quotes(lifecycle, input.rent, input.action)?;

@@ -111,6 +111,12 @@ const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 1_000));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : 'the Source readiness act refused without a usable reason';
 const short = (value: string) => `${value.slice(0, 7)}…${value.slice(-6)}`;
 
+/** Do not fetch a browser-only WASM asset while Pages prerenders this client surface. */
+function lazyWasmV1<T>(load: () => Promise<T>): () => Promise<T> {
+  let cached: Promise<T> | null = null;
+  return () => cached ??= load();
+}
+
 function browserStorage(): Storage {
   if (typeof window === 'undefined' || window.localStorage === undefined) {
     throw new Error('this browser exposes no durable recovery storage, so no wallet signature was requested');
@@ -157,19 +163,19 @@ function routeCopy(route: SourceReadinessAcquisitionV1['plan']['route']): Readon
 }
 
 function SourceTerminalPanel({
-  client, directory, endpoint, market, programs, wasmPromise,
+  client, directory, endpoint, market, programs, loadWasm,
 }: Readonly<{
   client: SolanaRpcClient;
   directory: ReturnType<typeof useWalletDirectoryV1>;
   endpoint: string;
   market: string;
   programs: Readonly<{ coreProgram: string; registryProgram: string; resolutionProgram: string }>;
-  wasmPromise: Promise<SourceReadinessWasmV1>;
+  loadWasm: () => Promise<SourceReadinessWasmV1>;
 }>) {
   const wallet = directory.address;
   const [state, setState] = useState<SourceTerminalStateV1>({ kind: 'idle', message: 'Read the terminal Source and Product graph to determine whether admission remains.' });
-  const acquire = useCallback(async () => acquireSourceTerminalV1(client, await wasmPromise, market.trim(), programs),
-    [client, market, programs, wasmPromise]);
+  const acquire = useCallback(async () => acquireSourceTerminalV1(client, await loadWasm(), market.trim(), programs),
+    [client, loadWasm, market, programs]);
 
   const poll = useCallback(async (journal: ClientOperationJournalV1, before: SourceTerminalAcquisitionV1 | null, alive: () => boolean = () => true) => {
     if (journal.phase !== 'submitted' || journal.signature === null) throw new Error('submitted terminal admission has no exact signature');
@@ -289,24 +295,24 @@ function SourceTerminalPanel({
 }
 
 function SourceCloseFundPanel({
-  client, directory, endpoint, market, programs, wasmPromise,
+  client, directory, endpoint, market, programs, loadWasm,
 }: Readonly<{
   client: SolanaRpcClient;
   directory: ReturnType<typeof useWalletDirectoryV1>;
   endpoint: string;
   market: string;
   programs: Readonly<{ coreProgram: string; registryProgram: string; resolutionProgram: string }>;
-  wasmPromise: Promise<SourceReadinessWasmV1>;
+  loadWasm: () => Promise<SourceReadinessWasmV1>;
 }>) {
   const wallet = directory.address;
   const [state, setState] = useState<SourceCloseFundStateV1>({ kind: 'idle', message: 'Read the Retiring Source to select exact receipt prepayment or direct close.' });
-  const acquire = useCallback(async () => acquireSourceCloseFundV1(client, await wasmPromise, market.trim(), programs),
-    [client, market, programs, wasmPromise]);
+  const acquire = useCallback(async () => acquireSourceCloseFundV1(client, await loadWasm(), market.trim(), programs),
+    [client, loadWasm, market, programs]);
 
   const poll = useCallback(async (journal: ClientOperationJournalV1, before: SourceCloseFundAcquisitionV1 | null, alive: () => boolean = () => true) => {
     if (journal.phase !== 'submitted' || journal.signature === null) throw new Error('submitted Source close act has no exact signature');
     const restored = await restoreSourceCloseFundJournalV1(journal);
-    const wasm = await wasmPromise;
+    const wasm = await loadWasm();
     const restoredAcquisition: SourceCloseFundAcquisitionV1 = Object.freeze({ plan: restored.plan,
       planJson: (JSON.parse(journal.plan) as { rustPlan: string }).rustPlan, snapshotJson: '{}', observationAddresses: [] });
     for (let attempt = 0; attempt < 30 && alive(); attempt += 1) {
@@ -337,7 +343,7 @@ function SourceCloseFundPanel({
       }
       await pause();
     }
-  }, [acquire, client, programs.resolutionProgram, wasmPromise]);
+  }, [acquire, client, loadWasm, programs.resolutionProgram]);
 
   useEffect(() => {
     if (wallet === null || market.trim() === '') return;
@@ -450,7 +456,7 @@ function ProviderSubmitPanel({
     message: 'Supply one verified EncodedVaa, its exact Receiver body, one frozen provider table, and the reclaim time.',
   });
   const wallet = directory.address;
-  const wasmPromise = useMemo(() => loadSourceProviderWasmV1(), []);
+  const loadWasm = useMemo(() => lazyWasmV1(loadSourceProviderWasmV1), []);
 
   const poll = useCallback(async (
     journal: ClientOperationJournalV1,
@@ -458,7 +464,7 @@ function ProviderSubmitPanel({
     alive: () => boolean = () => true,
   ) => {
     if (journal.phase !== 'submitted' || journal.signature === null) throw new Error('submitted provider creation has no exact signature');
-    const wasm = await wasmPromise;
+    const wasm = await loadWasm();
     const restored = await restoreSourceProviderSubmitJournalV1(journal);
     for (let attempt = 0; attempt < 30 && alive(); attempt += 1) {
       try {
@@ -481,7 +487,7 @@ function ProviderSubmitPanel({
       }
       await pause();
     }
-  }, [client, wasmPromise]);
+  }, [client, loadWasm]);
 
   useEffect(() => {
     if (wallet === null || market.trim() === '') return;
@@ -515,7 +521,7 @@ function ProviderSubmitPanel({
     setState({ kind: 'reading', message: 'Walking the Market’s current Source and Pyth release graph, then rejoining the exact table-backed account frame…' });
     try {
       const admission = await client.assertMutationCluster();
-      const acquisition = await acquireSourceProviderSubmitV1(client, await wasmPromise, {
+      const acquisition = await acquireSourceProviderSubmitV1(client, await loadWasm(), {
         market: market.trim(),
         payer: wallet,
         encodedVaa: encodedVaa.trim(),
@@ -609,7 +615,7 @@ function ProviderReclaimPanel({
     message: 'Paste the consumed provider lifecycle. Rust derives the reclaim and exact terminal balances.',
   });
   const wallet = directory.address;
-  const wasmPromise = useMemo(() => loadSourceProviderWasmV1(), []);
+  const loadWasm = useMemo(() => lazyWasmV1(loadSourceProviderWasmV1), []);
 
   const poll = useCallback(async (
     journal: ClientOperationJournalV1,
@@ -674,7 +680,7 @@ function ProviderReclaimPanel({
       const admission = await client.assertMutationCluster();
       const acquisition = await acquireSourceProviderReclaimV1(
         client,
-        await wasmPromise,
+        await loadWasm(),
         lifecycle.trim(),
         wallet,
         programs,
@@ -753,7 +759,7 @@ export default function ResolutionWorkspace() {
   const directory = useWalletDirectoryV1();
   const wallet = directory.address;
   const client = useMemo(() => new SolanaRpcClient(endpoint), [endpoint]);
-  const wasmPromise = useMemo(() => loadSourceReadinessWasmV1(), []);
+  const loadWasm = useMemo(() => lazyWasmV1(loadSourceReadinessWasmV1), []);
   const programs = useMemo(() => Object.freeze({
     coreProgram: deployment.programs.core,
     registryProgram: deployment.programs.registry,
@@ -762,10 +768,10 @@ export default function ResolutionWorkspace() {
 
   const acquire = useCallback(async (wasm?: SourceReadinessWasmV1) => acquireSourceReadinessV1(
     client,
-    wasm ?? await wasmPromise,
+    wasm ?? await loadWasm(),
     market.trim(),
     programs,
-  ), [client, market, programs, wasmPromise]);
+  ), [client, loadWasm, market, programs]);
 
   const pollSubmitted = useCallback(async (
     journal: ClientOperationJournalV1,
@@ -927,12 +933,12 @@ export default function ResolutionWorkspace() {
     <section className="workbench-heading"><div><h2>Admit the<br />terminal result.</h2></div><p>Once provider evidence has produced a terminal Source and certificate, bind that exact selector into Core. This is permissionless; the connected wallet only pays the transaction fee.</p></section>
     <div className="workbench-grid">
       <section className="workbench-coordinates"><header><span>Admission authority</span><h2>Use the Market and wallet above</h2><p>The Market selects its Product, releases, funding set, and Source. The Source selects the certificate and terminal sequence; neither is entered here.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Wallet</dt><dd>{wallet === null ? 'connect above' : short(wallet)}</dd></div><div><dt>Core</dt><dd>{short(programs.coreProgram)}</dd></div></dl></section>
-      <SourceTerminalPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={programs} wasmPromise={wasmPromise} />
+      <SourceTerminalPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={programs} loadWasm={loadWasm} />
     </div>
     <section className="workbench-heading"><div><h2>Discharge the<br />Source fund.</h2></div><p>After Core enters Retiring, fund the durable closure receipt exactly once and execute the permissionless V7 direct close. Source principal, ledger rent, and surplus return only to the immutable beneficiary.</p></section>
     <div className="workbench-grid">
       <section className="workbench-coordinates"><header><span>Close authority</span><h2>Use the Market and wallet above</h2><p>The Retiring Market and terminal Source derive every coordinate. The wallet only pays receipt rent and transaction fees.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Wallet</dt><dd>{wallet === null ? 'connect above' : short(wallet)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></section>
-      <SourceCloseFundPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={programs} wasmPromise={wasmPromise} />
+      <SourceCloseFundPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={programs} loadWasm={loadWasm} />
     </div>
     <section className="workbench-heading"><div><h2>Post provider<br />evidence.</h2></div><p>Join a Router-verified VAA and exact Receiver body to this Market’s current Source and Pyth release graph, then create the update and its reclaimable lifecycle atomically.</p></section>
     <div className="workbench-grid">

@@ -15,6 +15,21 @@ use crate::representation_composition::{
     build_claims_lifecycle_plan_v3, hot_v3::CompositionLifecycleHotPlanV3,
 };
 
+/// Derive the exact finalized Claims lifecycle request before physical account
+/// placement.
+///
+/// The V6 parent context is a digest of the family request, so callers cannot
+/// safely construct the Trading caller-authority PDA from an initial header.
+/// This owner performs its own two-pass derivation and returns the final bytes
+/// the physical-frame adapter must bind.
+pub fn derive_composition_lifecycle_plan_v6(
+    admission: CompositionAdmissionPlanV3<'_>,
+    header: LifecycleHeaderV2,
+    coordinates: &[LifecycleCoordinateV2],
+) -> Result<ClaimsLifecyclePlanV3> {
+    derive_v6_parent_and_build_lifecycle(admission.admitted(), header, coordinates)
+}
+
 /// Build one unsigned composition-admitted V6 Hot lifecycle instruction.
 ///
 /// The selected capability is Market-neutral. The exact finalized per-Market
@@ -57,7 +72,7 @@ pub fn build_composition_lifecycle_hot_plan_v6(
     {
         return Err(Error::HotAdapter);
     }
-    let lifecycle = derive_v6_parent_and_build_lifecycle(admitted, header, coordinates)?;
+    let lifecycle = derive_composition_lifecycle_plan_v6(admission, header, coordinates)?;
     if claims_accounts.len() != lifecycle.account_count {
         return Err(Error::HotAdapter);
     }

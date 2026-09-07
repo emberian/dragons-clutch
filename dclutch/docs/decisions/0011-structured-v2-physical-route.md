@@ -781,3 +781,28 @@ slot assignment carry over unchanged; they were never in dispute.
 - `ZeroSupplyRetire` needs a different child ABI from the other three
   (lifecycle, not representation), so it is a second encoder rather than a
   fourth branch of the first.
+
+## Addendum — 2026-09-07: selected capability-root activation is required before receipt activation
+
+The seven-entry Structured selected set published representation selectors `1..=5`
+and the two normalized Claims lifecycle selectors `6` and `7`, but contained no
+`CapabilityProgramV1` entry. Trading's `process_activation` accepts only that
+V1 activation descriptor to create the Trading-owned capability root; attempting
+to select either lifecycle descriptor is rejected before a Claims child is
+considered. A founded Structured market therefore could publish records yet
+could not reach `ActivateReceipt`.
+
+The release now appends one explicit root-activation entry at selector `255`.
+Selectors `1..=7` remain byte-for-byte the action/lifecycle selectors above.
+The entry has the distinct `DCSTACT1` request grammar and the activation
+schema, so an ordinary action request cannot select it. Its V1 bundle produces
+the 16-byte `DCSTCRT1` capability tail described by
+`FAMILY_ROOT_TAILS_V1`; this is the Trading root tail, not the 128-byte
+Structured node root. The root-activation descriptor, account profile, and
+effect are publication records alongside the existing action closure.
+
+The release compiler rejects an incorrect root schema or width, a wrong
+activation request selector, and any selected activation descriptor whose kind,
+config schema, or request grammar differs. Consumers must derive the activation
+record from the eight-entry ProgramSet and must not treat the lifecycle
+selectors as a parallel root authority.

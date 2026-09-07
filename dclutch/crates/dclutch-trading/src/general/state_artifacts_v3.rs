@@ -924,7 +924,7 @@ fn narrow_table_index(value: usize) -> Result<u16> {
 /// rent followed whoever paid, a stranger cranking one open would walk away
 /// owning the rent of something the market depends on.
 ///
-/// THE CANDIDATE IS THE EXCEPTION AND ITS OWN CLOSE PLAN ALREADY SAID SO --
+/// THE CANDIDATE AND ORDER ARE THE EXCEPTIONS. The candidate's own close plan already said so --
 /// "the Candidate's immutable lifecycle beneficiary is the solver", written
 /// beside a `Credit` tag that made it the market's wallet instead. A submission
 /// is one solver's own object: the solver funds its rent and its whole work
@@ -941,19 +941,21 @@ fn narrow_table_index(value: usize) -> Result<u16> {
 /// reads as: the account that paid IS the solver the record names, which the
 /// transition states a second time as `identity_eq(PAYER, OWNER)`.
 ///
-/// The Order recipe stays `Credit` deliberately. Nothing joins its beneficiary
-/// to the maker today, and moving a refund identity with no conjunct asking for
-/// it would be a change of economics with no reader.
+/// The Order recipe is `Payer`: PlaceOrder's emitted transition proves
+/// `identity_eq(PAYER, OWNER)` against the authenticated signed terms, so the
+/// maker who funds its creation is also the economic owner recorded by the
+/// lifecycle. A fee sponsor never occupies the lifecycle payer coordinate.
 const fn general_state_refund_source_v3(
     recipe: GeneralStateRecipeV3,
 ) -> LifecycleRefundSourceInputV3 {
     match recipe {
-        GeneralStateRecipeV3::Candidate => LifecycleRefundSourceInputV3::Payer,
+        GeneralStateRecipeV3::Candidate | GeneralStateRecipeV3::Order => {
+            LifecycleRefundSourceInputV3::Payer
+        }
         GeneralStateRecipeV3::Selection
         | GeneralStateRecipeV3::Settlement
         | GeneralStateRecipeV3::Terminal
         | GeneralStateRecipeV3::Batch
-        | GeneralStateRecipeV3::Order
         | GeneralStateRecipeV3::Verifier
         | GeneralStateRecipeV3::VerifiedCandidate => LifecycleRefundSourceInputV3::Credit,
     }
@@ -1375,7 +1377,15 @@ fn batch_and_order_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
             beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
                 identity::TERMINAL_BENEFICIARY_OBSERVATION,
             )?)),
-            refund_source: LifecycleRefundSourceInputV3::Credit,
+            // The authenticated maker pays PlaceOrder, and the transition
+            // proves `PAYER == OWNER` from the signed terms. CancelOrder
+            // merely authenticates an existing shared order, so it retains
+            // the record's already-established Credit refund semantics.
+            refund_source: if action == Action::PlaceOrder {
+                LifecycleRefundSourceInputV3::Payer
+            } else {
+                LifecycleRefundSourceInputV3::Credit
+            },
             guard: LifecycleGuardInputV3::Always,
         },
     ];
@@ -1814,6 +1824,35 @@ mod tests {
                 Ok(true)
             );
         }
+    }
+
+    /// PlaceOrder's order is a maker-owned record. The fee sponsor is only a
+    /// transaction payer; its key never occupies this lifecycle payer slot.
+    #[test]
+    fn place_order_order_create_records_the_authenticated_maker_payer() {
+        let place = general_action_lifecycle_shape_v5(Action::PlaceOrder)
+            .expect("PlaceOrder lifecycle shape");
+        let cancel = general_action_lifecycle_shape_v5(Action::CancelOrder)
+            .expect("CancelOrder lifecycle shape");
+        let order_create = place.plans().get(1).expect("PlaceOrder order plan");
+        let order_authenticate = cancel.plans().get(1).expect("CancelOrder order plan");
+        assert_eq!(
+            order_create.refund_source,
+            LifecycleRefundSourceInputV3::Payer,
+            "PlaceOrder lifecycle records the maker who its transition joins to signed OWNER"
+        );
+        assert_eq!(
+            order_create.payer,
+            Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_CLOSE_PAYER_ACCOUNT_V3
+            )),
+            "the lifecycle payer is the signed maker coordinate, never the fee sponsor"
+        );
+        assert_eq!(
+            order_authenticate.refund_source,
+            LifecycleRefundSourceInputV3::Credit,
+            "CancelOrder preserves the already-recorded order refund source"
+        );
     }
 
     /// THE FAMILY POLICY IS THE UNION, AND ONLY THE PER-ACTION JOIN READS IT.

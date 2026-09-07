@@ -418,18 +418,21 @@ struct TerminalSequenceCompletionV1 {
 /// The number is derived, not chosen, under `tools/gauntlet/CU_BUDGETS.md`'s
 /// rule -- `tolerance = roundup(band, 10_000) + 10_000`, floor 15,000;
 /// `budget = measured + tolerance`; `measured` is the highest draw, never a
-/// single run. The route was simulated against market 1's exact durable
-/// message on devnet under a 1,400,000-CU probe: three draws, 252,518 every
-/// time (252,368 in the Resolution program plus the 150 the ComputeBudget
-/// instruction itself costs), so the band is 0 and the tolerance bottoms out
-/// at its floor. 252,518 + 15,000 = 267,518, which is 19.1% of Solana's
-/// 1,400,000 per-transaction ceiling.
+/// single run. The route was remeasured against its exact unlandable durable
+/// packet on owned-loopback under a 1,400,000-CU diagnostic probe: three draws,
+/// 273,739
+/// every time (273,589 in Resolution plus the 150 the ComputeBudget instruction
+/// itself costs). The probe changes only its separate diagnostic packet's
+/// ComputeBudget prefix, never re-signs or sends the frozen packet. The band is
+/// 0 and the tolerance bottoms out at its floor. 273,739 + 15,000 = 288,739,
+/// which is 20.6% of Solana's 1,400,000 per-transaction ceiling. The final
+/// fresh-runtime measurement remains owed before acceptance evidence.
 ///
 /// The band is 0 rather than the 1,500-CU search-depth grid the gauntlet's
 /// rows ride because this is a devnet route over accounts that already exist:
 /// the deployed ELFs are fixed for the life of a cohort, so no PDA in the
 /// frame can redraw its bump.
-const RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1: u32 = 267_518;
+const RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1: u32 = 288_739;
 
 /// `DirectCloseCapability`'s declared ComputeBudget limit.
 ///
@@ -10655,23 +10658,22 @@ fn authenticate_terminal_session_v1(session: &TerminalSequenceSessionV1) -> Resu
     Ok(())
 }
 
-/// Whether a persisted table may be amended to `declared` by ADDING rows only.
+/// Whether a persisted table may be amended to `declared` without removing a
+/// stage.
 ///
-/// Every stage the session already declares must keep the exact number it
-/// declares -- a re-pin under a live sequence is the drift the guard exists for
-/// -- and the difference must be additions alone. Whether those additions are
-/// legal for THIS sequence is a second question, about journals, answered by
-/// the caller.
-fn terminal_compute_budget_additions_v1(
+/// The caller proves that every changed row is still unplanned, or that its
+/// sole prior packet was durably superseded. The table calculation intentionally
+/// knows neither filesystem fact; it only makes removals and no-op updates
+/// inexpressible.
+fn terminal_compute_budget_amendments_v1(
     persisted: &[TerminalStageComputeBudgetV1],
     declared: &[TerminalStageComputeBudgetV1],
 ) -> Option<Vec<TerminalStageV1>> {
-    let mut additions = Vec::new();
+    let mut amendments = Vec::new();
     for row in declared {
         match persisted.iter().find(|held| held.stage == row.stage) {
             Some(held) if held.compute_unit_limit == row.compute_unit_limit => {}
-            Some(_) => return None,
-            None => additions.push(row.stage),
+            Some(_) | None => amendments.push(row.stage),
         }
     }
     if persisted
@@ -10680,7 +10682,38 @@ fn terminal_compute_budget_additions_v1(
     {
         return None;
     }
-    (!additions.is_empty()).then_some(additions)
+    (!amendments.is_empty()).then_some(amendments)
+}
+
+/// A replacement packet may be planned only after the only older packet for
+/// that stage was moved aside by `--supersede-unlandable`.
+fn superseded_terminal_stage_journal_v1(
+    journal_dir: &Path,
+    stage: TerminalStageV1,
+) -> Result<bool> {
+    let canonical = stage_journal_name_v1(stage);
+    let prefix = format!("{canonical}.superseded.");
+    let mut candidates = fs::read_dir(journal_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix))
+        });
+    let Some(path) = candidates.next() else {
+        return Ok(false);
+    };
+    if candidates.next().is_some() {
+        return Err(refusal(
+            "terminal stage has more than one superseded packet journal",
+        ));
+    }
+    let journal = read_terminal_journal_v1(&path)?;
+    Ok(journal.phase == StageJournalPhaseV1::Superseded
+        && journal.authorized_mutation
+        && journal.intent.mutation
+            == (DurableTerminalMutationV1::Protocol { stage }))
 }
 
 /// Amend a live session that predates a stage's MEASURED ComputeBudget row.
@@ -10690,18 +10723,19 @@ fn terminal_compute_budget_additions_v1(
 /// stage compiled against. A stage that has never been planned compiled
 /// nothing: its canonical journal path does not exist, and a packet that was
 /// planned and then retired as unlandable moved aside under its own signature,
-/// which is what frees that path. So a table that only GAINS such a stage is
-/// not a change to any commitment this sequence has made, and refusing it would
+/// which is what frees that path. A changed row is therefore legal only for a
+/// stage whose canonical journal is absent and whose unique superseded journal
+/// proves the exact prior packet cannot land. Refusing that recovery would
 /// force a market already at Retiring -- with a frozen ALT and finalized stages
-/// on chain -- to abandon both over a number no signed packet has ever read.
+/// on chain -- to abandon both over a packet the chain will never include.
 ///
 /// Cohort-17's market 2 is why this exists: `DirectCloseCapability` met the
 /// 200,000-CU default meter on the first market ever to reach that stage, and
 /// its budget could not be declared without this.
 ///
 /// Everything else stays refused by the guard, which runs immediately after:
-/// a changed value, a removed row, or an addition for a stage whose canonical
-/// journal already exists in any phase.
+/// a removed row, a changed value without its exact superseded packet, or an
+/// addition for a stage whose canonical journal already exists in any phase.
 fn amend_terminal_session_compute_budgets_v1(
     session_path: &Path,
     journal_dir: &Path,
@@ -10711,13 +10745,20 @@ fn amend_terminal_session_compute_budgets_v1(
         return Ok(());
     };
     let declared = declared_terminal_compute_budgets_v1();
-    let Some(additions) =
-        terminal_compute_budget_additions_v1(&session.declared_compute_unit_limits, &declared)
+    let Some(amendments) =
+        terminal_compute_budget_amendments_v1(&session.declared_compute_unit_limits, &declared)
     else {
         return Ok(());
     };
-    for stage in &additions {
+    for stage in &amendments {
         if journal_dir.join(stage_journal_name_v1(*stage)).exists() {
+            return Ok(());
+        }
+        let was_declared = session
+            .declared_compute_unit_limits
+            .iter()
+            .any(|row| row.stage == *stage);
+        if was_declared && !superseded_terminal_stage_journal_v1(journal_dir, *stage)? {
             return Ok(());
         }
     }
@@ -10741,8 +10782,8 @@ fn amend_terminal_session_compute_budgets_v1(
     drop(file);
     fs::rename(&temporary, session_path)?;
     println!(
-        "amended terminal session ComputeBudget table with unplanned stages {additions:?}; \
-         every stage it already declared kept its exact number"
+        "amended terminal session ComputeBudget table for recoverable stages {amendments:?}; \
+         every changed stage either had no packet or one exact superseded packet"
     );
     Ok(())
 }
@@ -12114,14 +12155,13 @@ mod tests {
     ///
     /// `tools/gauntlet/CU_BUDGETS.md`: `tolerance = roundup(band, 10_000) +
     /// 10_000`, floor 15,000; `budget = measured + tolerance`; `measured` is
-    /// the highest draw. Market 1's exact durable message, simulated on devnet
-    /// 2026-09-04 under a 1,400,000-CU probe, drew 252,518 three times out of
-    /// three -- 252,368 inside Resolution plus the 150 the ComputeBudget
-    /// instruction costs itself -- so the band is 0 and the tolerance is its
-    /// floor.
+    /// the highest draw. The exact unlandable owned-loopback durable packet,
+    /// simulated three times under a 1,400,000-CU diagnostic envelope without
+    /// signing or sending it, drew 273,739 each time. Resolution used 273,589,
+    /// the ComputeBudget instruction used 150, and the band was zero.
     #[test]
     fn the_close_fund_budget_is_its_measured_draw_plus_the_trees_tolerance() {
-        const MEASURED: u32 = 252_518;
+        const MEASURED: u32 = 273_739;
         const BAND: u32 = 0;
         let tolerance = (BAND.div_ceil(10_000) * 10_000 + 10_000).max(15_000);
         assert_eq!(tolerance, 15_000, "a zero band bottoms out at the floor");
@@ -12189,7 +12229,8 @@ mod tests {
         ));
     }
 
-    /// A live session may GAIN a measured row and may never lose or move one.
+    /// A live session may gain a measured row or replace an unlandable packet's
+    /// row; it may never lose a row.
     ///
     /// The guard this serves refuses a table that changed under a sequence
     /// whose earlier stages are already signed. An addition for a stage that
@@ -12198,7 +12239,7 @@ mod tests {
     /// met the meter, and the number could not be declared without amending its
     /// session.
     #[test]
-    fn a_session_budget_table_may_only_gain_unplanned_rows() {
+    fn a_session_budget_table_may_amend_only_nonremoved_rows() {
         let row = |stage, compute_unit_limit| TerminalStageComputeBudgetV1 {
             stage,
             compute_unit_limit,
@@ -12207,39 +12248,42 @@ mod tests {
         let direct = row(TerminalStageV1::DirectCloseCapability, 515_929);
 
         assert_eq!(
-            terminal_compute_budget_additions_v1(
+            terminal_compute_budget_amendments_v1(
                 std::slice::from_ref(&close_fund),
                 &[direct.clone(), close_fund.clone()]
             ),
             Some(vec![TerminalStageV1::DirectCloseCapability]),
-            "an addition beside an unchanged row is the amendable case"
+            "an addition beside an unchanged row is an amendment"
         );
         assert_eq!(
-            terminal_compute_budget_additions_v1(
+            terminal_compute_budget_amendments_v1(
                 std::slice::from_ref(&close_fund),
                 std::slice::from_ref(&close_fund)
             ),
             None,
-            "an identical table is not an amendment"
+            "an identical table does not need an amendment"
         );
         assert_eq!(
-            terminal_compute_budget_additions_v1(
+            terminal_compute_budget_amendments_v1(
                 std::slice::from_ref(&close_fund),
                 &[
                     direct.clone(),
                     row(TerminalStageV1::ResolutionCloseFund, 267_519)
                 ]
             ),
-            None,
-            "a re-pinned value under a live sequence is the drift the guard is for"
+            Some(vec![
+                TerminalStageV1::DirectCloseCapability,
+                TerminalStageV1::ResolutionCloseFund,
+            ]),
+            "the caller must separately prove the added and changed rows are recoverable"
         );
         assert_eq!(
-            terminal_compute_budget_additions_v1(
+            terminal_compute_budget_amendments_v1(
                 &[direct.clone(), close_fund.clone()],
                 std::slice::from_ref(&close_fund)
             ),
             None,
-            "and a removal is never an addition"
+            "a removal is never an amendment"
         );
     }
 

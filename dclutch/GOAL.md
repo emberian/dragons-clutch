@@ -107,6 +107,16 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 | 2026-09-07 | Claims campaigns execute: accepted backed round trips, exact refusal rollback, all six targets accounted for | [Claims evidence](docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md) | `cac1a0593` |
 | 2026-09-07 | checked runtime build; validator trade, fee, resolution and first payout; Series/General walls located | [executed prefixes](docs/evidence/EXECUTED_PREFIXES_2026_09_07.md) | `56767e555` runtime; diagnostic host |
 
+| 2026-09-07 | Custody economics: governed parameters and nonzero upkeep Deposit execute; hostile and duplicate founders refuse exactly | [economics evidence](docs/evidence/ECONOMICS_CUSTODY_LOCAL_VALIDATOR_2026_09_07.md) | `9ab52277f` host; `56767e555` checked runtime |
+
+| 2026-09-07 | Series pre-Market expiry: both Trading builds pass all seven target cases, accepted poststates and four exact caller refusals | [Series evidence](docs/evidence/SERIES_PREMARKET_EXPIRY_PROGRAM_TEST_2026_09_07.md) | `548a2f1f6` Trading/host; `56767e555` companion ELFs |
+| 2026-09-07 | Ensemble: real Pyth member capture and fragment fold/reclaim execute in ProgramTest; validator founding remains open | [Ensemble evidence](docs/evidence/ENSEMBLE_PROGRAM_TEST_2026_09_07.md) | dated artifact set |
+
+
+| 2026-09-07 | eight fresh program links and matching frame captures establish an intermediate build baseline; later runtime debt remains explicit | [intermediate frame evidence](docs/evidence/COHORT18_INTERMEDIATE_FRAMES_A628_2026_09_07.md) | `a628bfd39` |
+| 2026-09-07 | Custody Propose, mature Apply and Withdraw execute with exact rollback controls across a durably finalized local clock advance | [governance evidence](docs/evidence/ECONOMICS_CUSTODY_GOVERNANCE_LOCAL_VALIDATOR_2026_09_07.md) | `c3d61aa97` host; `a628bfd39` runtime; 15 transactions |
+| 2026-09-07 | Ensemble full funding selection is carried through operator, Core and Resolution; fresh diagnostic capture executes | [mask runtime evidence](docs/evidence/ENSEMBLE_MASK_RUNTIME_PROGRAM_TEST_2026_09_07.md) | diagnostic mixed artifact set; terminal validator execution still owed |
+
 A new delta is one new row here and one entry in the store it names. The
 GOAL ledger file is closed; the entries main appended during the swarm are
 `docs/ledger/2026-09-04.md`, verbatim, and later narrative goes in a new dated

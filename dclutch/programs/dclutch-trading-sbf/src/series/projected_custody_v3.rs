@@ -72,6 +72,37 @@ pub struct SeriesProjectedConsumeV3 {
     pub realize_and_close: ProjectedCustodyRequestV1,
 }
 
+/// Project the first Prepare edge that creates the projected-Custody replay.
+///
+/// This is the only `Initialize` request for a Series future Market. It is
+/// public because a host founder must construct the same canonical request
+/// that the Prepare artifact commits; callers cannot supply its revision,
+/// amount, context, or SeriesEscrow source independently.
+pub fn project_prepare_initialize_v3(
+    escrow: dclutch_trading::series::PrefoundingSeriesEscrowV3,
+    expiry_slot: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+) -> Result<ProjectedCustodyRequestV1> {
+    base_request(escrow, expiry_slot, physical)
+}
+
+/// Project the second Prepare edge that opens the empty future-Market Hoard.
+///
+/// The first projected replay edge is the only permitted predecessor, so the
+/// operation has revision one, produces revision two, and moves no principal.
+pub fn project_prepare_open_hoard_v3(
+    escrow: dclutch_trading::series::PrefoundingSeriesEscrowV3,
+    expiry_slot: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+) -> Result<ProjectedCustodyRequestV1> {
+    with_transition(
+        base_request(escrow, expiry_slot, physical)?,
+        ProjectedCustodyOperationV1::OpenHoard,
+        1,
+        0,
+    )
+}
+
 /// Project atomic source close before Found and realization after Found.
 pub fn project_consume_v3(
     plan: ConsumeSeriesEscrowPlanV3,
@@ -349,6 +380,21 @@ mod tests {
     #[test]
     fn one_series_projection_owns_prepare_consume_and_expiry_coordinates() {
         let escrow = escrow();
+        let initialize =
+            project_prepare_initialize_v3(escrow, 100, physical()).expect("prepare initialize");
+        assert_eq!(
+            initialize.operation,
+            ProjectedCustodyOperationV1::Initialize
+        );
+        assert_eq!(initialize.expected_revision, 0);
+        assert_eq!(initialize.resulting_revision, 1);
+        assert_eq!(initialize.amount, 0);
+        let open =
+            project_prepare_open_hoard_v3(escrow, 100, physical()).expect("prepare open hoard");
+        assert_eq!(open.operation, ProjectedCustodyOperationV1::OpenHoard);
+        assert_eq!(open.expected_revision, 1);
+        assert_eq!(open.resulting_revision, 2);
+        assert_eq!(open.amount, 0);
         let consume =
             project_consume_v3(consume_series_escrow_v3(escrow), 100, physical()).expect("consume");
         assert_eq!(
@@ -406,6 +452,14 @@ mod tests {
         no_rent.escrow_vault_rent_lamports = 0;
         assert_eq!(
             project_consume_v3(consume_series_escrow_v3(escrow), 100, no_rent),
+            Err(SeriesProjectedCustodyErrorV3::MissingRent)
+        );
+        assert_eq!(
+            project_prepare_initialize_v3(escrow, 100, missing),
+            Err(SeriesProjectedCustodyErrorV3::MissingIdentity)
+        );
+        assert_eq!(
+            project_prepare_open_hoard_v3(escrow, 100, no_rent),
             Err(SeriesProjectedCustodyErrorV3::MissingRent)
         );
     }

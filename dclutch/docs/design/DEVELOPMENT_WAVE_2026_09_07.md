@@ -40,23 +40,62 @@ operator whose continued presence is required for holders to get paid.
 
 ## Current execution findings
 
-- The committed Claims batch is recorded in
-  `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md` and published by cut `b08bc2a57`.
-- The initial local-validator tier at `0a869a766` completed atomic founding
-  through Open and active funding. Its compute-budget witness is red on
-  thirteen rows; the budgets are not widened. It has not exercised the other
-  lifecycle stages. Raw evidence is under
-  `hbox:/tank/dregg-build/dclutch-codex-validator-20260907`.
-- The strict release attempt at `cac1a0593` refused the profiled Trading Hot
-  execution frame: five compiler overwrite diagnostics, with a 3,904-byte
-  measured frame. Extracting the Series replay observation into its own stage
-  reduced that measurement to 3,840 and zero diagnostics. A full checked build
-  and frame-baseline capture remain required from the committed repair.
-- The Dealer now has four owned-loopback commands sharing the public commands'
-  planners, executor and evidence writer. Cluster selection also authenticates
-  the founding report; the local arm refuses even acknowledged public devnet
-  before I/O. The thirteen focused native controls pass. Nonzero ELF and
-  local-validator execution still determine whether the economic path works.
+- Claims' six named ProgramTest targets have executed, including backed round
+  trips and exact hostile rollback. The dated authority is
+  `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md`; this does not substitute for
+  local-validator founding or full protocol route coverage.
+- Two checked eight-program builds now exist, at `56767e555` and `a628bfd39`.
+  The latter has matching independent frame captures and a strict candidate.
+  It remains intermediate: later General and Resolution changes require a
+  fresh all-program build. Publication cuts carry development work; they do
+  not assert that a build has become a deployed cohort.
+- Direct's validator journey has executed founding/Open, admission, nonzero
+  fills and fees, objective Pyth resolution, and wallet payouts. The retirement
+  rerun now invokes the actual upkeep producer before closing maker roots.
+  Its complete terminal sequence and conservation ledger remain to be checked.
+- Custody economics has an accepted real local-validator campaign: governed
+  parameters, Upkeep Found, and a nonzero Deposit Credit, with exact hostile
+  and duplicate refusals. Hoard principal moved zero. Its first dated authority is
+  `docs/evidence/ECONOMICS_CUSTODY_LOCAL_VALIDATOR_2026_09_07.md`.
+  A second 15-transaction validator campaign executes Propose, Apply and
+  Withdraw, including exact hostile rollback. Apply follows a durably
+  finalized, controlled local clock advance, not elapsed devnet time; see
+  `docs/evidence/ECONOMICS_CUSTODY_GOVERNANCE_LOCAL_VALIDATOR_2026_09_07.md`.
+- Series' shipped and profiled Trading targets each pass seven cases, including
+  two accepted expiry variants and four exact caller refusals. They reach projected Custody cleanup,
+  Core precommit, and Trading replay poststates. The committed repair separates
+  future-Market bump derivation, rent credit, typed projected wire, and readonly
+  replay observations. A host producer for the complete two-occurrence
+  local-validator input is still being implemented; the existing runner alone
+  cannot supply that input.
+- General's accepted nonempty path is being run after repairing action-scoped
+  lifecycle funding and the semantic outer frame / key-sorted Claims child
+  boundary. Dealer's TradingRecord admission repair reaches actual Custody CPI;
+  Dealer Found currently refuses its child account frame. A nonzero fill is
+  still unexecuted, and its vertical lane owns that repair.
+- Ensemble fold/reclaim has accepted real-ELF poststates. Its direct Pyth member
+  producer is being executed separately so pre-captured fragment fixtures do
+  not stand in for capture evidence. Recovery reached exhaustion and terminal
+  admission; its refund-key lookup is fixed and the full walk is rerunning.
+- Structured's Claims operations have executed against real ELFs. The V6 child bridge and per-Market publication producer are committed.
+  Executing the entrance exposed a missing root-creation descriptor. The set
+  now enumerates seven action descriptors plus one V1 root-activation
+  descriptor; generic root execution and receipt activation are being wired
+  into the validator driver.
+- Browser joining now carries the linked-basis binding, requires finalized
+  confirmation and authenticated poststate, and resumes its transaction journal.
+  Generated reference/client mirrors and the capability graph have converged.
+  Cohort 18 is still a placeholder, so no current-cohort participation claim is
+  justified yet.
+- The aquarium has bounded epochs, role and release checks, spending limits,
+  idempotent journals, replenishment, a durable supervisor lease, explicit
+  stop/resume controls and a checked static status publisher. It still needs a checked new cohort,
+  actual markets and ticket-author provenance before instantiation and
+  supervision on devnet.
+- The initial local-validator tier at `0a869a766` still has thirteen compute
+  budget regressions. Those budgets have not been widened. Complete protocol
+  route coverage, final release gates, devnet redeployment and a running public
+  aquarium remain open deliverables.
 
 ## Execution order and completion evidence
 

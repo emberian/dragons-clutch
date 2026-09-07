@@ -37,6 +37,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Optional
+import uuid
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -47,6 +48,7 @@ import simcore  # noqa: E402
 SCHEMA_CONFIG = "dclutch-aquarium-config-v1"
 SCHEMA_STATUS = "dclutch-aquarium-status-v1"
 SCHEMA_JOURNAL = "dclutch-aquarium-epoch-journal-v1"
+SCHEMA_SUPERVISOR = "dclutch-aquarium-supervisor-v1"
 COHORT_SCHEMA = "dclutch-cohort-manifest-v1"
 DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 # PROVISIONAL operational caps. Their lifting plan is
@@ -58,6 +60,8 @@ MAX_EPOCH_CYCLES_HARD = 256
 MAX_WALLETS_HARD = 512
 COHORT_ROLES = ("registry", "rent", "custody", "resolution", "claims", "trading", "core")
 REPRODUCIBLE_GATE_SCHEMA = "dclutch-reproducible-release-gate-v1"
+RELEASE_PACK_SCHEMA = "dclutch-successor-campaign-release-pack-v1"
+RELEASE_PACK_BASENAME = "SUCCESSOR_CAMPAIGN_PACK.json"
 STATES = frozenset({"preflight", "running", "stopping", "stopped", "halted", "stale"})
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -133,7 +137,7 @@ def address(value: Any, field: str) -> str:
 def utc_after(seconds: float) -> str:
     return (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=seconds)).isoformat(
         timespec="seconds"
-    )
+    ).replace("+00:00", "Z")
 
 
 def read_json(path: Path, field: str) -> dict:
@@ -144,6 +148,79 @@ def read_json(path: Path, field: str) -> dict:
     if not isinstance(result, dict):
         raise Refusal(f"{field} must contain one JSON object")
     return result
+
+
+def iso_timestamp(value: Any, field: str, *, nullable: bool = False) -> Optional[str]:
+    if value is None and nullable:
+        return None
+    candidate = text(value, field)
+    try:
+        parsed = dt.datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise Refusal(f"{field} must be an ISO timestamp") from error
+    if parsed.tzinfo is None:
+        raise Refusal(f"{field} must carry a timezone")
+    return candidate
+
+
+def public_timestamp(value: Any, field: str) -> str:
+    """Normalize a checked ISO instant for the browser's UTC-only schema."""
+    candidate = iso_timestamp(value, field)
+    assert candidate is not None
+    return dt.datetime.fromisoformat(candidate.replace("Z", "+00:00")).astimezone(dt.timezone.utc).isoformat(
+        timespec="seconds"
+    ).replace("+00:00", "Z")
+
+
+def supervisor_path(work: Path) -> Path:
+    return work / "SUPERVISOR.json"
+
+
+def process_command(pid: int) -> Optional[str]:
+    """Return the command only when the platform can attest the target PID.
+
+    A PID alone is not authority to signal: after a crash the operating system
+    may reuse it for an unrelated process. ``stop`` therefore refuses without
+    the launch's unguessable run id in the current command line.
+    """
+    try:
+        completed = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    command = completed.stdout.strip()
+    return command or None
+
+
+def active_supervisor(record: dict) -> bool:
+    if record.get("schema") != SCHEMA_SUPERVISOR:
+        raise Refusal("supervisor record has another schema")
+    pid = whole(record.get("pid"), "supervisor pid")
+    run_id = text(record.get("run_id"), "supervisor run_id")
+    if pid == 0:
+        return False
+    command = process_command(pid)
+    return command is not None and run_id in command and "--supervisor-run-id" in command
+
+
+def write_supervisor(path: Path, record: dict) -> None:
+    required = {"schema", "phase", "run_id", "pid", "config_sha256", "execute", "updated_at"}
+    if set(record) != required or record["schema"] != SCHEMA_SUPERVISOR:
+        raise Refusal("supervisor record fields differ")
+    if record["phase"] not in {"launching", "running", "stopping", "stopped", "halted", "lost"}:
+        raise Refusal("supervisor record phase is unknown")
+    if not isinstance(record["config_sha256"], str) or not HEX64.fullmatch(record["config_sha256"]):
+        raise Refusal("supervisor record config_sha256 differs")
+    if not isinstance(record["execute"], bool):
+        raise Refusal("supervisor record execute differs")
+    whole(record["pid"], "supervisor pid")
+    iso_timestamp(record["updated_at"], "supervisor updated_at")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    simcore.write_json_atomic(path, record)
 
 
 def verify_release_gate(path: Path, digest: str) -> None:
@@ -165,6 +242,49 @@ def verify_release_gate(path: Path, digest: str) -> None:
     if child.returncode != 0:
         detail = (child.stdout or b"").decode("utf-8", errors="replace").strip()
         raise Refusal(f"cohort.release_gate failed its release-owned reauthentication: {simcore.redact_text(detail[-800:])}")
+
+
+def verify_release_pack(path: Path, digest: str, source_revision: str, source_tree: str) -> dict:
+    """Reauthenticate the one source-pinned host producer the release owns."""
+    if path.name != RELEASE_PACK_BASENAME or not HEX64.fullmatch(digest) or sha256_file(path) != digest:
+        raise Refusal("cohort.release_pack must name and hash the exact SUCCESSOR_CAMPAIGN_PACK.json")
+    verifier = HERE.parent / "release" / "successor_campaign_pack.py"
+    if not verifier.is_file():
+        raise Refusal(f"release-pack verifier is absent: {verifier}")
+    child = subprocess.run(
+        [sys.executable, str(verifier), "verify", "--pack", str(path)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    if child.returncode != 0:
+        detail = (child.stdout or b"").decode("utf-8", errors="replace").strip()
+        raise Refusal(f"cohort.release_pack failed its release-owned reauthentication: {simcore.redact_text(detail[-800:])}")
+    pack = read_json(path, "cohort.release_pack")
+    source = pack.get("source")
+    if pack.get("schema") != RELEASE_PACK_SCHEMA or not isinstance(source, dict):
+        raise Refusal("cohort.release_pack has another schema")
+    if source.get("revision") != source_revision or source.get("tree_sha256") != source_tree:
+        raise Refusal("cohort.release_pack source identity differs from the checked cohort release")
+    try:
+        host = pack["product_handoff"]["build"]["successor"]
+    except (KeyError, TypeError) as error:
+        raise Refusal("cohort.release_pack omits the checked host successor binary") from error
+    if not isinstance(host, dict) or set(host) != {"canonical_path", "bytes", "sha256"}:
+        raise Refusal("cohort.release_pack host binary evidence fields differ")
+    host_path = absolute(host.get("canonical_path"), "cohort.release_pack host binary")
+    if (not host_path.is_file() or host_path.is_symlink() or host_path.resolve(strict=True) != host_path
+            or whole(host.get("bytes"), "cohort.release_pack host binary bytes") != host_path.stat().st_size
+            or not isinstance(host.get("sha256"), str) or not HEX64.fullmatch(host["sha256"])
+            or sha256_file(host_path) != host["sha256"]):
+        raise Refusal("cohort.release_pack host binary evidence differs")
+    return {"path": host_path, "sha256": host["sha256"], "bytes": host["bytes"]}
+
+
+def require_checked_bootstrap(config: dict, expected: dict, field: str) -> None:
+    bootstrap = absolute(config.get("bootstrap_bin"), f"{field} bootstrap_bin")
+    if (not bootstrap.is_file() or bootstrap.is_symlink() or bootstrap.resolve(strict=True) != bootstrap
+            or not os.access(bootstrap, os.X_OK) or bootstrap != expected["path"]
+            or sha256_file(bootstrap) != expected["sha256"]):
+        raise Refusal(f"{field} bootstrap_bin differs from the checked release host binary")
 
 
 def simulator_config(path: Path, market_address: str, maximum_spend: int) -> dict:
@@ -277,9 +397,17 @@ def validate_config(path: Path) -> dict:
     if gate_path.name != "RELEASE_GATE.json" or not HEX64.fullmatch(gate_digest) or sha256_file(gate_path) != gate_digest:
         raise Refusal("cohort.release_gate must name and hash the exact RELEASE_GATE.json")
     gate = read_json(gate_path, "cohort.release_gate")
-    if gate.get("schema") != REPRODUCIBLE_GATE_SCHEMA or gate.get("source_revision") != deploy_commit:
+    gate_tree = text(gate.get("source_tree_sha256"), "cohort.release_gate.source_tree_sha256")
+    if (gate.get("schema") != REPRODUCIBLE_GATE_SCHEMA or gate.get("source_revision") != deploy_commit
+            or not HEX64.fullmatch(gate_tree)):
         raise Refusal("cohort.release_gate does not authenticate this manifest's deploy commit")
     verify_release_gate(gate_path, gate_digest)
+    pack_cfg = cohort_cfg.get("release_pack")
+    if not isinstance(pack_cfg, dict):
+        raise Refusal("cohort.release_pack must bind ticket authoring to the checked source-built host binary")
+    pack_path = absolute(pack_cfg.get("path"), "cohort.release_pack.path")
+    pack_digest = text(pack_cfg.get("sha256"), "cohort.release_pack.sha256")
+    checked_bootstrap = verify_release_pack(pack_path, pack_digest, deploy_commit, gate_tree)
     prior_path = absolute(cohort_cfg.get("prior_manifest"), "cohort.prior_manifest")
     prior = read_json(prior_path, "cohort.prior_manifest")
     if prior.get("schema") != COHORT_SCHEMA:
@@ -337,6 +465,7 @@ def validate_config(path: Path) -> dict:
                 raise Refusal(f"epoch {epoch_id} needs at least one cycle")
             sim_path = absolute(epoch.get("simulator_config"), f"epoch {epoch_id} simulator_config")
             sim = simulator_config(sim_path, market_address, max_spend)
+            require_checked_bootstrap(sim, checked_bootstrap, f"epoch {epoch_id} simulator")
             sim_work = absolute(sim.get("work_dir"), f"epoch {epoch_id} simulator work_dir")
             if str(sim_work) in work_dirs:
                 raise Refusal("each epoch needs a distinct simulator work_dir; journals cannot be reused")
@@ -374,18 +503,21 @@ def validate_config(path: Path) -> dict:
     return {"body": body, "work": work, "public_status": public_status, "limits": limits,
             "cohort": {"number": cohort_number, "digest": stated_manifest_digest,
                        "deploy_commit": deploy_commit, "checked_at": checked_at,
-                       "release_gate_sha256": gate_digest, "general_accelerator": expected_accelerator_body},
+                       "release_gate_sha256": gate_digest, "general_accelerator": expected_accelerator_body,
+                       "bootstrap_binary_sha256": checked_bootstrap["sha256"],
+                       "bootstrap_binary": checked_bootstrap},
             "actors": actor_addresses, "markets": parsed_markets,
             "reserved_lamports": total_reserved_spend,
             "ticket_digests": frozenset(seen_ticket_digests)}
 
 
 class Aquarium:
-    def __init__(self, config: dict, *, execute: bool):
+    def __init__(self, config: dict, *, execute: bool, supervised_run_id: Optional[str] = None):
         self.config, self.execute = config, execute
         self.work: Path = config["work"]
         self.public_status: Path = config["public_status"]
-        self.started_at = simcore.utc_now_iso()
+        self.supervised_run_id = supervised_run_id
+        self.started_at = utc_after(0)
         self.stopping = False
         self.last_event: Optional[dict] = None
         self.counts = dict.fromkeys(("found", "admitted", "fill", "resolved", "deadline_failure",
@@ -439,11 +571,11 @@ class Aquarium:
         heartbeat = float(self.config["limits"].get("heartbeat_seconds", 90))
         body = {"schema": SCHEMA_STATUS,
                 "cohort": {"number": self.config["cohort"]["number"], "manifest_sha256": self.config["cohort"]["digest"],
-                           "deployment_commit": self.config["cohort"]["deploy_commit"], "checked_at": self.config["cohort"]["checked_at"],
+                           "deployment_commit": self.config["cohort"]["deploy_commit"], "checked_at": public_timestamp(self.config["cohort"]["checked_at"], "cohort.checked_at"),
                            "release_gate_sha256": self.config["cohort"]["release_gate_sha256"],
                            "general_accelerator": self.config["cohort"]["general_accelerator"]},
                 "state": state,
-                "run": {"started_at": self.started_at, "updated_at": simcore.utc_now_iso(),
+                "run": {"started_at": self.started_at, "updated_at": utc_after(0),
                         "expected_next_update_by": None if state in ("stopped", "halted") else utc_after(heartbeat),
                         "planned_market_count": len(self.config["markets"]),
                         "active_market_target": self.config["limits"]["min_active_markets"],
@@ -459,13 +591,21 @@ class Aquarium:
                 "artifacts": {"driver": "tools/load-simulator/simulator.py",
                               "epoch_journal_schema": SCHEMA_JOURNAL,
                               "child_journal_owner": "dclutch-load-simulator-cycle-v1"},
-                "failure": None if failure is None else {"kind": "driver-exit", "at": simcore.utc_now_iso(),
+                "failure": None if failure is None else {"kind": "driver-exit", "at": utc_after(0),
                                                           "detail": simcore.redact_text(failure)}}
         return body
 
     def publish(self, state: str, failure: Optional[str] = None) -> None:
         self.public_status.parent.mkdir(parents=True, exist_ok=True)
         simcore.write_json_atomic(self.public_status, self.status(state, failure))
+        if self.supervised_run_id is not None:
+            path = supervisor_path(self.work)
+            record = read_json(path, "supervisor record")
+            if record.get("run_id") != self.supervised_run_id:
+                raise Refusal("supervisor record belongs to another run")
+            record.update({"phase": state if state in {"running", "stopping", "stopped", "halted"} else "running",
+                           "pid": os.getpid(), "updated_at": simcore.utc_now_iso()})
+            write_supervisor(path, record)
 
     @staticmethod
     def child_status(epoch: dict) -> Optional[dict]:
@@ -616,6 +756,7 @@ def prepare_spec(path: Path) -> dict:
         raise Refusal("epoch preparation simulator_work_dir reuses an existing signed-journal root")
     template_path = absolute(body.get("simulator_template"), "epoch preparation simulator_template")
     template = simulator_config(template_path, market["address"], aquarium["limits"]["max_lamports_spent"])
+    require_checked_bootstrap(template, aquarium["cohort"]["bootstrap_binary"], "epoch preparation simulator_template")
     candidate_spend = whole((template.get("budget") or {}).get("max_lamports_spent"),
                             "epoch preparation template budget.max_lamports_spent")
     cumulative_spend = aquarium["reserved_lamports"] + candidate_spend
@@ -753,17 +894,165 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    return Aquarium(validate_config(Path(args.config)), execute=args.execute).run()
+    config_path = absolute(args.config, "config")
+    return Aquarium(
+        validate_config(config_path), execute=args.execute,
+        supervised_run_id=getattr(args, "supervisor_run_id", None),
+    ).run()
+
+
+def config_file_digest(path: Path) -> str:
+    if not path.is_file() or path.is_symlink() or path.resolve(strict=True) != path:
+        raise Refusal("config must be one regular, non-symlink file")
+    return sha256_file(path)
+
+
+def checked_public_snapshot(config: dict, source: Path) -> bytes:
+    """Recheck a supervisor-produced status before it can enter a static cut."""
+    status = read_json(source, "aquarium public status")
+    required = {"schema", "cohort", "state", "run", "activity", "limits", "artifacts", "failure"}
+    if set(status) != required or status.get("schema") != SCHEMA_STATUS or status.get("state") not in STATES:
+        raise Refusal("aquarium public status has another schema or fields")
+    cohort = status.get("cohort")
+    if not isinstance(cohort, dict) or cohort != {
+        "number": config["cohort"]["number"], "manifest_sha256": config["cohort"]["digest"],
+        "deployment_commit": config["cohort"]["deploy_commit"], "checked_at": public_timestamp(config["cohort"]["checked_at"], "cohort.checked_at"),
+        "release_gate_sha256": config["cohort"]["release_gate_sha256"],
+        "general_accelerator": config["cohort"]["general_accelerator"],
+    }:
+        raise Refusal("aquarium public status cohort does not match the checked config")
+    run = status.get("run")
+    run_keys = {"started_at", "updated_at", "expected_next_update_by", "planned_market_count",
+                "active_market_target", "joined_wallet_target", "max_wallets", "max_lamports_spent",
+                "lamports_spent_observed"}
+    if not isinstance(run, dict) or set(run) != run_keys:
+        raise Refusal("aquarium public status run fields differ")
+    iso_timestamp(run.get("started_at"), "aquarium public status run.started_at")
+    iso_timestamp(run.get("updated_at"), "aquarium public status run.updated_at")
+    iso_timestamp(run.get("expected_next_update_by"), "aquarium public status run.expected_next_update_by", nullable=True)
+    for field in run_keys - {"started_at", "updated_at", "expected_next_update_by"}:
+        whole(run.get(field), f"aquarium public status run.{field}")
+    if (run["planned_market_count"] != len(config["markets"])
+            or run["active_market_target"] != config["limits"]["min_active_markets"]
+            or run["joined_wallet_target"] != len(config["actors"])
+            or run["max_wallets"] != config["limits"]["max_wallets"]
+            or run["max_lamports_spent"] != config["limits"]["max_lamports_spent"]):
+        raise Refusal("aquarium public status limits do not match the checked config")
+    activity = status.get("activity")
+    if not isinstance(activity, dict) or activity.get("synthetic_actors") is not True:
+        raise Refusal("aquarium public status must explicitly name synthetic actors")
+    rows = activity.get("active_markets")
+    expected_rows = {(market["market_id"], market["address"]) for market in config["markets"]}
+    actual_rows = set()
+    if not isinstance(rows, list) or len(rows) > config["limits"]["max_active_markets"]:
+        raise Refusal("aquarium public status active market inventory differs")
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or row.get("join_open") is not False:
+            raise Refusal(f"aquarium public status active market {index} admits public joining")
+        actual_rows.add((row.get("market_id"), row.get("address")))
+    if actual_rows != expected_rows or len(actual_rows) != len(rows):
+        raise Refusal("aquarium public status active market inventory differs")
+    if status.get("limits") != {"max_active_markets": config["limits"]["max_active_markets"]}:
+        raise Refusal("aquarium public status public limit differs")
+    encoded = json.dumps(status, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    if str(config["work"]) in encoded.decode("utf-8"):
+        raise Refusal("aquarium public status carries a private work path")
+    return encoded
+
+
+def cmd_publish_status(args: argparse.Namespace) -> int:
+    config_path = absolute(args.config, "config")
+    config = validate_config(config_path)
+    source = config["public_status"]
+    destination = absolute(args.destination, "destination")
+    if destination.name != "aquarium-status-v1.json":
+        raise Refusal("destination must be named aquarium-status-v1.json")
+    body = checked_public_snapshot(config, source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    simcore.write_atomic(destination, body)
+    print(json.dumps({"published": str(destination), "sha256": hashlib.sha256(body).hexdigest()}, sort_keys=True))
+    return 0
+
+
+def launch_supervisor(config_path: Path, *, execute: bool, resume: bool) -> int:
+    config = validate_config(config_path)
+    digest = config_file_digest(config_path)
+    record_path = supervisor_path(config["work"])
+    existing = read_json(record_path, "supervisor record") if record_path.exists() else None
+    if existing is not None:
+        if existing.get("config_sha256") != digest:
+            raise Refusal("supervisor record belongs to another checked config")
+        if active_supervisor(existing):
+            raise Refusal("checked aquarium supervisor is already running")
+        if not resume and existing.get("phase") in {"launching", "running", "stopping", "halted", "lost"}:
+            raise Refusal("previous supervisor is not cleanly stopped; use explicit resume after inspection")
+    elif resume:
+        raise Refusal("no supervisor record exists to resume")
+    config["work"].mkdir(parents=True, exist_ok=True)
+    os.chmod(config["work"], 0o700)
+    run_id = uuid.uuid4().hex
+    command = [sys.executable, str(Path(__file__).resolve()), "run", "--config", str(config_path),
+               "--supervisor-run-id", run_id]
+    if execute:
+        command.append("--execute")
+    log_path = config["work"] / "SUPERVISOR.log"
+    # Claim the run id before the child can publish. PID zero is deliberately
+    # non-signalable; the child replaces it with its own PID on first publish.
+    write_supervisor(record_path, {"schema": SCHEMA_SUPERVISOR, "phase": "launching", "run_id": run_id,
+                                   "pid": 0, "config_sha256": digest, "execute": execute,
+                                   "updated_at": simcore.utc_now_iso()})
+    with log_path.open("a", encoding="utf-8") as log:
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+    record = read_json(record_path, "supervisor record")
+    if record.get("run_id") != run_id:
+        raise Refusal("supervisor launch record changed before its child started")
+    record.update({"pid": child.pid, "updated_at": simcore.utc_now_iso()})
+    write_supervisor(record_path, record)
+    print(json.dumps({"run_id": run_id, "pid": child.pid, "phase": "launching", "execute": execute}, sort_keys=True))
+    return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    return launch_supervisor(absolute(args.config, "config"), execute=args.execute, resume=False)
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    return launch_supervisor(absolute(args.config, "config"), execute=args.execute, resume=True)
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    config_path = absolute(args.config, "config")
+    config = validate_config(config_path)
+    record_path = supervisor_path(config["work"])
+    if not record_path.exists():
+        raise Refusal("no supervisor record exists to stop")
+    record = read_json(record_path, "supervisor record")
+    if record.get("config_sha256") != config_file_digest(config_path):
+        raise Refusal("supervisor record belongs to another checked config")
+    if not active_supervisor(record):
+        record.update({"phase": "lost", "updated_at": simcore.utc_now_iso()})
+        write_supervisor(record_path, record)
+        raise Refusal("supervisor PID is absent or belongs to another command; no signal was sent")
+    os.kill(int(record["pid"]), signal.SIGTERM)
+    record.update({"phase": "stopping", "updated_at": simcore.utc_now_iso()})
+    write_supervisor(record_path, record)
+    print(json.dumps({"pid": record["pid"], "phase": "stopping", "run_id": record["run_id"]}, sort_keys=True))
+    return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("check", "run"):
+    for name in ("check", "run", "start", "resume", "stop", "publish-status"):
         child = sub.add_parser(name)
         child.add_argument("--config", required=True)
-        if name == "run":
+        if name in ("run", "start", "resume"):
             child.add_argument("--execute", action="store_true")
+        if name == "run":
+            child.add_argument("--supervisor-run-id", help=argparse.SUPPRESS)
+        if name == "publish-status":
+            child.add_argument("--destination", required=True)
     prepare = sub.add_parser("prepare-epoch", help="preflight or explicitly author one bounded replacement epoch")
     prepare.add_argument("--spec", required=True)
     prepare.add_argument("--author", action="store_true",
@@ -774,6 +1063,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_check(args)
         if args.command == "prepare-epoch":
             return cmd_prepare_epoch(args)
+        if args.command == "publish-status":
+            return cmd_publish_status(args)
+        if args.command == "start":
+            return cmd_start(args)
+        if args.command == "resume":
+            return cmd_resume(args)
+        if args.command == "stop":
+            return cmd_stop(args)
         return cmd_run(args)
     except (Refusal, simcore.JournalConflict, OSError, ValueError, KeyError) as error:
         print(f"REFUSED: {error}", file=sys.stderr)

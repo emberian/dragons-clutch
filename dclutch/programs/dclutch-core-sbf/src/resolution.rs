@@ -2,8 +2,7 @@
 
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
-    CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
-    FUNDING_LEDGER_SLOT_BYTES_V2, FundingLedgerStatusV2, FundingLedgerV2,
+    CapabilityManifestV1, ContentId as CapabilityContentId, FundingLedgerStatusV2, FundingLedgerV2,
     funding::funded_rent_persists_v1,
 };
 use dclutch_market::{
@@ -144,9 +143,6 @@ const ADMIT_RESULT_DOMAIN_STAGING: usize = 19;
 const ADMIT_PORTFOLIO: usize = 20;
 const ADMIT_PORTFOLIO_STAGING: usize = 21;
 
-const RESOLUTION_FUNDING_LEDGER_BYTES: usize =
-    FUNDING_LEDGER_HEADER_BYTES_V2 + 3 * FUNDING_LEDGER_SLOT_BYTES_V2;
-
 /// The three Resolution actions Core still COMPOSES.
 ///
 /// `ResolutionCoreActionV1` is the WIRE enum and it keeps all four
@@ -199,7 +195,7 @@ pub(crate) fn process(
             .ok_or(CoreSbfError::Instruction)?,
     )
     .map_err(|_| CoreSbfError::Instruction)?;
-    if funding_header.physical_count() != 1 || funding_header.logical_count() != 3 {
+    if funding_header.physical_count() != 1 {
         return Err(CoreSbfError::Instruction.into());
     }
     let resolution_request = ResolutionRoleRequestV2::decode(
@@ -228,13 +224,6 @@ pub(crate) fn process(
         ResolutionCoreActionV1::VerifyFundReady => ComposedResolutionActionV1::VerifyFundReady,
         ResolutionCoreActionV1::AdmitTerminal => ComposedResolutionActionV1::AdmitTerminal,
     };
-    if funding_header.selected_mask()
-        != resolution_request
-            .funding_entry_mask()
-            .map_err(|_| CoreSbfError::Funding)?
-    {
-        return Err(CoreSbfError::Instruction.into());
-    }
     authenticate_action(request, envelope, resolution_request, action)?;
     validate_outer_frame(program_id, accounts, action)?;
     let frame = FixedRoleAccountsV1::parse(program_id, accounts)?;
@@ -254,7 +243,34 @@ pub(crate) fn process(
         action,
     )?;
     if action != ComposedResolutionActionV1::AdmitTerminal {
-        authenticate_recovery_policy(&frame, accounts, resolution_request, action)?;
+        let expected_mask =
+            authenticate_recovery_policy(&frame, accounts, resolution_request, action)?;
+        if funding_header.selected_mask() != expected_mask
+            || usize::try_from(funding_header.logical_count()).ok()
+                != Some(
+                    usize::try_from(expected_mask.count_ones())
+                        .map_err(|_| CoreSbfError::Funding)?,
+                )
+        {
+            return Err(CoreSbfError::Funding.into());
+        }
+    } else if usize::try_from(funding_header.logical_count()).ok()
+        != Some(
+            usize::try_from(funding_header.selected_mask().count_ones())
+                .map_err(|_| CoreSbfError::Funding)?,
+        )
+        || funding_header.selected_mask()
+            & resolution_request
+                .funding_entry_mask()
+                .map_err(|_| CoreSbfError::Funding)?
+            != resolution_request
+                .funding_entry_mask()
+                .map_err(|_| CoreSbfError::Funding)?
+    {
+        // Terminal has no policy pair. Its immutable Active ledger was admitted
+        // only by the exact Create/Verify checks above. The shared live-ledger
+        // check below binds this complete header mask to that persisted PDA.
+        return Err(CoreSbfError::Funding.into());
     }
     match action {
         ComposedResolutionActionV1::VerifyFundReady => {
@@ -264,6 +280,7 @@ pub(crate) fn process(
                 *authenticated.state,
                 resolution_request,
                 *authenticated.target_admission,
+                funding_header.selected_mask(),
             )?;
             require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
             commit_verified_readiness(
@@ -285,6 +302,7 @@ pub(crate) fn process(
                 accounts,
                 *authenticated.state,
                 resolution_request,
+                funding_header.selected_mask(),
             )?;
             require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
             if let Some(existing) = authenticated.state.terminal_receipt {
@@ -327,6 +345,7 @@ pub(crate) fn process(
                 resolution_request,
                 acknowledgement,
                 action,
+                funding_header.selected_mask(),
             )?;
             Ok(())
         }
@@ -477,6 +496,7 @@ fn authenticate_activation_accept(
     state: CoreState,
     request: ResolutionRoleRequestV2,
     target_admission: dclutch_market::Admission,
+    expected_mask: u16,
 ) -> Result<(), CoreSbfError> {
     // The Rent sysvar account stays in the frame and is still authenticated as
     // itself, so a substituted or unparseable rent account refuses exactly as it
@@ -490,6 +510,7 @@ fn authenticate_activation_accept(
         state,
         request,
         ComposedResolutionActionV1::VerifyFundReady,
+        expected_mask,
     )?;
     let receipt_account = account(accounts, VERIFY_ACTIVATION_RECEIPT)?;
     let generation_seed = state.identity.generation.to_le_bytes();
@@ -552,7 +573,7 @@ fn authenticate_activation_accept(
     // wall, in the other direction, and across a program boundary where no
     // compiler can see the two sides disagree.
     let ledger_rent_lamports = active
-        .funded_rent_minimum(RESOLUTION_FUNDING_LEDGER_BYTES)
+        .funded_rent_minimum(ledger_data.len())
         .map_err(|error| match error {
             dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
             | dclutch_market::capability_manifest::Error::FundedRentRateMissing => {
@@ -728,7 +749,7 @@ fn authenticate_recovery_policy(
     accounts: &[AccountInfo<'_>],
     request: ResolutionRoleRequestV2,
     action: ComposedResolutionActionV1,
-) -> Result<(), CoreSbfError> {
+) -> Result<u16, CoreSbfError> {
     let (policy_index, staging_index) = recovery_policy_indices(action)?;
     let material_account = account(accounts, SOURCE_MATERIAL)?;
     let material_data = material_account
@@ -857,9 +878,28 @@ fn authenticate_recovery_policy(
         }
         None => authenticate_no_recovery_entries(manifest, request)?,
     }
-    Ok(())
+    let mut expected_mask = request
+        .funding_entry_mask()
+        .map_err(|_| CoreSbfError::Funding)?;
+    if let Some((_, policy)) = policy {
+        let mut rung = 1_u8;
+        while rung < policy.attempt_count() {
+            let index = request
+                .recovery_entry_index
+                .checked_add(u16::from(rung))
+                .ok_or(CoreSbfError::Funding)?;
+            let bit = 1_u16
+                .checked_shl(u32::from(index))
+                .ok_or(CoreSbfError::Funding)?;
+            if expected_mask & bit != 0 {
+                return Err(CoreSbfError::Funding);
+            }
+            expected_mask |= bit;
+            rung = rung.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
+        }
+    }
+    Ok(expected_mask)
 }
-
 /// One manifest entry, configured by exactly one identity and released by the
 /// Resolution controller this market selected.
 fn authenticate_controller_entry(
@@ -969,6 +1009,7 @@ fn authenticate_admit_projection(
     accounts: &[AccountInfo<'_>],
     state: CoreState,
     request: ResolutionRoleRequestV2,
+    expected_mask: u16,
 ) -> Result<AdmitProjection, CoreSbfError> {
     let registry = frame.registry().key;
     let material_account = account(accounts, SOURCE_MATERIAL)?;
@@ -1058,6 +1099,19 @@ fn authenticate_admit_projection(
         product.outcome_count,
         &certificate_data,
     )?;
+    // The terminal frame lacks the recovery-policy pair. The live
+    // Resolution-owned ledger is therefore the persisted authority: its PDA
+    // address commits the full mask that CreateFund/VerifyFundReady already
+    // accepted against policy, and this equality rejects an added, missing, or
+    // reordered header row before Core admits the certificate.
+    authenticate_live_poststate(
+        frame,
+        accounts,
+        state,
+        request,
+        ComposedResolutionActionV1::AdmitTerminal,
+        expected_mask,
+    )?;
     Ok(AdmitProjection {
         product,
         receipt: TerminalReceipt {
@@ -1142,10 +1196,11 @@ fn authenticate_poststate(
     request: ResolutionRoleRequestV2,
     acknowledgement: CoreEffectAckV1,
     action: ComposedResolutionActionV1,
+    expected_mask: u16,
 ) -> Result<(), CoreSbfError> {
     let observed_digest = {
         {
-            authenticate_live_poststate(frame, accounts, state, request, action)?;
+            authenticate_live_poststate(frame, accounts, state, request, action, expected_mask)?;
             let source = account(accounts, SOURCE_STATE)?
                 .try_borrow_data()
                 .map_err(|_| CoreSbfError::ChildAck)?;
@@ -1183,6 +1238,7 @@ fn authenticate_live_poststate(
     state: CoreState,
     request: ResolutionRoleRequestV2,
     action: ComposedResolutionActionV1,
+    expected_mask: u16,
 ) -> Result<(), CoreSbfError> {
     let source_account = account(accounts, SOURCE_STATE)?;
     if source_account.owner != frame.target_program().key
@@ -1235,31 +1291,32 @@ fn authenticate_live_poststate(
         FundingLedgerStatusV2::Active
     };
     let funding_account = account(accounts, FUNDING_LEDGER)?;
-    if funding_account.owner != frame.target_program().key
-        || funding_account.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES
-    {
+    if funding_account.owner != frame.target_program().key {
         return Err(CoreSbfError::ChildAck);
     }
     let funding_data = funding_account
         .try_borrow_data()
         .map_err(|_| CoreSbfError::ChildAck)?;
     let ledger = FundingLedgerV2::decode(&funding_data).map_err(|_| CoreSbfError::Funding)?;
-    if ledger.selected_mask()
-        != request
-            .funding_entry_mask()
-            .map_err(|_| CoreSbfError::Funding)?
-        || ledger.slot_count() != 3
+    let role_mask = request
+        .funding_entry_mask()
+        .map_err(|_| CoreSbfError::Funding)?;
+    let ledger_width =
+        dclutch_market::capability_manifest::funding_ledger_bytes_v2(ledger.slot_count())
+            .map_err(|_| CoreSbfError::Funding)?;
+    if funding_data.len() != ledger_width
+        || ledger.selected_mask() != expected_mask
+        || expected_mask & role_mask != role_mask
     {
         return Err(CoreSbfError::Funding);
     }
     let authenticated = ledger
         .authenticate(manifest_id, manifest)
         .map_err(|_| CoreSbfError::Funding)?;
-    for entry_index in [
-        request.recovery_entry_index,
-        request.exhaustion_entry_index,
-        request.failure_entry_index,
-    ] {
+    for entry_index in 0_u16..16 {
+        if ledger.selected_mask() & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         let slot = authenticated
             .slot(entry_index)
             .map_err(|_| CoreSbfError::Funding)?;
@@ -1278,11 +1335,7 @@ fn authenticate_live_poststate(
     // market 3's admission by exactly 491,176 lamports that nobody had moved.
     // The ledger's own header records the rate its founding paid; ask that.
     authenticated
-        .validate_recorded_native_custody(
-            funding_account.lamports(),
-            RESOLUTION_FUNDING_LEDGER_BYTES,
-            false,
-        )
+        .validate_recorded_native_custody(funding_account.lamports(), ledger_width, false)
         .map_err(|error| match error {
             dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
             | dclutch_market::capability_manifest::Error::FundedRentRateMissing => {

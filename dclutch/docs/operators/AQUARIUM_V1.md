@@ -34,7 +34,14 @@ Do not make an aquarium config until all of these are true:
    `source_revision` equals the manifest's `deploy_commit`. A timestamp alone
    is not a release check. The separately deployed General accelerator is also
    pinned by program id, deployment slot, ELF digest, and semantic release id.
-4. Every simulator epoch has a credential-free HTTPS devnet configuration,
+4. The checked release's canonical `SUCCESSOR_CAMPAIGN_PACK.json` is present
+   and hashed in the config. Before an epoch is accepted, its release-owned
+   verifier reauthenticates the pack and the Product handoff's source-built
+   successor binary. Its source revision and tree digest must equal the
+   reproducible gate, and every simulator `bootstrap_bin` must be that exact
+   canonical executable with its recorded digest. A merely executable stale
+   host is a refusal before ticket authoring.
+5. Every simulator epoch has a credential-free HTTPS devnet configuration,
    devnet genesis acknowledgement, the exact inventory market address, a
    positive `budget.max_lamports_spent`, and distinct sha-pinned Direct ticket
    pairs.
@@ -97,7 +104,8 @@ public status feed.
     "program_ids": {"registry": "<pubkey>", "rent": "<pubkey>", "custody": "<pubkey>", "resolution": "<pubkey>", "claims": "<pubkey>", "trading": "<pubkey>", "core": "<pubkey>"},
     "prior_manifest": "/private/job/cohort-17.json",
     "general_accelerator": {"program_id": "<pubkey>", "deployment_slot": 0, "elf_sha256": "<64 lowercase hex>", "semantic_release_id": "<64 lowercase hex>"},
-    "release_gate": {"path": "/private/release/RELEASE_GATE.json", "sha256": "<64 lowercase hex>"}
+    "release_gate": {"path": "/private/release/RELEASE_GATE.json", "sha256": "<64 lowercase hex>"},
+    "release_pack": {"path": "/private/release/SUCCESSOR_CAMPAIGN_PACK.json", "sha256": "<64 lowercase hex>"}
   },
   "synthetic_actors": ["<explicit actor pubkey>"],
   "markets": [{
@@ -132,8 +140,11 @@ python3 tools/load-simulator/aquarium.py prepare-epoch --spec /private/job/reple
 
 The first command only validates and prints the exact signing plan. `--author`
 explicitly permits the existing `direct-intent-ticket-author-v1` to sign local
-portable ticket files; it makes no RPC request and submits no transaction. It
-produces a new simulator config with its ticket digests and a private
+portable ticket files; it makes no RPC request and submits no transaction.
+Before that child is invoked it rehashes the candidate template's
+`bootstrap_bin` against the release pack's checked Product host-binary
+provenance, so a stale local executable cannot author tickets. It produces a
+new simulator config with its ticket digests and a private
 `prepared-epoch.json`. Its plan records the prior, candidate, and cumulative
 reserved lamports. It refuses a candidate that would exceed the existing
 configuration's global spend limit, a simulator work directory that already
@@ -160,6 +171,42 @@ an existing journal is a refusal. The child retains its own signed journals and
 is never resent by the supervisor. SIGTERM and SIGINT terminate the child,
 which seals its journal, then publish `stopped`. A nonzero child result publishes
 `halted` with a redacted reason and retains the private driver transcript.
+
+## Leaving a bounded population supervised
+
+`run` remains the foreground operator command. For a supervised worker, use
+the same checked config with an explicit lifecycle command:
+
+```
+python3 tools/load-simulator/aquarium.py start --config /private/job/aquarium.json --execute
+python3 tools/load-simulator/aquarium.py stop --config /private/job/aquarium.json
+python3 tools/load-simulator/aquarium.py resume --config /private/job/aquarium.json --execute
+```
+
+`start` claims `SUPERVISOR.json` before the child can publish, records the
+exact config digest and a fresh run id, and writes child output to
+`SUPERVISOR.log` under the private work directory. `stop` sends `SIGTERM` only
+when `ps` attests that the current PID still carries that run id; a reused or
+missing PID is recorded as `lost` and receives no signal. The child seals the
+current driver journal between durable steps. A prior non-clean worker is not
+silently restarted: inspect its retained journals and use the explicit
+`resume` command. Resume uses the same checked config and durable child
+journals, so it cannot substitute another plan or resend a finalized epoch.
+
+For a static Pages cut, publish a reviewable snapshot only after the run's
+status exists and the release owner has selected the checked destination:
+
+```
+python3 tools/load-simulator/aquarium.py publish-status \
+  --config /private/job/aquarium.json \
+  --destination /absolute/path/to/apps/dclutch-web/public/aquarium-status-v1.json
+```
+
+The publisher rereads the checked cohort config, requires the exact cohort,
+limits, active inventory, synthetic-actor declaration and closed join state in
+the source status, rejects a private work path, then atomically writes the
+static file. It is a snapshot for the cut, not a promise that Pages itself
+will live-update. This command does not start a worker or make an RPC call.
 
 ## Public status
 

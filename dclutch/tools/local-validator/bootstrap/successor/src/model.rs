@@ -465,7 +465,15 @@ pub(crate) struct SelectedCapabilityV1 {
     pub(crate) records: Vec<SelectedCapabilityRecordV1>,
     pub(crate) activation_deadline_slot: u64,
     pub(crate) root_rent_minimum_lamports: u64,
+    /// Template-derived native principal delivered into a capability root at
+    /// activation. Zero preserves the ordinary Rent-only family quote.
+    #[serde(default, skip_serializing_if = "crate::model::is_zero_u64")]
+    pub(crate) creation_principal_lamports: u64,
     pub(crate) selected_manifest_entry_index: u16,
+}
+
+pub(crate) const fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

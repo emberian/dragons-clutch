@@ -394,6 +394,7 @@ fn build_bundle_with_admitted_candidate(
             effect_bytes: input.set.effect,
             effect_schema: facts.effect.schema,
             action: facts.action,
+            general_place_order,
             waist: input.waist,
             tail_count,
             family_request: input.scenario.family_request,

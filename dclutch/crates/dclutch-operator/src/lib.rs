@@ -43,6 +43,8 @@ pub mod representation_composition;
 pub mod source_readiness;
 /// Effect planning for shard-backed Structured receipts.
 pub mod structured;
+/// Market-free root-creation artifacts for Structured representations.
+pub mod structured_activation_bundle_v1;
 /// Market-free lifecycle activation artifacts for Structured representations.
 pub mod structured_lifecycle_selected_v1;
 /// Wallet-terminal payout input derivation, callable from a browser.
@@ -119,9 +121,15 @@ pub mod release_activation;
 pub mod resolution_core_v3 {
     pub use dclutch_resolution_core_v3_operator::*;
 }
+/// Typed production child-request bank for current Series occurrences.
+#[cfg(feature = "dealer-series")]
+pub mod series_child_bank_v1;
 /// Production acquisition of current Series V5 physical account banks.
 #[cfg(feature = "dealer-series")]
 pub mod series_current_acquisition_v5;
+/// Production construction of a Series V5 current-source bank from founder evidence.
+#[cfg(feature = "dealer-series")]
+pub mod series_current_source_v1;
 /// Chain-derived Series V3 Hot lifecycle and packet construction.
 #[cfg(feature = "dealer-series")]
 pub mod series_hot_v3;

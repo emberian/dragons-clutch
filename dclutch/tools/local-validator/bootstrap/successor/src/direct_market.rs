@@ -1363,6 +1363,7 @@ fn direct_manifest_entry_v1(
             config,
             activation_deadline_slot,
             root_rent_minimum_lamports,
+            creation_principal_lamports: 0,
         },
     )
 }

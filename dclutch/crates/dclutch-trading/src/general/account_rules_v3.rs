@@ -54,8 +54,7 @@ use crate::general::{
     candidate_v1::{GENERAL_CANDIDATE_BYTES_V1, GeneralCandidateLayoutV1},
     collection_v1::{
         GENERAL_BATCH_ROW_BASE_V2, GENERAL_BATCH_ROW_STRIDE_V2, GENERAL_ORDER_HEADER_BYTES_V2,
-        GENERAL_ORDER_ROW_BASE_V2, GENERAL_ORDER_ROW_DELIVER_OFFSET_V2,
-        GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2, GENERAL_ORDER_ROW_STRIDE_V2, GeneralBatchLayoutV2,
+        GENERAL_ORDER_ROW_BASE_V2, GENERAL_ORDER_ROW_STRIDE_V2, GeneralBatchLayoutV2,
         GeneralOrderLayoutV2,
     },
     effect_artifacts_v3::{
@@ -65,7 +64,7 @@ use crate::general::{
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        general_hot_item_scalar_stride_v3, identity, item_scalar, scalar,
+        general_hot_item_scalar_stride_v3, identity, scalar,
     },
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_manifest::SETTLEMENT_MANIFEST_HEADER_BYTES_V2,
@@ -223,7 +222,7 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
         Action::CloseCandidate => 26,
         Action::OpenBatch => 24,
         Action::CloseBatch => 22,
-        Action::PlaceOrder => 35,
+        Action::PlaceOrder => 32,
         Action::CancelOrder => 33,
         Action::ReleaseOrder => 22,
         Action::Close => 17,
@@ -242,17 +241,11 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     }
 }
 
-/// Number of operations evaluated once per Product outcome.
-///
-/// PlaceOrder's signed terms carry one receive/deliver pair per outcome. The
-/// source is a fixed evidence account, but the destinations are item registers,
-/// so these two affine projections belong to Profile13's item-operation body.
-const fn general_account_profile_item_operation_count_v3(action: Action) -> u16 {
-    if matches!(action, Action::PlaceOrder) {
-        2
-    } else {
-        0
-    }
+/// General derives PlaceOrder's per-outcome rows from the authenticated signed
+/// header in its typed adapter. The neutral AccountProfile VM authenticates
+/// that fixed header and owns no General row derivation.
+const fn general_account_profile_item_operation_count_v3(_action: Action) -> u16 {
+    0
 }
 
 /// Operations evaluated once per action, before any Product-item tail.
@@ -1017,16 +1010,13 @@ pub fn general_account_profile_operation_v3(
             data_offset: width(GeneralConfigV3Layout::PRICE_SCALE)?,
         }),
         // PlaceOrder's projections. The batch window supplies its status,
-        // clock, both close slots, bound and counters; the SIGNED TERMS
-        // evidence supplies every order coordinate the record will carry --
-        // including the per-outcome rows, projected affinely into the item
-        // bank at the image's own stride -- and the maker it names twice (the
-        // owner identity the deposit draws on, and the created record's rent
-        // beneficiary); the root, Product record and config supply the three
-        // independently-sourced identities the batch bindings require. The
-        // maker's authority is operation 27: the PAYER must BE the recorded
-        // owner, and the payer rule is the signer rule. The created order
-        // state is observed at 5..=7 the way Close observes its terminal.
+        // clock, both close slots, bound and counters; the signed terms supply
+        // every order coordinate the record carries. The root, Product record,
+        // and config provide the independently sourced batch identities. The
+        // maker's authority is the final PAYER projection: the transition
+        // proves that signer equals the authenticated signed owner. The
+        // protected terminal beneficiary remains zero until lifecycle writes
+        // that same payer on the create branch.
         5 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: terminal,
             destination: common_scalar(scalar::TERMINAL_BUMP_OBSERVATION)?,
@@ -1037,150 +1027,102 @@ pub fn general_account_profile_operation_v3(
             destination: common_scalar(scalar::TERMINAL_PRINCIPAL_OBSERVATION)?,
             data_offset: GeneralLocalStateLayoutV3::rent_principal(),
         }),
-        // The created record's rent beneficiary is the MAKER, and the value
-        // arrives through the plan's beneficiary register: the signed terms'
-        // owner is projected into the observation coordinate the create plan
-        // reads, so the lifecycle mints the record with the maker as its
-        // beneficiary. (The account is necessarily vacant here: the creation
-        // suite -- replay, vault, Position, all create-only -- is the replay
-        // guard, so there is no live beneficiary to observe.)
-        7 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
-            account: order_terms_account(action)?,
-            destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
-            data_offset: width(GeneralOrderLayoutV2::OWNER_ID)?,
-        }),
-        8 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+        7 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::ZERO)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::OUTCOME_COUNT)?,
         }),
-        9 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
+        8 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
             account: primary,
             destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::STATUS)?,
         }),
-        10 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        9 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::COLLECTION_CLOSE_SLOT)?,
         }),
-        11 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        10 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::SETTLEMENT_CLOSE_SLOT)?,
         }),
-        12 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+        11 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::CONFIG_MAX_ORDERS)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::MAX_ORDERS)?,
         }),
-        13 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+        12 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: primary,
             destination: common_scalar(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::ORDER_COUNT)?,
         }),
-        14 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        13 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: primary,
             destination: common_scalar(scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV2::COMMITTED_QUOTE_RESERVE)?,
         }),
-        15 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+        14 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::SCRATCH_A)?,
             data_offset: width(GeneralOrderLayoutV2::OUTCOME_COUNT)?,
         }),
-        16 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        15 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_NONCE)?,
             data_offset: width(GeneralOrderLayoutV2::NONCE)?,
         }),
-        17 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        16 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_MAX_LOTS)?,
             data_offset: width(GeneralOrderLayoutV2::MAX_LOTS)?,
         }),
-        18 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        17 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?,
             data_offset: width(GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT)?,
         }),
-        19 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+        18 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: order_terms_account(action)?,
             destination: common_scalar(scalar::ORDER_VALID_UNTIL_SLOT)?,
             data_offset: width(GeneralOrderLayoutV2::VALID_UNTIL_SLOT)?,
         }),
-        20 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        19 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::OWNER)?,
             data_offset: width(GeneralOrderLayoutV2::OWNER_ID)?,
         }),
-        21 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        20 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::SELECTION_BATCH)?,
             data_offset: width(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
-        22 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        21 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: order_terms_account(action)?,
             destination: common_identity(identity::CANDIDATE)?,
             data_offset: width(GeneralOrderLayoutV2::BATCH_ID)?,
         }),
-        23 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        22 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
             destination: common_identity(identity::MARKET)?,
             data_offset: root_tail_offset(GENERAL_ROOT_MARKET_OFFSET_V2)?,
         }),
-        24 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        23 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
             destination: common_identity(identity::GENERAL_CONFIG_ID)?,
             data_offset: root_tail_offset(GENERAL_ROOT_CONFIG_ID_OFFSET_V2)?,
         }),
-        25 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
+        24 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_PRODUCT_COORDINATE_V3)?),
             destination: common_identity(identity::SELECTION_PRODUCT)?,
             data_offset: width(PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2)?,
         }),
         // The maker who pays is the maker the signed terms name; see
         // SubmitCandidate above for why this cannot be a guard here.
-        26 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectKey {
+        25 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
             destination: common_identity(identity::PAYER)?,
         }),
-        // PlaceOrder's two item operations are THE TAIL, after every fixed
-        // one, and they were written here as `30` and `31`. That was true
-        // until the fixed body grew by the semantic-basis projection, and a
-        // literal in a span whose start moves is a number that stops being
-        // what it names without anything going red -- it simply stops being
-        // reached, and the encoder reports `Geometry` for an action that has
-        // run out of arms. Derived from the fixed count now, which is the
-        // definition of "the tail" rather than a snapshot of where it was.
-        first_item
-            if action == Action::PlaceOrder
-                && first_item == general_account_profile_fixed_operation_count_v3(action) =>
-        {
-            Ok(AccountOperationInputV2::ProjectDataU64Affine {
-                account: order_terms_account(action)?,
-                destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::CURSOR_INVENTORY)?),
-                data_offset: width(
-                    GENERAL_ORDER_HEADER_BYTES_V2 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V2,
-                )?,
-                data_stride: width(GENERAL_ORDER_ROW_STRIDE_V2)?,
-            })
-        }
-        second_item
-            if action == Action::PlaceOrder
-                && second_item
-                    == general_account_profile_fixed_operation_count_v3(action)
-                        .saturating_add(1) =>
-        {
-            Ok(AccountOperationInputV2::ProjectDataU64Affine {
-                account: order_terms_account(action)?,
-                destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::QUANTITY)?),
-                data_offset: width(
-                    GENERAL_ORDER_HEADER_BYTES_V2 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V2,
-                )?,
-                data_stride: width(GENERAL_ORDER_ROW_STRIDE_V2)?,
-            })
-        }
         // CancelOrder's projections. The second derived state (the order, at
         // the terminal coordinate) is observed the way Close observes its
         // terminal record; the batch window's counters and clock feed the
@@ -2757,9 +2699,11 @@ fn claims_data_rule(
             item_stride,
             AccountPrestateV2::Exact,
         )),
-        ClaimsFrameDataV1::LinkedBasisRecord => {
-            Ok(variable_rule_with(privileges, widths.linked_basis_prefix))
-        }
+        // The shared Product-runtime coordinate owns the one linked-basis
+        // body the outer authenticates. A child occurrence aliases that
+        // representative; any physical child-only record is authenticated by
+        // Claims, so General may state only key/owner/privileges here.
+        ClaimsFrameDataV1::LinkedBasisRecord => Ok(opaque_rule(privileges)),
         ClaimsFrameDataV1::ProductRecord => exact_external(privileges, PRODUCT_RECORD_BYTES_V2),
         ClaimsFrameDataV1::ResultDomainRecord => Ok(rule(
             privileges,
@@ -2799,21 +2743,7 @@ fn claims_data_rule(
             0,
             AccountPrestateV2::Exact,
         )),
-        ClaimsFrameDataV1::ProgramData(role) => {
-            let prefix = match role {
-                dclutch_claims::frame_spec_v1::ClaimsProgramDataRoleV1::Trading
-                | dclutch_claims::frame_spec_v1::ClaimsProgramDataRoleV1::Caller => {
-                    widths.trading_programdata_prefix
-                }
-                dclutch_claims::frame_spec_v1::ClaimsProgramDataRoleV1::Claims => {
-                    widths.claims_programdata_prefix
-                }
-                dclutch_claims::frame_spec_v1::ClaimsProgramDataRoleV1::Core => {
-                    widths.core_programdata_prefix
-                }
-            };
-            Ok(variable_rule_with(privileges, prefix))
-        }
+        ClaimsFrameDataV1::ProgramData(_) => Ok(opaque_rule(privileges)),
         ClaimsFrameDataV1::RentCredit => Ok(rule(
             privileges,
             widths.rent_credit,
@@ -2863,10 +2793,9 @@ fn custody_data_rule(
         CustodyFrameDataV1::TokenProgram
         | CustodyFrameDataV1::TokenMint
         | CustodyFrameDataV1::TokenAccount => Ok(opaque_rule(privileges)),
-        CustodyFrameDataV1::CallerProgramData => Ok(variable_rule_with(
-            privileges,
-            widths.trading_programdata_prefix,
-        )),
+        // Custody authenticates the caller ProgramData against its selected
+        // caller release. The outer owns no body fact at this child coordinate.
+        CustodyFrameDataV1::CallerProgramData => Ok(opaque_rule(privileges)),
         CustodyFrameDataV1::RealmRecord => Ok(rule(
             privileges,
             widths.realm_record,
@@ -3239,6 +3168,16 @@ mod tests {
         let selected = general_readonly_evidence_v3(Action::PlaceOrder, 0)
             .expect("PlaceOrder OrderTerms evidence");
         assert_eq!(selected.kind, GeneralReadonlyEvidenceKindV3::OrderTerms);
+        assert_eq!(
+            general_account_profile_item_operation_count_v3(Action::PlaceOrder),
+            0,
+            "the typed General adapter, not AccountProfile, derives signed rows",
+        );
+        assert_eq!(
+            general_account_profile_fixed_operation_count_v3(Action::PlaceOrder),
+            general_account_profile_operation_count_v3(Action::PlaceOrder),
+            "PlaceOrder has no raw-row item operation against fixed signed terms",
+        );
         for outcome_count in [2_u32, 3] {
             let rule =
                 general_account_profile_rule_v3(Action::PlaceOrder, selected.coordinate, WIDTHS)
@@ -3257,6 +3196,165 @@ mod tests {
             );
             assert_eq!(rule.rule.data_item_stride, 0);
         }
+    }
+
+    /// Lifecycle owns the terminal beneficiary on PlaceOrder's vacant create
+    /// branch. Projecting signed owner bytes into that protected destination
+    /// makes every honest create refuse before the maker/PAYER transition can
+    /// establish their equality.
+    #[test]
+    fn place_order_leaves_protected_beneficiary_to_lifecycle_and_projects_maker_payer() {
+        let action = Action::PlaceOrder;
+        assert_eq!(general_account_profile_operation_count_v3(action), 32);
+        let protected = common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)
+            .expect("terminal beneficiary register");
+        let writers = (0..general_account_profile_operation_count_v3(action))
+            .filter(|index| {
+                matches!(
+                    general_account_profile_operation_v3(action, *index)
+                        .expect("PlaceOrder operation"),
+                    AccountOperationInputV2::ProjectDataIdentity { destination, .. }
+                        if destination == protected
+                )
+            })
+            .count();
+        assert_eq!(
+            writers, 0,
+            "only lifecycle writes its protected beneficiary"
+        );
+        assert_eq!(
+            general_account_profile_operation_v3(action, 25).expect("maker payer operation"),
+            AccountOperationInputV2::ProjectKey {
+                account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
+                destination: common_identity(identity::PAYER).expect("payer register"),
+            },
+            "the transition receives the actual lifecycle payer to join against signed OWNER",
+        );
+    }
+
+    /// The outer Hot adapter may authenticate only its two shared-prefix
+    /// representatives before Profile13 observes them: selected configuration
+    /// through finalized selection, and linked basis through the Product
+    /// runtime graph. PlaceOrder's configuration is fixed; its linked basis is
+    /// the only variable body. Child program-data and child-only linked-basis
+    /// bodies are opaque here; their selected child validates those bytes.
+    #[test]
+    fn place_order_only_marks_outer_authenticated_variable_representatives() {
+        let action = Action::PlaceOrder;
+        let count = general_account_profile_fixed_count_v3(action).expect("PlaceOrder count");
+        let mut marked = [false; 2];
+        for coordinate in 0..count {
+            let rule = general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                .expect("PlaceOrder account rule");
+            if rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData {
+                continue;
+            }
+            match coordinate {
+                // The Hot adapter read is protected by the finalized Registry
+                // selection before it constructs this observation.
+                1 => marked[0] = true,
+                // The Product runtime graph authenticates this linked-basis
+                // record before it constructs this observation.
+                4 => marked[1] = true,
+                other => panic!(
+                    "PlaceOrder coordinate {other} claims an outer-authenticated variable body"
+                ),
+            }
+        }
+        assert_eq!(
+            marked,
+            [false, true],
+            "PlaceOrder has one adapter-authenticated variable body: linked basis"
+        );
+    }
+
+    /// Claims and Custody own their release/program-data parsing. General
+    /// supplies their actual accounts and aliases, but never turns those
+    /// child-owned bytes into an unauthenticated outer variable observation.
+    #[test]
+    fn place_order_child_variable_bodies_remain_opaque_to_outer_profile() {
+        let action = Action::PlaceOrder;
+        let child_start =
+            crate::general::state_artifacts_v3::general_child_account_start_v3(action);
+        let child_end = general_child_frame_end_v3(action).expect("PlaceOrder child end");
+        let mut linked_basis_aliases = 0_usize;
+        let mut claims_program_data = 0_usize;
+        let mut custody_program_data = 0_usize;
+        let mut opaque_program_data = 0_usize;
+
+        for coordinate in child_start..child_end {
+            let (frame, relative) = child_coordinate(action, coordinate).expect("child coordinate");
+            let rule = general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                .expect("PlaceOrder child rule");
+            let variable_body = match frame {
+                GeneralChildFrameV3::ClaimsProtocolPosition(action) => {
+                    ClaimsFrameSpecV1::protocol_position(action)
+                        .data(relative)
+                        .expect("Claims protocol data")
+                }
+                GeneralChildFrameV3::ClaimsAffine { position_count } => {
+                    ClaimsFrameSpecV1::affine(position_count)
+                        .and_then(|spec| spec.data(relative))
+                        .expect("Claims affine data")
+                }
+                GeneralChildFrameV3::Custody(operation) => {
+                    let data = CustodyFrameSpecV1::new(operation)
+                        .data(relative)
+                        .expect("Custody data");
+                    if data != CustodyFrameDataV1::CallerProgramData {
+                        continue;
+                    }
+                    custody_program_data += 1;
+                    if rule.prestate != AccountPrestateV2::AuthenticatedRouteAlias {
+                        opaque_program_data += 1;
+                        assert_eq!(
+                            rule.prestate,
+                            AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+                        );
+                    }
+                    assert_eq!(rule.rule.data_length, 0);
+                    assert_eq!(rule.rule.data_item_stride, 0);
+                    continue;
+                }
+            };
+            match variable_body {
+                ClaimsFrameDataV1::LinkedBasisRecord => {
+                    linked_basis_aliases += 1;
+                    assert_eq!(rule.prestate, AccountPrestateV2::AuthenticatedRouteAlias);
+                    assert_eq!(rule.rule.alias, AccountAliasInputV2::Fixed(4));
+                }
+                ClaimsFrameDataV1::ProgramData(_) => {
+                    claims_program_data += 1;
+                    if rule.prestate != AccountPrestateV2::AuthenticatedRouteAlias {
+                        opaque_program_data += 1;
+                        assert_eq!(
+                            rule.prestate,
+                            AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+                        );
+                    }
+                }
+                _ => continue,
+            }
+            assert_eq!(rule.rule.data_length, 0);
+            assert_eq!(rule.rule.data_item_stride, 0);
+        }
+
+        assert!(
+            linked_basis_aliases > 0,
+            "PlaceOrder names the shared linked basis"
+        );
+        assert_eq!(
+            claims_program_data, 6,
+            "PlaceOrder names the three ProgramData roles in two Claims frames"
+        );
+        assert_eq!(
+            custody_program_data, 3,
+            "PlaceOrder names Custody's caller ProgramData in each custody frame"
+        );
+        assert_eq!(
+            opaque_program_data, 3,
+            "each physical Claims ProgramData representative carries only key/owner/privilege truth"
+        );
     }
 
     #[test]

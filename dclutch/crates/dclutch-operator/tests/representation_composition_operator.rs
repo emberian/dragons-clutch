@@ -53,7 +53,8 @@ use dclutch_operator::representation_composition::{
     authenticate_composition_v3, build_claims_lifecycle_plan_v3,
     build_composition_admission_plan_v3, build_publication_plan_v3, compile_unsigned_packet_v0,
     hot_v3::build_composition_lifecycle_hot_plan_v3,
-    hot_v6::build_composition_lifecycle_hot_plan_v6, validate_publication_candidates_v3,
+    hot_v6::{build_composition_lifecycle_hot_plan_v6, derive_composition_lifecycle_plan_v6},
+    validate_publication_candidates_v3,
 };
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
@@ -999,6 +1000,17 @@ fn k3_n258_v6_keeps_capability_market_neutral_and_binds_runtime_descriptor() {
         rent_credit_before: 200,
         rent_credit_after: 200,
     };
+    let lifecycle = derive_composition_lifecycle_plan_v6(admission, header, &[])
+        .expect("canonical V6 lifecycle before physical placement");
+    assert_eq!(lifecycle.account_count, LIFECYCLE_COMMON_ACCOUNT_COUNT_V2);
+    assert_eq!(lifecycle.request.len(), 400);
+    assert_ne!(
+        dclutch_claims::rational_lifecycle::LifecycleRequestV2::decode(&lifecycle.request)
+            .expect("final lifecycle request")
+            .header()
+            .parent_context,
+        [0; 32]
+    );
     let plan = build_composition_lifecycle_hot_plan_v6(
         admission,
         &state,
@@ -1014,7 +1026,7 @@ fn k3_n258_v6_keeps_capability_market_neutral_and_binds_runtime_descriptor() {
     )
     .expect("market-neutral selected Hot");
     assert_eq!((plan.representation_width, plan.product_width), (3, 258));
-    assert_eq!(plan.lifecycle.request.len(), 400);
+    assert_eq!(plan.lifecycle.request, lifecycle.request);
     assert_eq!(plan.hot.instruction.data.len(), 528);
     let payer = Pubkey::new_from_array(id(106));
     let table = observed_lookup_table(&plan.hot.instruction, payer);

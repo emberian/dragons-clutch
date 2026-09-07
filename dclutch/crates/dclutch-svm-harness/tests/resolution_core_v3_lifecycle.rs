@@ -4429,7 +4429,10 @@ async fn a_real_pyth_member_capture_writes_a_fragment_and_keeps_primary() {
     )
     .expect("member fragment certificate");
     assert_eq!(certificate.receipt_account, resolver.pubkey().to_bytes());
-    assert_eq!(certificate.attempt_index, 0);
+    assert_eq!(
+        certificate.attempt_index, 1,
+        "member one records its declared ensemble source index, not a recovery rung"
+    );
     assert_ne!(certificate.provider_evidence, [0; 32]);
     println!("ENSEMBLE MEMBER CAPTURE CU: capture={capture_units}");
 }

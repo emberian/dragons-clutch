@@ -41,7 +41,7 @@ use std::{
 use serde::Serialize;
 use solana_sdk::{
     pubkey::Pubkey,
-    signature::{Keypair, Signer},
+    signature::{Keypair, Signature, Signer},
 };
 
 use crate::cluster::ExpectedClusterV1;
@@ -857,7 +857,62 @@ fn continue_to_the_refund(
     ));
     transactions.extend(admitted.transactions.iter().cloned());
 
-    // ------------------------- 3. an account the FOUNDER KEY owns to be paid into
+    // ----------------------- 3. the Claims replay exists before its first use
+    //
+    // Terminal payout deliberately decodes the Claims-role Custody replay; it
+    // never creates it as a side effect. Founding created the Trading-role
+    // replay, which is a distinct PDA, so drive the one canonical first-use
+    // producer before asking the payout planner for a snapshot that includes
+    // it. This is the same command Journey uses for its redemption spine.
+    let replay_output = request.work.join("claims-custody-replay.json");
+    crate::claims_custody_replay::run_owned_loopback_v1(vec![
+        "--rpc-url".to_owned(),
+        checked.rpc_url.clone(),
+        "--plan".to_owned(),
+        checked.plan_path.display().to_string(),
+        "--evidence".to_owned(),
+        evidence_path.display().to_string(),
+        "--market".to_owned(),
+        market.to_string(),
+        "--fee-payer".to_owned(),
+        worker.pubkey().to_string(),
+        "--fee-payer-keypair".to_owned(),
+        worker_keypair.display().to_string(),
+        "--output".to_owned(),
+        replay_output.display().to_string(),
+        "--execute".to_owned(),
+    ])?;
+    let replay_document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&replay_output)?)?;
+    let replay_signature = replay_document
+        .pointer("/landed/signature")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("Claims replay evidence names no landed signature"))?
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("Claims replay evidence signature: {error}")))?;
+    let mut replay_evidence = rpc
+        .finalized_signed_packet(
+            "ladder: create the Claims-role Custody replay before refund",
+            replay_signature,
+            false,
+        )?
+        .ok_or_else(|| Error::new("Claims replay creation did not reach finalized history"))?
+        .evidence;
+    replay_evidence.label = "ladder: create the Claims-role Custody replay before refund".into();
+    let replay_units = replay_evidence.compute_units_consumed;
+    transactions.push(replay_evidence);
+    stages.push(StageV1::new(
+        "the Claims-role Custody replay is created before refund",
+        "executed",
+        format!(
+            "The shipped claims-custody-replay producer read the aggregate's persisted custody \
+             context and created the distinct Claims-role replay terminal payout decodes. \
+             {} compute units.",
+            replay_units.map_or_else(|| "unreported".to_owned(), |value| value.to_string())
+        ),
+    ));
+
+    // ------------------------- 4. an account the FOUNDER KEY owns to be paid into
     //
     // The founding's collateral wallet answers to the campaign payer, not to
     // the founder role whose Position the payout debits, and the builder
@@ -977,10 +1032,7 @@ fn continue_to_the_refund(
             crate::wallet_terminal_payout_exterior::run(arguments.clone())?;
         }
         let document: serde_json::Value = serde_json::from_slice(&std::fs::read(&evidence)?)?;
-        let payout = document
-            .get("payout")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| Error::new("the payout evidence declared no `payout` amount"))?;
+        let payout = payout_atoms_from_evidence(&document)?;
         paid_total = paid_total.saturating_add(payout);
         refunds.push(serde_json::json!({
             "claimIndex": claim_index,
@@ -1109,6 +1161,24 @@ fn prepare_role_key(
         .ok_or_else(|| Error::new(format!("the prepare report names no key file for `{role}`")))
 }
 
+/// Parse the payout exterior's exact decimal atom field without admitting a
+/// JSON number, which would let a consumer round an economic amount.
+fn payout_atoms_from_evidence(document: &serde_json::Value) -> Result<u64> {
+    let text = document
+        .get("payout")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("the payout evidence requires a decimal-string `payout`"))?;
+    let payout = text
+        .parse::<u64>()
+        .map_err(|_| Error::new("the payout evidence contains an invalid atom quantity"))?;
+    if payout.to_string() != text {
+        return Err(Error::new(
+            "the payout evidence contains a noncanonical atom quantity",
+        ));
+    }
+    Ok(payout)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -1141,6 +1211,21 @@ mod tests {
                 .expect("the retained founder must remain available to the refund tier"),
             std::path::PathBuf::from("/tmp/founding-founder.json")
         );
+    }
+
+    #[test]
+    fn refund_evidence_keeps_its_atom_quantity_as_a_decimal_string() {
+        assert_eq!(
+            super::payout_atoms_from_evidence(&serde_json::json!({"payout":"166666667"}))
+                .expect("a canonical atom quantity"),
+            166_666_667
+        );
+        for document in [
+            serde_json::json!({"payout":166666667}),
+            serde_json::json!({"payout":"0166666667"}),
+        ] {
+            assert!(super::payout_atoms_from_evidence(&document).is_err());
+        }
     }
 }
 

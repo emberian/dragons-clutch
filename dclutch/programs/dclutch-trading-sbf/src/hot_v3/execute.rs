@@ -880,14 +880,12 @@ pub(super) fn execute_authenticated_hot_v3(
     )?;
     hot_heap_mark!("aliases");
     let projected_keys = logical_projection_keys_boxed_v3(context, product_runtime_v3);
-    let selected_config_is_variable = projected_account_uses_variable_marker_v3(
-        account_profile,
-        HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3,
-    )?;
-    let linked_basis_is_variable = projected_account_uses_variable_marker_v3(
-        account_profile,
-        HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3,
-    )?;
+    // Only these shared-prefix records have their bodies independently
+    // authenticated by the outer adapter before AccountProfile runs. Child
+    // ProgramData remains opaque here and its callee authenticates it.
+    let selected_config_is_variable =
+        projected_account_uses_variable_marker_v3(account_profile, 1)?;
+    let linked_basis_is_variable = projected_account_uses_variable_marker_v3(account_profile, 4)?;
     // THE PRODUCT RECORD'S DATA DIGEST, supplied as an observation because the
     // AccountProfile interpreter does not hash and must not start: a digest is
     // an adapter-established fact, like the key and the owner beside it, and
@@ -914,8 +912,8 @@ pub(super) fn execute_authenticated_hot_v3(
             &projected_keys,
         );
         observations.push(
-            if (coordinate == HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3 && selected_config_is_variable)
-                || (coordinate == HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3 && linked_basis_is_variable)
+            if (coordinate == 1 && selected_config_is_variable)
+                || (coordinate == 4 && linked_basis_is_variable)
             {
                 // The Product-runtime reader above authenticated Registry
                 // finality, schema, content digest, and either the selected
@@ -1024,6 +1022,20 @@ pub(super) fn execute_authenticated_hot_v3(
     // which `project_hot_effects_v3` decoded all of them again to keep the
     // permission byte. It is filled where the rules are already in hand, and
     // survives the observation bank's release the way the account inputs do.
+    let general_place_order_terms = if selected_kind == GENERAL_CAPABILITY_KIND_ID_V1
+        && selected_action == u32::from(GeneralAction::PlaceOrder as u8)
+    {
+        let evidence = general_readonly_evidence_v3(GeneralAction::PlaceOrder, 0)
+            .map_err(|_| TradingSbfError::Content)?;
+        Some(
+            runtime_data
+                .get(usize::from(evidence.coordinate))
+                .ok_or(TradingSbfError::Content)?
+                .as_ref(),
+        )
+    } else {
+        None
+    };
     let mut effect_permissions =
         try_projection_bank_v3(&AccountPermission::read_only(), observations.len())?;
     // Destructured at the call: every one of the four banks borrows the
@@ -1045,6 +1057,7 @@ pub(super) fn execute_authenticated_hot_v3(
         lifecycle,
         profile_join,
         selected_action,
+        general_place_order_terms,
         &current_rent_quotes,
         &dynamic_spans.widths,
         tail_count,

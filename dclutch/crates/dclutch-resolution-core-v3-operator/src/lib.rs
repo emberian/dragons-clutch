@@ -707,7 +707,7 @@ pub fn derive_resolution_funding_detail_coordinates_v3(
         _ => return Err(ResolutionCoreOperatorErrorV3::Record),
     };
     let funding_entry_indices = select_resolution_funding_entries_v3(material, policy, manifest)?;
-    let selected_mask = funding_entry_mask(funding_entry_indices)?;
+    let selected_mask = select_resolution_funding_mask_v3(material, policy, manifest)?;
     let manifest_id = market.identity.capability_manifest.to_bytes();
     let generation_le = market.identity.generation.to_le_bytes();
     let selected_mask_le = selected_mask.to_le_bytes();
@@ -1315,7 +1315,7 @@ pub fn build_resolution_create_fund_v3(
     let source_target = rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2);
     let source_top_up_lamports = source_target.saturating_sub(snapshot.source_destination.lamports);
 
-    let selected_mask = funding_entry_mask(entries)?;
+    let selected_mask = select_resolution_funding_mask_v3(material, recovery_policy, manifest)?;
     authenticate_pending_funding(
         snapshot.market.key,
         snapshot.resolution_program.key,
@@ -1372,7 +1372,8 @@ pub fn build_resolution_create_fund_v3(
         snapshot.funding_ledger.key,
         entries,
     );
-    let (role_bytes, role_request_digest) = encode_funding_role_request(role_request)?;
+    let (role_bytes, role_request_digest) =
+        encode_funding_role_request(role_request, selected_mask)?;
     let caller_authority = core_caller_authority(
         market,
         snapshot.core_program.key,
@@ -1444,7 +1445,7 @@ pub fn build_resolution_verify_fund_ready_v3(
         eprintln!("verify-fund-ready refused: beneficiary");
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
-    let (verify_material, _, entries) = authenticate_founding_records(
+    let (verify_material, verify_policy, entries) = authenticate_founding_records(
         snapshot.registry_program.key,
         &snapshot.source_material,
         &snapshot.source_material_staging,
@@ -1461,7 +1462,9 @@ pub fn build_resolution_verify_fund_ready_v3(
         .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
-    let active_entries = authenticate_active_funding_ledger(
+    let selected_mask =
+        select_resolution_funding_mask_v3(verify_material, verify_policy, manifest)?;
+    let active_mask = authenticate_active_funding_mask(
         snapshot.market.key,
         snapshot.resolution_program.key,
         &snapshot.funding_ledger,
@@ -1470,18 +1473,13 @@ pub fn build_resolution_verify_fund_ready_v3(
         manifest,
         false,
     )?;
-    // The records-derived entry list arrives in record-traversal order while
-    // the ledger derives its list from the mask's ascending bits; the sets are
-    // the fact being compared, and the composed founding's first execution
-    // proved the two authors disagree on order ([3,2,1] vs [1,2,3]) while
-    // agreeing on membership. CreateFund already compares order-insensitively
-    // by folding entries into the mask.
-    let mut canonical_entries = entries;
-    canonical_entries.sort_unstable();
-    let mut canonical_active = active_entries;
-    canonical_active.sort_unstable();
-    if canonical_active != canonical_entries {
-        eprintln!("verify-fund-ready refused: entries {entries:?} != active {active_entries:?}");
+    // The ledger's physical selection is authoritative after CreateFund. It
+    // must equal the complete policy-derived selection, including every
+    // ladder rung; the compact request only names the three semantic roles.
+    if active_mask != selected_mask {
+        eprintln!(
+            "verify-fund-ready refused: selected mask {selected_mask:#06x} != active {active_mask:#06x}"
+        );
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let role_request = funding_role_request(
@@ -1548,7 +1546,8 @@ pub fn build_resolution_verify_fund_ready_v3(
     {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
-    let (role_bytes, role_request_digest) = encode_funding_role_request(role_request)?;
+    let (role_bytes, role_request_digest) =
+        encode_funding_role_request(role_request, selected_mask)?;
     let caller_authority = core_caller_authority(
         market,
         snapshot.core_program.key,
@@ -1623,7 +1622,7 @@ pub fn build_resolution_activate_fund_v1(
     {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
-    let (material, _, entries) = authenticate_founding_records(
+    let (material, recovery_policy, entries) = authenticate_founding_records(
         pending.registry_program.key,
         &pending.source_material,
         &pending.source_material_staging,
@@ -1672,10 +1671,14 @@ pub fn build_resolution_activate_fund_v1(
             market.identity.generation,
             manifest_id,
             manifest,
-            funding_entry_mask(entries)?,
+            select_resolution_funding_mask_v3(material, recovery_policy, manifest)?,
         )?;
+        let selected_mask = select_resolution_funding_mask_v3(material, recovery_policy, manifest)?;
         let mut beneficiary_credit = 0_u64;
-        for entry_index in entries {
+        for entry_index in 0_u16..16 {
+            if selected_mask & (1_u16 << entry_index) == 0 {
+                continue;
+            }
             let debit = FundingLedgerV2::activate_in_place(
                 &mut activated,
                 manifest_id,
@@ -1706,7 +1709,7 @@ pub fn build_resolution_activate_fund_v1(
             FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
         )
     {
-        let active_entries = authenticate_active_funding_ledger(
+        let active_mask = authenticate_active_funding_mask(
             pending.market.key,
             pending.resolution_program.key,
             &pending.funding_ledger,
@@ -1723,16 +1726,10 @@ pub fn build_resolution_activate_fund_v1(
             pending.funding_ledger.lamports,
             &pending.funding_ledger.data,
         );
-        // Same two-authors order fact 0c26bba0 fixed at verify-fund-ready:
-        // the ledger derives ascending mask bits, the records arrive in
-        // traversal order, and membership is the fact under comparison. This
-        // inequality is why a completed activation could never shape its
-        // zero-lamport Replay witness and the Accept route stayed unreachable.
-        let mut canonical_entries = entries;
-        canonical_entries.sort_unstable();
-        let mut canonical_active = active_entries;
-        canonical_active.sort_unstable();
-        if canonical_active != canonical_entries
+        // The receipt is replayable only against the exact physical selection
+        // founded from the authenticated material and recovery policy.
+        let expected_mask = select_resolution_funding_mask_v3(material, recovery_policy, manifest)?;
+        if active_mask != expected_mask
             || receipt.release_set != market.identity.selected_release_set.to_bytes()
             || receipt.resolution_release != RESOLUTION_CONTROLLER_RELEASE_ID_V7
             || receipt.market != pending.market.key.to_bytes()
@@ -1951,7 +1948,7 @@ pub fn build_resolution_admit_terminal_v3(
     {
         return Err(ResolutionCoreOperatorErrorV3::Terminal);
     }
-    let entries = authenticate_funding(snapshot, market)?;
+    let (entries, selected_mask) = authenticate_funding(snapshot, market)?;
     let role_request = ResolutionRoleRequestV2 {
         action: ResolutionCoreActionV1::AdmitTerminal,
         receipt_kind,
@@ -1971,10 +1968,9 @@ pub fn build_resolution_admit_terminal_v3(
         .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let header = CapabilityFundingHeaderV2::new(
         1,
-        3,
-        role_request
-            .funding_entry_mask()
-            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?,
+        u8::try_from(selected_mask.count_ones())
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?,
+        selected_mask,
     )
     .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
     .encode();
@@ -2243,10 +2239,9 @@ pub fn build_resolution_close_fund_v3(
         .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let header = CapabilityFundingHeaderV2::new(
         1,
-        3,
-        role_request
-            .funding_entry_mask()
-            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?,
+        u8::try_from(close_plan.selected_mask.count_ones())
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?,
+        close_plan.selected_mask,
     )
     .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
     .encode();
@@ -2677,9 +2672,9 @@ fn authenticate_optional_recovery_policy(
     }
     let policy = RecoveryPolicyV2::decode(&recovery_policy.data)
         .map_err(ResolutionCoreOperatorErrorV3::Source)?;
-    if policy.attempt_count() != 1 {
-        return Err(ResolutionCoreOperatorErrorV3::Record);
-    }
+    // The policy's own finite bound is authoritative. A founding funds every
+    // attempt from the first role index onward; rejecting width here made a
+    // valid ensemble unreachable before it reached the chain.
     Ok(Some(policy))
 }
 
@@ -2703,6 +2698,60 @@ fn authenticate_optional_recovery_policy(
 /// no allocation identity and no policy digest to select by, so its failure
 /// compartment is the entry its own material configures and the other two are
 /// exactly the two remaining Resolution entries in manifest order.
+/// Derive the complete subset-ledger mask from finalized Source records.
+///
+/// `ResolutionRoleRequestV2` intentionally carries only the first member
+/// index plus exhaustion and failure.  A policy's remaining attempts are a
+/// contiguous, authenticated run from that first index, so this function is
+/// the single owner of the physical ledger width as well as its address.
+pub fn select_resolution_funding_mask_v3(
+    material: SourceMaterialV3,
+    policy: Option<RecoveryPolicyV2>,
+    manifest: CapabilityManifestV1<'_>,
+) -> Result<u16, ResolutionCoreOperatorErrorV3> {
+    let roles = select_resolution_funding_entries_v3(material, policy, manifest)?;
+    let mut mask = funding_entry_mask(roles)?;
+    if let Some(policy) = policy {
+        let mut attempt = 1_u8;
+        while attempt < policy.attempt_count() {
+            let index = roles[0].checked_add(u16::from(attempt)).ok_or_else(|| {
+                funding_conjunct(ResolutionFundingCauseV3::EntryIndexAboveMaskWidth {
+                    entry_index: u16::MAX,
+                })
+            })?;
+            if index >= 16 {
+                return Err(funding_conjunct(
+                    ResolutionFundingCauseV3::EntryIndexAboveMaskWidth { entry_index: index },
+                ));
+            }
+            let entry = manifest
+                .entry(index)
+                .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
+            let expected = policy
+                .attempt(attempt)
+                .map_err(ResolutionCoreOperatorErrorV3::Source)?
+                .funding_allocation_id()
+                .to_bytes();
+            if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+                || entry.config_id().to_bytes() != expected
+                || index == roles[1]
+                || index == roles[2]
+                || mask & (1_u16 << index) != 0
+            {
+                return Err(funding_conjunct(
+                    ResolutionFundingCauseV3::CompartmentsNotDistinct { entries: roles },
+                ));
+            }
+            mask |= 1_u16 << index;
+            attempt = attempt
+                .checked_add(1)
+                .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+        }
+    }
+    Ok(mask)
+}
+
+/// Derive the three semantic role indices; `select_resolution_funding_mask_v3` owns the complete physical set.
 pub fn select_resolution_funding_entries_v3(
     material: SourceMaterialV3,
     policy: Option<RecoveryPolicyV2>,
@@ -2783,6 +2832,37 @@ pub fn select_resolution_funding_entries_v3(
                 return Err(funding_conjunct(
                     ResolutionFundingCauseV3::CompartmentsNotDistinct { entries: result },
                 ));
+            }
+            // Attempt zero names the run; every later attempt must occupy the
+            // next manifest entry in policy order. This keeps the compact role
+            // request while making the full selected mask an authenticated fact.
+            let mut attempt = 1_u8;
+            while attempt < policy.attempt_count() {
+                let index = result[0].checked_add(u16::from(attempt)).ok_or_else(|| {
+                    funding_conjunct(ResolutionFundingCauseV3::EntryIndexAboveMaskWidth {
+                        entry_index: u16::MAX,
+                    })
+                })?;
+                let expected = policy
+                    .attempt(attempt)
+                    .map_err(ResolutionCoreOperatorErrorV3::Source)?
+                    .funding_allocation_id()
+                    .to_bytes();
+                let entry = manifest
+                    .entry(index)
+                    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
+                if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+                    || entry.config_id().to_bytes() != expected
+                    || index == result[1]
+                    || index == result[2]
+                {
+                    return Err(funding_conjunct(
+                        ResolutionFundingCauseV3::CompartmentsNotDistinct { entries: result },
+                    ));
+                }
+                attempt = attempt
+                    .checked_add(1)
+                    .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
             }
             Ok(result)
         }
@@ -3122,16 +3202,22 @@ fn funding_role_request(
 
 fn encode_funding_role_request(
     request: ResolutionRoleRequestV2,
+    selected_mask: u16,
 ) -> Result<(Vec<u8>, [u8; 32]), ResolutionCoreOperatorErrorV3> {
+    let role_mask = request
+        .funding_entry_mask()
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
+    if selected_mask == 0 || selected_mask & role_mask != role_mask {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    }
     let body = request
         .to_bytes()
         .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let header = CapabilityFundingHeaderV2::new(
         1,
-        3,
-        request
-            .funding_entry_mask()
-            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?,
+        u8::try_from(selected_mask.count_ones())
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?,
+        selected_mask,
     )
     .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
     .encode();
@@ -3381,12 +3467,12 @@ fn validate_funding_frame(
         _ => return Err(ResolutionCoreOperatorErrorV3::Frame),
     };
     let digest = hash(role_bytes).to_bytes();
+    let role_mask = role
+        .funding_entry_mask()
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     if header.physical_count() != 1
-        || header.logical_count() != 3
-        || header.selected_mask()
-            != role
-                .funding_entry_mask()
-                .map_err(ResolutionCoreOperatorErrorV3::Resolution)?
+        || u32::from(header.logical_count()) != header.selected_mask().count_ones()
+        || header.selected_mask() & role_mask != role_mask
         || request.action != Action::VerifyReadiness
         || request.market.to_bytes()
             != accounts
@@ -3646,12 +3732,14 @@ fn authenticate_close_source(
 fn authenticate_funding(
     snapshot: &ResolutionAdmitTerminalSnapshotV3,
     market: CoreState,
-) -> Result<[u16; 3], ResolutionCoreOperatorErrorV3> {
+) -> Result<([u16; 3], u16), ResolutionCoreOperatorErrorV3> {
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
-    authenticate_active_funding_ledger(
+    let material = SourceMaterialV3::decode(&snapshot.source_material.data)
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
+    let selected_mask = authenticate_active_funding_mask(
         snapshot.market.key,
         snapshot.resolution_program.key,
         &snapshot.funding_ledger,
@@ -3659,11 +3747,74 @@ fn authenticate_funding(
         manifest_id,
         manifest,
         false,
-    )
+    )?;
+    let roles = active_funding_role_projection(material, manifest, selected_mask)?;
+    Ok((roles, selected_mask))
+}
+
+/// Recover the compact Core request projection from an already-active ledger.
+///
+/// The full mask is the persisted authority: it is a Resolution PDA whose
+/// creation accepted only the policy-derived equality, and its address commits
+/// that mask. Terminal admission has no policy-record frame, so it cannot
+/// recreate the policy selection. It can, however, derive the three compact
+/// role anchors from immutable material/manifest bytes and require each to be
+/// present in the persisted full mask. Later ladder rungs remain in the header.
+fn active_funding_role_projection(
+    material: SourceMaterialV3,
+    manifest: CapabilityManifestV1<'_>,
+    selected_mask: u16,
+) -> Result<[u16; 3], ResolutionCoreOperatorErrorV3> {
+    let Some(recovery_policy) = material.recovery_policy() else {
+        return funding_entries_from_mask(selected_mask);
+    };
+    let failure_config = hash(&material.to_bytes()).to_bytes();
+    let exhaustion_config = recovery_policy.to_bytes();
+    let mut recovery = None;
+    let mut exhaustion = None;
+    let mut failure = None;
+    for entry_index in 0_u16..16 {
+        if selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
+        let entry = manifest
+            .entry(entry_index)
+            .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
+        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
+            return Err(ResolutionCoreOperatorErrorV3::Funding);
+        }
+        let config = entry.config_id().to_bytes();
+        if config == exhaustion_config {
+            if exhaustion.replace(entry_index).is_some() {
+                return Err(ResolutionCoreOperatorErrorV3::Funding);
+            }
+        } else if config == failure_config {
+            if failure.replace(entry_index).is_some() {
+                return Err(ResolutionCoreOperatorErrorV3::Funding);
+            }
+        } else if recovery.is_none_or(|first| entry_index < first) {
+            // The policy-owned ladder is contiguous from attempt zero. Its
+            // remaining rows have already been authenticated at founding;
+            // this selects only that run's immutable first anchor.
+            recovery = Some(entry_index);
+        }
+    }
+    let entries = [
+        recovery.ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
+        exhaustion.ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
+        failure.ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
+    ];
+    if !distinct_funding_entries(entries) {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    }
+    Ok(entries)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResolutionCloseFundingPlanV3 {
+    /// Full physical selection authenticated against material and policy.
+    selected_mask: u16,
+    /// Compact role projection carried on the Core/Resolution wire.
     entries: [u16; 3],
     source_refund_lamports: u64,
     ledger_remaining_native_principal: u64,
@@ -3708,7 +3859,7 @@ fn authenticate_close_funding(
         .map_err(|_| refuse("manifest identity"))?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
         .map_err(|_| refuse("manifest decode"))?;
-    let ledger_indices = authenticate_active_funding_ledger(
+    let ledger_mask = authenticate_active_funding_mask(
         snapshot.market.key,
         snapshot.resolution_program.key,
         &snapshot.funding_ledger,
@@ -3717,11 +3868,10 @@ fn authenticate_close_funding(
         manifest,
         true,
     )?;
-    // TWO AUTHORS OF ONE LIST, AND THE ROLES BELONG TO THE MATERIAL.
-    //
-    // `funding_entries_from_mask` walks the selected mask's ascending bits, so
-    // it says WHICH three manifest entries this ledger funds and nothing about
-    // what each one is FOR. The roles are a fact of the material:
+    // TWO AUTHORS OF ONE SELECTION, AND THE ROLES BELONG TO THE MATERIAL.
+    // The persisted Resolution-owned PDA supplies the complete physical mask;
+    // the policy pair derives the only mask this material was allowed to found.
+    // The compact roles remain a material fact:
     // `select_resolution_funding_entries_v3` is the one author of them, is what
     // CreateFund selected by, and returns `[recovery, exhaustion, failure]`.
     //
@@ -3739,13 +3889,11 @@ fn authenticate_close_funding(
     // activation-receipt arm fixed it again, both by comparing MEMBERSHIP.
     let entries = select_resolution_funding_entries_v3(material, recovery_policy, manifest)
         .map_err(|_| refuse("compartment roles are not derivable from this material"))?;
-    let mut canonical_ledger = ledger_indices;
-    canonical_ledger.sort_unstable();
-    let mut canonical_roles = entries;
-    canonical_roles.sort_unstable();
-    if canonical_ledger != canonical_roles {
+    let expected_mask = select_resolution_funding_mask_v3(material, recovery_policy, manifest)
+        .map_err(|_| refuse("complete policy selection is not derivable"))?;
+    if ledger_mask != expected_mask {
         return Err(refuse(&format!(
-            "the ledger funds entries {ledger_indices:?} and the material's roles name              {entries:?}; the sets differ"
+            "the ledger funds mask {ledger_mask:#06x}; policy requires {expected_mask:#06x}"
         )));
     }
     // The rent to REFUND is the rent that was PAID. Reading the sysvar here
@@ -3771,8 +3919,11 @@ fn authenticate_close_funding(
     let mut ledger_remaining_native_principal = 0_u64;
     let mut ledger_rent_lamports = 0_u64;
     let mut ledger_lamport_surplus = 0_u64;
-    // Physical iteration, so it follows the LEDGER's own row order.
-    for entry_index in ledger_indices {
+    // Physical iteration follows the authenticated complete ledger selection.
+    for entry_index in 0_u16..16 {
+        if ledger_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         let close = FundingLedgerV2::close_slot_in_place(
             &mut planned,
             manifest_id,
@@ -3840,6 +3991,7 @@ fn authenticate_close_funding(
         .checked_add(classified_ledger_lamports)
         .ok_or_else(|| refuse("refund lamports overflow"))?;
     ResolutionCloseFundingPlanV3 {
+        selected_mask: ledger_mask,
         entries,
         source_refund_lamports,
         ledger_remaining_native_principal,
@@ -3851,7 +4003,7 @@ fn authenticate_close_funding(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn authenticate_active_funding_ledger(
+fn authenticate_active_funding_mask(
     market: Pubkey,
     resolution_program: Pubkey,
     account: &ObservedAccount,
@@ -3859,7 +4011,7 @@ fn authenticate_active_funding_ledger(
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
     allow_lamport_surplus: bool,
-) -> Result<[u16; 3], ResolutionCoreOperatorErrorV3> {
+) -> Result<u16, ResolutionCoreOperatorErrorV3> {
     let refuse = |conjunct: &str| {
         eprintln!("active-funding-ledger refused: {conjunct}");
         ResolutionCoreOperatorErrorV3::Funding
@@ -3880,11 +4032,17 @@ fn authenticate_active_funding_ledger(
         &[],
     )?;
     let ledger = FundingLedgerV2::decode(&priced.bytes).map_err(|_| refuse("decode"))?;
-    let entries = funding_entries_from_mask(ledger.selected_mask())?;
+    let selected_mask = ledger.selected_mask();
+    if selected_mask == 0 {
+        return Err(refuse("empty selection"));
+    }
     let authenticated = ledger
         .authenticate(manifest_id, manifest)
         .map_err(|_| refuse("manifest binding"))?;
-    for entry_index in entries {
+    for entry_index in 0_u16..16 {
+        if selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(
             authenticated
                 .slot(entry_index)
@@ -3955,7 +4113,7 @@ fn authenticate_active_funding_ledger(
     {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
-    Ok(entries)
+    Ok(selected_mask)
 }
 
 fn authenticate_finalized_record(
@@ -4593,12 +4751,12 @@ pub fn validate_resolution_close_fund_report_v3(
         .checked_add(report.ledger_remaining_native_principal)
         .and_then(|value| value.checked_add(report.ledger_rent_lamports))
         .and_then(|value| value.checked_add(report.ledger_lamport_surplus));
+    let role_mask = role
+        .funding_entry_mask()
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     if header.physical_count() != 1
-        || header.logical_count() != 3
-        || header.selected_mask()
-            != role
-                .funding_entry_mask()
-                .map_err(ResolutionCoreOperatorErrorV3::Resolution)?
+        || u32::from(header.logical_count()) != header.selected_mask().count_ones()
+        || header.selected_mask() & role_mask != role_mask
         || request.action != Action::Retire
         || request.market.to_bytes() != facts.market
         || request.generation != facts.generation
@@ -4801,8 +4959,11 @@ mod tests {
             failure_entry_index: 3,
             receipt_sequence: 0,
         };
-        let (role_bytes, digest) =
-            encode_funding_role_request(role_request).expect("funding role request");
+        let (role_bytes, digest) = encode_funding_role_request(
+            role_request,
+            role_request.funding_entry_mask().expect("role mask"),
+        )
+        .expect("funding role request");
         let seeds = CallerAuthoritySeedsV1::from_bytes(
             [41; 32],
             market.to_bytes(),
@@ -5245,6 +5406,39 @@ mod tests {
     fn funding_entry_set_must_be_exactly_three_distinct_rows() {
         assert!(distinct_funding_entries([3, 1, 2]));
         assert!(!distinct_funding_entries([3, 1, 3]));
+    }
+
+    #[test]
+    fn operator_header_carries_full_policy_selection_while_roles_remain_compact() {
+        let role = ResolutionRoleRequestV2 {
+            action: ResolutionCoreActionV1::CreateFund,
+            receipt_kind: ResolutionCoreReceiptKindV1::None,
+            source_state: [1; 32],
+            source_material: [2; 32],
+            capability_manifest: [3; 32],
+            funding_ledger: [4; 32],
+            receipt: [0; 32],
+            beneficiary: [5; 32],
+            recovery_entry_index: 0,
+            exhaustion_entry_index: 2,
+            failure_entry_index: 3,
+            receipt_sequence: 0,
+        };
+        let (bytes, _) = encode_funding_role_request(role, 0b1111)
+            .expect("the full two-member selection contains every compact role");
+        let header = CapabilityFundingHeaderV2::decode(
+            bytes
+                .get(..dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2)
+                .expect("funding header"),
+        )
+        .expect("header decodes");
+        assert_eq!(header.logical_count(), 4);
+        assert_eq!(header.selected_mask(), 0b1111);
+        assert_eq!(
+            encode_funding_role_request(role, 0b1001),
+            Err(ResolutionCoreOperatorErrorV3::Funding),
+            "an operator cannot omit a compact role from the physical header",
+        );
     }
 
     /// THE MASK SAYS WHICH THREE ENTRIES; THE MATERIAL SAYS WHAT EACH IS FOR.

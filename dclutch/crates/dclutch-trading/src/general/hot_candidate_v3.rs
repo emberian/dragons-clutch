@@ -466,6 +466,71 @@ pub mod item_scalar {
     pub const CURSOR_INVENTORY: u32 = 5;
 }
 
+/// Write PlaceOrder's two per-outcome rows from its exact signed header.
+///
+/// The `OrderTerms` evidence record is deliberately its fixed signed header:
+/// rows are derived from that header's side, interval and claim quantity, and
+/// never travel as unauthenticated padding.  AccountProfile authenticates that
+/// exact header.  This General-owned adapter step materializes only the two
+/// item registers the candidate and its effect consume, after that projection
+/// and before lifecycle planning.  It is shared by the host bundle builder and
+/// Trading so neither side invents a wider evidence wire.
+pub fn seed_general_place_order_rows_from_signed_terms_v3(
+    outcome_count: u32,
+    signed_order_terms: &[u8],
+    scalars: &mut [u64],
+) -> Result<()> {
+    let expected = usize::try_from(general_hot_scalar_count_v3(
+        Action::PlaceOrder,
+        outcome_count,
+    )?)
+    .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
+    if scalars.len() != expected {
+        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+    }
+    let terms = GeneralSignedOrderTermsV2::decode(signed_order_terms)
+        .map_err(|_| GeneralHotCandidateErrorV3::Record(GeneralRecordV3::SignedTerms))?;
+    if terms.header().outcome_count != outcome_count {
+        return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
+    }
+    let common = usize::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
+        .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
+    let stride = usize::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+        .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
+    let receive = usize::try_from(item_scalar::CURSOR_INVENTORY)
+        .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
+    let deliver = usize::try_from(item_scalar::QUANTITY)
+        .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
+    let mut outcome = 0_u32;
+    while outcome < outcome_count {
+        let base = common
+            .checked_add(
+                usize::try_from(outcome)
+                    .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?
+                    .checked_mul(stride)
+                    .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            )
+            .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
+        let (receive_per_lot, deliver_per_lot) = terms.header().derived_row(outcome);
+        *scalars
+            .get_mut(
+                base.checked_add(receive)
+                    .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            )
+            .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = receive_per_lot;
+        *scalars
+            .get_mut(
+                base.checked_add(deliver)
+                    .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            )
+            .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = deliver_per_lot;
+        outcome = outcome
+            .checked_add(1)
+            .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
+    }
+    Ok(())
+}
+
 /// Identity coordinates consumed by exact child-packet projection.
 pub mod identity {
     /// Digest of the authenticated Hot parent request.
@@ -5790,6 +5855,93 @@ mod tests {
             write_identity(&mut input, scalar_count, coordinate, value).expect("place identity");
         }
         input
+    }
+
+    #[test]
+    fn place_order_signed_terms_adapter_derives_both_sides_and_refuses_hostile_headers() {
+        let outcome_count = 3;
+        let environment = environment();
+        let config = open_batch_config(environment);
+        let (_root, batch) = opened_batch(outcome_count, environment, config);
+        for (side, outcome, claims_per_lot) in [
+            (OrderSideV2::Buy, 1_u32, 5_u64),
+            (OrderSideV2::Sell, 2_u32, 7_u64),
+        ] {
+            let bytes = placed_order_bytes_with_shape(
+                outcome_count,
+                environment,
+                batch,
+                101,
+                (side, outcome, claims_per_lot),
+            );
+            let order = GeneralOrderV2::decode(&bytes).expect("canonical order");
+            let mut signed_terms =
+                vec![0_u8; general_signed_order_terms_len_v2(outcome_count).expect("signed width")];
+            order
+                .encode_signed_terms_into(&mut signed_terms)
+                .expect("signed immutable terms");
+            let scalar_count = usize::try_from(
+                general_hot_scalar_count_v3(Action::PlaceOrder, outcome_count)
+                    .expect("scalar count"),
+            )
+            .expect("scalar count fits usize");
+            let mut scalars = vec![0_u64; scalar_count];
+            seed_general_place_order_rows_from_signed_terms_v3(
+                outcome_count,
+                &signed_terms,
+                &mut scalars,
+            )
+            .expect("exact signed rows");
+            for item in 0..outcome_count {
+                let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+                let (receive, deliver) = order.header().derived_row(item);
+                assert_eq!(
+                    scalars[usize::try_from(base + item_scalar::CURSOR_INVENTORY)
+                        .expect("receive index")],
+                    receive,
+                    "{side:?} receive row {item}",
+                );
+                assert_eq!(
+                    scalars[usize::try_from(base + item_scalar::QUANTITY).expect("deliver index")],
+                    deliver,
+                    "{side:?} deliver row {item}",
+                );
+            }
+        }
+        let hostile = vec![0_u8; general_signed_order_terms_len_v2(1).expect("signed width")];
+        let mut scalars = vec![
+            0xfeed_u64;
+            usize::try_from(
+                general_hot_scalar_count_v3(Action::PlaceOrder, 1).expect("scalar count")
+            )
+            .expect("scalar count fits usize")
+        ];
+        let before = scalars.clone();
+        assert_eq!(
+            seed_general_place_order_rows_from_signed_terms_v3(1, &hostile, &mut scalars),
+            Err(GeneralHotCandidateErrorV3::Record(
+                GeneralRecordV3::SignedTerms
+            ))
+        );
+        assert_eq!(scalars, before);
+        let bytes = placed_order_bytes_with_shape(
+            outcome_count,
+            environment,
+            batch,
+            101,
+            (OrderSideV2::Buy, 0, 1),
+        );
+        let order = GeneralOrderV2::decode(&bytes).expect("canonical order");
+        let mut signed_terms =
+            vec![0_u8; general_signed_order_terms_len_v2(outcome_count).expect("signed width")];
+        order
+            .encode_signed_terms_into(&mut signed_terms)
+            .expect("signed immutable terms");
+        assert_eq!(
+            seed_general_place_order_rows_from_signed_terms_v3(1, &signed_terms, &mut scalars),
+            Err(GeneralHotCandidateErrorV3::TailCountMismatch)
+        );
+        assert_eq!(scalars, before);
     }
 
     fn admitted_batch_and_order(

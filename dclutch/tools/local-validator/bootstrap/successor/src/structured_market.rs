@@ -35,6 +35,9 @@
 //! graph has four outcomes -- so a module that reached for the market's outcome
 //! count here would compile a release that refuses at its first dispatch.
 
+use dclutch_operator::structured_activation_bundle_v1::{
+    STRUCTURED_CAPABILITY_ROOT_BYTES_V1, STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
+};
 use dclutch_operator::structured_selected_release_v1::{
     STRUCTURED_MAXIMUM_REPRESENTATION_WIDTH_V1, STRUCTURED_SELECTED_ACTION_COUNT_V1,
     StructuredSelectedReleaseInputV1, structured_selected_release_v1,
@@ -59,8 +62,9 @@ pub(crate) struct StructuredSelectedRecordV1 {
 /// One compiled Structured closure in the byte shape the neutral seam consumes.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct StructuredSelectedClosureBytesV1 {
-    /// Exact seven-entry `CapabilityProgramSetV2` bytes: representation
-    /// selectors 1..=5 and normalized V6 lifecycle selectors 6 and 7.
+    /// Exact eight-entry `CapabilityProgramSetV2` bytes: representation
+    /// selectors 1..=5, normalized V6 lifecycle selectors 6 and 7, and
+    /// root activation selector 255.
     pub(crate) program_set: Vec<u8>,
     /// The denominate descriptor at selector 1. Every selected bundle agrees
     /// on its entry-authored capability coordinates.
@@ -137,6 +141,7 @@ fn structured_selected_payload_v1(
         selected_descriptor_hex: crate::plan::hex(&closure.selected_descriptor),
         config_hex: crate::plan::hex(&closure.config),
         publication_hex: crate::plan::hex(&closure.publication),
+        creation_principal_lamports: 0,
         records: closure
             .records
             .iter()
@@ -207,8 +212,9 @@ pub(crate) fn demo_structured_market_input(
     let closure = structured_selected_closure_v1(StructuredSelectedReleaseInputV1 {
         realm: market_realm_identity_v1(collateral_mint)?,
         release_set: lab("release-set"),
-        root_schema: lab("root-schema"),
-        root_state_bytes: 8,
+        root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
+        root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
+            .map_err(|_| Error::new("Structured capability root width overflow"))?,
         // NOT the market's outcome count -- see this module's header. The
         // composition width the receipt is issued against, at the widest the
         // open RequestProfile V1 artifact can dispatch.
@@ -235,8 +241,9 @@ mod tests {
         StructuredSelectedReleaseInputV1 {
             realm,
             release_set: [0x15; 32],
-            root_schema: [0x42; 32],
-            root_state_bytes: 8,
+            root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
+            root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
+                .expect("root width"),
             representation_outcome_count: STRUCTURED_MAXIMUM_REPRESENTATION_WIDTH_V1,
             item_state_bytes: 64,
             product_basis: basis,
@@ -293,6 +300,7 @@ mod tests {
             config: &closure.config,
             activation_deadline_slot: 1_000,
             root_rent_minimum_lamports: 1_000_000,
+            creation_principal_lamports: 0,
         })
         .expect("entry");
 
@@ -328,6 +336,7 @@ mod tests {
                 config: &closure.config,
                 activation_deadline_slot: 1_000,
                 root_rent_minimum_lamports: 1_000_000,
+                creation_principal_lamports: 0,
             })
             .expect("entry");
             (closure.publication_id, entry)
@@ -378,7 +387,7 @@ mod tests {
         let payload = structured_selected_payload_v1(&closure, 1_000, 1_000_000);
         assert_eq!(
             payload.records.len(),
-            2 + 7 * STRUCTURED_SELECTED_ACTION_COUNT_V1
+            2 + 7 * STRUCTURED_SELECTED_ACTION_COUNT_V1 + 3
         );
 
         let mut seen = std::collections::BTreeSet::new();

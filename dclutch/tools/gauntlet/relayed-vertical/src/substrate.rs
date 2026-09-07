@@ -35,6 +35,7 @@ use crate::{Error, Result};
 const CHECKED_SLOT_FLOOR: u64 = 8;
 
 const VALIDATOR_READY: Duration = Duration::from_secs(90);
+const VALIDATOR_GRACEFUL_STOP: Duration = Duration::from_secs(30);
 
 /// Everything the checked-mutable bring-up needs from the caller.
 pub(crate) struct SubstrateRequestV1<'a> {
@@ -52,6 +53,8 @@ pub(crate) struct SubstrateRequestV1<'a> {
 pub(crate) struct CheckedSubstrateV1 {
     pub(crate) validator: ValidatorGuardV1,
     pub(crate) rpc_url: String,
+    rpc_port: u16,
+    ledger: PathBuf,
     pub(crate) plan_path: PathBuf,
     pub(crate) plan: SuccessorPlan,
     pub(crate) plan_sha256: String,
@@ -65,10 +68,162 @@ pub(crate) struct ValidatorGuardV1 {
 
 impl Drop for ValidatorGuardV1 {
     fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl ValidatorGuardV1 {
+    /// Stop the child before reusing its ledger or port block.
+    fn stop(&mut self) {
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
+    }
+
+    /// Ask Agave to flush the ledger before a controlled restart.
+    ///
+    /// `Child::kill` is SIGKILL, which is appropriate only for final teardown:
+    /// it can leave a just-finalized slot outside the recoverable ledger head.
+    /// A restart that claims the same ledger must first give Agave a bounded
+    /// SIGTERM window and refuse if it does not exit cleanly.
+    fn stop_for_restart(&mut self) -> Result<()> {
+        if self
+            .child
+            .try_wait()
+            .map_err(|error| Error::new(format!("poll validator before restart: {error}")))?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let status = Command::new("/bin/kill")
+            .arg("-TERM")
+            .arg(self.child.id().to_string())
+            .status()
+            .map_err(|error| Error::new(format!("send validator SIGTERM: {error}")))?;
+        if !status.success() {
+            return Err(Error::new(format!(
+                "validator SIGTERM exited {status}; refuse to restart an unflushed ledger"
+            )));
+        }
+        let deadline = Instant::now() + VALIDATOR_GRACEFUL_STOP;
+        loop {
+            if self
+                .child
+                .try_wait()
+                .map_err(|error| Error::new(format!("poll validator graceful stop: {error}")))?
+                .is_some()
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::new(
+                    "validator did not exit within 30 seconds after SIGTERM; refuse to restart an unflushed ledger",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+impl CheckedSubstrateV1 {
+    /// Restart this exact local ledger and warp it to a governed-action slot.
+    ///
+    /// This is deliberately a validator operation, never a protocol shortcut:
+    /// the prior ledger stays in place, every account is read again by the
+    /// caller, and Agave itself creates the intervening slots. It exists for
+    /// routes whose chain-defined notice window is too large to wait through
+    /// at wall-clock slot cadence in a bounded local campaign.
+    pub(crate) fn restart_at_finalized_slot(&mut self, target_slot: u64) -> Result<u64> {
+        if target_slot < CHECKED_SLOT_FLOOR {
+            return Err(Error::new(format!(
+                "refuse validator warp below checked deployment floor {CHECKED_SLOT_FLOOR}: {target_slot}"
+            )));
+        }
+        self.validator.stop_for_restart()?;
+        let log_path = self
+            .ledger
+            .parent()
+            .ok_or_else(|| Error::new("validator ledger has no parent directory"))?
+            .join(format!("validator-warp-{target_slot}.log"));
+        let child = spawn_validator(&self.ledger, self.rpc_port, Some(target_slot), &log_path)?;
+        self.validator = ValidatorGuardV1 { child };
+        wait_for_finalized_slot(&mut self.validator, &self.rpc_url, target_slot, &log_path)
+    }
+}
+
+fn spawn_validator(
+    ledger: &Path,
+    port: u16,
+    warp_slot: Option<u64>,
+    log_path: &Path,
+) -> Result<Child> {
+    let log = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(log_path)?;
+    let log_err = log.try_clone()?;
+    let mut command = Command::new("solana-test-validator");
+    command
+        .arg("--config")
+        .arg("/dev/null")
+        .arg("--ledger")
+        .arg(ledger)
+        .arg("--ticks-per-slot")
+        .arg("16")
+        .arg("--limit-ledger-size")
+        .arg(std::env::var("DCLUTCH_LIMIT_LEDGER_SIZE").unwrap_or_else(|_| "100000000".to_owned()))
+        .arg("--bind-address")
+        .arg("127.0.0.1")
+        .arg("--rpc-port")
+        .arg(port.to_string())
+        .arg("--faucet-port")
+        .arg((port + 2).to_string())
+        .arg("--gossip-port")
+        .arg((port + 3).to_string())
+        .arg("--dynamic-port-range")
+        .arg(format!("{}-{}", port + 10, port + 41));
+    if let Some(target) = warp_slot {
+        command.arg("--warp-slot").arg(target.to_string());
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err))
+        .spawn()
+        .map_err(|error| Error::new(format!("spawn solana-test-validator: {error}")))
+}
+
+fn wait_for_finalized_slot(
+    validator: &mut ValidatorGuardV1,
+    rpc_url: &str,
+    minimum_slot: u64,
+    log_path: &Path,
+) -> Result<u64> {
+    let deadline = Instant::now() + VALIDATOR_READY;
+    loop {
+        if let Some(status) = validator
+            .child
+            .try_wait()
+            .map_err(|error| Error::new(format!("poll validator: {error}")))?
+        {
+            return Err(Error::new(format!(
+                "solana-test-validator exited during bring-up: {status}; see {}",
+                log_path.display()
+            )));
+        }
+        if let Ok(mut probe) = Rpc::connect(rpc_url)
+            && let Ok(slot) = probe.finalized_slot()
+            && slot >= minimum_slot
+        {
+            return Ok(slot);
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::new(format!(
+                "validator at {rpc_url} did not reach finalized slot {minimum_slot} within 90 seconds"
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -275,6 +430,8 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
     Ok(CheckedSubstrateV1 {
         validator,
         rpc_url,
+        rpc_port: port,
+        ledger,
         plan_path,
         plan,
         plan_sha256,

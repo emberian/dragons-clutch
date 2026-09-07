@@ -4,13 +4,21 @@
 //! this module owns only their ordering, retained-authority join, finalized
 //! transaction capture, and refusal controls.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use dclutch_custody::upkeep_vault_v1::UpkeepVaultV1;
-use dclutch_market::protocol_parameters::ProtocolParametersRecordV1;
+use dclutch_market::protocol_parameters::{
+    ProtocolParametersChangeReceiptV1, ProtocolParametersRecordV1,
+};
 use dclutch_operator::{
     protocol_parameters_v1::{
-        found_protocol_parameters_instruction_v1, protocol_parameters_record_address_v1,
+        apply_protocol_parameters_instruction_v1, found_protocol_parameters_instruction_v1,
+        propose_protocol_parameters_instruction_v1, protocol_parameters_receipt_address_v1,
+        protocol_parameters_record_address_v1,
     },
     upkeep_vault_v1::{found_upkeep_vault_instruction_v1, upkeep_vault_address_v1},
 };
@@ -29,6 +37,13 @@ const DEPOSIT_LAMPORTS_V1: u64 = 17_001;
 const PARAMETERS_FOUNDING_AUTHORITY_REFUSAL_V1: u64 = 0x6104;
 const PARAMETERS_DUPLICATE_RECORD_REFUSAL_V1: u64 = 0x6102;
 const UPKEEP_DUPLICATE_VAULT_REFUSAL_V1: u64 = 0x6202;
+const PARAMETERS_UNAUTHORIZED_GOVERNANCE_REFUSAL_V1: u64 = 0x6106;
+const PARAMETERS_NO_PENDING_PROPOSAL_REFUSAL_V1: u64 = 0x6109;
+const PARAMETERS_NOT_MATURED_REFUSAL_V1: u64 = 0x610A;
+/// Provisional local-validator persistence ceiling. Lift only after measuring a
+/// slower checked-mutable validator root; it names a refusal rather than
+/// treating an unrooted transaction as restart-safe.
+const PERSISTED_FINALIZATION_WAIT_V1: Duration = Duration::from_secs(90);
 
 struct Progress {
     stage: String,
@@ -76,7 +91,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<()> {
 fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
     let substrate_dir = request.work.join("substrate");
     std::fs::create_dir_all(&substrate_dir)?;
-    let checked = crate::substrate::bring_up(&crate::substrate::SubstrateRequestV1 {
+    let mut checked = crate::substrate::bring_up(&crate::substrate::SubstrateRequestV1 {
         work: &substrate_dir,
         checked_release_gate: &request.checked_release_gate,
         expected_gate_sha256: &request.expected_gate_sha256,
@@ -195,6 +210,293 @@ fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
     progress.stages.push(json!({"stage": progress.stage, "outcome": "refused", "exactRefusal": "ProtocolParametersSbfErrorV1::Record", "custom": PARAMETERS_DUPLICATE_RECORD_REFUSAL_V1}));
 
     let payer = crate::substrate::campaign_payer_keypair(&checked)?;
+    let baseline_parameters = ProtocolParametersRecordV1::decode(&parameter_account.data)
+        .map_err(|error| Error::new(format!("parameters proposal prestate decode: {error:?}")))?
+        .parameters;
+    let proposed_cap = baseline_parameters
+        .closer_reward_cap_lamports
+        .checked_add(1)
+        .ok_or_else(|| Error::new("parameters proposal cap overflow"))?;
+    let proposed_body = dclutch_market::protocol_parameters::ProtocolParametersV1 {
+        closer_reward_cap_lamports: proposed_cap,
+        ..baseline_parameters
+    };
+    let hostile_body = proposed_body;
+    progress.stage = "parameters Propose hostile authority rollback".into();
+    let before_propose = snapshot(&parameter_account);
+    let hostile_propose =
+        propose_protocol_parameters_instruction_v1(custody, hostile.pubkey(), hostile_body)
+            .map_err(|error| Error::new(format!("build hostile parameters Propose: {error:?}")))?;
+    let hostile_propose_tx = rpc.send_expected_failure(
+        "parameters Propose hostile authority",
+        &[hostile_propose],
+        &hostile,
+    )?;
+    require_custom_refusal(
+        &hostile_propose_tx,
+        PARAMETERS_UNAUTHORIZED_GOVERNANCE_REFUSAL_V1,
+        "ProtocolParametersSbfErrorV1::UnauthorizedGovernance",
+    )?;
+    progress.transactions.push(hostile_propose_tx);
+    require_unchanged(
+        &before_propose,
+        &rpc.required_account(parameters, "parameters after hostile Propose")?,
+        "parameters hostile Propose",
+    )?;
+    progress.stages.push(json!({"stage":progress.stage,"outcome":"refused","exactRefusal":"ProtocolParametersSbfErrorV1::UnauthorizedGovernance","custom":PARAMETERS_UNAUTHORIZED_GOVERNANCE_REFUSAL_V1}));
+
+    progress.stage = "parameters Propose accepted".into();
+    let propose_report = economics_successor::run_value(
+        RouteV1::Propose,
+        ClusterV1::OwnedLoopback,
+        parameters_command_arguments(
+            &checked.rpc_url,
+            custody,
+            &authority,
+            &authority_path,
+            proposed_cap,
+        ),
+    )?;
+    capture_report_transaction(
+        &mut rpc,
+        progress,
+        "parameters Propose",
+        &propose_report,
+        "/signature",
+    )?;
+    let after_propose = rpc.required_account(parameters, "parameters after Propose")?;
+    let proposed_record = ProtocolParametersRecordV1::decode(&after_propose.data)
+        .map_err(|error| Error::new(format!("parameters proposed poststate decode: {error:?}")))?;
+    if !proposed_record.pending.is_standing()
+        || proposed_record.pending.digest != proposed_body.body_digest()
+        || proposed_record.parameters != baseline_parameters
+    {
+        return Err(Error::new(
+            "parameters Propose did not leave the active body unchanged with one exact standing change",
+        ));
+    }
+    progress
+        .stages
+        .push(json!({"stage":progress.stage,"outcome":"executed","report":propose_report}));
+
+    progress.stage = "parameters Apply before maturity rollback".into();
+    let before_early_apply = snapshot(&after_propose);
+    let early_body = proposed_body;
+    let early_apply = apply_protocol_parameters_instruction_v1(
+        custody,
+        payer.pubkey(),
+        early_body,
+        proposed_record.parameters.generation + 1,
+    )
+    .map_err(|error| Error::new(format!("build early parameters Apply: {error:?}")))?;
+    let early_apply_tx =
+        rpc.send_expected_failure("parameters Apply before maturity", &[early_apply], &payer)?;
+    require_custom_refusal(
+        &early_apply_tx,
+        PARAMETERS_NOT_MATURED_REFUSAL_V1,
+        "ProtocolParametersSbfErrorV1::ProposalNotMatured",
+    )?;
+    let early_apply_slot = early_apply_tx.slot;
+    progress.transactions.push(early_apply_tx);
+    require_unchanged(
+        &before_early_apply,
+        &rpc.required_account(parameters, "parameters after early Apply")?,
+        "parameters early Apply",
+    )?;
+    progress.stages.push(json!({"stage":progress.stage,"outcome":"refused","exactRefusal":"ProtocolParametersSbfErrorV1::ProposalNotMatured","custom":PARAMETERS_NOT_MATURED_REFUSAL_V1}));
+
+    progress.stage = "parameters persist finalized proposal before warp".into();
+    let finalized_before_warp = wait_for_finalized_slot(&mut rpc, early_apply_slot)?;
+    let durable_proposal =
+        rpc.required_account(parameters, "parameters after durable finalization")?;
+    require_unchanged(
+        &before_early_apply,
+        &durable_proposal,
+        "parameters durable finalization",
+    )?;
+    progress.stages.push(json!({
+        "stage":progress.stage,
+        "outcome":"executed",
+        "transactionSlot":early_apply_slot,
+        "finalizedSlot":finalized_before_warp
+    }));
+
+    progress.stage = "parameters Apply accepted after governed notice".into();
+    let earliest_apply_slot = proposed_record.pending.earliest_apply_slot;
+    let finalized_after_warp = checked.restart_at_finalized_slot(earliest_apply_slot)?;
+    if finalized_after_warp < earliest_apply_slot {
+        return Err(Error::new(
+            "validator warp did not reach the proposal's earliest Apply slot",
+        ));
+    }
+    let mut resumed_rpc = Rpc::connect(&checked.rpc_url)?;
+    let resumed =
+        resumed_rpc.required_account(parameters, "parameters after governed notice warp")?;
+    require_unchanged(
+        &snapshot(&durable_proposal),
+        &resumed,
+        "parameters governed notice warp",
+    )?;
+    let apply_report = economics_successor::run_value(
+        RouteV1::Apply,
+        ClusterV1::OwnedLoopback,
+        parameters_command_arguments(
+            &checked.rpc_url,
+            custody,
+            &authority,
+            &authority_path,
+            proposed_cap,
+        ),
+    )?;
+    capture_report_transaction(
+        &mut resumed_rpc,
+        progress,
+        "parameters Apply",
+        &apply_report,
+        "/signature",
+    )?;
+    let applied = ProtocolParametersRecordV1::decode(
+        &resumed_rpc
+            .required_account(parameters, "parameters after Apply")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("parameters Apply poststate decode: {error:?}")))?;
+    if applied.pending.is_standing()
+        || applied.parameters.generation != proposed_record.parameters.generation + 1
+        || applied.parameters.closer_reward_cap_lamports != proposed_cap
+    {
+        return Err(Error::new(
+            "parameters Apply did not activate exactly the standing proposed body",
+        ));
+    }
+    let receipt_address =
+        protocol_parameters_receipt_address_v1(custody, applied.parameters.generation);
+    let receipt_account =
+        resumed_rpc.required_account(receipt_address, "parameters Apply receipt")?;
+    if receipt_account.owner != custody {
+        return Err(Error::new("parameters Apply receipt has the wrong owner"));
+    }
+    let receipt = ProtocolParametersChangeReceiptV1::decode(&receipt_account.data)
+        .map_err(|error| Error::new(format!("parameters Apply receipt decode: {error:?}")))?;
+    if receipt.previous_digest != proposed_record.parameters.body_digest()
+        || receipt.new_digest != applied.parameters.body_digest()
+        || receipt.generation != applied.parameters.generation
+        || receipt.activation_slot != applied.parameters.activation_slot
+        || receipt.delay_slots != proposed_record.parameters.change_delay_slots
+        || receipt.proposed_at_slot.checked_add(receipt.delay_slots) != Some(earliest_apply_slot)
+    {
+        return Err(Error::new(
+            "parameters Apply receipt does not bind the prior body, notice, and activated body",
+        ));
+    }
+    progress.stages.push(json!({
+        "stage":progress.stage,
+        "outcome":"executed",
+        "earliestApplySlot":earliest_apply_slot,
+        "finalizedSlotAfterWarp":finalized_after_warp,
+        "report":apply_report
+    }));
+
+    progress.stage = "parameters Withdraw after Apply refusal rollback".into();
+    let after_apply =
+        resumed_rpc.required_account(parameters, "parameters before post-Apply Withdraw")?;
+    let post_apply_withdraw =
+        dclutch_operator::protocol_parameters_v1::withdraw_protocol_parameters_instruction_v1(
+            custody,
+            authority.pubkey(),
+        )
+        .map_err(|error| Error::new(format!("build post-Apply parameters Withdraw: {error:?}")))?;
+    let post_apply_withdraw_tx = resumed_rpc.send_expected_failure(
+        "parameters Withdraw after Apply",
+        &[post_apply_withdraw],
+        &authority,
+    )?;
+    require_custom_refusal(
+        &post_apply_withdraw_tx,
+        PARAMETERS_NO_PENDING_PROPOSAL_REFUSAL_V1,
+        "ProtocolParametersSbfErrorV1::NoPendingProposal",
+    )?;
+    progress.transactions.push(post_apply_withdraw_tx);
+    require_unchanged(
+        &snapshot(&after_apply),
+        &resumed_rpc.required_account(parameters, "parameters after post-Apply Withdraw")?,
+        "parameters post-Apply Withdraw",
+    )?;
+    progress.stages.push(json!({"stage":progress.stage,"outcome":"refused","exactRefusal":"ProtocolParametersSbfErrorV1::NoPendingProposal","custom":PARAMETERS_NO_PENDING_PROPOSAL_REFUSAL_V1}));
+
+    progress.stage = "parameters Propose for Withdraw accepted".into();
+    let withdraw_cap = proposed_cap
+        .checked_add(1)
+        .ok_or_else(|| Error::new("parameters withdrawal proposal cap overflow"))?;
+    let withdraw_propose_report = economics_successor::run_value(
+        RouteV1::Propose,
+        ClusterV1::OwnedLoopback,
+        parameters_command_arguments(
+            &checked.rpc_url,
+            custody,
+            &authority,
+            &authority_path,
+            withdraw_cap,
+        ),
+    )?;
+    capture_report_transaction(
+        &mut resumed_rpc,
+        progress,
+        "parameters Propose for Withdraw",
+        &withdraw_propose_report,
+        "/signature",
+    )?;
+    let before_withdraw = resumed_rpc.required_account(parameters, "parameters before Withdraw")?;
+    let withdraw_proposed =
+        ProtocolParametersRecordV1::decode(&before_withdraw.data).map_err(|error| {
+            Error::new(format!(
+                "parameters withdraw proposal poststate decode: {error:?}"
+            ))
+        })?;
+    let withdraw_body = dclutch_market::protocol_parameters::ProtocolParametersV1 {
+        closer_reward_cap_lamports: withdraw_cap,
+        ..applied.parameters
+    };
+    if !withdraw_proposed.pending.is_standing()
+        || withdraw_proposed.pending.digest != withdraw_body.body_digest()
+        || withdraw_proposed.parameters != applied.parameters
+    {
+        return Err(Error::new(
+            "parameters second Propose did not preserve the applied body and pin its exact withdrawal body",
+        ));
+    }
+    progress.stages.push(
+        json!({"stage":progress.stage,"outcome":"executed","report":withdraw_propose_report}),
+    );
+
+    progress.stage = "parameters Withdraw accepted".into();
+    let withdraw_report = economics_successor::run_value(
+        RouteV1::Withdraw,
+        ClusterV1::OwnedLoopback,
+        command_arguments(&checked.rpc_url, custody, &authority, &authority_path, None),
+    )?;
+    capture_report_transaction(
+        &mut resumed_rpc,
+        progress,
+        "parameters Withdraw",
+        &withdraw_report,
+        "/signature",
+    )?;
+    let withdrawn = ProtocolParametersRecordV1::decode(
+        &resumed_rpc
+            .required_account(parameters, "parameters after Withdraw")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("parameters withdraw poststate decode: {error:?}")))?;
+    if withdrawn.pending.is_standing() || withdrawn.parameters != applied.parameters {
+        return Err(Error::new(
+            "parameters Withdraw did not clear only the standing proposal",
+        ));
+    }
+    progress
+        .stages
+        .push(json!({"stage":progress.stage,"outcome":"executed","report":withdraw_report}));
+
     let payer_path = checked
         .report
         .campaign_founding_keypairs
@@ -269,6 +571,25 @@ fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
     Ok(())
 }
 
+fn parameters_command_arguments(
+    rpc_url: &str,
+    custody: Pubkey,
+    payer: &solana_sdk::signature::Keypair,
+    payer_path: &Path,
+    cap: u64,
+) -> Vec<String> {
+    let mut values = command_arguments(rpc_url, custody, payer, payer_path, None);
+    let keypair = values.pop().expect("command args carry keypair value");
+    let flag = values.pop().expect("command args carry keypair flag");
+    values.extend([
+        "--closer-reward-cap-lamports".into(),
+        cap.to_string(),
+        flag,
+        keypair,
+    ]);
+    values
+}
+
 fn command_arguments(
     rpc_url: &str,
     custody: Pubkey,
@@ -310,6 +631,23 @@ fn capture_report_transaction(
         .ok_or_else(|| Error::new(format!("{label} finalized transaction missing")))?;
     progress.transactions.push(landed.evidence);
     Ok(())
+}
+
+fn wait_for_finalized_slot(rpc: &mut Rpc, transaction_slot: u64) -> Result<u64> {
+    let deadline = Instant::now() + PERSISTED_FINALIZATION_WAIT_V1;
+    loop {
+        let finalized = rpc.finalized_slot()?;
+        if finalized >= transaction_slot {
+            return Ok(finalized);
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::new(format!(
+                "transaction at slot {transaction_slot} did not reach finalized slot within {} seconds; refuse to restart an unpersisted ledger",
+                PERSISTED_FINALIZATION_WAIT_V1.as_secs()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn require_custom_refusal(

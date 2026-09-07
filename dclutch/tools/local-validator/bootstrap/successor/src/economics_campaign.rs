@@ -19,8 +19,10 @@ use dclutch_market::protocol_parameters::{
 };
 use dclutch_operator::{
     protocol_parameters_v1::{
-        custody_programdata_address_v1, found_protocol_parameters_instruction_v1,
-        protocol_parameters_record_address_v1,
+        apply_protocol_parameters_instruction_v1, custody_programdata_address_v1,
+        found_protocol_parameters_instruction_v1, propose_protocol_parameters_instruction_v1,
+        protocol_parameters_receipt_address_v1, protocol_parameters_record_address_v1,
+        withdraw_protocol_parameters_instruction_v1,
     },
     upkeep_vault_v1::{
         deposit_upkeep_instruction_v1, found_upkeep_vault_instruction_v1, upkeep_vault_address_v1,
@@ -42,10 +44,16 @@ pub(crate) const PARAMETERS_FOUND_LOCAL_COMMAND_V1: &str = "parameters-found";
 pub(crate) const PARAMETERS_FOUND_DEVNET_COMMAND_V1: &str = "devnet-parameters-found";
 pub(crate) const UPKEEP_FOUND_LOCAL_COMMAND_V1: &str = "upkeep-found";
 pub(crate) const UPKEEP_FOUND_DEVNET_COMMAND_V1: &str = "devnet-upkeep-found";
+pub(crate) const PARAMETERS_PROPOSE_LOCAL_COMMAND_V1: &str = "parameters-propose";
+pub(crate) const PARAMETERS_APPLY_LOCAL_COMMAND_V1: &str = "parameters-apply";
+pub(crate) const PARAMETERS_WITHDRAW_LOCAL_COMMAND_V1: &str = "parameters-withdraw";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RouteV1 {
     Parameters,
+    Propose,
+    Apply,
+    Withdraw,
     Upkeep,
 }
 
@@ -60,6 +68,10 @@ impl ClusterV1 {
         match (self, route) {
             (Self::OwnedLoopback, RouteV1::Parameters) => PARAMETERS_FOUND_LOCAL_COMMAND_V1,
             (Self::Devnet, RouteV1::Parameters) => PARAMETERS_FOUND_DEVNET_COMMAND_V1,
+            (Self::OwnedLoopback, RouteV1::Propose) => PARAMETERS_PROPOSE_LOCAL_COMMAND_V1,
+            (Self::OwnedLoopback, RouteV1::Apply) => PARAMETERS_APPLY_LOCAL_COMMAND_V1,
+            (Self::OwnedLoopback, RouteV1::Withdraw) => PARAMETERS_WITHDRAW_LOCAL_COMMAND_V1,
+            (Self::Devnet, RouteV1::Propose | RouteV1::Apply | RouteV1::Withdraw) => "unavailable",
             (Self::OwnedLoopback, RouteV1::Upkeep) => UPKEEP_FOUND_LOCAL_COMMAND_V1,
             (Self::Devnet, RouteV1::Upkeep) => UPKEEP_FOUND_DEVNET_COMMAND_V1,
         }
@@ -73,6 +85,7 @@ struct ArgumentsV1 {
     payer: Pubkey,
     payer_keypair: Option<PathBuf>,
     amount: Option<u64>,
+    closer_reward_cap_lamports: Option<u64>,
     execute: bool,
 }
 
@@ -96,6 +109,9 @@ pub(crate) fn run_value(route: RouteV1, cluster: ClusterV1, raw: Vec<String>) ->
     let mut rpc = Rpc::connect_cluster(&arguments.origin, policy)?;
     match route {
         RouteV1::Parameters => parameters_found(&mut rpc, &arguments),
+        RouteV1::Propose => parameters_propose(&mut rpc, &arguments),
+        RouteV1::Apply => parameters_apply(&mut rpc, &arguments),
+        RouteV1::Withdraw => parameters_withdraw(&mut rpc, &arguments),
         RouteV1::Upkeep => upkeep_found(&mut rpc, &arguments),
     }
 }
@@ -107,6 +123,7 @@ fn parse(route: RouteV1, cluster: ClusterV1, raw: Vec<String>) -> Result<Argumen
     let mut payer = None;
     let mut payer_keypair = None;
     let mut amount = None;
+    let mut closer_reward_cap_lamports = None;
     let mut execute = false;
     let mut cursor = raw.into_iter();
     while let Some(flag) = cursor.next() {
@@ -130,6 +147,11 @@ fn parse(route: RouteV1, cluster: ClusterV1, raw: Vec<String>) -> Result<Argumen
             "--payer" => &mut payer,
             "--payer-keypair" => &mut payer_keypair,
             "--amount" if route == RouteV1::Upkeep => &mut amount,
+            "--closer-reward-cap-lamports"
+                if matches!(route, RouteV1::Propose | RouteV1::Apply) =>
+            {
+                &mut closer_reward_cap_lamports
+            }
             other => {
                 return Err(Error::new(format!(
                     "unknown {} argument: {other}",
@@ -157,8 +179,10 @@ fn parse(route: RouteV1, cluster: ClusterV1, raw: Vec<String>) -> Result<Argumen
         .parse::<Pubkey>()
         .map_err(|error| Error::new(format!("--custody: {error}")))?;
     let amount = match (route, amount) {
-        (RouteV1::Parameters, None) => None,
-        (RouteV1::Parameters, Some(_)) => unreachable!("parameters parser never accepts --amount"),
+        (RouteV1::Parameters | RouteV1::Propose | RouteV1::Apply | RouteV1::Withdraw, None) => None,
+        (RouteV1::Parameters | RouteV1::Propose | RouteV1::Apply | RouteV1::Withdraw, Some(_)) => {
+            unreachable!("only upkeep parser accepts --amount")
+        }
         (RouteV1::Upkeep, Some(raw)) => {
             let value = raw
                 .parse::<u64>()
@@ -177,12 +201,27 @@ fn parse(route: RouteV1, cluster: ClusterV1, raw: Vec<String>) -> Result<Argumen
             )));
         }
     };
+    let closer_reward_cap_lamports = match (route, closer_reward_cap_lamports) {
+        (RouteV1::Propose | RouteV1::Apply, Some(raw)) => Some(
+            raw.parse::<u64>()
+                .map_err(|_| Error::new("--closer-reward-cap-lamports must be a decimal u64"))?,
+        ),
+        (RouteV1::Propose | RouteV1::Apply, None) => {
+            return Err(Error::new(format!(
+                "--closer-reward-cap-lamports is required; usage: {}",
+                usage(route, cluster)
+            )));
+        }
+        (_, None) => None,
+        (_, Some(_)) => unreachable!("parser only accepts the cap for propose/apply"),
+    };
     Ok(ArgumentsV1 {
         origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
         custody,
         payer,
         payer_keypair: payer_keypair.map(PathBuf::from),
         amount,
+        closer_reward_cap_lamports,
         execute,
     })
 }
@@ -198,8 +237,13 @@ fn usage(route: RouteV1, cluster: ClusterV1) -> String {
     } else {
         ""
     };
+    let cap = if matches!(route, RouteV1::Propose | RouteV1::Apply) {
+        " --closer-reward-cap-lamports LAMPORTS"
+    } else {
+        ""
+    };
     format!(
-        "dclutch-local-successor-bootstrap {} --rpc-url URL{public} --custody CUSTODY_PROGRAM --payer PAYER{amount} [--execute --payer-keypair ABSOLUTE_JSON]",
+        "dclutch-local-successor-bootstrap {} --rpc-url URL{public} --custody CUSTODY_PROGRAM --payer PAYER{amount}{cap} [--execute --payer-keypair ABSOLUTE_JSON]",
         cluster.command(route)
     )
 }
@@ -318,6 +362,133 @@ fn parameters_found(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Value> {
             "hoardPrincipalMoved": 0
         }
     }))
+}
+
+fn current_parameters(
+    rpc: &mut Rpc,
+    custody: Pubkey,
+) -> Result<(Pubkey, ProtocolParametersRecordV1)> {
+    let address = protocol_parameters_record_address_v1(custody);
+    let account = owned_account(rpc, address, custody, "protocol-parameters record")?;
+    let record = ProtocolParametersRecordV1::decode(&account.data).map_err(|error| {
+        Error::new(format!(
+            "read-back parameters record does not decode: {error:?}"
+        ))
+    })?;
+    Ok((address, record))
+}
+
+fn proposed_parameters(record: ProtocolParametersRecordV1, cap: u64) -> ProtocolParametersV1 {
+    ProtocolParametersV1 {
+        closer_reward_cap_lamports: cap,
+        ..record.parameters
+    }
+}
+
+fn parameters_propose(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Value> {
+    let cap = arguments
+        .closer_reward_cap_lamports
+        .expect("propose parser required cap");
+    let (record_address, record) = current_parameters(rpc, arguments.custody)?;
+    let body = proposed_parameters(record, cap);
+    let instruction =
+        propose_protocol_parameters_instruction_v1(arguments.custody, arguments.payer, body)
+            .map_err(|error| Error::new(format!("build parameters Propose: {error:?}")))?;
+    if !arguments.execute {
+        return Ok(
+            json!({"command":"parameters-propose","cluster":arguments.origin.label(),"mode":"preflight","record":record_address.to_string(),"currentGeneration":record.parameters.generation,"closerRewardCapLamports":cap,"poststate":"would stage one exact governed body; no transaction was submitted"}),
+        );
+    }
+    let payer = signer(arguments, "parameters governance authority")?;
+    let transaction = rpc.send("parameters-propose", &[instruction], &payer)?;
+    accepted(&transaction.error, "parameters Propose")?;
+    let (_, after) = current_parameters(rpc, arguments.custody)?;
+    if !after.pending.is_standing()
+        || after.pending.digest != body.body_digest()
+        || after.parameters != record.parameters
+    {
+        return Err(Error::new(
+            "parameters Propose landed but did not preserve the active body and pin the proposed digest",
+        ));
+    }
+    Ok(
+        json!({"command":"parameters-propose","cluster":arguments.origin.label(),"record":record_address.to_string(),"signature":transaction.signature,"slot":transaction.slot,"poststate":{"activeGeneration":after.parameters.generation,"pendingProposal":true,"earliestApplySlot":after.pending.earliest_apply_slot,"proposedCloserRewardCapLamports":cap,"hoardPrincipalMoved":0}}),
+    )
+}
+
+fn parameters_withdraw(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Value> {
+    let (record_address, before) = current_parameters(rpc, arguments.custody)?;
+    let instruction =
+        withdraw_protocol_parameters_instruction_v1(arguments.custody, arguments.payer)
+            .map_err(|error| Error::new(format!("build parameters Withdraw: {error:?}")))?;
+    if !arguments.execute {
+        return Ok(
+            json!({"command":"parameters-withdraw","cluster":arguments.origin.label(),"mode":"preflight","record":record_address.to_string(),"poststate":"would clear only the standing proposal; no transaction was submitted"}),
+        );
+    }
+    let payer = signer(arguments, "parameters governance authority")?;
+    let transaction = rpc.send("parameters-withdraw", &[instruction], &payer)?;
+    accepted(&transaction.error, "parameters Withdraw")?;
+    let (_, after) = current_parameters(rpc, arguments.custody)?;
+    if after.pending != PendingChangeV1::NONE || after.parameters != before.parameters {
+        return Err(Error::new(
+            "parameters Withdraw landed but changed the active body or left a pending proposal",
+        ));
+    }
+    Ok(
+        json!({"command":"parameters-withdraw","cluster":arguments.origin.label(),"record":record_address.to_string(),"signature":transaction.signature,"slot":transaction.slot,"poststate":{"activeGeneration":after.parameters.generation,"pendingProposal":false,"hoardPrincipalMoved":0}}),
+    )
+}
+
+fn parameters_apply(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Value> {
+    let cap = arguments
+        .closer_reward_cap_lamports
+        .expect("apply parser required cap");
+    let (record_address, record) = current_parameters(rpc, arguments.custody)?;
+    let body = proposed_parameters(record, cap);
+    let next_generation = record
+        .parameters
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| Error::new("parameters generation overflow"))?;
+    let receipt = protocol_parameters_receipt_address_v1(arguments.custody, next_generation);
+    let instruction = apply_protocol_parameters_instruction_v1(
+        arguments.custody,
+        arguments.payer,
+        body,
+        next_generation,
+    )
+    .map_err(|error| Error::new(format!("build parameters Apply: {error:?}")))?;
+    if !arguments.execute {
+        return Ok(
+            json!({"command":"parameters-apply","cluster":arguments.origin.label(),"mode":"preflight","record":record_address.to_string(),"receipt":receipt.to_string(),"pendingEarliestApplySlot":record.pending.earliest_apply_slot,"poststate":"would apply only a matured matching proposal; no transaction was submitted"}),
+        );
+    }
+    let payer = signer(arguments, "parameters apply payer")?;
+    let transaction = rpc.send("parameters-apply", &[instruction], &payer)?;
+    accepted(&transaction.error, "parameters Apply")?;
+    let (_, after) = current_parameters(rpc, arguments.custody)?;
+    if after.pending != PendingChangeV1::NONE
+        || after.parameters.generation != next_generation
+        || after.parameters.closer_reward_cap_lamports != cap
+        || after.parameters.activation_slot != transaction.slot
+    {
+        return Err(Error::new(
+            "parameters Apply landed but its generation, activation, body, or pending state disagrees",
+        ));
+    }
+    let receipt_account = owned_account(
+        rpc,
+        receipt,
+        arguments.custody,
+        "protocol-parameters receipt",
+    )?;
+    if receipt_account.data.is_empty() {
+        return Err(Error::new("parameters Apply landed without its receipt"));
+    }
+    Ok(
+        json!({"command":"parameters-apply","cluster":arguments.origin.label(),"record":record_address.to_string(),"receipt":receipt.to_string(),"signature":transaction.signature,"slot":transaction.slot,"poststate":{"activeGeneration":after.parameters.generation,"activationSlot":after.parameters.activation_slot,"pendingProposal":false,"closerRewardCapLamports":cap,"hoardPrincipalMoved":0}}),
+    )
 }
 
 fn upkeep_found(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Value> {
@@ -465,6 +636,48 @@ mod tests {
         )
         .expect_err("zero is not a Credit act");
         assert!(refusal.to_string().contains("nonzero"));
+    }
+
+    #[test]
+    fn governed_proposal_requires_one_exact_cap_before_any_rpc_origin_is_constructed() {
+        let refusal = parse(
+            RouteV1::Propose,
+            ClusterV1::OwnedLoopback,
+            vec![
+                "--rpc-url".into(),
+                "http://127.0.0.1:20890".into(),
+                "--custody".into(),
+                Pubkey::new_from_array([7; 32]).to_string(),
+                "--payer".into(),
+                Pubkey::new_from_array([8; 32]).to_string(),
+            ],
+        )
+        .expect_err("a governed proposal cannot invent its proposed body");
+        assert!(
+            refusal
+                .to_string()
+                .contains("--closer-reward-cap-lamports is required")
+        );
+    }
+
+    #[test]
+    fn governed_apply_parses_its_exact_cap_on_owned_loopback() {
+        let parsed = parse(
+            RouteV1::Apply,
+            ClusterV1::OwnedLoopback,
+            vec![
+                "--rpc-url".into(),
+                "http://127.0.0.1:20890".into(),
+                "--custody".into(),
+                Pubkey::new_from_array([7; 32]).to_string(),
+                "--payer".into(),
+                Pubkey::new_from_array([8; 32]).to_string(),
+                "--closer-reward-cap-lamports".into(),
+                "17001".into(),
+            ],
+        )
+        .expect("local Apply argument shape");
+        assert_eq!(parsed.closer_reward_cap_lamports, Some(17_001));
     }
 
     #[test]

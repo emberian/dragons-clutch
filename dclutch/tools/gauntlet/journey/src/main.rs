@@ -183,6 +183,9 @@ mod plan;
 #[path = "../../../local-validator/bootstrap/successor/src/pyth_vaa_provisioning.rs"]
 #[allow(dead_code)]
 mod pyth_vaa_provisioning;
+#[path = "../../../local-validator/bootstrap/successor/src/rational_lifecycle_hot_frame.rs"]
+#[allow(dead_code)]
+mod rational_lifecycle_hot_frame;
 #[path = "../../../local-validator/bootstrap/successor/src/rational_market.rs"]
 #[allow(dead_code)]
 mod rational_market;
@@ -240,9 +243,24 @@ mod sponsored_release_observation;
 #[path = "../../../local-validator/bootstrap/successor/src/sponsored_schedule.rs"]
 #[allow(dead_code)]
 mod sponsored_schedule;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_activation.rs"]
+#[allow(dead_code)]
+mod structured_activation;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_campaign.rs"]
+#[allow(dead_code)]
+mod structured_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_claims_producer.rs"]
+#[allow(dead_code)]
+mod structured_claims_producer;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_composition_admission.rs"]
+#[allow(dead_code)]
+mod structured_composition_admission;
 #[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
 #[allow(dead_code)]
 mod structured_market;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_physical_frame.rs"]
+#[allow(dead_code)]
+mod structured_physical_frame;
 #[path = "../../../local-validator/bootstrap/successor/src/terminal_exterior_pyth.rs"]
 #[allow(dead_code)]
 mod terminal_exterior_pyth;
@@ -290,6 +308,7 @@ mod economics_successor;
 #[path = "../../../local-validator/bootstrap/successor/src/scoring_dealer.rs"]
 #[allow(dead_code)]
 mod scoring_dealer;
+mod structured_claims_campaign;
 mod ledger;
 mod provider;
 mod resolution;
@@ -387,6 +406,9 @@ fn run() -> Result<()> {
         Some("run") => run_journey(arguments.collect()),
         Some("dealer") => dealer_campaign::execute(parse_journey_request(arguments.collect())?),
         Some("economics") => economics_campaign::execute(parse_journey_request(arguments.collect())?),
+        Some("structured-claims") => {
+            structured_claims_campaign::execute(parse_journey_request(arguments.collect())?)
+        }
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();

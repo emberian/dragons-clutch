@@ -58,6 +58,11 @@ use crate::bearer::{
     build_rational_open_selected_bundle_v6, build_rational_open_structured_selected_bundle_v6,
     build_rational_terminal_selected_bundle_v6, encode_open_capability_lifecycle_policy_v5,
 };
+use crate::structured_activation_bundle_v1::{
+    STRUCTURED_ACTIVATION_SELECTOR_V1, STRUCTURED_CAPABILITY_ROOT_BYTES_V1,
+    STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1, build_structured_activation_bundle_v1,
+    structured_activation_descriptor_schema_v1,
+};
 use crate::structured_lifecycle_selected_v1::{
     StructuredActivationSelectedClosureV1, StructuredLifecycleSelectedErrorV1,
     structured_activation_selected_closure_v1,
@@ -293,7 +298,9 @@ pub struct StructuredSelectedReleaseV1 {
     /// authenticated Structured ProgramSet maps those two wires to selectors
     /// six and seven beside the five representation actions.
     pub activation: StructuredActivationSelectedClosureV1,
-    /// Exact seven-entry CapabilityProgramSetV2 bytes.
+    /// The sole V1 descriptor that creates this release's capability root.
+    pub root_activation: dclutch_market::capability_activation::ActivationBundleV1,
+    /// Exact eight-entry CapabilityProgramSetV2 bytes.
     pub program_set: Vec<u8>,
     /// Exact immutable config-record bytes.
     pub config: Vec<u8>,
@@ -360,8 +367,18 @@ pub fn structured_selected_release_v1(
     let activation = structured_activation_selected_closure_v1(input)
         .map_err(StructuredSelectedReleaseErrorV1::Lifecycle)?;
 
+    let root_activation = build_structured_activation_bundle_v1(
+        selected
+            .first()
+            .ok_or(StructuredSelectedReleaseErrorV1::Release)?
+            .descriptor
+            .as_slice(),
+        1,
+    )
+    .ok_or(StructuredSelectedReleaseErrorV1::Encoding)?;
     let program_set = assemble_program_set(
         &activation,
+        &root_activation,
         selected
             .first()
             .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
@@ -382,6 +399,7 @@ pub fn structured_selected_release_v1(
         structured,
         terminal,
         activation,
+        root_activation,
         program_set,
         config: selection.to_bytes().to_vec(),
         // Placeholder replaced below from the admission's own report, so no
@@ -417,12 +435,13 @@ impl StructuredSelectedReleaseV1 {
     ///
     /// The carrier predates lifecycle selectors, but its selection routine
     /// reads the V3 representation request and therefore selects only entries
-    /// one through five.  The returned bytes remain the single seven-entry
+    /// one through five.  The returned bytes remain the single eight-entry
     /// Structured ProgramSet; this is not a second authority or a projection
     /// with lifecycle entries removed.
     pub fn open_action_program_set(&self) -> Result<RationalOpenCapabilityProgramSetV3> {
         let expected = assemble_program_set(
             &self.activation,
+            &self.root_activation,
             self.selected
                 .first()
                 .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
@@ -473,6 +492,29 @@ impl StructuredSelectedReleaseV1 {
         });
         for bundle in self.bundle_bytes()? {
             push_bundle_records(&mut records, bundle)?;
+        }
+        for (label, schema, body) in [
+            (
+                "root-activation-account-profile",
+                dclutch_market::capability_activation::activation_account_profile_schema_v1(),
+                self.root_activation.account_profile.as_slice(),
+            ),
+            (
+                "root-activation-effect",
+                dclutch_market::capability_activation::activation_effect_schema_v1(),
+                self.root_activation.effect.as_slice(),
+            ),
+            (
+                "root-activation-descriptor",
+                structured_activation_descriptor_schema_v1(),
+                self.root_activation.descriptor.as_slice(),
+            ),
+        ] {
+            records.push(StructuredPublicationRecordV1 {
+                label,
+                schema,
+                body,
+            });
         }
         Ok(records)
     }
@@ -640,6 +682,7 @@ fn publish(
         .map_err(StructuredSelectedReleaseErrorV1::ProgramSetContract)?;
     let expected_set = assemble_program_set(
         &release.activation,
+        &release.root_activation,
         release
             .selected
             .first()
@@ -661,7 +704,7 @@ fn publish(
     if expected_set != release.program_set
         || set.selector_offset() != 10
         || set.selector_width() != SelectorWidthV2::U8
-        || usize::from(set.entry_count()) != STRUCTURED_SELECTED_ACTION_COUNT_V1
+        || usize::from(set.entry_count()) != STRUCTURED_SELECTED_ACTION_COUNT_V1 + 1
     {
         return Err(StructuredSelectedReleaseErrorV1::Publication);
     }
@@ -714,7 +757,7 @@ fn publish(
         || publication.release_set != input.release_set
         || publication.root_schema != input.root_schema
         || publication.root_state_bytes != input.root_state_bytes
-        || usize::from(publication.action_count) != STRUCTURED_SELECTED_ACTION_COUNT_V1
+        || usize::from(publication.action_count) != STRUCTURED_SELECTED_ACTION_COUNT_V1 + 1
     {
         return Err(StructuredSelectedReleaseErrorV1::Publication);
     }
@@ -726,7 +769,8 @@ fn validate_input(input: StructuredSelectedReleaseInputV1<'_>) -> Result<()> {
         .into_iter()
         .any(|identity| identity == [0; 32])
         || input.realm == input.release_set
-        || input.root_state_bytes == 0
+        || input.root_schema != STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1
+        || input.root_state_bytes != u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1).expect("root width")
         || input.representation_outcome_count == 0
         // The open RequestProfile V1 artifact's 1,312-byte bound makes this the
         // largest executable geometry; a wider release would encode and then
@@ -745,6 +789,7 @@ fn validate_input(input: StructuredSelectedReleaseInputV1<'_>) -> Result<()> {
 /// continues to carry its canonical lifecycle tags 0 and 1.
 fn assemble_program_set(
     activation: &StructuredActivationSelectedClosureV1,
+    root_activation: &dclutch_market::capability_activation::ActivationBundleV1,
     denominate: &RationalOpenSelectedHotBundleV3,
     reconstitute: &RationalOpenSelectedHotBundleV3,
     issue: &RationalOpenStructuredHotBundleV3,
@@ -762,6 +807,10 @@ fn assemble_program_set(
     )
     .ok_or(StructuredSelectedReleaseErrorV1::ProgramSet)?;
     let bundles = [
+        (
+            STRUCTURED_ACTIVATION_SELECTOR_V1,
+            root_activation.descriptor.as_slice(),
+        ),
         (
             activate_receipt,
             activation.activate_receipt.descriptor.as_slice(),
@@ -793,18 +842,29 @@ fn assemble_program_set(
     ];
     let mut entries = Vec::with_capacity(bundles.len());
     for (selector, bytes) in bundles {
-        let descriptor = CapabilityProgramV4::decode(bytes)
-            .map_err(StructuredSelectedReleaseErrorV1::CapabilityProgram)?;
-        if descriptor.kind().to_bytes() != STRUCTURED_CAPABILITY_KIND_ID_V2
-            || descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
-        {
-            return Err(StructuredSelectedReleaseErrorV1::ProgramSet);
-        }
+        let schema = if selector == STRUCTURED_ACTIVATION_SELECTOR_V1 {
+            let descriptor = dclutch_market::capability_program::CapabilityProgramV1::decode(bytes)
+                .map_err(StructuredSelectedReleaseErrorV1::CapabilityProgram)?;
+            if descriptor.kind().to_bytes() != STRUCTURED_CAPABILITY_KIND_ID_V2
+                || descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
+                || descriptor.request_schema().to_bytes()
+                    != crate::structured_activation_bundle_v1::STRUCTURED_ACTIVATION_REQUEST_SCHEMA_ID_V1
+            { return Err(StructuredSelectedReleaseErrorV1::ProgramSet); }
+            structured_activation_descriptor_schema_v1()
+        } else {
+            let descriptor = CapabilityProgramV4::decode(bytes)
+                .map_err(StructuredSelectedReleaseErrorV1::CapabilityProgram)?;
+            if descriptor.kind().to_bytes() != STRUCTURED_CAPABILITY_KIND_ID_V2
+                || descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
+            {
+                return Err(StructuredSelectedReleaseErrorV1::ProgramSet);
+            }
+            CAPABILITY_PROGRAM_SCHEMA_ID_V4
+        };
         entries.push(CapabilityProgramSetEntryV2::new(
             selector,
             CapabilityDescriptorReferenceV2::new(
-                ContentId::new(CAPABILITY_PROGRAM_SCHEMA_ID_V4)
-                    .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?,
+                ContentId::new(schema).map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?,
                 ContentId::new(hash(bytes).to_bytes())
                     .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?,
             ),
@@ -990,8 +1050,9 @@ mod tests {
         StructuredSelectedReleaseInputV1 {
             realm: id(18),
             release_set: id(15),
-            root_schema: id(42),
-            root_state_bytes: 8,
+            root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
+            root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
+                .expect("root width"),
             representation_outcome_count: K,
             item_state_bytes: ITEM_STATE_BYTES,
             product_basis: basis,
@@ -1006,11 +1067,12 @@ mod tests {
         let set = dclutch_market::capability_program::set_v2::CapabilityProgramSetV2::decode(
             &release.program_set,
         )
-        .expect("seven-entry set");
+        .expect("eight-entry set");
         assert_eq!(set.selector_offset(), 10);
         assert_eq!(set.selector_width(), SelectorWidthV2::U8);
-        assert_eq!(set.entry_count(), 7);
-        let descriptors: Vec<[u8; 32]> = (0..set.entry_count())
+        assert_eq!(set.entry_count(), 8);
+        let descriptors: Vec<[u8; 32]> = (0..u16::try_from(STRUCTURED_SELECTED_ACTION_COUNT_V1)
+            .expect("action count"))
             .map(|index| {
                 set.entry(index)
                     .expect("entry")
@@ -1031,6 +1093,18 @@ mod tests {
         );
         assert_eq!(set.entry(6).expect("coordinate entry").selector(), 7);
         assert_eq!(
+            set.entry(7).expect("root activation entry").selector(),
+            STRUCTURED_ACTIVATION_SELECTOR_V1
+        );
+        assert_eq!(
+            set.entry(7)
+                .expect("root activation entry")
+                .descriptor()
+                .schema()
+                .to_bytes(),
+            structured_activation_descriptor_schema_v1(),
+        );
+        assert_eq!(
             set.entry(6)
                 .expect("coordinate entry")
                 .descriptor()
@@ -1048,8 +1122,14 @@ mod tests {
         );
         assert_eq!(release.publication.realm, id(18));
         assert_eq!(release.publication.release_set, id(15));
-        assert_eq!(release.publication.root_schema, id(42));
-        assert_eq!(release.publication.root_state_bytes, 8);
+        assert_eq!(
+            release.publication.root_schema,
+            STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1
+        );
+        assert_eq!(
+            release.publication.root_state_bytes,
+            u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1).expect("root width")
+        );
         let open = release
             .open_action_program_set()
             .expect("open producer set");
@@ -1109,7 +1189,10 @@ mod tests {
         let basis = basis();
         let release = structured_selected_release_v1(input(&basis)).expect("release");
         let records = release.publication_records().expect("records");
-        assert_eq!(records.len(), 2 + 7 * STRUCTURED_SELECTED_ACTION_COUNT_V1);
+        assert_eq!(
+            records.len(),
+            2 + 7 * STRUCTURED_SELECTED_ACTION_COUNT_V1 + 3
+        );
 
         let program_set = records.first().expect("program-set record");
         assert_eq!(program_set.label, "program-set");

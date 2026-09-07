@@ -72,12 +72,12 @@ mod rational_market;
 #[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
 #[allow(dead_code)]
 mod relayed;
-#[path = "../../../local-validator/bootstrap/successor/src/release_identity.rs"]
-#[allow(dead_code)]
-mod release_identity;
 #[path = "../../../local-validator/bootstrap/successor/src/release_capture.rs"]
 #[allow(dead_code)]
 mod release_capture;
+#[path = "../../../local-validator/bootstrap/successor/src/release_identity.rs"]
+#[allow(dead_code)]
+mod release_identity;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
@@ -110,15 +110,15 @@ mod recovery_crank;
 // The failure arm past the exhaustion: the deadline walk that commits the
 // failure selector, the family-neutral terminal admission, and the payout
 // driver the refund rides. Linked for the same reason the crank is.
-#[path = "../../../local-validator/bootstrap/successor/src/deadline_failure.rs"]
-#[allow(dead_code)]
-mod deadline_failure;
 #[path = "../../../local-validator/bootstrap/successor/src/admit_terminal.rs"]
 #[allow(dead_code)]
 mod admit_terminal;
-#[path = "../../../local-validator/bootstrap/successor/src/wallet_terminal_payout_exterior.rs"]
+#[path = "../../../local-validator/bootstrap/successor/src/claims_custody_replay.rs"]
 #[allow(dead_code)]
-mod wallet_terminal_payout_exterior;
+mod claims_custody_replay;
+#[path = "../../../local-validator/bootstrap/successor/src/deadline_failure.rs"]
+#[allow(dead_code)]
+mod deadline_failure;
 #[path = "../../../local-validator/bootstrap/successor/src/sponsored_schedule.rs"]
 #[allow(dead_code)]
 mod sponsored_schedule;
@@ -128,6 +128,9 @@ mod terminal_lifecycle;
 #[path = "../../../local-validator/bootstrap/successor/src/wallet_terminal.rs"]
 #[allow(dead_code)]
 mod wallet_terminal;
+#[path = "../../../local-validator/bootstrap/successor/src/wallet_terminal_payout_exterior.rs"]
+#[allow(dead_code)]
+mod wallet_terminal_payout_exterior;
 
 // ---------------------------------------------- the minted publication
 //
@@ -368,10 +371,9 @@ mod tests {
 
     #[test]
     fn the_default_rung_is_the_shipped_flag_spelling() {
-        let rungs = super::local_mutable::parse_recovery_rungs_v1(
-            super::ladder::DEFAULT_RECOVERY_RUNGS_V1,
-        )
-        .expect("the tier's default rung must parse as the shipped --recovery-rungs value");
+        let rungs =
+            super::local_mutable::parse_recovery_rungs_v1(super::ladder::DEFAULT_RECOVERY_RUNGS_V1)
+                .expect("the tier's default rung must parse as the shipped --recovery-rungs value");
         assert_eq!(rungs.len(), 1, "the tier founds a TWO-source market");
     }
 }

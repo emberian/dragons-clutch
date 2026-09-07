@@ -908,27 +908,25 @@ fn custody_window_v1(
 
 /// Build one route's fixed prefix from the Lean-emitted privilege table.
 ///
-/// A coordinate left at the default pubkey is refused rather than compiled.
+/// A coordinate left unnamed is refused rather than compiled.
 /// The plans fill a vector by named constant, so a frame that grows a
-/// coordinate no plan writes would otherwise ship the System program at it and
+/// coordinate no plan writes would otherwise ship a placeholder at it and
 /// refuse on chain with a code that names the frame and not the omission.
 fn prefix_v1(
-    keys: &[Pubkey],
+    keys: &[Option<Pubkey>],
     privileges: fn(usize) -> Option<(bool, bool)>,
 ) -> Result<Vec<AccountMeta>> {
     let mut metas = Vec::with_capacity(keys.len());
     for (index, key) in keys.iter().enumerate() {
         let (writable, signer) = privileges(index)
             .ok_or_else(|| Error::new(format!("the frame declares no coordinate {index}")))?;
-        if *key == Pubkey::default() {
-            return Err(Error::new(format!(
-                "this plan left frame coordinate {index} unnamed"
-            )));
-        }
+        let key = (*key).ok_or_else(|| {
+            Error::new(format!("this plan left frame coordinate {index} unnamed"))
+        })?;
         metas.push(if writable {
-            AccountMeta::new(*key, signer)
+            AccountMeta::new(key, signer)
         } else {
-            AccountMeta::new_readonly(*key, signer)
+            AccountMeta::new_readonly(key, signer)
         });
     }
     if privileges(keys.len()).is_some() {
@@ -1181,28 +1179,28 @@ fn plan_found(
         deposit,
     )?;
 
-    let mut keys = vec![Pubkey::default(); generated::FOUND_ACCOUNT_COUNT];
-    keys[generated::FOUND_SPONSOR_ACCOUNT] = sponsor;
-    keys[generated::FOUND_FUND_ACCOUNT] = fund;
-    keys[generated::FOUND_RULE_ACCOUNT] = rule;
-    keys[generated::FOUND_QUOTE_ACCOUNT] = quote;
-    keys[generated::FOUND_MARKET_ACCOUNT] = coordinates.market;
-    keys[generated::FOUND_AGGREGATE_ACCOUNT] = coordinates.aggregate;
-    keys[generated::FOUND_DEALER_POSITION_ACCOUNT] = dealer_position;
-    keys[generated::FOUND_DEALER_ADMISSION_ACCOUNT] = dealer_admission;
-    keys[generated::FOUND_CLAIMS_AUTHORITY_ACCOUNT] = admit.authority;
-    keys[generated::FOUND_CLAIMS_PROGRAM_ACCOUNT] = coordinates.claims_program;
-    keys[generated::FOUND_SPONSOR_TOKEN_ACCOUNT] = sponsor_token;
-    keys[generated::FOUND_VAULT_ACCOUNT] = vault;
-    keys[generated::FOUND_CUSTODY_REPLAY_ACCOUNT] = replay;
-    keys[generated::FOUND_CUSTODY_AUTHORITY_ACCOUNT] = coordinates.custody_authority;
-    keys[generated::FOUND_CUSTODY_PROGRAM_ACCOUNT] = coordinates.custody_program;
-    keys[generated::FOUND_MINT_ACCOUNT] = coordinates.mint;
-    keys[generated::FOUND_TOKEN_PROGRAM_ACCOUNT] = coordinates.token_program;
-    keys[generated::FOUND_ACTIVATION_CACHE_ACCOUNT] = coordinates.activation_cache;
-    keys[generated::FOUND_REGISTRY_PROGRAM_ACCOUNT] = coordinates.registry;
-    keys[generated::FOUND_SYSTEM_PROGRAM_ACCOUNT] = system_program::ID;
-    keys[generated::FOUND_RENT_ACCOUNT] = sysvar::rent::ID;
+    let mut keys = vec![None; generated::FOUND_ACCOUNT_COUNT];
+    keys[generated::FOUND_SPONSOR_ACCOUNT] = Some(sponsor);
+    keys[generated::FOUND_FUND_ACCOUNT] = Some(fund);
+    keys[generated::FOUND_RULE_ACCOUNT] = Some(rule);
+    keys[generated::FOUND_QUOTE_ACCOUNT] = Some(quote);
+    keys[generated::FOUND_MARKET_ACCOUNT] = Some(coordinates.market);
+    keys[generated::FOUND_AGGREGATE_ACCOUNT] = Some(coordinates.aggregate);
+    keys[generated::FOUND_DEALER_POSITION_ACCOUNT] = Some(dealer_position);
+    keys[generated::FOUND_DEALER_ADMISSION_ACCOUNT] = Some(dealer_admission);
+    keys[generated::FOUND_CLAIMS_AUTHORITY_ACCOUNT] = Some(admit.authority);
+    keys[generated::FOUND_CLAIMS_PROGRAM_ACCOUNT] = Some(coordinates.claims_program);
+    keys[generated::FOUND_SPONSOR_TOKEN_ACCOUNT] = Some(sponsor_token);
+    keys[generated::FOUND_VAULT_ACCOUNT] = Some(vault);
+    keys[generated::FOUND_CUSTODY_REPLAY_ACCOUNT] = Some(replay);
+    keys[generated::FOUND_CUSTODY_AUTHORITY_ACCOUNT] = Some(coordinates.custody_authority);
+    keys[generated::FOUND_CUSTODY_PROGRAM_ACCOUNT] = Some(coordinates.custody_program);
+    keys[generated::FOUND_MINT_ACCOUNT] = Some(coordinates.mint);
+    keys[generated::FOUND_TOKEN_PROGRAM_ACCOUNT] = Some(coordinates.token_program);
+    keys[generated::FOUND_ACTIVATION_CACHE_ACCOUNT] = Some(coordinates.activation_cache);
+    keys[generated::FOUND_REGISTRY_PROGRAM_ACCOUNT] = Some(coordinates.registry);
+    keys[generated::FOUND_SYSTEM_PROGRAM_ACCOUNT] = Some(system_program::ID);
+    keys[generated::FOUND_RENT_ACCOUNT] = Some(sysvar::rent::ID);
     let prefix = prefix_v1(&keys, found_privileges_v1)?;
 
     let mut windows = custody_window_v1(
@@ -1509,15 +1507,15 @@ fn plan_quote(
     .to_bytes()
     .map_err(|error| Error::new(format!("quote request: {error:?}")))?;
 
-    let mut keys = vec![Pubkey::default(); generated::QUOTE_ACCOUNT_COUNT];
-    keys[generated::QUOTE_PAYER_ACCOUNT] = payer;
-    keys[generated::QUOTE_FUND_ACCOUNT] = fund_key;
-    keys[generated::QUOTE_RULE_ACCOUNT] = rule_key;
-    keys[generated::QUOTE_QUOTE_ACCOUNT] = quote;
-    keys[generated::QUOTE_MARKET_ACCOUNT] = coordinates.market;
-    keys[generated::QUOTE_DEALER_POSITION_ACCOUNT] = dealer_position;
-    keys[generated::QUOTE_ACTIVATION_CACHE_ACCOUNT] = coordinates.activation_cache;
-    keys[generated::QUOTE_REGISTRY_PROGRAM_ACCOUNT] = coordinates.registry;
+    let mut keys = vec![None; generated::QUOTE_ACCOUNT_COUNT];
+    keys[generated::QUOTE_PAYER_ACCOUNT] = Some(payer);
+    keys[generated::QUOTE_FUND_ACCOUNT] = Some(fund_key);
+    keys[generated::QUOTE_RULE_ACCOUNT] = Some(rule_key);
+    keys[generated::QUOTE_QUOTE_ACCOUNT] = Some(quote);
+    keys[generated::QUOTE_MARKET_ACCOUNT] = Some(coordinates.market);
+    keys[generated::QUOTE_DEALER_POSITION_ACCOUNT] = Some(dealer_position);
+    keys[generated::QUOTE_ACTIVATION_CACHE_ACCOUNT] = Some(coordinates.activation_cache);
+    keys[generated::QUOTE_REGISTRY_PROGRAM_ACCOUNT] = Some(coordinates.registry);
 
     Ok(PlanV1 {
         route: RouteV1::Quote,
@@ -1719,26 +1717,26 @@ fn plan_fill(
         parent,
     )?;
 
-    let mut keys = vec![Pubkey::default(); generated::FILL_ACCOUNT_COUNT];
-    keys[generated::FILL_TAKER_ACCOUNT] = taker;
-    keys[generated::FILL_FUND_ACCOUNT] = fund_key;
-    keys[generated::FILL_RULE_ACCOUNT] = rule_key;
-    keys[generated::FILL_MARKET_ACCOUNT] = coordinates.market;
-    keys[generated::FILL_AGGREGATE_ACCOUNT] = coordinates.aggregate;
-    keys[generated::FILL_DEALER_POSITION_ACCOUNT] = dealer_position;
-    keys[generated::FILL_TAKER_POSITION_ACCOUNT] = taker_position;
-    keys[generated::FILL_CLAIMS_AUTHORITY_ACCOUNT] = claims_window.authority;
-    keys[generated::FILL_CLAIMS_PROGRAM_ACCOUNT] = coordinates.claims_program;
-    keys[generated::FILL_TAKER_TOKEN_ACCOUNT] = taker_token;
-    keys[generated::FILL_VAULT_ACCOUNT] = vault;
-    keys[generated::FILL_HOARD_ACCOUNT] = coordinates.hoard;
-    keys[generated::FILL_CUSTODY_REPLAY_ACCOUNT] = fund_replay;
-    keys[generated::FILL_CUSTODY_AUTHORITY_ACCOUNT] = coordinates.custody_authority;
-    keys[generated::FILL_CUSTODY_PROGRAM_ACCOUNT] = coordinates.custody_program;
-    keys[generated::FILL_MINT_ACCOUNT] = coordinates.mint;
-    keys[generated::FILL_TOKEN_PROGRAM_ACCOUNT] = coordinates.token_program;
-    keys[generated::FILL_ACTIVATION_CACHE_ACCOUNT] = coordinates.activation_cache;
-    keys[generated::FILL_REGISTRY_PROGRAM_ACCOUNT] = coordinates.registry;
+    let mut keys = vec![None; generated::FILL_ACCOUNT_COUNT];
+    keys[generated::FILL_TAKER_ACCOUNT] = Some(taker);
+    keys[generated::FILL_FUND_ACCOUNT] = Some(fund_key);
+    keys[generated::FILL_RULE_ACCOUNT] = Some(rule_key);
+    keys[generated::FILL_MARKET_ACCOUNT] = Some(coordinates.market);
+    keys[generated::FILL_AGGREGATE_ACCOUNT] = Some(coordinates.aggregate);
+    keys[generated::FILL_DEALER_POSITION_ACCOUNT] = Some(dealer_position);
+    keys[generated::FILL_TAKER_POSITION_ACCOUNT] = Some(taker_position);
+    keys[generated::FILL_CLAIMS_AUTHORITY_ACCOUNT] = Some(claims_window.authority);
+    keys[generated::FILL_CLAIMS_PROGRAM_ACCOUNT] = Some(coordinates.claims_program);
+    keys[generated::FILL_TAKER_TOKEN_ACCOUNT] = Some(taker_token);
+    keys[generated::FILL_VAULT_ACCOUNT] = Some(vault);
+    keys[generated::FILL_HOARD_ACCOUNT] = Some(coordinates.hoard);
+    keys[generated::FILL_CUSTODY_REPLAY_ACCOUNT] = Some(fund_replay);
+    keys[generated::FILL_CUSTODY_AUTHORITY_ACCOUNT] = Some(coordinates.custody_authority);
+    keys[generated::FILL_CUSTODY_PROGRAM_ACCOUNT] = Some(coordinates.custody_program);
+    keys[generated::FILL_MINT_ACCOUNT] = Some(coordinates.mint);
+    keys[generated::FILL_TOKEN_PROGRAM_ACCOUNT] = Some(coordinates.token_program);
+    keys[generated::FILL_ACTIVATION_CACHE_ACCOUNT] = Some(coordinates.activation_cache);
+    keys[generated::FILL_REGISTRY_PROGRAM_ACCOUNT] = Some(coordinates.registry);
     let prefix = prefix_v1(&keys, fill_privileges_v1)?;
 
     let mut windows = claims_window.metas;
@@ -2085,21 +2083,21 @@ fn plan_withdraw(
         amount,
     )?;
 
-    let mut keys = vec![Pubkey::default(); generated::WITHDRAW_ACCOUNT_COUNT];
-    keys[generated::WITHDRAW_SPONSOR_ACCOUNT] = sponsor;
-    keys[generated::WITHDRAW_FUND_ACCOUNT] = fund_key;
-    keys[generated::WITHDRAW_RULE_ACCOUNT] = rule_key;
-    keys[generated::WITHDRAW_MARKET_ACCOUNT] = coordinates.market;
-    keys[generated::WITHDRAW_DEALER_POSITION_ACCOUNT] = dealer_position;
-    keys[generated::WITHDRAW_SPONSOR_TOKEN_ACCOUNT] = sponsor_token;
-    keys[generated::WITHDRAW_VAULT_ACCOUNT] = vault;
-    keys[generated::WITHDRAW_CUSTODY_REPLAY_ACCOUNT] = replay;
-    keys[generated::WITHDRAW_CUSTODY_AUTHORITY_ACCOUNT] = coordinates.custody_authority;
-    keys[generated::WITHDRAW_CUSTODY_PROGRAM_ACCOUNT] = coordinates.custody_program;
-    keys[generated::WITHDRAW_MINT_ACCOUNT] = coordinates.mint;
-    keys[generated::WITHDRAW_TOKEN_PROGRAM_ACCOUNT] = coordinates.token_program;
-    keys[generated::WITHDRAW_ACTIVATION_CACHE_ACCOUNT] = coordinates.activation_cache;
-    keys[generated::WITHDRAW_REGISTRY_PROGRAM_ACCOUNT] = coordinates.registry;
+    let mut keys = vec![None; generated::WITHDRAW_ACCOUNT_COUNT];
+    keys[generated::WITHDRAW_SPONSOR_ACCOUNT] = Some(sponsor);
+    keys[generated::WITHDRAW_FUND_ACCOUNT] = Some(fund_key);
+    keys[generated::WITHDRAW_RULE_ACCOUNT] = Some(rule_key);
+    keys[generated::WITHDRAW_MARKET_ACCOUNT] = Some(coordinates.market);
+    keys[generated::WITHDRAW_DEALER_POSITION_ACCOUNT] = Some(dealer_position);
+    keys[generated::WITHDRAW_SPONSOR_TOKEN_ACCOUNT] = Some(sponsor_token);
+    keys[generated::WITHDRAW_VAULT_ACCOUNT] = Some(vault);
+    keys[generated::WITHDRAW_CUSTODY_REPLAY_ACCOUNT] = Some(replay);
+    keys[generated::WITHDRAW_CUSTODY_AUTHORITY_ACCOUNT] = Some(coordinates.custody_authority);
+    keys[generated::WITHDRAW_CUSTODY_PROGRAM_ACCOUNT] = Some(coordinates.custody_program);
+    keys[generated::WITHDRAW_MINT_ACCOUNT] = Some(coordinates.mint);
+    keys[generated::WITHDRAW_TOKEN_PROGRAM_ACCOUNT] = Some(coordinates.token_program);
+    keys[generated::WITHDRAW_ACTIVATION_CACHE_ACCOUNT] = Some(coordinates.activation_cache);
+    keys[generated::WITHDRAW_REGISTRY_PROGRAM_ACCOUNT] = Some(coordinates.registry);
     let prefix = prefix_v1(&keys, withdraw_privileges_v1)?;
     let windows = custody_transfer_window_v1(coordinates, &leg)?;
 
@@ -2695,7 +2693,7 @@ mod tests {
             (generated::FILL_ACCOUNT_COUNT, fill_privileges_v1),
             (generated::WITHDRAW_ACCOUNT_COUNT, withdraw_privileges_v1),
         ] {
-            let keys = vec![Pubkey::new_unique(); count];
+            let keys = vec![Some(Pubkey::new_unique()); count];
             let metas = prefix_v1(&keys, privileges).expect("the exact width is admitted");
             assert_eq!(metas.len(), count);
             let short = prefix_v1(&keys[..count - 1], privileges)
@@ -2704,10 +2702,11 @@ mod tests {
                 format!("{short}"),
                 "the frame declares more coordinates than this plan named"
             );
-            // A coordinate a plan never wrote is the default pubkey, and that
-            // is an omission rather than an address.
+            // A coordinate a plan never wrote is `None`. The System Program
+            // itself is the default pubkey, so an address cannot serve as the
+            // completeness sentinel.
             let mut unnamed = keys.clone();
-            unnamed[count - 1] = Pubkey::default();
+            unnamed[count - 1] = None;
             let refusal =
                 prefix_v1(&unnamed, privileges).expect_err("an unnamed coordinate is refused");
             assert_eq!(
@@ -2715,6 +2714,18 @@ mod tests {
                 format!("this plan left frame coordinate {} unnamed", count - 1)
             );
         }
+    }
+
+    #[test]
+    fn the_prefix_builder_accepts_a_named_system_program() {
+        let mut keys = vec![Some(Pubkey::new_unique()); generated::FOUND_ACCOUNT_COUNT];
+        keys[generated::FOUND_SYSTEM_PROGRAM_ACCOUNT] = Some(system_program::ID);
+        let metas = prefix_v1(&keys, found_privileges_v1)
+            .expect("System Program is a named account, despite its zero pubkey");
+        assert_eq!(
+            metas[generated::FOUND_SYSTEM_PROGRAM_ACCOUNT].pubkey,
+            system_program::ID
+        );
     }
 
     /// Coordinate zero of every frame is its one signer, and it is the only

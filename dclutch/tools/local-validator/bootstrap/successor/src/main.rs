@@ -49,7 +49,9 @@ mod local_mutable;
 mod release_lineage;
 mod series_act_verbs_v1;
 mod series_consume_campaign;
+mod series_founder;
 mod series_lifecycle_campaign;
+mod series_market;
 mod series_permit_expiry_campaign;
 mod series_terminal_campaign;
 // The journey campaign's conservation engine, shared textually the same way
@@ -63,6 +65,7 @@ mod model;
 mod plan;
 mod pyth_lab_publication;
 mod pyth_vaa_provisioning;
+mod rational_lifecycle_hot_frame;
 mod rational_market;
 mod recovery_crank;
 mod relayed;
@@ -73,12 +76,18 @@ mod runtime;
 mod scoring_dealer;
 mod seed;
 mod selected_capability;
+mod selected_capability_activation;
 mod source_abort_exterior;
 mod spline_product;
 mod sponsored_push;
 mod sponsored_release_observation;
 mod sponsored_schedule;
+mod structured_activation;
+mod structured_campaign;
+mod structured_claims_producer;
+mod structured_composition_admission;
 mod structured_market;
+mod structured_physical_frame;
 mod terminal_exterior_pyth;
 mod terminal_lifecycle;
 mod terminal_sequence;
@@ -245,6 +254,21 @@ fn run() -> Result<()> {
                 arguments.collect(),
             )
         }
+        Some(economics_campaign::PARAMETERS_PROPOSE_LOCAL_COMMAND_V1) => economics_campaign::run(
+            economics_campaign::RouteV1::Propose,
+            economics_campaign::ClusterV1::OwnedLoopback,
+            arguments.collect(),
+        ),
+        Some(economics_campaign::PARAMETERS_APPLY_LOCAL_COMMAND_V1) => economics_campaign::run(
+            economics_campaign::RouteV1::Apply,
+            economics_campaign::ClusterV1::OwnedLoopback,
+            arguments.collect(),
+        ),
+        Some(economics_campaign::PARAMETERS_WITHDRAW_LOCAL_COMMAND_V1) => economics_campaign::run(
+            economics_campaign::RouteV1::Withdraw,
+            economics_campaign::ClusterV1::OwnedLoopback,
+            arguments.collect(),
+        ),
         Some(economics_campaign::UPKEEP_FOUND_LOCAL_COMMAND_V1) => economics_campaign::run(
             economics_campaign::RouteV1::Upkeep,
             economics_campaign::ClusterV1::OwnedLoopback,
@@ -261,6 +285,9 @@ fn run() -> Result<()> {
         }
         Some(command) if command == family_hot_campaign::GENERAL_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::General)
+        }
+        Some(command) if command == series_founder::SERIES_FOUNDER_INPUT_COMMAND_V1 => {
+            series_founder::run(arguments.collect())
         }
         Some(command) if command == series_consume_campaign::SERIES_CONSUME_COMMAND_V1 => {
             series_consume_campaign::run(arguments.collect())
@@ -475,6 +502,9 @@ fn run() -> Result<()> {
         }
         Some(command) if command == direct_resolution_campaign::COMMAND_V1 => {
             direct_resolution_campaign::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == structured_campaign::COMMAND_V1 => {
+            structured_campaign::run_owned_loopback_v1(arguments.collect())
         }
         Some(command) if command == spline_product::COMMAND_V1 => {
             spline_product::run(arguments.collect())

@@ -61,6 +61,8 @@ pub(crate) struct SelectedCapabilityClosureV1<'a> {
     pub(crate) activation_deadline_slot: u64,
     /// Exact Rent quote for the capability root the entry prepays.
     pub(crate) root_rent_minimum_lamports: u64,
+    /// Family-derived native Creation principal delivered with the root.
+    pub(crate) creation_principal_lamports: u64,
 }
 
 /// Derive the one manifest entry a selected capability closure determines.
@@ -88,6 +90,12 @@ pub(crate) fn selected_manifest_entry_v1(
     let program_set_id: [u8; 32] = Sha256::digest(closure.program_set).into();
     let config_id: [u8; 32] = Sha256::digest(closure.config).into();
     let none = CompartmentFundingV1::not_applicable();
+    let creation = if closure.creation_principal_lamports == 0 {
+        none
+    } else {
+        CompartmentFundingV1::native_lamports(closure.creation_principal_lamports)
+            .map_err(|error| Error::new(format!("selected creation quote: {error:?}")))?
+    };
     let amounts = FundingAmountsV1::new(
         // The funding ledger owns the complete exact Rent quote. Any lamports
         // already sitting on the vacant PDA are classified at activation by the
@@ -95,7 +103,7 @@ pub(crate) fn selected_manifest_entry_v1(
         // unsolicited surplus; they never reduce this immutable quote.
         CompartmentFundingV1::native_lamports(closure.root_rent_minimum_lamports)
             .map_err(|error| Error::new(format!("selected root rent quote: {error:?}")))?,
-        none,
+        creation,
         none,
         none,
         none,
@@ -347,6 +355,7 @@ pub(crate) fn payload_manifest_entry_v1(
         config: &config,
         activation_deadline_slot: payload.activation_deadline_slot,
         root_rent_minimum_lamports: payload.root_rent_minimum_lamports,
+        creation_principal_lamports: payload.creation_principal_lamports,
     })
 }
 

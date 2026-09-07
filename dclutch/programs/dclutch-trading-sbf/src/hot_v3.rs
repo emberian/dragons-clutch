@@ -117,6 +117,12 @@ use dclutch_trading::series::{
     ticket_admission_v1::SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1,
 };
 use dclutch_trading::{
+    general::{
+        hot_candidate_v3::seed_general_place_order_rows_from_signed_terms_v3,
+        state_artifacts_v3::general_readonly_evidence_v3,
+    },
+    general_codec::Action as GeneralAction,
+    general_config::root::GENERAL_CAPABILITY_KIND_ID_V1,
     direct_finalization_v3::{
         DIRECT_INLINE_POSTSTATE_COUNT_V3, DirectInlineAccountPrestateV3,
         DirectInlineAccountPrestatesV3, DirectInlineFinalizationInputV3,
@@ -452,8 +458,6 @@ const MAX_HOT_RUNTIME_ACCOUNTS_V3: usize = 256;
 const MAX_HOT_SCALARS_V3: usize = 512;
 const MAX_HOT_IDENTITIES_V3: usize = 128;
 const MAX_HOT_REQUEST_BYTES_V3: usize = 8_192;
-const HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3: usize = 1;
-const HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3: usize = 4;
 
 const CHILD_RECEIPT_CONTEXT_DOMAIN_V4: &[u8] = b"dclutch:hot-child-receipt-context:v4";
 const CHILD_REQUEST_DIGEST_DOMAIN_V4: &[u8] = b"dclutch:hot-child-request:v4";

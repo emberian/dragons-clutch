@@ -10,6 +10,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("aquarium", HERE / "aquarium.py")
@@ -26,8 +27,9 @@ def key(number: int) -> str:
 class AquariumTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.release_gate_verifier = aquarium.verify_release_gate
+        self.release_pack_verifier = aquarium.verify_release_pack
         aquarium.verify_release_gate = lambda _path, _digest: None
         self.current = {role: key(index + 1) for index, role in enumerate(("registry", "rent", "custody", "resolution", "claims", "trading", "core"))}
         self.prior = {role: key(index + 20) for index, role in enumerate(self.current)}
@@ -53,10 +55,16 @@ class AquariumTests(unittest.TestCase):
             "budget": {"max_lamports_spent": 40}}))
         self.gate = self.root / "RELEASE_GATE.json"
         self.gate.write_text(json.dumps({"schema": aquarium.REPRODUCIBLE_GATE_SCHEMA,
-            "source_revision": "a" * 40}))
+            "source_revision": "a" * 40, "source_tree_sha256": "1" * 64}))
+        self.pack = self.root / aquarium.RELEASE_PACK_BASENAME
+        self.pack.write_text(json.dumps({"fixture": "release pack is reauthenticated by a stub"}))
+        self.checked_bootstrap = {"path": self.boot, "sha256": aquarium.sha256_file(self.boot),
+                                  "bytes": self.boot.stat().st_size}
+        aquarium.verify_release_pack = lambda _path, _digest, _revision, _tree: self.checked_bootstrap
 
     def tearDown(self):
         aquarium.verify_release_gate = self.release_gate_verifier
+        aquarium.verify_release_pack = self.release_pack_verifier
         self.temp.cleanup()
 
     def body(self):
@@ -69,7 +77,8 @@ class AquariumTests(unittest.TestCase):
                        "program_ids": self.current, "prior_manifest": str(self.old),
                        "general_accelerator": {"program_id": key(90), "deployment_slot": 1000,
                            "elf_sha256": "f" * 64, "semantic_release_id": "e" * 64},
-                       "release_gate": {"path": str(self.gate), "sha256": aquarium.sha256_file(self.gate)}},
+                       "release_gate": {"path": str(self.gate), "sha256": aquarium.sha256_file(self.gate)},
+                       "release_pack": {"path": str(self.pack), "sha256": aquarium.sha256_file(self.pack)}},
             "synthetic_actors": [key(300), key(301)],
             "markets": [{"market_id": "direct-1", "address": key(100), "source_market_label": "1",
                          "join_open": False, "epochs": [{"epoch_id": "opening", "cycles": 2,
@@ -108,7 +117,7 @@ class AquariumTests(unittest.TestCase):
             "general_accelerator": {"program_id": key(90), "deployment_slot": "1000", "elf_sha256": "f" * 64, "semantic_release_id": "e" * 64},
             "markets": [{"label": "1", "kind": "direct", "address": key(100)}]}))
         self.gate.write_text(json.dumps({"schema": aquarium.REPRODUCIBLE_GATE_SCHEMA,
-            "source_revision": "b" * 40}))
+            "source_revision": "b" * 40, "source_tree_sha256": "1" * 64}))
         with self.assertRaisesRegex(aquarium.Refusal, "release_gate does not authenticate"):
             aquarium.validate_config(self.write(self.body()))
 
@@ -133,6 +142,65 @@ class AquariumTests(unittest.TestCase):
         self.manifest.write_text(json.dumps(manifest))
         with self.assertRaisesRegex(aquarium.Refusal, "canonical non-negative decimal"):
             aquarium.validate_config(self.write(self.body()))
+
+    def test_release_pack_refuses_a_host_provenance_from_another_source(self):
+        pack = self.root / aquarium.RELEASE_PACK_BASENAME
+        def write_pack(revision):
+            pack.write_text(json.dumps({
+                "schema": aquarium.RELEASE_PACK_SCHEMA,
+                "source": {"revision": revision, "tree_sha256": "1" * 64},
+                "product_handoff": {"build": {"successor": {
+                    "canonical_path": str(self.boot), "bytes": self.boot.stat().st_size,
+                    "sha256": aquarium.sha256_file(self.boot)}}},
+            }))
+        write_pack("a" * 40)
+        verified = types.SimpleNamespace(returncode=0, stdout=b"verified")
+        with mock.patch.object(aquarium.subprocess, "run", return_value=verified):
+            accepted = self.release_pack_verifier(pack, aquarium.sha256_file(pack), "a" * 40, "1" * 64)
+            self.assertEqual(accepted["path"], self.boot)
+            write_pack("b" * 40)
+            with self.assertRaisesRegex(aquarium.Refusal, "source identity differs"):
+                self.release_pack_verifier(pack, aquarium.sha256_file(pack), "a" * 40, "1" * 64)
+
+    def test_preparation_accepts_only_the_release_pack_host_binary(self):
+        aquarium_path = self.write(self.body())
+        def ticket(maker, collateral, nonce):
+            return {"keypair_env": "DCLUTCH_TEST_TICKET_KEY", "maker": maker,
+                    "collateral_account": collateral, "lifecycle": "fok", "outcome": "1",
+                    "generation": "1", "nonce": str(nonce), "valid_from": "10", "valid_through": "100",
+                    "maximum_fill": "100", "limit_price": "1000000", "fee_basis_points": "50"}
+        spec = {"schema": aquarium.SCHEMA_PREPARE, "aquarium_config": str(aquarium_path),
+                "market_id": "direct-1", "epoch_id": "host-bound", "cycles": 1,
+                "output_dir": str(self.root / "host-bound"),
+                "simulator_work_dir": str(self.root / "child-host-bound"),
+                "simulator_template": str(self.sim),
+                "ticket_pairs": [{"seller": ticket(key(601), key(602), 1),
+                                  "buyer": ticket(key(603), key(604), 2)}]}
+        path = self.root / "host-bound.json"; path.write_text(json.dumps(spec))
+        self.assertEqual(aquarium.prepare_spec(path)["bootstrap"], self.boot)
+
+    def test_preparation_refuses_a_stale_template_host_before_ticket_authoring(self):
+        aquarium_path = self.write(self.body())
+        stale = self.root / "stale-bootstrap"; stale.write_text("#!/bin/sh\nexit 99\n")
+        stale.chmod(stale.stat().st_mode | stat.S_IEXEC)
+        template = json.loads(self.sim.read_text()); template["bootstrap_bin"] = str(stale)
+        template_path = self.root / "stale-template.json"; template_path.write_text(json.dumps(template))
+        def ticket(maker, collateral, nonce):
+            return {"keypair_env": "DCLUTCH_TEST_TICKET_KEY", "maker": maker,
+                    "collateral_account": collateral, "lifecycle": "fok", "outcome": "1",
+                    "generation": "1", "nonce": str(nonce), "valid_from": "10", "valid_through": "100",
+                    "maximum_fill": "100", "limit_price": "1000000", "fee_basis_points": "50"}
+        spec = {"schema": aquarium.SCHEMA_PREPARE, "aquarium_config": str(aquarium_path),
+                "market_id": "direct-1", "epoch_id": "stale-host", "cycles": 1,
+                "output_dir": str(self.root / "stale-host"),
+                "simulator_work_dir": str(self.root / "child-stale-host"),
+                "simulator_template": str(template_path),
+                "ticket_pairs": [{"seller": ticket(key(611), key(612), 1),
+                                  "buyer": ticket(key(613), key(614), 2)}]}
+        path = self.root / "stale-host.json"; path.write_text(json.dumps(spec))
+        with self.assertRaisesRegex(aquarium.Refusal, "differs from the checked release host binary"):
+            aquarium.prepare_spec(path)
+        self.assertFalse((self.root / "stale-host").exists())
 
     def test_refuses_a_credential_stored_in_an_epoch_config(self):
         sim = json.loads(self.sim.read_text())
@@ -178,6 +246,43 @@ print('fake simulator completed')
         self.assertEqual(public["run"]["lamports_spent_observed"], 3)
         journal = self.root / "work" / "epochs" / "direct-1" / "opening" / "journal.json"
         self.assertEqual(json.loads(journal.read_text())["phase"], "finalized")
+
+    def test_checked_snapshot_reauthenticates_status_before_static_copy(self):
+        config_path = self.write(self.body())
+        parsed = aquarium.validate_config(config_path)
+        aquarium.Aquarium(parsed, execute=False).publish("stopped")
+        destination = self.root / "site" / "aquarium-status-v1.json"
+        self.assertEqual(aquarium.cmd_publish_status(types.SimpleNamespace(
+            config=str(config_path), destination=str(destination))), 0)
+        published = json.loads(destination.read_text())
+        self.assertEqual(published["cohort"]["checked_at"], "2026-09-07T00:00:00Z")
+        self.assertNotIn(str(self.root), destination.read_text())
+        source = json.loads(parsed["public_status"].read_text())
+        source["cohort"]["deployment_commit"] = "b" * 40
+        parsed["public_status"].write_text(json.dumps(source))
+        with self.assertRaisesRegex(aquarium.Refusal, "does not match the checked config"):
+            aquarium.cmd_publish_status(types.SimpleNamespace(
+                config=str(config_path), destination=str(self.root / "other" / "aquarium-status-v1.json")))
+
+    def test_supervisor_requires_owned_run_id_to_stop_and_allows_explicit_resume(self):
+        config_path = self.write(self.body())
+        launched = types.SimpleNamespace(pid=4242)
+        with mock.patch.object(aquarium.subprocess, "Popen", return_value=launched) as popen:
+            self.assertEqual(aquarium.cmd_start(types.SimpleNamespace(config=str(config_path), execute=False)), 0)
+        record_path = aquarium.supervisor_path(self.root / "work")
+        record = json.loads(record_path.read_text())
+        argv = popen.call_args.args[0]
+        self.assertIn("--supervisor-run-id", argv)
+        self.assertIn(record["run_id"], argv)
+        with mock.patch.object(aquarium, "process_command", return_value="unrelated --supervisor-run-id other"):
+            with self.assertRaisesRegex(aquarium.Refusal, "no signal was sent"):
+                aquarium.cmd_stop(types.SimpleNamespace(config=str(config_path)))
+        self.assertEqual(json.loads(record_path.read_text())["phase"], "lost")
+        resumed = types.SimpleNamespace(pid=4343)
+        with mock.patch.object(aquarium, "process_command", return_value=None), \
+             mock.patch.object(aquarium.subprocess, "Popen", return_value=resumed):
+            self.assertEqual(aquarium.cmd_resume(types.SimpleNamespace(config=str(config_path), execute=False)), 0)
+        self.assertNotEqual(json.loads(record_path.read_text())["run_id"], record["run_id"])
 
     def test_epoch_preparation_authors_distinct_ticket_files_without_a_transaction(self):
         aquarium_path = self.write(self.body())

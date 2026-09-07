@@ -113,7 +113,7 @@ impl StructuredActivationSelectedClosureV1 {
     /// Enumerate the Registry records the activation route authenticates.
     ///
     /// There is deliberately no ProgramSet record here: the enclosing
-    /// `StructuredSelectedReleaseV1` owns the single seven-entry set and
+    /// `StructuredSelectedReleaseV1` owns the single eight-entry set and
     /// publishes this closure's records in selector order.
     pub fn publication_records(&self) -> Result<Vec<StructuredPublicationRecordV1<'_>>> {
         let mut records = Vec::with_capacity(1 + 7 * STRUCTURED_ACTIVATION_ACTIONS_V1.len());
@@ -274,8 +274,12 @@ mod tests {
         StructuredSelectedReleaseInputV1 {
             realm: id(18),
             release_set: id(15),
-            root_schema: id(42),
-            root_state_bytes: 8,
+            root_schema:
+                crate::structured_activation_bundle_v1::STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
+            root_state_bytes: u32::try_from(
+                crate::structured_activation_bundle_v1::STRUCTURED_CAPABILITY_ROOT_BYTES_V1,
+            )
+            .expect("root width"),
             representation_outcome_count: 3,
             item_state_bytes: 64,
             product_basis: basis,

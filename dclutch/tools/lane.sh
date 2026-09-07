@@ -456,7 +456,7 @@ lane_fmt_help() {
 usage: lane.sh fmt [--allow-root] <file.rs> [<file.rs> ...]
 
 Runs exactly:
-    rustup run 1.97.1 rustfmt --edition 2024 -- <file.rs> ...
+    rustup run 1.97.1 rustfmt --edition 2024 --config skip_children=true -- <file.rs> ...
 
 Never `cargo fmt -p <crate>` (reformats every file in the crate, including
 files another lane currently owns) and never a bare `rustfmt` (whatever
@@ -470,12 +470,15 @@ real statement changes sitting in the same diff of a file several lanes
 share.
 
 Refuses a bare crate/module root filename (lib.rs, main.rs, mod.rs) unless
---allow-root is given: rustfmt run on a root file follows every `mod`
-declaration that file contains and reformats each of those files too --
-silently reflowing far more than the one file you named (the mod-following
-hazard). This check is filename-based, not a parse of the file's `mod`
-statements; pass --allow-root deliberately when a root file really is what
-you mean to format.
+--allow-root is given. Even with that explicit flag, only named files are
+formatted: skip_children=true prevents rustfmt from following ordinary `mod`
+or #[path] declarations into another lane's files. A leaf filename can also
+contain such declarations, so filename guarding alone is insufficient.
+
+Name every child you intend to format as a separate argument. On 2026-09-07,
+several --allow-root calls repeatedly reformatted dozens of successor and
+Journey files; the wrapper now enforces its named-files promise directly.
+
 EOF
 }
 
@@ -523,7 +526,7 @@ lane_cmd_fmt() {
   command -v rustup >/dev/null 2>&1 ||
     lane_die "fmt: rustup not found -- this wrapper exists specifically to avoid a bare/unpinned rustfmt (see 'lane.sh fmt --help')" 1
 
-  rustup run 1.97.1 rustfmt --edition 2024 -- "${files[@]}"
+  rustup run 1.97.1 rustfmt --edition 2024 --config skip_children=true -- "${files[@]}"
 }
 
 # ---------------------------------------------------------------------------

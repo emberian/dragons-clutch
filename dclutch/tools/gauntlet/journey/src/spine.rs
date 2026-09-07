@@ -1314,7 +1314,15 @@ pub(crate) fn retire(
     // earlier terminal refusal: the driver named that earlier barrier, and a
     // maker close would merely add a second, unrelated refusal.
     if !completion.exists() && terminal_needs_maker_replay_close(&outcome) {
-        let upkeep_ready = found_upkeep_vault(rpc, context, spine, fee_payer, fee_payer_keypair);
+        let parameters_ready = found_protocol_parameters(
+            rpc,
+            context,
+            spine,
+            fee_payer,
+            fee_payer_keypair,
+        );
+        let upkeep_ready = parameters_ready
+            && found_upkeep_vault(rpc, context, spine, fee_payer, fee_payer_keypair);
         // ONE CLOSE PER MAKER. A Direct fill opens a maker replay on BOTH
         // sides -- the manifest names `/seller/maker` and `/buyer/maker` and
         // the root counts both -- and `require_closable` demands
@@ -1488,6 +1496,158 @@ fn terminal_needs_maker_replay_close(
     outcome: &std::result::Result<usize, (usize, String)>,
 ) -> bool {
     matches!(outcome, Err((_, error)) if error.contains("MakerRootCountInvariant"))
+}
+
+/// Found Custody's governed protocol parameters before planning a maker close.
+///
+/// `DirectCloseMaker` decodes this record while it derives its fee split. An
+/// Upkeep vault alone cannot stand in for it: its header has a different
+/// semantic owner and the close planner rightly refuses the vacant parameters
+/// PDA as `ProtocolParameters(InvalidHeader)`.
+fn found_protocol_parameters(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    fee_payer: Pubkey,
+    fee_payer_keypair: &Path,
+) -> bool {
+    let stage = "retirement: Custody ProtocolParameters are founded before Direct maker closure";
+    let report = context.work.join("parameters-found.json");
+    let custody = match read_json(context.plan)
+        .ok()
+        .and_then(|plan| {
+            plan.pointer("/custody/program_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .and_then(|text| text.parse::<Pubkey>().ok())
+    {
+        Some(custody) => custody,
+        None => {
+            spine.refused(
+                stage,
+                "the checked plan omitted Custody's program_id",
+                "`parameters-found` takes Custody's deployed program address from the checked \
+                 plan; no caller-provided substitute is accepted."
+                    .into(),
+            );
+            return false;
+        }
+    };
+    let document = if report.exists() {
+        match read_json(&report) {
+            Ok(document) => document,
+            Err(error) => {
+                spine.refused(
+                    stage,
+                    &error.to_string(),
+                    "The prior parameters producer report was unreadable, so the journey will \
+                     not rerun a Found route whose existing record it has not authenticated."
+                        .into(),
+                );
+                return false;
+            }
+        }
+    } else {
+        let arguments = vec![
+            "--rpc-url".to_owned(),
+            context.rpc_url.to_owned(),
+            "--custody".to_owned(),
+            custody.to_string(),
+            "--payer".to_owned(),
+            fee_payer.to_string(),
+            "--payer-keypair".to_owned(),
+            fee_payer_keypair.display().to_string(),
+            "--execute".to_owned(),
+        ];
+        match crate::economics_successor::run_value(
+            crate::economics_successor::RouteV1::Parameters,
+            crate::economics_successor::ClusterV1::OwnedLoopback,
+            arguments,
+        ) {
+            Ok(document) => {
+                let bytes = match serde_json::to_vec_pretty(&document) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        spine.refused(
+                            stage,
+                            &error.to_string(),
+                            "The finalized parameters producer report could not be encoded for \
+                             durable journey evidence."
+                                .into(),
+                        );
+                        return false;
+                    }
+                };
+                if let Err(error) = std::fs::write(&report, bytes) {
+                    spine.refused(
+                        stage,
+                        &error.to_string(),
+                        "The actual parameters Found finalized, but the journey could not \
+                         persist its producer report; it will not continue to a maker close \
+                         without that evidence."
+                            .into(),
+                    );
+                    return false;
+                }
+                document
+            }
+            Err(error) => {
+                spine.refused(
+                    stage,
+                    &error.to_string(),
+                    format!(
+                        "The shipped `parameters-found --execute` producer refused: {error}. \
+                         The maker close is not planned because its governed parameters \
+                         precondition has no authenticated producer evidence."
+                    ),
+                );
+                return false;
+            }
+        }
+    };
+    if !is_exact_parameters_found_report(&document, custody) {
+        spine.refused(
+            stage,
+            "the parameters producer report did not prove its canonical genesis poststate",
+            "The journey requires the Custody-owned parameters record, an inactive proposal, \
+             and zero Hoard movement before a Direct close can read its governed split."
+                .into(),
+        );
+        return false;
+    }
+    let label = "journey retirement: Custody ProtocolParameters Found";
+    let (landed, compute) = harvest_document(rpc, label, &document, &mut spine.transactions);
+    if landed != 1 {
+        spine.refused(
+            stage,
+            "the parameters producer report did not yield one finalized transaction",
+            "Parameters Found is one producer act; the maker close is not planned unless its \
+             exact signature re-reads from the chain."
+                .into(),
+        );
+        return false;
+    }
+    spine.executed(
+        stage,
+        landed,
+        compute,
+        "`parameters-found --execute` founded Custody's canonical governed parameters record. \
+         Direct maker close reads this exact record for its economic split; it is distinct from \
+         the Upkeep vault that receives any Donation remainder."
+            .into(),
+    );
+    spine.reports.insert("parameters-found".into(), document);
+    true
+}
+
+fn is_exact_parameters_found_report(document: &Value, custody: Pubkey) -> bool {
+    document.get("command").and_then(Value::as_str) == Some("parameters-found")
+        && document.get("custody").and_then(Value::as_str) == Some(custody.to_string().as_str())
+        && document.pointer("/poststate/recordOwner").and_then(Value::as_str)
+            == Some(custody.to_string().as_str())
+        && document.pointer("/poststate/pendingProposal") == Some(&Value::Bool(false))
+        && document.pointer("/poststate/hoardPrincipalMoved") == Some(&Value::from(0))
 }
 
 /// Found Custody's canonical Upkeep vault and receipt one nonzero Deposit.
@@ -1825,6 +1985,43 @@ mod tests {
             "Successor(InvalidUpkeepVault)".into(),
         ))));
         assert!(!terminal_needs_maker_replay_close(&Ok(6)));
+    }
+
+    #[test]
+    fn parameters_found_report_requires_custody_owned_genesis_poststate() {
+        let custody = Pubkey::new_unique();
+        let valid = serde_json::json!({
+            "command": "parameters-found",
+            "custody": custody.to_string(),
+            "poststate": {
+                "recordOwner": custody.to_string(),
+                "pendingProposal": false,
+                "hoardPrincipalMoved": 0,
+            },
+        });
+        assert!(is_exact_parameters_found_report(&valid, custody));
+
+        let proposal = serde_json::json!({
+            "command": "parameters-found",
+            "custody": custody.to_string(),
+            "poststate": {
+                "recordOwner": custody.to_string(),
+                "pendingProposal": true,
+                "hoardPrincipalMoved": 0,
+            },
+        });
+        assert!(!is_exact_parameters_found_report(&proposal, custody));
+
+        let foreign_owner = serde_json::json!({
+            "command": "parameters-found",
+            "custody": custody.to_string(),
+            "poststate": {
+                "recordOwner": Pubkey::new_unique().to_string(),
+                "pendingProposal": false,
+                "hoardPrincipalMoved": 0,
+            },
+        });
+        assert!(!is_exact_parameters_found_report(&foreign_owner, custody));
     }
 
     #[test]

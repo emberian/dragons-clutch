@@ -70,7 +70,7 @@ read `git diff` on your own paths right after either.
 
 ### `lane.sh fmt [--allow-root] <file.rs> [<file.rs> ...]`
 
-Runs exactly `rustup run 1.97.1 rustfmt --edition 2024 -- <file.rs> ...`.
+Runs exactly `rustup run 1.97.1 rustfmt --edition 2024 --config skip_children=true -- <file.rs> ...`.
 Never `cargo fmt -p <crate>` (reformats the whole crate) and never a bare
 `rustfmt` (whatever toolchain/edition happens to be ambient).
 
@@ -84,6 +84,9 @@ lanes share. The `--allow-root` guard is separate: rustfmt run on a crate or
 module root follows every `mod` declaration the file contains and reformats
 each of those files too — the "mod-following hazard," which silently
 reformats far more than the one file you named.
+The wrapper now sets `skip_children=true` even with `--allow-root`, so both
+ordinary modules and `#[path]` children stay byte-identical unless named as
+separate arguments. This also protects leaf files containing module declarations.
 
 ### `lane.sh board <text...>`
 

@@ -295,6 +295,7 @@ pub(crate) fn general_selected_payload_v1(
         selected_descriptor_hex: crate::plan::hex(&closure.selected_descriptor),
         config_hex: crate::plan::hex(&closure.config),
         publication_hex: crate::plan::hex(&closure.publication),
+        creation_principal_lamports: 0,
         records: closure
             .records
             .iter()
@@ -388,6 +389,7 @@ mod tests {
             config: &closure.config,
             activation_deadline_slot: u64::MAX,
             root_rent_minimum_lamports: 1_000_000,
+            creation_principal_lamports: 0,
         }
     }
 
