@@ -73,14 +73,16 @@ use solana_sdk_ids::{system_program, sysvar};
 use dclutch_claims::CallerRole;
 use dclutch_claims::frame_spec_v1::{ClaimsFrameRoleV1, ClaimsFrameSpecV1, SignedDeltaFrameSpecV3};
 use dclutch_claims::liability_basis_state_v2::{
-    LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+    LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketSeedsV2,
+    LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2, liability_basis_vector_width_v2,
 };
 use dclutch_claims::position_admission::{
     USER_POSITION_ADMISSION_CHILD_ACCOUNT_COUNT_V1, UserPositionAdmissionRequestV1,
 };
 use dclutch_claims::protocol_position_v2::{
-    ProtocolPositionActionV2, ProtocolPositionAdmissionSeedsV2, ProtocolPositionOwnerKindV2,
-    ProtocolPositionPresenceV2, ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
+    PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
+    ProtocolPositionAdmissionSeedsV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
+    ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
 use dclutch_claims::signed_delta_v3::{
     DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
@@ -1330,13 +1332,14 @@ fn plan_admit_window_v1(
     let rent = rent_sysvar(rpc)?;
     let position_account = optional_account(rpc, position)?;
     let admission_account = optional_account(rpc, admission)?;
-    let observed = |account: &Option<RpcAccount>| -> (u64, usize) {
-        account
-            .as_ref()
-            .map_or((0, 0), |value| (value.lamports, value.data.len()))
-    };
-    let (position_lamports, position_bytes) = observed(&position_account);
-    let (admission_lamports, admission_bytes) = observed(&admission_account);
+    let observed =
+        |account: &Option<RpcAccount>| account.as_ref().map_or(0, |value| value.lamports);
+    let rent_plan = plan_admit_rents_v1(
+        &rent,
+        coordinates.claim_count,
+        observed(&position_account),
+        observed(&admission_account),
+    )?;
 
     let claims_request = ProtocolPositionRequestV2 {
         action: ProtocolPositionActionV2::Admit,
@@ -1351,10 +1354,10 @@ fn plan_admit_window_v1(
         generation: coordinates.generation,
         expected_market_revision: coordinates.aggregate_revision,
         expected_position_revision: 0,
-        observed_position_lamports: position_lamports,
-        observed_admission_lamports: admission_lamports,
-        position_rent_principal: rent.minimum_balance(position_bytes),
-        admission_rent_principal: rent.minimum_balance(admission_bytes),
+        observed_position_lamports: rent_plan.position_lamports,
+        observed_admission_lamports: rent_plan.admission_lamports,
+        position_rent_principal: rent_plan.position_principal,
+        admission_rent_principal: rent_plan.admission_principal,
         capability_descriptor: [0; 32],
         capability_outcome: 0,
     }
@@ -1390,6 +1393,38 @@ fn plan_admit_window_v1(
         });
     }
     Ok(AdmitWindowV1 { metas, authority })
+}
+
+/// The two CPI-time rent facts for a Dealer Position and admission record.
+///
+/// The PDAs are zero-length before the CPI, but DealerFound pre-funds the
+/// canonical layouts before Claims allocates them. These must consequently be
+/// the exact post-admission widths and balances rather than the observed
+/// vacant widths and balances.
+struct AdmitRentPlanV1 {
+    position_principal: u64,
+    admission_principal: u64,
+    position_lamports: u64,
+    admission_lamports: u64,
+}
+
+fn plan_admit_rents_v1(
+    rent: &solana_sdk::rent::Rent,
+    claim_count: u32,
+    observed_position_lamports: u64,
+    observed_admission_lamports: u64,
+) -> Result<AdmitRentPlanV1> {
+    let position_bytes =
+        liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, claim_count)
+            .map_err(|error| Error::new(format!("Claims Position width: {error:?}")))?;
+    let position_principal = rent.minimum_balance(position_bytes);
+    let admission_principal = rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2);
+    Ok(AdmitRentPlanV1 {
+        position_principal,
+        admission_principal,
+        position_lamports: observed_position_lamports.max(position_principal),
+        admission_lamports: observed_admission_lamports.max(admission_principal),
+    })
 }
 
 impl CoordinatesV1 {
@@ -2749,6 +2784,42 @@ mod tests {
             usize::from(spec.account_count().expect("width")),
             FILL_CLAIMS_WINDOW_ACCOUNTS
         );
+    }
+
+    /// A vacant PDA has no bytes, but Claims allocates these two exact layouts
+    /// after DealerFound has paid their rent. Reusing the vacant lengths would
+    /// make the request fail `ProtocolPositionRequestV2::validate` before the
+    /// founding instruction can perform that prefund.
+    #[test]
+    fn vacant_dealer_admission_uses_post_allocation_rent_principals() {
+        let rent = solana_sdk::rent::Rent::default();
+        let claim_count = 2;
+        let vacant = plan_admit_rents_v1(&rent, claim_count, 0, 0).expect("canonical widths");
+        let position_bytes =
+            liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, claim_count)
+                .expect("position width");
+        assert_eq!(
+            vacant.position_principal,
+            rent.minimum_balance(position_bytes)
+        );
+        assert_eq!(
+            vacant.admission_principal,
+            rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+        );
+        assert_eq!(vacant.position_lamports, vacant.position_principal);
+        assert_eq!(vacant.admission_lamports, vacant.admission_principal);
+        assert_ne!(vacant.position_principal, rent.minimum_balance(0));
+        assert_ne!(vacant.admission_principal, rent.minimum_balance(0));
+
+        let donated = plan_admit_rents_v1(
+            &rent,
+            claim_count,
+            vacant.position_principal + 1,
+            vacant.admission_principal + 1,
+        )
+        .expect("donated canonical widths");
+        assert_eq!(donated.position_lamports, vacant.position_principal + 1);
+        assert_eq!(donated.admission_lamports, vacant.admission_principal + 1);
     }
 
     #[test]
