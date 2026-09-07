@@ -324,6 +324,7 @@ pub fn route_terminal_payout_frame_v1(
     let aggregate_account = round_one.required(aggregate_key, "Claims aggregate")?;
     let custody_context =
         observed_custody_context_v1(aggregate_account, coordinates.claims, request.market)?;
+    refuse_the_failure_escrow_as_owner_v1(aggregate_account, coordinates.claims, request)?;
     let input = routed_input_v1(
         coordinates,
         routing,
@@ -604,6 +605,53 @@ fn escrow_native_v1(escrow: &ObservedAccount, claim_count: u32) -> Result<Vec<u6
                 .map_err(|error| Error::new(format!("failure escrow balance {index}: {error:?}")))
         })
         .collect()
+}
+
+/// Refuse, by name, a payout whose owner is the Market's own failure escrow.
+///
+/// The escrow's owner is a program-derived address with no key, so no party
+/// can sign coordinate 0 for it, and its column is owed nothing under every
+/// certificate (`runtime_v3`'s `FailureCoordinateNotPayable`; the failure arm
+/// pays "one collateral atom to every ordinary claim, nothing to the failure
+/// coordinate"). A producer that built this input would be instructing an act
+/// no party can perform; the act that discharges the escrow is the closure
+/// burn inside the retirement's `prepare` packet (decision 0025 shape A,
+/// `7d45d6ba3`), and the census records the column as the residue rather than
+/// as an unpaid holder. So the refund walk's "payout for the escrow" is a
+/// NO-OP the ledger writes down, never a transaction, and this is where the
+/// producer says so.
+///
+/// Derived, never listed: the escrow is `failure_escrow_v1` off the aggregate
+/// the caller already observed in round one, the same author the
+/// `BeginRetiring` preflight and the checkpointed retirement builder read.
+pub fn refuse_the_failure_escrow_as_owner_v1(
+    aggregate_account: &ObservedAccount,
+    claims: Pubkey,
+    request: &TerminalPayoutRequestV1,
+) -> Result<()> {
+    let aggregate = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
+    // A width that seats no escrow has no escrow to refuse for; the ordinary
+    // owner check downstream still governs.
+    let Ok(escrow) = crate::failure_escrow_v1::failure_escrow_v1(
+        claims,
+        aggregate.logical_market,
+        aggregate_account.key,
+        aggregate.claim_count,
+    ) else {
+        return Ok(());
+    };
+    if request.owner == escrow.owner {
+        return Err(Error::new(format!(
+            "the payout owner {} is this Market's own failure escrow, a program-derived address \
+             with no key: no party can sign for it and its failure column is owed nothing under \
+             every certificate. There is no payout to produce -- the column is discharged by \
+             the closure burn inside the retirement's prepare packet, and a census records it \
+             as the seated residue at index {}",
+            request.owner, escrow.failure_selector
+        )));
+    }
+    Ok(())
 }
 
 /// The Market's Custody namespace, read from the account that owns it.
@@ -1209,6 +1257,73 @@ mod tests {
                 .to_string()
                 .contains("live Core terminal receipt differs")
         );
+    }
+
+    /// The escrow's payout is a NO-OP a census records, never a transaction.
+    ///
+    /// This producer is the last place that can say so before a key is opened,
+    /// and it must say it about ONE address: an owner check that refused every
+    /// owner would pass this test's refusal half and be useless, so the
+    /// ordinary holder the fixture names is asserted through first. The escrow
+    /// is DERIVED from the aggregate the caller already observed, never listed,
+    /// so a Market whose founding seated the column at a different address
+    /// cannot be refused by an address somebody remembered.
+    #[test]
+    fn the_derived_failure_escrow_is_refused_as_a_payout_owner_by_name() {
+        let input = fixture();
+        let coordinates = coordinates_from(&input);
+        let market = pubkey(&input.market).unwrap();
+        let custody_context = hex32(&input.custody_context).unwrap();
+        let aggregate = aggregate_account(&coordinates, market, custody_context, 100);
+        let escrow = crate::failure_escrow_v1::failure_escrow_v1(
+            coordinates.claims,
+            market.to_bytes(),
+            aggregate.key,
+            3,
+        )
+        .expect("a three-outcome aggregate seats an escrow");
+        assert_eq!(
+            escrow.failure_selector, 2,
+            "the failure cell is the last coordinate of the width, never a literal"
+        );
+
+        // THE POSITIVE CONTROL. An ordinary holder is produced for.
+        refuse_the_failure_escrow_as_owner_v1(
+            &aggregate,
+            coordinates.claims,
+            &request_from(&input),
+        )
+        .expect("an ordinary owner is not this Market's escrow");
+
+        let mut hostile = request_from(&input);
+        hostile.owner = escrow.owner;
+        let error = refuse_the_failure_escrow_as_owner_v1(&aggregate, coordinates.claims, &hostile)
+            .expect_err("the Market's own failure escrow must refuse");
+        let sentence = error.to_string();
+        for fragment in [
+            "is this Market's own failure escrow",
+            "a program-derived address with no key",
+            "the closure burn inside the retirement's prepare packet",
+            "seated residue at index 2",
+        ] {
+            assert!(
+                sentence.contains(fragment),
+                "the refusal must name its conjunct; missing {fragment:?} in: {sentence}"
+            );
+        }
+
+        // The escrow of ANOTHER Market is an ordinary stranger to this one.
+        let elsewhere = crate::failure_escrow_v1::failure_escrow_v1(
+            coordinates.claims,
+            Pubkey::new_unique().to_bytes(),
+            aggregate.key,
+            3,
+        )
+        .expect("another Market's escrow derives");
+        let mut foreign = request_from(&input);
+        foreign.owner = elsewhere.owner;
+        refuse_the_failure_escrow_as_owner_v1(&aggregate, coordinates.claims, &foreign)
+            .expect("another Market's escrow is not this Market's");
     }
 
     fn context_fixture(slot: u64) -> (SelectedInputV1, FinalizedSnapshotV1) {

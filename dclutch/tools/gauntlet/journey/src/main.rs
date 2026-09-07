@@ -51,6 +51,9 @@ use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 //
 // `cluster` is the one owner of the origin rail that keeps this runner on
 // 127.0.0.1, so a change that weakened that rail must break THIS build too.
+#[path = "../../../local-validator/bootstrap/successor/src/admit_terminal.rs"]
+#[allow(dead_code)]
+mod admit_terminal;
 #[path = "../../../local-validator/bootstrap/successor/src/aggregate_retirement_exterior.rs"]
 #[allow(dead_code)]
 mod aggregate_retirement_exterior;
@@ -84,6 +87,9 @@ mod collateral_release;
 #[path = "../../../local-validator/bootstrap/successor/src/core_bump_projection.rs"]
 #[allow(dead_code)]
 mod core_bump_projection;
+#[path = "../../../local-validator/bootstrap/successor/src/deadline_failure.rs"]
+#[allow(dead_code)]
+mod deadline_failure;
 #[path = "../../../local-validator/bootstrap/successor/src/direct_capability_activation.rs"]
 #[allow(dead_code)]
 mod direct_capability_activation;
@@ -271,6 +277,7 @@ mod wallet_terminal_payout_exterior;
 mod substrate;
 
 // ------------------------------------------------------------- this campaign
+mod failure;
 mod journey;
 mod ledger;
 mod provider;
@@ -406,7 +413,21 @@ fn run_journey(arguments: Vec<String>) -> Result<()> {
             .parse::<u32>()
             .map_err(|_| Error::new("--holders must be a decimal count"))?,
     };
+    // WHICH END OF THE WINDOW. The honest walk answers the market through the
+    // real Pyth receiver; the failure walk lets the window close unobserved,
+    // exhausts the ladder, commits the failure selector and REFUNDS. Everything
+    // after the terminal is the same stages reading a different certificate.
+    let walk = match values.get("--walk").map(String::as_str) {
+        None | Some("honest") => journey::JourneyWalkV1::Honest,
+        Some("failure") => journey::JourneyWalkV1::Failure,
+        Some(other) => {
+            return Err(Error::new(format!(
+                "--walk must be honest or failure: {other}"
+            )));
+        }
+    };
     let request = journey::JourneyRequestV1 {
+        walk,
         transcript: absolute(required("--transcript")?, "--transcript")?,
         work: absolute(required("--work")?, "--work")?,
         rpc_port: required("--rpc-port")?

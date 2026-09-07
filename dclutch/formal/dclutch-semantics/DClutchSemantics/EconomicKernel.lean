@@ -1570,6 +1570,36 @@ theorem an_admitted_failure_walk_leaves_no_remainder
   exact failure_refund_leaves_no_remainder ordinaryCount supply (ordinaryCount * unit)
     positive holdings exact partition
 
+/-- The refund arm as a chain measures it (the failure-arm runbook rows and
+the real-ELF walk): one stranger holding `stranger` ordinary claims and the
+founder holding every other ordinary claim draw the whole Hoard BETWEEN them,
+each exactly what they hold at one collateral `unit` per claim.  The founder
+is paid for the claims they hold and for nothing else -- the failure column the
+escrow seats appears nowhere in either draw -- which is decision 0025's "a
+founder with no ordinary claims receives zero on an outage" and "a stranger
+holding half the ordinary claims receives half the escrow" as one identity. -/
+theorem a_stranger_and_the_founder_draw_the_hoard_between_them
+    (ordinaryCount unit supply stranger : Nat) (positive : 0 < ordinaryCount)
+    (held : stranger ≤ ordinaryCount * supply) :
+    failureRefund ordinaryCount stranger (ordinaryCount * unit)
+        + failureRefund ordinaryCount (ordinaryCount * supply - stranger) (ordinaryCount * unit)
+      = supply * (ordinaryCount * unit) := by
+  rw [an_admitted_founding_makes_every_refund_exact ordinaryCount unit stranger positive,
+    an_admitted_founding_makes_every_refund_exact ordinaryCount unit
+      (ordinaryCount * supply - stranger) positive,
+    ← Nat.add_mul, Nat.add_sub_cancel' held, Nat.mul_comm ordinaryCount supply, Nat.mul_assoc]
+
+/-- The founder's refund is a function of the founder's ordinary holdings and
+of nothing else: two founders holding the same ordinary claims are refunded the
+same, whatever else the market seated.  Stated as the trivial identity it is,
+so that "paid nothing for having chosen the oracle" is a theorem a reader can
+point at rather than a sentence. -/
+theorem the_founder_is_refunded_for_holdings_and_for_nothing_else
+    (ordinaryCount unit founderHoldings : Nat) (positive : 0 < ordinaryCount) :
+    failureRefund ordinaryCount founderHoldings (ordinaryCount * unit)
+      = founderHoldings * unit :=
+  an_admitted_founding_makes_every_refund_exact ordinaryCount unit founderHoldings positive
+
 /-- The failure terminal's payout vector: one collateral `unit` at every
 ordinary column and nothing at the failure column.  The escrow's own claims pay
 nobody, which is what lets the ordinary columns draw the whole Hoard exactly

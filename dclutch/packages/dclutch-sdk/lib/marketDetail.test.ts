@@ -10,12 +10,15 @@ import {
   CORE_STATE_TERMINAL_RECEIPT_OFFSET,
   CORE_STATE_VERSION_OFFSET,
   CORE_VERSION,
+  LIABILITY_BASIS_STATE_VERSION_V2,
   REALM_SCHEMA_RELEASE_ID_V1,
 } from './generated/coreFound';
 import {
   capabilityProvenanceV1,
   failureEscrowOwnerV1,
+  failureEscrowV1,
   inspectMarketDetailV1,
+  refundsOnFailureFromEscrowV1,
   liabilityProvenanceV1,
   marketPhaseMeaningV1,
   outageDisclosureV1,
@@ -324,6 +327,90 @@ describe('outageDisclosureV1', () => {
     expect(failureEscrowOwnerV1(witnessClaims, witnessMarket, 3)).toBe(witnessEscrow);
     // A different selector is a different escrow, so the seed really carries it.
     expect(failureEscrowOwnerV1(witnessClaims, witnessMarket, 2)).not.toBe(witnessEscrow);
+  });
+
+  // Cohort-16.1's REAL devnet coordinates, the same pin the host's
+  // `crates/dclutch-operator/src/failure_escrow_v1.rs` carries: a live 160-byte
+  // DCLLBP02 Position holding [0, 0, 0, 166666667]. A derivation that drifts
+  // stops reproducing a real address rather than stopping agreeing with itself.
+  const cohort161 = Object.freeze({
+    claims: '8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk',
+    market: '3xoSXBVsAXENB1RPq4sqS8euCksT1qsnnz83eWQPEtgY',
+    aggregate: 'CBzv1hhtToxpCaExaA7QqES4bMu5UjxiAiBW9bMUrCdg',
+    owner: 'Hq6sF5pv3i8CBkH46dsyN9fnzJi1jooS2gj6USCQmke3',
+    position: '7FQCfc4RrrsATEe969eNVYoLjDukmBVKMAxM1yg7AzcQ',
+    admission: '4WUZ2qZKz7nkgGnnNejP8cLNHhjKCFCpHwNVDikE3T9b',
+  });
+
+  it('derives the whole escrow the host derives, pinned to a chain', () => {
+    const escrow = failureEscrowV1(cohort161.claims, cohort161.market, cohort161.aggregate, 4);
+    expect(escrow.failureSelector).toBe(3);
+    expect(escrow.owner).toBe(cohort161.owner);
+    expect(escrow.position).toBe(cohort161.position);
+    expect(escrow.admission).toBe(cohort161.admission);
+    // A width that seats no escrow is not an escrow this function invents.
+    expect(() => failureEscrowV1(cohort161.claims, cohort161.market, cohort161.aggregate, 1)).toThrow();
+  });
+
+  /**
+   * A DCLLBP02 Position at the generated offsets: magic 0, state version u16
+   * @8, claim_count u32 @12, aggregate @24, owner @56, balances after the
+   * 128-byte header.
+   *
+   * The version is the GENERATED constant. Written as a literal it would be a
+   * second author for the number `header()` refuses on, and left out entirely
+   * it reads 0 -- which is how this fixture spent its whole life being decoded
+   * as `state version 0 is unsupported`, caught, and returned as the absent
+   * seating, so every `false` this suite asserted was true for the wrong
+   * reason and the two `true`s could never have passed.
+   */
+  function positionBytes(aggregate: string, owner: string, balances: ReadonlyArray<bigint>): Uint8Array {
+    const bytes = new Uint8Array(128 + balances.length * 8);
+    bytes.set(new TextEncoder().encode('DCLLBP02'), 0);
+    const view = new DataView(bytes.buffer);
+    view.setUint16(8, LIABILITY_BASIS_STATE_VERSION_V2, true);
+    view.setUint32(12, balances.length, true);
+    view.setBigUint64(16, 1n, true);
+    bytes.set(new (require('@solana/web3.js').PublicKey)(aggregate).toBytes(), 24);
+    bytes.set(new (require('@solana/web3.js').PublicKey)(owner).toBytes(), 56);
+    balances.forEach((atoms, index) => view.setBigUint64(128 + index * 8, atoms, true));
+    return bytes;
+  }
+
+  it('reads refundsOnFailure off the escrow Position, and only off a seated one', () => {
+    const escrow = failureEscrowV1(cohort161.claims, cohort161.market, cohort161.aggregate, 4);
+    const supply = ['166666667', '166666667', '166666667', '166666667'];
+    const seated = refundsOnFailureFromEscrowV1({
+      escrow,
+      claimsProgramId: cohort161.claims,
+      outcomeCount: 4,
+      supplyAtoms: supply,
+      account: { owner: cohort161.claims, executable: false, data: positionBytes(cohort161.aggregate, cohort161.owner, [0n, 0n, 0n, 166666667n]) },
+    });
+    expect(seated).toEqual({ present: true, seated: true, heldAtoms: '166666667', refundsOnFailure: true });
+    // An empty address is a categorical founding: nothing seated, no refund.
+    expect(refundsOnFailureFromEscrowV1({ escrow, claimsProgramId: cohort161.claims, outcomeCount: 4, supplyAtoms: supply, account: null }))
+      .toEqual({ present: false, seated: false, heldAtoms: '0', refundsOnFailure: false });
+    // A tradeable claim beside the residue is not the seated shape.
+    const beside = refundsOnFailureFromEscrowV1({
+      escrow,
+      claimsProgramId: cohort161.claims,
+      outcomeCount: 4,
+      supplyAtoms: supply,
+      account: { owner: cohort161.claims, executable: false, data: positionBytes(cohort161.aggregate, cohort161.owner, [0n, 5n, 0n, 166666667n]) },
+    });
+    expect(beside.present).toBe(true);
+    expect(beside.seated).toBe(false);
+    expect(beside.refundsOnFailure).toBe(false);
+    // Nothing issued on the failure outcome seats nothing.
+    const nothing = refundsOnFailureFromEscrowV1({
+      escrow,
+      claimsProgramId: cohort161.claims,
+      outcomeCount: 4,
+      supplyAtoms: ['1', '1', '1', '0'],
+      account: { owner: cohort161.claims, executable: false, data: positionBytes(cohort161.aggregate, cohort161.owner, [0n, 0n, 0n, 0n]) },
+    });
+    expect(nothing.seated).toBe(false);
   });
 
   it('says HOLDERS ARE REFUNDED off the payout scale, not off the seating', () => {

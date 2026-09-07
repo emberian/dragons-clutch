@@ -107,6 +107,18 @@ mod upgrade;
 #[path = "../../../local-validator/bootstrap/successor/src/recovery_crank.rs"]
 #[allow(dead_code)]
 mod recovery_crank;
+// The failure arm past the exhaustion: the deadline walk that commits the
+// failure selector, the family-neutral terminal admission, and the payout
+// driver the refund rides. Linked for the same reason the crank is.
+#[path = "../../../local-validator/bootstrap/successor/src/deadline_failure.rs"]
+#[allow(dead_code)]
+mod deadline_failure;
+#[path = "../../../local-validator/bootstrap/successor/src/admit_terminal.rs"]
+#[allow(dead_code)]
+mod admit_terminal;
+#[path = "../../../local-validator/bootstrap/successor/src/wallet_terminal_payout_exterior.rs"]
+#[allow(dead_code)]
+mod wallet_terminal_payout_exterior;
 #[path = "../../../local-validator/bootstrap/successor/src/sponsored_schedule.rs"]
 #[allow(dead_code)]
 mod sponsored_schedule;

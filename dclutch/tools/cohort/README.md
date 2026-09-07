@@ -939,6 +939,94 @@ a rung the market has not reached refuses `SourceLadder` rather than being
 joined against the wrong feed — so nothing about this row is a second opinion
 about which leg is live.
 
+### exhaust
+
+The other end of the window. `relay-capture` and `relay-settle` answer a
+market; this row commits the Product's own failure selector because nobody
+did, and a market takes exactly one of the two. It is
+`devnet-commit-deadline-failure-v1`, over the 22-account frame the relay
+contract declares, and the route has existed since the relayed vertical --
+what had never run on a chain is its second arm: a market whose funded ladder
+walked every leg it sold and stands `Exhausted`. Decision 0027 says how it
+gets there ("only when the ladder is exhausted, and only after the last
+window's maximum age, does the failure selector resolve") and decision 0025
+says what it pays ("into the escrow, not into the founder's Position").
+
+The driver decides nothing. Which arm is the Source's own phase; the selector
+is `ResultDomainV2::failure_selector` off the finalized result domain; the
+bounty is the manifest's quote. What it does is refuse BY NAME, before a key
+opens, the two cases that are not its to finish: a market standing on
+`Primary` that bought a ladder (the crank owns the legs;
+`exhaust_after_primary_deadline` refuses a recovery-bearing material so the
+walk cannot skip a paid-for rung), and a market standing on a rung. So this
+row runs AFTER `crank-ladder`'s exhausting leg, never instead of it, and its
+evidence names the arm it took.
+
+### admit-failure
+
+`admit-terminal` for the failure arm, and deliberately not a different act:
+`devnet-admit-terminal-v1` calls `build_resolution_admit_terminal_v3`, the one
+builder the sponsored transport, the flagship command and the journey tier all
+call, and reads the certificate KIND off the Source's phase. A `FailureCommitted`
+Source names the `ResolutionFailure` seat; a Source still `Exhausted` has no
+certificate to admit and is refused by name. The phase byte moves 1 to 2 and
+`terminal_winner` is the failure cell.
+
+### refund-stranger
+
+The half of decision 0025 that had never run on a chain. Under the failure
+selector a refunding basis pays one atom to every ordinary claim and nothing
+to the failure coordinate, so the stranger who bought an ordinary outcome is
+paid exactly their balance at that index -- pro rata from the Hoard, whichever
+outcome would have been right. The same `wallet-terminal-payout-input` and
+`devnet-wallet-terminal-payout-v1` as `payout`, with the certificate's kind
+selecting the failure arm inside the evaluator (`TerminalScenarioV3::Failure`,
+mirrored by the host from the same authenticated record).
+
+Two hostiles by name. An input edited to one atom more than the balance is
+refused at the producer (`payout quantity must be within 1..=balance`) and, sent
+by hand, on the wire as `ClaimsSbfError::Overdraw` (`0x5012`) -- split from
+`Economic` so a holder overstating their share is not sent hunting a payout
+vector that is exact. And an `--owner` naming the market's own failure escrow is
+refused at the producer, because the escrow is a program-derived address with
+no key and its column is owed nothing under every certificate.
+
+### refund-founder
+
+The founder draws only their holdings, and the row says so one index at a
+time: `$ARG1` walks every ORDINARY index, the founder's payout at each equals
+their Position balance there, and over all of them the founder's payouts plus
+the stranger's sum to exactly the Hoard the founding put up. The founder was
+issued no failure claim (founding v6 seats it in the escrow), so an input for
+the failure index refuses at the producer with a balance of `1..=0`. That is
+cohort-13's measured table negated on a chain: nobody is paid for having chosen
+the oracle.
+
+The recipient is a token account the FOUNDER KEY owns
+(`{market.refund.founder_recipient}`), not the founding's `collateral_wallet`:
+the payout debits the Position `founding-founder` owns, and the builder refuses
+a recipient owned by anybody else (JOURNEY-8's `Custody` conjunct, named).
+
+### refund-census
+
+The journey's ledger at the refund boundary, with the Hoard's fall DECLARED as
+the sum of the refund evidences' own `payout` fields rather than a number typed
+here: L2 compares the chain against the drivers' arithmetic. L3 joins the escrow
+under `failure-escrow` and it still holds the whole failure column -- the
+refunds did not touch it, and it is exactly the residue `retire`'s prepare
+packet burns. L4 is inapplicable by name on a Terminal Market. An INAPPLICABLE is
+not a pass.
+
+### escrow-zero
+
+Nothing runs, on purpose, and the census writes down what that means. The
+escrow's payout would be a transaction no party can sign, so it is a NO-OP the
+ledger records: the derived escrow Position still holds exactly the aggregate's
+supply at the failure coordinate and zero everywhere else, every ordinary supply
+is zero, the Hoard is zero, and every law holds against a declared delta of
+zero. A column that moved between `refund-census` and here would mean somebody
+signed for a keyless PDA. `retire` then burns it (decision 0025 shape A).
+
 ### route-witness
 
 Harvest the signatures out of this cohort's evidence document, ask devnet what

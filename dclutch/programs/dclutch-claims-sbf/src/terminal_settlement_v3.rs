@@ -423,13 +423,31 @@ fn authenticate_and_prepare(
         &mut aggregate_scratch,
         &mut packet,
     )
-    .map_err(|_| ClaimsSbfError::Economic)?;
+    .map_err(terminal_planning_refusal)?;
     Ok(Box::new(PreparedTerminalSettlementV3 {
         packet,
         payout,
         market,
         terminal_digest,
     }))
+}
+
+/// Name the terminal planner's refusal on the wire.
+///
+/// `map_err(|_| Coarse)` converts a located defect into a search. The planner
+/// distinguishes a caller asking for claims they do not hold from every
+/// conservation defect, so the wire carries that one distinction: an
+/// overstated quantity is `Overdraw`, and everything else stays the
+/// conservation code it always was.
+const fn terminal_planning_refusal(
+    error: dclutch_claims::product_basis_terminal_v3::Error,
+) -> ClaimsSbfError {
+    match error {
+        dclutch_claims::product_basis_terminal_v3::Error::InsufficientBalance => {
+            ClaimsSbfError::Overdraw
+        }
+        _ => ClaimsSbfError::Economic,
+    }
 }
 
 #[inline(never)]

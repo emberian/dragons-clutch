@@ -107,6 +107,20 @@ const fn command(expected: ExpectedClusterV1) -> &'static str {
 /// a frame that drifts fails here rather than after a cluster round trip.
 const FRAME_ACCOUNTS_V1: usize = 18;
 
+/// The sentence this driver refuses a too-early crank with, for a tier that
+/// has to tell "not yet due" from every other refusal.
+///
+/// The two seconds it names are the whole of what a caller has to know, and
+/// the ladder and journey tiers MATCH this text rather than parse it. It is
+/// declared here, once, so a driver that stopped saying it would stop the
+/// tiers' markers matching at the same commit instead of one tier quietly
+/// treating some other refusal as its hostile satisfied.
+pub(crate) const TOO_EARLY_MARKER_V1: &str = "a crank is admissible STRICTLY after the deadline";
+
+/// `wait_until_unix_seconds_v1`'s own sentence for a target it will not sleep
+/// to (`sponsored_schedule.rs`), matched by the same tiers for the same reason.
+pub(crate) const WAIT_CEILING_MARKER_V1: &str = "past the stated ceiling of";
+
 pub(crate) fn devnet_usage() -> &'static str {
     "dclutch-local-successor-bootstrap devnet-advance-recovery-v1 --rpc-url URL --i-mean-devnet DEVNET_GENESIS --plan ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY --terminal-sequence U64 --worker PUBKEY --output ABSOLUTE_JSON [--wait --max-wait-seconds I64] [--execute --worker-keypair ABSOLUTE_JSON]\n\
      \nThe public arm of the same permissionless crank. It consumes an executed devnet campaign report, refuses every non-devnet origin, and writes its evidence under the devnet label."

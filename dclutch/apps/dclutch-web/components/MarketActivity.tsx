@@ -13,7 +13,7 @@ import {
   type MarketActivityV1,
   type MarketFillV1,
 } from '@dclutch/sdk/marketActivity';
-import { failureEscrowOwnerV1, outageDisclosureV1 } from '@dclutch/sdk/marketDetail';
+import { failureEscrowOwnerV1, failureEscrowV1, outageDisclosureV1, refundsOnFailureFromEscrowV1, type EscrowSeatingV1 } from '@dclutch/sdk/marketDetail';
 import { shortAddressV1 } from '@dclutch/sdk/marketDiscovery';
 import { checkedReleaseSetIdsV1 } from '@dclutch/sdk/publicCutStaging';
 import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@dclutch/sdk/quantity';
@@ -53,7 +53,7 @@ import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
-  | Readonly<{ kind: 'ready'; message: string; activity: MarketActivityV1; spine: Extract<DirectTradeSpineV1, Readonly<{ status: 'inspected' }>> }>;
+  | Readonly<{ kind: 'ready'; message: string; activity: MarketActivityV1; spine: Extract<DirectTradeSpineV1, Readonly<{ status: 'inspected' }>>; seating: EscrowSeatingV1 | null }>;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'the activity read refused without a usable reason';
@@ -163,11 +163,34 @@ export default function MarketActivity({ address, endpoint, programs, denominati
         priceScale: spine.priceScale,
         feeBasisPoints: spine.feeBasisPoints,
       });
-      setState({ kind: 'ready', message: activity.reason, activity, spine });
+      // WHETHER AN OUTAGE REFUNDS, READ OFF WHO HOLDS WHAT. A refunding
+      // founding (v6) seats the whole failure column in the escrow Position
+      // the MARKET derives; a categorical founding leaves that address empty.
+      // So the escrow's PRESENCE settles the disclosure, and it is the same
+      // derivation the host's `failure_escrow_v1` reads before it lets a
+      // market retire. One extra account read, and a failed read leaves the
+      // disclosure honest about being unread rather than taking the page down.
+      let seating: EscrowSeatingV1 | null = null;
+      if (supplyAtoms !== null && spine.outcomeCount >= 2) {
+        try {
+          const escrow = failureEscrowV1(claims, address, spine.aggregateAddress, spine.outcomeCount);
+          const observed = await client.accountInfo(escrow.position);
+          seating = refundsOnFailureFromEscrowV1({
+            escrow,
+            claimsProgramId: claims,
+            outcomeCount: spine.outcomeCount,
+            supplyAtoms,
+            account: observed.account,
+          });
+        } catch {
+          seating = null;
+        }
+      }
+      setState({ kind: 'ready', message: activity.reason, activity, spine, seating });
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
-  }, [address, endpoint, core, registry, trading, claims]);
+  }, [address, endpoint, core, registry, trading, claims, supplyAtoms]);
 
   // Read on mount and again whenever the market or the cluster changes. The
   // microtask defers it past the page's own first read, which shares this
@@ -214,6 +237,7 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
 }>) {
   const activity = state.kind === 'ready' ? state.activity : null;
   const spine = state.kind === 'ready' ? state.spine : null;
+  const seating = state.kind === 'ready' ? state.seating : null;
   const fills = activity?.fills ?? [];
   const positions = activity?.positions ?? [];
   // The one thing a buyer cannot take a founder's word for, and it is not
@@ -226,6 +250,16 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
       supplyAtoms,
       positions,
       failureEscrowOwner: failureEscrowOwner ?? null,
+      // SEATED IS EVIDENCE; UNSEATED IS NOT. Only a refunding founding (v6)
+      // writes the whole nonzero failure column into the Position the MARKET
+      // derives, so a seated escrow settles the disclosure. The converse is
+      // false and the SDK says so at `outageDisclosureV1`: a refunding record
+      // whose column still sits with the founder -- cohort-16.1's own shape --
+      // is unseated, and passing `false` here would print "the whole
+      // collateral is paid to whoever holds the failure claim" about a market
+      // that refunds every ordinary holder instead. Unseated is UNREAD, and
+      // the disclosure has a sentence for that.
+      refundsOnFailure: seating?.seated === true ? true : null,
     });
 
   return <section className="trade-v3-card" aria-label="What has happened on this market">

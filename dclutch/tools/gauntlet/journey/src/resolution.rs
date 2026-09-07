@@ -45,7 +45,8 @@ use dclutch_resolution_core_v3_operator::{
 };
 use dclutch_source::resolution::{
     FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2,
+    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
 };
 use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -116,8 +117,20 @@ pub(crate) struct ResolutionAddressesV1 {
     pub(crate) funding_entry_indices: [u16; 3],
     pub(crate) rent_beneficiary: Pubkey,
     /// The terminal certificate this Market's first terminal sequence would
-    /// occupy. Watched from the start so the ledger can see it stay vacant.
+    /// occupy on the HONEST walk: the `ResolutionSuccess` seat. Watched from
+    /// the start so the ledger can see it stay vacant.
     pub(crate) certificate: Pubkey,
+    /// The same sequence's `ResolutionFailure` seat, which the failure walk
+    /// mints into instead. The kind is a PDA seed, so the two are different
+    /// addresses for one Source at one sequence and neither can overwrite the
+    /// other; both are watched so whichever walk runs, the ledger saw the
+    /// other seat stay vacant.
+    pub(crate) failure_certificate: Pubkey,
+    /// The ladder's two receipt seats: the advance onto the funded rung at
+    /// sequence two and the exhaustion at sequence three. Vacant on the honest
+    /// walk, both minted on the failure walk.
+    pub(crate) recovery_advanced_certificate: Pubkey,
+    pub(crate) recovery_exhausted_certificate: Pubkey,
     /// The Source closure receipt the retirement stage prepays and CloseFund
     /// writes. One sequence past the terminal certificate's.
     pub(crate) closure_receipt: Pubkey,
@@ -297,16 +310,27 @@ pub(crate) fn derive(
     let funding =
         Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0;
 
-    let certificate = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-            source_state.as_ref(),
-            &[1],
-            &1_u64.to_le_bytes(),
-        ],
-        &resolution_program,
-    )
-    .0;
+    // THE KIND IS A SEED, READ FROM THE CODEC. This used to spell the success
+    // seat as a literal `&[1]`; the failure walk needs the other kinds at the
+    // same sequence, and four literals would be four authors of where a
+    // certificate lives.
+    let certificate_at = |kind: ResolutionCertificateKindV2, sequence: u64| -> Pubkey {
+        Pubkey::find_program_address(
+            &[
+                RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                source_state.as_ref(),
+                &[kind.kind_seed()],
+                &sequence.to_le_bytes(),
+            ],
+            &resolution_program,
+        )
+        .0
+    };
+    let certificate = certificate_at(ResolutionCertificateKindV2::ResolutionSuccess, 1);
+    let failure_certificate = certificate_at(ResolutionCertificateKindV2::ResolutionFailure, 1);
+    let recovery_advanced_certificate =
+        certificate_at(ResolutionCertificateKindV2::RecoveryAdvanced, 2);
+    let recovery_exhausted_certificate = certificate_at(ResolutionCertificateKindV2::Exhausted, 3);
 
     let activation_receipt = Pubkey::find_program_address(
         &[
@@ -355,6 +379,9 @@ pub(crate) fn derive(
         funding_entry_indices,
         rent_beneficiary: Pubkey::new_from_array(market.rent_beneficiary.to_bytes()),
         certificate,
+        failure_certificate,
+        recovery_advanced_certificate,
+        recovery_exhausted_certificate,
         closure_receipt,
     })
 }
@@ -365,6 +392,18 @@ pub(crate) fn watch(ledger: &mut ConservationLedgerV1, addresses: &ResolutionAdd
         ("resolution_source_state", addresses.source_state),
         ("resolution_funding_subset_ledger", addresses.funding),
         ("resolution_terminal_certificate", addresses.certificate),
+        (
+            "resolution_failure_certificate",
+            addresses.failure_certificate,
+        ),
+        (
+            "resolution_recovery_advanced_certificate",
+            addresses.recovery_advanced_certificate,
+        ),
+        (
+            "resolution_recovery_exhausted_certificate",
+            addresses.recovery_exhausted_certificate,
+        ),
         ("resolution_closure_receipt", addresses.closure_receipt),
         ("resolution_rent_beneficiary", addresses.rent_beneficiary),
     ] {
@@ -727,8 +766,28 @@ pub(crate) fn admit_terminal(
         ));
     }
 
-    let report = build_resolution_admit_terminal_v3(&admit_terminal_snapshot(rpc, addresses)?)
-        .map_err(|error| Error::new(format!("chain-derived AdmitTerminal: {error:?}")))?;
+    // THE SEAT IS THE SOURCE'S. A Resolved Source names the success seat and a
+    // FailureCommitted one the failure seat; reading the kind anywhere else
+    // would let this stage ask Core to accept a success certificate for a
+    // walked market. Anything else is a Source with no certificate to admit.
+    let source = SourceResolutionStateV2::decode(
+        &rpc.required_account(addresses.source_state, "Source resolution state")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("Source resolution state: {error:?}")))?;
+    let certificate = match source.phase() {
+        SourceResolutionPhaseV1::Resolved => addresses.certificate,
+        SourceResolutionPhaseV1::FailureCommitted => addresses.failure_certificate,
+        other => {
+            return Err(Error::new(format!(
+                "the Source stands at {other:?}: Core admits a terminal only from Resolved or \
+                 FailureCommitted, and the Market is (Open, Consumed) with nothing to admit"
+            )));
+        }
+    };
+    let report =
+        build_resolution_admit_terminal_v3(&admit_terminal_snapshot(rpc, addresses, certificate)?)
+            .map_err(|error| Error::new(format!("chain-derived AdmitTerminal: {error:?}")))?;
     validate_resolution_admit_terminal_report_v3(&report)
         .map_err(|error| Error::new(format!("AdmitTerminal report: {error:?}")))?;
     if report.instruction.program_id != addresses.core_program {
@@ -773,12 +832,12 @@ pub(crate) fn admit_terminal(
     let receipt = after
         .terminal_receipt
         .ok_or_else(|| Error::new("a Terminal Market carries no terminal receipt"))?;
-    if receipt.to_bytes() != addresses.certificate.to_bytes() {
+    if receipt.to_bytes() != certificate.to_bytes() {
         return Err(Error::new(format!(
-            "the Market's terminal receipt names {} and this campaign prepaid the certificate at \
+            "the Market's terminal receipt names {} and this campaign admitted the certificate at \
              {}",
             Pubkey::new_from_array(receipt.to_bytes()),
-            addresses.certificate
+            certificate
         )));
     }
     if after.terminal_winner != report.selector {
@@ -806,7 +865,7 @@ pub(crate) fn admit_terminal(
                  operator READ from the Source's own decision against a Product-authenticated \
                  outcome count of {}, not a number this campaign chose. Readiness stayed {:?}.",
                 report.terminal_sequence,
-                addresses.certificate,
+                certificate,
                 report.selector,
                 report.outcome_count,
                 after.readiness
@@ -838,6 +897,7 @@ pub(crate) const ADMIT_TERMINAL_STAGE_V1: &str =
 fn admit_terminal_snapshot(
     rpc: &mut Rpc,
     addresses: &ResolutionAddressesV1,
+    certificate: Pubkey,
 ) -> Result<ResolutionAdmitTerminalSnapshotV3> {
     let (observation, present) = rpc.finalized_observed_accounts(
         &[
@@ -852,7 +912,7 @@ fn admit_terminal_snapshot(
             addresses.capability_manifest.raw,
             addresses.source_state,
             addresses.funding,
-            addresses.certificate,
+            certificate,
             sysvar::rent::ID,
             addresses.product.raw,
             addresses.result_domain.raw,

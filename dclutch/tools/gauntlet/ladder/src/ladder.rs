@@ -84,7 +84,7 @@ const WORKER_FUNDING_LAMPORTS: u64 = 2_000_000_000;
 /// that stopped saying this would make the marker stop matching, and the tier
 /// would report the refusal as a STOP -- loudly, in its transcript -- rather
 /// than quietly treat some other refusal as a hostile satisfied.
-const CRANK_TOO_EARLY_MARKER_V1: &str = "a crank is admissible STRICTLY after the deadline";
+const CRANK_TOO_EARLY_MARKER_V1: &str = crate::recovery_crank::TOO_EARLY_MARKER_V1;
 
 /// `wait_until_unix_seconds_v1`'s own sentence for a target it will not sleep
 /// to (`sponsored_schedule.rs`).
@@ -99,7 +99,7 @@ const CRANK_TOO_EARLY_MARKER_V1: &str = "a crank is admissible STRICTLY after th
 /// conjunct held, and the distance is in the driver's sentence. Only a wait
 /// that refuses for THIS reason is recorded; any other error still stops the
 /// walk.
-const CRANK_CEILING_MARKER_V1: &str = "past the stated ceiling of";
+const CRANK_CEILING_MARKER_V1: &str = crate::recovery_crank::WAIT_CEILING_MARKER_V1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -312,6 +312,7 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
     let advanced = advance.landed;
     cranks.push(advance.report);
 
+    let mut refund: Option<serde_json::Value> = None;
     if advanced && request.walk == WalkV1::Exhaust {
         let exhaust = drive_crank(
             &checked,
@@ -324,7 +325,24 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
             EXHAUST_SEQUENCE_V1,
             "exhaust the last funded rung",
         )?;
+        let exhausted = exhaust.landed;
         cranks.push(exhaust.report);
+        // THE EXHAUSTED PATH CONTINUES TO THE REFUND. An `Exhausted` receipt
+        // is not an end; decisions 0027 and 0025 say what follows it, and
+        // until this tier drove it nothing on any chain had.
+        if exhausted {
+            refund = Some(continue_to_the_refund(
+                &checked,
+                &request,
+                &mut rpc,
+                &mut stages,
+                &mut transactions,
+                &accounts,
+                market,
+                &worker,
+                &worker_keypair_path,
+            )?);
+        }
     }
 
     if request.walk == WalkV1::Capture {
@@ -359,6 +377,7 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
                              published record read against the cluster's own clock, and a leg \
                              that was not yet due is REPORTED as not yet due.",
         "cranks": cranks,
+        "refund": refund,
         "stages": stages,
     });
     std::fs::write(
@@ -380,6 +399,373 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
     )?;
     Ok(transcript)
 }
+
+/// How many times the payout driver may be re-entered for one refund.
+///
+/// The driver advances one durable action per invocation -- four routing-table
+/// acts and then the payout -- so this bounds ACTS, not retries.
+const REFUND_RESUMPTION_CEILING_V1: usize = 24;
+
+/// SPL Token `InitializeAccount3`: the owner rides inline, so no Rent sysvar
+/// and no second transaction. The same discriminant the journey's collateral
+/// distribution and the successor's Direct token setup spell; a shared
+/// constant is owed to the convergence (BUILD_FAILURE-ARM.md, seams).
+const INITIALIZE_ACCOUNT_3: u8 = 18;
+
+/// From `Exhausted` to the refund: the deadline walk, Core's admission, and the
+/// founder drawing only their holdings -- through the shipped drivers, in order.
+///
+/// The ladder's market has no stranger (it never fills), so the founder holds
+/// every ordinary claim and the escrow the whole failure column. Under the
+/// failure selector every ordinary claim is one atom on the refunding scale,
+/// so the founder's refunds over the ordinary indices sum to exactly the Hoard,
+/// and the escrow's payout is a NO-OP the transcript records: the producer
+/// refuses an owner that is the Market's own escrow by name, because nothing
+/// can sign for a keyless PDA and its column is discharged by the closure burn.
+#[allow(clippy::too_many_arguments)]
+fn continue_to_the_refund(
+    checked: &substrate::CheckedSubstrateV1,
+    request: &LadderRequestV1,
+    rpc: &mut Rpc,
+    stages: &mut Vec<StageV1>,
+    transactions: &mut Vec<TransactionEvidence>,
+    accounts: &std::collections::BTreeMap<String, crate::model::AccountEvidence>,
+    market: Pubkey,
+    worker: &Keypair,
+    worker_keypair: &Path,
+) -> Result<serde_json::Value> {
+    use dclutch_custody::token_svm::{ACCOUNT_BYTES, TOKEN_2022_PROGRAM_ID, TokenAccount};
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    use solana_system_interface::instruction::create_account;
+
+    let evidence_path = request.work.join("founding-evidence.json");
+    let base = |sequence: u64| -> Vec<String> {
+        vec![
+            "--rpc-url".to_owned(),
+            checked.rpc_url.clone(),
+            "--plan".to_owned(),
+            checked.plan_path.display().to_string(),
+            "--evidence".to_owned(),
+            evidence_path.display().to_string(),
+            "--market".to_owned(),
+            market.to_string(),
+            "--terminal-sequence".to_owned(),
+            sequence.to_string(),
+        ]
+    };
+
+    // ------------------------------------------ 1. the failure selector
+    let mut walk = base(FAILURE_SEQUENCE_V1);
+    walk.extend([
+        "--worker".to_owned(),
+        worker.pubkey().to_string(),
+        "--output".to_owned(),
+        request.work.join("deadline-failure.json").display().to_string(),
+        "--wait".to_owned(),
+        "--max-wait-seconds".to_owned(),
+        request.max_wait_seconds.to_string(),
+        "--execute".to_owned(),
+        "--worker-keypair".to_owned(),
+        worker_keypair.display().to_string(),
+    ]);
+    let walked = crate::deadline_failure::run_v1(walk, ExpectedClusterV1::OwnedLoopback)?;
+    let walk_evidence = walked
+        .landed
+        .ok_or_else(|| Error::new("an executed deadline walk reported no landed transaction"))?;
+    let work_paid = walked.work_paid.unwrap_or(0);
+    stages.push(StageV1::new(
+        "the failure selector is committed",
+        "executed",
+        format!(
+            "The shipped commit-deadline-failure driver took the {} arm from the Source's own \
+             phase ({:?}), built the 22-account frame from relay_frame_roles_v1, and committed \
+             the Product's failure cell {} of {} into the ResolutionFailure seat {} -- paying the \
+             same stranger who cranked the ladder {work_paid} lamports out of the market's own \
+             prepaid compartment. Signature {}, {} compute units. A ladder that exhausts is not \
+             an end: this is the terminal decision 0027 says it exhausts INTO.",
+            walked.arm,
+            walked.phase_before,
+            walked.failure_selector,
+            walked.outcome_count,
+            walked.certificate,
+            walk_evidence.signature,
+            walk_evidence
+                .compute_units_consumed
+                .map_or_else(|| "unreported".to_owned(), |value| value.to_string())
+        ),
+    ));
+    let walk_signature = walk_evidence.signature.clone();
+    transactions.push(walk_evidence);
+
+    // ----------------------------------------------- 2. Core admits it
+    let mut admit = base(FAILURE_SEQUENCE_V1);
+    admit.extend([
+        "--fee-payer".to_owned(),
+        worker.pubkey().to_string(),
+        "--output".to_owned(),
+        request.work.join("admit-terminal.json").display().to_string(),
+        "--execute".to_owned(),
+        "--fee-payer-keypair".to_owned(),
+        worker_keypair.display().to_string(),
+    ]);
+    let admitted = crate::admit_terminal::run_v1(admit, ExpectedClusterV1::OwnedLoopback)?;
+    let admit_units: u64 = admitted
+        .transactions
+        .iter()
+        .filter_map(|evidence| evidence.compute_units_consumed)
+        .sum();
+    stages.push(StageV1::new(
+        "Core admits the failure certificate",
+        "executed",
+        format!(
+            "The shipped admit-terminal driver read the certificate kind off the Source's \
+             FailureCommitted phase ({:?}), built the frame through \
+             build_resolution_admit_terminal_v3 -- the one author every terminal admission \
+             calls -- rode it over one frozen routing table, and the Market's phase byte moved \
+             1 to 2 with terminal winner {} of {}. {} transactions, {admit_units} compute units.",
+            admitted.kind,
+            admitted.selector,
+            admitted.outcome_count,
+            admitted.transactions.len()
+        ),
+    ));
+    transactions.extend(admitted.transactions.iter().cloned());
+
+    // ------------------------- 3. an account the FOUNDER KEY owns to be paid into
+    //
+    // The founding's collateral wallet answers to the campaign payer, not to
+    // the founder role whose Position the payout debits, and the builder
+    // refuses a recipient owned by anybody but the stated owner (JOURNEY-8).
+    let founder_keypair_path = checked
+        .report
+        .campaign_founding_keypairs
+        .get("founding-founder")
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::new("the prepare report names no key file for `founding-founder`"))?;
+    let founder = substrate::load_keypair(&founder_keypair_path)?;
+    let label_address = |label: &str| -> Result<Pubkey> {
+        pubkey(
+            &accounts
+                .get(label)
+                .ok_or_else(|| Error::new(format!("the founding's evidence names no `{label}`")))?
+                .address,
+        )
+    };
+    let mint = label_address("collateral_mint")?;
+    let hoard = label_address("founding_hoard_vault_open")?;
+    let aggregate = label_address("claims_aggregate")?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+    let recipient = Keypair::new();
+    let mut initialize = Vec::with_capacity(33);
+    initialize.push(INITIALIZE_ACCOUNT_3);
+    initialize.extend_from_slice(founder.pubkey().as_ref());
+    let account_rent = rpc.minimum_balance(ACCOUNT_BYTES)?;
+    let opened = rpc.send_with_signers(
+        "ladder: open the founder's refund account",
+        &[
+            create_account(
+                &worker.pubkey(),
+                &recipient.pubkey(),
+                account_rent,
+                ACCOUNT_BYTES as u64,
+                &token_program,
+            ),
+            Instruction {
+                program_id: token_program,
+                accounts: vec![
+                    AccountMeta::new(recipient.pubkey(), false),
+                    AccountMeta::new_readonly(mint, false),
+                ],
+                data: initialize,
+            },
+        ],
+        worker,
+        &[&recipient],
+    )?;
+    transactions.push(opened);
+    let hoard_amount = |rpc: &mut Rpc| -> Result<u64> {
+        let account = rpc.required_account(hoard, "Hoard vault")?;
+        Ok(TokenAccount::parse(&account.data)
+            .map_err(|error| Error::new(format!("Hoard vault: {error:?}")))?
+            .amount)
+    };
+    let hoard_before = hoard_amount(rpc)?;
+
+    // --------------------------- 4. the founder draws only their holdings
+    let ordinary_count = admitted
+        .outcome_count
+        .checked_sub(1)
+        .ok_or_else(|| Error::new("a Product with no outcomes"))?;
+    let mut refunds = Vec::new();
+    let mut paid_total: u64 = 0;
+    for claim_index in 0..ordinary_count {
+        let input = crate::terminal_lifecycle::produce_wallet_terminal_input_owned_loopback_v1(vec![
+            "--rpc-url".to_owned(),
+            checked.rpc_url.clone(),
+            "--plan".to_owned(),
+            checked.plan_path.display().to_string(),
+            "--evidence".to_owned(),
+            evidence_path.display().to_string(),
+            "--market".to_owned(),
+            market.to_string(),
+            "--owner".to_owned(),
+            founder.pubkey().to_string(),
+            "--recipient".to_owned(),
+            recipient.pubkey().to_string(),
+            "--claim-index".to_owned(),
+            claim_index.to_string(),
+        ])?;
+        let input_path = request.work.join(format!("refund-{claim_index}-input.json"));
+        std::fs::write(&input_path, serde_json::to_vec_pretty(&input)?)?;
+        let journal_dir = request.work.join(format!("refund-{claim_index}-journal"));
+        std::fs::create_dir_all(&journal_dir)?;
+        let evidence = request.work.join(format!("refund-{claim_index}-evidence.json"));
+        let arguments = vec![
+            "--rpc-url".to_owned(),
+            checked.rpc_url.clone(),
+            "--input".to_owned(),
+            input_path.display().to_string(),
+            "--fee-payer".to_owned(),
+            worker.pubkey().to_string(),
+            "--fee-payer-keypair".to_owned(),
+            worker_keypair.display().to_string(),
+            "--owner-keypair".to_owned(),
+            founder_keypair_path.display().to_string(),
+            "--journal-dir".to_owned(),
+            journal_dir.display().to_string(),
+            "--evidence".to_owned(),
+            evidence.display().to_string(),
+            "--execute".to_owned(),
+        ];
+        // ONE DURABLE ACTION PER INVOCATION, re-entered until the evidence
+        // exists: that is the driver's crash-safety contract, not a loop.
+        let mut passes = 0_usize;
+        while !evidence.exists() {
+            passes += 1;
+            if passes > REFUND_RESUMPTION_CEILING_V1 {
+                return Err(Error::new(format!(
+                    "refund at claim index {claim_index}: the payout driver was re-entered \
+                     {REFUND_RESUMPTION_CEILING_V1} times without writing its evidence"
+                )));
+            }
+            crate::wallet_terminal_payout_exterior::run(arguments.clone())?;
+        }
+        let document: serde_json::Value = serde_json::from_slice(&std::fs::read(&evidence)?)?;
+        let payout = document
+            .get("payout")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| Error::new("the payout evidence declared no `payout` amount"))?;
+        paid_total = paid_total.saturating_add(payout);
+        refunds.push(serde_json::json!({
+            "claimIndex": claim_index,
+            "payout": payout,
+            "passes": passes,
+            "evidence": evidence.display().to_string(),
+        }));
+        stages.push(StageV1::new(
+            &format!("the founder is refunded at ordinary index {claim_index}"),
+            "executed",
+            format!(
+                "wallet-terminal-payout-input then the shipped payout driver ({passes} \
+                 invocations, one durable stage each) under the ResolutionFailure certificate: \
+                 the evaluator took the refunding failure arm and paid {payout} atoms -- the \
+                 founder's own balance at this index, one atom per ordinary claim, and nothing \
+                 for having chosen the oracle. The recipient is an account the founder key \
+                 owns, opened by this tier."
+            ),
+        ));
+    }
+    let hoard_after = hoard_amount(rpc)?;
+
+    // ----------------------- 5. the escrow's payout is a no-op, recorded
+    let claims = pubkey(&checked.plan.claims.program_id)?;
+    let escrow = dclutch_operator::failure_escrow_v1::failure_escrow_v1(
+        claims,
+        market.to_bytes(),
+        aggregate,
+        admitted.outcome_count,
+    )
+    .map_err(|error| Error::new(format!("failure escrow: {error}")))?;
+    let escrow_refusal = crate::terminal_lifecycle::produce_wallet_terminal_input_owned_loopback_v1(vec![
+        "--rpc-url".to_owned(),
+        checked.rpc_url.clone(),
+        "--plan".to_owned(),
+        checked.plan_path.display().to_string(),
+        "--evidence".to_owned(),
+        evidence_path.display().to_string(),
+        "--market".to_owned(),
+        market.to_string(),
+        "--owner".to_owned(),
+        escrow.owner.to_string(),
+        "--recipient".to_owned(),
+        recipient.pubkey().to_string(),
+        "--claim-index".to_owned(),
+        escrow.failure_selector.to_string(),
+    ]);
+    let escrow_outcome = match escrow_refusal {
+        Err(error) if error.to_string().contains("own failure escrow") => {
+            ("recorded-no-op", error.to_string())
+        }
+        Err(error) => {
+            return Err(Error::new(format!(
+                "the producer refused the escrow's payout for a reason other than the escrow \
+                 being keyless: {error}"
+            )));
+        }
+        Ok(_) => {
+            return Err(Error::new(
+                "the producer BUILT a payout input for the Market's own failure escrow; nothing \
+                 can sign for it and the column is the closure burn's to discharge",
+            ));
+        }
+    };
+    stages.push(StageV1::new(
+        "the escrow's payout is a no-op the census records",
+        escrow_outcome.0,
+        format!(
+            "No transaction. The escrow {} is owned by {}, a program-derived address with no \
+             key, and wallet-terminal-payout-input refused an --owner naming it before a key \
+             opened: {}. Its column at index {} is the seated residue decision 0025 shape A \
+             burns inside the retirement's prepare packet.",
+            escrow.position, escrow.owner, escrow_outcome.1, escrow.failure_selector
+        ),
+    ));
+
+    Ok(serde_json::json!({
+        "failureWalk": {
+            "arm": walked.arm,
+            "certificate": walked.certificate.to_string(),
+            "failureSelector": walked.failure_selector,
+            "outcomeCount": walked.outcome_count,
+            "workPaid": work_paid,
+            "signature": walk_signature,
+            "frameAccounts": walked.frame_accounts,
+        },
+        "admission": {
+            "certificateKind": format!("{:?}", admitted.kind),
+            "selector": admitted.selector,
+            "transactions": admitted.transactions.len(),
+            "routingTableRentLamports": admitted.table_rent_lamports,
+        },
+        "founder": founder.pubkey().to_string(),
+        "founderRecipient": recipient.pubkey().to_string(),
+        "refunds": refunds,
+        "paidTotal": paid_total,
+        "hoardBefore": hoard_before,
+        "hoardAfter": hoard_after,
+        "hoardDrained": hoard_before.saturating_sub(hoard_after) == paid_total && hoard_after == 0,
+        "escrow": {
+            "owner": escrow.owner.to_string(),
+            "position": escrow.position.to_string(),
+            "failureSelector": escrow.failure_selector,
+            "payout": escrow_outcome.0,
+        },
+    }))
+}
+
+/// The terminal certificate sequence the failure walk writes, and the one the
+/// admission and every refund then read.
+const FAILURE_SEQUENCE_V1: u64 = 1;
 
 /// One crank of the ladder, driven through the SHIPPED command.
 struct CrankRunV1 {

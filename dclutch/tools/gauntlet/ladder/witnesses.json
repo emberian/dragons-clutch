@@ -36,6 +36,27 @@
       "query": "[.transactions[] | select(.error != null) | select((.label | test(\"refuse\"; \"i\")) | not)] | length | tostring",
       "expect": "0",
       "provenance": "The successor campaign this tier drives submits deliberate expected-failure transactions -- 'Found37 refuses a substituted Market coordinate and rolls the transaction back' is one -- and every one of them SAYS SO in its own label, which is the campaign's own convention and not this tier's. So a finalized transaction carrying a structured InstructionError whose label does not say it refuses is an UNPLANNED refusal, and this counts them. It is not a claim that nothing refused; it is a claim that nothing refused by surprise."
+    },
+    {
+      "id": "the-failure-selector-was-committed",
+      "kind": "plan-jq",
+      "query": ".refund.failureWalk.arm // \"not-driven\"",
+      "expect": "ladder-exhausted",
+      "provenance": "Decision 0027: 'only when the ladder is exhausted, and only after the last window's maximum age, does the failure selector resolve'. The shipped commit-deadline-failure driver takes the arm off the Source's own phase (dclutch_operator::deadline_failure_v1::deadline_failure_decision_v1) and writes it into its evidence; `ladder-exhausted` is the arm a walked ladder selects, `primary-deadline` the arm a market with no ladder selects, and a market standing on a rung is refused by name before a key opens. The transcript copies the driver's word rather than restating it. On the capture walk the transcript's `refund` object is null and this witness reads its default, so it is red there ON PURPOSE: it asserts the exhaust walk's continuation and nothing about the capture walk."
+    },
+    {
+      "id": "the-founder-drew-the-hoard-and-nothing-else",
+      "kind": "plan-jq",
+      "query": "if .refund.hoardDrained == true then \"drained\" else \"not-drained\" end",
+      "expect": "drained",
+      "provenance": "Decision 0025 section 5: 'a founder with no ordinary claims receives zero on an outage' and the refunding arm pays one atom to every ordinary claim. The ladder's market never fills, so the founder holds every ordinary claim and the escrow the whole failure column; the tier reads the Hoard before the first refund and after the last, and `hoardDrained` is true only when the sum of the payout drivers' own `payout` fields equals the Hoard's fall AND the Hoard reads zero -- the founder drew exactly their holdings and the escrow's column was worth nothing to anybody (EconomicKernel.lean: a_stranger_and_the_founder_draw_the_hoard_between_them). On the capture walk the transcript's `refund` object is null and this witness reads its default, so it is red there ON PURPOSE: it asserts the exhaust walk's continuation and nothing about the capture walk."
+    },
+    {
+      "id": "the-escrow-payout-was-a-recorded-no-op",
+      "kind": "plan-jq",
+      "query": ".refund.escrow.payout // \"absent\"",
+      "expect": "recorded-no-op",
+      "provenance": "The escrow's owner is the ClaimsCapability PDA at (market, failure selector): a program-derived address with no key, so no party can sign coordinate 0 of a terminal settlement for it, and its column is owed nothing under every certificate (runtime_v3 FailureCoordinateNotPayable; EconomicKernel.lean the_failure_column_is_owed_nothing_under_every_certificate). The tier asks wallet-terminal-payout-input for that owner and records the producer's refusal by name -- 'is this Market's own failure escrow' -- as the payout that never was; the column is the residue decision 0025 shape A burns inside the retirement's prepare packet. On the capture walk the transcript's `refund` object is null and this witness reads its default, so it is red there ON PURPOSE: it asserts the exhaust walk's continuation and nothing about the capture walk."
     }
   ]
 }

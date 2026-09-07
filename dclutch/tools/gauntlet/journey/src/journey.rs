@@ -12,7 +12,7 @@ use serde_json::Value;
 use solana_sdk::signature::Signer;
 
 use crate::{
-    Error, Result,
+    Error, Result, failure,
     ledger::{ClassClaimV1, ConservationLedgerV1, LamportClaimV1, ObservationV1},
     provider, resolution, spine,
     stages::{self, MarketAddressesV1, StageReportV1},
@@ -96,6 +96,8 @@ pub(crate) struct MarketPhaseV1 {
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct JourneyTranscriptV1 {
     pub(crate) schema: String,
+    /// `honest` or `failure`: which end of the window this run walked.
+    pub(crate) walk: String,
     pub(crate) holder_count: u32,
     /// Whether the producer derived its signing keys deterministically. Without
     /// it the bump-search noise makes two runs' compute numbers incomparable,
@@ -149,7 +151,33 @@ pub(crate) struct JourneyTranscriptV1 {
 /// a market this campaign could not found. Since 2026-09-06 it brings the
 /// substrate up itself, exactly as `tools/gauntlet/ladder/` does, and compiles
 /// the Market against the deployment it is standing on.
+/// Which end of the window the campaign walks.
+///
+/// The honest walk answers the market through the real Pyth receiver. The
+/// failure walk lets the window close unobserved, cranks the ladder to
+/// `Exhausted`, commits the Product's own failure selector, and then runs the
+/// SAME terminal admission, redemption and retirement stages -- which read a
+/// `ResolutionFailure` certificate and refund every ordinary holder pro rata
+/// from the Hoard, pay the founder only their holdings, and burn the escrow's
+/// column at closure (decisions 0025 and 0027). One campaign, two walks, one
+/// set of stages after the terminal: the refund is not a second protocol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JourneyWalkV1 {
+    Honest,
+    Failure,
+}
+
+impl JourneyWalkV1 {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Honest => "honest",
+            Self::Failure => "failure",
+        }
+    }
+}
+
 pub(crate) struct JourneyRequestV1 {
+    pub(crate) walk: JourneyWalkV1,
     pub(crate) transcript: PathBuf,
     pub(crate) work: PathBuf,
     pub(crate) rpc_port: u16,
@@ -187,6 +215,7 @@ struct JourneySessionV1 {
 /// refused. `execute` owns it; the body only ever borrows it.
 #[derive(Default)]
 struct JourneyProgressV1 {
+    walk: String,
     holder_count: u32,
     claim_unit_atoms: u64,
     evidence: String,
@@ -335,6 +364,7 @@ impl JourneyProgressV1 {
     fn into_transcript(self) -> JourneyTranscriptV1 {
         JourneyTranscriptV1 {
             schema: TRANSCRIPT_SCHEMA_V1.into(),
+            walk: self.walk,
             holder_count: self.holder_count,
             deterministic_keypairs: true,
             evidence: self.evidence,
@@ -426,6 +456,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
     validate_new_path(&request.transcript, "--transcript")?;
     std::fs::create_dir_all(&request.work)?;
     let mut progress = JourneyProgressV1::new(request.holder_count);
+    progress.walk = request.walk.label().to_owned();
     let outcome = run(&request, &mut progress);
     let transcript = progress.into_transcript();
     write_json(&request.transcript, &transcript)?;
@@ -617,10 +648,27 @@ fn campaign(
     // the record the resolution stage needs and in nothing else. The rung
     // string goes through the SHIPPED `--recovery-rungs` parser rather than a
     // second one, the way the ladder tier does it.
-    let rungs = crate::local_mutable::parse_recovery_rungs_v1(DEFAULT_RECOVERY_RUNGS_V1)?;
-    let shape = crate::market::LocalMarketShapeV1 {
-        recovery: Some(rungs),
-        ..crate::market::LocalMarketShapeV1::default()
+    let shape = match request.walk {
+        JourneyWalkV1::Honest => crate::market::LocalMarketShapeV1 {
+            recovery: Some(crate::local_mutable::parse_recovery_rungs_v1(
+                DEFAULT_RECOVERY_RUNGS_V1,
+            )?),
+            ..crate::market::LocalMarketShapeV1::default()
+        },
+        // THE FAILURE WALK'S SHAPE. The same one rung, and a shelf life short
+        // enough that the primary leg's deadline -- the captured publication
+        // instant plus `max_age` -- is behind the chain clock before the market
+        // is Open. That is the lab stating a fact about its frozen fixture, and
+        // the honest alternative to warping the validator's clock; what it
+        // cannot do is answer a rung, which is exactly why it is this walk's
+        // shape. See `failure.rs`.
+        JourneyWalkV1::Failure => crate::market::LocalMarketShapeV1 {
+            recovery: Some(crate::local_mutable::parse_recovery_rungs_v1(
+                failure::DEFAULT_FAILURE_RECOVERY_RUNGS_V1,
+            )?),
+            terminal_max_age_seconds: Some(failure::FAILURE_WALK_MAX_AGE_SECONDS_V1),
+            ..crate::market::LocalMarketShapeV1::default()
+        },
     };
     let market_input =
         crate::market::demo_market_input_shaped(registry, direct.compiler(), &shape)?;
@@ -1022,7 +1070,14 @@ fn campaign(
     // is worth more written down beside a complete ledger than thrown as an
     // error that discards the rest of the journey -- so the stage is recorded
     // either way and the run fails at the end, after the transcript exists.
-    progress.entering(provider::PYTH_TRANSPORT_STAGE_V1);
+    // WHICH END OF THE WINDOW. One label per walk, because the stage is a
+    // different fact -- answered, or walked to the failure selector -- and a
+    // ledger boundary and a census binding may not have two owners.
+    let resolution_stage_label = match request.walk {
+        JourneyWalkV1::Honest => provider::PYTH_TRANSPORT_STAGE_V1,
+        JourneyWalkV1::Failure => failure::FAILURE_WALK_STAGE_V1,
+    };
+    progress.entering(resolution_stage_label);
     // WHERE A REFUSING FRAME IS KEPT. A run tears its validator down, so a wall
     // met here is unaskable afterwards unless the frame and the accounts it
     // named are on disk. The captures live beside the transcript.
@@ -1036,8 +1091,71 @@ fn campaign(
     // Pyth submit. The counters are read off the evidence rather than off the
     // return value, which is the only reading a refusal cannot zero.
     let before_provider = session.transactions.len();
-    let (provider_report, provider_lamports, provider_classes) =
-        match provider::resolve_through_pyth(
+    // WHAT THE WALK COMMITTED, HELD UNTIL CORE HAS SPOKEN. The deadline driver
+    // reads the Product's failure cell off the FINALIZED result domain before
+    // it signs; Core writes `terminal_winner` after the admission accepts the
+    // certificate. Those are two authorities reading one number through two
+    // paths, and a campaign that did not compare them would redeem every holder
+    // against whichever one happened to be right.
+    let mut failure_walk: Option<failure::FailureWalkOutcomeV1> = None;
+    let (provider_report, provider_lamports, provider_classes) = match request.walk {
+        // NOBODY ANSWERS. Three shipped drivers -- advance, exhaust, commit --
+        // walk the market to the Product's own failure selector. A refusal is
+        // a FINDING recorded on the stage exactly as the honest arm's is.
+        JourneyWalkV1::Failure => {
+            let walk_context = failure::FailureWalkContextV1 {
+                rpc_url: &session.rpc_url,
+                plan: &session.plan_path,
+                campaign_report: &campaign_report,
+                market: addresses.founding_market,
+                work: &request.work,
+                worker: payer,
+                worker_keypair: &payer_key,
+            };
+            match failure::walk_to_failure(&walk_context, &mut session.transactions) {
+                Ok((report, lamports, document, outcome)) => {
+                    progress.spine.insert("failure-walk".into(), document);
+                    failure_walk = Some(outcome);
+                    (report, lamports, ClassClaimV1::unchanged())
+                }
+                Err(error) => {
+                    progress
+                        .unexpected_refusals
+                        .push(format!("{} -- {error}", failure::FAILURE_WALK_STAGE_V1));
+                    let landed = session.transactions.len().saturating_sub(before_provider);
+                    let compute = session
+                        .transactions
+                        .iter()
+                        .skip(before_provider)
+                        .filter_map(|evidence| evidence.compute_units_consumed)
+                        .sum::<u64>();
+                    (
+                        StageReportV1 {
+                            stage: failure::FAILURE_WALK_STAGE_V1.into(),
+                            outcome: "refused".into(),
+                            transactions: landed,
+                            compute_units: compute,
+                            note: format!(
+                                "REFUSED, and the refusal is the finding: {error}. {landed} \
+                                 transactions had already finalized, for {compute} compute \
+                                 units; they are in the transcript's transaction list under \
+                                 their own labels."
+                            ),
+                        },
+                        LamportClaimV1::inapplicable(
+                            "the walk refused part way through, so what it placed and where is \
+                             exactly what is not known; L7 does not guess across a wall",
+                        ),
+                        ClassClaimV1::inapplicable(
+                            "the walk refused part way through, so which compartments it \
+                             touched is exactly what is not known; L8 does not guess across a \
+                             wall either",
+                        ),
+                    )
+                }
+            }
+        }
+        JourneyWalkV1::Honest => match provider::resolve_through_pyth(
             &mut session.rpc,
             &session.authority,
             &session.plan,
@@ -1081,11 +1199,12 @@ fn campaign(
                     ),
                 )
             }
-        };
+        },
+    };
     progress.stages.push(provider_report);
     ledger.observe(
         &mut session.rpc,
-        provider::PYTH_TRANSPORT_STAGE_V1,
+        resolution_stage_label,
         0,
         0,
         provider_lamports,
@@ -1135,6 +1254,61 @@ fn campaign(
         }
     };
     progress.stages.push(admit_report);
+    // THE TWO READINGS OF THE FAILURE CELL MUST BE ONE NUMBER.
+    //
+    // On the failure walk the campaign now holds both: the selector the
+    // deadline driver read off the finalized `ResultDomainV2` before it
+    // committed, and the `terminal_winner` byte Core wrote when it accepted the
+    // certificate. Every redemption after this point pays "one atom to every
+    // ordinary claim and nothing to the failure coordinate" against the SECOND
+    // one, so a disagreement is not a reporting defect -- it means the holders
+    // are about to be paid on a different Product than the one that failed.
+    // This is a hard error rather than a recorded refusal for that reason; the
+    // transcript is written on the way out either way.
+    if let Some(walk) = &failure_walk {
+        let admitted = CoreState::decode(
+            &session
+                .rpc
+                .required_account(addresses.founding_market, "Core Market")?
+                .data,
+        )
+        .map_err(|error| Error::new(format!("Core Market: {error:?}")))?;
+        if admitted.terminal_winner != walk.failure_selector {
+            return Err(Error::new(format!(
+                "the deadline walk committed the Product's failure cell {} of {} and the Market \
+                 records terminal winner {}: two authorities read one selector and disagreed, \
+                 so no holder may be redeemed against either",
+                walk.failure_selector, walk.outcome_count, admitted.terminal_winner
+            )));
+        }
+        // AND THE SEAT. `resolution::admit_terminal` already refuses a receipt
+        // that is not the certificate IT derived; this asks the same question
+        // of the seat the WALK minted, reached through a different driver and a
+        // different derivation.
+        let receipt = admitted
+            .terminal_receipt
+            .ok_or_else(|| Error::new("a Terminal Market carries no terminal receipt"))?;
+        if receipt.to_bytes() != walk.certificate.to_bytes() {
+            return Err(Error::new(format!(
+                "the deadline walk minted the ResolutionFailure seat at {} and the Market's \
+                 terminal receipt names {}",
+                walk.certificate,
+                solana_sdk::pubkey::Pubkey::new_from_array(receipt.to_bytes())
+            )));
+        }
+        // THE WALK IS PAID OR NOBODY WALKS IT. Decision 0027 funds the legs out
+        // of the market's own prepaid Resolution compartment precisely so that
+        // a stranger has a reason to spend a signature on somebody else's
+        // outage. A zero bounty is a market whose failure terminal nobody would
+        // ever reach.
+        if walk.work_paid == 0 {
+            return Err(Error::new(
+                "the deadline walk paid its worker nothing: the failure terminal is reachable \
+                 only because the founding prepaid the walk, and a zero bounty means the funding \
+                 ledger did not pay for the leg that was just walked",
+            ));
+        }
+    }
     ledger.observe(
         &mut session.rpc,
         resolution::ADMIT_TERMINAL_STAGE_V1,
@@ -1629,6 +1803,7 @@ mod tests {
         std::fs::create_dir_all(&work).expect("a scratch work directory");
         let transcript = work.join("transcript.json");
         let error = execute(JourneyRequestV1 {
+            walk: JourneyWalkV1::Honest,
             transcript: transcript.clone(),
             work: work.clone(),
             rpc_port: 0,

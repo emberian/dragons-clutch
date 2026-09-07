@@ -71,6 +71,19 @@ from one commit rather than two.
 
 ## What it does not reach, and why
 
+**The exhaust walk no longer stops at `Exhausted`.** Decision 0027 says the
+ladder exhausts INTO the failure selector and decision 0025 says what that pays,
+and since the failure-arm build the tier drives both past the exhausting crank:
+`local-private-validator-commit-deadline-failure-v1` commits the Product's own
+failure cell from `Exhausted` (22 accounts, the same stranger paid the bounty),
+`local-private-validator-admit-terminal-v1` reads the certificate kind off the
+Source and moves the phase byte, and `local-private-validator-wallet-terminal-payout-v1`
+refunds the founder at every ordinary index into an account the tier opens for
+the founder key -- one atom per ordinary claim on the refunding scale, the
+Hoard read before and after. The escrow's own payout is recorded as the
+producer's refusal ("is this Market's own failure escrow"), never sent. The
+transcript's `refund` object carries all of it; on the capture walk it is null.
+
 **A rung CAPTURE cannot be driven on this fixture.** Not for want of a builder:
 `dclutch-provider-transport-v3-operator` derives the execute request's
 `source_index` and its source-spec identity from the Source's own phase and

@@ -8,7 +8,11 @@ import {
   type MarketLiabilityV1,
   type MarketProvenanceV1,
 } from './marketDiscovery';
-import { type MarketCorePhaseV2 } from './marketCoreV2';
+import { decodeClaimsPositionV2, type MarketCorePhaseV2 } from './marketCoreV2';
+import {
+  PROTOCOL_POSITION_ADMISSION_SEED_V2,
+  PROTOCOL_POSITION_STATE_SEED_V2,
+} from './generated/directParticipantV1';
 import { type RequiredBackingBasisV2 } from './marketDiscovery';
 import { type SolanaRpcClient } from './rpc';
 import {
@@ -398,4 +402,126 @@ export function failureEscrowOwnerV1(claimsProgramId: string, marketAddress: str
     [CLAIMS_CAPABILITY_OWNER_SEED_V2, new PublicKey(marketAddress).toBytes(), selector],
     new PublicKey(claimsProgramId),
   )[0].toBase58();
+}
+
+/** One market's derived failure escrow: the three addresses the host derives. */
+export type FailureEscrowV1 = Readonly<{
+  /** The failure coordinate: the last cell. */
+  failureSelector: number;
+  /** The `ClaimsCapability` owner PDA at (market, failure selector); it has no key. */
+  owner: string;
+  /** The escrow's `LiabilityBasisV2` Position under that owner and the aggregate. */
+  position: string;
+  /** The escrow's protocol-Position admission record under the same pair. */
+  admission: string;
+}>;
+
+/**
+ * The whole escrow, derived rather than read -- the port of
+ * `dclutch_claims::protocol_position_v2::failure_escrow_v1`, which is the one
+ * author the host's `BeginRetiring` preflight, the journey census and the
+ * checkpointed retirement builder all read. Seeds, in the Rust file's order:
+ * owner = `(CLAIMS_CAPABILITY_OWNER_SEED_V2, market, u32le selector)`;
+ * position = `(PROTOCOL_POSITION_STATE_SEED_V2, aggregate, owner)`;
+ * admission = `(PROTOCOL_POSITION_ADMISSION_SEED_V2, aggregate, owner)`.
+ *
+ * A width below two seats no escrow (`FailureEscrowErrorV1::Width`) and is
+ * refused here the same way rather than derived into nonsense.
+ */
+export function failureEscrowV1(
+  claimsProgramId: string,
+  marketAddress: string,
+  aggregateAddress: string,
+  outcomeCount: number,
+): FailureEscrowV1 {
+  if (!Number.isSafeInteger(outcomeCount) || outcomeCount < 2) {
+    throw new Error('a refunding complete set needs one ordinary coordinate and one failure coordinate; this width seats no escrow');
+  }
+  const failureSelector = outcomeCount - 1;
+  const owner = failureEscrowOwnerV1(claimsProgramId, marketAddress, failureSelector);
+  const claims = new PublicKey(claimsProgramId);
+  const aggregate = new PublicKey(aggregateAddress).toBytes();
+  const ownerBytes = new PublicKey(owner).toBytes();
+  const position = PublicKey.findProgramAddressSync(
+    [PROTOCOL_POSITION_STATE_SEED_V2, aggregate, ownerBytes],
+    claims,
+  )[0].toBase58();
+  const admission = PublicKey.findProgramAddressSync(
+    [PROTOCOL_POSITION_ADMISSION_SEED_V2, aggregate, ownerBytes],
+    claims,
+  )[0].toBase58();
+  return Object.freeze({ failureSelector, owner, position, admission });
+}
+
+/** Whether a market's failure column is seated in its own escrow, read off the escrow's Position. */
+export type EscrowSeatingV1 = Readonly<{
+  /** The escrow Position exists, is Claims-owned and decodes at this width. */
+  present: boolean;
+  /** It holds the WHOLE failure column and nothing else, and the column is nonzero. */
+  seated: boolean;
+  /** What it holds at the failure coordinate. */
+  heldAtoms: string;
+  /**
+   * `seated`, under the name a caller wants -- and it IMPLIES IN ONE DIRECTION
+   * ONLY.
+   *
+   * A refunding founding (v6) seats the whole failure column in exactly this
+   * Position and nothing else does, so `true` here is evidence a market
+   * refunds: it is what the host's `failure_escrow_v1` derivation
+   * (HOST-RETIRE/17B) reads before it lets a market retire.
+   *
+   * `false` IS NOT EVIDENCE OF THE OPPOSITE, and a caller that treats it as
+   * such prints the sentence `outageDisclosureV1` exists to prevent. A market
+   * founded to refund BEFORE the founding that seats the escrow was built
+   * carries the column with its founder and reads `false` here; the
+   * disclosure's own comment says deriving the payee from the seating alone
+   * "would tell a buyer on a refunding market that the founder takes
+   * everything, which is the opposite of what would happen", and its
+   * `refundsOnFailure` input is `ProductBasisFactsV3.refundsOnFailure` -- a
+   * payout-scale fact. Pass `true` through when this is `true`; pass the
+   * UNREAD `null` when it is not, or read the record.
+   */
+  refundsOnFailure: boolean;
+}>;
+
+/**
+ * Derive `refundsOnFailure` from the escrow Position's presence and contents.
+ *
+ * `account` is the observed escrow Position (or `null` when the address is
+ * empty). The decode is `decodeClaimsPositionV2`'s -- the same reader the
+ * activity leaderboard uses -- so the offsets have one author.
+ */
+export function refundsOnFailureFromEscrowV1(
+  input: Readonly<{
+    escrow: FailureEscrowV1;
+    claimsProgramId: string;
+    outcomeCount: number;
+    supplyAtoms: ReadonlyArray<string>;
+    account: Readonly<{ owner: string; executable: boolean; data: Uint8Array }> | null;
+  }>,
+): EscrowSeatingV1 {
+  const absent = Object.freeze({ present: false, seated: false, heldAtoms: '0', refundsOnFailure: false });
+  const account = input.account;
+  if (account === null || account.executable || account.owner !== input.claimsProgramId) return absent;
+  let balances: ReadonlyArray<string>;
+  try {
+    const position = decodeClaimsPositionV2(input.escrow.position, account.data);
+    if (position.claimCount !== input.outcomeCount || position.owner !== input.escrow.owner) return absent;
+    balances = position.balances;
+  } catch {
+    return absent;
+  }
+  const selector = input.escrow.failureSelector;
+  const held = balances[selector] ?? '0';
+  let supply: bigint;
+  let heldAtoms: bigint;
+  try {
+    supply = BigInt(input.supplyAtoms[selector] ?? '');
+    heldAtoms = BigInt(held);
+  } catch {
+    return Object.freeze({ present: true, seated: false, heldAtoms: held, refundsOnFailure: false });
+  }
+  const nothingElse = balances.every((atoms, index) => index === selector || atoms === '0');
+  const seated = supply > 0n && heldAtoms === supply && nothingElse;
+  return Object.freeze({ present: true, seated, heldAtoms: held, refundsOnFailure: seated });
 }

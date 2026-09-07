@@ -337,6 +337,20 @@ pub enum ClaimsSbfError {
     /// MARKET is the wrong shape, and the two send their reader to opposite
     /// places: one to the packet's owner field, the other to the founding.
     FailureEscrowUnseated = 0x5011,
+    /// The terminal payout asked for more claims than the Position holds at
+    /// that index, or more than the aggregate owes there.
+    ///
+    /// Split out of [`ClaimsSbfError::Economic`] because that code is
+    /// conservation -- an amount that does not add up somewhere in the
+    /// evaluator -- and this is a caller asking for a share that is not
+    /// theirs. Under the refunding failure arm every ordinary claim is one
+    /// atom on the refunding scale, so "more than pro rata" and "more claims
+    /// than held" are the same accusation, and a holder who overstates their
+    /// quantity is refused by THIS name rather than sent hunting a payout
+    /// vector that is exact. The producer already refuses it off chain with a
+    /// sentence (`wallet_terminal_input`'s `1..=balance`); this is the wire's
+    /// word for the same fact when a caller builds the packet by hand.
+    Overdraw = 0x5012,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -360,7 +374,8 @@ dclutch_refusal_registry::pin_refusal_band!(
         ExposureNotIdentity,
         ReceiptAlias,
         FailureEscrow,
-        FailureEscrowUnseated
+        FailureEscrowUnseated,
+        Overdraw
     ]
 );
 

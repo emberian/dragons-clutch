@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, env, error::Error as StdError, fmt, io::Write, 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use solana_sdk::pubkey::Pubkey;
 
+mod admit_terminal;
 mod aggregate_retirement_exterior;
 mod aggregate_retirement_journal;
 mod campaign;
@@ -16,6 +17,7 @@ mod closure_receipt_projection;
 mod cluster;
 mod collateral_release;
 mod core_bump_projection;
+mod deadline_failure;
 mod direct_capability_activation;
 mod direct_close_maker;
 mod direct_fee_settlement;
@@ -255,6 +257,18 @@ fn run() -> Result<()> {
         }
         Some(command) if command == recovery_crank::COMMAND_DEVNET_V1 => {
             recovery_crank::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == deadline_failure::COMMAND_V1 => {
+            deadline_failure::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == deadline_failure::COMMAND_DEVNET_V1 => {
+            deadline_failure::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == admit_terminal::COMMAND_V1 => {
+            admit_terminal::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == admit_terminal::COMMAND_DEVNET_V1 => {
+            admit_terminal::run_devnet_v1(arguments.collect())
         }
         Some(command) if command == claims_custody_replay::COMMAND_V1 => {
             claims_custody_replay::run_owned_loopback_v1(arguments.collect())
@@ -2363,6 +2377,10 @@ fn usage() {
     println!("{}", wallet_terminal::usage());
     println!("{}", wallet_terminal_payout_exterior::usage());
     println!("{}", wallet_terminal_payout_exterior::devnet_usage());
+    println!("{}", deadline_failure::usage());
+    println!("{}", deadline_failure::devnet_usage());
+    println!("{}", admit_terminal::usage());
+    println!("{}", admit_terminal::devnet_usage());
     println!("{}", direct_trade::usage());
     println!("{}", direct_trade_producer::usage());
     println!("{}", direct_trade_producer::devnet_session_usage());

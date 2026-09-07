@@ -95,6 +95,14 @@ MARKET_KIND = {
     "found-two-source": ("two-source",),
     "crank-ladder": ("two-source",),
     "capture-rung": ("two-source",),
+    # The failure arm: the two-source market whose window closes unobserved
+    # walks crank-ladder -> exhaust -> admit-failure -> the refunds -> retire.
+    "exhaust": ("two-source",),
+    "admit-failure": ("two-source",),
+    "refund-stranger": ("two-source",),
+    "refund-founder": ("two-source",),
+    "refund-census": ("two-source",),
+    "escrow-zero": ("two-source",),
     "found-general-family": ("general",),
     "refound-general": ("general",),
     "found-general": ("general",),
@@ -602,10 +610,23 @@ def emit(row, view_step, document, prior, market, stages) -> str:
         return head + NO_ARGS % {"stage_literal": f'"{stage_dir}"'}
 
     # The guards: every row that blocks THIS row must have left GREEN.
-    blockers = [r["key"] for r in row["_chosen"] if row["key"] in [b.strip() for b in r["blocks"].split(",")]]
+    blockers = [r for r in row["_chosen"] if row["key"] in [b.strip() for b in r["blocks"].split(",")]]
     guards = []
     for blocker in blockers:
-        for bdir in stages_for(blocker, row["_chosen"], document, label):
+        # A PER-MARKET ROW IS BLOCKED ONLY BY WHAT RAN FOR ITS OWN MARKET. The
+        # two rows' market kinds need not overlap: `escrow-zero` fans over the
+        # two-source market alone and `retire` over every kind, so without this
+        # a Direct market's retirement waits on a refund census taken about a
+        # market it has nothing to do with. Measured on cohort-18, where
+        # `39-retire-1.sh` was emitted guarded on `escrow-zero-S/GREEN`.
+        if (
+            label is not None
+            and per_market(row)
+            and per_market(blocker)
+            and label not in market_labels(blocker["key"], document)
+        ):
+            continue
+        for bdir in stages_for(blocker["key"], row["_chosen"], document, label):
             guards.append(f'[ -f "$HERE/{bdir}/GREEN" ] || {{ echo "$STAGE: {bdir} has not gone green; nothing here may start until it has" >&2; exit 65; }}')
     if not guards:
         guards.append("# (nothing blocks this row)")
@@ -764,6 +785,12 @@ def emit(row, view_step, document, prior, market, stages) -> str:
 
     body += f'\ntouch "$OUT/GREEN"\necho "{stage_dir.upper().replace("-", "_")}_EXIT=0"\n'
     return head + body
+
+
+def market_labels(key: str, document: dict) -> list[str]:
+    """The market labels a per-market row fans over, in manifest order."""
+    kinds = market_kinds(key)
+    return [m["label"] for m in document.get("markets", []) if m.get("kind", "direct") in kinds]
 
 
 def stages_for(key: str, chosen: list[dict], document: dict, label: str | None) -> list[str]:

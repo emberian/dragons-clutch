@@ -17,6 +17,11 @@
 
 /// Bearer specialization of the Rational Representation V2 actions.
 pub mod bearer;
+/// The host's one author for the funded deadline-failure walk's frame and
+/// admissibility: the exhausted terminal as a driven act.
+pub mod deadline_failure_v1;
+/// The host's one author for a Market's refunding failure escrow.
+pub mod failure_escrow_v1;
 /// Fractional Claims family construction, lowering and retirement planning.
 pub mod fractional;
 /// Evidence bridge for the Fractional cubic-life campaign.
@@ -40,8 +45,6 @@ pub mod source_readiness;
 pub mod structured;
 /// Wallet-terminal payout input derivation, callable from a browser.
 pub mod wallet_terminal_input;
-/// The host's one author for a Market's refunding failure escrow.
-pub mod failure_escrow_v1;
 /// Wallet-terminal payout derivation, callable from a browser.
 pub mod wallet_terminal_payout;
 
