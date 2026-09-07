@@ -282,6 +282,10 @@ mod substrate;
 // ------------------------------------------------------------- this campaign
 mod failure;
 mod journey;
+mod dealer_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/scoring_dealer.rs"]
+#[allow(dead_code)]
+mod scoring_dealer;
 mod ledger;
 mod provider;
 mod resolution;
@@ -377,6 +381,7 @@ fn run() -> Result<()> {
     let _program = arguments.next();
     match arguments.next().as_deref() {
         Some("run") => run_journey(arguments.collect()),
+        Some("dealer") => dealer_campaign::execute(parse_journey_request(arguments.collect())?),
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
@@ -387,6 +392,14 @@ fn run() -> Result<()> {
 }
 
 fn run_journey(arguments: Vec<String>) -> Result<()> {
+    let transcript = journey::execute(parse_journey_request(arguments)?)?;
+    let mut stdout = std::io::stdout();
+    stdout.write_all(&serde_json::to_vec_pretty(&transcript)?)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+fn parse_journey_request(arguments: Vec<String>) -> Result<journey::JourneyRequestV1> {
     let mut values = std::collections::BTreeMap::new();
     let mut iterator = arguments.into_iter();
     while let Some(flag) = iterator.next() {
@@ -446,11 +459,7 @@ fn run_journey(arguments: Vec<String>) -> Result<()> {
         seed: required("--seed")?,
         holder_count,
     };
-    let transcript = journey::execute(request)?;
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&serde_json::to_vec_pretty(&transcript)?)?;
-    stdout.write_all(b"\n")?;
-    Ok(())
+    Ok(request)
 }
 
 /// Refuse the retired standalone demo compiler.

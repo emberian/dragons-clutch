@@ -167,13 +167,10 @@ elif [ ! -f "$WORK/stamps.archive" ] || [ "$(cat "$WORK/stamps.archive")" != "$G
 else
     echo "stage archive: up to date"
 fi
-# The tier's own files, which may not be in the gate's revision yet. Copied
-# rather than symlinked so the built binary names one directory.
-if [ "$WORKTREE" != 1 ]; then
-    rm -rf "$SOURCE/tools/gauntlet/journey"
-    mkdir -p "$SOURCE/tools/gauntlet"
-    cp -R "$SCRIPT_DIR" "$SOURCE/tools/gauntlet/journey"
-fi
+# The campaign stays inside the gate's exact archive. Overlaying this runner's
+# working-tree modules here would silently change what the source revision
+# names. Developing a newer host against an older gate uses --worktree, whose
+# evidence is explicitly diagnostic.
 
 # ------------------------------------------------------------- 2. the campaign
 HOST_TARGET="$WORK/host-target"

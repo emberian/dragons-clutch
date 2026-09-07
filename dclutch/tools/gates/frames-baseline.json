@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "3ef0697756da26521e6622148f0a5a9b8e3a6ec7",
+  "commit": "56767e555d05ecd005edec4fc939d269e8757417",
   "link_count": 8,
   "links": [
     {
@@ -8858,12 +8858,6 @@
         },
         {
           "frames_bytes": [
-            192
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6hot_v313series_expiry28SeriesExpiryReplayPrestateV113authenticated17h<hash>E"
-        },
-        {
-          "frames_bytes": [
             384
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v313series_expiry34classify_selected_series_expiry_v117h<hash>E"
@@ -9290,7 +9284,7 @@
         },
         {
           "frames_bytes": [
-            3840
+            3776
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v37execute28execute_authenticated_hot_v317h<hash>E"
         },
@@ -9335,6 +9329,12 @@
             128
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v37execute32logical_projection_keys_boxed_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6hot_v37execute40observe_series_expiry_replay_prestate_v117h<hash>E"
         },
         {
           "frames_bytes": [
