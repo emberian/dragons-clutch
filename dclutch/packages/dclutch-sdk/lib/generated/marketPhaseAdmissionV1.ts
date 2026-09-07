@@ -20,7 +20,7 @@ export interface RoutePhaseGateV1 {
 }
 
 /** Routes enumerated by the census, gated or not. */
-export const ROUTE_COUNT_V1 = 165 as const;
+export const ROUTE_COUNT_V1 = 166 as const;
 
 export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/affine_batch_v2::process", phases: ["Open"], prestates: [] },
@@ -72,6 +72,7 @@ export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "resolution/process_submit#magic", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_verify#VerifyFundReady", phases: ["Founding", "Open"], prestates: [["Founding", "Prepaid"], ["Open", "Consumed"]] },
   { route: "resolution/provider_instruction_v3::process_provider_resolution_v3", phases: ["Open"], prestates: [["Open", "Consumed"]] },
+  { route: "resolution/provider_instruction_v3::process_provider_resolution_v3#count", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1", phases: ["Retiring"], prestates: [] },
   { route: "trading/direct_close_maker_v1::process_direct_close_maker_v1", phases: ["Retiring"], prestates: [] },
   { route: "trading/direct_replay_setup_v1::process_direct_replay_setup_v1", phases: ["Open"], prestates: [] },

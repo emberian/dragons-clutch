@@ -19,7 +19,7 @@
 
 use std::str::FromStr;
 
-use solana_account::{Account, AccountSharedData};
+use solana_account::Account;
 use solana_program::{
     clock::Clock,
     hash::hash,
@@ -270,6 +270,12 @@ pub fn add_upgraded_provider_programs(test: &mut ProgramTest, provider: Provider
             program_hash,
             programdata_hash,
         );
+        // ProgramTest starts before the captured deployment slots. Its loader
+        // caches the genesis programs at slot zero; changing ProgramData after
+        // execution trips the runtime's replacement guard. The Pyth release
+        // record used by the ProgramTest campaign carries the corresponding
+        // zero-slot observations while the ELF and every provider-owned
+        // account remain byte-pinned below.
         programdata_body[4..12].copy_from_slice(&0_u64.to_le_bytes());
         test.add_genesis_account(
             program,
@@ -322,34 +328,6 @@ fn provider_rows(provider: ProviderAddresses) -> [ProviderRow; 2] {
             "f26f4b53b0f980455886116f500fa74ba475e51b1acb7f486b18afa9d73d948f",
         ),
     ]
-}
-
-fn install_captured_programdata_accounts(
-    context: &mut ProgramTestContext,
-    provider: ProviderAddresses,
-) {
-    let rent = Rent::default();
-    for (program, programdata, slot, elf, program_hash, programdata_hash) in provider_rows(provider)
-    {
-        let (_, programdata_body) = loader_bodies(
-            program,
-            programdata,
-            slot,
-            elf,
-            program_hash,
-            programdata_hash,
-        );
-        context.set_account(
-            &programdata,
-            &AccountSharedData::from(Account {
-                lamports: rent.minimum_balance(programdata_body.len()),
-                data: programdata_body,
-                owner: bpf_loader_upgradeable::ID,
-                executable: false,
-                rent_epoch: 0,
-            }),
-        );
-    }
 }
 
 /// Encode the exact synthetic-local Pyth release record.
@@ -406,6 +384,18 @@ pub fn synthetic_release_bytes(provider: ProviderAddresses) -> [u8; 440] {
         hash(&bytes).to_bytes(),
         hex_32("69115c2aabc5a51cab85edd3e5afeafdf9c82e331b800a885acb7d63af053adc")
     );
+    bytes
+}
+
+/// ProgramTest's Loader observations for the captured provider ELFs.
+///
+/// The bytes retain the pinned program identities, code hashes, configuration,
+/// router ABI and guardian set. Only the two deployment slots are zero because
+/// the local bank loads the genesis accounts at slot zero; its runtime refuses
+/// a later in-place ProgramData replacement after either ELF has executed.
+pub fn synthetic_program_test_release_bytes(provider: ProviderAddresses) -> [u8; 440] {
+    let mut bytes = synthetic_release_bytes(provider);
+    bytes[362..378].fill(0);
     bytes
 }
 
@@ -642,7 +632,6 @@ pub async fn initialize_real_providers(
     assert_eq!(verified.data.len(), encoded_size);
     assert_eq!(verified.data.get(8), Some(&2), "ProcessingStatus::Verified");
     assert_eq!(verified.data.get(41), Some(&1), "verified VAA version");
-    install_captured_programdata_accounts(context, provider);
     encoded.pubkey()
 }
 

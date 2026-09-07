@@ -54,11 +54,12 @@ use dclutch_product::admission::{
 };
 use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_provider_transport_v3_operator::{
-    ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteLadderV3,
-    ProviderExecuteSnapshotV3, ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3,
-    ProviderSubmitIntentV3, ProviderSubmitSnapshotV3, ProviderTransportOperatorErrorV3,
-    build_provider_abandon_v3, build_provider_execute_v3, build_provider_reclaim_v3,
-    build_provider_submit_v3,
+    ProviderEnsembleMemberExecuteIntentV3, ProviderExecuteDeploymentV3, ProviderExecuteIntentV3,
+    ProviderExecuteLadderV3, ProviderExecuteSnapshotV3, ProviderReclaimDeploymentV3,
+    ProviderSubmitDeploymentV3, ProviderSubmitIntentV3, ProviderSubmitSnapshotV3,
+    ProviderTransportOperatorErrorV3, build_provider_abandon_v3,
+    build_provider_ensemble_member_execute_v3, build_provider_execute_v3,
+    build_provider_reclaim_v3, build_provider_submit_v3,
 };
 use dclutch_source::pyth::{
     FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
@@ -83,8 +84,9 @@ use dclutch_registry::release_set::{
     ProtocolInfrastructureProfileV2,
 };
 use dclutch_source::resolution::{
-    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3,
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    EnsembleFragmentSeatSeedsV1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+    PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     ResolutionCertificateKindV2, ResolutionCertificateV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
@@ -102,7 +104,7 @@ use dclutch_resolution_core_v3_operator::{
 };
 use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_source::{
-    CapacityEnvelope, ContentId as SourceContentId, PROVIDER_RELEASE_SCHEMA_ID_V1,
+    CapacityEnvelope, ContentId as SourceContentId, EnsembleSpecV1, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2, RoundingBoundary,
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -731,6 +733,18 @@ enum MarketPrestateV1 {
     /// ladder's: the first is configured by the attempt's own allocation, the
     /// second by the policy digest, the third by the material.
     WalkableRecovery,
+    /// `Open + Primary` under an odd-quorum ensemble material. This is the
+    /// exact pre-capture state for a direct Resolution member producer: the
+    /// Source has not become a terminal, and the member fragment is the only
+    /// output the producer may write.
+    ///
+    /// The fixture intentionally seeds this Source instead of pretending the
+    /// current three-row controller-funding frame can found a two-member
+    /// policy: members need two allocation rows plus policy and material,
+    /// while that frame names three rows. The direct capture itself neither
+    /// reads nor mutates funding; the real-ELF case below measures that route
+    /// separately from the funded fold/reclaim campaign.
+    EnsembleMember,
 }
 
 impl MarketPrestateV1 {
@@ -744,6 +758,7 @@ impl MarketPrestateV1 {
                 | Self::TerminalFailure
                 | Self::WalkableFailure
                 | Self::WalkableRecovery
+                | Self::EnsembleMember
         )
     }
 
@@ -777,14 +792,29 @@ impl MarketPrestateV1 {
     /// policy -- and naming it is what turns a market with one terminal into a
     /// market with a ladder.
     const fn recovery_terms(self) -> bool {
-        matches!(self, Self::WalkableRecovery)
+        matches!(self, Self::WalkableRecovery | Self::EnsembleMember)
+    }
+
+    /// Whether this material has declared member slots before any recovery
+    /// rungs. The Pyth producer test uses an odd `3-of-1` ensemble so one
+    /// accepted member capture is sufficient evidence for the producer without
+    /// claiming a quorum fold from one fragment.
+    const fn ensemble_terms(self) -> bool {
+        matches!(self, Self::EnsembleMember)
+    }
+
+    /// Whether the fixture starts with a Resolution-owned Source account.
+    const fn preload_source(self) -> bool {
+        self.preload_terminal() || matches!(self, Self::EnsembleMember)
     }
 }
 
 fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let preload_terminal = prestate.preload_terminal();
+    let preload_source = prestate.preload_source();
     let failure_terms = prestate.failure_terms();
     let recovery_terms = prestate.recovery_terms();
+    let ensemble_terms = prestate.ensemble_terms();
     let elves = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -980,7 +1010,10 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let recovery_allocation = source_id([0x93; 32]);
     let update_view =
         FullPriceUpdateV2::parse(pyth_provider::PRICE_UPDATE).expect("captured full Pyth update");
-    let pyth_release_bytes = pyth_provider::synthetic_release_bytes(provider);
+    // ProgramTest loads the pinned ELF genesis accounts at slot zero. The
+    // release therefore observes those two local Loader slots while retaining
+    // the captured Pyth ELF, hashes, config, ABI and guardian-set pins.
+    let pyth_release_bytes = pyth_provider::synthetic_program_test_release_bytes(provider);
     assert_eq!(pyth_release_bytes.len(), PYTH_RELEASE_V1_ENCODED_LEN);
     let pyth_release_value =
         PythReleaseV1::decode(&pyth_release_bytes).expect("pinned Pyth release");
@@ -1049,23 +1082,55 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let alternative_source_bytes = alternative_source_value.to_bytes();
     let alternative_source_id = hash(&alternative_source_bytes).to_bytes();
     assert_ne!(alternative_source_id, source_spec_id);
+    let ensemble_second_allocation = source_id([0x94; 32]);
+    let primary_deadline = update_view
+        .publish_time()
+        .checked_add(i64::from(WINDOW_MAX_AGE_SECONDS))
+        .expect("bounded ensemble member deadline");
     let recovery_policy_value = RecoveryPolicyV2::new(
         capacity_id,
-        [
-            Some(
-                RecoveryAttemptV2::new(
-                    source_id(alternative_source_id),
-                    source_id(provider_release_id),
-                    TERMINAL_TIME + 20,
-                    recovery_allocation,
-                )
-                .expect("recovery attempt"),
-            ),
-            None,
-            None,
-            None,
-        ],
-        1,
+        if ensemble_terms {
+            [
+                Some(
+                    RecoveryAttemptV2::new(
+                        source_id(alternative_source_id),
+                        source_id(provider_release_id),
+                        primary_deadline,
+                        recovery_allocation,
+                    )
+                    .expect("ensemble member one"),
+                ),
+                Some(
+                    RecoveryAttemptV2::new(
+                        source_id([0x95; 32]),
+                        source_id(provider_release_id),
+                        primary_deadline
+                            .checked_add(1)
+                            .expect("bounded ensemble member deadline"),
+                        ensemble_second_allocation,
+                    )
+                    .expect("ensemble member two"),
+                ),
+                None,
+                None,
+            ]
+        } else {
+            [
+                Some(
+                    RecoveryAttemptV2::new(
+                        source_id(alternative_source_id),
+                        source_id(provider_release_id),
+                        TERMINAL_TIME + 20,
+                        recovery_allocation,
+                    )
+                    .expect("recovery attempt"),
+                ),
+                None,
+                None,
+                None,
+            ]
+        },
+        if ensemble_terms { 2 } else { 1 },
     )
     .expect("recovery policy");
     let recovery_policy_bytes = recovery_policy_value.to_bytes();
@@ -1124,6 +1189,13 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         recovery_terms.then(|| source_id(recovery_policy_id)),
         source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );
+    let material_value = if ensemble_terms {
+        material_value
+            .with_ensemble(EnsembleSpecV1::new(3, 1).expect("odd ensemble quorum"), 0)
+            .expect("canonical ensemble material")
+    } else {
+        material_value
+    };
     let material_bytes = material_value.to_bytes();
     let material_id = hash(&material_bytes).to_bytes();
 
@@ -1142,11 +1214,19 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         None,
     )
     .expect("funding quote");
-    let entries = [
-        (0xa1, recovery_allocation.to_bytes()),
-        (0xa2, recovery_policy_id),
-        (0xa3, material_id),
-    ]
+    let entries = if ensemble_terms {
+        [
+            (0xa1, recovery_allocation.to_bytes()),
+            (0xa2, ensemble_second_allocation.to_bytes()),
+            (0xa3, material_id),
+        ]
+    } else {
+        [
+            (0xa1, recovery_allocation.to_bytes()),
+            (0xa2, recovery_policy_id),
+            (0xa3, material_id),
+        ]
+    }
     .map(|(seed, config)| {
         CapabilityEntryV1::new(
             id([seed; 32]),
@@ -1459,7 +1539,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         ],
         &RESOLUTION_PROGRAM_ID,
     );
-    if !preload_terminal {
+    if !preload_source {
         test.add_account(
             source,
             Account {
@@ -1668,6 +1748,27 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
                     .expect("terminal certificate")
                     .to_vec(),
             ),
+        );
+    } else if preload_source {
+        let source_value = SourceResolutionStateV2::fresh(
+            market.to_bytes(),
+            GENERATION,
+            source_id(material_id),
+            rent_credit.to_bytes(),
+            source_bump,
+            0,
+            0,
+        )
+        .expect("fresh ensemble Source")
+        .state();
+        assert_eq!(
+            source_value.phase(),
+            SourceResolutionPhaseV1::Primary,
+            "a member producer starts from the still-unresolved primary source"
+        );
+        test.add_account(
+            source,
+            protocol_account(RESOLUTION_PROGRAM_ID, source_value.to_bytes().to_vec()),
         );
     }
     let closure = Pubkey::find_program_address(
@@ -4183,6 +4284,156 @@ async fn a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms() {
 /// standing exactly on a window's deadline must refuse, on both rungs, because
 /// the last second an honest observation may land and the first second a crank
 /// may run are different seconds.
+#[tokio::test]
+async fn a_real_pyth_member_capture_writes_a_fragment_and_keeps_primary() {
+    let mut fixture = fixture(MarketPrestateV1::EnsembleMember);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let encoded_vaa =
+        pyth_provider::initialize_real_providers(&mut context, fixture.provider).await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.slot = clock.slot.max(1);
+    clock.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&clock);
+    let payer = context.payer.pubkey();
+    let post_update_body = pyth_provider::RECEIVER_POST_UPDATE
+        .get(8..)
+        .expect("Receiver PostUpdate body")
+        .to_vec();
+
+    let provider_submit = build_provider_submit_v3(
+        &provider_submit_snapshot(&mut context, &fixture, encoded_vaa).await,
+        provider_submit_deployment(&fixture),
+        &ProviderSubmitIntentV3 {
+            submitter: payer,
+            refund_recipient: fixture.rent_credit,
+            update_account: fixture.update.pubkey(),
+            reclaim_after_unix_seconds: TERMINAL_TIME + i64::from(WINDOW_MAX_AGE_SECONDS),
+            post_update_body: post_update_body.clone(),
+        },
+    )
+    .expect("the real Pyth receiver accepts a submitted update for the ensemble Source");
+    let lifecycle_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+    pyth_provider::submit(
+        &mut context,
+        &[
+            transfer(&payer, &provider_submit.lifecycle, lifecycle_rent),
+            provider_submit.instruction,
+        ],
+        &[&fixture.update],
+    )
+    .await
+    .expect("the real Receiver posts the checked Pyth update");
+
+    let source_before = observed(&mut context, fixture.source)
+        .await
+        .expect("ensemble Source");
+    assert_eq!(
+        SourceResolutionStateV2::decode(&source_before.data)
+            .expect("ensemble Source state")
+            .phase(),
+        SourceResolutionPhaseV1::Primary,
+        "a member producer begins before a quorum fold can change the Source"
+    );
+    let resolver = Keypair::new();
+    let fragment = Pubkey::find_program_address(
+        &EnsembleFragmentSeatSeedsV1::new(
+            fixture.source.to_bytes(),
+            1,
+            TERMINAL_SEQUENCE,
+        )
+        .seeds(),
+        &RESOLUTION_PROGRAM_ID,
+    )
+    .0;
+    let resolver_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(0);
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &resolver.pubkey(), resolver_rent),
+            transfer(
+                &payer,
+                &fragment,
+                Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            ),
+        ],
+    )
+    .await
+    .expect("prepay the distinct resolver and deterministic member fragment seat");
+
+    let member_capture = build_provider_ensemble_member_execute_v3(
+        &provider_execute_recovery_snapshot(&mut context, &fixture, provider_submit.lifecycle)
+            .await,
+        provider_execute_deployment(&fixture),
+        &ProviderEnsembleMemberExecuteIntentV3 {
+            resolver: resolver.pubkey(),
+            terminal_sequence: TERMINAL_SEQUENCE,
+            member: 1,
+            post_update_body,
+        },
+    )
+    .expect("the direct Resolution producer derives declared member one from canonical material");
+    assert_eq!(
+        member_capture.instruction.program_id, RESOLUTION_PROGRAM_ID,
+        "member capture enters Resolution directly; Core only receives a later ensemble fold"
+    );
+    let capture_units = submit_measuring_units(
+        &mut context,
+        &[member_capture.instruction],
+        &[&resolver],
+    )
+    .await
+    .expect("the current Resolution ELF accepts the checked Pyth member capture");
+
+    assert_eq!(
+        observed(&mut context, fixture.source)
+            .await
+            .expect("ensemble Source after capture")
+            .data,
+        source_before.data,
+        "a member capture writes its own fragment and leaves Source Primary for the fold"
+    );
+    let lifecycle = ProviderUpdateLifecycleV3::decode(
+        &observed(&mut context, provider_submit.lifecycle)
+            .await
+            .expect("consumed provider lifecycle")
+            .data,
+    )
+    .expect("provider lifecycle");
+    assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Consumed);
+    assert_eq!(lifecycle.certificate, fragment.to_bytes());
+    assert_eq!(lifecycle.terminal_sequence, TERMINAL_SEQUENCE);
+    let certificate = ResolutionCertificateV2::decode(
+        &observed(&mut context, fragment)
+            .await
+            .expect("member fragment")
+            .data,
+    )
+    .expect("member fragment certificate");
+    assert_eq!(certificate.receipt_account, resolver.pubkey().to_bytes());
+    assert_eq!(certificate.attempt_index, 0);
+    assert_ne!(certificate.provider_evidence, [0; 32]);
+    println!("ENSEMBLE MEMBER CAPTURE CU: capture={capture_units}");
+}
+
 #[tokio::test]
 async fn a_two_source_market_walks_its_funded_ladder_and_every_rung_pays_a_stranger() {
     let mut fixture = fixture(MarketPrestateV1::WalkableRecovery);

@@ -137,7 +137,7 @@ pub(crate) fn process_provider_resolution_v3(
         count if count == with_policy => Some(base_count),
         _ => return Err(ResolutionError::AccountFrame.into()),
     };
-    authenticate_privileges(program_id, accounts, tail_start)?;
+    authenticate_privileges(program_id, accounts, tail_start, request.caller)?;
     let frame = ProviderFrameV3 {
         accounts,
         tail_start,
@@ -479,11 +479,21 @@ fn authenticate_privileges(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     tail_start: usize,
+    caller: ProviderCallerV3,
 ) -> ProgramResult {
     for (index, account) in accounts.iter().enumerate() {
         let expected_executable = matches!(index, 7 | 11 | 13 | 15)
             || matches!(index, value if value == tail_start + 1 || value == tail_start + 4 || value == tail_start + 8);
-        if account.is_signer != matches!(index, 0 | 1)
+        // Core and Trading enter through a CPI, so their caller-authority PDA
+        // is a program signer alongside the resolver. A direct ensemble
+        // member capture enters Resolution itself: its derived caller PDA
+        // authenticates the intent but cannot sign a top-level transaction.
+        // The resolver is the sole transaction signer in that frame.
+        let expected_signer = match caller {
+            ProviderCallerV3::Resolution => index == 1,
+            ProviderCallerV3::Core | ProviderCallerV3::Trading => matches!(index, 0 | 1),
+        };
+        if account.is_signer != expected_signer
             || account.is_writable != (matches!(index, 2 | 3) || index == tail_start - 1)
             || account.executable != expected_executable
             || accounts

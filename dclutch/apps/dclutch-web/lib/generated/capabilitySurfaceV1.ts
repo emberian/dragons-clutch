@@ -6,7 +6,7 @@
 //   packages/dclutch-sdk/lib/walletHandoff.ts           (every wallet request and the sole submission)
 //   apps/dclutch-web/package.json                       (the abi:*:verify pairing)
 //
-// 270 surveyed modules, 26 routes, 39 generated authorities, 3 published runbooks.
+// 273 surveyed modules, 26 routes, 39 generated authorities, 3 published runbooks.
 // 12 of those modules cannot start without a file produced outside this browser.
 
 /** What a module's transitive closure is able to ask a wallet for. */
@@ -306,7 +306,9 @@ export const CLIENT_MODULE_SURFACES_V1: ReadonlyArray<ClientModuleSurfaceV1> = O
   Object.freeze({ module: "components/ui/label.tsx", routes: Object.freeze(["/product-v2", "/resolution"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "components/ui/table.tsx", routes: Object.freeze(["/product-v2"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "components/WalletDirectory.tsx", routes: Object.freeze(["/activity", "/found", "/liquidity", "/market", "/markets/[address]", "/portfolio", "/redeem", "/release", "/resolution"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
+  Object.freeze({ module: "fixtures/public-market-bindings-v1.json", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "fixtures/published-route-manifests.json", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
+  Object.freeze({ module: "lib/aquariumStatus.ts", routes: Object.freeze(["/pulse"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "lib/capabilitySurface.ts", routes: Object.freeze(["/console", "/operate", "/workbench"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([1, 2, 3, 5, 10, 12, 14, 16, 17, 22, 23, 24, 30, 32]) }),
   Object.freeze({ module: "lib/clientOperationJournal.ts", routes: Object.freeze(["/market", "/markets/[address]", "/portfolio", "/redeem", "/resolution"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "lib/deploymentStore.ts", routes: Object.freeze(["/", "/activity", "/bounty", "/campaign", "/console", "/create", "/direct", "/explorer", "/found", "/general", "/liquidity", "/live", "/market", "/markets", "/markets/[address]", "/operate", "/population", "/portfolio", "/product-v2", "/pulse", "/redeem", "/release", "/resolution", "/smoke", "/trade", "/workbench"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([3, 22]) }),
@@ -333,6 +335,7 @@ export const CLIENT_MODULE_SURFACES_V1: ReadonlyArray<ClientModuleSurfaceV1> = O
   Object.freeze({ module: "lib/generated/walletTerminalPayoutWasmV1.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([38]) }),
   Object.freeze({ module: "lib/observedSnapshotV1.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([1, 2, 3, 10, 14, 16, 17, 22, 23, 24]) }),
   Object.freeze({ module: "lib/productPayoffV2Evaluation.ts", routes: Object.freeze(["/product-v2"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([15, 34]) }),
+  Object.freeze({ module: "lib/publicMarketBindings.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "lib/publishedRouteManifests.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "lib/redeemOperationJournal.ts", routes: Object.freeze(["/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([1, 2, 3, 5, 6, 10, 14, 16, 17, 18, 19, 21, 22, 23, 24, 26, 31]) }),
   Object.freeze({ module: "lib/rpcDefault.ts", routes: Object.freeze(["/activity", "/explorer", "/market", "/markets", "/markets/[address]", "/portfolio", "/redeem"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
@@ -354,7 +357,7 @@ export const CLIENT_MODULE_SURFACES_V1: ReadonlyArray<ClientModuleSurfaceV1> = O
   Object.freeze({ module: "lib/tradeFlowRefusals.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
   Object.freeze({ module: "lib/tradeFlowSteps.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([1, 2, 3, 5, 16, 22, 23, 24]) }),
   Object.freeze({ module: "lib/useAccountWatch.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),
-  Object.freeze({ module: "lib/userPositionAdmissionOperation.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([1, 2, 3, 6, 10, 14, 16, 17, 22, 23, 24, 36]) }),
+  Object.freeze({ module: "lib/userPositionAdmissionOperation.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([1, 2, 3, 5, 6, 10, 11, 14, 16, 17, 22, 23, 24, 36]) }),
   Object.freeze({ module: "lib/userPositionAdmissionSnapshot.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([1, 2, 3, 6, 10, 14, 16, 17, 22, 23, 24, 36]) }),
   Object.freeze({ module: "lib/userPositionAdmissionV1.ts", routes: Object.freeze(["/market", "/markets/[address]"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([36]) }),
   Object.freeze({ module: "lib/walletStandard.ts", routes: Object.freeze(["/activity", "/found", "/liquidity", "/market", "/markets/[address]", "/portfolio", "/redeem", "/release", "/resolution"]), authority: "none", submits: false, readsExternalFile: false, generatedAbis: Object.freeze([]) }),

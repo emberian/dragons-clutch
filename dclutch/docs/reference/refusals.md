@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **452** codes, with meanings taken
+The tables below carry all **456** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**78 of 452** codes have been observed refusing a real
+**78 of 456** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,7 +54,7 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-452 codes belonging to the programs the route census enumerates.
+456 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -547,6 +547,10 @@ The 22 campaigns contributing:
 | `0x402C` | `TradingSbfError::CloseMakerParameters` | The governed parameters record was absent from the close-maker frame, not owned by the release set's Custody program, not at the address its seeds derive, or did not decode (decision 0024, the record USED). | -- | `programs/dclutch-trading-sbf/src/lib.rs:593` |
 | `0x402D` | `TradingSbfError::CloseMakerUpkeepVault` | The upkeep vault was absent from the close-maker frame, not owned by the release set's Custody program, not at its address, or its credit CPI refused (decision 0024 item 4). | -- | `programs/dclutch-trading-sbf/src/lib.rs:597` |
 | `0x402E` | `TradingSbfError::CloseMakerCloser` | The closer at the close-maker frame's coordinate 24 did not sign, was not a plain System wallet, or aliased another coordinate (`FUNDED_CRANK_V1.md` section 6: signs only to own the reward). | -- | `programs/dclutch-trading-sbf/src/lib.rs:601` |
+| `0x402F` | `TradingSbfError::SeriesPrecommitCallerKey` | Series precommit observation names another Trading caller PDA. | -- | `programs/dclutch-trading-sbf/src/lib.rs:603` |
+| `0x4030` | `TradingSbfError::SeriesPrecommitCallerPrivileges` | Series precommit caller carries forbidden outer privileges. | -- | `programs/dclutch-trading-sbf/src/lib.rs:605` |
+| `0x4031` | `TradingSbfError::SeriesPrecommitCallerOwner` | Series precommit caller is not System-owned. | -- | `programs/dclutch-trading-sbf/src/lib.rs:607` |
+| `0x4032` | `TradingSbfError::SeriesPrecommitCallerData` | Series precommit caller has a nonempty account body. | -- | `programs/dclutch-trading-sbf/src/lib.rs:609` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:44` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:46` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:48` |

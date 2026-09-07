@@ -231,6 +231,35 @@ impl AuthenticatedLogicalMarketV3 {
     }
 }
 
+/// Select under the already authenticated capability kind. Keep lifecycle
+/// decoding and temporary ProgramSet entries out of the main Hot stack frame.
+#[inline(never)]
+fn select_hot_program_entry_v3(
+    program_set: CapabilityProgramSetV2<'_>,
+    selected_kind: [u8; 32],
+    family_request: &[u8],
+) -> Result<dclutch_market::capability_program::set_v2::CapabilityProgramSetEntryV2, ProgramError> {
+    // Only Structured creation maps the typed wire tags 0/1 to selectors 6/7.
+    // RequestProfile and Claims still consume their original canonical wires.
+    if let Some(selector) = structured_lifecycle_selector_v1(selected_kind, family_request) {
+        let mut index = 0_u16;
+        while index < program_set.entry_count() {
+            let entry = program_set
+                .entry(index)
+                .map_err(|_| TradingSbfError::Content)?;
+            if entry.selector() == selector {
+                return Ok(entry);
+            }
+            index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        Err(TradingSbfError::Content.into())
+    } else {
+        program_set
+            .select_entry(family_request)
+            .map_err(|_| TradingSbfError::Content.into())
+    }
+}
+
 #[inline(never)]
 pub(super) fn authenticate_and_execute_hot_v3(
     prepared: &AuthenticatedHotPreludeV3<'_, '_, '_, '_>,
@@ -288,30 +317,8 @@ pub(super) fn authenticate_and_execute_hot_v3(
         &program_set_data,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    // The authenticated Structured capability is the only family allowed to
-    // normalize its V6 creation wire tags 0/1 to selected-table selectors 6/7.
-    // RequestProfile and the Claims child continue to receive the original wire.
     let selected_kind = context.selection().kind().to_bytes();
-    let selected_entry =
-        if let Some(selector) = structured_lifecycle_selector_v1(selected_kind, family_request) {
-            let mut index = 0_u16;
-            let mut matched = None;
-            while index < program_set.entry_count() {
-                let entry = program_set
-                    .entry(index)
-                    .map_err(|_| TradingSbfError::Content)?;
-                if entry.selector() == selector {
-                    matched = Some(entry);
-                    break;
-                }
-                index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
-            }
-            matched.ok_or(TradingSbfError::Content)?
-        } else {
-            program_set
-                .select_entry(family_request)
-                .map_err(|_| TradingSbfError::Content)?
-        };
+    let selected_entry = select_hot_program_entry_v3(program_set, selected_kind, family_request)?;
     let selected_descriptor = selected_entry.descriptor();
     if selected_descriptor.schema().to_bytes() != PROGRAM_SCHEMA_ID_V4 {
         return Err(TradingSbfError::UnsupportedContent.into());

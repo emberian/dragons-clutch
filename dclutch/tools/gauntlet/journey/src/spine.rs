@@ -1650,7 +1650,7 @@ fn is_exact_upkeep_found_report(document: &Value, custody: Pubkey) -> bool {
         && document
             .pointer("/poststate/creditClass")
             .and_then(Value::as_str)
-            == Some("Deposit")
+            == Some("upkeep:deposit")
         && document.pointer("/poststate/unreceiptedLamports") == Some(&Value::from(0))
 }
 
@@ -1835,7 +1835,7 @@ mod tests {
             "custody": custody.to_string(),
             "poststate": {
                 "creditAmount": UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1,
-                "creditClass": "Deposit",
+                "creditClass": "upkeep:deposit",
                 "unreceiptedLamports": 0,
             },
         });
@@ -1857,7 +1857,7 @@ mod tests {
             "custody": custody.to_string(),
             "poststate": {
                 "creditAmount": UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1,
-                "creditClass": "Deposit",
+                "creditClass": "upkeep:deposit",
                 "unreceiptedLamports": 1,
             },
         });

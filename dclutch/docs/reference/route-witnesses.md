@@ -22,16 +22,16 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | **local validator** | 24 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
 | **ProgramTest only** | 41 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
 | **blocked** | 44 | no campaign and no devnet witness; `tools/gauntlet/blocked.json` records a reason, a class and an owner |
-| **unrecorded** | 9 | no campaign, no devnet witness, and no reason recorded |
+| **unrecorded** | 10 | no campaign, no devnet witness, and no reason recorded |
 
-Those five classes partition the 165, and the last one is NOT the count of
+Those five classes partition the 166, and the last one is NOT the count of
 routes nothing has ever run:
 
-- **unrecorded: 9 of 165** -- no campaign
+- **unrecorded: 10 of 166** -- no campaign
   binding, no devnet witness, and no entry in `tools/gauntlet/blocked.json`.
   Nobody has written anything at all about this route. This is the number the
   register has always printed under the name NEVER-EXECUTED.
-- **undriven: 45 of 165** -- unrecorded, PLUS every
+- **undriven: 46 of 166** -- unrecorded, PLUS every
   blocked route whose entry is classed `status-report` ("no campaign or tier
   drives it yet", with nothing structural in the way), PLUS every blocked route
   whose entry is classed `unwired` (it admits the route is driven today and
@@ -52,7 +52,7 @@ entries classify 44 routes.
 By class of blocking entry: **out-of-release-set** 0, **structural** 6, **repointing** 2, **unwired** 7, **status-report** 29.
 
 **A real Agave runtime drives 71 of the
-165.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
+166.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
 validator or devnet transaction where the route is chain-facing; those are the
 rows that meet it. The ProgramTest column is not a lesser version of the same
 thing -- `tools/gauntlet/DESIGN.md` admits that substrate only as a labelled
@@ -376,6 +376,7 @@ entries whose route now executes.
 | `resolution/process_submit#magic` | local-validator | `journey`, `ladder` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/ladder/bindings.json` |
 | `resolution/process_verify#VerifyFundReady` | local-validator | `journey` | `tools/gauntlet/journey/bindings.json` |
 | `resolution/provider_instruction_v3::process_provider_resolution_v3` | local-validator | `journey`, `ladder` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/ladder/bindings.json` |
+| `resolution/provider_instruction_v3::process_provider_resolution_v3#count` | never-executed | no campaign, no reason recorded | -- |
 | `resolution/provider_transport_v3::process_provider_transport_v3` | local-validator | `journey`, `ladder`, `resolution-core-v3-programtest` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/ladder/bindings.json` |
 | `resolution/relay_transport_v1::process_relay_transport_v1` | local-validator | `relayed-vertical`, `resolution-relayed-programtest` | `tools/gauntlet/relayed-vertical/bindings.json` |
 | `resolution/sponsored_push_v1::process_sponsored_push_v1` | devnet | cohort 13 `DCLTSPI1` slot 492,139,257; cohort 14 `DCLTSPI1` slot 492,358,855; cohort 14 `DCLTSPI1` slot 492,412,657; cohort 14 `DCLTSPI1` slot 492,491,288; cohort 14 `DCLTSPI1` slot 492,545,402; cohort 15 `DCLTSPI1` slot 492,775,238; cohort 15 `DCLTSPI1` slot 492,829,232; cohort 15 `DCLTSPI1` slot 492,868,986; cohort 15 `DCLTSPI1` slot 492,925,112; cohort 16 `DCLTSPI1` slot 493,772,406; cohort 16 `DCLTSPI1` slot 493,825,024; cohort 17 `DCLTSPI1` slot 493,992,422; cohort 17 `DCLTSPI1` slot 494,099,419; cohort 17 `DCLTSPI1` slot 494,150,841; also bound by `resolution-sponsored-programtest` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
