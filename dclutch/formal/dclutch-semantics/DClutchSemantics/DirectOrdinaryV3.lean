@@ -26,6 +26,16 @@ Register schema notes that are semantic, not incidental:
   stays NON-terminal whenever a fee is owed.
 * the Product-owned tail carries one canonical coordinate and one Claims
   quantity per item; nothing else in the bank is Product-width.
+* **the execution price is DERIVED, not the matcher's.** Under the batch spine
+  (`docs/design/MECHANISM_BATCH_SPINE_2026_09_04.md` §1.5) the inline fill is
+  the RFQ — a batch of two — and a batch has a uniform price by arithmetic:
+  `derivedPrice = (sellerLimit + buyerLimit) / 2`, the equal split, rounded
+  down. The request still carries `executionPrice`, and the prelude now
+  requires it to EQUAL the derived value; the two `scalarLe` conjuncts that
+  used to admit any price inside the interval survive as the crossing check
+  (`sellerLimit ≤ buyerLimit`). A fill at an agreed price (`sellerLimit =
+  buyerLimit`) is unchanged. `DirectRfqV1` proves the same pair clears as a
+  batch of two under the joint clearing's certificate.
 -/
 
 namespace DClutch.DirectOrdinaryV3
@@ -57,7 +67,7 @@ inductive ScalarSlot where
   | sellerBump | sellerRentPrincipalObservation | sellerRentPrincipal | buyerCreated
   | buyerBumpObservation | buyerBump | claimTransfer | feeSoleRouteEnabled
   | makerCurrentRentMinimum | claimTailTotal | maxFeeBps
-  | feeContinuationRouteEnabled
+  | feeContinuationRouteEnabled | limitSum | two | derivedPrice
   deriving DecidableEq, Repr
 
 namespace ScalarSlot
@@ -80,7 +90,7 @@ def all : List ScalarSlot := [
   .sellerBump, .sellerRentPrincipalObservation, .sellerRentPrincipal, .buyerCreated,
   .buyerBumpObservation, .buyerBump, .claimTransfer, .feeSoleRouteEnabled,
   .makerCurrentRentMinimum, .claimTailTotal, .maxFeeBps,
-  .feeContinuationRouteEnabled
+  .feeContinuationRouteEnabled, .limitSum, .two, .derivedPrice
 ]
 
 @[simp] def index : ScalarSlot → Nat
@@ -152,6 +162,9 @@ def all : List ScalarSlot := [
   | .claimTailTotal => 65
   | .maxFeeBps => 66
   | .feeContinuationRouteEnabled => 67
+  | .limitSum => 68
+  | .two => 69
+  | .derivedPrice => 70
 
 def rustName : ScalarSlot → String
   | .rootPhase => "SCALAR_ROOT_PHASE_V3"
@@ -222,6 +235,9 @@ def rustName : ScalarSlot → String
   | .claimTailTotal => "SCALAR_CLAIM_TAIL_TOTAL_V3"
   | .maxFeeBps => "SCALAR_MAX_FEE_BPS_V3"
   | .feeContinuationRouteEnabled => "SCALAR_FEE_CONTINUATION_ROUTE_ENABLED_V3"
+  | .limitSum => "SCALAR_LIMIT_SUM_V3"
+  | .two => "SCALAR_TWO_V3"
+  | .derivedPrice => "SCALAR_DERIVED_PRICE_V3"
 
 /-- Emitted Rust documentation for this coordinate. -/
 def doc : ScalarSlot → String
@@ -293,6 +309,9 @@ def doc : ScalarSlot → String
   | .claimTailTotal => "Program-owned total of the Claims quantities written across the Product tail."
   | .maxFeeBps => "Program-owned venue fee band (decision 0014 D2), in basis points."
   | .feeContinuationRouteEnabled => "Fee-continuation Custody route enable bit, program-pinned to zero: the fee leg settles in a second transaction."
+  | .limitSum => "Program-owned sum of the seller floor and the buyer cap."
+  | .two => "Program-owned constant two, the RFQ's equal-split denominator."
+  | .derivedPrice => "Program-owned derived RFQ price: the equal split of the two limits, rounded down; the request's execution price must equal it."
 
 /-- The maker replay magic word is written into the fee-denominator coordinate
 after the floor-fee division has consumed it. The reuse is deliberate and the
@@ -522,6 +541,14 @@ def preludeOps : List Op := [
   .scalarLe (s .sellerLimit) (s .executionPrice),
   .scalarLe (s .executionPrice) (s .buyerLimit),
   .scalarLe (s .executionPrice) (s .priceScale),
+  -- THE RFQ PRICE. The two conjuncts above now say only that the limits cross;
+  -- the price itself is the equal split of the two limits, and the request's
+  -- `executionPrice` must be exactly it. A matcher who names any other price
+  -- in the interval refuses here.
+  .loadConst (s .two) 2,
+  .checkedAddInto (s .sellerLimit) (s .buyerLimit) (s .limitSum),
+  .mulDivFloor (s .limitSum) (s .one) (s .two) (s .derivedPrice),
+  .scalarEq (s .executionPrice) (s .derivedPrice),
   .scalarEq (s .sellerFeeBps) (s .policyFeeBps),
   .scalarEq (s .buyerFeeBps) (s .policyFeeBps),
   .scalarLe (s .policyFeeBps) (s .maxFeeBps),
@@ -591,17 +618,17 @@ def program : Program := {
 
 theorem well_formed : program.wellFormed = true := by native_decide
 
-theorem prelude_count : program.prelude.length = 69 := by native_decide
+theorem prelude_count : program.prelude.length = 73 := by native_decide
 
 theorem item_count : program.itemBody.length = 3 := by native_decide
 
 theorem epilogue_count : program.epilogue.length = 1 := by native_decide
 
-theorem common_scalar_count : program.commonScalars = 68 := by native_decide
+theorem common_scalar_count : program.commonScalars = 71 := by native_decide
 
 theorem common_identity_count : program.commonIdentities = 32 := by native_decide
 
-theorem encoded_width : (Codec.encodeProgram program).length = 1784 := by native_decide
+theorem encoded_width : (Codec.encodeProgram program).length = 1880 := by native_decide
 
 /-! ## Witnesses
 
@@ -700,6 +727,41 @@ theorem canonical_frame_admits :
   native_decide
 
 open Witness in
+/-- THE RFQ PRICE IS DERIVED. The canonical frame's 40/60 pair clears at 50 and
+at nothing else: a matcher who names 55 — inside both limits, and admitted by
+the pre-spine program — refuses, because the price is the pair's and not the
+matcher's. -/
+theorem a_matcher_price_off_the_equal_split_refuses :
+    program.execute 3 ⟨scalars 3 [(.executionPrice, 55)], identities⟩ = none := by
+  native_decide
+
+open Witness in
+/-- An agreed price is unchanged: both limits at 50 clear at 50, the same quote
+the canonical frame produces. -/
+theorem an_agreed_price_admits_unchanged :
+    quote (program.execute 3
+        ⟨scalars 3 [(.sellerLimit, 50), (.buyerLimit, 50)], identities⟩) = some (5, 0, 10) := by
+  native_decide
+
+open Witness in
+/-- The equal split rounds DOWN: 40/61 clears at 50, and a request naming 51
+refuses. The odd atom stays with the buyer, who signed the higher of the two. -/
+theorem the_equal_split_rounds_down :
+    quote (program.execute 3
+        ⟨scalars 3 [(.buyerLimit, 61)], identities⟩) = some (5, 0, 10) ∧
+    program.execute 3
+        ⟨scalars 3 [(.buyerLimit, 61), (.executionPrice, 51)], identities⟩ = none := by
+  native_decide
+
+open Witness in
+/-- An uncrossed pair — floor above cap — refuses at the crossing conjunct
+before the price is even derived. -/
+theorem an_uncrossed_pair_refuses :
+    program.execute 3
+        ⟨scalars 3 [(.sellerLimit, 60), (.buyerLimit, 40)], identities⟩ = none := by
+  native_decide
+
+open Witness in
 /-- The divergence this clause closes. With an authenticated outcome count of
 five, a traded outcome of four, and a Product tail of three, no item carries the
 traded outcome: the fold writes nothing, and the epilogue refuses a fill whose
@@ -784,7 +846,7 @@ against it. -/
 /-- The scalar bank is affine in the tail count at the emitted stride, so the
 tail count is a runtime width and never a compile-time one. -/
 theorem the_scalar_bank_is_affine_in_the_tail_count (tailCount : Nat) :
-    program.scalarWidth tailCount = 68 + tailCount * 2 := rfl
+    program.scalarWidth tailCount = 71 + tailCount * 2 := rfl
 
 /-- The identity bank does not grow with the geometry at all: ordinary Direct
 has no per-Product-item identity. -/

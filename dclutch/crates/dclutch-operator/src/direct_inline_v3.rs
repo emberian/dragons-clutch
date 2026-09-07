@@ -1731,10 +1731,23 @@ fn preview_economics(
             return Err(Error::EconomicMismatch);
         }
     }
+    // The chain derives the price rather than accepting one: the two interval
+    // conjuncts now say only that the limits cross, and the execution price
+    // must equal their floored equal split
+    // (`DirectOrdinaryV3.lean` `preludeOps`, `SCALAR_DERIVED_PRICE_V3`). A
+    // preview that admitted any other price inside the interval would build
+    // transactions the program refuses.
+    let derived_price = seller
+        .intent
+        .limit_price
+        .checked_add(buyer.intent.limit_price)
+        .ok_or(Error::Arithmetic)?
+        / 2;
     if seller.intent.outcome != buyer.intent.outcome
         || execution_price < seller.intent.limit_price
         || execution_price > buyer.intent.limit_price
         || execution_price > config.price_scale()
+        || execution_price != derived_price
     {
         return Err(Error::EconomicMismatch);
     }
@@ -1987,6 +2000,49 @@ mod tests {
                 fee_basis_points: 25,
                 collateral_account: [maker_byte + 10; 32],
             },
+        }
+    }
+
+    /// The off-chain preview refuses exactly what the chain refuses: the
+    /// execution price is the floored equal split of the two limits, never
+    /// merely a price inside the interval.
+    ///
+    /// The positive control comes first — the fixture's own 400,000 floor and
+    /// 600,000 cap preview at 500,000 — so each refusal below is attributable
+    /// to the price and not to a neighbouring conjunct. Every price tried
+    /// leaves gross an exact division, which is the other way this preview can
+    /// refuse.
+    #[test]
+    fn the_preview_admits_only_the_equal_split_the_chain_derives() {
+        let config =
+            dclutch_trading::successor::DirectExecutionConfigV1::new(1_000_000, 25, [60; 32])
+                .expect("config");
+        let state = DirectInlineHotStateV3 {
+            fixed_accounts: Vec::new(),
+            strategy_accounts: Vec::new(),
+            runtime_accounts: Vec::new(),
+            release_set: [1; 32],
+            generation: 9,
+            clock_slot: 150,
+            minimum_finalized_slot: 0,
+            hot_outer: None,
+        };
+        let market = Pubkey::new_from_array([7; 32]);
+        let seller = intent(0, 1);
+        let buyer = intent(1, 2);
+        let preview = preview_economics(
+            market, &state, config, seller, buyer, 1_000, 500_000, 70_001,
+        )
+        .expect("the equal split previews");
+        assert_eq!(preview.claim_transfer, 1_000);
+        assert_eq!(preview.gross_collateral, 500);
+
+        for price in [400_000_u64, 460_000, 540_000, 600_000] {
+            assert_eq!(
+                preview_economics(market, &state, config, seller, buyer, 1_000, price, 70_001),
+                Err(Error::EconomicMismatch),
+                "a crossing price off the equal split must refuse"
+            );
         }
     }
 

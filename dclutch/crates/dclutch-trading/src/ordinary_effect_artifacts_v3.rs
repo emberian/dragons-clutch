@@ -876,7 +876,10 @@ mod tests {
             effect.fixed_account_count(),
             DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3 + 1
         );
-        assert_eq!(effect.common_scalar_count(), 68);
+        assert_eq!(
+            usize::try_from(effect.common_scalar_count()).expect("scalar width"),
+            DIRECT_ORDINARY_COMMON_SCALARS_V3
+        );
         assert_eq!(effect.item_scalar_stride(), 2);
         assert_eq!(effect.common_identity_count(), 32);
         assert_eq!(effect.request_bytes(0).expect("request bank"), 3_424);

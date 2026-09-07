@@ -11,29 +11,41 @@ formal_root="$repo_root/formal/dclutch-semantics"
 src="$repo_root/crates/dclutch-trading/src"
 
 generated_intent="$src/generated_intent_v2.rs"
+generated_intent_v3="$src/generated_intent_v3.rs"
 generated_successor="$src/generated_successor.rs"
 generated_ordinary="$src/generated_ordinary_v3.rs"
 generated_registered_fill="$src/generated_registered_fill_v4.rs"
 
 candidate_intent=$(mktemp "${TMPDIR:-/tmp}/dclutch-direct-intent-v2.XXXXXX")
+candidate_intent_v3=$(mktemp "${TMPDIR:-/tmp}/dclutch-direct-intent-v3.XXXXXX")
 candidate_successor=$(mktemp "${TMPDIR:-/tmp}/dclutch-direct-successor.XXXXXX")
 candidate_ordinary=$(mktemp "${TMPDIR:-/tmp}/dclutch-direct-ordinary-v3.XXXXXX")
 candidate_registered_fill=$(mktemp "${TMPDIR:-/tmp}/dclutch-direct-registered-fill-v4.XXXXXX")
-trap 'rm -f "$candidate_intent" "$candidate_successor" "$candidate_ordinary" "$candidate_registered_fill"' EXIT HUP INT TERM
+trap 'rm -f "$candidate_intent" "$candidate_intent_v3" "$candidate_successor" "$candidate_ordinary" "$candidate_registered_fill"' EXIT HUP INT TERM
 
 (
   cd "$formal_root"
   lake build DClutchSemantics.DirectIntentV2Codec >/dev/null
+  lake build DClutchSemantics.DirectIntentV3Codec >/dev/null
   lake build DClutchSemantics.DirectSuccessorAbi >/dev/null
   lake build DClutchSemantics.DirectOrdinaryV3 >/dev/null
   lake build DClutchSemantics.DirectRegisteredFillV4 >/dev/null
   lake env lean --run EmitDirectIntentV2Rust.lean >"$candidate_intent"
+  lake env lean --run EmitDirectIntentV3Rust.lean >"$candidate_intent_v3"
   lake env lean --run EmitDirectSuccessorAbiRust.lean >"$candidate_successor"
   lake env lean --run EmitDirectOrdinaryV3Rust.lean >"$candidate_ordinary"
   lake env lean --run EmitDirectRegisteredFillV4Rust.lean >"$candidate_registered_fill"
 )
 
 test "$(wc -l <"$candidate_intent" | tr -d ' ')" -gt 45
+test "$(wc -l <"$candidate_intent_v3" | tr -d ' ')" -gt 60
+
+# The one field that makes a V3 ticket an RFQ half rather than an open offer,
+# and the width it costs. Pinned before the byte compare so a schema edit that
+# dropped the counterparty would be accused here rather than reported as an
+# anonymous byte difference.
+grep -q '^pub const COMPACT_INTENT_BYTES_V3: usize = 172;$' "$candidate_intent_v3"
+grep -q '^pub(crate) const COMPACT_INTENT_COUNTERPARTY_OFFSET_V3: usize = 140;$' "$candidate_intent_v3"
 test "$(wc -l <"$candidate_successor" | tr -d ' ')" -gt 90
 
 # The global Direct lifecycle's two wire tags. `DirectRootPhaseV1` declared no
@@ -52,10 +64,12 @@ test "$(wc -l <"$candidate_ordinary" | tr -d ' ')" -gt 250
 test "$(wc -l <"$candidate_registered_fill" | tr -d ' ')" -gt 400
 rustfmt --edition 2024 \
   "$candidate_intent" \
+  "$candidate_intent_v3" \
   "$candidate_successor" \
   "$candidate_ordinary" \
   "$candidate_registered_fill"
 cmp --silent "$candidate_intent" "$generated_intent"
+cmp --silent "$candidate_intent_v3" "$generated_intent_v3"
 cmp --silent "$candidate_successor" "$generated_successor"
 cmp --silent "$candidate_ordinary" "$generated_ordinary"
 cmp --silent "$candidate_registered_fill" "$generated_registered_fill"

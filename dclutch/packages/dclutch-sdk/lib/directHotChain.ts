@@ -758,11 +758,19 @@ export function validateDirectSignedRequestProfileV2(bytes: Uint8Array): void {
   // `dclutch-trading`'s `ordinary_artifacts_v3.rs` passes them into
   // `RequestGeometryV1::new`). Pinning them as literal zero refused every
   // Market whose scalars grow per outcome; cohort-8's stride is 2.
+  // The common scalar width has its own accusation. It is the one field of the
+  // eight that a RELEASE moves rather than a corruption: the ordinary program
+  // grew three slots when the execution price became the derived equal split
+  // (`SCALAR_LIMIT_SUM_V3`, `SCALAR_TWO_V3`, `SCALAR_DERIVED_PRICE_V3`), so a
+  // record published by an earlier release disagrees here and nowhere else.
+  // Folded into the sentence below it read as a corrupt record.
+  if (commonScalars !== DIRECT_ORDINARY_COMMON_SCALARS_V3) {
+    throw new Error(`embedded RequestProfile states a common scalar width of ${commonScalars}, and this client reads ${DIRECT_ORDINARY_COMMON_SCALARS_V3}: the record was published by a different Direct release`);
+  }
   if (fixedRequestBytes !== DirectAbi.DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3
       || itemRequestBytes !== 0 || fixedOperations === 0 || itemOperations !== 0
       || itemScalarStride !== DirectAbi.DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3
       || itemIdentityStride !== DirectAbi.DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3
-      || commonScalars !== DIRECT_ORDINARY_COMMON_SCALARS_V3
       || commonIdentities !== DIRECT_ORDINARY_COMMON_IDENTITIES_V3
       || embedded.length !== DirectAbi.REQUEST_PROFILE_HEADER_BYTES_V1
         + fixedOperations * DirectAbi.REQUEST_PROFILE_OPERATION_BYTES_V1) {

@@ -17,6 +17,9 @@ mod generated_registered_controller;
 #[allow(missing_docs)]
 mod generated_intent_v2;
 #[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated_intent_v3;
+#[rustfmt::skip]
 mod generated_ordinary_v3;
 #[rustfmt::skip]
 mod generated_registered_fill_v4;
@@ -34,6 +37,7 @@ pub mod execution_v3;
 pub mod fee_settlement_v1;
 pub mod inline_candidate_v2;
 pub mod intent_v2;
+pub mod intent_v3;
 #[cfg(not(target_os = "solana"))]
 pub mod native_close_bundle_v1;
 pub mod native_evidence_v3;

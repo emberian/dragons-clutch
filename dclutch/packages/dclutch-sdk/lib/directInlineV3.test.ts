@@ -226,7 +226,28 @@ describe('Direct V3 inline transaction construction', () => {
       buyerCollateralDebit: 1_002n,
       totalFeeTransfer: 4n,
     });
-    expect(() => previewDirectInlineV3(candidate, seller, buyer, 2_000n, 500_001n, 1_000n)).toThrow(/not exactly representable/);
+    // The chain derives the price from the two signed limits, so a matcher
+    // that names any other crossing price is refused before any arithmetic.
+    expect(() => previewDirectInlineV3(candidate, seller, buyer, 2_000n, 500_001n, 1_000n)).toThrow(/equal split/);
+    expect(() => previewDirectInlineV3(candidate, seller, buyer, 2_000n, 400_000n, 1_000n)).toThrow(/equal split/);
+    expect(() => previewDirectInlineV3(candidate, seller, buyer, 2_000n, 600_000n, 1_000n)).toThrow(/equal split/);
+
+    // The split rounds down: an odd sum derives the lower of the two.
+    const limits = (sellerLimit: bigint, buyerLimit: bigint) => Object.freeze({
+      seller: Object.freeze({ ...seller, intent: Object.freeze({ ...seller.intent, limitPrice: sellerLimit }) }),
+      buyer: Object.freeze({ ...buyer, intent: Object.freeze({ ...buyer.intent, limitPrice: buyerLimit }) }),
+    });
+    const odd = limits(400_001n, 600_000n);
+    expect(previewDirectInlineV3(candidate, odd.seller, odd.buyer, 2_000n, 500_000n, 1_000n).executionPrice).toBe(500_000n);
+    expect(() => previewDirectInlineV3(candidate, odd.seller, odd.buyer, 2_000n, 500_001n, 1_000n)).toThrow(/equal split/);
+
+    // The derived price can be one the scale cannot represent exactly at this
+    // fill, and then the pair cannot trade: the chain's own exact division
+    // refuses the same gross. Under the old interval rule a matcher could step
+    // off the split to a representable price; it no longer can.
+    const unrepresentable = limits(400_001n, 600_002n);
+    expect(() => previewDirectInlineV3(candidate, unrepresentable.seller, unrepresentable.buyer, 2_000n, 500_001n, 1_000n))
+      .toThrow(/not exactly representable/);
   });
 
   it('the wallet wire carries the caller-mined hint block and does not grow by a byte', () => {

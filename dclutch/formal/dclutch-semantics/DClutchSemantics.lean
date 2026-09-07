@@ -35,6 +35,7 @@ import DClutchSemantics.DealerTradingProfile
 import DClutchSemantics.Direct
 import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.DirectIntentV2Codec
+import DClutchSemantics.DirectIntentV3Codec
 import DClutchSemantics.DirectLifecycle
 import DClutchSemantics.DirectLifecycleAbi
 import DClutchSemantics.DirectLifecycleProgram
@@ -43,6 +44,7 @@ import DClutchSemantics.DirectProgram
 import DClutchSemantics.DirectProgramV2
 import DClutchSemantics.DirectProofs
 import DClutchSemantics.DirectRegisteredFillV4
+import DClutchSemantics.DirectRfqV1
 import DClutchSemantics.DirectSuccessor
 import DClutchSemantics.DirectSuccessorAbi
 import DClutchSemantics.EconomicCodec

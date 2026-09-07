@@ -739,9 +739,17 @@ export function previewDirectInlineV3(
       throw new Error(`${side === 0 ? 'seller' : 'buyer'} intent does not admit this exact chain-derived execution`);
     }
   }
+  // The chain derives the price rather than accepting one: the two interval
+  // conjuncts now say only that the limits cross, and the execution price must
+  // equal their floored equal split (`DirectOrdinaryV3.lean` `preludeOps`,
+  // `SCALAR_DERIVED_PRICE_V3`).
+  const derivedPrice = (seller.intent.limitPrice + buyer.intent.limitPrice) / 2n;
   if (seller.intent.outcome !== buyer.intent.outcome || executionPrice < seller.intent.limitPrice
       || executionPrice > buyer.intent.limitPrice || executionPrice > route.priceScale) {
     throw new Error('execution price or outcome does not cross both signed limits');
+  }
+  if (executionPrice !== derivedPrice) {
+    throw new Error('execution price is not the equal split of the two signed limits the chain derives');
   }
   const scaled = exactU64(fill, 'fill') * exactU64(executionPrice, 'execution price');
   if (scaled % route.priceScale !== 0n) throw new Error('fill × price is not exactly representable at the immutable price scale');

@@ -519,13 +519,31 @@ mod tests {
     }
 
     #[test]
-    fn exact_program_admits_price_improved_ioc_and_routes_the_seller_leg_alone() {
+    fn exact_program_admits_the_derived_price_ioc_and_routes_the_seller_leg_alone() {
         let config = DirectExecutionConfigV1::new(100, 500, id(60)).expect("config");
         let scalar_width = DIRECT_ORDINARY_COMMON_SCALARS_V3
             + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
         let mut output = std::vec![99_u64; scalar_width];
         execute(request(), context(config), &mut output).expect("ordinary transition");
-        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_784);
+        // The RFQ price rule read off the admitted frame rather than restated:
+        // the execution price the program accepted IS the floored equal split
+        // of the two limits it was handed. The width this line used to pin is
+        // derived from the geometry in
+        // `the_emitted_program_carries_its_own_derived_width_and_geometry`.
+        let seller_floor = request().seller.intent.limit_price;
+        let buyer_cap = request().buyer.intent.limit_price;
+        assert_eq!(output[SCALAR_SELLER_LIMIT_V3], seller_floor);
+        assert_eq!(output[SCALAR_BUYER_LIMIT_V3], buyer_cap);
+        assert_eq!(output[SCALAR_TWO_V3], 2);
+        assert_eq!(output[SCALAR_LIMIT_SUM_V3], seller_floor + buyer_cap);
+        assert_eq!(
+            output[SCALAR_DERIVED_PRICE_V3],
+            (seller_floor + buyer_cap) / 2
+        );
+        assert_eq!(
+            output[SCALAR_EXECUTION_PRICE_V3],
+            output[SCALAR_DERIVED_PRICE_V3]
+        );
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 5);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 10);
         assert_eq!(output[SCALAR_GROSS_V3], 20);
@@ -574,6 +592,50 @@ mod tests {
                 if item == 2 { 40 } else { 0 }
             );
         }
+    }
+
+    /// The RFQ's price rule on the executed program, both directions.
+    ///
+    /// The positive control is the first case: the branch's own fixture at the
+    /// equal split admits. Every other case moves exactly one field, so a
+    /// refusal is attributable to the split check and not to a neighbouring
+    /// conjunct. The off-split prices are chosen so that gross stays an exact
+    /// division — an inexact gross refuses for its own reason and would prove
+    /// nothing about the split.
+    #[test]
+    fn only_the_equal_split_is_admitted_and_the_split_rounds_down() {
+        let config = DirectExecutionConfigV1::new(100, 500, id(60)).expect("config");
+        let width = DIRECT_ORDINARY_COMMON_SCALARS_V3
+            + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
+
+        let mut admitted = std::vec![0_u64; width];
+        execute(request(), context(config), &mut admitted).expect("the equal split admits");
+        assert_eq!(admitted[SCALAR_EXECUTION_PRICE_V3], 50);
+
+        // Forty and sixty are the interval endpoints the old rule admitted;
+        // forty-five and fifty-five are strictly inside it.
+        for price in [40_u64, 45, 55, 60] {
+            let mut off_split = request();
+            off_split.execution_price = price;
+            let mut output = std::vec![0x55_u64; width];
+            let before = output.clone();
+            assert_eq!(
+                execute(off_split, context(config), &mut output),
+                Err(dclutch_vm::v3::Error::CheckFailed),
+                "a crossing price off the equal split must refuse"
+            );
+            assert_eq!(output, before);
+        }
+
+        // Rounding: a floor of forty against a cap of sixty-one derives fifty,
+        // not fifty-one. The Lean witness is `the_equal_split_rounds_down`.
+        let mut odd = request();
+        odd.buyer.intent.limit_price = 61;
+        let mut output = std::vec![0_u64; width];
+        execute(odd, context(config), &mut output).expect("the odd interval admits its floor");
+        assert_eq!(output[SCALAR_LIMIT_SUM_V3], 101);
+        assert_eq!(output[SCALAR_DERIVED_PRICE_V3], 50);
+        assert_eq!(output[SCALAR_EXECUTION_PRICE_V3], 50);
     }
 
     #[test]
