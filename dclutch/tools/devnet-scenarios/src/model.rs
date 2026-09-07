@@ -9,7 +9,13 @@ pub const BODY_DIGEST_SCOPE_V1: &str = "canonical-compact-scenario-body-json-v1"
 /// Exact public-devnet identity which the runtime must authenticate again.
 pub const DEVNET_GENESIS_HASH_V1: &str = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 /// Exact development fee rate applied independently to each Direct side.
-pub const DEVNET_FEE_BASIS_POINTS_V1: u16 = 50;
+///
+/// The bootstrap's chosen rate, projected from the one module that chooses it
+/// (`dclutch_trading::token_setup_v1`) rather than written a second time here.
+/// A scenario that disagreed with the setup wire about the rate would produce
+/// expectations no fill can meet, and the disagreement would be invisible.
+pub const DEVNET_FEE_BASIS_POINTS_V1: u16 =
+    dclutch_trading::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
 
 /// Digest-bearing canonical scenario envelope.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

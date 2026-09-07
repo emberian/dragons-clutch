@@ -17,6 +17,16 @@
 //! sequencer would call and which re-derives every account coordinate from the
 //! Market's own state before it agrees to build anything.
 //!
+//! The donation is no longer one destination. Decision 0024 split the observed
+//! balance three ways -- the recorded owner takes the principal EXACTLY, the
+//! closer takes a carve out of the donation, and every remaining lamport is
+//! credited to the upkeep vault -- and the carve's share and its lamport
+//! ceiling are read out of the Custody-owned governed parameters record this
+//! frame carries at coordinate 22. That record is not passed in either: this
+//! driver derives its address under the Custody program the Market's own
+//! release set names, and the plan stage authenticates it before a single
+//! number comes out of it.
+//!
 //! This driver's whole job is to turn a cluster into that function's input and
 //! its answer into something an operator can read. It decides nothing.
 //!
@@ -48,20 +58,37 @@ use std::path::{Path, PathBuf};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
-use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey, signature::Keypair, signer::Signer};
+use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer};
 
-use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::upkeep_vault_v1::UpkeepVaultSeedsV1;
+use dclutch_market::CoreState;
+use dclutch_market::capability_manifest::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
+};
 use dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2;
 use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-use dclutch_core_contract::ContentId;
+use dclutch_market::protocol_parameters::ProtocolParametersRecordSeedsV1;
+use dclutch_operator::direct_close_maker_v1::{
+    DirectCloseMakerClusterV1, DirectCloseMakerPlanErrorV1, DirectCloseMakerPlanV1,
+    DirectCloseMakerSnapshotV1, DirectCloseMakerSubmitV1, plan_direct_close_maker_v1,
+};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::release_set::{
+    CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
+};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_trading::{
     close_maker_bundle_v1::{
         direct_close_maker_account_profile_schema_v1, direct_close_maker_descriptor_schema_v1,
         direct_close_maker_effect_schema_v1,
     },
     close_maker_v1::{
-        DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1,
-        DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1, DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1, DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1, DirectCloseMakerRequestV1,
     },
     program_set_v4::build_direct_inline_ordinary_lifecycle_program_set_v1,
     successor::{
@@ -69,14 +96,6 @@ use dclutch_trading::{
         MakerReplaySeedsV1,
     },
 };
-use dclutch_market::CoreState;
-use dclutch_operator::direct_close_maker_v1::{
-    DirectCloseMakerClusterV1, DirectCloseMakerPlanErrorV1, DirectCloseMakerPlanV1,
-    DirectCloseMakerSnapshotV1, DirectCloseMakerSubmitV1, plan_direct_close_maker_v1,
-};
-use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_registry::release_set::{CapabilityExecutionSelectionV1, ExecutionRoleV1};
 
 use crate::campaign::{
     parse_campaign_terminal_evidence_with_expected_cluster_v1, read_keypair_file,
@@ -97,9 +116,9 @@ pub(crate) const COMMAND_V1: &str = "local-private-validator-direct-close-maker-
 pub(crate) const COMMAND_DEVNET_V1: &str = "devnet-direct-close-maker-v1";
 
 pub(crate) fn usage() -> &'static str {
-    "dclutch-local-successor-bootstrap local-private-validator-direct-close-maker-v1 --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON --market-input ABSOLUTE_JSON --campaign-evidence ABSOLUTE_JSON --direct-evidence ABSOLUTE_JSON --market MARKET --maker MAKER --evidence ABSOLUTE_NEW_JSON [--entry-index N] [--maker-replay ADDRESS] [--execute --fee-payer-keypair ABSOLUTE_JSON]\n\
-     dclutch-local-successor-bootstrap devnet-direct-close-maker-v1 --rpc-url URL --i-mean-devnet GENESIS_HASH --plan ABSOLUTE_JSON --market-input ABSOLUTE_JSON --campaign-evidence ABSOLUTE_JSON --direct-evidence ABSOLUTE_JSON --market MARKET --maker MAKER --evidence ABSOLUTE_NEW_JSON [--entry-index N] [--maker-replay ADDRESS] [--execute --fee-payer-keypair ABSOLUTE_JSON]\n\
-     \nCloses one Direct maker replay inside Retiring: wall 22's missing decrement, driven against a live cluster. It is permissionless -- no party to the market signs it, and the payer may be a stranger. Nothing economic is passed in: the beneficiary, the historical rent principal and the donation slice are read off the replay's own authenticated bytes, so a submission cannot move a lamport the market did not already fix. Without --execute this is a DRY RUN that opens no key and sends nothing, and it still reports the exact instruction, the exact refund split, and the exact poststate the close would produce. A replay that still owes its fee, or still has live intents, refuses here by name rather than on chain."
+    "dclutch-local-successor-bootstrap local-private-validator-direct-close-maker-v1 --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON --market-input ABSOLUTE_JSON --campaign-evidence ABSOLUTE_JSON --direct-evidence ABSOLUTE_JSON --market MARKET --maker MAKER --evidence ABSOLUTE_NEW_JSON [--entry-index N] [--maker-replay ADDRESS] [--closer ADDRESS] [--execute --fee-payer-keypair ABSOLUTE_JSON]\n\
+     dclutch-local-successor-bootstrap devnet-direct-close-maker-v1 --rpc-url URL --i-mean-devnet GENESIS_HASH --plan ABSOLUTE_JSON --market-input ABSOLUTE_JSON --campaign-evidence ABSOLUTE_JSON --direct-evidence ABSOLUTE_JSON --market MARKET --maker MAKER --evidence ABSOLUTE_NEW_JSON [--entry-index N] [--maker-replay ADDRESS] [--closer ADDRESS] [--execute --fee-payer-keypair ABSOLUTE_JSON]\n\
+     \nCloses one Direct maker replay inside Retiring: wall 22's missing decrement, driven against a live cluster. It is permissionless -- no party to the market signs it, and the payer may be a stranger. Nothing economic is passed in: the beneficiary, the historical rent principal and the donation slice are read off the replay's own authenticated bytes, and the closer's SHARE of that donation and its lamport ceiling are read off the Custody-owned governed parameters record this frame carries, which is not passed in either. So a submission cannot move a lamport the market and the governed record did not already fix. The balance splits three ways: the recorded rent owner takes the principal exactly, the closer takes the carve, and every remaining lamport of the donation is credited to the upkeep vault. Without --execute this is a DRY RUN that opens no key and sends nothing, so it cannot know who the closer would be: name one with --closer. With --execute the closer IS the fee payer this tool opens, which is the one frame coordinate a payer may occupy, because it is the one that signs anyway. Either way this reports the exact instruction, the exact three-way split, and the exact poststate the close would produce. A replay that still owes its fee, or still has live intents, refuses here by name rather than on chain."
 }
 
 /// Parsed command line.
@@ -114,6 +133,7 @@ struct ArgumentsV1 {
     direct_evidence: PathBuf,
     entry_index: u16,
     maker_replay: Option<Pubkey>,
+    closer: Option<Pubkey>,
     fee_payer_keypair: Option<PathBuf>,
     evidence: PathBuf,
     execute: bool,
@@ -207,15 +227,75 @@ fn close_v1(
     })?;
     let rent_owner = Pubkey::new_from_array(replay.rent_owner());
 
-    let snapshot = gather(
+    // The closer is a frame member now, so it has to exist before anything is
+    // gathered. Under `--execute` it is the payer this tool opens, which is the
+    // one frame coordinate a payer may occupy: it signs the transaction anyway,
+    // and coordinate 24 is the one coordinate the route asks a signature of. A
+    // dry run opens no key, so it has none to name and takes `--closer`.
+    let payer = match arguments.execute {
+        true => {
+            let path = arguments
+                .fee_payer_keypair
+                .as_deref()
+                .ok_or_else(|| Error::new("--execute requires --fee-payer-keypair"))?;
+            Some(Keypair::new_from_array(read_keypair_file(
+                path,
+                "close maker payer",
+            )?))
+        }
+        false => None,
+    };
+    let closer = resolve_closer(arguments, payer.as_ref())?;
+    if let Some(payer) = payer.as_ref() {
+        refuse_payer_in_frame(
+            &frame_keys(
+                &coordinates,
+                rent_owner,
+                closer,
+                coordinates.first_pass_caller_authority,
+            ),
+            payer.pubkey(),
+        )?;
+    }
+
+    // TWO PASSES AT MOST, and the common path is ONE. Coordinate 26's last seed
+    // is the digest of an upkeep request carrying the donation remainder and
+    // the digest of this close's own receipt, so it is derivable only from a
+    // completed plan. `InvalidCallerAuthority` carries the address the plan
+    // wanted, which is how a builder becomes right without reimplementing
+    // `assemble_plan`. When the remainder is zero -- every cohort to date,
+    // because every measured donation slice has been zero -- the plan requires
+    // nothing of that coordinate and the first pass stands.
+    let first = gather(
         &mut rpc,
         arguments,
         &coordinates,
         rent_owner,
+        closer,
+        coordinates.first_pass_caller_authority,
         cluster,
         genesis,
     )?;
-    let plan = plan_direct_close_maker_v1(&snapshot).map_err(describe_refusal)?;
+    let plan = match plan_direct_close_maker_v1(&first) {
+        Ok(plan) => plan,
+        Err(DirectCloseMakerPlanErrorV1::InvalidCallerAuthority(expected)) => {
+            let second = gather(
+                &mut rpc,
+                arguments,
+                &coordinates,
+                rent_owner,
+                closer,
+                expected,
+                cluster,
+                genesis,
+            )?;
+            // A second disagreement is a real refusal, not a coordinate this
+            // driver still has to learn: the plan already named the authority
+            // once and was given it.
+            plan_direct_close_maker_v1(&second).map_err(describe_refusal)?
+        }
+        Err(error) => return Err(describe_refusal(error)),
+    };
     let report = match plan {
         DirectCloseMakerPlanV1::Complete(complete) => {
             println!("market               {}", complete.market);
@@ -248,12 +328,7 @@ fn close_v1(
         return Ok(());
     }
 
-    let path = arguments
-        .fee_payer_keypair
-        .as_deref()
-        .ok_or_else(|| Error::new("--execute requires --fee-payer-keypair"))?;
-    let payer = Keypair::new_from_array(read_keypair_file(path, "close maker payer")?);
-    refuse_payer_in_frame(&report.instruction.accounts, payer.pubkey())?;
+    let payer = payer.ok_or_else(|| Error::new("--execute requires --fee-payer-keypair"))?;
     println!("payer                {}", payer.pubkey());
 
     let evidence = rpc.send(
@@ -295,6 +370,19 @@ fn close_v1(
         )));
     }
     println!("beneficiary after    {credited} (read back from chain)");
+    let housed = rpc
+        .account(coordinates.upkeep_vault)?
+        .map_or(0, |account| account.lamports);
+    if housed != report.expected_upkeep_vault_lamports {
+        return Err(Error::new(format!(
+            "the close landed but the upkeep vault {} holds {housed}, not the projected {}",
+            coordinates.upkeep_vault, report.expected_upkeep_vault_lamports
+        )));
+    }
+    println!("upkeep vault after   {housed} (read back from chain)");
+    // The closer's balance is deliberately NOT read back: under --execute the
+    // closer is the fee payer, so its balance carries the transaction fee as
+    // well as the carve, and the plan projects only the carve.
 
     write_evidence(
         &arguments.evidence,
@@ -360,6 +448,28 @@ struct CoordinatesV1 {
     effect: RecordPairV1,
     rent_sysvar: Pubkey,
     maker_replay: Pubkey,
+    /// The Custody program THIS Market's release set names.
+    ///
+    /// Read out of the activation cache beside Core and Trading rather than
+    /// taken from a flag, because both Custody coordinates below are PDAs
+    /// UNDER it: a wrong program here is a wrong answer about every economic
+    /// number in the plan, and the plan stage refuses one that is not the
+    /// role's ([`DirectCloseMakerPlanErrorV1::InvalidCustodyProgram`]).
+    custody_program: Pubkey,
+    /// The Custody-owned governed parameters record; the carve's share and its
+    /// lamport ceiling are read here.
+    protocol_parameters: Pubkey,
+    /// The Custody-owned upkeep vault the donation remainder is credited to.
+    upkeep_vault: Pubkey,
+    /// The caller authority coordinate 26 carries on the FIRST pass.
+    ///
+    /// The real one is seeded by the digest of this close's own RECEIPT, which
+    /// no gather can know, so the first pass names the authority seeded by the
+    /// digest of its own REQUEST instead: same family, same derivation, and a
+    /// digest no upkeep request for this close can ever have. A plan that needs
+    /// the real one refuses with it attached and the second pass carries it; a
+    /// plan with no donation remainder asks nothing of this coordinate at all.
+    first_pass_caller_authority: Pubkey,
     ordinary_witness: dclutch_trading::ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
 }
 
@@ -576,8 +686,10 @@ fn record_pair(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> Result<R
 ///
 /// Nothing here is believed by the plan builder: it re-derives every one of
 /// these coordinates from the same chain state and refuses if any differs. This
-/// exists so an operator names a market and a maker rather than twenty-two
-/// addresses.
+/// exists so an operator names a market and a maker rather than a whole frame
+/// of addresses. Two of them are not derivable from the Market alone: the
+/// closer is a party rather than a coordinate, and the caller authority is
+/// seeded from a plan that has not run yet, so both arrive from elsewhere.
 fn derive_coordinates(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<CoordinatesV1> {
     let market_account = rpc.required_account(arguments.market, "Core Market")?;
     let market = CoreState::decode(&market_account.data)
@@ -607,6 +719,11 @@ fn derive_coordinates(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Coordina
     };
     let (core_selected, core_programdata) = role(ExecutionRoleV1::Core, "Core")?;
     let (trading_program, trading_programdata) = role(ExecutionRoleV1::Trading, "Trading")?;
+    // The same authority the Core and Trading identities come from, for the
+    // same reason: the release set is the Market's own statement of which
+    // programs it selected. Custody's ProgramData is not a frame member, so
+    // only the program identity is taken.
+    let (custody_program, _) = role(ExecutionRoleV1::Custody, "Custody")?;
     if core_selected != core_program {
         return Err(Error::new(format!(
             "the Market at {} is owned by {core_program}, but its release selects Core {core_selected}",
@@ -688,6 +805,38 @@ fn derive_coordinates(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Coordina
         }
     };
 
+    // Both Custody coordinates are one per DEPLOYMENT rather than one per
+    // market: their seed tuples are a domain and nothing else, so naming the
+    // Custody program is naming them. The seeds are borrowed from the contracts
+    // that own them rather than respelled here.
+    let protocol_parameters = Pubkey::find_program_address(
+        &ProtocolParametersRecordSeedsV1.as_slices(),
+        &custody_program,
+    )
+    .0;
+    let upkeep_vault =
+        Pubkey::find_program_address(&UpkeepVaultSeedsV1.as_slices(), &custody_program).0;
+    let request_body = DirectCloseMakerRequestV1 {
+        market: arguments.market.to_bytes(),
+        maker: arguments.maker.to_bytes(),
+        generation,
+    }
+    .to_bytes()
+    .map_err(|error| Error::new(format!("canonical close request: {error:?}")))?;
+    let first_pass_caller_authority = Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::from_bytes(
+            release_set,
+            arguments.market.to_bytes(),
+            ExecutionRoleV1::Trading,
+            maker_replay.to_bytes(),
+            digest(&request_body),
+        )
+        .map_err(|error| Error::new(format!("first-pass caller authority: {error:?}")))?
+        .as_slices(),
+        &trading_program,
+    )
+    .0;
+
     Ok(CoordinatesV1 {
         market: arguments.market,
         generation,
@@ -726,20 +875,27 @@ fn derive_coordinates(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Coordina
         )?,
         rent_sysvar: solana_sdk_ids::sysvar::rent::ID,
         maker_replay,
+        custody_program,
+        protocol_parameters,
+        upkeep_vault,
+        first_pass_caller_authority,
         ordinary_witness,
     })
 }
 
-/// Read the twenty-two accounts at one finalized observation.
-fn gather(
-    rpc: &mut Rpc,
-    arguments: &ArgumentsV1,
+/// The exact ordered frame this close names, coordinate by coordinate.
+///
+/// One author for the key order, so `gather` and the fee-payer census cannot
+/// disagree about which coordinate is which. The width is the codec's own
+/// constant, so a frame that grows cannot leave this function a coordinate
+/// short and still compile.
+fn frame_keys(
     coordinates: &CoordinatesV1,
     rent_owner: Pubkey,
-    cluster: DirectCloseMakerClusterV1,
-    genesis_hash: [u8; 32],
-) -> Result<DirectCloseMakerSnapshotV1> {
-    let keys = [
+    closer: Pubkey,
+    caller_authority: Pubkey,
+) -> [Pubkey; DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1] {
+    [
         coordinates.root,
         coordinates.market,
         coordinates.manifest_raw,
@@ -762,9 +918,64 @@ fn gather(
         coordinates.rent_sysvar,
         coordinates.maker_replay,
         rent_owner,
-    ];
+        coordinates.protocol_parameters,
+        coordinates.upkeep_vault,
+        closer,
+        coordinates.custody_program,
+        caller_authority,
+    ]
+}
+
+/// Whose the carve is, under each arm.
+///
+/// A dry run opens no key, so it cannot know a closer and is told one. Under
+/// `--execute` the payer IS the closer, and a `--closer` that disagrees with
+/// the key actually being opened is refused rather than silently ignored: the
+/// carve would land somewhere other than where the operator was told.
+fn resolve_closer(arguments: &ArgumentsV1, payer: Option<&Keypair>) -> Result<Pubkey> {
+    match payer {
+        Some(payer) => {
+            let payer = payer.pubkey();
+            if arguments.closer.is_some_and(|named| named != payer) {
+                return Err(Error::new(format!(
+                    "--closer names another account, but --execute pays and signs from \
+                     {payer}, which is the closer this close would credit. Drop --closer, or \
+                     open the key you meant to pay the carve to."
+                )));
+            }
+            Ok(payer)
+        }
+        None => arguments.closer.ok_or_else(|| {
+            Error::new(
+                "--closer ADDRESS is required on a dry run: the close frame now carries a \
+                 closer at coordinate 24, it is paid the carve out of the donation, and a run \
+                 that opens no key cannot know whose it would be. Under --execute the fee payer \
+                 is the closer and --closer is not needed.",
+            )
+        }),
+    }
+}
+
+/// Read the whole close frame at one finalized observation.
+#[allow(clippy::too_many_arguments)]
+fn gather(
+    rpc: &mut Rpc,
+    arguments: &ArgumentsV1,
+    coordinates: &CoordinatesV1,
+    rent_owner: Pubkey,
+    closer: Pubkey,
+    caller_authority: Pubkey,
+    cluster: DirectCloseMakerClusterV1,
+    genesis_hash: [u8; 32],
+) -> Result<DirectCloseMakerSnapshotV1> {
+    let keys = frame_keys(coordinates, rent_owner, closer, caller_authority);
     if keys.len() != DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1 {
-        return Err(Error::new("the close frame is not twenty-two accounts"));
+        // The width is stated by the codec constant rather than spelled in
+        // English, so a frame that grows again cannot leave a sentence behind
+        // saying how wide it used to be.
+        return Err(Error::new(format!(
+            "the close frame is not {DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1} accounts"
+        )));
     }
     let snapshot = finalized_snapshot(rpc, &keys)?;
     let at = |index: usize| -> Result<dclutch_operator::ObservedAccount> {
@@ -800,32 +1011,45 @@ fn gather(
         maker: arguments.maker,
         maker_replay: at(DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1)?,
         rent_owner: at(DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1)?,
+        protocol_parameters: at(DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1)?,
+        upkeep_vault: at(DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1)?,
+        closer: at(DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1)?,
+        custody_program: at(DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1)?,
+        caller_authority: at(DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1)?,
     })
 }
 
-/// Refuse a fee payer this close's own frame already names.
+/// Refuse a fee payer this close's own frame names anywhere but as the closer.
 ///
-/// The route refuses ANY signer across its twenty-two coordinates and pins
-/// exact writability on each, and BOTH are transaction-level properties rather
-/// than per-instruction ones: a fee payer signs the transaction and is written
-/// for the fee whatever `AccountMeta` it was given, so an `AccountInfo` the
-/// route reads back reports `is_signer` and `is_writable` true for it. A close
-/// that named its own payer would therefore refuse on chain as
-/// `CloseMakerFrame`, with nothing in the message to say why.
+/// The route admits EXACTLY ONE signer -- the closer at coordinate 24 -- and
+/// pins exact writability on every coordinate, and BOTH are transaction-level
+/// properties rather than per-instruction ones: a fee payer signs the
+/// transaction and is written for the fee whatever `AccountMeta` it was given,
+/// so an `AccountInfo` the route reads back reports `is_signer` and
+/// `is_writable` true for it. That is why paying from the closer is the one
+/// collision that WORKS -- coordinate 24 signs and is written anyway, which is
+/// exactly what a payer does -- and why paying from any other coordinate
+/// refuses on chain as `CloseMakerCloser` or `CloseMakerFrame`, with nothing in
+/// the message to say why.
 ///
 /// The rent owner is the collision an operator will actually reach for: a maker
 /// closing their own replay and receiving their own rent is the obvious way to
 /// do it, and it is the one way that cannot work. So it refuses here, naming the
 /// coordinate, rather than letting the cut read a frame refusal off a failed
 /// transaction.
-fn refuse_payer_in_frame(accounts: &[AccountMeta], payer: Pubkey) -> Result<()> {
-    match accounts.iter().position(|meta| meta.pubkey == payer) {
-        None => Ok(()),
+fn refuse_payer_in_frame(
+    keys: &[Pubkey; DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1],
+    payer: Pubkey,
+) -> Result<()> {
+    match keys.iter().position(|key| *key == payer) {
+        None | Some(DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1) => Ok(()),
         Some(index) => Err(Error::new(format!(
             "the fee payer {payer} is coordinate {index} of this close's own frame. The route \
-             refuses any signer across the frame, and a fee payer signs whatever meta it carries, \
-             so this would refuse on chain as CloseMakerFrame. Pay from an account this close does \
-             not name -- it is permissionless, so any funded stranger will do."
+             admits one signer, the closer at coordinate {DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1}, \
+             and a fee payer signs whatever meta it carries, so this would refuse on chain as \
+             CloseMakerCloser or CloseMakerFrame. Pay from an account this close does not name -- \
+             it is permissionless, so any funded stranger will do -- or pay from the closer, \
+             which is the coordinate a signature belongs to."
         ))),
     }
 }
@@ -847,11 +1071,26 @@ fn report_plan(coordinates: &CoordinatesV1, report: &DirectCloseMakerSubmitV1) {
     );
     println!("rent principal       {}", report.rent_principal);
     println!("donation             {}", report.unclassified_donation);
-    println!("closer carve         {}", report.closer_reward);
-    println!("total credit         {}", report.total_credit);
+    println!(
+        "closer               {}",
+        Pubkey::new_from_array(receipt.closer)
+    );
+    println!("upkeep vault         {}", coordinates.upkeep_vault);
+    // The three destinations, each beside the number it receives. `total_credit`
+    // is the OWNER's credit and it is the principal exactly -- never a lamport
+    // of the donation -- so it is printed under the owner's name and not as a
+    // total of anything.
+    println!("-> owner  (principal){:>12}", report.total_credit);
+    println!("-> closer (carve)    {:>12}", report.closer_reward);
+    println!("-> vault  (remainder){:>12}", report.upkeep_credit);
     println!(
         "beneficiary after    {}",
         report.expected_rent_owner_lamports
+    );
+    println!("closer after         {}", report.expected_closer_lamports);
+    println!(
+        "upkeep vault after   {}",
+        report.expected_upkeep_vault_lamports
     );
     println!(
         "open maker roots     {} -> {}",
@@ -916,11 +1155,18 @@ fn write_evidence(
         "plan": report.map(|report| json!({
             "maker": Pubkey::new_from_array(report.expected_receipt.maker).to_string(),
             "rentOwner": Pubkey::new_from_array(report.expected_receipt.rent_owner).to_string(),
+            "closer": Pubkey::new_from_array(report.expected_receipt.closer).to_string(),
+            "upkeepVault": coordinates.upkeep_vault.to_string(),
+            "protocolParameters": coordinates.protocol_parameters.to_string(),
+            "custodyProgram": coordinates.custody_program.to_string(),
             "rentPrincipal": report.rent_principal,
             "unclassifiedDonation": report.unclassified_donation,
             "closerReward": report.closer_reward,
+            "upkeepCredit": report.upkeep_credit,
             "totalCredit": report.total_credit,
             "beneficiaryLamportsAfter": report.expected_rent_owner_lamports,
+            "closerLamportsAfter": report.expected_closer_lamports,
+            "upkeepVaultLamportsAfter": report.expected_upkeep_vault_lamports,
             "remainingOpenMakerRoots": report.expected_remaining_open_maker_roots,
             "requestDigest": crate::plan::hex(&report.request_digest),
             "expectedPostRootDigest": crate::plan::hex(&report.expected_post_root_digest),
@@ -952,6 +1198,7 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let mut direct_evidence = None;
     let mut entry_index = 0_u16;
     let mut maker_replay = None;
+    let mut closer = None;
     let mut fee_payer_keypair = None;
     let mut evidence = None;
     let mut execute = false;
@@ -986,6 +1233,13 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
                         .map_err(|error| Error::new(format!("--maker-replay: {error}")))?,
                 );
             }
+            "--closer" => {
+                closer = Some(
+                    value()?
+                        .parse::<Pubkey>()
+                        .map_err(|error| Error::new(format!("--closer: {error}")))?,
+                );
+            }
             "--plan" => plan = Some(PathBuf::from(value()?)),
             "--market-input" => market_input = Some(PathBuf::from(value()?)),
             "--campaign-evidence" => campaign_evidence = Some(PathBuf::from(value()?)),
@@ -1014,6 +1268,7 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
             .ok_or_else(|| Error::new("--direct-evidence is required"))?,
         entry_index,
         maker_replay,
+        closer,
         fee_payer_keypair,
         evidence: evidence.ok_or_else(|| Error::new("--evidence is required"))?,
         execute,
@@ -1116,29 +1371,76 @@ mod tests {
         assert!(live.contains("cancel-through"), "{live}");
     }
 
-    /// A fee payer the close already names is refused before anything is sent.
+    /// A fee payer the close already names is refused before anything is sent,
+    /// and the closer -- the one coordinate that signs anyway -- is not.
     ///
     /// This is the seam the static audit pointed at: the route's signer census
     /// and writability pins are transaction-level, so the one obvious way to
     /// run this close -- pay from the wallet that receives the rent -- is the
     /// one way that cannot work. It must refuse here, naming the coordinate.
+    /// The frame's ONE admitted signer is the other half of the same fact: a
+    /// payer that is the closer carries exactly the privileges coordinate 24
+    /// already asks for, so refusing it would refuse the arm this tool takes
+    /// under `--execute`.
     #[test]
-    fn a_fee_payer_the_frame_already_names_is_refused_before_the_send() {
-        let rent_owner = Pubkey::new_from_array([7; 32]);
-        let stranger = Pubkey::new_from_array([8; 32]);
-        let accounts = vec![
-            AccountMeta::new(Pubkey::new_from_array([1; 32]), false),
-            AccountMeta::new_readonly(Pubkey::new_from_array([2; 32]), false),
-            AccountMeta::new(rent_owner, false),
-        ];
+    fn a_fee_payer_the_frame_names_is_refused_unless_it_is_the_closer() {
+        let mut keys = [Pubkey::default(); DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1];
+        for (index, key) in keys.iter_mut().enumerate() {
+            let seed = u8::try_from(index).expect("frame index fits a byte");
+            *key = Pubkey::new_from_array([seed + 1; 32]);
+        }
+        let stranger = Pubkey::new_from_array([0xfe; 32]);
+        let closer = keys[DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1];
+        let rent_owner = keys[DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1];
 
-        refuse_payer_in_frame(&accounts, stranger).expect("a stranger may always pay");
+        refuse_payer_in_frame(&keys, stranger).expect("a stranger may always pay");
+        refuse_payer_in_frame(&keys, closer)
+            .expect("the closer signs and is written anyway, so it may also pay");
 
-        let refusal = refuse_payer_in_frame(&accounts, rent_owner)
+        let refusal = refuse_payer_in_frame(&keys, rent_owner)
             .expect_err("the beneficiary must not pay for its own close");
         let refusal = format!("{refusal:?}");
-        assert!(refusal.contains("coordinate 2"), "{refusal}");
-        assert!(refusal.contains("CloseMakerFrame"), "{refusal}");
+        assert!(
+            refusal.contains(&format!(
+                "coordinate {DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1}"
+            )),
+            "{refusal}"
+        );
+        assert!(refusal.contains("CloseMakerCloser"), "{refusal}");
+    }
+
+    /// The carve has a destination under both arms, and the arms cannot
+    /// disagree about it.
+    ///
+    /// A dry run opens no key, so it must be told one; `--execute` opens the
+    /// payer and that key IS the closer. A `--closer` naming a third account
+    /// under `--execute` would promise the carve to somewhere the transaction
+    /// cannot send it, so it refuses rather than being ignored.
+    #[test]
+    fn the_closer_is_named_on_a_dry_run_and_is_the_payer_under_execute() {
+        let named = Pubkey::new_from_array([9; 32]);
+        let dry = parse(args(&["--closer", &named.to_string()])).expect("well formed arguments");
+        assert_eq!(resolve_closer(&dry, None).expect("a named closer"), named);
+
+        let refusal = resolve_closer(&parse(args(&[])).expect("well formed arguments"), None)
+            .expect_err("a dry run with no closer must refuse");
+        assert!(format!("{refusal:?}").contains("--closer"), "{refusal:?}");
+
+        let payer = Keypair::new();
+        assert_eq!(
+            resolve_closer(
+                &parse(args(&[])).expect("well formed arguments"),
+                Some(&payer)
+            )
+            .expect("the payer is the closer"),
+            payer.pubkey(),
+        );
+        let refusal = resolve_closer(&dry, Some(&payer))
+            .expect_err("a --closer that is not the opened payer must refuse");
+        assert!(
+            format!("{refusal:?}").contains("--closer names another"),
+            "{refusal:?}"
+        );
     }
 
     #[test]

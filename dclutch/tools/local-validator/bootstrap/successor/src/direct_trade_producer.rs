@@ -102,7 +102,11 @@ const DEVNET_DIRECT_PRODUCER_JOURNAL_SCHEMA_V1: &str =
 
 const FILL_ATOMS_V1: u64 = 100_000_000;
 const EXECUTION_PRICE_V1: u64 = 500_000;
-const FEE_BASIS_POINTS_V1: u16 = 50;
+/// The bootstrap's chosen rate, projected from the module that chooses it.
+/// A producer that wrote `50` here would be a second author for a number the
+/// setup wire already owns, and the two could drift apart silently.
+const FEE_BASIS_POINTS_V1: u16 =
+    dclutch_trading::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
 pub(crate) const EXPECTED_PRICE_SCALE_V1: u64 = 1_000_000;
 const INTENT_LIFETIME_SLOTS_V1: u64 = 432_000;
 

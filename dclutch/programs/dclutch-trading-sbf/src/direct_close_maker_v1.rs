@@ -29,17 +29,22 @@
 //! fee settlement is deliberately phase-free, so settle-then-close is always
 //! available in Retiring and the refusal strands nobody.
 //!
-//! # Rent, and the pending ruling
+//! # Rent, and the three credits
 //!
-//! The whole observed balance follows the landed Lean plan
-//! (`MakerClosePlan`: principal plus `unclassified_donation`, less the ruled
-//! closer carve -- zero here, because this frame admits no closer -- to the
-//! immutably recorded `rent_owner` -- refund conservation proved). Refusing a
-//! nonzero donation instead would hand a griefer a 1-lamport transfer that
-//! strands the replay permanently, the exact outcome `CloseSeal`'s cap
-//! commentary documents against. The permissionless closer's reward is
-//! `DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1 = 0` until cohort-9 ruling 1 carves
-//! one from the donation slice.
+//! The whole observed balance follows the landed Lean plan (`MakerClosePlan`):
+//! the immutably recorded `rent_owner` receives `rent_principal` EXACTLY, the
+//! closer at coordinate 24 receives the carve, and every remaining lamport of
+//! `unclassified_donation` is credited to the upkeep vault at coordinate 23
+//! and receipted there by CPI (decision 0024 item 4). Refusing a nonzero
+//! donation instead would hand a griefer a 1-lamport transfer that strands the
+//! replay permanently, the exact outcome `CloseSeal`'s cap commentary
+//! documents against; housing it is the alternative that route takes.
+//!
+//! The carve is not a constant in this executable. It is
+//! `ProtocolParametersV1::closer_carve` over the donation, read out of the
+//! governed record at coordinate 22 -- Custody-owned, at the address this
+//! route derives for itself -- so moving the closer's pay is a proposal
+//! against that record and its delay, never an ELF.
 //!
 //! # No expected-state digests
 //!
@@ -53,11 +58,20 @@ extern crate alloc;
 
 use alloc::vec;
 
+use dclutch_custody::CallerRoleV1;
+use dclutch_custody::upkeep_vault_v1::{
+    UPKEEP_VAULT_RECORD_BYTES_V1, UpkeepCreditV1, UpkeepOperationV1, UpkeepProtocolCallerV1,
+    UpkeepRequestV1, UpkeepSourceClassV1, UpkeepVaultSeedsV1,
+};
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRegistersV2, CapabilityRootHeaderV1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
+};
+use dclutch_market::protocol_parameters::{
+    ProtocolParametersRecordSeedsV1, ProtocolParametersV1,
+    authenticate_protocol_parameters_account_v1,
 };
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
@@ -66,7 +80,7 @@ use dclutch_registry::activation_auth_v1::{
     require_cache_account,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
 use dclutch_trading::{
     close_maker_v1,
@@ -93,7 +107,11 @@ use dclutch_vm::effect::v2::{
 };
 use dclutch_vm::v2::{RegisterInput, RegisterOutput};
 use solana_program::{
-    account_info::AccountInfo, hash::hash, program::set_return_data, program_error::ProgramError,
+    account_info::AccountInfo,
+    hash::hash,
+    instruction::{AccountMeta, Instruction},
+    program::{invoke_signed, set_return_data},
+    program_error::ProgramError,
     pubkey::Pubkey,
 };
 use solana_sdk_ids::{system_program, sysvar};
@@ -126,6 +144,11 @@ struct Accounts<'accounts, 'info> {
     rent: &'accounts AccountInfo<'info>,
     replay: &'accounts AccountInfo<'info>,
     rent_owner: &'accounts AccountInfo<'info>,
+    parameters: &'accounts AccountInfo<'info>,
+    upkeep_vault: &'accounts AccountInfo<'info>,
+    closer: &'accounts AccountInfo<'info>,
+    custody_program: &'accounts AccountInfo<'info>,
+    caller_authority: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> Accounts<'accounts, 'info> {
@@ -133,10 +156,20 @@ impl<'accounts, 'info> Accounts<'accounts, 'info> {
         program_id: &Pubkey,
         accounts: &'accounts [AccountInfo<'info>],
     ) -> Result<Self, ProgramError> {
-        if accounts.len() != DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1
-            || accounts.iter().any(|account| account.is_signer)
-        {
+        if accounts.len() != DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1 {
             return Err(TradingSbfError::CloseMakerFrame.into());
+        }
+        // THE SIGNER RULE, exempting exactly one coordinate by name. The route
+        // stays permissionless -- no party to the market signs it -- but the
+        // closer must sign to OWN the carve, never to be authorized by it
+        // (`FUNDED_CRANK_V1.md` section 6). Any other signer, or a missing
+        // one, is `CloseMakerCloser`: a frame refusal about the closer, told
+        // apart from every other frame refusal so a caller that signed with
+        // the wrong key learns which key was wrong.
+        if accounts.iter().enumerate().any(|(index, account)| {
+            account.is_signer != (index == close_maker_v1::DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1)
+        }) {
+            return Err(TradingSbfError::CloseMakerCloser.into());
         }
         for (index, account) in accounts.iter().enumerate() {
             let (expected_writable, expected_executable) =
@@ -239,12 +272,35 @@ impl<'accounts, 'info> Accounts<'accounts, 'info> {
                 accounts,
                 close_maker_v1::DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1,
             )?,
+            parameters: get(
+                accounts,
+                close_maker_v1::DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1,
+            )?,
+            upkeep_vault: get(
+                accounts,
+                close_maker_v1::DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1,
+            )?,
+            closer: get(
+                accounts,
+                close_maker_v1::DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1,
+            )?,
+            custody_program: get(
+                accounts,
+                close_maker_v1::DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1,
+            )?,
+            caller_authority: get(
+                accounts,
+                close_maker_v1::DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1,
+            )?,
         };
         if value.trading_program.key != program_id
             || value.rent.key != &sysvar::rent::ID
             || value.cache.owner != value.registry.key
         {
             return Err(TradingSbfError::CloseMakerFrame.into());
+        }
+        if !value.custody_program.executable {
+            return Err(TradingSbfError::CloseMakerUpkeepVault.into());
         }
         Ok(value)
     }
@@ -298,7 +354,9 @@ pub fn process_direct_close_maker_v1(
             .ok_or(TradingSbfError::Root)?,
     )
     .map_err(|_| TradingSbfError::Root)?;
-    let closed = authenticate_replay_close(program_id, &accounts, request, pre_root_state)?;
+    let parameters = authenticate_economics(&accounts)?;
+    let closed =
+        authenticate_replay_close(program_id, &accounts, request, pre_root_state, parameters)?;
     require_rent_owner_destination(&accounts, closed.plan.rent_owner)?;
     let direct_post = closed.root.encode();
 
@@ -436,9 +494,11 @@ pub fn process_direct_close_maker_v1(
         maker_root: accounts.replay.key.to_bytes(),
         rent_owner: closed.plan.rent_owner,
         post_root_digest,
+        closer: accounts.closer.key.to_bytes(),
         rent_principal: closed.plan.rent_principal,
         unclassified_donation: closed.plan.unclassified_donation,
         closer_reward: closed.plan.closer_reward,
+        upkeep_credit: closed.plan.upkeep_credit,
         total_credit: closed.plan.total_credit,
         remaining_open_maker_roots: closed.root.open_maker_root_count(),
     }
@@ -452,13 +512,139 @@ pub fn process_direct_close_maker_v1(
     drop(manifest_data);
     drop(root_data);
 
+    let upkeep_credit = closed.plan.upkeep_credit;
     commit(&accounts, pre_root_digest, &post_root, closed)?;
+    // AFTER the lamports moved, and after the close's own receipt exists to be
+    // named: the vault's credit route RECOGNIZES lamports already at the
+    // address, and its `receipt_digest` is this close's receipt, so the act is
+    // receipted twice and neither receipt can be written without the other.
+    // The CPI also overwrites return data, so this route's own answer is set
+    // last.
+    receipt_upkeep_credit(
+        program_id,
+        &accounts,
+        release_set,
+        request.market,
+        upkeep_credit,
+        hash(&receipt).to_bytes(),
+    )?;
     set_return_data(&receipt);
     Ok(())
 }
 
-/// Write the decremented root, drain the replay to its recorded owner, and
-/// return the replay's account to the System program.
+/// Receipt the donation remainder in the upkeep vault, by CPI into Custody.
+///
+/// The lamports are already there: [`commit`] debited the Trading-owned replay
+/// and credited the Custody-owned vault directly, which the runtime admits for
+/// a credit. This call only makes the vault's record SAY where they came from,
+/// under [`UpkeepSourceClassV1::Donation`] and the caller-authority PDA this
+/// program signs with. A zero credit -- every cohort to date -- calls nothing:
+/// the vault contract refuses a zero amount by name, and a close with no
+/// donation has nothing to receipt.
+#[inline(never)]
+fn receipt_upkeep_credit(
+    program_id: &Pubkey,
+    accounts: &Accounts<'_, '_>,
+    release_set: [u8; 32],
+    market: [u8; 32],
+    amount: u64,
+    receipt_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    if amount == 0 {
+        return Ok(());
+    }
+    let context = accounts.replay.key.to_bytes();
+    let body = UpkeepRequestV1 {
+        operation: UpkeepOperationV1::Credit,
+        credit: Some(UpkeepCreditV1 {
+            source_class: UpkeepSourceClassV1::Donation,
+            caller: Some(UpkeepProtocolCallerV1 {
+                caller_role: CallerRoleV1::Trading,
+                release_set,
+                market,
+                context,
+            }),
+            receipt_digest,
+            amount,
+        }),
+    }
+    // ONE ACCUSATION, so one code. Every way this encode can refuse -- a zero
+    // amount, a shape the class and the caller disagree about, Custody named as
+    // its own caller -- is unreachable from the literal three lines above it,
+    // and all three would mean the same thing if they were reachable: this
+    // executable built a request the vault's own contract does not admit. There
+    // is no caller mistake to distinguish here, which is the only condition
+    // under which a coarse code is honest.
+    .to_bytes()
+    .map_err(|_| TradingSbfError::CloseMakerUpkeepVault)?;
+    // The authority is derived FROM the request bytes, exactly as the vault
+    // re-derives it on the other side, so the caller cannot name a PDA for one
+    // request and spend it on another. Its refusal is the same accusation as
+    // the encode's: a zero release set, market or context here is a release the
+    // root already authenticated being zero, not a frame a caller chose.
+    let seeds = CallerAuthoritySeedsV1::from_bytes(
+        release_set,
+        market,
+        ExecutionRoleV1::Trading,
+        context,
+        hash(&body).to_bytes(),
+    )
+    .map_err(|_| TradingSbfError::CloseMakerUpkeepVault)?;
+    let (expected_authority, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    if accounts.caller_authority.key != &expected_authority {
+        return Err(TradingSbfError::CloseMakerUpkeepVault.into());
+    }
+    let instruction = Instruction {
+        program_id: *accounts.custody_program.key,
+        accounts: vec![
+            AccountMeta::new(*accounts.upkeep_vault.key, false),
+            AccountMeta::new_readonly(*accounts.caller_authority.key, true),
+            AccountMeta::new_readonly(*accounts.cache.key, false),
+            AccountMeta::new_readonly(*accounts.registry.key, false),
+            AccountMeta::new_readonly(*accounts.trading_program.key, false),
+            AccountMeta::new_readonly(*accounts.trading_programdata.key, false),
+            AccountMeta::new_readonly(*accounts.rent.key, false),
+        ],
+        data: body.to_vec(),
+    };
+    let infos = [
+        accounts.upkeep_vault.clone(),
+        accounts.caller_authority.clone(),
+        accounts.cache.clone(),
+        accounts.registry.clone(),
+        accounts.trading_program.clone(),
+        accounts.trading_programdata.clone(),
+        accounts.rent.clone(),
+        accounts.custody_program.clone(),
+    ];
+    let bump_seed = [bump];
+    let [domain, release, market_seed, role, context_seed, digest] = seeds.as_slices();
+    invoke_signed(
+        &instruction,
+        &infos,
+        &[&[
+            domain,
+            release,
+            market_seed,
+            role,
+            context_seed,
+            digest,
+            &bump_seed,
+        ]],
+    )
+    .map_err(crate::child_refused_v1)?;
+    Ok(())
+}
+
+/// Write the decremented root, split the replay's whole balance three ways,
+/// and return the replay's account to the System program.
+///
+/// The split is the plan's, to the lamport: the recorded owner receives the
+/// principal EXACTLY, the closer receives the carve, the vault receives the
+/// rest of the donation, and the replay is left at zero. The observed balance
+/// is checked against the sum before anything moves, so a replay whose balance
+/// changed between the plan and the commit refuses rather than stranding a
+/// remainder in a closed account.
 fn commit(
     accounts: &Accounts<'_, '_>,
     pre_root_digest: [u8; 32],
@@ -479,7 +665,13 @@ fn commit(
     drop(root_commit);
 
     let total_credit = closed.plan.total_credit;
-    if accounts.replay.lamports() != total_credit {
+    let closer_reward = closed.plan.closer_reward;
+    let upkeep_credit = closed.plan.upkeep_credit;
+    let moved = total_credit
+        .checked_add(closer_reward)
+        .and_then(|value| value.checked_add(upkeep_credit))
+        .ok_or(TradingSbfError::Commit)?;
+    if accounts.replay.lamports() != moved {
         return Err(TradingSbfError::Commit.into());
     }
     let destination_after = accounts
@@ -487,9 +679,27 @@ fn commit(
         .lamports()
         .checked_add(total_credit)
         .ok_or(TradingSbfError::Commit)?;
+    let closer_after = accounts
+        .closer
+        .lamports()
+        .checked_add(closer_reward)
+        .ok_or(TradingSbfError::Commit)?;
+    let vault_after = accounts
+        .upkeep_vault
+        .lamports()
+        .checked_add(upkeep_credit)
+        .ok_or(TradingSbfError::Commit)?;
     {
         let mut destination_lamports = accounts
             .rent_owner
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)?;
+        let mut closer_lamports = accounts
+            .closer
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)?;
+        let mut vault_lamports = accounts
+            .upkeep_vault
             .try_borrow_mut_lamports()
             .map_err(|_| TradingSbfError::Commit)?;
         let mut replay_lamports = accounts
@@ -497,6 +707,8 @@ fn commit(
             .try_borrow_mut_lamports()
             .map_err(|_| TradingSbfError::Commit)?;
         **destination_lamports = destination_after;
+        **closer_lamports = closer_after;
+        **vault_lamports = vault_after;
         **replay_lamports = 0;
     }
     accounts
@@ -505,6 +717,8 @@ fn commit(
         .map_err(|_| TradingSbfError::Commit)?;
     accounts.replay.assign(&system_program::ID);
     if accounts.rent_owner.lamports() != destination_after
+        || accounts.closer.lamports() != closer_after
+        || accounts.upkeep_vault.lamports() != vault_after
         || accounts.replay.lamports() != 0
         || accounts.replay.owner != &system_program::ID
         || !accounts
@@ -532,6 +746,7 @@ fn authenticate_replay_close(
     accounts: &Accounts<'_, '_>,
     request: DirectCloseMakerRequestV1,
     pre_root_state: DirectRootStateV1,
+    parameters: ProtocolParametersV1,
 ) -> Result<MakerReplayCloseResultV2, ProgramError> {
     let coordinates = DirectCoordinatesV1::new(request.market, request.generation)
         .map_err(|_| TradingSbfError::Content)?;
@@ -561,10 +776,11 @@ fn authenticate_replay_close(
         pre_root_state,
         maker_root,
         replay.lamports(),
-        // The carve ceiling. Zero because this frame admits no closer
-        // account -- see the constant's own note; the ruling is landed in
-        // the kernel and the route work is owed.
-        close_maker_v1::DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1,
+        // The carve's share and ceiling, from the governed record this frame
+        // carried and `authenticate_economics` held to its own address. Never
+        // a constant in this executable: that is the whole of decision 0024's
+        // amendment.
+        parameters,
     )
     .map_err(|error| match error {
         SuccessorError::FeeOwedOutstanding => TradingSbfError::CloseMakerFeeOutstanding,
@@ -859,6 +1075,19 @@ fn reauthenticate_roles<'info>(
     if core_receipt.program().to_bytes() != accounts.core_program.key.to_bytes() {
         return Err(TradingSbfError::Release.into());
     }
+    // RULING R1/R5's missing conjunct: the Custody program the vault credit is
+    // a CPI into is the one THIS release set names, read out of the same cache
+    // this frame already carries. Its ProgramData is not in the frame, so the
+    // role's binding is read rather than frame-authenticated -- the discipline
+    // `upkeep_vault_v1::protocol_frame` uses for the calling program, from the
+    // other side of the same CPI.
+    let custody = activated
+        .role(ExecutionRoleV1::Custody)
+        .map_err(|_| TradingSbfError::Release)?
+        .release();
+    if custody.program().to_bytes() != accounts.custody_program.key.to_bytes() {
+        return Err(TradingSbfError::CloseMakerUpkeepVault.into());
+    }
     authenticate_activated_role_in_frame_v1(
         accounts.cache,
         activated,
@@ -867,6 +1096,60 @@ fn reauthenticate_roles<'info>(
         accounts.trading_programdata,
     )
     .map_err(|error| TradingSbfError::from(error).into())
+}
+
+/// Decision 0024's three economics coordinates, held before a lamport moves.
+///
+/// The governed record is READ, never assumed: its owner is the release set's
+/// Custody program, its address is the one this route derives from
+/// [`ProtocolParametersRecordSeedsV1`] under that program, and its bytes decode
+/// through the contract's own hostile decoder. A consumer that took a value out
+/// of a record it had not held to this would be applying whatever economics a
+/// stranger wrote at whatever address the stranger passed.
+#[inline(never)]
+fn authenticate_economics(
+    accounts: &Accounts<'_, '_>,
+) -> Result<ProtocolParametersV1, ProgramError> {
+    let expected_vault = Pubkey::find_program_address(
+        &UpkeepVaultSeedsV1.as_slices(),
+        accounts.custody_program.key,
+    )
+    .0;
+    if accounts.upkeep_vault.key != &expected_vault
+        || accounts.upkeep_vault.owner != accounts.custody_program.key
+        || accounts.upkeep_vault.data_len() != UPKEEP_VAULT_RECORD_BYTES_V1
+    {
+        return Err(TradingSbfError::CloseMakerUpkeepVault.into());
+    }
+    // The closer is a plain empty System wallet for the reason the rent owner
+    // is one: crediting a program-owned account is a write with bytes in it,
+    // and this route has no authority to make one.
+    if accounts.closer.owner != &system_program::ID
+        || accounts.closer.executable
+        || !accounts
+            .closer
+            .try_data_is_empty()
+            .map_err(|_| TradingSbfError::CloseMakerCloser)?
+    {
+        return Err(TradingSbfError::CloseMakerCloser.into());
+    }
+    let expected_record = Pubkey::find_program_address(
+        &ProtocolParametersRecordSeedsV1.as_slices(),
+        accounts.custody_program.key,
+    )
+    .0;
+    let data = accounts
+        .parameters
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::CloseMakerParameters)?;
+    authenticate_protocol_parameters_account_v1(
+        accounts.parameters.owner.to_bytes(),
+        accounts.parameters.key.to_bytes(),
+        accounts.custody_program.key.to_bytes(),
+        expected_record.to_bytes(),
+        &data,
+    )
+    .map_err(|_| TradingSbfError::CloseMakerParameters.into())
 }
 
 #[allow(clippy::too_many_arguments)]

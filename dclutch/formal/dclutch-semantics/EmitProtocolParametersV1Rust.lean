@@ -41,6 +41,18 @@ def main : IO Unit := do
     s!"pub const PROTOCOL_GENESIS_CLOSER_REWARD_CAP_LAMPORTS_V1: u64 = {genesis.closerRewardCapLamports};"
   IO.println
     s!"pub const PROTOCOL_GENESIS_CRANK_REWARD_CAP_LAMPORTS_V1: u64 = {genesis.crankRewardCapLamports};"
+  IO.println
+    s!"pub const PROTOCOL_TAKE_ADMITTED_THIS_RELEASE_V1: bool = {protocolTakeAdmittedThisRelease};"
+  IO.println s!"pub const PROTOCOL_PARAMETERS_REQUEST_BYTES_V1: usize = {requestBytes};"
+  emitMagic "PROTOCOL_PARAMETERS_REQUEST_MAGIC_V1" requestMagic
+  IO.println s!"pub const PROTOCOL_PARAMETERS_RECEIPT_PDA_DOMAIN_V1: &[u8] = b\"{receiptPdaDomain}\";"
+  IO.println s!"pub const PROTOCOL_GOVERNANCE_FOUND_TAG_V1: u8 = {GovernanceAct.tag .found};"
+  IO.println s!"pub const PROTOCOL_GOVERNANCE_PROPOSE_TAG_V1: u8 = {GovernanceAct.tag .propose};"
+  IO.println s!"pub const PROTOCOL_GOVERNANCE_WITHDRAW_TAG_V1: u8 = {GovernanceAct.tag .withdraw};"
+  IO.println s!"pub const PROTOCOL_GOVERNANCE_APPLY_TAG_V1: u8 = {GovernanceAct.tag .apply};"
+  IO.println s!"pub const PROTOCOL_PARAMETERS_FOUND_ACCOUNT_COUNT_V1: usize = {foundAccountCount};"
+  IO.println s!"pub const PROTOCOL_PARAMETERS_AUTHORITY_ACCOUNT_COUNT_V1: usize = {authorityAccountCount};"
+  IO.println s!"pub const PROTOCOL_PARAMETERS_APPLY_ACCOUNT_COUNT_V1: usize = {applyAccountCount};"
   for (name, field) in [
       ("VERSION", RecordField.version), ("KIND", .kind), ("BUMP", .bump),
       ("RESERVED_HEADER", .reservedHeader),
@@ -63,3 +75,15 @@ def main : IO Unit := do
       ("GENERATION", .generation), ("PROPOSED_AT_SLOT", .proposedAtSlot),
       ("ACTIVATION_SLOT", .activationSlot), ("DELAY_SLOTS", .delaySlots)] do
     emitOffset "PROTOCOL_PARAMETERS_RECEIPT" receiptLayout name field
+  for (name, field) in [
+      ("VERSION", RequestField.version), ("ACT", .act), ("RESERVED_HEADER", .reservedHeader),
+      ("GOVERNANCE_AUTHORITY", .governanceAuthority),
+      ("PROTOCOL_BENEFICIARY", .protocolBeneficiary),
+      ("CHANGE_DELAY_SLOTS", .changeDelaySlots),
+      ("CLOSER_REWARD_CAP", .closerRewardCapLamports),
+      ("CRANK_REWARD_CAP", .crankRewardCapLamports),
+      ("MAX_FEE_BASIS_POINTS", .maxFeeBasisPoints),
+      ("TAKE_BASIS_POINTS", .protocolTakeBasisPoints),
+      ("CLOSER_CARVE_BASIS_POINTS", .closerCarveBasisPoints),
+      ("RESERVED_TAIL", .reservedTail)] do
+    emitOffset "PROTOCOL_PARAMETERS_REQUEST" requestLayout name field

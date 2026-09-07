@@ -220,6 +220,21 @@ pub(crate) fn admit_open_market(
         ("claims_admission", addresses.admission),
         ("custody_replay", addresses.custody_replay),
         ("lifecycle_rent_credit", addresses.rent_credit),
+        // Decision 0024 item 4's upkeep vault, watched from the FIRST census
+        // rather than met later already holding a credit. It is a lamport
+        // account and never a collateral one, so it is L7's business and not
+        // L1's: the Direct close-maker credits it out of a replay's donation
+        // slice, and "a route that placed rent into an account nobody named"
+        // is the exact hole L7 exists to close. One vault per Custody
+        // deployment, so its address is derived from the program alone.
+        (
+            "upkeep_vault",
+            Pubkey::find_program_address(
+                &dclutch_custody::upkeep_vault_v1::UpkeepVaultSeedsV1.as_slices(),
+                &custody_program,
+            )
+            .0,
+        ),
     ] {
         ledger.watch(label, address);
     }

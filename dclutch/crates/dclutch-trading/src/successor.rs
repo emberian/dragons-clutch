@@ -17,6 +17,7 @@ use crate::direct_root_admission_v1::{
     DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1, DIRECT_ROOT_RETIRING_ADMISSIBLE_STATES_V1,
 };
 use crate::intent_v2::{COMPACT_INTENT_BYTES_V2, CancelThroughV2, CompactIntentV2};
+use dclutch_market::protocol_parameters::ProtocolParametersV1;
 
 #[rustfmt::skip]
 #[allow(missing_docs)]
@@ -2501,12 +2502,20 @@ pub struct MakerReplayClosePlanV2 {
     pub unclassified_donation: u64,
     /// The permissionless closer's carve, out of the donation slice alone.
     ///
-    /// Ruling D1 item 4 (2026-09-04). Bounded by the cap AND by the donation,
-    /// so `total_credit >= rent_principal` for every cap a caller can pass:
-    /// the principal is the maker's own money and is never part of the carve.
-    /// Lean: `the_closer_carve_never_touches_principal`.
+    /// Ruling D1 item 4 (2026-09-04): a share of the donation, then a lamport
+    /// cap, both read from the governed record
+    /// (`ProtocolParametersV1::closer_carve`). Bounded by the donation, so the
+    /// principal is never part of it. Lean:
+    /// `the_closer_carve_never_touches_principal`.
     pub closer_reward: u64,
-    /// Exact total lamports credited to the beneficiary RentCredit.
+    /// The donation after the carve, credited to the upkeep vault
+    /// (decision 0024 item 4; `dclutch_custody::upkeep_vault_v1`, class
+    /// `Donation`). The one principled recipient for lamports that were
+    /// nobody's. Lean:
+    /// `the_donation_reaches_the_closer_or_the_vault_and_nobody_else`.
+    pub upkeep_credit: u64,
+    /// Exact lamports credited to the recorded beneficiary: the principal,
+    /// exactly, and never a lamport of the donation.
     pub total_credit: u64,
 }
 
@@ -2528,25 +2537,19 @@ pub struct MakerReplayCloseResultV2 {
 /// Retiring; the refusal strands nobody. Lean: `closeMaker` /
 /// `close_conserves_fee_receivable` in `DirectSuccessor.lean`.
 ///
-/// `closer_reward_cap` is ruling D1 item 4's carve ceiling and it is an
-/// ARGUMENT, not a constant here, because `docs/design/FUNDED_CRANK_V1.md`
-/// section 3 rules that a crank's floor derives from the Rent sysvar and is
-/// never a source literal. The governed value lives in
-/// `dclutch-market::protocol_parameters`'s record as
-/// `closer_reward_cap_lamports`.
-///
-/// **The deployed route passes zero, and it does so for a frame reason rather
-/// than a policy reason.** `direct_close_maker_v1.rs` refuses ANY signer, so
-/// there is no closer account in the frame to pay: a nonzero cap here would
-/// compute a carve with nowhere to send it. Paying a closer needs a
-/// twenty-third account and a signer conjunct -- a released AccountProfile
-/// change, which moves the descriptor digest and re-founds -- and that is
-/// named debt, not a finished value.
+/// `parameters` is the governed record the route read out of its frame
+/// (`dclutch-market::protocol_parameters`), and the carve is that record's
+/// `closer_carve` over the donation: a share, then a lamport cap, neither a
+/// constant here, because `docs/design/FUNDED_CRANK_V1.md` section 3 rules
+/// that a crank's floor is never a source literal. The route pays the carve
+/// to the closer at its frame's coordinate 24, the remainder of the donation
+/// to the upkeep vault at coordinate 23, and the principal to the recorded
+/// owner -- three credits, one conservation.
 pub fn close_maker_replay_v2(
     root: DirectRootStateV1,
     maker_root: MakerReplayRootV1,
     observed_lamports: u64,
-    closer_reward_cap: u64,
+    parameters: ProtocolParametersV1,
 ) -> SuccessorResult<MakerReplayCloseResultV2> {
     if !DIRECT_ROOT_RETIRING_ADMISSIBLE_STATES_V1.admits(root.phase) {
         return Err(SuccessorError::InvalidRootPhase);
@@ -2575,13 +2578,14 @@ pub fn close_maker_replay_v2(
             // A cap, never a demand: a thin donation yields a thin carve rather
             // than a refusal, because a close that could refuse for lack of
             // funds is a close nobody turns and a market nobody retires.
-            let closer_reward = closer_reward_cap.min(unclassified_donation);
+            let closer_reward = parameters.closer_carve(unclassified_donation);
             MakerReplayClosePlanV2 {
                 rent_owner: maker_root.rent_owner,
                 rent_principal: maker_root.rent_principal,
                 unclassified_donation,
                 closer_reward,
-                total_credit: observed_lamports - closer_reward,
+                upkeep_credit: unclassified_donation - closer_reward,
+                total_credit: maker_root.rent_principal,
             }
         },
     })
@@ -3617,23 +3621,41 @@ mod tests {
         )
         .expect("create");
         assert_eq!(
-            close_maker_replay_v2(created.root, created.maker_root, 111, 0),
+            close_maker_replay_v2(created.root, created.maker_root, 111, carve_cap(0)),
             Err(SuccessorError::InvalidRootPhase)
         );
         let retiring = created.root.begin_retiring().expect("retiring");
-        let closed =
-            close_maker_replay_v2(retiring, created.maker_root, 111, 0).expect("close maker");
+        let closed = close_maker_replay_v2(retiring, created.maker_root, 111, carve_cap(0))
+            .expect("close maker");
         assert_eq!(closed.root.open_maker_root_count(), 0);
         assert_eq!(closed.plan.rent_owner, id(9));
         assert_eq!(closed.plan.rent_principal, 100);
         assert_eq!(closed.plan.unclassified_donation, 11);
         assert_eq!(closed.plan.closer_reward, 0);
-        assert_eq!(closed.plan.total_credit, 111);
+        // The owner receives their principal EXACTLY and the eleven lamports of
+        // donation are housed, which is the whole of what the vault changed
+        // about this close: 111 to one party became 100 to the owner and 11 to
+        // an account with no authority over itself.
+        assert_eq!(closed.plan.total_credit, 100);
+        assert_eq!(closed.plan.upkeep_credit, 11);
+        assert_eq!(
+            closed.plan.closer_reward + closed.plan.upkeep_credit + closed.plan.total_credit,
+            111
+        );
         closed.root.require_closable().expect("root closable");
         assert_eq!(
-            close_maker_replay_v2(closed.root, created.maker_root, 111, 0),
+            close_maker_replay_v2(closed.root, created.maker_root, 111, carve_cap(0)),
             Err(SuccessorError::MakerRootCountInvariant)
         );
+    }
+
+    /// The genesis record with one cap: the share is already the whole
+    /// donation, so `closer_carve` is `min(cap, donation)`.
+    fn carve_cap(cap: u64) -> ProtocolParametersV1 {
+        ProtocolParametersV1 {
+            closer_reward_cap_lamports: cap,
+            ..ProtocolParametersV1::genesis([0; 32])
+        }
     }
 
     /// RULING D1 ITEM 4: the closer's carve comes out of the donation slice
@@ -3660,39 +3682,67 @@ mod tests {
         .expect("create");
         let retiring = created.root.begin_retiring().expect("retiring");
 
-        // cap 0: today's deployed close, to the lamport.
-        let today = close_maker_replay_v2(retiring, created.maker_root, 111, 0).expect("today");
+        // cap 0: the genesis record's close. Nobody is carved; the whole
+        // donation is housed; the owner receives exactly their principal.
+        let today =
+            close_maker_replay_v2(retiring, created.maker_root, 111, carve_cap(0)).expect("today");
         assert_eq!(today.plan.closer_reward, 0);
-        assert_eq!(today.plan.total_credit, 111);
+        assert_eq!(today.plan.upkeep_credit, 11);
+        assert_eq!(today.plan.total_credit, 100);
 
-        // cap 4: the carve binds and the beneficiary keeps 107 -- still more
-        // than the 100 of principal, which is the whole point.
-        let funded = close_maker_replay_v2(retiring, created.maker_root, 111, 4).expect("funded");
+        // cap 4: the carve binds; seven go to the vault; the owner still
+        // receives exactly the 100 of principal, which is the whole point.
+        let funded =
+            close_maker_replay_v2(retiring, created.maker_root, 111, carve_cap(4)).expect("funded");
         assert_eq!(funded.plan.closer_reward, 4);
-        assert_eq!(funded.plan.total_credit, 107);
+        assert_eq!(funded.plan.upkeep_credit, 7);
+        assert_eq!(funded.plan.total_credit, 100);
 
-        // cap larger than the donation: the DONATION binds, not the cap, and
-        // the beneficiary still receives every lamport of principal.
-        let greedy =
-            close_maker_replay_v2(retiring, created.maker_root, 111, u64::MAX).expect("greedy");
+        // cap larger than the donation: the DONATION binds, not the cap; the
+        // vault receives nothing and the owner every lamport of principal.
+        let greedy = close_maker_replay_v2(retiring, created.maker_root, 111, carve_cap(u64::MAX))
+            .expect("greedy");
         assert_eq!(greedy.plan.closer_reward, 11);
-        assert_eq!(greedy.plan.total_credit, 100);
+        assert_eq!(greedy.plan.upkeep_credit, 0);
         assert_eq!(greedy.plan.total_credit, greedy.plan.rent_principal);
 
-        // No donation, any cap: nothing to carve, and it is not a refusal.
-        let bare =
-            close_maker_replay_v2(retiring, created.maker_root, 100, u64::MAX).expect("bare");
+        // No donation, any cap: nothing to carve, nothing to house, and it is
+        // not a refusal.
+        let bare = close_maker_replay_v2(retiring, created.maker_root, 100, carve_cap(u64::MAX))
+            .expect("bare");
         assert_eq!(bare.plan.unclassified_donation, 0);
         assert_eq!(bare.plan.closer_reward, 0);
+        assert_eq!(bare.plan.upkeep_credit, 0);
         assert_eq!(bare.plan.total_credit, 100);
 
-        // Conservation over every case: nothing created, nothing stranded.
-        for plan in [today.plan, funded.plan, greedy.plan, bare.plan] {
+        // The record's SHARE binds before its cap: half the donation at an
+        // unbounded cap is five (rounding toward the vault), six housed.
+        let halved = close_maker_replay_v2(
+            retiring,
+            created.maker_root,
+            111,
+            ProtocolParametersV1 {
+                closer_carve_basis_points: 5_000,
+                closer_reward_cap_lamports: u64::MAX,
+                ..ProtocolParametersV1::genesis([0; 32])
+            },
+        )
+        .expect("halved");
+        assert_eq!(halved.plan.closer_reward, 5);
+        assert_eq!(halved.plan.upkeep_credit, 6);
+
+        // Conservation over every case: nothing created, nothing stranded,
+        // and not a lamport of principal anywhere but the owner.
+        for plan in [today.plan, funded.plan, greedy.plan, bare.plan, halved.plan] {
             assert_eq!(
                 plan.rent_principal + plan.unclassified_donation,
-                plan.closer_reward + plan.total_credit,
+                plan.closer_reward + plan.upkeep_credit + plan.total_credit,
             );
-            assert!(plan.total_credit >= plan.rent_principal);
+            assert_eq!(plan.total_credit, plan.rent_principal);
+            assert_eq!(
+                plan.closer_reward + plan.upkeep_credit,
+                plan.unclassified_donation
+            );
         }
     }
 
@@ -3718,7 +3768,7 @@ mod tests {
         let owing = created.maker_root.record_fee_owed(4).expect("record");
         let retiring = created.root.begin_retiring().expect("retiring");
         assert_eq!(
-            close_maker_replay_v2(retiring, owing, 111, 0),
+            close_maker_replay_v2(retiring, owing, 111, carve_cap(0)),
             Err(SuccessorError::FeeOwedOutstanding)
         );
         // A short settlement cannot clear the flag on the way past.
@@ -3727,7 +3777,8 @@ mod tests {
             Err(SuccessorError::FeeOwedOutstanding)
         );
         let settled = owing.settle_fee_owed(4).expect("exact settlement");
-        let closed = close_maker_replay_v2(retiring, settled, 111, 0).expect("settled close");
+        let closed =
+            close_maker_replay_v2(retiring, settled, 111, carve_cap(0)).expect("settled close");
         assert_eq!(closed.root.open_maker_root_count(), 0);
         assert_eq!(closed.plan.rent_owner, id(9));
     }
@@ -3757,7 +3808,8 @@ mod tests {
             Err(SuccessorError::MakerRootCountInvariant),
             "Retired stays gated on zero makers -- the invariant never moved",
         );
-        let closed = close_maker_replay_v2(retiring, created.maker_root, 111, 0).expect("close");
+        let closed =
+            close_maker_replay_v2(retiring, created.maker_root, 111, carve_cap(0)).expect("close");
         closed
             .root
             .require_closable()

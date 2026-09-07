@@ -53,6 +53,11 @@ pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAcc
 /// What a holder needs to find and redeem a claim-check.
 pub mod claim_check_v1;
 
+/// Host-only construction for the governable parameter surface's four acts.
+pub mod protocol_parameters_v1;
+/// Host-only construction for the upkeep vault's two permissionless routes.
+pub mod upkeep_vault_v1;
+
 /// Canonical logical-to-physical routing and finalized poststate planning for Direct V3.
 /// The family-neutral producer for Trading's permissionless validated-artifact seal.
 pub mod capability_seal_v1;

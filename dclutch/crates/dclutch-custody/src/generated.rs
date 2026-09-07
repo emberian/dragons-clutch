@@ -10,6 +10,7 @@ pub const CUSTODY_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-authority:v
 pub const CUSTODY_REPLAY_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-replay:v1";
 pub const CUSTODY_VAULT_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-vault:v1";
 pub const CUSTODY_POSTSTATE_DOMAIN_V1: &[u8] = b"dclutch:custody-poststate:v1";
+pub const CUSTODY_UPKEEP_VAULT_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-upkeep:v1";
 pub const CUSTODY_COMPARTMENT_NONE_TAG_V1: u8 = 0;
 pub const CUSTODY_COMPARTMENT_EXTERNAL_TAG_V1: u8 = 1;
 pub const CUSTODY_COMPARTMENT_SETTLEMENT_TAG_V1: u8 = 2;

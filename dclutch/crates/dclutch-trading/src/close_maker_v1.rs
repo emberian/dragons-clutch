@@ -29,10 +29,11 @@ pub const DIRECT_CLOSE_MAKER_SELECTOR_V1: u32 = 0xffff_ff04;
 pub const DIRECT_CLOSE_MAKER_REQUEST_BYTES_V1: usize = 96;
 /// Exact close-maker receipt width.
 ///
-/// Widened from 240 on 2026-09-04 for `closer_reward`. The receipt is
+/// Widened from 240 on 2026-09-04 for `closer_reward`, and from 248 for
+/// `closer` and `upkeep_credit` when the vault landed. The receipt is
 /// `set_return_data` only -- no released record, descriptor or profile digests
 /// it -- so the width is a codec fact and not a release identity.
-pub const DIRECT_CLOSE_MAKER_RECEIPT_BYTES_V1: usize = 248;
+pub const DIRECT_CLOSE_MAKER_RECEIPT_BYTES_V1: usize = 288;
 /// Close-maker request magic.
 pub const DIRECT_CLOSE_MAKER_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTDMC1";
 /// Close-maker receipt magic.
@@ -50,33 +51,17 @@ pub const DIRECT_CLOSE_MAKER_REQUEST_SCHEMA_ID_V1: [u8; 32] = [
     0x42, 0xa3, 0x87, 0xd9, 0xac, 0x0a, 0xae, 0x61, 0x8f, 0x7a, 0x90, 0x71, 0x5c, 0xe7, 0x19, 0x36,
 ];
 
-/// The carve ceiling this route passes to `close_maker_replay_v2`.
+/// The carve ceiling and share are NOT constants here.
 ///
-/// **RULED 2026-09-04 (C-11 D1 item 4): a permissionless closer's reward is
-/// carved from the donation slice alone, capped at the funded-crank floor.**
-/// The rule is in the kernel and proved in Lean
-/// (`the_closer_carve_never_touches_principal`,
-/// `the_closer_carve_is_capped_and_bounded_by_the_donation`), and the governed
-/// value is `closer_reward_cap_lamports` in
-/// `dclutch-market::protocol_parameters`'s record, whose genesis this constant
-/// projects so the two can never disagree.
-///
-/// **It is zero, and the reason is the FRAME, not the ruling.**
-/// `direct_close_maker_v1.rs` refuses any signer at all
-/// (`accounts.iter().any(|account| account.is_signer)`), so there is no closer
-/// in the twenty-two-account frame to pay. Paying one needs a twenty-third
-/// account with a signer conjunct -- `FUNDED_CRANK_V1.md` section 6's "the
-/// caller signs only to own the reward, never to be authorized" -- which moves
-/// the released AccountProfile, the close descriptor's digest, and therefore
-/// every derived identity. That is a cohort cut's work and it is OWED, named
-/// here rather than left as a zero a reader would take for a policy.
-///
-/// What did NOT change: refusing a nonzero donation is still rejected, on
-/// `CloseSeal`'s own documented lesson -- anyone can transfer one lamport into
-/// a Trading-owned PDA, so a refusal would let a griefer strand any replay, and
-/// the market behind it, permanently, for nothing.
-pub const DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1: u64 =
-    dclutch_market::protocol_parameters::PROTOCOL_GENESIS_CLOSER_REWARD_CAP_LAMPORTS_V1;
+/// RULED 2026-09-04 (C-11 D1 item 4) and built under decision 0024's
+/// amendment: the route reads `closer_carve_basis_points` and
+/// `closer_reward_cap_lamports` out of the governed record at its frame's
+/// coordinate 22 (`dclutch-market::protocol_parameters`) and pays the carve to
+/// the closer at coordinate 24, who signs only to own it. The genesis record's
+/// cap is zero, so a close under it pays no closer and houses the whole
+/// donation in the upkeep vault at coordinate 23; the one number that has to
+/// move to pay a closer is the record's cap, by proposal and delay, never a
+/// redeploy.
 
 /// Exact number of scalar registers in the authenticated close artifacts.
 pub const DIRECT_CLOSE_MAKER_SCALAR_COUNT_V1: u16 = 10;
@@ -116,7 +101,12 @@ pub const DIRECT_CLOSE_MAKER_TRADING_IDENTITY_V1: u16 = 0;
 pub const DIRECT_CLOSE_MAKER_ROOT_IDENTITY_V1: u16 = 1;
 
 /// Exact top-level account count.
-pub const DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1: usize = 22;
+///
+/// Twenty-two was the frame that admitted no closer; the five appended
+/// coordinates are decision 0024's: the governed record, the upkeep vault, the
+/// closer, the Custody program the vault credit is a CPI into, and the
+/// caller-authority PDA Trading signs that CPI with.
+pub const DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1: usize = 27;
 
 /// Top-level index of the composite Direct root (writable).
 pub const DIRECT_CLOSE_MAKER_ROOT_TOP_ACCOUNT_V1: usize = 0;
@@ -162,6 +152,21 @@ pub const DIRECT_CLOSE_MAKER_RENT_ACCOUNT_V1: usize = 19;
 pub const DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1: usize = 20;
 /// Top-level index of the recorded rent-owner destination wallet (writable).
 pub const DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1: usize = 21;
+/// Top-level index of the governed protocol-parameters record (Custody-owned,
+/// readonly): the carve share and cap are read here, never from a constant.
+pub const DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1: usize = 22;
+/// Top-level index of the upkeep vault (Custody-owned, writable): the donation
+/// after the carve is credited here.
+pub const DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1: usize = 23;
+/// Top-level index of the closer (signer, writable): paid the carve, and the
+/// only signer the frame admits.
+pub const DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1: usize = 24;
+/// Top-level index of the release set's Custody program (executable): the
+/// vault credit is a CPI into it.
+pub const DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1: usize = 25;
+/// Top-level index of Trading's caller-authority PDA for this request
+/// (readonly at the top level; Trading signs the CPI with it).
+pub const DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1: usize = 26;
 
 /// Return the exact `(writable, executable)` membrane for one account index.
 #[must_use]
@@ -172,10 +177,13 @@ pub const fn direct_close_maker_account_privileges_v1(index: usize) -> Option<(b
         Some((
             index == DIRECT_CLOSE_MAKER_ROOT_TOP_ACCOUNT_V1
                 || index == DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1
-                || index == DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1,
+                || index == DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1
+                || index == DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1
+                || index == DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1,
             index == DIRECT_CLOSE_MAKER_CORE_PROGRAM_ACCOUNT_V1
                 || index == DIRECT_CLOSE_MAKER_TRADING_PROGRAM_ACCOUNT_V1
-                || index == DIRECT_CLOSE_MAKER_REGISTRY_ACCOUNT_V1,
+                || index == DIRECT_CLOSE_MAKER_REGISTRY_ACCOUNT_V1
+                || index == DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1,
         ))
     }
 }
@@ -198,11 +206,13 @@ const RECEIPT_MAKER_OFFSET: usize = 80;
 const RECEIPT_MAKER_ROOT_OFFSET: usize = 112;
 const RECEIPT_RENT_OWNER_OFFSET: usize = 144;
 const RECEIPT_POST_ROOT_DIGEST_OFFSET: usize = 176;
-const RECEIPT_RENT_PRINCIPAL_OFFSET: usize = 208;
-const RECEIPT_DONATION_OFFSET: usize = 216;
-const RECEIPT_CLOSER_REWARD_OFFSET: usize = 224;
-const RECEIPT_TOTAL_CREDIT_OFFSET: usize = 232;
-const RECEIPT_REMAINING_COUNT_OFFSET: usize = 240;
+const RECEIPT_CLOSER_OFFSET: usize = 208;
+const RECEIPT_RENT_PRINCIPAL_OFFSET: usize = 240;
+const RECEIPT_DONATION_OFFSET: usize = 248;
+const RECEIPT_CLOSER_REWARD_OFFSET: usize = 256;
+const RECEIPT_UPKEEP_CREDIT_OFFSET: usize = 264;
+const RECEIPT_TOTAL_CREDIT_OFFSET: usize = 272;
+const RECEIPT_REMAINING_COUNT_OFFSET: usize = 280;
 
 /// Stable request/receipt refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -289,13 +299,17 @@ pub struct DirectCloseMakerReceiptV1 {
     pub rent_owner: [u8; 32],
     /// SHA-256 of the exact root bytes after the count decrement.
     pub post_root_digest: [u8; 32],
+    /// The closer the carve reached: the frame's one signer.
+    pub closer: [u8; 32],
     /// Historical account-rent principal, exactly as recorded at first use.
     pub rent_principal: u64,
     /// Lamports above principal, explicitly not fees or reserves.
     pub unclassified_donation: u64,
     /// The permissionless closer's carve, out of the donation slice alone.
     pub closer_reward: u64,
-    /// Exact total lamports credited to the beneficiary.
+    /// The donation after the carve, credited to the upkeep vault.
+    pub upkeep_credit: u64,
+    /// Exact lamports credited to the beneficiary: the principal, exactly.
     pub total_credit: u64,
     /// Open maker roots still standing after this close.
     pub remaining_open_maker_roots: u64,
@@ -311,19 +325,27 @@ impl DirectCloseMakerReceiptV1 {
             self.maker_root,
             self.rent_owner,
             self.post_root_digest,
+            self.closer,
         ] {
             require_nonzero(value)?;
         }
-        // Conservation, and the ruling's own bound, in one place: the whole
-        // observed balance is exactly the carve plus what the beneficiary
-        // received, and the carve came out of the donation slice, so the
-        // beneficiary still received at least everything the maker put in. A
-        // receipt claiming a larger carve than the donation is a receipt for a
-        // close that took principal, and it refuses here.
+        // Conservation, and the ruling's own bounds, in one place: the whole
+        // observed balance is exactly the carve plus the vault's credit plus
+        // what the beneficiary received; the carve and the credit together are
+        // exactly the donation; and the beneficiary received exactly the
+        // principal. A receipt claiming a larger carve than the donation, or a
+        // beneficiary credit other than the principal, is a receipt for a close
+        // that moved principal, and it refuses here.
         if self.rent_principal == 0
             || self.closer_reward > self.unclassified_donation
+            || self.closer_reward.checked_add(self.upkeep_credit)
+                != Some(self.unclassified_donation)
+            || self.total_credit != self.rent_principal
             || self.rent_principal.checked_add(self.unclassified_donation)
-                != self.closer_reward.checked_add(self.total_credit)
+                != self
+                    .closer_reward
+                    .checked_add(self.upkeep_credit)
+                    .and_then(|value| value.checked_add(self.total_credit))
         {
             return Err(DirectCloseMakerErrorV1::InvalidRefund);
         }
@@ -344,9 +366,11 @@ impl DirectCloseMakerReceiptV1 {
             maker_root: array(input, RECEIPT_MAKER_ROOT_OFFSET)?,
             rent_owner: array(input, RECEIPT_RENT_OWNER_OFFSET)?,
             post_root_digest: array(input, RECEIPT_POST_ROOT_DIGEST_OFFSET)?,
+            closer: array(input, RECEIPT_CLOSER_OFFSET)?,
             rent_principal: u64_at(input, RECEIPT_RENT_PRINCIPAL_OFFSET)?,
             unclassified_donation: u64_at(input, RECEIPT_DONATION_OFFSET)?,
             closer_reward: u64_at(input, RECEIPT_CLOSER_REWARD_OFFSET)?,
+            upkeep_credit: u64_at(input, RECEIPT_UPKEEP_CREDIT_OFFSET)?,
             total_credit: u64_at(input, RECEIPT_TOTAL_CREDIT_OFFSET)?,
             remaining_open_maker_roots: u64_at(input, RECEIPT_REMAINING_COUNT_OFFSET)?,
         }
@@ -365,6 +389,7 @@ impl DirectCloseMakerReceiptV1 {
             self.maker_root,
             self.rent_owner,
             self.post_root_digest,
+            self.closer,
         ];
         debug_assert!(
             RECEIPT_RENT_PRINCIPAL_OFFSET - RECEIPT_REQUEST_DIGEST_OFFSET == identities.len() * 32
@@ -379,6 +404,7 @@ impl DirectCloseMakerReceiptV1 {
             self.rent_principal,
             self.unclassified_donation,
             self.closer_reward,
+            self.upkeep_credit,
             self.total_credit,
             self.remaining_open_maker_roots,
         ];
@@ -523,10 +549,12 @@ mod tests {
             maker_root: id(4),
             rent_owner: id(5),
             post_root_digest: id(6),
+            closer: id(7),
             rent_principal: 100,
             unclassified_donation: 11,
             closer_reward: 0,
-            total_credit: 111,
+            upkeep_credit: 11,
+            total_credit: 100,
             remaining_open_maker_roots: 0,
         }
     }
@@ -629,6 +657,7 @@ mod tests {
         // receives exactly the principal.
         let whole = DirectCloseMakerReceiptV1 {
             closer_reward: 11,
+            upkeep_credit: 0,
             total_credit: 100,
             ..receipt()
         };
@@ -645,7 +674,21 @@ mod tests {
         assert_eq!(
             DirectCloseMakerReceiptV1 {
                 closer_reward: 12,
+                upkeep_credit: 0,
                 total_credit: 99,
+                ..receipt()
+            }
+            .new(),
+            Err(DirectCloseMakerErrorV1::InvalidRefund)
+        );
+        // And the vault-era bound: a receipt that credits the owner one
+        // lamport of donation, conserved to the lamport, still refuses --
+        // the donation reaches the closer or the vault and nobody else.
+        assert_eq!(
+            DirectCloseMakerReceiptV1 {
+                closer_reward: 0,
+                upkeep_credit: 10,
+                total_credit: 101,
                 ..receipt()
             }
             .new(),
@@ -657,7 +700,8 @@ mod tests {
             DirectCloseMakerReceiptV1 {
                 unclassified_donation: 0,
                 closer_reward: 11,
-                total_credit: 100,
+                upkeep_credit: 0,
+                total_credit: 111,
                 rent_principal: 111,
                 ..receipt()
             }
@@ -666,20 +710,35 @@ mod tests {
         );
     }
 
-    /// The carve ceiling this route passes is zero because its FRAME admits no
-    /// closer, not because ruling D1 item 4 says zero -- and the frame fact is
-    /// asserted beside it so the two cannot be confused.
+    /// The frame carries decision 0024: the governed record at 22, the vault at
+    /// 23, the closer at 24, the Custody program at 25 and Trading's caller
+    /// authority at 26 -- and nothing past 26.
     #[test]
-    fn the_carve_ceiling_is_zero_because_the_frame_admits_no_closer() {
-        assert_eq!(DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1, 0);
-        // The governed record's genesis is its single author.
+    fn the_frame_carries_the_record_the_vault_and_a_closer() {
+        assert_eq!(DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, 27);
+        assert_eq!(DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1, 22);
+        assert_eq!(DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1, 23);
+        assert_eq!(DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1, 24);
+        assert_eq!(DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1, 25);
+        assert_eq!(DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1, 26);
         assert_eq!(
-            DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1,
-            dclutch_market::protocol_parameters::PROTOCOL_GENESIS_CLOSER_REWARD_CAP_LAMPORTS_V1,
+            direct_close_maker_account_privileges_v1(
+                DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1
+            ),
+            Some((false, false))
         );
-        // Twenty-two accounts, none of them a closer: indices 20 and 21 are the
-        // replay and the recorded rent owner, and there is no index 22.
-        assert_eq!(DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, 22);
+        assert_eq!(
+            direct_close_maker_account_privileges_v1(DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1),
+            Some((true, false))
+        );
+        assert_eq!(
+            direct_close_maker_account_privileges_v1(DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1),
+            Some((true, false))
+        );
+        assert_eq!(
+            direct_close_maker_account_privileges_v1(DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1),
+            Some((false, true))
+        );
         assert_eq!(
             direct_close_maker_account_privileges_v1(DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1),
             None,
@@ -696,8 +755,11 @@ mod tests {
             executable += usize::from(x);
             assert!(!(w && x), "no account is both writable and executable");
         }
-        assert_eq!(writable, 3, "root, replay, and rent owner");
-        assert_eq!(executable, 3, "core, trading, registry");
+        assert_eq!(
+            writable, 5,
+            "root, replay, rent owner, upkeep vault, closer"
+        );
+        assert_eq!(executable, 4, "core, trading, registry, custody");
         assert!(
             direct_close_maker_account_privileges_v1(DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1).is_none()
         );

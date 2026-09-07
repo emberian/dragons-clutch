@@ -5,9 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ACCOUNT_STORAGE_OVERHEAD_BYTES_V1,
   COMPACTION_CRANK_REWARD_LAMPORTS_V1,
   OPENER_ACCOUNT_WIDTHS_V1,
+  fundedRentMinimumV1,
+  fundedRentRateFromMinimumV1,
   lamportsAsSolV1,
+  openerFirstCrankAtFundedRateV1,
   openerFirstCrankV1,
 } from './openerTerms';
 
@@ -34,6 +38,9 @@ const read = (path: string) => readFileSync(join(repoRoot, path), 'utf8');
 
 const CLAIM_CHECK_V1 = 'crates/dclutch-claims/src/claim_check_v1.rs';
 const CONSERVATION_V1 = 'crates/dclutch-claims/src/claim_check_conservation_v1.rs';
+const PARAMETERS_GENERATED_V1 = 'crates/dclutch-market/src/protocol_parameters/generated.rs';
+const FUNDING_V2 = 'crates/dclutch-market/src/capability_manifest/funding.rs';
+const MANIFEST_ABI_V1 = 'crates/dclutch-market/src/capability_manifest/generated_abi.rs';
 
 const constant = (source: string, name: string) => {
   const match = source.match(new RegExp(`pub const ${name}: u(?:64|size) = ([0-9_]+);`));
@@ -49,8 +56,18 @@ describe('the widths and the cap this file restates are the Rust\'s', () => {
     expect(constant(source, 'CLAIM_CHECK_ESCROW_BYTES_V1')).toBe(BigInt(OPENER_ACCOUNT_WIDTHS_V1.claimCheckEscrow));
   });
 
-  it('pins the crank reward cap', () => {
-    expect(constant(source, 'COMPACTION_CRANK_REWARD_LAMPORTS_V1')).toBe(COMPACTION_CRANK_REWARD_LAMPORTS_V1);
+  it('pins the crank reward cap TO ITS AUTHOR, not to a second copy of it', () => {
+    // The Rust constant stopped being a literal when decision 0024's amendment
+    // made the governed record the one author of every economic value. Pinning
+    // the literal would now pass by finding nothing, so this pins the CHAIN:
+    // the record's generated genesis carries the number, and the claims
+    // constant projects it by name. Break either link and this goes red.
+    const generated = read(PARAMETERS_GENERATED_V1);
+    expect(constant(generated, 'PROTOCOL_GENESIS_CRANK_REWARD_CAP_LAMPORTS_V1'))
+      .toBe(COMPACTION_CRANK_REWARD_LAMPORTS_V1);
+    expect(source).toContain(
+      'pub const COMPACTION_CRANK_REWARD_LAMPORTS_V1: u64 =\n    dclutch_market::protocol_parameters::PROTOCOL_GENESIS_CRANK_REWARD_CAP_LAMPORTS_V1;',
+    );
   });
 
   it('pins the Position width formula', () => {
@@ -138,5 +155,57 @@ describe('the arithmetic reproduces the cohorts\' own numbers', () => {
     const starved = openerFirstCrankV1({ outcomeCount: 2, rentFor: at(6_333n), crankRewardCapLamports: 10n ** 12n });
     expect(starved.crankReward).toBe(starved.released - starved.claimCheckTopUp);
     expect(starved.openerRepayment).toBe(0n);
+  });
+});
+
+describe('the founded-rate pricing is the Rust\'s, and it is the honest one', () => {
+  it('pins the storage overhead against the manifest ABI', () => {
+    const abi = read(MANIFEST_ABI_V1);
+    expect(constant(abi, 'ACCOUNT_STORAGE_OVERHEAD_BYTES')).toBe(ACCOUNT_STORAGE_OVERHEAD_BYTES_V1);
+  });
+
+  it('pins the pricing formula against `funded_rent_minimum_v2`', () => {
+    // `(ACCOUNT_STORAGE_OVERHEAD_BYTES + bytes) * rate`, written in the Rust as
+    // a checked chain. If the shape stops being affine in the length, one rate
+    // stops pricing every width and this whole file is stating something false.
+    const funding = read(FUNDING_V2);
+    expect(funding).toContain('.checked_add(bytes)');
+    expect(funding).toContain('.and_then(|span| span.checked_mul(u64::from(funded_rent_rate)))');
+    expect(fundedRentMinimumV1(6_333n, 312)).toBe(2_786_520n);
+  });
+
+  it('reproduces the certificate seat cohort-14 actually funded', () => {
+    // `COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md`: the seat is 312 bytes and
+    // holds exactly 2,786,520 lamports at the founding rate of 6,333. That is
+    // the seat prepay decision 0024 item 4 charters the upkeep vault to hold.
+    expect(fundedRentMinimumV1(6_333n, 312)).toBe(2_786_520n);
+    expect(fundedRentRateFromMinimumV1(2_786_520n, 312)).toBe(6_333n);
+  });
+
+  it('refuses a minimum no single rate can price, rather than rounding to one', () => {
+    expect(() => fundedRentRateFromMinimumV1(2_786_521n, 312)).toThrow(/no single lamports-per-byte rate/);
+    expect(() => fundedRentMinimumV1(0n, 312)).toThrow(/nonzero lamports-per-byte/);
+  });
+
+  it('agrees with the four-read plan exactly when the cluster is affine', () => {
+    const at = (lamportsPerByte: bigint) => (bytes: number) =>
+      (BigInt(bytes) + 128n) * lamportsPerByte;
+    for (const rate of [5_080n, 6_333n, 6_960n]) {
+      for (const outcomeCount of [2, 4, 8]) {
+        expect(openerFirstCrankAtFundedRateV1({ outcomeCount, fundedRentRate: rate }))
+          .toEqual(openerFirstCrankV1({ outcomeCount, rentFor: at(rate) }));
+      }
+    }
+  });
+
+  it('states a cohort-15 market\'s cost at ITS rate, not at today\'s', () => {
+    // The whole point of pricing from the recorded rate: the same market costs
+    // its opener a different number depending on which rate you price it at,
+    // and only one of the two is a fact about that market.
+    const recorded = openerFirstCrankAtFundedRateV1({ outcomeCount: 4, fundedRentRate: 6_333n });
+    const today = openerFirstCrankAtFundedRateV1({ outcomeCount: 4, fundedRentRate: 5_080n });
+    expect(recorded.openerStillOwed).toBe(1_244_945n);
+    expect(today.openerStillOwed).toBe(1_038_200n);
+    expect(recorded.openerStillOwed).not.toBe(today.openerStillOwed);
   });
 });

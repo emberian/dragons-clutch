@@ -22,7 +22,11 @@ use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 
 mod delegated;
 mod projected;
+/// The governed protocol-parameters record's routes (decision 0024).
+pub mod protocol_parameters_v1;
 mod retirement_replay_handoff_v1;
+/// The upkeep vault's routes (decision 0024 item 4).
+pub mod upkeep_vault_v1;
 
 /// One diagnostic phase mark: a label and the transaction meter's remaining CU.
 ///
@@ -232,6 +236,15 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     custody_cu_checkpoint!("cu-enter");
+    // The two economics families dispatch on their own exact width and magic
+    // BEFORE the bump split: neither carries a relayed bump, and neither width
+    // is any other route's, so a wire of theirs is theirs and nothing else.
+    if upkeep_vault_v1::selects(instruction_data) {
+        return upkeep_vault_v1::process(program_id, accounts, instruction_data);
+    }
+    if protocol_parameters_v1::selects(instruction_data) {
+        return protocol_parameters_v1::process(program_id, accounts, instruction_data);
+    }
     let (instruction_data, relay) = split_caller_authority_bump_v1(instruction_data);
     if instruction_data.len() == dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
         && instruction_data.get(..dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())

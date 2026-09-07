@@ -20,12 +20,8 @@ custom-panic = []
 # enables this feature.
 # Diagnostic-only phase checkpoints for measured SBF compute profiling.
 hot-cu-profile = []
-series-family = [
-    "dep:dclutch-custody",
-]
-dealer-family = [
-    "dep:dclutch-custody",
-]
+series-family = []
+dealer-family = []
 families = [
     "series-family",
     "dealer-family",
@@ -35,16 +31,17 @@ families = [
 # the fixed Claims/Custody child composers and Token-2022 poststate verifier,
 # so their dependency closure must remain explicit here rather than being
 # inherited accidentally from the production `families` feature.
-outer-only = [
-    "dep:dclutch-custody",
-]
+outer-only = []
 
 [dependencies]
 dclutch-vm = { path = "../../crates/dclutch-vm" }
 dclutch-market = { path = "../../crates/dclutch-market", features = ["alloc"] }
 dclutch-claims = { path = "../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
-dclutch-custody = { path = "../../crates/dclutch-custody", optional = true }
+# NOT optional. The Direct close-maker is a default route and it credits the
+# upkeep vault through `dclutch_custody::upkeep_vault_v1`, so the ABI is part of
+# the unconditional link rather than of a family feature (decision 0024 item 4).
+dclutch-custody = { path = "../../crates/dclutch-custody" }
 dclutch-trading = { path = "../../crates/dclutch-trading", features = ["svm"] }
 dclutch-product = { path = "../../crates/dclutch-product", features = ["svm"] }
 dclutch-sbf-runtime = { path = "../../crates/dclutch-sbf-runtime" }

@@ -63,8 +63,54 @@ def recordMagic : List UInt8 :=
 def receiptMagic : List UInt8 :=
   [0x44, 0x43, 0x4c, 0x54, 0x50, 0x52, 0x43, 0x31]
 
-/-- `[domain, generation]` -- the one record, per parameter generation. -/
+/-- `[domain]` -- the one record.  Its generation is a FIELD, not a seed: a
+consumer reads the record at one address whatever generation it holds, and the
+receipts below are what a census walks. -/
 def recordPdaDomain : String := "dclutch:protocol-parameters:v1"
+
+/-- `[receiptDomain, generation as eight little-endian bytes]` -- one change
+receipt per generation, so the stream a census reads is addressable without a
+scan and a gap in it is a gap a reader can name. -/
+def receiptPdaDomain : String := "dclutch:parameters-receipt:v1"
+
+/-- `DCLTPRQ1` -- the one request wire for the four governance acts. -/
+def requestMagic : List UInt8 :=
+  [0x44, 0x43, 0x4c, 0x54, 0x50, 0x52, 0x51, 0x31]
+
+theorem magics_are_pairwise_distinct :
+    [recordMagic, receiptMagic, requestMagic].Nodup := by native_decide
+
+/-- A PDA seed is at most thirty-two bytes; the two domains are distinct. -/
+theorem pda_domains_are_admissible_and_distinct :
+    recordPdaDomain.toUTF8.toList.length <= 32 ∧
+      receiptPdaDomain.toUTF8.toList.length <= 32 ∧
+      recordPdaDomain ≠ receiptPdaDomain := by
+  native_decide
+
+/-- The four acts.  `found` writes the genesis record once, with the founder as
+the placeholder authority (decision 0024 section 3: "named as a placeholder
+rather than pretended to be governance").  The other three are `propose`,
+`withdraw` and `applyChange` below. -/
+inductive GovernanceAct where
+  | found | propose | withdraw | apply
+  deriving DecidableEq, Repr
+
+def GovernanceAct.tag : GovernanceAct -> UInt8
+  | .found => 0 | .propose => 1 | .withdraw => 2 | .apply => 3
+
+def GovernanceAct.all : List GovernanceAct := [.found, .propose, .withdraw, .apply]
+
+theorem governance_act_tags_are_pairwise_distinct :
+    (GovernanceAct.all.map GovernanceAct.tag).Nodup := by native_decide
+
+/-- `[record, founder, custody_programdata, system_program, rent_sysvar]`. -/
+def foundAccountCount : Nat := 5
+
+/-- `[record, authority]`, for `propose` and `withdraw`. -/
+def authorityAccountCount : Nat := 2
+
+/-- `[record, receipt, payer, system_program, rent_sysvar]`, for `apply`. -/
+def applyAccountCount : Nat := 5
 
 /-!
 ## The constitution: four source constants a release owns
@@ -103,6 +149,18 @@ move before it binds; short enough that it is a waiting period and not a veto.
 Governance sets `changeDelaySlots` at or above this and can never set it below,
 so it cannot make itself instantaneous by governing its own delay first. -/
 def minimumChangeDelaySlots : Nat := 7 * slotsPerNominalDay
+
+/-- Whether THIS release admits a protocol take at all.
+
+Decision 0024 item 1: no protocol fee take before mainnet, revisited with the
+mainnet ruling (decision 0026: mainnet follows assurance).  The pair rule below
+makes a take and a payee move together; this constant makes the pair
+unreachable until the release that goes to mainnet flips it.  It is a source
+constant on purpose -- "before mainnet" is a fact about which ELF is deployed,
+not a value governance may vote itself into -- and it is refused BY NAME
+(`Refusal.takeBeforeMainnet`) rather than folded into the band, so that a reader
+of the refusal learns which ruling stopped them. -/
+def protocolTakeAdmittedThisRelease : Bool := false
 
 /-!
 ## The parameters
@@ -178,6 +236,12 @@ theorem inBand_delay_floor {p : Parameters} (banded : inBand p = true) :
   simp only [inBand, Bool.and_eq_true, decide_eq_true_eq] at banded
   exact banded.2.2.2.2
 
+/-- Decision 0024 item 1 as a conjunct: a nonzero take is admissible only in a
+release that admits one.  Checked after the bands at both acts, so a take with
+no payee is still the pair rule's refusal and a take WITH a payee is this one. -/
+def takeAdmissible (p : Parameters) : Bool :=
+  protocolTakeAdmittedThisRelease || (p.protocolTakeBasisPoints == 0)
+
 /-- The values the record is born holding: today's deployed economics, exactly.
 
 `maxFeeBasisPoints` is the ceiling itself, because that is what the tree
@@ -245,6 +309,9 @@ inductive Refusal where
   | proposalNotMatured
   /-- The bytes offered are not the bytes proposed. -/
   | proposalDigestMismatch
+  /-- A nonzero protocol take in a release that admits none (decision 0024
+  item 1; lifted only by the mainnet ruling's own release). -/
+  | takeBeforeMainnet
   deriving DecidableEq, Repr
 
 /-- What a governance act returns.  Its own type rather than `Except`, so that
@@ -261,6 +328,7 @@ def propose (record : Record) (signerIsAuthority : Bool)
   else if !signerIsAuthority then .refused .unauthorizedGovernance
   else if !record.pending.digestIsZero then .refused .proposalOutstanding
   else if !inBand proposed then .refused .parameterOutOfBand
+  else if !takeAdmissible proposed then .refused .takeBeforeMainnet
   else .changed { record with
     pending := {
       digestIsZero := false
@@ -286,6 +354,7 @@ def applyChange (record : Record) (proposed : Parameters) (digestMatches : Bool)
   else if currentSlot < record.pending.earliestApplySlot then .refused .proposalNotMatured
   else if !digestMatches then .refused .proposalDigestMismatch
   else if !inBand proposed then .refused .parameterOutOfBand
+  else if !takeAdmissible proposed then .refused .takeBeforeMainnet
   else .changed {
     parameters := { proposed with
       generation := record.parameters.generation + 1
@@ -340,6 +409,8 @@ theorem applied_parameters_are_in_band
   split at applied
   · simp at applied
   · rename_i inside
+    split at applied
+    · simp at applied
     simp only [Bool.not_eq_true'] at inside
     simp only [Outcome.changed.injEq] at applied
     subst applied
@@ -379,6 +450,8 @@ theorem every_applied_change_advances_the_generation
   · simp at applied
   split at applied
   · simp at applied
+  split at applied
+  · simp at applied
   · simp only [Outcome.changed.injEq] at applied
     subst applied
     rfl
@@ -392,6 +465,8 @@ theorem a_proposal_carries_at_least_the_minimum_notice
     (staged : propose record true proposed slot = .changed after) :
     slot + minimumChangeDelaySlots <= after.pending.earliestApplySlot := by
   unfold propose at staged
+  split at staged
+  · simp at staged
   split at staged
   · simp at staged
   split at staged
@@ -480,6 +555,54 @@ theorem a_take_with_no_payee_never_stages :
       = .refused .parameterOutOfBand := by
   native_decide
 
+/-- HOSTILE 4 -- decision 0024 item 1 as a conjunct, not a comment: a take
+WITH a payee, inside every band, still never stages in a release that admits
+none, and it is refused by its own name. -/
+theorem a_take_before_mainnet_never_stages :
+    propose genesisRecord true
+      { genesis with protocolTakeBasisPoints := 25, protocolBeneficiaryIsZero := false }
+      proposedAt
+      = .refused .takeBeforeMainnet := by
+  native_decide
+
+/-- And it does not slip in at apply either, whatever a proposal claimed: a
+proposal is a commitment, never a permission. -/
+theorem a_take_before_mainnet_never_applies :
+    applyChange
+      { parameters := genesis
+        pending := {
+          digestIsZero := false
+          earliestApplySlot := proposedAt + minimumChangeDelaySlots } }
+      { genesis with protocolTakeBasisPoints := 25, protocolBeneficiaryIsZero := false }
+      true (proposedAt + minimumChangeDelaySlots)
+      = .refused .takeBeforeMainnet := by
+  native_decide
+
+/-- The law the two witnesses serve: no record any release before mainnet can
+reach carries a take.  The hypothesis is the release constant itself, so the
+theorem survives the release that flips it -- it stops applying rather than
+becoming false. -/
+theorem no_applied_record_takes_before_mainnet
+    (record after : Record) (proposed : Parameters) (digestMatches : Bool) (slot : Nat)
+    (before : protocolTakeAdmittedThisRelease = false)
+    (applied : applyChange record proposed digestMatches slot = .changed after) :
+    after.parameters.protocolTakeBasisPoints = 0 := by
+  unfold applyChange at applied
+  split at applied
+  · simp at applied
+  split at applied
+  · simp at applied
+  split at applied
+  · simp at applied
+  split at applied
+  · simp at applied
+  split at applied
+  · simp at applied
+  · rename_i admitted
+    simp only [Outcome.changed.injEq] at applied
+    subst applied
+    simpa [takeAdmissible, before] using admitted
+
 /-!
 ## The wire
 
@@ -554,6 +677,45 @@ theorem receiptSchema_wellFormed : WellFormed receiptSchema := by
   native_decide
 
 theorem receiptFields_disjoint : receiptLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 _
+
+/-- The request: a header naming the act, then the proposed BODY in the
+record's own field order.  `found` carries the genesis body with the founder's
+key as authority and refuses any other; `withdraw` carries zeros; `propose` and
+`apply` carry the value.  The body is what `body_digest` hashes, so a proposal
+and its apply are compared over exactly these bytes. -/
+inductive RequestField where
+  | magic | version | act | reservedHeader
+  | governanceAuthority | protocolBeneficiary
+  | changeDelaySlots | closerRewardCapLamports | crankRewardCapLamports
+  | maxFeeBasisPoints | protocolTakeBasisPoints | closerCarveBasisPoints
+  | reservedTail
+  deriving DecidableEq, Repr
+
+def requestSchema : List (FieldSpec RequestField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.act, .u8⟩,
+  ⟨.reservedHeader, .reserved 5⟩,
+  ⟨.governanceAuthority, .bytes 32⟩, ⟨.protocolBeneficiary, .bytes 32⟩,
+  ⟨.changeDelaySlots, .u64⟩, ⟨.closerRewardCapLamports, .u64⟩,
+  ⟨.crankRewardCapLamports, .u64⟩,
+  ⟨.maxFeeBasisPoints, .u16⟩, ⟨.protocolTakeBasisPoints, .u16⟩,
+  ⟨.closerCarveBasisPoints, .u16⟩, ⟨.reservedTail, .reserved 2⟩
+]
+
+def requestLayout : List (PlacedField RequestField) := specialize requestSchema
+
+def requestBytes : Nat := schemaWidth requestSchema
+
+theorem request_width_is_one_hundred_twelve : requestBytes = 112 := by decide
+
+theorem requestSchema_unique_names : (requestSchema.map FieldSpec.name).Nodup := by
+  native_decide
+
+theorem requestSchema_wellFormed : WellFormed requestSchema := by
+  refine ⟨requestSchema_unique_names, ?_⟩
+  native_decide
+
+theorem requestFields_disjoint : requestLayout.Pairwise Before :=
   specializeFrom_pairwise 0 _
 
 end DClutch.ProtocolParametersV1

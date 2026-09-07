@@ -9,10 +9,12 @@
 //!   intentional flip of the old count gate (cohort-9 review item 1,
 //!   amendment 1), proven here on the real ELF rather than in a leaf test;
 //! * the maker replay then closes INSIDE Retiring: the count decrements 1 -> 0
-//!   through the released transition's own `nonzero` + `sub_into`, the whole
-//!   observed balance (principal plus donation) lands on the immutably
-//!   recorded `rent_owner`, and the replay account returns to the System
-//!   program;
+//!   through the released transition's own `nonzero` + `sub_into`, the
+//!   observed balance splits three ways -- the immutably recorded `rent_owner`
+//!   takes the principal EXACTLY, the closer at coordinate 24 takes the carve
+//!   the governed parameters record allows it, and every remaining lamport of
+//!   the donation is credited to the Custody-owned upkeep vault by CPI -- and
+//!   the replay account returns to the System program;
 //! * the drained root now passes the exact gate that stopped wall 22: the
 //!   RELEASED native-close transition bytecode -- the same
 //!   `scalar_eq(count, 0)` the physical close runs -- accepts the drained
@@ -26,7 +28,19 @@
 //!   registered live intents refuses `CloseMakerLiveIntents`; a substituted
 //!   rent destination refuses `CloseMakerFrame` before anything moves.
 
-use dclutch_vm::account_profile::ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1;
+use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_custody::upkeep_vault_v1::{UpkeepVaultSeedsV1, UpkeepVaultV1};
+use dclutch_direct_hot_program_test_support::{
+    DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5, DirectHotDeploymentWidthsV5,
+    build_direct_hot_artifact_fixture_v5,
+    waist::{
+        CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, Elves, REGISTRY_PROGRAM_ID, RefusedExecution,
+        Releases, SuccessfulExecution, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
+        canonical_lookup_addresses, elves, fixture_substrate, program_test_without_forced_budget,
+        programdata_v2, start_with_substrate, submit_v0_observed,
+    },
+};
+use dclutch_market::CoreEffectActionV1;
 use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1,
@@ -39,7 +53,22 @@ use dclutch_market::capability_program::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::CapabilityProgramV4,
 };
-use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_market::protocol_parameters::{
+    PendingChangeV1, ProtocolParametersRecordSeedsV1, ProtocolParametersRecordV1,
+    ProtocolParametersV1,
+};
+use dclutch_market::{
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    STATE_BYTES, StateBumpsV1,
+};
+use dclutch_operator::{
+    Finality, Observation, ObservedAccount,
+    direct_close_maker_v1::{
+        DirectCloseMakerClusterV1, DirectCloseMakerPlanErrorV1, DirectCloseMakerPlanV1,
+        DirectCloseMakerSnapshotV1, plan_direct_close_maker_v1,
+    },
+};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_trading::{
     begin_retiring_bundle_v1::{
         direct_begin_retiring_account_profile_schema_v1,
@@ -50,9 +79,12 @@ use dclutch_trading::{
         direct_close_maker_effect_schema_v1,
     },
     close_maker_v1::{
-        DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1,
-        DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1, DirectCloseMakerReceiptV1, DirectCloseMakerRequestV1,
-        direct_close_maker_account_privileges_v1,
+        DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1, DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1, DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1,
+        DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1, DirectCloseMakerReceiptV1,
+        DirectCloseMakerRequestV1, direct_close_maker_account_privileges_v1,
     },
     intent_v2::CompactIntentV2,
     ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
@@ -70,31 +102,9 @@ use dclutch_trading::{
         consume_nonce_v2,
     },
 };
-use dclutch_direct_hot_program_test_support::{
-    DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5, DirectHotDeploymentWidthsV5,
-    build_direct_hot_artifact_fixture_v5,
-    waist::{
-        CORE_PROGRAM_ID, Elves, REGISTRY_PROGRAM_ID, RefusedExecution, Releases,
-        SuccessfulExecution, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
-        canonical_lookup_addresses, elves, fixture_substrate, program_test_without_forced_budget,
-        programdata_v2, start_with_substrate, submit_v0_observed,
-    },
-};
-use dclutch_vm::effect::v2::SCHEMA_RELEASE_ID as EFFECT_SCHEMA_RELEASE_ID_V2;
-use dclutch_market::CoreEffectActionV1;
-use dclutch_market::{
-    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
-    STATE_BYTES, StateBumpsV1,
-};
-use dclutch_operator::{
-    Finality, Observation, ObservedAccount,
-    direct_close_maker_v1::{
-        DirectCloseMakerClusterV1, DirectCloseMakerPlanErrorV1, DirectCloseMakerPlanV1,
-        DirectCloseMakerSnapshotV1, plan_direct_close_maker_v1,
-    },
-};
-use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_trading_sbf::TradingSbfError;
+use dclutch_vm::account_profile::ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1;
+use dclutch_vm::effect::v2::SCHEMA_RELEASE_ID as EFFECT_SCHEMA_RELEASE_ID_V2;
 use dclutch_vm::v2::{
     ProgramV2 as TransitionProgramV2, RegisterInput, RegisterOutput, execute_atomic,
 };
@@ -106,6 +116,8 @@ use solana_program::{
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
+use solana_sdk::signature::Keypair;
+use solana_sdk::signer::Signer;
 use solana_sdk::transaction::TransactionError;
 use solana_sdk_ids::{compute_budget, sysvar};
 
@@ -136,6 +148,23 @@ const RENT_OWNER: Pubkey = Pubkey::new_from_array([0xc1; 32]);
 const STRANGER_WALLET: Pubkey = Pubkey::new_from_array([0xc2; 32]);
 /// Lamports above rent principal on the clean replay: the donation slice.
 const DONATION: u64 = 11;
+/// The governance authority the genesis parameters record records.
+///
+/// Never in a frame, and never read by this route: the close reads the carve's
+/// share and ceiling out of the record and nothing else. It is nonzero only so
+/// the fixture stages a record whose governance is live rather than frozen.
+const GOVERNANCE_AUTHORITY: Pubkey = Pubkey::new_from_array([0xb2; 32]);
+/// What coordinate 26 carries before a plan has named the real one.
+///
+/// That coordinate's last seed is the digest of an upkeep request carrying the
+/// donation remainder AND the digest of this close's own receipt, so it is not
+/// derivable from chain state the way every other coordinate is -- only from a
+/// completed plan. The frame is fixed-width, so something must sit here in the
+/// meantime, and this is it: an address no derivation produces, which a plan
+/// that needs the real one refuses BY NAME while handing the real one back
+/// ([`planned_caller_authority`]). A close whose donation remainder is zero
+/// asks nothing of the coordinate at all, and then this stands.
+const UNPLANNED_CALLER_AUTHORITY: Pubkey = Pubkey::new_from_array([0xd1; 32]);
 /// The unsettled fee the debtor's replay records.
 const DEBT: u64 = 4;
 
@@ -244,8 +273,8 @@ fn install_replay(
     let seeds =
         MakerReplaySeedsV1::new(coordinates, maker.to_bytes()).expect("nonzero maker seeds");
     let (address, bump) = Pubkey::find_program_address(&seeds.as_slices(), &TRADING_PROGRAM_ID);
-    let rent_principal = Rent::default()
-        .minimum_balance(dclutch_trading::successor::DIRECT_MAKER_REPLAY_BYTES_V1);
+    let rent_principal =
+        Rent::default().minimum_balance(dclutch_trading::successor::DIRECT_MAKER_REPLAY_BYTES_V1);
     let intent = AuthenticatedIntentReplayV2::from_signed_intent(
         maker.to_bytes(),
         CompactIntentV2 {
@@ -325,6 +354,14 @@ struct CloseMakerCase {
     /// what lets the builder re-derive -- rather than be told -- which
     /// descriptor, profile, and effect the close is allowed to use.
     ordinary: DirectInlineOrdinaryHotBundleV4,
+    /// The Custody-owned governed record the carve's share and ceiling are read
+    /// from; one per Custody deployment, at the address its domain derives.
+    protocol_parameters: Pubkey,
+    /// The Custody-owned vault the donation remainder is credited to.
+    upkeep_vault: Pubkey,
+    /// The permissionless closer: a plain funded System wallet, the frame's one
+    /// signer, and a stranger to this market in every conjunct the route reads.
+    closer: Keypair,
     clean: InstalledReplay,
     debtor: InstalledReplay,
     live: InstalledReplay,
@@ -360,6 +397,24 @@ impl CloseMakerCase {
             .expect("canonical close request")
             .to_vec(),
         }
+    }
+
+    /// The close frame for one installed replay, at the caller authority a
+    /// completed plan named.
+    ///
+    /// Every other coordinate is derivable before the close runs; this one is
+    /// not, so it is the one the caller passes rather than the one the fixture
+    /// staged.
+    fn close_instruction_planned(
+        &self,
+        replay: &InstalledReplay,
+        caller_authority: Pubkey,
+    ) -> Instruction {
+        self.close_instruction_with(
+            replay,
+            DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1,
+            AccountMeta::new_readonly(caller_authority, false),
+        )
     }
 
     fn close_instruction_with(
@@ -615,6 +670,67 @@ fn build_case(test: &mut ProgramTest, releases: Releases, artifacts: &Elves) -> 
         );
     }
 
+    // The closer: a plain funded System wallet this test holds the key to, so
+    // it can actually sign. Nothing about WHICH key it is reaches any conjunct
+    // of the route -- that is what makes the close permissionless with a signer
+    // in its frame -- so a fresh keypair is exactly as good as any other, and a
+    // fresh one cannot alias a coordinate the fixture already named.
+    let closer = Keypair::new();
+    test.add_account(
+        closer.pubkey(),
+        Account {
+            lamports: 1_000_000,
+            data: Vec::new(),
+            owner: solana_sdk_ids::system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    // The two Custody-owned accounts the close reads and credits. Both are one
+    // per Custody DEPLOYMENT -- their seed tuples are a domain and nothing else
+    // -- so they are derived under the Custody program the release set names,
+    // never at an address the fixture chose. Without them in the bank every
+    // close refuses: the carve's share has no record to come from and the
+    // donation remainder has nowhere to land.
+    let (protocol_parameters, protocol_parameters_bump) = Pubkey::find_program_address(
+        &ProtocolParametersRecordSeedsV1.as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    );
+    let (upkeep_vault, upkeep_vault_bump) =
+        Pubkey::find_program_address(&UpkeepVaultSeedsV1.as_slices(), &CUSTODY_PROGRAM_ID);
+    // Exactly the bodies the Custody adapter's own `found` routes write, from
+    // the same constructors, so the fixture cannot stage economics no deployment
+    // could produce. Under the genesis record the carve CEILING is zero
+    // lamports, so the closer is paid nothing however large the share and the
+    // whole donation is housed in the vault.
+    let parameters_bytes = ProtocolParametersRecordV1 {
+        bump: protocol_parameters_bump,
+        parameters: ProtocolParametersV1::genesis(GOVERNANCE_AUTHORITY.to_bytes()),
+        pending: PendingChangeV1::NONE,
+    }
+    .to_bytes();
+    let vault_bytes = UpkeepVaultV1::genesis(upkeep_vault_bump).to_bytes();
+    for (address, bytes) in [
+        (protocol_parameters, parameters_bytes.as_slice()),
+        (upkeep_vault, vault_bytes.as_slice()),
+    ] {
+        test.add_account(
+            address,
+            Account {
+                // The vault's credit route measures what it has NOT receipted
+                // against its own rent minimum, so a vault funded to anything
+                // but that minimum would start with a remainder no credit
+                // accounts for.
+                lamports: rent.minimum_balance(bytes.len()),
+                data: bytes.to_vec(),
+                owner: CUSTODY_PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
+
     // The composite root: Open, with the three maker roots COUNTED. This is
     // the exact state wall 22 proved unretirable under the old ordering.
     let mut open_tail = DirectRootStateV1::new();
@@ -762,15 +878,67 @@ fn build_case(test: &mut ProgramTest, releases: Releases, artifacts: &Elves) -> 
         .get_mut(DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1)
         .expect("rent owner placeholder") = AccountMeta::new(clean.rent_owner, false);
 
-    for metas in [&begin_retiring_metas, &close_metas] {
-        for (index, meta) in metas.iter().enumerate() {
-            assert_ne!(
-                meta.pubkey,
-                Pubkey::default(),
-                "coordinate {index} was never filled in",
-            );
-            assert!(!meta.is_signer, "no route here admits a signer");
-        }
+    // Decision 0024's five, appended after the two per-maker coordinates. The
+    // governed record and the vault are one per Custody deployment; the closer
+    // is the frame's one signer, and it signs to OWN the carve rather than to
+    // authorize anything; the Custody program is the CPI target the vault
+    // credit goes through; and the caller authority is the coordinate no
+    // fixture can name in advance.
+    for (index, meta) in [
+        (
+            DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1,
+            AccountMeta::new_readonly(protocol_parameters, false),
+        ),
+        (
+            DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1,
+            AccountMeta::new(upkeep_vault, false),
+        ),
+        (
+            DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1,
+            AccountMeta::new(closer.pubkey(), true),
+        ),
+        (
+            DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1,
+            AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+        ),
+        (
+            DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1,
+            AccountMeta::new_readonly(UNPLANNED_CALLER_AUTHORITY, false),
+        ),
+    ] {
+        *close_metas.get_mut(index).expect("appended coordinate") = meta;
+    }
+
+    for (index, meta) in begin_retiring_metas.iter().enumerate() {
+        assert_ne!(
+            meta.pubkey,
+            Pubkey::default(),
+            "coordinate {index} was never filled in",
+        );
+        assert!(!meta.is_signer, "begin-retiring admits no signer");
+    }
+    // The close admits exactly one, and the codec's own constant names it. An
+    // `||` chain or a count of one would also be satisfied by a frame in which
+    // the WRONG coordinate signs, and this route's whole signature story is
+    // which one. The writability membrane is read off the codec function the
+    // route itself uses rather than restated, for the same reason.
+    for (index, meta) in close_metas.iter().enumerate() {
+        assert_ne!(
+            meta.pubkey,
+            Pubkey::default(),
+            "coordinate {index} was never filled in",
+        );
+        assert_eq!(
+            meta.is_signer,
+            index == DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1,
+            "coordinate {index} disagrees with the close's one-signer rule",
+        );
+        let (writable, _) =
+            direct_close_maker_account_privileges_v1(index).expect("coordinate privileges");
+        assert_eq!(
+            meta.is_writable, writable,
+            "coordinate {index} carries the wrong writability",
+        );
     }
 
     CloseMakerCase {
@@ -782,6 +950,9 @@ fn build_case(test: &mut ProgramTest, releases: Releases, artifacts: &Elves) -> 
         market,
         native_close_transition: release.native_close.transition.clone(),
         ordinary: release.ordinary,
+        protocol_parameters,
+        upkeep_vault,
+        closer,
         clean,
         debtor,
         live,
@@ -872,14 +1043,17 @@ async fn close_maker_drains_the_count_wall_22_stopped_at() {
     let case = build_case(&mut test, releases, &artifacts);
 
     let begin = transaction_instructions(case.begin_retiring_instruction(), COMPUTE_LIMIT);
-    let close_clean = transaction_instructions(case.close_instruction(&case.clean), COMPUTE_LIMIT);
+    // Staged at the placeholder authority, because the table is built before
+    // the bank exists and the real coordinate is only knowable from a completed
+    // plan. The clean arms are rebuilt at the planned address below; the
+    // address a table carries costs nothing either way.
+    let staged_clean = transaction_instructions(case.close_instruction(&case.clean), COMPUTE_LIMIT);
     let close_debtor =
         transaction_instructions(case.close_instruction(&case.debtor), COMPUTE_LIMIT - 1);
     let close_live =
         transaction_instructions(case.close_instruction(&case.live), COMPUTE_LIMIT - 2);
-    let reclose = transaction_instructions(case.close_instruction(&case.clean), COMPUTE_LIMIT - 3);
     let mut addresses = Vec::new();
-    for arm in [&begin, &close_clean, &close_debtor, &close_live, &reclose] {
+    for arm in [&begin, &staged_clean, &close_debtor, &close_live] {
         addresses.extend(canonical_lookup_addresses(arm, Pubkey::default()));
     }
     addresses.sort_unstable_by_key(Pubkey::to_bytes);
@@ -932,10 +1106,29 @@ async fn close_maker_drains_the_count_wall_22_stopped_at() {
         "begin-retiring preserves the standing count; only the phase moves",
     );
 
+    // The clean close's caller authority, from the only author that can know
+    // it: a plan over the real post-begin-retiring graph.
+    let authority = planned_caller_authority(&mut context, &case, &case.clean).await;
+    let close_clean = transaction_instructions(
+        case.close_instruction_planned(&case.clean, authority),
+        COMPUTE_LIMIT,
+    );
+    let reclose = transaction_instructions(
+        case.close_instruction_planned(&case.clean, authority),
+        COMPUTE_LIMIT - 3,
+    );
+
     // The debtor refuses by name: the replay is the sole record of the
     // receivable, and this close will not erase a debt.
     let refusal = refused(
-        submit_v0_observed(&mut context, &close_debtor, addresses.clone(), None, &[]).await,
+        submit_v0_observed(
+            &mut context,
+            &close_debtor,
+            addresses.clone(),
+            None,
+            &[&case.closer],
+        )
+        .await,
         "closing the debtor's replay",
     );
     assert_eq!(
@@ -947,7 +1140,14 @@ async fn close_maker_drains_the_count_wall_22_stopped_at() {
 
     // Standing registered intents refuse by name too.
     let refusal = refused(
-        submit_v0_observed(&mut context, &close_live, addresses.clone(), None, &[]).await,
+        submit_v0_observed(
+            &mut context,
+            &close_live,
+            addresses.clone(),
+            None,
+            &[&case.closer],
+        )
+        .await,
         "closing the replay with a live registered intent",
     );
     assert_eq!(
@@ -959,9 +1159,18 @@ async fn close_maker_drains_the_count_wall_22_stopped_at() {
 
     // The clean maker's replay closes: the missing decrement, landing.
     let owner_before = account(&mut context, case.clean.rent_owner).await.lamports;
-    let execution = submit_v0_observed(&mut context, &close_clean, addresses.clone(), None, &[])
-        .await
-        .expect("the clean maker's close");
+    let closer_before = account(&mut context, case.closer.pubkey()).await.lamports;
+    let vault_before = account(&mut context, case.upkeep_vault).await.lamports;
+    let parameters_before = account(&mut context, case.protocol_parameters).await;
+    let execution = submit_v0_observed(
+        &mut context,
+        &close_clean,
+        addresses.clone(),
+        None,
+        &[&case.closer],
+    )
+    .await
+    .expect("the clean maker's close");
     println!(
         "CLOSEMAKER compute units consumed: {}",
         execution.compute_units_consumed
@@ -988,8 +1197,10 @@ async fn close_maker_drains_the_count_wall_22_stopped_at() {
     );
 
     // The replay account is gone -- returned to the System program, empty --
-    // and the WHOLE balance (principal + donation) landed on the recorded
-    // rent owner, per the landed Lean plan (`maker_close_refund_conserved`).
+    // and its balance landed in three places, per decision 0024: the recorded
+    // owner took the principal EXACTLY, the closer took the carve the governed
+    // record allowed it, and the rest of the donation was credited to the
+    // upkeep vault.
     let closed_replay = account_maybe(&mut context, case.clean.address).await;
     assert!(
         closed_replay.is_none()
@@ -1001,10 +1212,42 @@ async fn close_maker_drains_the_count_wall_22_stopped_at() {
         "the closed replay must be gone or a zeroed System account",
     );
     let owner_after = account(&mut context, case.clean.rent_owner).await.lamports;
+    let closer_after = account(&mut context, case.closer.pubkey()).await.lamports;
+    let vault_after = account(&mut context, case.upkeep_vault).await.lamports;
     assert_eq!(
         owner_after,
-        owner_before + case.clean.lamports,
-        "principal plus donation, conserved to the recorded owner",
+        owner_before + case.clean.rent_principal,
+        "the recorded owner takes the principal exactly, never a lamport of the donation",
+    );
+    // Under the genesis record the carve CEILING is zero lamports, so the
+    // closer is paid nothing however large the share and the whole donation is
+    // housed. The one number that has to move to pay a closer is that ceiling,
+    // by proposal and delay, never a redeploy -- which is why this arm asserts
+    // the genesis outcome rather than a share this route could not change.
+    assert_eq!(
+        closer_after, closer_before,
+        "the genesis carve ceiling is zero, so this close pays its closer nothing",
+    );
+    assert_eq!(
+        vault_after,
+        vault_before + DONATION,
+        "every lamport of the donation the closer did not take is housed in the vault",
+    );
+    assert_eq!(
+        (owner_after - owner_before)
+            + (closer_after - closer_before)
+            + (vault_after - vault_before),
+        case.clean.lamports,
+        "the three destinations do not sum to the balance the replay held",
+    );
+    // The governed record is READ and never written. The carve's share and its
+    // ceiling came out of these bytes; the one thing that may change them is a
+    // governance proposal serving its delay, and this route is not one.
+    let parameters_after = account(&mut context, case.protocol_parameters).await;
+    assert_eq!(
+        (parameters_after.data, parameters_after.lamports),
+        (parameters_before.data, parameters_before.lamports),
+        "the close wrote to the governed parameters record",
     );
     assert_eq!(
         case.clean.lamports,
@@ -1023,14 +1266,39 @@ async fn close_maker_drains_the_count_wall_22_stopped_at() {
     assert_eq!(receipt.maker_root, case.clean.address.to_bytes());
     assert_eq!(receipt.rent_owner, RENT_OWNER.to_bytes());
     assert_eq!(receipt.post_root_digest, hash(&drained.data).to_bytes());
+    assert_eq!(receipt.closer, case.closer.pubkey().to_bytes());
     assert_eq!(receipt.rent_principal, case.clean.rent_principal);
     assert_eq!(receipt.unclassified_donation, DONATION);
-    assert_eq!(receipt.total_credit, case.clean.lamports);
+    // `total_credit` is the OWNER's credit and it is the principal exactly; the
+    // donation is what the other two destinations divide.
+    assert_eq!(receipt.total_credit, case.clean.rent_principal);
+    assert_eq!(
+        receipt.closer_reward + receipt.upkeep_credit,
+        receipt.unclassified_donation,
+        "the donation splits between the closer and the vault, entirely",
+    );
+    assert_eq!(
+        receipt.total_credit + receipt.closer_reward + receipt.upkeep_credit,
+        case.clean.lamports,
+        "the receipt's three credits do not sum to the observed balance",
+    );
+    assert_eq!(
+        receipt.upkeep_credit,
+        vault_after - vault_before,
+        "the vault's balance moved by something other than the receipted credit",
+    );
     assert_eq!(receipt.remaining_open_maker_roots, 2);
 
     // A second close of the same replay refuses by absence.
     let refusal = refused(
-        submit_v0_observed(&mut context, &reclose, addresses.clone(), None, &[]).await,
+        submit_v0_observed(
+            &mut context,
+            &reclose,
+            addresses.clone(),
+            None,
+            &[&case.closer],
+        )
+        .await,
         "re-closing the already-closed replay",
     );
     assert_eq!(
@@ -1098,26 +1366,47 @@ async fn close_maker_refuses_hostile_frames() {
     foreign_selector_data[12] ^= 1;
     let mut foreign_selector = case.close_instruction(&case.clean);
     foreign_selector.data = foreign_selector_data;
+    // The closer coordinate, present but not signing. The route asks for
+    // exactly one signature and this is the one it asks for, so a frame that
+    // withholds it is told which key was wrong rather than being handed the
+    // generic frame refusal.
+    let unsigned_closer = case.close_instruction_with(
+        &case.clean,
+        DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1,
+        AccountMeta::new(case.closer.pubkey(), false),
+    );
 
     let arms = [
         transaction_instructions(stranger_destination, COMPUTE_LIMIT),
         transaction_instructions(foreign_replay, COMPUTE_LIMIT - 1),
         transaction_instructions(narrow_instruction, COMPUTE_LIMIT - 2),
         transaction_instructions(foreign_selector, COMPUTE_LIMIT - 3),
+        transaction_instructions(unsigned_closer, COMPUTE_LIMIT - 4),
     ];
-    let expected: [(u32, &str); 4] = [
+    // The third member says whether the closer signs this arm. Every arm but
+    // the last one carries the frame's one lawful signature, so each refuses
+    // for ITS reason rather than for a missing closer.
+    let expected: [(u32, &str, bool); 5] = [
         (
             TradingSbfError::CloseMakerFrame as u32,
             "a substituted rent destination",
+            true,
         ),
         (
             TradingSbfError::CloseMakerReplayAccount as u32,
             "another maker's replay under this coordinate",
+            true,
         ),
-        (TradingSbfError::Content as u32, "a truncated request"),
+        (TradingSbfError::Content as u32, "a truncated request", true),
         (
             TradingSbfError::Content as u32,
             "a selector naming another action",
+            true,
+        ),
+        (
+            TradingSbfError::CloseMakerCloser as u32,
+            "a closer that does not sign",
+            false,
         ),
     ];
 
@@ -1135,9 +1424,14 @@ async fn close_maker_refuses_hostile_frames() {
         .expect("begin-retiring over standing maker roots");
     let retiring = account(&mut context, case.root).await;
 
-    for (arm, (code, label)) in arms.iter().zip(expected) {
+    for (arm, (code, label, closer_signs)) in arms.iter().zip(expected) {
+        let signers: Vec<&Keypair> = if closer_signs {
+            vec![&case.closer]
+        } else {
+            Vec::new()
+        };
         let refusal = refused(
-            submit_v0_observed(&mut context, arm, addresses.clone(), None, &[]).await,
+            submit_v0_observed(&mut context, arm, addresses.clone(), None, &signers).await,
             label,
         );
         assert_eq!(
@@ -1157,6 +1451,24 @@ async fn close_maker_refuses_hostile_frames() {
         assert_eq!(untouched.lamports, replay.lamports);
         assert_eq!(untouched.owner, TRADING_PROGRAM_ID);
     }
+    // And neither did the two economics accounts: a refused close credits no
+    // carve and receipts no donation.
+    let vault = UpkeepVaultV1::decode(&account(&mut context, case.upkeep_vault).await.data)
+        .expect("the vault record decodes");
+    assert_eq!(
+        (
+            vault.credit_count,
+            vault.inflow_total,
+            vault.inflow_donation
+        ),
+        (0, 0, 0),
+        "a refused close receipted something into the vault",
+    );
+    assert_eq!(
+        account(&mut context, case.closer.pubkey()).await.lamports,
+        1_000_000,
+        "a refused close paid its closer",
+    );
 }
 
 /// Read one live account as the operator crate's finalized observation.
@@ -1195,15 +1507,17 @@ async fn observed_account(
     }
 }
 
-/// Gather the exact 22-account graph the close plan builder authenticates.
+/// Gather the exact account graph the close plan builder authenticates.
 ///
 /// The coordinates come from the frame the fixture already built by hand, so
 /// this reads what the route reads and nothing else. The replay and rent-owner
-/// slots are per-close and are filled from the installed replay.
+/// slots are per-close and are filled from the installed replay; the caller
+/// authority is per-PLAN and is passed in, because no gather can derive it.
 async fn close_snapshot(
     context: &mut ProgramTestContext,
     case: &CloseMakerCase,
     replay: &InstalledReplay,
+    caller_authority: Pubkey,
 ) -> DirectCloseMakerSnapshotV1 {
     let observation = Observation {
         slot: 1_000,
@@ -1221,6 +1535,9 @@ async fn close_snapshot(
     *keys
         .get_mut(DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1)
         .expect("rent owner coordinate") = replay.rent_owner;
+    *keys
+        .get_mut(DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1)
+        .expect("caller authority coordinate") = caller_authority;
 
     let mut gathered = Vec::with_capacity(DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1);
     for key in &keys {
@@ -1256,8 +1573,40 @@ async fn close_snapshot(
         registry_program: at(18),
         rent_sysvar: at(19),
         maker: replay.maker,
-        maker_replay: at(20),
-        rent_owner: at(21),
+        maker_replay: at(DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1),
+        rent_owner: at(DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1),
+        protocol_parameters: at(DIRECT_CLOSE_MAKER_PROTOCOL_PARAMETERS_ACCOUNT_V1),
+        upkeep_vault: at(DIRECT_CLOSE_MAKER_UPKEEP_VAULT_ACCOUNT_V1),
+        closer: at(DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1),
+        custody_program: at(DIRECT_CLOSE_MAKER_CUSTODY_PROGRAM_ACCOUNT_V1),
+        caller_authority: at(DIRECT_CLOSE_MAKER_CALLER_AUTHORITY_ACCOUNT_V1),
+    }
+}
+
+/// Ask a plan for the caller authority this close's own upkeep credit is
+/// signed with.
+///
+/// Coordinate 26's last seed is the digest of an upkeep request carrying the
+/// donation remainder AND the digest of this close's own receipt, so it is
+/// derivable only from a completed plan -- which is exactly why
+/// [`DirectCloseMakerPlanErrorV1::InvalidCallerAuthority`] carries the address
+/// it wanted. This test is a frame builder like any other, and it becomes right
+/// the way one is meant to: gather at the placeholder, plan, and take the
+/// address the refusal names. A close whose donation remainder is zero requires
+/// nothing of the coordinate, plans on the first pass, and keeps the
+/// placeholder.
+async fn planned_caller_authority(
+    context: &mut ProgramTestContext,
+    case: &CloseMakerCase,
+    replay: &InstalledReplay,
+) -> Pubkey {
+    let snapshot = close_snapshot(context, case, replay, UNPLANNED_CALLER_AUTHORITY).await;
+    match plan_direct_close_maker_v1(&snapshot) {
+        Err(DirectCloseMakerPlanErrorV1::InvalidCallerAuthority(expected)) => expected,
+        Ok(_) => UNPLANNED_CALLER_AUTHORITY,
+        Err(other) => panic!(
+            "the plan refused for a reason other than the unnamed caller authority: {other:?}"
+        ),
     }
 }
 
@@ -1282,9 +1631,9 @@ async fn operator_plan_builder_drives_a_real_close_and_refuses_the_two_by_name()
     let case = build_case(&mut test, releases, &artifacts);
 
     let begin = transaction_instructions(case.begin_retiring_instruction(), COMPUTE_LIMIT);
-    let close_clean = transaction_instructions(case.close_instruction(&case.clean), COMPUTE_LIMIT);
+    let staged_clean = transaction_instructions(case.close_instruction(&case.clean), COMPUTE_LIMIT);
     let mut addresses = Vec::new();
-    for arm in [&begin, &close_clean] {
+    for arm in [&begin, &staged_clean] {
         addresses.extend(canonical_lookup_addresses(arm, Pubkey::default()));
     }
     addresses.sort_unstable_by_key(Pubkey::to_bytes);
@@ -1298,14 +1647,23 @@ async fn operator_plan_builder_drives_a_real_close_and_refuses_the_two_by_name()
         .expect("begin-retiring over standing maker roots");
 
     // ---- the debtor and the live replay refuse BEFORE a transaction exists --
-    let debtor = close_snapshot(&mut context, &case, &case.debtor).await;
+    // Both refuse inside the shared semantic close, which runs before the
+    // caller authority is ever asked for, so the placeholder at coordinate 26
+    // is not what either of them is refusing.
+    let debtor = close_snapshot(
+        &mut context,
+        &case,
+        &case.debtor,
+        UNPLANNED_CALLER_AUTHORITY,
+    )
+    .await;
     assert_eq!(
         plan_direct_close_maker_v1(&debtor).expect_err("a debtor replay must not plan"),
         DirectCloseMakerPlanErrorV1::FeeOutstanding,
         "the debtor's close must refuse at plan time, mirroring 0x4011",
     );
 
-    let live = close_snapshot(&mut context, &case, &case.live).await;
+    let live = close_snapshot(&mut context, &case, &case.live, UNPLANNED_CALLER_AUTHORITY).await;
     assert_eq!(
         plan_direct_close_maker_v1(&live).expect_err("a live replay must not plan"),
         DirectCloseMakerPlanErrorV1::LiveIntents,
@@ -1313,7 +1671,16 @@ async fn operator_plan_builder_drives_a_real_close_and_refuses_the_two_by_name()
     );
 
     // ---- the clean replay plans, and the plan is the fixture's own frame ----
-    let snapshot = close_snapshot(&mut context, &case, &case.clean).await;
+    // Two passes, and the first one is not a failure: the plan names the caller
+    // authority it wants because nobody can derive it in one pass, and a
+    // builder becomes right by gathering again at the address it named. This is
+    // the flow the live driver takes.
+    let authority = planned_caller_authority(&mut context, &case, &case.clean).await;
+    assert_ne!(
+        authority, UNPLANNED_CALLER_AUTHORITY,
+        "a nonzero donation remainder must make the plan name its caller authority",
+    );
+    let snapshot = close_snapshot(&mut context, &case, &case.clean, authority).await;
     let report = match plan_direct_close_maker_v1(&snapshot).expect("a clean replay must plan") {
         DirectCloseMakerPlanV1::Submit(report) => report,
         DirectCloseMakerPlanV1::Complete(_) => panic!("a standing replay must not be Complete"),
@@ -1321,26 +1688,48 @@ async fn operator_plan_builder_drives_a_real_close_and_refuses_the_two_by_name()
 
     // Two independent authors of the same frame agree: the hand-built fixture
     // instruction and the chain-derived one are byte-identical.
-    let handbuilt = case.close_instruction(&case.clean);
+    let handbuilt = case.close_instruction_planned(&case.clean, authority);
     assert_eq!(report.instruction.program_id, handbuilt.program_id);
     assert_eq!(report.instruction.data, handbuilt.data);
     assert_eq!(report.instruction.accounts, handbuilt.accounts);
+    // The route stays permissionless with a signature in its frame: exactly one
+    // coordinate signs, it is the closer, and no conjunct of the route reads
+    // WHICH key it is -- the signature is the closer's claim on its own carve,
+    // not an authorization anybody grants it.
     assert!(
         report
             .instruction
             .accounts
             .iter()
-            .all(|meta| !meta.is_signer),
-        "the close is permissionless; nothing in its frame may ask to sign",
+            .enumerate()
+            .all(|(index, meta)| meta.is_signer == (index == DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1)),
+        "the close admits exactly one signer, and it is the closer",
+    );
+    assert_eq!(
+        report
+            .instruction
+            .accounts
+            .get(DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1)
+            .expect("closer coordinate")
+            .pubkey,
+        case.closer.pubkey(),
     );
 
     let owner_before = account(&mut context, case.clean.rent_owner).await.lamports;
+    let closer_before = account(&mut context, case.closer.pubkey()).await.lamports;
+    let vault_before = account(&mut context, case.upkeep_vault).await.lamports;
     let close = transaction_instructions(report.instruction.clone(), COMPUTE_LIMIT);
 
     // ---- submit the BUILDER's instruction, not the fixture's ----
-    let execution = submit_v0_observed(&mut context, &close, addresses.clone(), None, &[])
-        .await
-        .expect("the plan builder's own close instruction");
+    let execution = submit_v0_observed(
+        &mut context,
+        &close,
+        addresses.clone(),
+        None,
+        &[&case.closer],
+    )
+    .await
+    .expect("the plan builder's own close instruction");
     println!(
         "CLOSEMAKER(operator-planned) compute units consumed: {}",
         execution.compute_units_consumed
@@ -1377,13 +1766,27 @@ async fn operator_plan_builder_drives_a_real_close_and_refuses_the_two_by_name()
         report.expected_remaining_open_maker_roots,
     );
 
-    // The money went where the replay said, in the amount the replay said.
+    // The money went where the replay and the governed record said, in the
+    // amounts they said, at all three destinations.
     let owner_after = account(&mut context, case.clean.rent_owner).await.lamports;
+    let closer_after = account(&mut context, case.closer.pubkey()).await.lamports;
+    let vault_after = account(&mut context, case.upkeep_vault).await.lamports;
     assert_eq!(owner_after, report.expected_rent_owner_lamports);
+    assert_eq!(closer_after, report.expected_closer_lamports);
+    assert_eq!(vault_after, report.expected_upkeep_vault_lamports);
     assert_eq!(owner_after - owner_before, report.total_credit);
+    assert_eq!(closer_after - closer_before, report.closer_reward);
+    assert_eq!(vault_after - vault_before, report.upkeep_credit);
+    // The owner's credit is the principal EXACTLY; the donation is what the
+    // other two divide, and nothing falls between them.
+    assert_eq!(report.rent_principal, report.total_credit);
     assert_eq!(
-        report.rent_principal + report.unclassified_donation,
-        report.total_credit,
+        report.closer_reward + report.upkeep_credit,
+        report.unclassified_donation,
+    );
+    assert_eq!(
+        report.total_credit + report.closer_reward + report.upkeep_credit,
+        case.clean.lamports,
     );
 
     // The replay is gone, and the builder now says so instead of planning a

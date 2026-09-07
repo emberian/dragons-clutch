@@ -1,10 +1,28 @@
 # The Upkeep Vault — design sketch V0
 
-Status: **CHARTERED 2026-09-04 by ember (C-11 D1 as amended). Not yet
-built.** This document is the argument and stands as written; the record
-shape a lane builds from is
+Status: **CHARTERED 2026-09-04 by ember (C-11 D1 as amended); BUILT
+2026-09-06 (lane CONVERGE-ECONOMICS), with two of the four inflows
+producible.** This document is the argument and stands as written; the
+record shape a lane builds from is
 `docs/design/ECONOMICS_MODELS_2026_09_04.md` §7, which also carries the
 measured inflows and the adversary the review below asks for.
+
+**What exists now.** `crates/dclutch-custody/src/upkeep_vault_v1.rs` and
+its Lean twin `DClutchSemantics/UpkeepVaultV1.lean` own the record, the
+closed four-class enum, the two operations and the one transition;
+`programs/dclutch-custody-sbf/src/upkeep_vault_v1.rs` owns the accounts,
+in Custody's sub-band `0x6200`. I2 is enforced by name — the reserved
+debit tag returns `NoSpendRoute` at decode, before an account is touched.
+One producer is wired: the Direct close-maker credits the donation
+remainder after the closer's carve, by a caller-authority-signed CPI.
+**The two classes that carry real money still have no producer**, and §3's
+table now reads as a to-do list with two rows done: the seat prepay's
+account ends up Resolution-owned and Resolution has no seat-close route,
+and the escrow-close residue reaches the market's RentCredit today under
+an argument `claim_check_conservation_v1.rs` makes in its own words.
+Routing either here reverses an argument and needs its own decision.
+The class-by-class position is readable at run time through
+`UpkeepVaultV1::class_report`.
 
 **One measurement changes how to read §3.** The two inflows this sketch
 was designed around — the `CloseMakerReplay` donation slice and

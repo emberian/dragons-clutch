@@ -52,12 +52,63 @@ export const OPENER_ACCOUNT_WIDTHS_V1 = Object.freeze({
  * A cap on a residual, never a demand: a thin position yields a thin reward
  * rather than a refusal, because a compaction that could refuse for lack of
  * funds would reintroduce the sleeping-holder deadlock through the funding
- * door. It is also the one lamport magnitude in this family still written as a
- * source literal rather than derived from Rent, which
- * `docs/design/FUNDED_CRANK_V1.md` section 3 rules against; the governed record
- * `dclutch-market::protocol_parameters` is where it moves to.
+ * door.
+ *
+ * Its one author is now the governed record's genesis,
+ * `PROTOCOL_GENESIS_CRANK_REWARD_CAP_LAMPORTS_V1` in `crates/dclutch-market/
+ * src/protocol_parameters/generated.rs`; the Rust constant this restates
+ * projects that, and `openerTerms.test.ts` pins the chain rather than the
+ * number. It is still a source literal rather than a value read off the record
+ * at run time, which `docs/design/FUNDED_CRANK_V1.md` section 3 argues against:
+ * the compaction frame does not carry the record, and widening it is its own
+ * cohort's work. What changed is that there is one place to edit, not four.
  */
 export const COMPACTION_CRANK_REWARD_LAMPORTS_V1 = 200_000n;
+
+/**
+ * Solana's fixed per-account storage overhead, in bytes.
+ *
+ * `ACCOUNT_STORAGE_OVERHEAD_BYTES` in `crates/dclutch-market/src/
+ * capability_manifest/generated_abi.rs`, whose one author is
+ * `formal/dclutch-semantics/DClutchSemantics/CapabilityManifestV1Abi.lean`.
+ */
+export const ACCOUNT_STORAGE_OVERHEAD_BYTES_V1 = 128n;
+
+/**
+ * What an account of `accountBytes` costs at a founding's RECORDED rate.
+ *
+ * `funded_rent_minimum_v2` in `crates/dclutch-market/src/capability_manifest/
+ * funding.rs`, restated. `Rent::minimum_balance` is affine in the length, so
+ * ONE rate prices every account a founding created, at every width -- which is
+ * why the persisted fact is the rate and not any one length's minimum.
+ *
+ * This is the honest pricing for a market that already exists: its accounts
+ * hold what its own founding funded them with, at the rate its founding fixed,
+ * and the cluster's rate today prices some other market.
+ */
+export function fundedRentMinimumV1(fundedRentRate: bigint, accountBytes: number): bigint {
+  if (fundedRentRate <= 0n) throw new Error('a funded-rent rate is a nonzero lamports-per-byte figure');
+  if (!Number.isInteger(accountBytes) || accountBytes < 0) throw new Error('an account width is a non-negative integer');
+  return (ACCOUNT_STORAGE_OVERHEAD_BYTES_V1 + BigInt(accountBytes)) * fundedRentRate;
+}
+
+/**
+ * Recover the rate a founding recorded from one account's funded minimum.
+ *
+ * `funded_rent_rate_from_minimum_v1` in the same Rust module, including its
+ * refusal: a minimum this cannot reproduce exactly is a minimum that was not
+ * priced at any single rate, and it is refused rather than rounded. The
+ * founding surface uses it against the cluster's own zero-length reading,
+ * which is exactly `derive_funded_rent_rate_v2`'s first step.
+ */
+export function fundedRentRateFromMinimumV1(minimum: bigint, accountBytes: number): bigint {
+  const span = ACCOUNT_STORAGE_OVERHEAD_BYTES_V1 + BigInt(accountBytes);
+  const rate = minimum / span;
+  if (rate <= 0n || fundedRentMinimumV1(rate, accountBytes) !== minimum) {
+    throw new Error(`no single lamports-per-byte rate prices ${minimum} lamports for ${accountBytes} bytes`);
+  }
+  return rate;
+}
 
 /** What the first crank does to the opener's advance, lamport by lamport. */
 export type OpenerFirstCrankV1 = Readonly<{
@@ -113,6 +164,34 @@ export function openerFirstCrankV1(input: Readonly<{
     openerRepayment,
     openerStillOwed: openerOutlay - openerRepayment,
     rentCreditResidue: afterReward - openerRepayment,
+  });
+}
+
+/**
+ * The same plan, priced the way the protocol prices: at ONE recorded rate.
+ *
+ * The difference from [`openerFirstCrankV1`] is not arithmetic, it is
+ * provenance. That function takes whatever the caller read for each width,
+ * which is right for a market that does not exist yet only if the cluster's
+ * rent is affine and stable across the four reads. This one takes the single
+ * `u32` a founding persists in its capability funding ledger
+ * (`CAPABILITY_FUNDING_LEDGER_FUNDED_RENT_RATE_OFFSET_V2`) and prices every
+ * width through it, so the figure a terms surface states about an existing
+ * market is the figure that market's own accounts actually hold -- devnet moved
+ * 6,333 to 5,080 lamports a byte inside cohort-15, and a page pricing a
+ * cohort-15 market at today's rate is a fifth wrong about a number a founder is
+ * being asked to accept.
+ */
+export function openerFirstCrankAtFundedRateV1(input: Readonly<{
+  outcomeCount: number;
+  /** The `u32` a founding recorded, in lamports per byte. */
+  fundedRentRate: bigint;
+  crankRewardCapLamports?: bigint;
+}>): OpenerFirstCrankV1 {
+  return openerFirstCrankV1({
+    outcomeCount: input.outcomeCount,
+    rentFor: (bytes: number) => fundedRentMinimumV1(input.fundedRentRate, bytes),
+    crankRewardCapLamports: input.crankRewardCapLamports,
   });
 }
 

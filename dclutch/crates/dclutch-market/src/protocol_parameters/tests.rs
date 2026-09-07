@@ -4,6 +4,7 @@
 //! length refusal, the header refusal and every band conjunct, which is the
 //! failure mode `AGENTS.md` measured nineteen times in one week.
 
+use super::generated::PROTOCOL_PARAMETERS_REQUEST_ACT_OFFSET;
 use super::*;
 
 const AUTHORITY: [u8; 32] = [7; 32];
@@ -188,20 +189,20 @@ fn a_parameter_outside_its_band_refuses() {
         ),
         Err(Error::ParameterOutOfBand),
     );
-    // Together they admit, which is what makes the two refusals above a PAIR
-    // rule rather than a prohibition on either field.
-    assert!(
-        record
-            .propose(
-                true,
-                ProtocolParametersV1 {
-                    protocol_take_basis_points: 25,
-                    protocol_beneficiary: STRANGER_BENEFICIARY,
-                    ..base
-                },
-                NOW,
-            )
-            .is_ok()
+    // Together they are IN BAND, which is what makes the two refusals above a
+    // PAIR rule rather than a prohibition on either field -- and what stops
+    // them is then the release, by its own name, not the band (decision 0024
+    // item 1 as a conjunct; the whole hostile is
+    // `a_take_before_mainnet_refuses_by_name`).
+    let paired = ProtocolParametersV1 {
+        protocol_take_basis_points: 25,
+        protocol_beneficiary: STRANGER_BENEFICIARY,
+        ..base
+    };
+    assert!(paired.in_band());
+    assert_eq!(
+        record.propose(true, paired, NOW),
+        Err(Error::TakeBeforeMainnet)
     );
     // And a take above the fee band it is taken out of refuses even with a payee.
     assert_eq!(
@@ -417,5 +418,144 @@ fn the_nominal_day_is_the_one_the_compaction_deadline_already_assumed() {
     assert_eq!(
         PROTOCOL_MINIMUM_CHANGE_DELAY_SLOTS_V1,
         7 * PROTOCOL_SLOTS_PER_NOMINAL_DAY_V1
+    );
+}
+
+/// HOSTILE 4 -- decision 0024 item 1 as a conjunct: a take WITH a payee, inside
+/// every band, refuses by its own name before mainnet; at propose, at apply
+/// against a substituted-in proposal's digest, and on the read of a record a
+/// foreign author wrote one into.
+#[test]
+fn a_take_before_mainnet_refuses_by_name() {
+    assert!(!PROTOCOL_TAKE_ADMITTED_THIS_RELEASE_V1);
+    let record = genesis_record();
+    let taking = ProtocolParametersV1 {
+        protocol_take_basis_points: 25,
+        protocol_beneficiary: STRANGER_BENEFICIARY,
+        ..record.parameters
+    };
+    // In band: the pair rule is satisfied, so the refusal below is the take
+    // conjunct and nothing else.
+    assert!(taking.in_band());
+    assert_eq!(
+        record.propose(true, taking, NOW),
+        Err(Error::TakeBeforeMainnet)
+    );
+    // The control: the same body with the take and payee removed stages.
+    assert!(
+        record
+            .propose(
+                true,
+                ProtocolParametersV1 {
+                    crank_reward_cap_lamports: 1,
+                    ..record.parameters
+                },
+                NOW
+            )
+            .is_ok()
+    );
+    // A standing proposal for a harmless value, then the taking body offered
+    // at apply: the digest mismatch is met first, which is what makes the
+    // conjunct at apply reachable only through a record whose pending digest
+    // already commits to a take -- and no in-release propose can write one.
+    let staged = record
+        .propose(
+            true,
+            ProtocolParametersV1 {
+                crank_reward_cap_lamports: 1,
+                ..record.parameters
+            },
+            NOW,
+        )
+        .expect("stages");
+    let smuggled = ProtocolParametersRecordV1 {
+        pending: PendingChangeV1 {
+            digest: taking.body_digest(),
+            ..staged.pending
+        },
+        ..staged
+    };
+    assert_eq!(
+        smuggled.apply_change(taking, NOW + PROTOCOL_MINIMUM_CHANGE_DELAY_SLOTS_V1),
+        Err(Error::TakeBeforeMainnet)
+    );
+    // And a persisted record carrying one refuses on decode.
+    let foreign = ProtocolParametersRecordV1 {
+        parameters: taking,
+        ..record
+    };
+    assert_eq!(
+        ProtocolParametersRecordV1::decode(&foreign.to_bytes()),
+        Err(Error::TakeBeforeMainnet)
+    );
+}
+
+#[test]
+fn governance_requests_round_trip_and_a_withdraw_carries_nothing() {
+    let record = genesis_record();
+    for act in [
+        GovernanceActV1::Found,
+        GovernanceActV1::Propose,
+        GovernanceActV1::Apply,
+    ] {
+        let request = ProtocolParametersRequestV1 {
+            act,
+            body: record.parameters,
+        };
+        let bytes = request.to_bytes();
+        assert_eq!(ProtocolParametersRequestV1::decode(&bytes), Ok(request));
+        // The body on the wire is exactly what the record's digest hashes.
+        assert_eq!(
+            ProtocolParametersRequestV1::decode(&bytes)
+                .expect("decodes")
+                .body
+                .body_digest(),
+            record.parameters.body_digest()
+        );
+    }
+    let withdraw = ProtocolParametersRequestV1 {
+        act: GovernanceActV1::Withdraw,
+        body: record.parameters,
+    };
+    // Encoding a withdraw drops the body; decoding one with a body refuses.
+    assert_eq!(
+        ProtocolParametersRequestV1::decode(&withdraw.to_bytes()),
+        Ok(ProtocolParametersRequestV1::WITHDRAW)
+    );
+    let mut with_body = ProtocolParametersRequestV1::WITHDRAW.to_bytes();
+    with_body[PROTOCOL_PARAMETERS_REQUEST_ACT_OFFSET + 6] = 1;
+    assert_eq!(
+        ProtocolParametersRequestV1::decode(&with_body),
+        Err(Error::NonCanonical)
+    );
+    let mut unknown_act = ProtocolParametersRequestV1::WITHDRAW.to_bytes();
+    unknown_act[PROTOCOL_PARAMETERS_REQUEST_ACT_OFFSET] = 9;
+    assert_eq!(
+        ProtocolParametersRequestV1::decode(&unknown_act),
+        Err(Error::UnknownAct)
+    );
+}
+
+#[test]
+fn a_consumer_reads_a_parameter_only_out_of_the_custody_owned_record_at_its_address() {
+    let record = genesis_record();
+    let custody = [0xc1; 32];
+    let key = [0xd1; 32];
+    let bytes = record.to_bytes();
+    assert_eq!(
+        authenticate_protocol_parameters_account_v1(custody, key, custody, key, &bytes),
+        Ok(record.parameters)
+    );
+    assert_eq!(
+        authenticate_protocol_parameters_account_v1([0xc2; 32], key, custody, key, &bytes),
+        Err(Error::InvalidHeader)
+    );
+    assert_eq!(
+        authenticate_protocol_parameters_account_v1(custody, [0xd2; 32], custody, key, &bytes),
+        Err(Error::InvalidHeader)
+    );
+    assert_eq!(
+        ProtocolParametersReceiptSeedsV1::new(7).as_slices()[1],
+        &7_u64.to_le_bytes()
     );
 }

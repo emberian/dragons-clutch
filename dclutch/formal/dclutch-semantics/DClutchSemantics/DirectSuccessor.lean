@@ -463,21 +463,27 @@ def beginRetiring (root : Root) : Option Root :=
 The `closerReward` field is ruling D1 item 4 (2026-09-04): a permissionless
 closer may be paid, and the payment is carved from the DONATION SLICE ALONE.
 The principal is the maker's own money and is never part of it -- which is why
-`totalCredit` is bounded below by `rentPrincipal` and the theorem saying so is
-the one that matters here.
+`totalCredit` IS `rentPrincipal`, exactly, and the theorem saying so is the one
+that matters here.
+
+`upkeepCredit` is decision 0024 item 4 (the vault is wanted) applied to the
+same slice: whatever the donation is after the closer's carve goes to the
+upkeep vault (`DClutchSemantics.UpkeepVaultV1`, source class `donation`), the
+one principled recipient the tree has for lamports that were nobody's.  Before
+the vault existed the remainder was credited to the recorded owner as an
+unclassified windfall; it never was theirs, and it never carried a lamport on
+any cohort, so the change moves no measured money.
 
 The cap arrives as an argument rather than living in this file, because
 `docs/design/FUNDED_CRANK_V1.md` section 3 rules that a crank's floor is derived
-from the Rent sysvar and never written as a source literal.  Today the deployed
-route passes ZERO, and it does so because its frame admits no closer account at
-all, not because the ruling says zero: `direct_close_maker_v1.rs` refuses ANY
-signer, so there is nobody in the frame to pay.  That is named debt, not a
-finished value. -/
+from the Rent sysvar and never written as a source literal.  The adapter reads
+it from the governed record (`ProtocolParametersV1.closerCarve`). -/
 structure MakerClosePlan where
   rentOwner : Nat
   rentPrincipal : Nat
   unclassifiedDonation : Nat
   closerReward : Nat
+  upkeepCredit : Nat
   totalCredit : Nat
   deriving DecidableEq, Inhabited, Repr
 
@@ -495,7 +501,7 @@ that ignored it would erase a debt with no residue.  Settlement is phase-free,
 so settle-then-close is always available in Retiring; nothing strands. -/
 def closeMaker
     (root : Root) (makerRoot : MakerRoot) (observedLamports : Nat)
-    (closerRewardCap : Nat) :
+    (closerReward : Nat) :
     Option MakerCloseResult := do
   if ¬root.Valid ∨ root.phase ≠ .retiring ∨ root.openMakerRootCount = 0 ∨
       ¬makerRoot.Valid ∨ makerRoot.liveCount ≠ 0 ∨ makerRoot.feeOwed ≠ 0 ∨
@@ -505,13 +511,14 @@ def closeMaker
       root := { root with openMakerRootCount := root.openMakerRootCount - 1 }
       plan :=
         let donation := observedLamports - makerRoot.rentPrincipal
-        let reward := min closerRewardCap donation
+        let reward := min closerReward donation
         {
           rentOwner := makerRoot.rentOwner
           rentPrincipal := makerRoot.rentPrincipal
           unclassifiedDonation := donation
           closerReward := reward
-          totalCredit := observedLamports - reward
+          upkeepCredit := donation - reward
+          totalCredit := makerRoot.rentPrincipal
         }
     }
 
@@ -526,21 +533,21 @@ theorem maker_close_count_conserved
   omega
 
 /-- Nothing is created and nothing evaporates: the whole observed balance is
-exactly the closer's carve plus what the recorded beneficiary receives. -/
+exactly the closer's carve plus the vault's credit plus what the recorded
+beneficiary receives. -/
 theorem maker_close_refund_conserved
     (root : Root) (makerRoot : MakerRoot) (lamports cap : Nat)
     (result : MakerCloseResult)
     (success : closeMaker root makerRoot lamports cap = some result) :
     result.plan.rentPrincipal + result.plan.unclassifiedDonation =
-      result.plan.closerReward + result.plan.totalCredit := by
+      result.plan.closerReward + result.plan.upkeepCredit + result.plan.totalCredit := by
   simp [closeMaker] at success
   rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
   change makerRoot.rentPrincipal + (lamports - makerRoot.rentPrincipal)
     = min cap (lamports - makerRoot.rentPrincipal)
-      + (lamports - min cap (lamports - makerRoot.rentPrincipal))
-  have bound : min cap (lamports - makerRoot.rentPrincipal) <= lamports := by
-    have := Nat.min_le_right cap (lamports - makerRoot.rentPrincipal)
-    omega
+      + ((lamports - makerRoot.rentPrincipal) - min cap (lamports - makerRoot.rentPrincipal))
+      + makerRoot.rentPrincipal
+  have bound := Nat.min_le_right cap (lamports - makerRoot.rentPrincipal)
   omega
 
 /-- RULING D1 ITEM 4, and the theorem that makes it a ruling rather than a
@@ -554,9 +561,7 @@ theorem the_closer_carve_never_touches_principal
     result.plan.rentPrincipal <= result.plan.totalCredit := by
   simp [closeMaker] at success
   rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
-  change makerRoot.rentPrincipal <= lamports - min cap (lamports - makerRoot.rentPrincipal)
-  have := Nat.min_le_right cap (lamports - makerRoot.rentPrincipal)
-  omega
+  exact Nat.le_refl _
 
 /-- And the carve is bounded by BOTH the cap and the donation, so a cap larger
 than the donation pays out the donation rather than inventing lamports. -/
@@ -570,17 +575,37 @@ theorem the_closer_carve_is_capped_and_bounded_by_the_donation
   rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
   exact ⟨Nat.min_le_left _ _, Nat.min_le_right _ _⟩
 
-/-- Today's deployed behaviour is the cap-zero instance, byte for byte: a zero
-cap pays nobody and credits the whole observed balance, which is exactly what
-`close_maker_replay_v2` did before the carve existed. -/
-theorem a_zero_cap_is_todays_close
+/-- DECISION 0024 ITEM 4 for this route: the donation reaches the closer or
+the vault and nobody else, and nothing the maker put in reaches the vault. -/
+theorem the_donation_reaches_the_closer_or_the_vault_and_nobody_else
+    (root : Root) (makerRoot : MakerRoot) (lamports cap : Nat)
+    (result : MakerCloseResult)
+    (success : closeMaker root makerRoot lamports cap = some result) :
+    result.plan.closerReward + result.plan.upkeepCredit = result.plan.unclassifiedDonation /\
+      result.plan.upkeepCredit <= result.plan.unclassifiedDonation := by
+  simp [closeMaker] at success
+  rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
+  have bound := Nat.min_le_right cap (lamports - makerRoot.rentPrincipal)
+  constructor
+  · change min cap (lamports - makerRoot.rentPrincipal)
+      + ((lamports - makerRoot.rentPrincipal) - min cap (lamports - makerRoot.rentPrincipal))
+      = lamports - makerRoot.rentPrincipal
+    omega
+  · exact Nat.sub_le _ _
+
+/-- A zero cap pays no closer and houses the whole donation: the instance the
+genesis record's cap selects, and what today's deployed route does the day the
+vault exists. -/
+theorem a_zero_cap_pays_no_closer_and_houses_the_whole_donation
     (root : Root) (makerRoot : MakerRoot) (lamports : Nat)
     (result : MakerCloseResult)
     (success : closeMaker root makerRoot lamports 0 = some result) :
-    result.plan.closerReward = 0 /\ result.plan.totalCredit = lamports := by
+    result.plan.closerReward = 0 /\
+      result.plan.upkeepCredit = lamports - makerRoot.rentPrincipal /\
+      result.plan.totalCredit = makerRoot.rentPrincipal := by
   simp [closeMaker] at success
   rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
-  exact ⟨by simp, by simp⟩
+  exact ⟨by simp, by simp, by simp⟩
 
 /-- Fee conservation at close: a close is never the event that ends a nonzero
 obligation.  The only transition that zeroes `feeOwed` is `settleFeeOwed`,
@@ -659,14 +684,15 @@ theorem closure_path :
     closed.plan.rentPrincipal = 100 ∧
       closed.plan.unclassifiedDonation = 11 ∧
       closed.plan.closerReward = 0 ∧
-      closed.plan.totalCredit = 111 ∧
+      closed.plan.upkeepCredit = 11 ∧
+      closed.plan.totalCredit = 100 ∧
       closed.root.openMakerRootCount = 0 ∧
       rootClosable closed.root = true := by
   native_decide
 
 /-- NON-VACUITY for the carve: the same close under a cap of four pays the
-closer four out of the eleven-lamport donation and credits the recorded owner
-one hundred and seven, which is still more than the hundred of principal. -/
+closer four out of the eleven-lamport donation, houses the other seven in the
+upkeep vault, and credits the recorded owner exactly the hundred of principal. -/
 theorem a_funded_closer_is_paid_out_of_the_donation_alone :
     let created := (consumeNonce openRoot none intent .inline (some funding)).get!
     let retiring := (beginRetiring created.root).get!
@@ -674,7 +700,8 @@ theorem a_funded_closer_is_paid_out_of_the_donation_alone :
     closed.plan.rentPrincipal = 100 ∧
       closed.plan.unclassifiedDonation = 11 ∧
       closed.plan.closerReward = 4 ∧
-      closed.plan.totalCredit = 107 := by
+      closed.plan.upkeepCredit = 7 ∧
+      closed.plan.totalCredit = 100 := by
   native_decide
 
 /-- And a cap larger than the donation carves the donation, never the

@@ -32,6 +32,7 @@ def main : IO Unit := do
   emitDomain "CUSTODY_REPLAY_PDA_DOMAIN_V1" replayPdaDomain
   emitDomain "CUSTODY_VAULT_PDA_DOMAIN_V1" vaultPdaDomain
   emitDomain "CUSTODY_POSTSTATE_DOMAIN_V1" poststateDomain
+  emitDomain "CUSTODY_UPKEEP_VAULT_PDA_DOMAIN_V1" upkeepVaultPdaDomain
   for compartment in Compartment.all do
     IO.println s!"pub const {Compartment.rustName compartment}: u8 = {Compartment.tag compartment};"
   for (name, field) in [

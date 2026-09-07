@@ -5,15 +5,17 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   COMPACTION_CRANK_REWARD_LAMPORTS_V1,
   OPENER_ACCOUNT_WIDTHS_V1,
+  fundedRentMinimumV1,
+  fundedRentRateFromMinimumV1,
   lamportsAsSolV1,
-  openerFirstCrankV1,
+  openerFirstCrankAtFundedRateV1,
   type OpenerFirstCrankV1,
 } from '@dclutch/sdk/openerTerms';
 import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 type State =
   | Readonly<{ kind: 'loading' | 'refused'; message: string }>
-  | Readonly<{ kind: 'ready'; plan: OpenerFirstCrankV1 }>;
+  | Readonly<{ kind: 'ready'; plan: OpenerFirstCrankV1; rate: bigint; recorded: boolean }>;
 
 /**
  * The market's terms sentence for the crank-first order.
@@ -22,55 +24,86 @@ type State =
  * market's terms state it. Opening costs the opener the first crank, and a
  * market whose escrow is compacted exactly once never repays them.
  *
- * The number is read off the cluster this page is pointed at, four
- * `getMinimumBalanceForRentExemption` calls, and run through the kernel's own
- * order -- because rent is a cluster parameter that moves. Devnet went 6,333 to
- * 5,080 lamports a byte inside cohort-15, a fifth off this figure in a day, so
- * a page that quoted a number would have been quietly wrong about what it was
- * charging a founder. When the reads refuse, this says so and states no figure.
+ * # One rate, and it is stated
+ *
+ * The figure is priced from a single lamports-per-byte RATE, the way the
+ * protocol itself prices: `funded_rent_minimum_v2` is affine in the length, so
+ * one rate prices every account a founding creates, and one `u32` is what a
+ * founding persists in its capability funding ledger.
+ *
+ * A market that already exists passes its RECORDED rate as `fundedRentRate`,
+ * and the number then describes that market rather than this cluster: its
+ * accounts hold what its own founding funded them with. A founding surface
+ * passes nothing, and the rate is derived from the cluster this page is pointed
+ * at, exactly as `derive_funded_rent_rate_v2` derives the rate the founding is
+ * about to record -- two readings, cross-checked, and a cluster whose rent is
+ * not affine is refused by name rather than approximated.
+ *
+ * Either way the rate is PRINTED, because it is the whole provenance of the
+ * number beside it. Devnet went 6,333 to 5,080 lamports a byte inside
+ * cohort-15, a fifth off this figure in a day, so a page that quoted a number
+ * without its rate would have been quietly wrong about what it was charging a
+ * founder. When the reads refuse, this says so and states no figure.
  */
 export default function OpenerFirstCrankTerms({
   endpoint,
   outcomeCount,
   heading,
+  fundedRentRate,
 }: Readonly<{
   endpoint: string;
   outcomeCount: number;
   heading: string;
+  /**
+   * The lamports-per-byte rate this market's founding recorded, when there is
+   * a market. Absent on the founding surface, where no rate has been recorded
+   * yet and the cluster's own is what one will be derived from.
+   */
+  fundedRentRate?: bigint;
 }>) {
   const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading this cluster’s rent minimums…' });
 
   const read = useCallback(async () => {
-    setState({ kind: 'loading', message: 'Reading this cluster’s rent minimums…' });
+    if (fundedRentRate !== undefined) {
+      setState({
+        kind: 'ready',
+        plan: openerFirstCrankAtFundedRateV1({ outcomeCount, fundedRentRate }),
+        rate: fundedRentRate,
+        recorded: true,
+      });
+      return;
+    }
+    setState({ kind: 'loading', message: 'Deriving this cluster’s funded-rent rate…' });
     const widths = OPENER_ACCOUNT_WIDTHS_V1;
     const client = new SolanaRpcClient(endpoint);
-    const needed = [
-      widths.claimCheck,
-      widths.claimCheckEscrow,
-      widths.tokenAccount,
-      widths.admission,
-      widths.positionHeader + widths.positionPerOutcome * outcomeCount,
-    ];
     try {
-      const observed = new Map<number, bigint>();
-      for (const bytes of needed) {
-        if (observed.has(bytes)) continue;
-        const observation = await client.minimumBalanceForRentExemption(bytes);
-        observed.set(bytes, BigInt(observation.lamports));
+      // TWO readings, which is what pins an affine function. The zero-length
+      // one gives the rate; the claim check's own width has to agree with it
+      // exactly, and a cluster that does not is refused rather than averaged --
+      // `derive_funded_rent_rate_v2`'s discipline, and for its reason: an
+      // approximated rate is a recorded number that silently prices some other
+      // account wrong.
+      const zero = BigInt((await client.minimumBalanceForRentExemption(0)).lamports);
+      const rate = fundedRentRateFromMinimumV1(zero, 0);
+      const witness = BigInt((await client.minimumBalanceForRentExemption(widths.claimCheck)).lamports);
+      if (fundedRentMinimumV1(rate, widths.claimCheck) !== witness) {
+        throw new Error(
+          `this cluster’s rent is not affine in the account length: ${rate} lamports a byte prices ${widths.claimCheck} bytes at ${fundedRentMinimumV1(rate, widths.claimCheck)} and the cluster answered ${witness}`,
+        );
       }
-      const rentFor = (bytes: number) => {
-        const lamports = observed.get(bytes);
-        if (lamports === undefined) throw new Error(`no rent minimum was read for ${bytes} bytes`);
-        return lamports;
-      };
-      setState({ kind: 'ready', plan: openerFirstCrankV1({ outcomeCount, rentFor }) });
+      setState({
+        kind: 'ready',
+        plan: openerFirstCrankAtFundedRateV1({ outcomeCount, fundedRentRate: rate }),
+        rate,
+        recorded: false,
+      });
     } catch (error) {
       setState({
         kind: 'refused',
         message: `The cluster did not answer for its rent minimums, so no figure is stated here: ${error instanceof Error ? error.message : 'no reason was given'}.`,
       });
     }
-  }, [endpoint, outcomeCount]);
+  }, [endpoint, outcomeCount, fundedRentRate]);
 
   // Deferred out of the effect body for the same reason the retirement drawer
   // beside it defers: a synchronous `setState` in an effect is a cascading
@@ -100,11 +133,13 @@ export default function OpenerFirstCrankTerms({
           <div><dt>The first crank repays</dt><dd>{lamportsAsSolV1(state.plan.openerRepayment)} SOL</dd></div>
           <div><dt>Still owed after it</dt><dd><strong>{lamportsAsSolV1(state.plan.openerStillOwed)} SOL</strong> · {state.plan.openerStillOwed.toString()} lamports</dd></div>
           <div><dt>The cranker is paid</dt><dd>{lamportsAsSolV1(state.plan.crankReward)} SOL, first</dd></div>
+          <div><dt>Priced at</dt><dd>{state.rate.toString()} lamports a byte · {state.recorded ? 'this market’s recorded founding rate' : 'derived from this cluster, the rate a founding here would record'}</dd></div>
         </dl>
         <p className="direct-status">
-          Read from this cluster&apos;s own rent minimums at {outcomeCount} outcomes, not quoted: rent is a
-          cluster parameter and devnet moved it by a fifth inside one cohort. A market compacted more than
-          once repays the opener progressively; the cap on one crank&apos;s reward is{' '}
+          Derived at {outcomeCount} outcomes from the one rate above, not quoted: rent is a cluster
+          parameter and devnet moved it by a fifth inside one cohort, so the number that describes a market
+          is the number priced at the rate that market&apos;s own founding fixed. A market compacted more
+          than once repays the opener progressively; the cap on one crank&apos;s reward is{' '}
           {lamportsAsSolV1(COMPACTION_CRANK_REWARD_LAMPORTS_V1)} SOL and it is a ceiling on a residual, never
           a demand — a thin sweep pays a thin reward rather than refusing, because a crank that could refuse
           for lack of funds is a crank nobody turns.

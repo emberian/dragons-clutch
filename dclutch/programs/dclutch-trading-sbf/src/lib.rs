@@ -584,6 +584,18 @@ pub enum TradingSbfError {
     /// that has ever executed, on the same terms as
     /// [`TradingSbfError::ShadowTrustedEnvironment`].
     ActivationLedgerCount = 0x402B,
+    /// The governed parameters record was absent from the close-maker frame,
+    /// not owned by the release set's Custody program, not at the address its
+    /// seeds derive, or did not decode (decision 0024, the record USED).
+    CloseMakerParameters = 0x402C,
+    /// The upkeep vault was absent from the close-maker frame, not owned by
+    /// the release set's Custody program, not at its address, or its credit
+    /// CPI refused (decision 0024 item 4).
+    CloseMakerUpkeepVault = 0x402D,
+    /// The closer at the close-maker frame's coordinate 24 did not sign, was
+    /// not a plain System wallet, or aliased another coordinate
+    /// (`FUNDED_CRANK_V1.md` section 6: signs only to own the reward).
+    CloseMakerCloser = 0x402E,
 }
 
 impl TradingSbfError {
@@ -593,7 +605,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 47] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -638,6 +650,9 @@ impl TradingSbfError {
         Self::FundedRent,
         Self::SeriesExpireCoreTemplate,
         Self::ActivationLedgerCount,
+        Self::CloseMakerParameters,
+        Self::CloseMakerUpkeepVault,
+        Self::CloseMakerCloser,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -691,6 +706,9 @@ impl TradingSbfError {
             Self::FundedRent => 41,
             Self::SeriesExpireCoreTemplate => 42,
             Self::ActivationLedgerCount => 43,
+            Self::CloseMakerParameters => 44,
+            Self::CloseMakerUpkeepVault => 45,
+            Self::CloseMakerCloser => 46,
         }
     }
 }

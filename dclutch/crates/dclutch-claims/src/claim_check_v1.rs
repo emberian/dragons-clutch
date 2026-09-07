@@ -126,7 +126,17 @@ pub const COMPACTION_DEADLINE_SLOTS_V1: u64 = 38_880_000;
 /// lamports already leaving the position and admission accounts, which today
 /// flow in full to a creation-fixed refund wallet — an identified party, and
 /// the party that benefits most from retirement actually happening.
-pub const COMPACTION_CRANK_REWARD_LAMPORTS_V1: u64 = 200_000;
+///
+/// **It is not a literal here any more.** Decision 0024's amendment makes
+/// `dclutch-market::protocol_parameters`'s record the one author of every
+/// governed economic value, and this constant PROJECTS that record's genesis
+/// so the two can never disagree. The record is not yet this route's runtime
+/// SOURCE — the compaction frame does not carry it, and widening that frame is
+/// its own cohort's work — so what changed is authorship, not governability:
+/// moving the number still needs an ELF, but it needs exactly one edit, in the
+/// record's own module, and every consumer follows.
+pub const COMPACTION_CRANK_REWARD_LAMPORTS_V1: u64 =
+    dclutch_market::protocol_parameters::PROTOCOL_GENESIS_CRANK_REWARD_CAP_LAMPORTS_V1;
 
 const RECORD_VERSION_OFFSET: usize = 8;
 const RECORD_KIND_OFFSET: usize = 10;

@@ -20,10 +20,13 @@ mod frame_spec_v1;
 mod generated;
 #[allow(dead_code)]
 mod generated_projected_state_v2;
+#[allow(missing_docs)]
+mod generated_upkeep_vault_v1;
 mod projected;
 mod projected_admission_v1;
 mod request_layout;
 mod retirement_replay_handoff_v1;
+pub mod upkeep_vault_v1;
 
 pub use delegated::*;
 pub use frame_spec_v1::*;
@@ -61,6 +64,9 @@ pub const CUSTODY_BUMP_RELAY_BYTES_V1: usize = 3;
 pub use generated::CUSTODY_AUTHORITY_PDA_DOMAIN_V1;
 /// Exact per-context Custody replay PDA seed domain.
 pub use generated::CUSTODY_REPLAY_PDA_DOMAIN_V1;
+/// Exact upkeep-vault PDA seed domain: the one protocol-owned lamport vault
+/// (decision 0024 item 4). Its record and routes are [`upkeep_vault_v1`].
+pub use generated::CUSTODY_UPKEEP_VAULT_PDA_DOMAIN_V1;
 /// Exact token-vault PDA seed domain.
 pub use generated::CUSTODY_VAULT_PDA_DOMAIN_V1;
 
@@ -72,6 +78,7 @@ const _: () = {
     assert!(CUSTODY_AUTHORITY_PDA_DOMAIN_V1.len() <= projected::MAX_PDA_SEED_BYTES);
     assert!(CUSTODY_REPLAY_PDA_DOMAIN_V1.len() <= projected::MAX_PDA_SEED_BYTES);
     assert!(CUSTODY_VAULT_PDA_DOMAIN_V1.len() <= projected::MAX_PDA_SEED_BYTES);
+    assert!(CUSTODY_UPKEEP_VAULT_PDA_DOMAIN_V1.len() <= projected::MAX_PDA_SEED_BYTES);
 };
 /// Domain separating the adapter's token/replay poststate commitment.
 pub use generated::CUSTODY_POSTSTATE_DOMAIN_V1;

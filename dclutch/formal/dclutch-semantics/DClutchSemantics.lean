@@ -142,3 +142,4 @@ import DClutchSemantics.TransitionVM
 import DClutchSemantics.TransitionVMV2
 import DClutchSemantics.TransitionVMV3
 import DClutchSemantics.TsEmit
+import DClutchSemantics.UpkeepVaultV1

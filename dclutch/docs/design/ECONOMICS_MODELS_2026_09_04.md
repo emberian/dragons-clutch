@@ -462,6 +462,25 @@ instruction. The parameter record of §6 is governable because its values are
 policy; this record is not, because its values are *prices for verifiable work*
 and a governed price is a discretionary payout wearing a schedule.
 
+**ADDENDUM 2026-09-06 (lane CONVERGE-ECONOMICS): what was built differs from
+this table in three rows, and the reason is that no outflow exists.** The record
+in `crates/dclutch-custody/src/upkeep_vault_v1.rs` carries `bump`,
+`inflow_total`, `outflow_total`, a per-class total for each of the four source
+classes, `credit_count` and `last_credit_digest`. It does NOT carry
+`release_set`, `price_table_digest` or a `paid_receipt_digests` cursor. All
+three are payout machinery: they name the table a payout was paid under and stop
+one receipted state change being paid twice. The build ruled that **no outflow
+route is written at all** — `UpkeepOperationV1`'s reserved debit tag refuses by
+name (`Error::NoSpendRoute`), `outflow_total` is a running number nothing moves,
+and this section's own §4 candidates are unruled prices. Fields whose only
+purpose is to discipline an instruction that does not exist would be a schema
+asserting a capability the program refuses, which is the shape of claim this
+tree spends its time deleting. The first ruled outflow route carries its own
+decision, its own Rent-derived price, and these three fields with it. The
+per-class totals are the addition this table did not anticipate, and §7.3 is
+why: the four sources have wildly different measured magnitudes, and one
+`inflow_total` could not have told them apart.
+
 ### 7.3 Inflows, measured
 
 | source | today | measured on cohorts 13/14/15 |
@@ -536,6 +555,28 @@ ZeroBump-class recovery bounties.
 4. **`COMPACTION_CRANK_REWARD_LAMPORTS_V1` as a literal.** §2, named as debt.
 5. **The escrow-close residue.** §5, unimplemented, and until it lands the
    single-crank opener eats the whole shortfall.
+
+**ADDENDUM 2026-09-06 (lane CONVERGE-ECONOMICS): four of those five moved.**
+
+1. **Built.** Contract, Lean, two Custody routes in sub-band `0x6200`, a host
+   client, and a producer: the Direct close-maker credits the donation remainder
+   by CPI. Two of the four chartered inflows still have no producer and the
+   vault's own module doc names which and why.
+2. **One consumer reads the account.** The Direct close-maker's carve is read
+   out of the record at its frame's coordinate 22, by the chain and by the
+   planner, both through `authenticate_protocol_parameters_account_v1`. The fee
+   band and the crank cap still PROJECT the genesis, and their frames are why —
+   authorship moved, the runtime read did not.
+3. **Built.** The frame is twenty-seven accounts and coordinate 24 is a closer
+   who signs only to own the carve. The route no longer refuses every signer; it
+   exempts exactly that coordinate, by name.
+4. **No longer a literal.** It projects
+   `PROTOCOL_GENESIS_CRANK_REWARD_CAP_LAMPORTS_V1`, and the browser's source gate
+   now pins the authorship chain rather than the number.
+5. **Unmoved**, and §7.3's measurement is why it is the more interesting of the
+   two remaining: the residue reaches the market's RentCredit today under an
+   argument `claim_check_conservation_v1.rs` makes in its own words, so routing
+   it to the vault reverses an argument rather than filling a hole.
 
 ## 9. The frame cost, measured, and the ratchet left red
 

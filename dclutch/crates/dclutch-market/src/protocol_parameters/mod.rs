@@ -65,18 +65,26 @@
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated;
+mod request_v1;
 
 use dclutch_sha256_adapter::digest;
+
+pub use request_v1::{GovernanceActV1, ProtocolParametersRequestV1};
 
 pub use generated::{
     PROTOCOL_ABSOLUTE_FEE_CEILING_BASIS_POINTS_V1, PROTOCOL_BASIS_POINT_DENOMINATOR_V1,
     PROTOCOL_GENESIS_CLOSER_CARVE_BASIS_POINTS_V1, PROTOCOL_GENESIS_CLOSER_REWARD_CAP_LAMPORTS_V1,
     PROTOCOL_GENESIS_CRANK_REWARD_CAP_LAMPORTS_V1, PROTOCOL_GENESIS_MAX_FEE_BASIS_POINTS_V1,
-    PROTOCOL_GENESIS_TAKE_BASIS_POINTS_V1, PROTOCOL_MINIMUM_CHANGE_DELAY_SLOTS_V1,
-    PROTOCOL_PARAMETERS_ABI_VERSION_V1, PROTOCOL_PARAMETERS_PDA_DOMAIN_V1,
-    PROTOCOL_PARAMETERS_RECEIPT_BYTES_V1, PROTOCOL_PARAMETERS_RECEIPT_MAGIC_V1,
+    PROTOCOL_GENESIS_TAKE_BASIS_POINTS_V1, PROTOCOL_GOVERNANCE_APPLY_TAG_V1,
+    PROTOCOL_GOVERNANCE_FOUND_TAG_V1, PROTOCOL_GOVERNANCE_PROPOSE_TAG_V1,
+    PROTOCOL_GOVERNANCE_WITHDRAW_TAG_V1, PROTOCOL_MINIMUM_CHANGE_DELAY_SLOTS_V1,
+    PROTOCOL_PARAMETERS_ABI_VERSION_V1, PROTOCOL_PARAMETERS_APPLY_ACCOUNT_COUNT_V1,
+    PROTOCOL_PARAMETERS_AUTHORITY_ACCOUNT_COUNT_V1, PROTOCOL_PARAMETERS_FOUND_ACCOUNT_COUNT_V1,
+    PROTOCOL_PARAMETERS_PDA_DOMAIN_V1, PROTOCOL_PARAMETERS_RECEIPT_BYTES_V1,
+    PROTOCOL_PARAMETERS_RECEIPT_MAGIC_V1, PROTOCOL_PARAMETERS_RECEIPT_PDA_DOMAIN_V1,
     PROTOCOL_PARAMETERS_RECORD_BYTES_V1, PROTOCOL_PARAMETERS_RECORD_MAGIC_V1,
-    PROTOCOL_SLOTS_PER_NOMINAL_DAY_V1,
+    PROTOCOL_PARAMETERS_REQUEST_BYTES_V1, PROTOCOL_PARAMETERS_REQUEST_MAGIC_V1,
+    PROTOCOL_SLOTS_PER_NOMINAL_DAY_V1, PROTOCOL_TAKE_ADMITTED_THIS_RELEASE_V1,
 };
 
 use generated::{
@@ -139,6 +147,17 @@ pub enum Error {
     ProposalDigestMismatch,
     /// A slot or generation sum did not fit `u64`.
     ArithmeticOverflow,
+    /// A nonzero protocol take in a release that admits none.
+    ///
+    /// Decision 0024 item 1 as a conjunct rather than a comment: the pair
+    /// rule makes a take and a payee move together, and
+    /// [`PROTOCOL_TAKE_ADMITTED_THIS_RELEASE_V1`] makes the pair unreachable
+    /// until the release the mainnet ruling (decision 0026) ships flips it.
+    /// Checked after the bands, so a take with no payee is still the pair
+    /// rule's refusal and a take WITH a payee is this one.
+    TakeBeforeMainnet,
+    /// An act byte no governance route answers to.
+    UnknownAct,
 }
 
 /// Result alias for this contract.
@@ -205,6 +224,12 @@ impl ProtocolParametersV1 {
             && (self.protocol_take_basis_points == 0) == is_zero(&self.protocol_beneficiary)
             && self.closer_carve_basis_points <= PROTOCOL_BASIS_POINT_DENOMINATOR_V1
             && self.change_delay_slots >= PROTOCOL_MINIMUM_CHANGE_DELAY_SLOTS_V1
+    }
+
+    /// Decision 0024 item 1 as a conjunct. Lean twin: `takeAdmissible`.
+    #[must_use]
+    pub const fn take_admissible(self) -> bool {
+        PROTOCOL_TAKE_ADMITTED_THIS_RELEASE_V1 || self.protocol_take_basis_points == 0
     }
 
     /// The carve one close pays its permissionless closer.
@@ -311,6 +336,9 @@ impl ProtocolParametersRecordV1 {
         if !proposed.in_band() {
             return Err(Error::ParameterOutOfBand);
         }
+        if !proposed.take_admissible() {
+            return Err(Error::TakeBeforeMainnet);
+        }
         let earliest_apply_slot = current_slot
             .checked_add(self.parameters.change_delay_slots)
             .ok_or(Error::ArithmeticOverflow)?;
@@ -366,6 +394,9 @@ impl ProtocolParametersRecordV1 {
         }
         if !proposed.in_band() {
             return Err(Error::ParameterOutOfBand);
+        }
+        if !proposed.take_admissible() {
+            return Err(Error::TakeBeforeMainnet);
         }
         let generation = self
             .parameters
@@ -487,6 +518,9 @@ impl ProtocolParametersRecordV1 {
         // consumer never has to ask.
         if !value.parameters.in_band() {
             return Err(Error::ParameterOutOfBand);
+        }
+        if !value.parameters.take_admissible() {
+            return Err(Error::TakeBeforeMainnet);
         }
         Ok(value)
     }
@@ -682,6 +716,67 @@ impl ProtocolParametersChangeReceiptV1 {
         }
         Ok(value)
     }
+}
+
+/// The record's seeds: the domain alone. One record per Custody deployment,
+/// whatever generation it holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtocolParametersRecordSeedsV1;
+
+impl ProtocolParametersRecordSeedsV1 {
+    /// Borrow the exact ordered SVM seed slices, excluding the bump.
+    #[must_use]
+    pub const fn as_slices(&self) -> [&'static [u8]; 1] {
+        [PROTOCOL_PARAMETERS_PDA_DOMAIN_V1]
+    }
+}
+
+/// A change receipt's seeds: the receipt domain and the generation it
+/// produced, as eight little-endian bytes, so the stream a census reads is
+/// addressable without a scan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtocolParametersReceiptSeedsV1 {
+    generation: [u8; 8],
+}
+
+impl ProtocolParametersReceiptSeedsV1 {
+    /// The receipt of the change that produced `generation`.
+    #[must_use]
+    pub const fn new(generation: u64) -> Self {
+        Self {
+            generation: generation.to_le_bytes(),
+        }
+    }
+
+    /// Borrow the exact ordered SVM seed slices, excluding the bump.
+    #[must_use]
+    pub fn as_slices(&self) -> [&[u8]; 2] {
+        [PROTOCOL_PARAMETERS_RECEIPT_PDA_DOMAIN_V1, &self.generation]
+    }
+}
+
+/// What a consumer in another program has to hold before it may read a
+/// parameter out of the record: the account is Custody-owned, sits at the
+/// address the consumer derived for itself, and decodes.
+///
+/// Pure on purpose: the consumer derives `expected_key` from
+/// [`ProtocolParametersRecordSeedsV1`] under the Custody role its own
+/// activation cache names, and hands the observed owner, key and bytes here.
+/// A consumer that read a value out of a record it had not held to this would
+/// be applying whatever economics a stranger wrote at whatever address the
+/// stranger passed.
+pub fn authenticate_protocol_parameters_account_v1(
+    observed_owner: [u8; 32],
+    observed_key: [u8; 32],
+    custody_program: [u8; 32],
+    expected_key: [u8; 32],
+    data: &[u8],
+) -> Result<ProtocolParametersV1> {
+    if observed_owner != custody_program || observed_key != expected_key {
+        return Err(Error::InvalidHeader);
+    }
+    let record = ProtocolParametersRecordV1::decode(data)?;
+    Ok(record.parameters)
 }
 
 // A `const fn` over an exact array with a bounded index: the same width fact as

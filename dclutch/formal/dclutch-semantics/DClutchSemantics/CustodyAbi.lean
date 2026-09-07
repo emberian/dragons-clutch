@@ -34,7 +34,7 @@ def receiptMagic : List UInt8 :=
 /-!
 ## The Custody namespace
 
-Four PDA seed domains. The Rust stated all four itself and asserted the
+Five PDA seed domains. The Rust stated the first four itself and asserted the
 thirty-two-byte seed bound with a `const _` block, which is the right assertion
 in the wrong place: an over-long domain refuses every bump inside
 `find_program_address`, so the authority it names can never sign and every route
@@ -54,11 +54,19 @@ def vaultPdaDomain : String := "dclutch:custody-vault:v1"
 
 /-- Separates the adapter's token/replay poststate commitment.  Not a PDA seed,
 but held to the same bound because it is the same alphabet of domains and a
-reader should not have to know which of the four is which. -/
+reader should not have to know which of the five is which. -/
 def poststateDomain : String := "dclutch:custody-poststate:v1"
 
+/-- `[upkeepVaultDomain]` -- the one protocol-owned lamport vault under this
+program (decision 0024 item 4).  No market, no release set, no context and no
+role in the seeds: the vault is the protocol's rather than a market's, there is
+exactly one per Custody deployment, and nothing derives an authority over it
+because it has none.  Its record and its only routes are
+`DClutchSemantics.UpkeepVaultV1`. -/
+def upkeepVaultPdaDomain : String := "dclutch:custody-upkeep:v1"
+
 def pdaDomains : List String :=
-  [authorityPdaDomain, replayPdaDomain, vaultPdaDomain, poststateDomain]
+  [authorityPdaDomain, replayPdaDomain, vaultPdaDomain, poststateDomain, upkeepVaultPdaDomain]
 
 /-- A PDA seed may be at most thirty-two bytes.  This is the `const _` assert
 the Rust carried, moved to the object it is about. -/

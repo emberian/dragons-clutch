@@ -8,7 +8,7 @@ PROVISIONAL from the ruling until 15:50 EDT, when ember read the docket and
 accepted it in conversation without amending it; the confirmation line below is
 the whole of what was said. The rulings are docket item D1; ember's amendment
 is recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4652-4653`. This is C-11's row
-(`docs/MASTER_COMPLETION_CONTRACT.md:96`), the only row in the contract that
+(`docs/MASTER_COMPLETION_CONTRACT.md:99`), the only row in the contract that
 names a precondition on ember before code may be written. Item 5 landed the
 same morning at `8ed7f242f` (lane ECONOMICS); the rest is the ECONOMICS lane's
 charter.
@@ -33,8 +33,7 @@ reversible on request at the cost §7 states.
 C-11 requires that *"Fee rates, beneficiaries, opener shortfall, upkeep vault
 and donation treatment are modeled adversarially and receive Ember's explicit
 economic rulings before implementation"*
-(`docs/MASTER_COMPLETION_CONTRACT.md:96`; register row `:186`, *"open; Ember
-owns each economic choice"*).
+(`docs/MASTER_COMPLETION_CONTRACT.md:99`; register row `:190`).
 
 The tree had already built past that gate in four of the five, deliberately: it
 built a shape it can defend and left the value knob at a provable default —
@@ -85,7 +84,7 @@ upkeep vault only, which has zero code.
    (`:45-48`). It is the only home the tree has for compaction dust that today
    *"goes NOWHERE"*, for escrow-close residue after `opener_outlay` is serviced,
    and for the certificate-seat prepay nothing reimburses
-   (`docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md:763`).
+   (`docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md:771`).
 5. **The closer's reward is carved from the donation slice alone, capped at the
    funded-crank floor.** `DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1` moves off zero,
    and the carve may touch only the `unclassified_donation` half of the observed
@@ -238,7 +237,7 @@ amendment was made to avoid.
 
 ## Evidence pointers
 
-`docs/MASTER_COMPLETION_CONTRACT.md:96`, `:186`; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4652-4659`;
+`docs/MASTER_COMPLETION_CONTRACT.md:99`, `:190`; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4652-4659`;
 `docs/decisions/0014-the-fee-rate.md` (whole, esp. `:7-13`, `:134-137`);
 `docs/design/UPKEEP_VAULT_V0.md:3`, `:10-11`, `:19-34`, `:38-48`, `:52-62`,
 `:95-103`, `:112-119`;
@@ -255,4 +254,4 @@ amendment was made to avoid.
 `programs/dclutch-custody-sbf/src/lib.rs` at `8ed7f242f`;
 `tools/gauntlet/journey/src/ledger.rs:1004-1012`;
 `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:1499-1504`, `:2900-2936`;
-`docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md:763`.
+`docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md:771`.

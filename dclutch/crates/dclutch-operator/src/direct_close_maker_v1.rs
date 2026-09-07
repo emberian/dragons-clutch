@@ -3,8 +3,8 @@
 //! This module performs no RPC, wallet access, signing, or submission. It
 //! reauthenticates one same-finalized snapshot, regenerates the complete
 //! canonical five-entry lifecycle release from its ordinary witness, and
-//! either returns the exact permissionless 22-account Trading instruction that
-//! closes one maker replay or reports that the replay is already gone.
+//! either returns the exact 27-account Trading instruction that closes one
+//! maker replay or reports that the replay is already gone.
 //!
 //! # Why this exists
 //!
@@ -49,7 +49,24 @@
 //! caller input never becomes authority). A caller that names the wrong
 //! beneficiary gets [`DirectCloseMakerPlanErrorV1::InvalidRentOwner`], not a
 //! redirected refund.
+//!
+//! # The three credits, and where their numbers come from
+//!
+//! Decision 0024 split the observed balance three ways: the recorded
+//! `rent_owner` takes `rent_principal` EXACTLY, the closer at coordinate 24
+//! takes the carve, and every remaining lamport of the donation is credited to
+//! the upkeep vault at coordinate 23. The carve is not a constant in this
+//! crate either. It is `ProtocolParametersV1::closer_carve` over the donation,
+//! read out of the Custody-owned governed record at coordinate 22 -- at the
+//! address this builder derives for itself, under the Custody program THIS
+//! release set names -- so the operator's prediction of the closer's pay moves
+//! only when the record moves, exactly as the chain's does.
 
+use dclutch_custody::CallerRoleV1;
+use dclutch_custody::upkeep_vault_v1::{
+    UPKEEP_VAULT_RECORD_BYTES_V1, UpkeepCreditV1, UpkeepOperationV1, UpkeepProtocolCallerV1,
+    UpkeepRequestV1, UpkeepSourceClassV1, UpkeepVaultSeedsV1,
+};
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
@@ -59,9 +76,13 @@ use dclutch_market::capability_program::{
     CapabilityRootHeaderV1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
+use dclutch_market::protocol_parameters::{
+    ProtocolParametersRecordSeedsV1, ProtocolParametersV1,
+    authenticate_protocol_parameters_account_v1,
+};
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
 use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -74,7 +95,7 @@ use dclutch_trading::{
         direct_close_maker_effect_schema_v1,
     },
     close_maker_v1::{
-        DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1,
+        DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1,
         DIRECT_CLOSE_MAKER_RECEIPT_BYTES_V1, DIRECT_CLOSE_MAKER_REQUEST_BYTES_V1,
         DirectCloseMakerReceiptV1, DirectCloseMakerRequestV1,
         direct_close_maker_account_privileges_v1,
@@ -191,6 +212,32 @@ pub struct DirectCloseMakerCoordinateInputV1 {
     /// It is never believed: the plan stage refuses unless it equals the
     /// `rent_owner` the replay recorded at first use.
     pub rent_owner: Pubkey,
+    /// The release set's Custody program.
+    ///
+    /// Named rather than derived because a release set is a record, not an
+    /// address: the governed parameters record and the upkeep vault are both
+    /// PDAs UNDER this program, so nothing about them can be derived until it
+    /// is known. The plan stage reads the Custody role out of the activation
+    /// cache and refuses unless the role names exactly this program.
+    pub custody_program: Pubkey,
+    /// The permissionless closer, paid the carve and the frame's one signer.
+    ///
+    /// A message cannot be addressed without naming it, so the caller does.
+    /// Naming it is not being authorized by it: the closer signs to OWN the
+    /// carve, and no conjunct of this route turns on who it is
+    /// (`docs/design/FUNDED_CRANK_V1.md` section 6).
+    pub closer: Pubkey,
+    /// Trading's caller-authority PDA for THIS close's upkeep credit.
+    ///
+    /// Not coordinate-derivable, and named for the same reason `maker_replay`
+    /// and `rent_owner` are: its last seed is the digest of an upkeep request
+    /// whose `amount` is the donation remainder and whose `receipt_digest` is
+    /// this close's own receipt, and BOTH are read off account bytes the
+    /// coordinate stage never sees. The plan stage re-derives it from the
+    /// authenticated numbers and refuses on disagreement
+    /// ([`DirectCloseMakerPlanErrorV1::InvalidCallerAuthority`]), so a caller
+    /// that names a PDA for one request cannot spend it on another.
+    pub caller_authority: Pubkey,
 }
 
 /// Message-placement class owned by the DCLTDMC1 account-frame semantic.
@@ -200,9 +247,14 @@ pub enum DirectCloseMakerMetaClassV1 {
     LookupStable,
     /// A signer that must remain in the static message key set.
     ///
-    /// The close has none. The variant exists so this family's class vocabulary
-    /// matches its siblings' rather than quietly omitting the case a reader
-    /// would look for to confirm the route is permissionless.
+    /// The close has exactly one: the closer at coordinate 24. It signs to OWN
+    /// the carve -- the lamports land in an account nobody but its holder can
+    /// spend from -- and never to be authorized by the signature: no conjunct
+    /// of this route reads which key it is, so any stranger may turn the crank
+    /// and be paid for it (`docs/design/FUNDED_CRANK_V1.md` section 6). The
+    /// class is a placement fact and not a permission one: a signer cannot be
+    /// resolved through a lookup table, so this coordinate stays inline
+    /// whatever table the market has.
     InlineSigner,
     /// An executable program-account identity that must remain inline.
     InlineProgram,
@@ -210,11 +262,17 @@ pub enum DirectCloseMakerMetaClassV1 {
     InlineRequestBound,
 }
 
-/// Exact placement classes for the canonical 22-account DCLTDMC1 frame.
+/// Exact placement classes for the canonical 27-account DCLTDMC1 frame.
 ///
-/// Indices 0..=19 are the begin-retiring frame verbatim; the close appends the
-/// two coordinates that are specific to one maker and therefore must not be
-/// assumed by a lookup table built for the market as a whole.
+/// Indices 0..=19 are the begin-retiring frame verbatim; 20 and 21 are the two
+/// coordinates specific to one maker, which must not be assumed by a lookup
+/// table built for the market as a whole. Decision 0024's five append after
+/// them, and they do not all class alike. The governed record and the upkeep
+/// vault are one per Custody deployment and never move, so a table built for
+/// the market may carry them; the closer must stay inline because it signs;
+/// the Custody program is a program identity; and the caller authority is
+/// seeded from the digest of THIS close's own upkeep request, which makes it
+/// the most request-bound coordinate in the frame.
 pub const DIRECT_CLOSE_MAKER_META_CLASSES_V1: [DirectCloseMakerMetaClassV1;
     DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1] = [
     DirectCloseMakerMetaClassV1::LookupStable,
@@ -239,6 +297,11 @@ pub const DIRECT_CLOSE_MAKER_META_CLASSES_V1: [DirectCloseMakerMetaClassV1;
     DirectCloseMakerMetaClassV1::LookupStable,
     DirectCloseMakerMetaClassV1::InlineRequestBound,
     DirectCloseMakerMetaClassV1::InlineRequestBound,
+    DirectCloseMakerMetaClassV1::LookupStable,
+    DirectCloseMakerMetaClassV1::LookupStable,
+    DirectCloseMakerMetaClassV1::InlineSigner,
+    DirectCloseMakerMetaClassV1::InlineProgram,
+    DirectCloseMakerMetaClassV1::InlineRequestBound,
 ];
 
 /// Non-finalized exact ordered meta closure for one DCLTDMC1 request.
@@ -248,7 +311,7 @@ pub struct DirectCloseMakerMetaClosureV1 {
     pub program_id: Pubkey,
     /// Exact canonical request whose identities derive the account coordinates.
     pub request: DirectCloseMakerRequestV1,
-    /// Exact 22 account metas in top-level wire order.
+    /// Exact 27 account metas in top-level wire order.
     pub accounts: [AccountMeta; DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1],
     /// Exact per-meta message-placement classes in the same wire order.
     pub classes: [DirectCloseMakerMetaClassV1; DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1],
@@ -299,6 +362,9 @@ pub fn derive_direct_close_maker_meta_closure_v1(
             input.trading_programdata,
             input.maker_replay,
             input.rent_owner,
+            input.custody_program,
+            input.closer,
+            input.caller_authority,
         ]
         .iter()
         .any(|identity| *identity == Pubkey::default())
@@ -340,6 +406,17 @@ pub fn derive_direct_close_maker_meta_closure_v1(
         &input.registry_program,
     )
     .0;
+    // Both are one per Custody DEPLOYMENT and not one per market or per close:
+    // their seed tuples are a domain and nothing else, so naming the Custody
+    // program is naming them. The seeds are borrowed from the contracts that
+    // own them rather than respelled here, for the reason `record_key` gives.
+    let parameters_record = Pubkey::find_program_address(
+        &ProtocolParametersRecordSeedsV1.as_slices(),
+        &input.custody_program,
+    )
+    .0;
+    let upkeep_vault =
+        Pubkey::find_program_address(&UpkeepVaultSeedsV1.as_slices(), &input.custody_program).0;
     let keys = [
         input.root,
         Pubkey::new_from_array(request.market),
@@ -363,12 +440,21 @@ pub fn derive_direct_close_maker_meta_closure_v1(
         solana_sdk_ids::sysvar::rent::ID,
         input.maker_replay,
         input.rent_owner,
+        parameters_record,
+        upkeep_vault,
+        input.closer,
+        input.custody_program,
+        input.caller_authority,
     ];
     let mut accounts = core::array::from_fn(|index| AccountMeta::new_readonly(keys[index], false));
     for (index, meta) in accounts.iter_mut().enumerate() {
         let (writable, _) = direct_close_maker_account_privileges_v1(index)
             .ok_or(DirectCloseMakerCoordinateErrorV1::InvalidIdentity)?;
         meta.is_writable = writable;
+        // Exactly one coordinate signs, and the codec's own constant names it.
+        // Stated as an equality rather than an `||` chain so a frame that grew
+        // a second signer would have to say so here, in one place.
+        meta.is_signer = index == DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1;
     }
     for (index, account) in accounts.iter().enumerate() {
         if accounts
@@ -499,12 +585,43 @@ pub struct DirectCloseMakerSnapshotV1 {
     pub maker_replay: ObservedAccount,
     /// The recorded rent beneficiary; writable, and credited.
     pub rent_owner: ObservedAccount,
+    /// The Custody-owned governed protocol-parameters record; read only.
+    ///
+    /// The carve share and its lamport cap are read out of these bytes through
+    /// the contract's own hostile decoder, never out of a constant in this
+    /// crate, so an operator's prediction of the closer's pay is the record's
+    /// answer and not a stale copy of it.
+    pub protocol_parameters: ObservedAccount,
+    /// The Custody-owned upkeep vault; writable, and credited the donation
+    /// remainder.
+    ///
+    /// One vault per Custody deployment. Only its address, owner and width are
+    /// this route's business: the record's own contract owns what the bytes
+    /// mean, and the credit is receipted through it by CPI rather than written
+    /// here.
+    pub upkeep_vault: ObservedAccount,
+    /// The permissionless closer; writable, credited the carve, and the frame's
+    /// one signer.
+    pub closer: ObservedAccount,
+    /// The release set's executable Custody program.
+    ///
+    /// Both Custody PDAs in this frame are derived under it, and the vault
+    /// credit is a CPI into it, so a wrong program here is a wrong answer about
+    /// every economic number in the plan.
+    pub custody_program: ObservedAccount,
+    /// Trading's caller-authority PDA for this close's upkeep credit; readonly
+    /// at the top level, and the seed Trading signs the vault CPI with.
+    pub caller_authority: ObservedAccount,
 }
 
 /// Exact unsigned submission and independently predicted successful response.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectCloseMakerSubmitV1 {
-    /// Permissionless exact 22-account Trading instruction.
+    /// Exact 27-account Trading instruction, signed only by the closer.
+    ///
+    /// Still permissionless: the one signature is the closer's claim on its own
+    /// carve, and no party to the market has to be present for the close to
+    /// turn.
     pub instruction: Instruction,
     /// Coordinate-only closure the fresh finalized report reproduced exactly.
     pub meta_closure: DirectCloseMakerMetaClosureV1,
@@ -526,13 +643,26 @@ pub struct DirectCloseMakerSubmitV1 {
     pub expected_remaining_open_maker_roots: u64,
     /// The beneficiary's exact lamports after the credit.
     pub expected_rent_owner_lamports: u64,
+    /// The closer's exact lamports after its carve lands.
+    pub expected_closer_lamports: u64,
+    /// The upkeep vault's exact lamports after the donation remainder lands.
+    pub expected_upkeep_vault_lamports: u64,
     /// Historical account-rent principal, exactly as the replay recorded it.
     pub rent_principal: u64,
     /// Lamports above principal, explicitly not fees or reserves.
     pub unclassified_donation: u64,
     /// The permissionless closer's carve, out of the donation slice alone.
     pub closer_reward: u64,
-    /// Exact total lamports credited to the beneficiary.
+    /// The donation after the carve, credited to the upkeep vault under
+    /// `UpkeepSourceClassV1::Donation`.
+    ///
+    /// Zero on every cohort to date, because a replay funded to exactly its own
+    /// rent has no donation to divide. Under the genesis record it is the
+    /// WHOLE donation whenever there is one: the cap is zero lamports, so the
+    /// carve is zero however large the share, and the remainder is everything.
+    pub upkeep_credit: u64,
+    /// Exact lamports credited to the recorded beneficiary: the principal,
+    /// exactly, and never a lamport of the donation.
     pub total_credit: u64,
     /// Exact program required to produce immediate return data.
     pub expected_receipt_producer: Pubkey,
@@ -606,6 +736,44 @@ pub enum DirectCloseMakerPlanErrorV1 {
     /// The named beneficiary was not the recorded `rent_owner`, or was not a
     /// plain empty System wallet.
     InvalidRentOwner,
+    /// The account at coordinate 25 was not the Custody program this release
+    /// set names, or was not a deployed executable at all.
+    ///
+    /// Told apart from [`Self::InvalidRelease`] because it is the conjunct an
+    /// operator gets wrong by hand: the Core and Trading programs are read off
+    /// the market, and the Custody one is the third program a caller has to
+    /// find for itself.
+    InvalidCustodyProgram,
+    /// The upkeep vault was not the Custody-derived PDA, was not owned by the
+    /// Custody program, or was not one record wide.
+    InvalidUpkeepVault,
+    /// The closer was not a plain empty System wallet.
+    ///
+    /// Not a claim about WHICH key it is -- the route never reads that -- but
+    /// about what kind of account it is. Crediting a program-owned account is a
+    /// write with bytes in it, and this route has no authority to make one.
+    InvalidCloser,
+    /// The caller named a caller-authority PDA that is not the one this close's
+    /// own upkeep request derives; the payload is the one it does.
+    ///
+    /// Reachable only when the donation remainder is nonzero: a zero credit is
+    /// no request, so there is no authority to be wrong about.
+    ///
+    /// **It carries the address because nobody can name it in one pass.** This
+    /// coordinate's last seed is the digest of an upkeep request that carries
+    /// the donation remainder and the digest of this close's own receipt, so it
+    /// is not derivable from chain state the way `maker_replay` and `rent_owner`
+    /// are -- it is derivable only from a completed plan. A refusal that said
+    /// only "wrong" would leave a builder with no way to become right except to
+    /// reimplement `assemble_plan`, which is exactly the second author this
+    /// crate exists to prevent. So the plan states the coordinate, and a builder
+    /// with a donation gathers, plans, re-gathers at the named address, and
+    /// plans again.
+    InvalidCallerAuthority(Pubkey),
+    /// `dclutch_market::protocol_parameters` refused; the cause is its own.
+    ProtocolParameters(dclutch_market::protocol_parameters::Error),
+    /// `dclutch_custody::upkeep_vault_v1` refused; the cause is its own.
+    Upkeep(dclutch_custody::upkeep_vault_v1::Error),
     /// The replay still owes its Direct fee. Mirrors `CloseMakerFeeOutstanding`
     /// (`0x4011`): settle the fee first, then close.
     FeeOutstanding,
@@ -643,6 +811,11 @@ struct AuthenticatedCloseV1 {
     market: CoreState,
     header: CapabilityRootHeaderV1,
     root_state: DirectRootStateV1,
+    /// The Custody program THIS release set names, read out of the activation
+    /// cache alongside Core and Trading rather than taken from the frame. The
+    /// frame's coordinate 25 is then held to it, which is the only reason a
+    /// derivation under it can be trusted.
+    custody_program: [u8; 32],
 }
 
 /// Reauthenticate one exact finalized snapshot and build its unsigned plan.
@@ -652,7 +825,7 @@ pub fn plan_direct_close_maker_v1(
     snapshot.cluster.admit(snapshot.genesis_hash)?;
     let observation = same_finalized_observation(snapshot)?;
     authenticate_infrastructure(snapshot)?;
-    let market = authenticate_market_and_release(snapshot)?;
+    let (market, custody_program) = authenticate_market_and_release(snapshot)?;
     let (header, root_state) = authenticate_root_and_artifacts(snapshot, market)?;
     assemble_plan(
         snapshot,
@@ -661,6 +834,7 @@ pub fn plan_direct_close_maker_v1(
             market,
             header,
             root_state,
+            custody_program,
         },
     )
 }
@@ -718,6 +892,11 @@ fn frame_accounts(
         &snapshot.rent_sysvar,
         &snapshot.maker_replay,
         &snapshot.rent_owner,
+        &snapshot.protocol_parameters,
+        &snapshot.upkeep_vault,
+        &snapshot.closer,
+        &snapshot.custody_program,
+        &snapshot.caller_authority,
     ]
 }
 
@@ -741,9 +920,17 @@ fn authenticate_infrastructure(
     Ok(())
 }
 
+/// Authenticate the Market, its activation cache, and the deployments the
+/// release set names, returning the Market and the Custody program's identity.
+///
+/// Core and Trading are held to their FULL deployment authentication, because
+/// both programs and both ProgramData accounts are frame members. Custody's
+/// ProgramData is not, so its role binding is read here and the frame's
+/// coordinate 25 is held to it in [`authenticate_economics`] -- the same
+/// division the chain makes in `reauthenticate_roles`, for the same reason.
 fn authenticate_market_and_release(
     snapshot: &DirectCloseMakerSnapshotV1,
-) -> Result<CoreState, DirectCloseMakerPlanErrorV1> {
+) -> Result<(CoreState, [u8; 32]), DirectCloseMakerPlanErrorV1> {
     if snapshot.market.owner != snapshot.core_program.key
         || snapshot.market.data.len() != STATE_BYTES
         || !funded_rent_persists_v1(snapshot.market.lamports)
@@ -808,7 +995,13 @@ fn authenticate_market_and_release(
     ] {
         authenticate_role_deployment(activated, role, program, programdata)?;
     }
-    Ok(market)
+    let custody_program = activated
+        .role(ExecutionRoleV1::Custody)
+        .map_err(DirectCloseMakerPlanErrorV1::Registry)?
+        .release()
+        .program()
+        .to_bytes();
+    Ok((market, custody_program))
 }
 
 fn authenticate_role_deployment(
@@ -1110,6 +1303,140 @@ fn replay_is_vacant(account: &ObservedAccount) -> Result<bool, DirectCloseMakerP
     }
 }
 
+/// Decision 0024's economics coordinates, held before a number is read out of
+/// any of them.
+///
+/// The chain's twin is `authenticate_economics` in
+/// `programs/dclutch-trading-sbf/src/direct_close_maker_v1.rs`, and the
+/// conjuncts here are its conjuncts in its order, because a plan that held the
+/// governed record to LESS than the chain does would promise a close the chain
+/// refuses, and one that held it to more would refuse a close the chain admits.
+///
+/// `custody_program` is the identity [`authenticate_market_and_release`] read
+/// for [`ExecutionRoleV1::Custody`] out of the activation cache, and the frame's
+/// coordinate 25 is held to it here. What is NOT owed -- and is not owed on
+/// chain either -- is the full deployment authentication Core and Trading
+/// receive: Custody's ProgramData is not a member of this frame, so its release
+/// binding is READ rather than frame-authenticated, the same discipline
+/// `upkeep_vault_v1::protocol_frame` applies to the calling program from the
+/// other side of the same CPI. The shape conjuncts that remain are the ones
+/// [`authenticate_infrastructure`] already holds the Registry program to.
+fn authenticate_economics(
+    snapshot: &DirectCloseMakerSnapshotV1,
+    custody_program: [u8; 32],
+) -> Result<ProtocolParametersV1, DirectCloseMakerPlanErrorV1> {
+    if custody_program != snapshot.custody_program.key.to_bytes()
+        || !snapshot.custody_program.executable
+        || snapshot.custody_program.owner != bpf_loader_upgradeable::ID
+        || ProgramV3View::parse(&snapshot.custody_program.data).is_err()
+    {
+        return Err(DirectCloseMakerPlanErrorV1::InvalidCustodyProgram);
+    }
+    let expected_vault = Pubkey::find_program_address(
+        &UpkeepVaultSeedsV1.as_slices(),
+        &snapshot.custody_program.key,
+    )
+    .0;
+    if snapshot.upkeep_vault.key != expected_vault
+        || snapshot.upkeep_vault.owner != snapshot.custody_program.key
+        || snapshot.upkeep_vault.data.len() != UPKEEP_VAULT_RECORD_BYTES_V1
+    {
+        return Err(DirectCloseMakerPlanErrorV1::InvalidUpkeepVault);
+    }
+    // The closer is a plain empty System wallet for the reason the rent owner
+    // is one: crediting a program-owned account is a write with bytes in it,
+    // and this route has no authority to make one.
+    if snapshot.closer.owner != system_program::ID
+        || snapshot.closer.executable
+        || !snapshot.closer.data.is_empty()
+    {
+        return Err(DirectCloseMakerPlanErrorV1::InvalidCloser);
+    }
+    let expected_record = Pubkey::find_program_address(
+        &ProtocolParametersRecordSeedsV1.as_slices(),
+        &snapshot.custody_program.key,
+    )
+    .0;
+    // The contract's own answer, kept whole. It distinguishes a foreign owner
+    // from a wrong address from a record that is out of band, and an operator
+    // reading `ParameterOutOfBand` at plan time knows something no `Invalid`
+    // would have told it.
+    authenticate_protocol_parameters_account_v1(
+        snapshot.protocol_parameters.owner.to_bytes(),
+        snapshot.protocol_parameters.key.to_bytes(),
+        snapshot.custody_program.key.to_bytes(),
+        expected_record.to_bytes(),
+        &snapshot.protocol_parameters.data,
+    )
+    .map_err(DirectCloseMakerPlanErrorV1::ProtocolParameters)
+}
+
+/// Re-derive the caller-authority PDA this close's upkeep credit is signed
+/// with, and refuse a caller that named a different one.
+///
+/// This is `receipt_upkeep_credit`'s derivation conjunct for conjunct: the same
+/// request bytes, hashed the same way, fed as the last seed of
+/// [`CallerAuthoritySeedsV1`] under the Trading program. Deriving the authority
+/// FROM the request bytes is what stops a caller naming a PDA for one request
+/// and spending it on another; re-deriving it here is what stops that caller
+/// finding out at send time, after the fee.
+///
+/// **A zero credit derives nothing, and requires nothing.**
+/// `receipt_upkeep_credit` returns before it builds a request when the
+/// remainder is zero -- the vault contract refuses a zero amount by name, and a
+/// close with no donation has nothing to receipt -- so there is no request, no
+/// digest, and no authority for this stage to be right or wrong about. The
+/// account stays in the frame because the frame is fixed-width, and nothing
+/// beyond its membership is asked of it. This is the case every cohort to date
+/// actually takes.
+fn require_caller_authority(
+    snapshot: &DirectCloseMakerSnapshotV1,
+    release_set: [u8; 32],
+    market: [u8; 32],
+    upkeep_credit: u64,
+    receipt_digest: [u8; 32],
+) -> Result<(), DirectCloseMakerPlanErrorV1> {
+    if upkeep_credit == 0 {
+        return Ok(());
+    }
+    let context = snapshot.maker_replay.key.to_bytes();
+    let body = UpkeepRequestV1 {
+        operation: UpkeepOperationV1::Credit,
+        credit: Some(UpkeepCreditV1 {
+            source_class: UpkeepSourceClassV1::Donation,
+            caller: Some(UpkeepProtocolCallerV1 {
+                caller_role: CallerRoleV1::Trading,
+                release_set,
+                market,
+                context,
+            }),
+            receipt_digest,
+            amount: upkeep_credit,
+        }),
+    }
+    .to_bytes()
+    .map_err(DirectCloseMakerPlanErrorV1::Upkeep)?;
+    let seeds = CallerAuthoritySeedsV1::from_bytes(
+        release_set,
+        market,
+        ExecutionRoleV1::Trading,
+        context,
+        hash(&body).to_bytes(),
+    )
+    // The release-set codec's refusal reaches the Registry taxonomy through the
+    // Registry's own lossless `From`, so the seed-level cause survives rather
+    // than becoming a second name for it here.
+    .map_err(|error| DirectCloseMakerPlanErrorV1::Registry(error.into()))?;
+    let expected =
+        Pubkey::find_program_address(&seeds.as_slices(), &snapshot.trading_program.key).0;
+    if snapshot.caller_authority.key != expected {
+        return Err(DirectCloseMakerPlanErrorV1::InvalidCallerAuthority(
+            expected,
+        ));
+    }
+    Ok(())
+}
+
 fn assemble_plan(
     snapshot: &DirectCloseMakerSnapshotV1,
     authenticated: AuthenticatedCloseV1,
@@ -1187,6 +1514,12 @@ fn assemble_plan(
         return Err(DirectCloseMakerPlanErrorV1::InvalidRentOwner);
     }
 
+    // The economics coordinates, before anything reads a number out of them.
+    // The carve is the governed record's answer over the donation, so the
+    // record has to be authenticated BEFORE the split is computed, not checked
+    // afterwards against a split that already used it.
+    let parameters = authenticate_economics(snapshot, authenticated.custody_program)?;
+
     // The shared semantic close. Calling it is what makes the two refusals
     // below the SAME refusals the chain raises, rather than a second opinion
     // about them.
@@ -1194,7 +1527,7 @@ fn assemble_plan(
         authenticated.root_state,
         maker_root,
         snapshot.maker_replay.lamports,
-        DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1,
+        parameters,
     )
     .map_err(|error| match error {
         SuccessorError::FeeOwedOutstanding => DirectCloseMakerPlanErrorV1::FeeOutstanding,
@@ -1231,9 +1564,11 @@ fn assemble_plan(
         maker_root: snapshot.maker_replay.key.to_bytes(),
         rent_owner: closed.plan.rent_owner,
         post_root_digest,
+        closer: snapshot.closer.key.to_bytes(),
         rent_principal: closed.plan.rent_principal,
         unclassified_donation: closed.plan.unclassified_donation,
         closer_reward: closed.plan.closer_reward,
+        upkeep_credit: closed.plan.upkeep_credit,
         total_credit: closed.plan.total_credit,
         remaining_open_maker_roots: closed.root.open_maker_root_count(),
     }
@@ -1242,6 +1577,16 @@ fn assemble_plan(
     let expected_receipt_body = expected_receipt
         .to_bytes()
         .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMaker)?;
+
+    // The authority the vault CPI will be signed with is derived from THIS
+    // receipt, so it cannot be checked until the receipt bytes exist.
+    require_caller_authority(
+        snapshot,
+        release_set,
+        request.market,
+        closed.plan.upkeep_credit,
+        hash(&expected_receipt_body).to_bytes(),
+    )?;
 
     let meta_closure =
         derive_direct_close_maker_meta_closure_v1(DirectCloseMakerCoordinateInputV1 {
@@ -1261,9 +1606,16 @@ fn assemble_plan(
             trading_programdata: snapshot.trading_programdata.key,
             maker_replay: snapshot.maker_replay.key,
             rent_owner: snapshot.rent_owner.key,
+            custody_program: snapshot.custody_program.key,
+            closer: snapshot.closer.key,
+            caller_authority: snapshot.caller_authority.key,
         })
         .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMakerCoordinate)?;
 
+    // Exactly the closer signs, and nothing else does. Written as a per-index
+    // equality rather than a count because a count of one is also satisfied by
+    // a frame in which the WRONG coordinate signs, and this route's whole
+    // signature story is which one.
     if frame_accounts(snapshot)
         .iter()
         .zip(meta_closure.accounts.iter())
@@ -1271,7 +1623,10 @@ fn assemble_plan(
         || meta_closure
             .accounts
             .iter()
-            .any(|account| account.is_signer)
+            .enumerate()
+            .any(|(index, account)| {
+                account.is_signer != (index == DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1)
+            })
         || meta_closure.classes != DIRECT_CLOSE_MAKER_META_CLASSES_V1
     {
         return Err(DirectCloseMakerPlanErrorV1::InvalidPlan);
@@ -1284,10 +1639,23 @@ fn assemble_plan(
         }
     }
 
+    // Three destinations, three predictions, one arithmetic. `commit` adds each
+    // credit to the balance this snapshot observed and refuses on overflow;
+    // so does this, so a plan that would overflow on chain overflows here.
     let expected_rent_owner_lamports = snapshot
         .rent_owner
         .lamports
         .checked_add(closed.plan.total_credit)
+        .ok_or(DirectCloseMakerPlanErrorV1::InvalidPlan)?;
+    let expected_closer_lamports = snapshot
+        .closer
+        .lamports
+        .checked_add(closed.plan.closer_reward)
+        .ok_or(DirectCloseMakerPlanErrorV1::InvalidPlan)?;
+    let expected_upkeep_vault_lamports = snapshot
+        .upkeep_vault
+        .lamports
+        .checked_add(closed.plan.upkeep_credit)
         .ok_or(DirectCloseMakerPlanErrorV1::InvalidPlan)?;
 
     Ok(DirectCloseMakerPlanV1::Submit(Box::new(
@@ -1307,9 +1675,12 @@ fn assemble_plan(
             expected_post_root_digest: post_root_digest,
             expected_remaining_open_maker_roots: closed.root.open_maker_root_count(),
             expected_rent_owner_lamports,
+            expected_closer_lamports,
+            expected_upkeep_vault_lamports,
             rent_principal: closed.plan.rent_principal,
             unclassified_donation: closed.plan.unclassified_donation,
             closer_reward: closed.plan.closer_reward,
+            upkeep_credit: closed.plan.upkeep_credit,
             total_credit: closed.plan.total_credit,
             expected_receipt_producer: snapshot.trading_program.key,
             expected_receipt,
@@ -1323,9 +1694,12 @@ mod tests {
     use solana_program::rent::Rent;
 
     use dclutch_core_contract::ContentId;
+    use dclutch_custody::upkeep_vault_v1::UpkeepVaultV1;
     use dclutch_market::capability_program::SelectedRecordBumpsV1;
+    use dclutch_market::protocol_parameters::{PendingChangeV1, ProtocolParametersRecordV1};
     use dclutch_market::{Identity, MarketIdentity, Readiness, StateBumpsV1};
     use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+    use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
     use dclutch_trading::successor::{
         DirectMakerReplayLayoutV1 as MakerLayout, DirectRootStateLayoutV1 as RootLayout,
     };
@@ -1385,6 +1759,106 @@ mod tests {
 
     fn meta(closure: &DirectCloseMakerMetaClosureV1, index: usize) -> Pubkey {
         closure.accounts.get(index).expect("account meta").pubkey
+    }
+
+    /// Exact variant-two Loader V3 Program bytes naming one ProgramData.
+    ///
+    /// The Custody program is the one account in this frame whose DATA the plan
+    /// parses without also holding its ProgramData, so a fixture that left it
+    /// empty would be exercising a conjunct nothing on a real cluster fails.
+    fn program_account_data(programdata: Pubkey) -> Vec<u8> {
+        let mut data = vec![0_u8; LOADER_V3_PROGRAM_BYTES];
+        data[..4].copy_from_slice(&2_u32.to_le_bytes());
+        data[4..].copy_from_slice(&programdata.to_bytes());
+        data
+    }
+
+    /// The caller-authority PDA this close's own upkeep credit seeds, or `None`
+    /// when the credit is zero and the chain derives nothing.
+    ///
+    /// A caller has to name coordinate 26, and that coordinate is the digest of
+    /// a request built out of the plan's own numbers -- so naming it means
+    /// running the close's arithmetic first. This is that arithmetic, rebuilt
+    /// here from the fixture's inputs rather than lifted off a report, so the
+    /// plan's derivation is checked against an independent one and not against
+    /// itself.
+    fn caller_authority(
+        snapshot: &DirectCloseMakerSnapshotV1,
+        root_state: DirectRootStateV1,
+        generation: u64,
+        release_set: [u8; 32],
+        parameters: ProtocolParametersV1,
+    ) -> Option<Pubkey> {
+        let maker_root = MakerReplayRootV1::decode(&snapshot.maker_replay.data).ok()?;
+        let closed = close_maker_replay_v2(
+            root_state,
+            maker_root,
+            snapshot.maker_replay.lamports,
+            parameters,
+        )
+        .ok()?;
+        if closed.plan.upkeep_credit == 0 {
+            return None;
+        }
+        let mut post_root = snapshot.root.data.clone();
+        post_root
+            .get_mut(CAPABILITY_ROOT_HEADER_BYTES_V1..)?
+            .copy_from_slice(&closed.root.encode());
+        let market = snapshot.market.key.to_bytes();
+        let context = snapshot.maker_replay.key.to_bytes();
+        let request_body = DirectCloseMakerRequestV1 {
+            market,
+            maker: maker_root.maker(),
+            generation,
+        }
+        .new()
+        .ok()?
+        .to_bytes()
+        .ok()?;
+        let receipt_body = DirectCloseMakerReceiptV1 {
+            request_digest: hash(&request_body).to_bytes(),
+            market,
+            maker: maker_root.maker(),
+            maker_root: context,
+            rent_owner: closed.plan.rent_owner,
+            post_root_digest: hash(&post_root).to_bytes(),
+            closer: snapshot.closer.key.to_bytes(),
+            rent_principal: closed.plan.rent_principal,
+            unclassified_donation: closed.plan.unclassified_donation,
+            closer_reward: closed.plan.closer_reward,
+            upkeep_credit: closed.plan.upkeep_credit,
+            total_credit: closed.plan.total_credit,
+            remaining_open_maker_roots: closed.root.open_maker_root_count(),
+        }
+        .new()
+        .ok()?
+        .to_bytes()
+        .ok()?;
+        let body = UpkeepRequestV1 {
+            operation: UpkeepOperationV1::Credit,
+            credit: Some(UpkeepCreditV1 {
+                source_class: UpkeepSourceClassV1::Donation,
+                caller: Some(UpkeepProtocolCallerV1 {
+                    caller_role: CallerRoleV1::Trading,
+                    release_set,
+                    market,
+                    context,
+                }),
+                receipt_digest: hash(&receipt_body).to_bytes(),
+                amount: closed.plan.upkeep_credit,
+            }),
+        }
+        .to_bytes()
+        .ok()?;
+        let seeds = CallerAuthoritySeedsV1::from_bytes(
+            release_set,
+            market,
+            ExecutionRoleV1::Trading,
+            context,
+            hash(&body).to_bytes(),
+        )
+        .ok()?;
+        Some(Pubkey::find_program_address(&seeds.as_slices(), &snapshot.trading_program.key).0)
     }
 
     /// A Retiring root tail carrying an exact open-maker count.
@@ -1461,10 +1935,17 @@ mod tests {
         let registry = key(60);
         let core = key(61);
         let trading = key(62);
+        let custody = key(63);
         let maker = key(70);
         let rent_owner_key = key(71);
+        let closer_key = key(72);
         let rent = Rent::default();
         let root_state = retiring_root(open_maker_root_count);
+        // Today's deployed economics, exactly: the carve share is the whole
+        // donation and the carve CAP is zero lamports, so the closer is paid
+        // nothing and the vault takes every donated lamport. A plan built
+        // against a live cluster reads this record and gets this answer.
+        let parameters = ProtocolParametersV1::genesis(key(73).to_bytes());
 
         let mut market_identity = MarketIdentity {
             market_id: identity(1),
@@ -1552,6 +2033,11 @@ mod tests {
             maker: maker,
             maker_replay: observed(40),
             rent_owner: observed(41),
+            protocol_parameters: observed(42),
+            upkeep_vault: observed(43),
+            closer: observed(44),
+            custody_program: observed(45),
+            caller_authority: observed(46),
         };
         snapshot.root.key = root_key;
         snapshot.root.owner = trading;
@@ -1584,6 +2070,45 @@ mod tests {
         snapshot.rent_owner.owner = system_program::ID;
         snapshot.rent_owner.lamports = 1_000;
 
+        // Decision 0024's five. Both Custody PDAs are derived the way the plan
+        // derives them -- under the program, from the contract's own seeds --
+        // so a fixture cannot pass by naming an address the plan invented.
+        let (record_key, record_bump) =
+            Pubkey::find_program_address(&ProtocolParametersRecordSeedsV1.as_slices(), &custody);
+        let (vault_key, vault_bump) =
+            Pubkey::find_program_address(&UpkeepVaultSeedsV1.as_slices(), &custody);
+        snapshot.custody_program.key = custody;
+        snapshot.custody_program.owner = bpf_loader_upgradeable::ID;
+        snapshot.custody_program.executable = true;
+        snapshot.custody_program.data = program_account_data(key(64));
+        snapshot.protocol_parameters.key = record_key;
+        snapshot.protocol_parameters.owner = custody;
+        snapshot.protocol_parameters.data = ProtocolParametersRecordV1 {
+            bump: record_bump,
+            parameters,
+            pending: PendingChangeV1::NONE,
+        }
+        .to_bytes()
+        .to_vec();
+        snapshot.protocol_parameters.lamports =
+            rent.minimum_balance(snapshot.protocol_parameters.data.len());
+        snapshot.upkeep_vault.key = vault_key;
+        snapshot.upkeep_vault.owner = custody;
+        snapshot.upkeep_vault.data = UpkeepVaultV1::genesis(vault_bump).to_bytes().to_vec();
+        snapshot.upkeep_vault.lamports = rent.minimum_balance(snapshot.upkeep_vault.data.len());
+        snapshot.closer.key = closer_key;
+        snapshot.closer.owner = system_program::ID;
+        snapshot.closer.lamports = 500;
+        if let Some(authority) = caller_authority(
+            &snapshot,
+            root_state,
+            market_identity.generation,
+            header.release_set().to_bytes(),
+            parameters,
+        ) {
+            snapshot.caller_authority.key = authority;
+        }
+
         let closure =
             derive_direct_close_maker_meta_closure_v1(DirectCloseMakerCoordinateInputV1 {
                 request: DirectCloseMakerRequestV1 {
@@ -1606,6 +2131,9 @@ mod tests {
                 trading_programdata: snapshot.trading_programdata.key,
                 maker_replay: replay_key,
                 rent_owner: rent_owner_key,
+                custody_program: custody,
+                closer: closer_key,
+                caller_authority: snapshot.caller_authority.key,
             })
             .expect("coordinate closure");
         snapshot.capability_manifest.key = meta(&closure, 2);
@@ -1629,6 +2157,7 @@ mod tests {
                 market,
                 header,
                 root_state,
+                custody_program: custody.to_bytes(),
             },
             donation,
             rent_principal,
@@ -1652,8 +2181,8 @@ mod tests {
     }
 
     /// The whole point: a clean replay under a Retiring root produces the exact
-    /// permissionless 22-account outer, and a receipt whose refund arithmetic
-    /// conserves the observed balance.
+    /// 27-account outer, and a receipt whose refund arithmetic conserves the
+    /// observed balance across all three destinations.
     #[test]
     fn clean_replay_emits_exact_unsigned_outer_and_authenticated_receipt() {
         let fixture = fixture(3, 0, 0);
@@ -1673,13 +2202,24 @@ mod tests {
         );
 
         // Permissionless is a property of the frame, not a promise in a doc
-        // comment: no account in it asks for a signature.
-        assert!(
+        // comment: exactly one account asks for a signature, it is the closer,
+        // and it is the account the carve is paid to rather than any party to
+        // the market.
+        for (index, meta) in report.instruction.accounts.iter().enumerate() {
+            assert_eq!(
+                meta.is_signer,
+                index == DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1,
+                "account {index} signer"
+            );
+        }
+        assert_eq!(
             report
                 .instruction
                 .accounts
-                .iter()
-                .all(|meta| !meta.is_signer)
+                .get(DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1)
+                .expect("closer meta")
+                .pubkey,
+            fixture.snapshot.closer.key
         );
 
         // The writable membrane is the codec's, not a second opinion.
@@ -1690,12 +2230,14 @@ mod tests {
         }
 
         // Nothing economic was invented: the principal is the replay's own
-        // recorded number and the donation is exactly the excess balance.
+        // recorded number, the donation is exactly the excess balance, and the
+        // beneficiary receives the principal and not one lamport more.
         assert_eq!(report.rent_principal, fixture.rent_principal);
         assert_eq!(report.unclassified_donation, fixture.donation);
+        assert_eq!(report.total_credit, fixture.rent_principal);
         assert_eq!(
-            report.total_credit,
-            fixture.rent_principal + fixture.donation
+            report.closer_reward + report.upkeep_credit,
+            report.unclassified_donation
         );
         assert_eq!(
             report.expected_rent_owner_lamports,
@@ -1732,9 +2274,63 @@ mod tests {
             hash(&report.instruction.data).to_bytes()
         );
         assert_eq!(decoded.post_root_digest, report.expected_post_root_digest);
+        assert_eq!(decoded.closer, fixture.snapshot.closer.key.to_bytes());
+        assert_eq!(decoded.total_credit, decoded.rent_principal);
         assert_eq!(
-            decoded.rent_principal + decoded.unclassified_donation,
-            decoded.total_credit
+            decoded.closer_reward + decoded.upkeep_credit,
+            decoded.unclassified_donation
+        );
+    }
+
+    /// Decision 0024's whole split, on one plan.
+    ///
+    /// The beneficiary is paid the principal EXACTLY -- never a lamport of the
+    /// donation, which is the change from the frame that had no vault to send
+    /// it to -- and the donation goes wherever the governed record says. Under
+    /// the genesis record the carve cap is zero lamports, so the closer is paid
+    /// nothing and the house takes it all; the plan predicts each destination's
+    /// balance and names the closer in the receipt.
+    #[test]
+    fn a_plan_pays_the_owner_the_principal_and_houses_the_rest() {
+        let fixture = fixture(3, 0, 0);
+        let report = submit(&fixture).expect("submit");
+
+        assert_eq!(report.total_credit, fixture.rent_principal);
+        assert_eq!(report.upkeep_credit, fixture.donation);
+        assert_eq!(report.closer_reward, 0);
+        assert_eq!(
+            report.expected_upkeep_vault_lamports,
+            fixture.snapshot.upkeep_vault.lamports + fixture.donation
+        );
+        // A zero carve is a zero credit: the closer's balance is exactly what
+        // it was, which is what "the cap is zero lamports" has to mean.
+        assert_eq!(
+            report.expected_closer_lamports,
+            fixture.snapshot.closer.lamports
+        );
+        assert_eq!(
+            report.expected_receipt.closer,
+            fixture.snapshot.closer.key.to_bytes()
+        );
+    }
+
+    /// A parameters account somebody else owns is not the governed record, and
+    /// the contract that owns the refusal says so by name.
+    ///
+    /// The carve share and cap are read out of these bytes. A consumer that
+    /// took them out of a record it had not held to its owner would be applying
+    /// whatever economics a stranger wrote at whatever address the stranger
+    /// passed, which is the exact failure `authenticate_protocol_parameters_
+    /// account_v1` exists to make unreachable.
+    #[test]
+    fn a_frame_whose_record_is_not_the_custody_owned_one_refuses_by_name() {
+        let mut foreign = fixture(3, 0, 0);
+        foreign.snapshot.protocol_parameters.owner = foreign.snapshot.trading_program.key;
+        assert_eq!(
+            submit(&foreign).expect_err("a foreign-owned record must not price a close"),
+            DirectCloseMakerPlanErrorV1::ProtocolParameters(
+                dclutch_market::protocol_parameters::Error::InvalidHeader
+            )
         );
     }
 
@@ -1908,23 +2504,39 @@ mod tests {
             DIRECT_CLOSE_MAKER_META_CLASSES_V1.len(),
             DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1
         );
-        // The route is permissionless, so no coordinate may be classed as a
-        // signer that must stay in the static key set.
-        assert!(
-            !DIRECT_CLOSE_MAKER_META_CLASSES_V1
+        // Exactly one coordinate is classed as a signer, and it is the closer.
+        // A signer cannot be resolved through a lookup table, so this is a
+        // placement fact before it is a permission one.
+        assert_eq!(
+            DIRECT_CLOSE_MAKER_META_CLASSES_V1
                 .iter()
-                .any(|class| *class == DirectCloseMakerMetaClassV1::InlineSigner)
-        );
-        // The two per-close coordinates must not be assumed by a lookup table
-        // built for the market as a whole.
-        assert_eq!(
-            DIRECT_CLOSE_MAKER_META_CLASSES_V1[20],
-            DirectCloseMakerMetaClassV1::InlineRequestBound
+                .filter(|class| **class == DirectCloseMakerMetaClassV1::InlineSigner)
+                .count(),
+            1
         );
         assert_eq!(
-            DIRECT_CLOSE_MAKER_META_CLASSES_V1[21],
-            DirectCloseMakerMetaClassV1::InlineRequestBound
+            DIRECT_CLOSE_MAKER_META_CLASSES_V1[DIRECT_CLOSE_MAKER_CLOSER_ACCOUNT_V1],
+            DirectCloseMakerMetaClassV1::InlineSigner
         );
+        // The per-close coordinates must not be assumed by a lookup table built
+        // for the market as a whole: the replay, the beneficiary, and the
+        // caller authority whose last seed is this close's own receipt digest.
+        for index in [20, 21, 26] {
+            assert_eq!(
+                DIRECT_CLOSE_MAKER_META_CLASSES_V1[index],
+                DirectCloseMakerMetaClassV1::InlineRequestBound,
+                "class at {index}"
+            );
+        }
+        // The governed record and the vault are one per Custody DEPLOYMENT, so
+        // a table built for the market may carry them.
+        for index in [22, 23] {
+            assert_eq!(
+                DIRECT_CLOSE_MAKER_META_CLASSES_V1[index],
+                DirectCloseMakerMetaClassV1::LookupStable,
+                "class at {index}"
+            );
+        }
 
         let mut input = DirectCloseMakerCoordinateInputV1 {
             request: report.request,
@@ -1943,6 +2555,9 @@ mod tests {
             trading_programdata: key(64),
             maker_replay: key(65),
             rent_owner: key(66),
+            custody_program: key(67),
+            closer: key(68),
+            caller_authority: key(69),
         };
         derive_direct_close_maker_meta_closure_v1(input).expect("well formed identities");
 
