@@ -15,6 +15,7 @@ claim backed by collateral locked before it exists. `README.md` says it for a
 stranger; `docs/INTENT.md` says why, in ember's own words with provenance.
 Completion is defined by `docs/MASTER_COMPLETION_CONTRACT.md` (rows
 C-00..C-17); what is deliberately not built is `docs/OMISSION_INDEX.md`.
+Current implementation and execution wave: [2026-09-07 plan](docs/design/DEVELOPMENT_WAVE_2026_09_07.md).
 
 ## The standing goal — ember, 2026-09-01
 
@@ -103,6 +104,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 | 2026-09-06 | the accelerator's first witness; the retirement's debit in both frames; the first retired market | [2026-09-06](docs/ledger/2026-09-06.md) | `docs/evidence/COHORT161_*.md` |
 | 2026-09-07 | the build wave lands: ten families merged in the queue's order, one skipped and why, the reference at its fixpoint | [2026-09-07](docs/ledger/2026-09-07.md) | `docs/evidence/BUILD_WAVE_MERGE_2026_09_07.md` |
 | 2026-09-07 | the handoff at the end of the build wave: the state, the rules, what is owed, the pitfalls | [handoff](docs/HANDOFF_2026_09_07.md) | `docs/HANDOFF_2026_09_07.md` |
+| 2026-09-07 | Claims campaigns execute: accepted backed round trips, exact refusal rollback, all six targets accounted for | [Claims evidence](docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md) | `cac1a0593` |
 
 A new delta is one new row here and one entry in the store it names. The
 GOAL ledger file is closed; the entries main appended during the swarm are

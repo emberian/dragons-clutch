@@ -23,7 +23,7 @@ from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**73 of 452** codes have been observed refusing a real
+**78 of 452** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -155,7 +155,7 @@ The 22 campaigns contributing:
 | `0x500D` | `ClaimsSbfError::PrincipalCapacity` | Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | -- | `programs/dclutch-claims-sbf/src/lib.rs:258` |
 | `0x500E` | `ClaimsSbfError::ExposureNotIdentity` | The supplied Product-to-Claims exposure is not the identity embedding. | -- | `programs/dclutch-claims-sbf/src/lib.rs:281` |
 | `0x500F` | `ClaimsSbfError::ReceiptAlias` | An account presented at a representation coordinate is the receipt's own Mint or Account: a receipt backed by itself. | -- | `programs/dclutch-claims-sbf/src/lib.rs:302` |
-| `0x5010` | `ClaimsSbfError::FailureEscrow` | The Position offered as a refunding complete set's failure escrow is not the Market's own escrow. | retirement-checkpoint-programtest | `programs/dclutch-claims-sbf/src/lib.rs:321` |
+| `0x5010` | `ClaimsSbfError::FailureEscrow` | The Position offered as a refunding complete set's failure escrow is not the Market's own escrow. | claims-fractional-atomic-programtest; retirement-checkpoint-programtest | `programs/dclutch-claims-sbf/src/lib.rs:321` |
 | `0x5011` | `ClaimsSbfError::FailureEscrowUnseated` | The escrow account is the Market's own, and this Market's failure supply is not seated in it. | -- | `programs/dclutch-claims-sbf/src/lib.rs:339` |
 | `0x5012` | `ClaimsSbfError::Overdraw` | The terminal payout asked for more claims than the Position holds at that index, or more than the aggregate owes there. | -- | `programs/dclutch-claims-sbf/src/lib.rs:353` |
 | `0x5013` | `ClaimsSbfError::FounderBondFrame` | A terminal settlement that must draw the founder bond was handed no escrow to draw it from. | -- | `programs/dclutch-claims-sbf/src/lib.rs:371` |
@@ -187,7 +187,7 @@ The 22 campaigns contributing:
 | `0x5183` | `ClaimsFoundingSbfErrorV5::Custody` | Custody source, Hoard, or replay post-observations refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:135` |
 | `0x5184` | `ClaimsFoundingSbfErrorV5::ProductBasis` | Product graph, linked basis, or Founding Core Market refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:137` |
 | `0x5185` | `ClaimsFoundingSbfErrorV5::ClaimsState` | Claims aggregate, Position, or admission PDA/vacancy refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:139` |
-| `0x5186` | `ClaimsFoundingSbfErrorV5::Rent` | Rent sysvar, exact principals, target lamports, or RentCredit refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:141` |
+| `0x5186` | `ClaimsFoundingSbfErrorV5::Rent` | Rent sysvar, exact principals, target lamports, or RentCredit refused. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/founding_v5.rs:141` |
 | `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:143` |
 | `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:145` |
 | `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:147` |
@@ -198,7 +198,7 @@ The 22 campaigns contributing:
 | `0x518E` | `ClaimsFoundingSbfErrorV5::ActivationCache` | The account handed as the Registry activation cache is not the canonical cache for this request's release set, or its body did not decode. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:186` |
 | `0x518F` | `ClaimsFoundingSbfErrorV5::RoleDeployment` | An activated role's observed on-chain deployment is not the one its activation admitted. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:194` |
 | `0x5190` | `ClaimsFoundingSbfErrorV5::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:211` |
-| `0x5191` | `ClaimsFoundingSbfErrorV5::FounderBondUnderfunded` | The escrow Position holds its rent but not the founder bond. | -- | `programs/dclutch-claims-sbf/src/founding_v5.rs:226` |
+| `0x5191` | `ClaimsFoundingSbfErrorV5::FounderBondUnderfunded` | The escrow Position holds its rent but not the founder bond. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/founding_v5.rs:226` |
 | `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | -- | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:130` |
 | `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:132` |
 | `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:134` |
@@ -231,13 +231,13 @@ The 22 campaigns contributing:
 | `0x5267` | `SparseNativeTransferSbfErrorV1::Receipt` | Exact success receipt construction refused. | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:94` |
 | `0x5300` | `ClaimsConservationSbfErrorV1::Instruction` | The request bytes refused the `DCLCNS01` codec or its own arithmetic. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:128` |
 | `0x5301` | `ClaimsConservationSbfErrorV1::Accounts` | Account count, privileges, owners, executables, or the request's account coordinates did not match the frame. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:131` |
-| `0x5302` | `ClaimsConservationSbfErrorV1::Identity` | The aggregate or a Position is not the derived account, does not join the request, or is not at the pinned revision; or a token account is not the mint's under the owner the request names. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:135` |
+| `0x5302` | `ClaimsConservationSbfErrorV1::Identity` | The aggregate or a Position is not the derived account, does not join the request, or is not at the pinned revision; or a token account is not the mint's under the owner the request names. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:135` |
 | `0x5303` | `ClaimsConservationSbfErrorV1::ProductBasis` | The linked basis record is not this Market's, disagrees with the request's basis scale or digest, or the Core join refused. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:138` |
 | `0x5304` | `ClaimsConservationSbfErrorV1::Phase` | The Core Market is not Open. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:140` |
 | `0x5305` | `ClaimsConservationSbfErrorV1::PrincipalCapacity` | A split would grow outstanding principal past the Market's carried manipulation-capacity cap. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:143` |
-| `0x5306` | `ClaimsConservationSbfErrorV1::Balances` | A stated pre-balance -- the actor's or the vault's -- is not what the account holds. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:146` |
+| `0x5306` | `ClaimsConservationSbfErrorV1::Balances` | A stated pre-balance -- the actor's or the vault's -- is not what the account holds. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:146` |
 | `0x5307` | `ClaimsConservationSbfErrorV1::Backing` | The vault does not back the outstanding supply at the basis scale: L4's LBV2 form, refused before any act. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:149` |
-| `0x5308` | `ClaimsConservationSbfErrorV1::Holding` | A merge found less than `quantity` at a coordinate it burns: the holder does not hold a complete set. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:152` |
+| `0x5308` | `ClaimsConservationSbfErrorV1::Holding` | A merge found less than `quantity` at a coordinate it burns: the holder does not hold a complete set. | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:152` |
 | `0x5309` | `ClaimsConservationSbfErrorV1::Candidate` | The complete-set arithmetic overflowed, or a revision could not advance, or a coordinate did not fit its candidate. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:155` |
 | `0x530A` | `ClaimsConservationSbfErrorV1::CustodyWire` | The derived Custody request or its wire could not be constructed. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:157` |
 | `0x530B` | `ClaimsConservationSbfErrorV1::Receipt` | Custody's receipt was absent or the token balances after the transfer are not the request's stated poststate. | -- | `programs/dclutch-claims-sbf/src/claims_conservation_v1.rs:160` |

@@ -20,8 +20,8 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | --- | ---: | --- |
 | **devnet** | **47** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
 | **local validator** | 24 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
-| **ProgramTest only** | 40 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
-| **blocked** | 45 | no campaign and no devnet witness; `tools/gauntlet/blocked.json` records a reason, a class and an owner |
+| **ProgramTest only** | 41 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
+| **blocked** | 44 | no campaign and no devnet witness; `tools/gauntlet/blocked.json` records a reason, a class and an owner |
 | **unrecorded** | 9 | no campaign, no devnet witness, and no reason recorded |
 
 Those five classes partition the 165, and the last one is NOT the count of
@@ -31,7 +31,7 @@ routes nothing has ever run:
   binding, no devnet witness, and no entry in `tools/gauntlet/blocked.json`.
   Nobody has written anything at all about this route. This is the number the
   register has always printed under the name NEVER-EXECUTED.
-- **undriven: 46 of 165** -- unrecorded, PLUS every
+- **undriven: 45 of 165** -- unrecorded, PLUS every
   blocked route whose entry is classed `status-report` ("no campaign or tier
   drives it yet", with nothing structural in the way), PLUS every blocked route
   whose entry is classed `unwired` (it admits the route is driven today and
@@ -46,10 +46,10 @@ Both are counts of ROUTES, not of `blocked.json` entries, and the two
 denominators are not the same number: one entry's trailing `*` covers a whole
 program's routes, and an entry whose route now executes stops being counted
 here at all while its text stays in the file (route-witnesses.md lists those,
-under *Blocks their own route has already falsified*). 45
-entries classify 45 routes.
+under *Blocks their own route has already falsified*). 44
+entries classify 44 routes.
 
-By class of blocking entry: **out-of-release-set** 0, **structural** 6, **repointing** 2, **unwired** 8, **status-report** 29.
+By class of blocking entry: **out-of-release-set** 0, **structural** 6, **repointing** 2, **unwired** 7, **status-report** 29.
 
 **A real Agave runtime drives 71 of the
 165.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
@@ -179,7 +179,7 @@ campaign passed this control on a sentence in its header.
 | `claims-claim-check-programtest` | program-test | yes | 7 | `tools/gauntlet/claims-claim-check/run-claims-claim-check.sh` | `5c905e34ad2659bd` |
 | `claims-family-programtest` | program-test | yes | 7 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `1d5d6a755f54166f` |
 | `custody-family-programtest` | program-test | yes | 2 | `tools/gauntlet/claims-custody/run-claims-custody.sh` | `df26e8f1354d48f2` |
-| `claims-fractional-atomic-programtest` | program-test | yes | 6 | `tools/gauntlet/claims-fractional-atomic/run-fractional-atomic.sh` | `583038631ca2aea1` |
+| `claims-fractional-atomic-programtest` | program-test | yes | 8 | `tools/gauntlet/claims-fractional-atomic/run-fractional-atomic.sh` | `f5d477f8c1de27ef` |
 | `claims-fractional-signed-delta-programtest` | program-test | yes | 2 | **none** -- driven by hand | `e5be4d6c4f36e2f5` |
 | `claims-rational-lifecycle-programtest` | program-test | yes | 2 | **none** -- driven by hand | `11c0278d3778e105` |
 | `claims-rational-representation-v2-programtest` | program-test | yes | 9 | **none** -- driven by hand | `92a50bd7f597fc98` |
@@ -251,9 +251,9 @@ entries whose route now executes.
 | `claims/claim_check_compaction_v1::process_open_escrow` | program-test | `claims-claim-check-programtest`, `claims-fractional-atomic-programtest` | `tools/gauntlet/claims-claim-check/bindings.json`<br>`tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow` | program-test | `claims-claim-check-programtest`, `claims-fractional-atomic-programtest` | `tools/gauntlet/claims-claim-check/bindings.json`<br>`tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/claim_check_redemption_v1::process_redemption#else` | program-test | `claims-claim-check-programtest` | `tools/gauntlet/claims-claim-check/bindings.json` |
-| `claims/claims_conservation_v1::process` | blocked | blocked by rule `claims/claims_conservation_v1::process` | `tools/gauntlet/blocked.json` |
+| `claims/claims_conservation_v1::process` | program-test | `claims-fractional-atomic-programtest` | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/custody_replay_v1::process` | devnet | cohort 13 `DCLCCR01` slot 492,151,322; cohort 14 `DCLCCR01` slot 492,550,558; cohort 16 `DCLCCR01` slot 493,826,534; cohort 17 `DCLCCR01` slot 494,151,055; also bound by `claims-claim-check-programtest`, `claims-fractional-atomic-programtest`, `claims-rational-representation-v2-programtest` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
-| `claims/founding_v5::process` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
+| `claims/founding_v5::process` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `claims-fractional-atomic-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `claims/fractional_atomic_v3::process` | blocked | blocked by rule `claims/fractional_atomic_v3::process` | `tools/gauntlet/blocked.json` |
 | `claims/fractional_claim_check_v1::process_fractional_compaction` | program-test | `claims-fractional-atomic-programtest` | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/fractional_claim_check_v1::process_fractional_redemption` | program-test | `claims-fractional-atomic-programtest` | `tools/gauntlet/claims-fractional-atomic/bindings.json` |

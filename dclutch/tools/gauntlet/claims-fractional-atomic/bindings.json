@@ -1,6 +1,6 @@
 {
   "campaign": "claims-fractional-atomic-programtest",
-  "note": "Real-ELF ProgramTest for the fractional claim-check life: open the native escrow, compact a sleeping holder's reserve, redeem shards, close. Committed and passing since 8fdcdc56 and INVISIBLE to the census until 2026-09-01, because the workspace took no dclutch-program-test-evidence dependency and so called record() for nothing. Campaign: programs/dclutch-claims-sbf/program-test/fractional-atomic (tests/fractional_compaction.rs). EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE, NEVER FROM WHAT THE CAMPAIGN OUGHT TO TOUCH: the labels, the outcomes, the invoked programs and the refusal codes are the ones the runtime reported in a 47-transaction fold, and each label was checked to carry exactly one outcome AND one refusal code before it was written down. The first draft failed that check and `census observe` is what caught it: six hostile crank substitutions shared a label, and five of them raise codes the binding did not name. The label now carries the plant, which is the discriminator the campaign itself varies. That order matters -- docs/reference/routes.md derives `witnessed` from bindings alone and never consults the ledger, so a binding written from expectation manufactures the false green this tier exists to remove.",
+  "note": "Real-ELF ProgramTest for the fractional claim-check life: open the native escrow, compact a sleeping holder's reserve, redeem shards, close. Committed and passing since 8fdcdc56 and INVISIBLE to the census until 2026-09-01, because the workspace took no dclutch-program-test-evidence dependency and so called record() for nothing. Campaign: programs/dclutch-claims-sbf/program-test/fractional-atomic (tests/fractional_compaction.rs). EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE, NEVER FROM WHAT THE CAMPAIGN OUGHT TO TOUCH: the labels, the outcomes, the invoked programs and the refusal codes are the ones the runtime reported in a 47-transaction fold, and each label was checked to carry exactly one outcome AND one refusal code before it was written down. The first draft failed that check and `census observe` is what caught it: six hostile crank substitutions shared a label, and five of them raise codes the binding did not name. The label now carries the plant, which is the discriminator the campaign itself varies. That order matters -- docs/reference/routes.md derives `witnessed` from bindings alone and never consults the ledger, so a binding written from expectation manufactures the false green this tier exists to remove. Extended 2026-09-07 from 77 observed transactions over claims_founding, claims_conservation and fractional_compaction, after running the newly reachable refunding and categorical round trips. Core Open remains a seeded prestate in this component campaign; no validator-lifecycle claim is made.",
   "bindings": [
     {
       "label": "fractional claim-check: open the native claim-check escrow",
@@ -182,6 +182,306 @@
       "outcome": "refused",
       "refusal": "claims/FractionalClaimCheckCompactionSbfErrorV1::SelectionConfig",
       "note": "HOSTILE. Exposure terms the Market never selected. Observed once as Custom(0x565C)."
+    },
+    {
+      "label": "categorical conservation round trip: claims-role replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The Claims-role Custody replay is created by its own route before conservation."
+    },
+    {
+      "label": "categorical conservation round trip: donation",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Real Token-2022 donation; this transaction invokes no first-party route."
+    },
+    {
+      "label": "categorical conservation round trip: founding",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "categorical conservation: merge",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claims_conservation_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Split/merge over the declared account family, with exact collateral and claim poststates; hostile cases check full rollback except the quoted fee."
+    },
+    {
+      "label": "categorical conservation: split",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claims_conservation_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Split/merge over the declared account family, with exact collateral and claim poststates; hostile cases check full rollback except the quoted fee."
+    },
+    {
+      "label": "claims founding: categorical, no escrow",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "claims founding: refunding, escrow below its own rent",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsFoundingSbfErrorV5::Rent",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "claims founding: refunding, escrow rent absent",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsFoundingSbfErrorV5::Rent",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "claims founding: refunding, escrow rent without the bond",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsFoundingSbfErrorV5::FounderBondUnderfunded",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "claims founding: refunding, escrow seated",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "claims founding: refunding, escrow substituted",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::FailureEscrow",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "claims founding: refunding, founder bond one lamport short",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsFoundingSbfErrorV5::FounderBondUnderfunded",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "conservation hostile: a merge naming the failure coordinate",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claims_conservation_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsConservationSbfErrorV1::Identity",
+      "note": "Split/merge over the declared account family, with exact collateral and claim poststates; hostile cases check full rollback except the quoted fee."
+    },
+    {
+      "label": "conservation hostile: a merge naming the failure coordinate: claims-role replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The Claims-role Custody replay is created by its own route before conservation."
+    },
+    {
+      "label": "conservation hostile: a merge naming the failure coordinate: founding",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "conservation hostile: a split without collateral",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claims_conservation_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsConservationSbfErrorV1::Balances",
+      "note": "Split/merge over the declared account family, with exact collateral and claim poststates; hostile cases check full rollback except the quoted fee."
+    },
+    {
+      "label": "conservation hostile: a split without collateral: claims-role replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The Claims-role Custody replay is created by its own route before conservation."
+    },
+    {
+      "label": "conservation hostile: a split without collateral: founding",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "conservation hostile: an incomplete categorical merge",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claims_conservation_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsConservationSbfErrorV1::Holding",
+      "note": "Split/merge over the declared account family, with exact collateral and claim poststates; hostile cases check full rollback except the quoted fee."
+    },
+    {
+      "label": "conservation hostile: an incomplete categorical merge: claims-role replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The Claims-role Custody replay is created by its own route before conservation."
+    },
+    {
+      "label": "conservation hostile: an incomplete categorical merge: founding",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "conservation hostile: the donation that makes the overreach representable",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Real Token-2022 donation; this transaction invokes no first-party route."
+    },
+    {
+      "label": "conservation hostile: the reversed pair",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claims_conservation_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsConservationSbfErrorV1::Identity",
+      "note": "Split/merge over the declared account family, with exact collateral and claim poststates; hostile cases check full rollback except the quoted fee."
+    },
+    {
+      "label": "conservation hostile: the reversed pair: claims-role replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The Claims-role Custody replay is created by its own route before conservation."
+    },
+    {
+      "label": "conservation hostile: the reversed pair: founding",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "conservation round trip: a stranger donates to the vault",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Real Token-2022 donation; this transaction invokes no first-party route."
+    },
+    {
+      "label": "conservation round trip: claims-role replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The Claims-role Custody replay is created by its own route before conservation."
+    },
+    {
+      "label": "conservation round trip: founding",
+      "routes": [
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Real-ELF Claims founding; no Core Found/Open route is credited to its seeded prestate."
+    },
+    {
+      "label": "conservation: the merge",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claims_conservation_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Split/merge over the declared account family, with exact collateral and claim poststates; hostile cases check full rollback except the quoted fee."
+    },
+    {
+      "label": "conservation: the split",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claims_conservation_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Split/merge over the declared account family, with exact collateral and claim poststates; hostile cases check full rollback except the quoted fee."
     }
   ]
 }

@@ -871,7 +871,7 @@ SUITE_RUNNERS = (
     ("claims", "programs/dclutch-claims-sbf/run-rational-representation-v2-program-test.sh", "the rational representation V2 lowering"),
     ("claims-lifecycle", "programs/dclutch-claims-sbf/program-test/rational-lifecycle/run-program-test.sh", "the Token-2022 receipt and coordinate lifecycle, on the pinned v11 artifact"),
     ("claims-position", "programs/dclutch-claims-sbf/program-test/protocol-position/run-program-test.sh", "the ordered Fractional retirement walk closing a real shard Mint"),
-    ("claims-fractional", "programs/dclutch-claims-sbf/program-test/fractional-atomic/run-program-test.sh", "four Fractional campaigns: atomicity, the permissioned burn wall, compaction, escrow PDA handover"),
+    ("claims-fractional", "programs/dclutch-claims-sbf/program-test/fractional-atomic/run-program-test.sh", "Fractional and Claims founding/conservation campaigns: atomicity, burn authority, compaction, escrow handover and backed split/merge"),
     ("sparse-chain", "programs/dclutch-claims-sbf/program-test/sparse-chain/run-program-test.sh", "the sparse native transfer chain"),
     ("affine-batch", "programs/dclutch-claims-sbf/program-test/affine-batch/run-program-test.sh", "the affine batch V2 lowering"),
     ("signed-delta", "programs/dclutch-claims-sbf/program-test/fractional-signed-delta/run-program-test.sh", "the fractional signed-delta route"),

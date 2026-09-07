@@ -39,11 +39,11 @@ Source module: `packages/dclutch-sdk/lib/generated/sourceProviderWasmV1.ts`, who
 | `SOURCE_PROVIDER_SUBMIT_PLAN_FORMAT_V1` | `dclutch-source-provider-submit-plan-v1` |
 | `SOURCE_PROVIDER_SUBMIT_POSTSTATE_INPUT_FORMAT_V1` | `dclutch-source-provider-submit-poststate-input-v1` |
 | `SOURCE_PROVIDER_SUBMIT_POSTSTATE_FORMAT_V1` | `dclutch-source-provider-submit-poststate-v1` |
-| `SOURCE_PROVIDER_WASM_SHA256_V1` | `2507617b456dec80296352a34be954d5c13865059f8cc706a775cdc7b5eb2650` |
+| `SOURCE_PROVIDER_WASM_SHA256_V1` | `bfe6dce7141f8bdab638bfd5cb48df6e676e74d690966ceadb2a682bb7f53946` |
 
 ## Numeric constants (widths, offsets, counts, tags)
 
 | name | value |
 | --- | ---: |
 | `SOURCE_PROVIDER_SUBMIT_LIFECYCLE_BYTES_V1` | 528 |
-| `SOURCE_PROVIDER_WASM_BYTES_V1` | 632,401 |
+| `SOURCE_PROVIDER_WASM_BYTES_V1` | 641,156 |

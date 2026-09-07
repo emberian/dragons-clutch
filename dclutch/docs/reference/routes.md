@@ -54,7 +54,7 @@ Both figures are derived here, from the same classification:
   binding, no devnet witness, and no entry in `tools/gauntlet/blocked.json`.
   Nobody has written anything at all about this route. This is the number the
   register has always printed under the name NEVER-EXECUTED.
-- **undriven: 46 of 165** -- unrecorded, PLUS every
+- **undriven: 45 of 165** -- unrecorded, PLUS every
   blocked route whose entry is classed `status-report` ("no campaign or tier
   drives it yet", with nothing structural in the way), PLUS every blocked route
   whose entry is classed `unwired` (it admits the route is driven today and
@@ -69,8 +69,8 @@ Both are counts of ROUTES, not of `blocked.json` entries, and the two
 denominators are not the same number: one entry's trailing `*` covers a whole
 program's routes, and an entry whose route now executes stops being counted
 here at all while its text stays in the file (route-witnesses.md lists those,
-under *Blocks their own route has already falsified*). 45
-entries classify 45 routes.
+under *Blocks their own route has already falsified*). 44
+entries classify 44 routes.
 
 The **phase** column is the route's own guard, not a summary of one. It is
 the named admission constant the guard checks against -- one admission type
@@ -138,9 +138,9 @@ instead:
 | `claims/claim_check_compaction_v1::process_open_escrow` | action | magic `DCLTCCO1` | `market: Terminal, Retiring` | executed (claims-claim-check-programtest); executed (claims-fractional-atomic-programtest); refused (claims-claim-check-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:576` |
 | `claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow` | action | magic `DCLTCCR1`; variant `dclutch_claims::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow` | no phase gate | executed (claims-claim-check-programtest); executed (claims-fractional-atomic-programtest); refused (claims-claim-check-programtest); refused (claims-fractional-atomic-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:631` |
 | `claims/claim_check_redemption_v1::process_redemption#else` | action | magic `DCLTCCR1`; fallthrough | no phase gate | executed (claims-claim-check-programtest); refused (claims-claim-check-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:637` |
-| `claims/claims_conservation_v1::process` | action | predicate `claims_conservation_v1::is_claims_conservation_v1`; length `CLAIMS_CONSERVATION_REQUEST_BYTES_V1`; magic `DCLCNS01` | `market: Open` | blocked by rule `claims/claims_conservation_v1::process` (unwired): The ELF campaign exists at programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/claims_conservation.rs and has never been executed: the convergence lane that wrote it had no SBF toolchain and the build-wave merge queue was forbidden SBF builds, so SBF_OUT_DIR has never held a dclutch_claims_sbf.so on this machine. | `programs/dclutch-claims-sbf/src/lib.rs:650` |
+| `claims/claims_conservation_v1::process` | action | predicate `claims_conservation_v1::is_claims_conservation_v1`; length `CLAIMS_CONSERVATION_REQUEST_BYTES_V1`; magic `DCLCNS01` | `market: Open` | executed (claims-fractional-atomic-programtest); refused (claims-fractional-atomic-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:650` |
 | `claims/custody_replay_v1::process` | action | magic `DCLCCR01` | no phase gate | executed (claims-claim-check-programtest); executed (claims-fractional-atomic-programtest); executed (claims-rational-representation-v2-programtest); executed (devnet cohort 13); executed (devnet cohort 14); executed (devnet cohort 16); executed (devnet cohort 17); refused (claims-rational-representation-v2-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:544` |
-| `claims/founding_v5::process` | action | magic `DCLFDR05` | `market: Founding` | executed (devnet cohort 13); executed (tier1) | `programs/dclutch-claims-sbf/src/lib.rs:536` |
+| `claims/founding_v5::process` | action | magic `DCLFDR05` | `market: Founding` | executed (claims-fractional-atomic-programtest); executed (devnet cohort 13); executed (tier1); refused (claims-fractional-atomic-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:536` |
 | `claims/fractional_atomic_v3::process` | entry | magic `DCFREQ02` | no phase gate | blocked by rule `claims/fractional_atomic_v3::process` (unwired): Driven today, and invisible to the census for a wiring reason rather than a protocol one. | `programs/dclutch-claims-sbf/src/lib.rs:469` |
 | `claims/fractional_claim_check_v1::process_fractional_compaction` | action | magic `DCLTFCC1` | `market: Terminal, Retiring` | executed (claims-fractional-atomic-programtest); refused (claims-fractional-atomic-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:605` |
 | `claims/fractional_claim_check_v1::process_fractional_redemption` | action | magic `DCLTFCR1` | no phase gate | executed (claims-fractional-atomic-programtest); refused (claims-fractional-atomic-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:617` |

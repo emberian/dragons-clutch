@@ -21,29 +21,19 @@
 //!
 //! # The world this campaign stands on, and what it establishes rather than plants
 //!
-//! Every account here comes from `founding_world` -- the same fixture
-//! `claims_world.rs` uses -- so the Market this campaign splits and merges
-//! on is one the FOUNDING ROUTE created on the real ELF, not one a fixture
-//! wrote. Three things a founding leaves undone this campaign establishes, in
-//! its own transactions, before any conservation act:
+//! `founding_world`, shared with `claims_founding.rs`, installs the Core,
+//! Registry and collateral fixtures. The real Claims founding route creates
+//! the aggregate and Positions subsequently consumed by this campaign. This
+//! proves the Claims composition, not the complete public founding lifecycle.
 //!
-//! 1. **The Claims-role Custody replay.** A founding advances the TRADING-role
-//!    cursor; a split or a merge is a Claims-role Custody effect and needs its
-//!    own. This campaign creates it by driving the Claims program's own
-//!    `DCLCCR01` route, which is what the runbook's
-//!    `devnet-claims-custody-replay-v1` verb drives -- the precondition is
-//!    executed, not planted.
-//! 2. **The Market opens.** A founding consumes a Market in `Phase::Founding`
-//!    and Claims cannot write Core's account. The phase advance is Core's own
-//!    stage and no part of this campaign's subject, so it is applied to the
-//!    Core account directly, through the codec that owns `CoreState`, leaving
-//!    every other field -- including the identity the account's own address
-//!    derives from -- exactly as the founding found it.
-//! 3. **A stranger's donation to the vault.** L4 is an INEQUALITY:
-//!    `vault_atoms >= max_k supply[k] * basis_scale`. A real Token-2022
-//!    transfer from a stranger into the vault, of an amount that is not a
-//!    multiple of the basis scale, is what makes that an inequality under test
-//!    rather than an equality that happens to hold.
+//! Before conservation:
+//!
+//! 1. The real `DCLCCR01` route creates the Claims-role Custody replay.
+//! 2. The fixture seeds Core's Open/Consumed prestate. No Core Open
+//!    transaction is submitted or credited to the census.
+//! 3. A stranger makes a real Token-2022 donation to the Hoard. On the refunding
+//!    shape it is not a multiple of the basis scale, so the collateral backing
+//!    inequality is exercised with surplus rather than only at equality.
 //!
 //! The actor is the FOUNDER, and that is not a convenience: a Position is
 //! created by admission, so the only holder who can merge on a freshly founded
@@ -77,11 +67,11 @@ use dclutch_fractional_atomic_program_test::campaign_support::{
     token_program_id,
 };
 use dclutch_fractional_atomic_program_test::founding_world::{
-    CLAIMS_PROGRAM_ID, CLAIM_COUNT, COLLATERAL_MINT, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID,
+    CLAIM_COUNT, CLAIMS_PROGRAM_ID, COLLATERAL_MINT, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID,
     FoundingShapeV1, FoundingWorld, HostileV1, Outcome, QUANTITY, REGISTRY_PROGRAM_ID,
     founder_keypair, founding_instruction, submit, submit_with, world_with_extra_collateral,
 };
-use dclutch_market::{CoreState, Phase};
+use dclutch_market::{CoreState, Phase, Readiness};
 use dclutch_operator::claims_conservation_v1::{
     ClaimsConservationActV1, ClaimsConservationObservedV1, ClaimsConservationPlanV1,
     ClaimsConservationProgramsV1, plan_claims_conservation_v1,
@@ -191,10 +181,7 @@ async fn account_bytes(context: &mut ProgramTestContext, key: Pubkey) -> Vec<u8>
 
 /// The bytes of an account that may not exist -- a categorical Market's failure
 /// escrow is derived, named in every frame, and never created.
-async fn optional_account_bytes(
-    context: &mut ProgramTestContext,
-    key: Pubkey,
-) -> Option<Vec<u8>> {
+async fn optional_account_bytes(context: &mut ProgramTestContext, key: Pubkey) -> Option<Vec<u8>> {
     context
         .banks_client
         .get_account(key)
@@ -477,7 +464,10 @@ impl CensusV1 {
                 } else {
                     VerdictV1::violated(
                         "L6",
-                        format!("watched accounts closed unaccounted: {}", vanished.join(", ")),
+                        format!(
+                            "watched accounts closed unaccounted: {}",
+                            vanished.join(", ")
+                        ),
                     )
                 }
             }
@@ -575,7 +565,10 @@ impl CensusV1 {
                 "{} VIOLATED at `{}`: {}",
                 verdict.law, now.stage, verdict.detail,
             );
-            println!("  {} {} at `{}`  {}", verdict.law, verdict.status, now.stage, verdict.detail);
+            println!(
+                "  {} {} at `{}`  {}",
+                verdict.law, verdict.status, now.stage, verdict.detail
+            );
         }
         self.observations.push(now);
     }
@@ -712,8 +705,10 @@ async fn claims_replay_instruction(
         &CUSTODY_PROGRAM_ID,
     )
     .0;
-    let mut accounts =
-        vec![AccountMeta::new_readonly(Pubkey::default(), false); replay_route::CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1];
+    let mut accounts = vec![
+        AccountMeta::new_readonly(Pubkey::default(), false);
+        replay_route::CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1
+    ];
     let put = |accounts: &mut Vec<AccountMeta>, index: usize, meta: AccountMeta| {
         *accounts.get_mut(index).expect("frame coordinate") = meta;
     };
@@ -762,7 +757,11 @@ async fn claims_replay_instruction(
         replay_route::CUSTODY_REPLAY,
         AccountMeta::new(replay, false),
     );
-    put(&mut accounts, replay_route::PAYER, AccountMeta::new(payer, true));
+    put(
+        &mut accounts,
+        replay_route::PAYER,
+        AccountMeta::new(payer, true),
+    );
     put(
         &mut accounts,
         replay_route::SYSTEM_PROGRAM,
@@ -819,12 +818,13 @@ async fn open_claims_replay(
     replay
 }
 
-/// Advance the Core Market from `Founding` to `Open`.
+/// Seed the Core prestate this Claims component campaign requires.
 ///
-/// Core's own stage, and no part of this campaign's subject. Every other field
-/// -- including `identity`, which the Market account's address derives from --
-/// is left exactly as the founding found it.
-async fn open_the_market(context: &mut ProgramTestContext, world: &FoundingWorld) {
+/// A real Core Open consumes readiness as well as changing the phase. This
+/// fixture does not execute that route and contributes no Core Open evidence;
+/// the full validator lifecycle must establish it through the public driver.
+/// The market identity and every economic field remain as founded.
+async fn seed_open_market(context: &mut ProgramTestContext, world: &FoundingWorld) {
     let key = world.shared.core_market;
     let mut account = context
         .banks_client
@@ -834,6 +834,7 @@ async fn open_the_market(context: &mut ProgramTestContext, world: &FoundingWorld
         .expect("the Core Market exists");
     let mut core = CoreState::decode(&account.data).expect("Core state");
     core.phase = Phase::Open;
+    core.readiness = Readiness::Consumed;
     account.data = core.encode().expect("an Open Core state").to_vec();
     context.set_account(&key, &AccountSharedData::from(account));
 }
@@ -976,7 +977,47 @@ async fn submit_hostile(
     label: &str,
 ) -> Outcome {
     let owner = founder_keypair();
-    submit_with(context, label, instructions, &owner, &[]).await
+    let mut before = BTreeMap::new();
+    for key in instructions
+        .iter()
+        .flat_map(|instruction| instruction.accounts.iter().map(|meta| meta.pubkey))
+        .chain(std::iter::once(owner.pubkey()))
+    {
+        before.insert(
+            key,
+            context
+                .banks_client
+                .get_account(key)
+                .await
+                .expect("prestate"),
+        );
+    }
+    let outcome = submit_with(context, label, instructions, &owner, &[]).await;
+    for (key, mut expected) in before {
+        if key == owner.pubkey() {
+            let payer = expected.as_mut().expect("fee payer exists");
+            payer.lamports = payer
+                .lamports
+                .checked_sub(
+                    outcome
+                        .fee_lamports
+                        .expect("bank quoted the transaction fee"),
+                )
+                .expect("payer covers the fee");
+        }
+        assert_eq!(
+            context
+                .banks_client
+                .get_account(key)
+                .await
+                .expect("poststate"),
+            expected,
+            "{label}: every account rolls back, including an earlier ApproveChecked; \
+             only the bank-quoted fee may leave the payer; account {key}; logs: {:?}",
+            outcome.logs,
+        );
+    }
+    outcome
 }
 
 /// Stand the world up to the point where a conservation act is admissible.
@@ -989,8 +1030,13 @@ async fn founded_and_open(
     let (test, world) = conservation_world(shape, founder_atoms, stranger_atoms);
     let mut context = test.start_with_context().await;
     found(&mut context, &world, &format!("{label}: founding")).await;
-    open_claims_replay(&mut context, &world, &format!("{label}: claims-role replay")).await;
-    open_the_market(&mut context, &world).await;
+    open_claims_replay(
+        &mut context,
+        &world,
+        &format!("{label}: claims-role replay"),
+    )
+    .await;
+    seed_open_market(&mut context, &world).await;
     (world, context)
 }
 
@@ -1082,7 +1128,10 @@ async fn a_split_and_its_merge_are_a_round_trip_over_the_eight_laws() {
         "the split refused {:?}: {:?}",
         outcome.refusal, outcome.logs,
     );
-    println!("conservation split: accepted, {} CU consumed", outcome.units);
+    println!(
+        "conservation split: accepted, {} CU consumed",
+        outcome.units
+    );
     census.admit(
         observe(
             &mut context,
@@ -1097,8 +1146,7 @@ async fn a_split_and_its_merge_are_a_round_trip_over_the_eight_laws() {
         .await,
     );
 
-    let after_split =
-        aggregate_supply(&account_bytes(&mut context, world.aggregate).await);
+    let after_split = aggregate_supply(&account_bytes(&mut context, world.aggregate).await);
     for (coordinate, (was, is)) in before.iter().zip(after_split.iter()).enumerate() {
         assert_eq!(
             *is,
@@ -1108,8 +1156,7 @@ async fn a_split_and_its_merge_are_a_round_trip_over_the_eight_laws() {
     }
     let failure = failure_selector_v1(CLAIM_COUNT).expect("failure selector");
     let holder = position_balances(&account_bytes(&mut context, world.position).await);
-    let escrow =
-        position_balances(&account_bytes(&mut context, world.escrow_position).await);
+    let escrow = position_balances(&account_bytes(&mut context, world.escrow_position).await);
     assert_eq!(
         holder
             .get(usize::try_from(failure).expect("selector"))
@@ -1146,7 +1193,10 @@ async fn a_split_and_its_merge_are_a_round_trip_over_the_eight_laws() {
         "the merge refused {:?}: {:?}",
         outcome.refusal, outcome.logs,
     );
-    println!("conservation merge: accepted, {} CU consumed", outcome.units);
+    println!(
+        "conservation merge: accepted, {} CU consumed",
+        outcome.units
+    );
     census.admit(
         observe(
             &mut context,
@@ -1161,8 +1211,7 @@ async fn a_split_and_its_merge_are_a_round_trip_over_the_eight_laws() {
         .await,
     );
 
-    let after_merge =
-        aggregate_supply(&account_bytes(&mut context, world.aggregate).await);
+    let after_merge = aggregate_supply(&account_bytes(&mut context, world.aggregate).await);
     assert_eq!(
         after_merge, before,
         "the round trip is the identity on the aggregate's supply vector",
@@ -1178,12 +1227,96 @@ async fn a_split_and_its_merge_are_a_round_trip_over_the_eight_laws() {
         "and on the vault, which keeps the stranger's donation it never owed anybody",
     );
     assert_eq!(
-        held_complete_sets_v1(
-            &account_bytes(&mut context, world.position).await,
-            true
-        ),
+        held_complete_sets_v1(&account_bytes(&mut context, world.position).await, true),
         Ok(QUANTITY),
         "the holder is back to the sets the founding admitted",
+    );
+}
+
+/// A categorical holder owns every coordinate, including failure; a funded
+/// split and merge move real collateral and restore the whole supply vector.
+#[tokio::test]
+async fn a_categorical_split_and_merge_restore_every_coordinate_and_the_collateral() {
+    let (world, mut context) = founded_and_open(
+        FoundingShapeV1::Categorical,
+        SPLIT_SETS,
+        DONATION_ATOMS,
+        "categorical conservation round trip",
+    )
+    .await;
+    donate_to_the_vault(
+        &mut context,
+        &world,
+        DONATION_ATOMS,
+        "categorical conservation round trip: donation",
+    )
+    .await;
+    let before_supply = aggregate_supply(&account_bytes(&mut context, world.aggregate).await);
+    let before_position = position_balances(&account_bytes(&mut context, world.position).await);
+    let before_hoard = token_amount(&account_bytes(&mut context, world.hoard).await);
+    let split = plan(
+        &mut context,
+        &world,
+        ClaimsConservationDirectionV1::Split,
+        SPLIT_SETS,
+    )
+    .await;
+    assert!(!split.refunds_on_failure);
+    assert_eq!(split.collateral_atoms, SPLIT_SETS);
+    let outcome = submit_act(&mut context, &split, "categorical conservation: split").await;
+    assert!(outcome.accepted, "categorical split: {:?}", outcome.logs);
+    assert_eq!(
+        token_amount(&account_bytes(&mut context, FOUNDER_COLLATERAL).await),
+        0,
+    );
+    assert_eq!(
+        token_amount(&account_bytes(&mut context, world.hoard).await),
+        before_hoard + SPLIT_SETS,
+    );
+    assert_eq!(
+        position_balances(&account_bytes(&mut context, world.position).await),
+        before_position
+            .iter()
+            .map(|balance| balance + SPLIT_SETS)
+            .collect::<Vec<_>>(),
+        "every coordinate, including failure, belongs to the categorical holder",
+    );
+    assert_eq!(
+        aggregate_supply(&account_bytes(&mut context, world.aggregate).await),
+        before_supply
+            .iter()
+            .map(|supply| supply + SPLIT_SETS)
+            .collect::<Vec<_>>(),
+    );
+    let merge = plan(
+        &mut context,
+        &world,
+        ClaimsConservationDirectionV1::Merge,
+        SPLIT_SETS,
+    )
+    .await;
+    let outcome = submit_act(&mut context, &merge, "categorical conservation: merge").await;
+    assert!(outcome.accepted, "categorical merge: {:?}", outcome.logs);
+    assert_eq!(
+        aggregate_supply(&account_bytes(&mut context, world.aggregate).await),
+        before_supply,
+    );
+    assert_eq!(
+        position_balances(&account_bytes(&mut context, world.position).await),
+        before_position,
+    );
+    assert_eq!(
+        token_amount(&account_bytes(&mut context, world.hoard).await),
+        before_hoard,
+        "the donation remains in the Hoard after both transfers",
+    );
+    assert_eq!(
+        token_amount(&account_bytes(&mut context, FOUNDER_COLLATERAL).await),
+        SPLIT_SETS,
+    );
+    assert!(
+        !account_exists(&mut context, world.escrow_position).await,
+        "categorical conservation creates no failure escrow",
     );
 }
 
@@ -1222,11 +1355,8 @@ async fn a_split_without_the_collateral_refuses_balances() {
         .await
         .expect("bank read")
         .expect("the actor's collateral account");
-    account.data = token_account_bytes_for(
-        COLLATERAL_MINT,
-        founder_keypair().pubkey(),
-        split_atoms - 1,
-    );
+    account.data =
+        token_account_bytes_for(COLLATERAL_MINT, founder_keypair().pubkey(), split_atoms - 1);
     context.set_account(&FOUNDER_COLLATERAL, &AccountSharedData::from(account));
 
     let mut instructions = Vec::new();
