@@ -76,6 +76,7 @@ members = [
     "programs/dclutch-trading-sbf/program-test/devnet-replay",
     "programs/dclutch-trading-sbf/program-test/direct-hot",
     "programs/dclutch-trading-sbf/program-test/general-hot",
+    "programs/dclutch-trading-sbf/program-test/scoring-dealer",
     "programs/dclutch-trading-sbf/program-test/test-programs/core-caller",
     "programs/dclutch-trading-sbf/program-test/test-programs/custody-leg-caller",
     "programs/dclutch-trading-sbf/program-test/test-programs/postjoin-claims",

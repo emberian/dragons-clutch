@@ -3212,6 +3212,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-trading-scoring-dealer-program-test"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-program-test-evidence",
+ "dclutch-registry",
+ "dclutch-trading",
+ "dclutch-trading-sbf",
+ "solana-account 4.6.0",
+ "solana-address-lookup-table-interface",
+ "solana-message 4.5.0",
+ "solana-program",
+ "solana-program-test",
+ "solana-sdk",
+ "solana-sdk-ids",
+ "solana-transaction 4.2.0",
+ "tokio",
+]
+
+[[package]]
 name = "dclutch-trading-user-position-admission-program-test"
 version = "0.1.0"
 dependencies = [

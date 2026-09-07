@@ -32,7 +32,7 @@ use dclutch_trading::scoring_rule::records_v1::DealerFundV1;
 use dclutch_trading::scoring_rule::requests_v1::{
     DealerFillRequestV1, DealerRouteV1, FILL_FRAME_ACCOUNTS, fill_privileges_v1,
 };
-use dclutch_trading::scoring_rule::{AdmittedFill, admit_fill, generated};
+use dclutch_trading::scoring_rule::{Potential, RuleParameters, admit_fill, generated};
 use solana_program::{
     account_info::AccountInfo,
     hash::hash,
@@ -167,26 +167,20 @@ pub fn process_dealer_fill_v1(
     // The rule, over the inventory the chain holds.
     let aggregate = get(prefix, generated::FILL_AGGREGATE_ACCOUNT)?;
     let dealer_position = get(prefix, generated::FILL_DEALER_POSITION_ACCOUNT)?;
-    let (inventory, dealer_view, aggregate_view) = read_inventory_v1(
+    let admission = admit_fill_v1(
         claims_program.key,
         aggregate,
         dealer_position,
         fund_account.key,
-        fund.outcome_count,
-    )?;
-    let admitted = admit_fill(
         rule.parameters,
-        &inventory,
-        &request.receive,
-        &request.deliver,
-        &request.prices,
-    )
-    .map_err(ScoringDealerErrorV1::from)?;
+        fund.outcome_count,
+        &request,
+    )?;
     hot_cu_checkpoint!("scoring-dealer:fill:admitted");
 
     // The cash, atoms.
     let (pays_atoms, receives_atoms) = fund
-        .debit_atoms(admitted.dealer_pays, admitted.dealer_receives)
+        .debit_atoms(admission.dealer_pays, admission.dealer_receives)
         .map_err(ScoringDealerErrorV1::from)?;
     let mint_atoms = fund
         .atoms(request.mint)
@@ -232,143 +226,333 @@ pub fn process_dealer_fill_v1(
         facts,
         fund,
         fund_account.key,
-        dealer_view.revision,
+        admission,
         taker_revision,
-        aggregate_view.revision,
-        aggregate_view.claim_count,
-        aggregate_view.basis_id,
         request,
         instruction_data,
     )?;
     hot_cu_checkpoint!("scoring-dealer:fill:claims");
 
     // The cash legs.
-    let (window_a, rest) = rest.split_at(FILL_CUSTODY_WINDOW_ACCOUNTS);
-    let (window_b, window_c) = rest.split_at(FILL_CUSTODY_WINDOW_ACCOUNTS);
-    let parent = hash(instruction_data).to_bytes();
-    let hoard = get(prefix, generated::FILL_HOARD_ACCOUNT)?;
-    let hoard_context = if legs.taker_to_hoard + legs.fund_to_hoard > 0 {
-        // The Hoard's replay names the founding's custody context; the Hoard
-        // vault must derive from it under `HoardPrincipal`.
-        let hoard_replay = read_replay_v1(window_b)?;
-        let seeds = CustodyVaultSeedsV1::new(
-            fund.market,
-            facts.release_set,
-            hoard_replay.context,
-            CompartmentV1::HoardPrincipal,
-        );
-        if Pubkey::find_program_address(&seeds.as_slices(), custody_program.key).0 != *hoard.key {
-            return Err(ScoringDealerErrorV1::Custody.into());
-        }
-        hoard_replay.context
-    } else {
-        [0; 32]
-    };
-    let fund_replay = read_replay_v1(window_a)?;
-    invoke_custody_transfer_v1(
+    settle_cash_legs_v1(
         program_id,
-        CustodyLegV1 {
-            window: window_a,
-            custody_program,
-            replay: fund_replay,
-            facts,
-            market: fund.market,
-            context: fund_account.key.to_bytes(),
-            source_compartment: CompartmentV1::TradingPrincipal,
-            destination_compartment: CompartmentV1::HoardPrincipal,
-            source_owner: [0; 32],
-            destination_owner: [0; 32],
-            source_vault_context: fund_account.key.to_bytes(),
-            destination_vault_context: hoard_context,
-            parent_request_digest: parent,
-            transfer_index: 0,
-            amount: legs.fund_to_hoard,
-        },
+        custody_program,
+        get(prefix, generated::FILL_HOARD_ACCOUNT)?,
+        rest,
+        facts,
+        fund.market,
+        fund_account.key.to_bytes(),
+        request.taker,
+        hash(instruction_data).to_bytes(),
+        legs,
     )?;
-    if legs.taker_to_hoard > 0 {
-        let hoard_replay = read_replay_v1(window_b)?;
-        invoke_custody_transfer_v1(
-            program_id,
-            CustodyLegV1 {
-                window: window_b,
-                custody_program,
-                replay: hoard_replay,
-                facts,
-                market: fund.market,
-                context: hoard_context,
-                source_compartment: CompartmentV1::External,
-                destination_compartment: CompartmentV1::HoardPrincipal,
-                source_owner: request.taker,
-                destination_owner: [0; 32],
-                source_vault_context: [0; 32],
-                destination_vault_context: hoard_context,
-                parent_request_digest: parent,
-                transfer_index: 1,
-                amount: legs.taker_to_hoard,
-            },
-        )?;
-    }
-    if legs.fund_to_taker + legs.taker_to_fund > 0 {
-        // The fund's replay advanced if leg A ran; re-read it.
-        let fund_replay = read_replay_v1(window_c)?;
-        let to_taker = legs.fund_to_taker > 0;
-        invoke_custody_transfer_v1(
-            program_id,
-            CustodyLegV1 {
-                window: window_c,
-                custody_program,
-                replay: fund_replay,
-                facts,
-                market: fund.market,
-                context: fund_account.key.to_bytes(),
-                source_compartment: if to_taker {
-                    CompartmentV1::TradingPrincipal
-                } else {
-                    CompartmentV1::External
-                },
-                destination_compartment: if to_taker {
-                    CompartmentV1::External
-                } else {
-                    CompartmentV1::TradingPrincipal
-                },
-                source_owner: if to_taker { [0; 32] } else { request.taker },
-                destination_owner: if to_taker { request.taker } else { [0; 32] },
-                source_vault_context: if to_taker {
-                    fund_account.key.to_bytes()
-                } else {
-                    [0; 32]
-                },
-                destination_vault_context: if to_taker {
-                    [0; 32]
-                } else {
-                    fund_account.key.to_bytes()
-                },
-                parent_request_digest: parent,
-                transfer_index: 2,
-                amount: legs.fund_to_taker.max(legs.taker_to_fund),
-            },
-        )?;
-    }
     hot_cu_checkpoint!("scoring-dealer:fill:custody");
 
     // The fund: cash by the debit, Ŵ carried for the next admission (the
     // carrier of §6 -- a cache the next fill re-derives, never an author).
     let before = fund.to_bytes().map_err(|_| ScoringDealerErrorV1::Commit)?;
-    let next = next_fund_v1(fund, &admitted, pays_atoms, receives_atoms)?;
+    let next = next_fund_v1(fund, admission.potential_after, pays_atoms, receives_atoms)?;
     let fund_bytes = commit_fund_v1(fund_account, hash(&before).to_bytes(), next)?;
     emit_receipt_v1(
         DealerRouteV1::Fill,
         instruction_data,
         next,
         &fund_bytes,
-        admitted.dealer_pays,
-        admitted.dealer_receives,
+        admission.dealer_pays,
+        admission.dealer_receives,
     )
+}
+
+/// The Hoard vault the mint's par lands in, and the custody context its
+/// founding named.
+///
+/// Zero when neither Hoard leg runs: nothing derives, nothing is checked, and
+/// the value is never read.
+#[inline(never)]
+fn hoard_context_v1(
+    custody_program: &Pubkey,
+    hoard: &AccountInfo<'_>,
+    window: &[AccountInfo<'_>],
+    market: [u8; 32],
+    release_set: [u8; 32],
+) -> Result<[u8; 32], ProgramError> {
+    // The Hoard's replay names the founding's custody context; the Hoard
+    // vault must derive from it under `HoardPrincipal`.
+    let context = read_replay_v1(window)?.context;
+    let seeds =
+        CustodyVaultSeedsV1::new(market, release_set, context, CompartmentV1::HoardPrincipal);
+    if Pubkey::find_program_address(&seeds.as_slices(), custody_program).0 != *hoard.key {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
+    Ok(context)
+}
+
+/// The fill's three cash legs, in the order `cashLegs` names them, each built
+/// and invoked out of line.
+///
+/// One [`CustodyLegV1`] is over three hundred bytes and three of them were
+/// live in the route's own frame at once; `invoke_custody_transfer_v1` takes
+/// the leg by value, so passing it by reference only moves the pointer and
+/// leaves the temporary exactly where it was (measured: the frame did not
+/// change by one byte). What moves it is the call boundary -- a stage's
+/// locals are its own frame's, and this stage's are the three legs.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn settle_cash_legs_v1<'info>(
+    program_id: &Pubkey,
+    custody_program: &AccountInfo<'info>,
+    hoard: &AccountInfo<'info>,
+    windows: &[AccountInfo<'info>],
+    facts: MarketFactsV1,
+    market: [u8; 32],
+    fund_context: [u8; 32],
+    taker: [u8; 32],
+    parent: [u8; 32],
+    legs: CashLegsV1,
+) -> Result<(), ProgramError> {
+    let (window_a, rest) = windows.split_at(FILL_CUSTODY_WINDOW_ACCOUNTS);
+    let (window_b, window_c) = rest.split_at(FILL_CUSTODY_WINDOW_ACCOUNTS);
+    let hoard_context = if legs.taker_to_hoard + legs.fund_to_hoard > 0 {
+        hoard_context_v1(
+            custody_program.key,
+            hoard,
+            window_b,
+            market,
+            facts.release_set,
+        )?
+    } else {
+        [0; 32]
+    };
+    fund_to_hoard_leg_v1(
+        program_id,
+        custody_program,
+        window_a,
+        facts,
+        market,
+        fund_context,
+        hoard_context,
+        parent,
+        legs.fund_to_hoard,
+    )?;
+    if legs.taker_to_hoard > 0 {
+        taker_to_hoard_leg_v1(
+            program_id,
+            custody_program,
+            window_b,
+            facts,
+            market,
+            hoard_context,
+            taker,
+            parent,
+            legs.taker_to_hoard,
+        )?;
+    }
+    if legs.fund_to_taker + legs.taker_to_fund > 0 {
+        net_leg_v1(
+            program_id,
+            custody_program,
+            window_c,
+            facts,
+            market,
+            fund_context,
+            taker,
+            parent,
+            legs,
+        )?;
+    }
+    Ok(())
+}
+
+/// Leg A: the fund's share of the mint's par, fund vault to Hoard.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn fund_to_hoard_leg_v1<'info>(
+    program_id: &Pubkey,
+    custody_program: &AccountInfo<'info>,
+    window: &[AccountInfo<'info>],
+    facts: MarketFactsV1,
+    market: [u8; 32],
+    fund_context: [u8; 32],
+    hoard_context: [u8; 32],
+    parent: [u8; 32],
+    amount: u64,
+) -> Result<(), ProgramError> {
+    let replay = read_replay_v1(window)?;
+    invoke_custody_transfer_v1(
+        program_id,
+        CustodyLegV1 {
+            window,
+            custody_program,
+            replay,
+            facts,
+            market,
+            context: fund_context,
+            source_compartment: CompartmentV1::TradingPrincipal,
+            destination_compartment: CompartmentV1::HoardPrincipal,
+            source_owner: [0; 32],
+            destination_owner: [0; 32],
+            source_vault_context: fund_context,
+            destination_vault_context: hoard_context,
+            parent_request_digest: parent,
+            transfer_index: 0,
+            amount,
+        },
+    )
+}
+
+/// Leg B: the taker's share of the mint's par, taker to Hoard.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn taker_to_hoard_leg_v1<'info>(
+    program_id: &Pubkey,
+    custody_program: &AccountInfo<'info>,
+    window: &[AccountInfo<'info>],
+    facts: MarketFactsV1,
+    market: [u8; 32],
+    hoard_context: [u8; 32],
+    taker: [u8; 32],
+    parent: [u8; 32],
+    amount: u64,
+) -> Result<(), ProgramError> {
+    let replay = read_replay_v1(window)?;
+    invoke_custody_transfer_v1(
+        program_id,
+        CustodyLegV1 {
+            window,
+            custody_program,
+            replay,
+            facts,
+            market,
+            context: hoard_context,
+            source_compartment: CompartmentV1::External,
+            destination_compartment: CompartmentV1::HoardPrincipal,
+            source_owner: taker,
+            destination_owner: [0; 32],
+            source_vault_context: [0; 32],
+            destination_vault_context: hoard_context,
+            parent_request_digest: parent,
+            transfer_index: 1,
+            amount,
+        },
+    )
+}
+
+/// Leg C: the net, whichever way it goes -- fund to taker, or taker to fund.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn net_leg_v1<'info>(
+    program_id: &Pubkey,
+    custody_program: &AccountInfo<'info>,
+    window: &[AccountInfo<'info>],
+    facts: MarketFactsV1,
+    market: [u8; 32],
+    fund_context: [u8; 32],
+    taker: [u8; 32],
+    parent: [u8; 32],
+    legs: CashLegsV1,
+) -> Result<(), ProgramError> {
+    // The fund's replay advanced if leg A ran; re-read it.
+    let replay = read_replay_v1(window)?;
+    let to_taker = legs.fund_to_taker > 0;
+    invoke_custody_transfer_v1(
+        program_id,
+        CustodyLegV1 {
+            window,
+            custody_program,
+            replay,
+            facts,
+            market,
+            context: fund_context,
+            source_compartment: if to_taker {
+                CompartmentV1::TradingPrincipal
+            } else {
+                CompartmentV1::External
+            },
+            destination_compartment: if to_taker {
+                CompartmentV1::External
+            } else {
+                CompartmentV1::TradingPrincipal
+            },
+            source_owner: if to_taker { [0; 32] } else { taker },
+            destination_owner: if to_taker { taker } else { [0; 32] },
+            source_vault_context: if to_taker { fund_context } else { [0; 32] },
+            destination_vault_context: if to_taker { [0; 32] } else { fund_context },
+            parent_request_digest: parent,
+            transfer_index: 2,
+            amount: legs.fund_to_taker.max(legs.taker_to_fund),
+        },
+    )
+}
+
+/// What the rule admitted and the Claims coordinates the fill priced against:
+/// everything the route reads after the kernel runs, and nothing wider than a
+/// word except the basis identity.
+///
+/// The inventory, [`AdmittedFill`] and the two decoded Claims views are
+/// together well over half a kilobyte, and NONE of them is read once the rule
+/// has admitted -- only these seven values are. Holding them in the route's
+/// own frame is part of what put it over the 4,096 bytes SBPF v0 gives every
+/// call (`super::authenticate_market_v1` states the bound); [`admit_fill_v1`]
+/// is the boundary that keeps them in a frame of their own.
+#[derive(Clone, Copy)]
+struct FillAdmissionV1 {
+    /// Claim units the Dealer pays for the fill.
+    dealer_pays: u64,
+    /// Claim units the Dealer receives.
+    dealer_receives: u64,
+    /// `Ŵ(inv′)`, the pair the fund carries forward.
+    potential_after: Potential,
+    /// The Dealer Position revision the rule priced against.
+    dealer_revision: u64,
+    /// The aggregate revision the rule priced against.
+    aggregate_revision: u64,
+    /// The aggregate's runtime claim count.
+    aggregate_claim_count: u32,
+    /// The aggregate's semantic `LiabilityBasisV2` identity.
+    basis_id: [u8; 32],
+}
+
+/// Read the inventory the chain holds and put the fill to the rule, out of
+/// line. See [`FillAdmissionV1`] for why the boundary is here.
+#[inline(never)]
+fn admit_fill_v1(
+    claims_program: &Pubkey,
+    aggregate: &AccountInfo<'_>,
+    dealer_position: &AccountInfo<'_>,
+    fund_key: &Pubkey,
+    parameters: RuleParameters,
+    outcome_count: u8,
+    request: &DealerFillRequestV1,
+) -> Result<FillAdmissionV1, ProgramError> {
+    let (inventory, dealer_view, aggregate_view) = read_inventory_v1(
+        claims_program,
+        aggregate,
+        dealer_position,
+        fund_key,
+        outcome_count,
+    )?;
+    let admitted = admit_fill(
+        parameters,
+        &inventory,
+        &request.receive,
+        &request.deliver,
+        &request.prices,
+    )
+    .map_err(ScoringDealerErrorV1::from)?;
+    Ok(FillAdmissionV1 {
+        dealer_pays: admitted.dealer_pays,
+        dealer_receives: admitted.dealer_receives,
+        potential_after: admitted.potential_after,
+        dealer_revision: dealer_view.revision,
+        aggregate_revision: aggregate_view.revision,
+        aggregate_claim_count: aggregate_view.claim_count,
+        basis_id: aggregate_view.basis_id,
+    })
 }
 
 fn next_fund_v1(
     fund: DealerFundV1,
-    admitted: &AdmittedFill,
+    potential_after: Potential,
     pays_atoms: u64,
     receives_atoms: u64,
 ) -> Result<DealerFundV1, ProgramError> {
@@ -380,8 +564,8 @@ fn next_fund_v1(
         .ok_or(ScoringDealerErrorV1::Overflow)?;
     Ok(DealerFundV1 {
         cash,
-        inventory_minimum: admitted.potential_after.minimum,
-        liquidity_cost: admitted.potential_after.cost,
+        inventory_minimum: potential_after.minimum,
+        liquidity_cost: potential_after.cost,
         revision: fund
             .revision
             .checked_add(1)
@@ -420,11 +604,8 @@ fn invoke_claims_fill_delta_v1<'info>(
     facts: MarketFactsV1,
     fund: DealerFundV1,
     fund_key: &Pubkey,
-    dealer_revision: u64,
+    admission: FillAdmissionV1,
     taker_revision: u64,
-    aggregate_revision: u64,
-    claim_count: u32,
-    basis_id: [u8; 32],
     request: DealerFillRequestV1,
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
@@ -447,18 +628,19 @@ fn invoke_claims_fill_delta_v1<'info>(
         market: fund.market,
         request_id,
         product_record_digest,
-        semantic_basis_id: basis_id,
+        semantic_basis_id: admission.basis_id,
         linked_basis_record_digest,
-        expected_market_revision: aggregate_revision,
-        claim_count,
+        expected_market_revision: admission.aggregate_revision,
+        claim_count: admission.aggregate_claim_count,
     };
     let positions = [
-        SignedDeltaPositionV3::new(fund_key.to_bytes(), dealer_revision)
+        SignedDeltaPositionV3::new(fund_key.to_bytes(), admission.dealer_revision)
             .map_err(|_| ScoringDealerErrorV1::Claims)?,
         SignedDeltaPositionV3::new(request.taker, taker_revision)
             .map_err(|_| ScoringDealerErrorV1::Claims)?,
     ];
     let width = usize::from(fund.outcome_count);
+    let claim_count = admission.aggregate_claim_count;
     let mut aggregate_deltas = alloc::vec::Vec::with_capacity(claim_count as usize);
     for outcome in 0..claim_count as usize {
         aggregate_deltas.push(delta(if outcome < width {
