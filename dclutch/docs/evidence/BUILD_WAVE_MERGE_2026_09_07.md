@@ -731,3 +731,121 @@ wants a build rather than a transfer should run it.
    founding, and `recovery-capture`'s ensemble material and fragment.
 7. **A branch guard in `tools/cut.sh`** (§8.7).
 8. **The twelfth family** (§9).
+
+---
+
+## Addendum, 2026-09-07 (JOINT-CLEARING-2): §3 is reversed — the family landed
+
+`joint-clearing` was merged into `main` at `24a3f595c`, on the same day it was
+skipped, by a lane convened to finish it. This document is not edited above; this is the dated
+addendum AGENTS.md requires for a reversed verdict.
+
+**The queue's resolution was reused unchanged and was right.** Main's nine
+refusal-clause enums with joint-clearing's V2 types, all seven hunks of
+`hot_candidate_v3.rs`. The second rebase, onto a main that had since taken
+`recovery-capture` and two reference regenerations, took one further conflict:
+`crates/dclutch-operator/src/lib.rs`'s sorted `pub mod` list, resolved as the
+union, exactly as this queue resolved it eight times.
+
+**The four unmigrated program-test files were six**, and `hot_instruction_v3.rs`
+and `family_hot_campaign.rs` are the two §3 did not name. Every one of them had
+to be AUTHORED rather than patched, and §3's reading of why is confirmed: the
+joint arm makes an order a single-outcome interval and every fixture's orders
+moved claims at all outcomes at once, so `runtime_verify::current_shape` refuses
+them with `ShapeNotInterval` before any conjunct is reached.
+
+The decision the walks now assert, stated once because it is one decision in
+five files:
+
+* every order is a ONE-OUTCOME interval on one side, its per-lot vectors
+  DERIVED from `GeneralOrderHeaderV2::derived_row` rather than carried beside
+  the shape;
+* every maker sits exactly ON their own limit and is filled to their own
+  maximum, so `QuoteLimit`, `CreditLimit` and the marginal conjunct are each
+  checked at their boundary rather than in their interior;
+* the certificate's price vector is the one the box FORCES — the whole scale at
+  the traded outcome and zero elsewhere — which is also decision 0032's
+  lexicographic minimum for that box, so a fixture cannot pass by choosing a
+  price;
+* `live_order_count` is read off the batch (`GeneralBatchV2::live_order_count`),
+  never typed, because that field IS the completeness conjunct.
+
+**The books balance, and that is Wall A speaking rather than a convenience.** A
+clearing that mints complete sets creates claims at every outcome and hands them
+to takers at only the ones that have any; every other outcome is a residual the
+close must strand, and §3's Wall A is exactly that the strand's burn has no
+child frame. So a fixture with fewer orders than outcomes cannot mint AND reach
+a terminal close — and two of these walk to a terminal close at width 258. They
+buy and sell the same lots at one outcome instead: `M = 0`, no residual, and the
+close is reachable at every runtime width.
+
+**Three defects the compile found, none of them a merge resolution.**
+
+1. **The bundle-builder's span tests were RED and nobody had run them** — nine
+   of eighteen, `lifecycle envelope: InvalidBody`. The family made the Batch
+   envelope Product-width and the fixture still wrote `batch.to_bytes()`, the
+   224-byte V1 prefix, into an account the envelope sizes at `296 + 16N`. All
+   eighteen pass now.
+2. **§5's second unfinished migration, and the join that was missing.** The five
+   physical sites declared `224 + 0N`. `GENERAL_BATCH_ROW_BASE_V2` and
+   `GENERAL_BATCH_ROW_STRIDE_V2` name the pair once and `general_batch_len_v2`
+   is those two numbers; a new test holds EVERY local-state rule to
+   `general_local_state_len_v3` at four widths, and was proved red against the
+   old constants first. Their own tests had been comparing a rule against
+   itself.
+3. **`tools/gate census` refused the branch, and it was right.** The V1→V2
+   rename moved the batch and order record magics onto `DCGBAT02` and
+   `DCGORD02` — both already live on main, as `general/lifecycle.rs`'s
+   `BATCH_LIFECYCLE_MAGIC_V2` and `runtime_manifest.rs`'s per-order manifest ROW
+   header. Decision 0007's rule applied one wire object over, as the gate's own
+   message asks: the discriminant that has never reached a chain moves. The
+   records are `DCGBTCH2` and `DCGSORD2` now, chosen for Hamming distance from
+   the squatters, moved in Lean first and carrying the two transition-program
+   magic WORDS with them.
+
+**The two on-chain writes: §3's reason to skip, now named and tested.**
+
+* Wall A refuses by name. `SettlementClauseV3::PositionCloseGeometry` said "a
+  close has no position geometry", which describes the shape and not the cause;
+  it is `PositionCloseStrandUnseated`, its doc names the fifth child frame and
+  the 65 → 66 account count that would seat it, and the test asserts both that
+  a stranding close is refused by that clause AND that a close stranding
+  nothing still projects an empty geometry.
+* `ClaimsSbfError::StrandUnseated = 0x5014` — the first free code after
+  `founder-bond`'s `0x5013` — with a producer, which is what §3 declined to
+  allocate a code without.
+* Wall B has no plan to refuse, so the fail-closed fact is asserted instead: the
+  Product-width batch account the chain writes carries a VACANT clearing tail at
+  every outcome. `publish_clearing_v1`'s doc now states the frame facts exactly
+  and names the two shapes that could seat the publication, including the one
+  decision 0032 did not rule out — a sixteenth `ClearBatch` action, shaped like
+  `CloseBatch`, which already has the batch writable.
+
+**§3's last paragraph stands.** The three `BasketAction::StrandResidual` arms
+were NOT restored: nothing in the merged tree executes a strand, and a
+`BasketAction` with no executor is the same producer-missing pattern the wave
+spent its night diagnosing. The Claims program refuses the plan by name instead.
+
+**What this landing owes, beyond §5's list.**
+
+* **The browser, and it is the largest.** `abi:general-v5:verify` is RED:
+  `packages/dclutch-sdk/lib/generated/generalSuccessorV5.ts` mirrors the General
+  batch and order records at V1, and those records no longer exist. The browser
+  is FAIL-CLOSED on them — `generalPlanV5.ts` compares the magic before
+  decoding, so it refuses rather than mis-decodes — but it cannot read them at
+  all until `generate-general-successor-v5.mjs`, `generalPlanV5.ts` and
+  `apps/dclutch-web/lib/explorer/accountRecords.ts` are swept onto the V2
+  decoders the family already wrote in `generalClearingV1.ts`.
+* **`crates/dclutch-trading/src/general/lifecycle.rs` is fully orphaned.** Every
+  public type it declares has zero consumers tree-wide, and it is what holds
+  `DCGBAT02`. That is somebody's deletion, and until it happens a live wire
+  magic is held by a record nothing creates.
+* **The frame ratchet moved again.** The batch account's geometry
+  (`224 + 0N` → `296 + 16N`) is in every General lifecycle recipe and account
+  rule, and the Claims dispatch gained a variant. Still red, still needs two
+  independent SBF captures.
+* The SDK's ABI-coverage baseline grew by three deliberate rows for
+  `generalClearingV1.ts`'s hand-kept magics and offsets; the exit is seam S12.
+* `packages/dclutch-sdk/lib/stateMachines.test.ts` is red on main and not this
+  family's: it expects two machines where `series`' `series-root`/`series-ticket`
+  now answer.

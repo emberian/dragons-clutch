@@ -72,7 +72,16 @@ say "live      $LIVE (HEAD $LIVE_SHORT, tree $LIVE_TREE)"
 say "          $LIVE_DIRTY uncommitted path(s) NOT published -- this cut is HEAD"
 
 # --- transport: make the live tree object reachable inside the public repo ---
-git -C "$PUB" fetch --no-tags --quiet "$LIVE" "$LIVE_COMMIT:refs/cut/live"
+#
+# THE `+` IS LOAD-BEARING. `refs/cut/live` is a scratch transport ref, not a
+# history: it names whatever commit the last cut carried. Two cuts from
+# divergent live commits are ordinary -- a lane can cut from a worktree, and a
+# clobbered commit can leave the ref pointing at something main no longer
+# contains -- and without the force marker git refuses the second one
+# `non-fast-forward`. `set -e` then exits 1 having printed only the header,
+# which is a cut that says nothing about why it did not happen. Found on
+# 2026-09-07 when the ref still named an orphaned commit.
+git -C "$PUB" fetch --no-tags --quiet "$LIVE" "+$LIVE_COMMIT:refs/cut/live"
 git -C "$PUB" rev-parse --verify --quiet "$LIVE_TREE^{tree}" >/dev/null \
   || die "live tree object did not arrive in the publication host"
 
