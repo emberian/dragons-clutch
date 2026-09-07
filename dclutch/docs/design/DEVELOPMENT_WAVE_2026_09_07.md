@@ -44,15 +44,18 @@ operator whose continued presence is required for holders to get paid.
   trips and exact hostile rollback. The dated authority is
   `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md`; this does not substitute for
   local-validator founding or full protocol route coverage.
-- Two checked eight-program builds now exist, at `56767e555` and `a628bfd39`.
-  The latter has matching independent frame captures and a strict candidate.
-  It remains intermediate: later General and Resolution changes require a
+- Checked eight-program builds now exist through `7f1ad2acf`; `a628bfd39`
+  and `5cbc1e777` also have matching independent frame captures.
+  These remain intermediate: later General and Claims changes require a
   fresh all-program build. Publication cuts carry development work; they do
   not assert that a build has become a deployed cohort.
 - Direct's validator journey has executed founding/Open, admission, nonzero
   fills and fees, objective Pyth resolution, and wallet payouts. The retirement
-  rerun now invokes the actual upkeep producer before closing maker roots.
-  Its complete terminal sequence and conservation ledger remain to be checked.
+  rerun invokes the actual upkeep producer before closing maker roots. The
+  preserved-runtime diagnostic now completes checkpointed retirement and
+  verifies all five terminal accounts absent, with exact refunds and fees.
+  Its authority is `docs/evidence/JOURNEY_RUNTIME567_DIAGNOSTIC_TAIL_2026_09_07.md`;
+  this must be repeated against the final fresh runtime.
 - Custody economics has an accepted real local-validator campaign: governed
   parameters, Upkeep Found, and a nonzero Deposit Credit, with exact hostile
   and duplicate refusals. Hoard principal moved zero. Its first dated authority is
@@ -65,23 +68,32 @@ operator whose continued presence is required for holders to get paid.
   two accepted expiry variants and four exact caller refusals. They reach projected Custody cleanup,
   Core precommit, and Trading replay poststates. The committed repair separates
   future-Market bump derivation, rent credit, typed projected wire, and readonly
-  replay observations. A host producer for the complete two-occurrence
-  local-validator input is still being implemented; the existing runner alone
-  cannot supply that input.
+  replay observations. Explicit immutable-record construction now binds the
+  ordinary Market compiler's actual Product, Realm, Source and manifest.
+  Typed child receipt/Claims production and the selected-release assembler
+  are implemented. Their actual Found/Prepare driver is being connected;
+  the complete two-occurrence validator campaign has not run.
 - General's accepted nonempty path is being run after repairing action-scoped
   lifecycle funding and the semantic outer frame / key-sorted Claims child
-  boundary. Dealer's TradingRecord admission repair reaches actual Custody CPI;
-  Dealer Found currently refuses its child account frame. A nonzero fill is
-  still unexecuted, and its vertical lane owns that repair.
+  boundary. Its next repair reads the actual external token-account owner,
+  respecting the selected token profile's variable account width. Dealer's
+  RentCredit repair is running in a fresh validator campaign; a nonzero fill
+  is still unexecuted. Adversarial review additionally found and repaired
+  Dealer/Claims admission's missing join to Core's committed rent-credit address.
 - Ensemble fold/reclaim has accepted real-ELF poststates. Its direct Pyth member
   producer is being executed separately so pre-captured fragment fixtures do
-  not stand in for capture evidence. Recovery reached exhaustion and terminal
-  admission; its refund-key lookup is fixed and the full walk is rerunning.
+  not stand in for capture evidence. The two-member compiler and first-member
+  real transport CLI are running against a checked validator. Recovery's
+  exhaustion branch reached terminal admission and all three refund payouts;
+  Capture is restarting after the prospective-vacancy reader repair.
 - Structured's Claims operations have executed against real ELFs. The V6 child bridge and per-Market publication producer are committed.
   Executing the entrance exposed a missing root-creation descriptor. The set
   now enumerates seven action descriptors plus one V1 root-activation
-  descriptor; generic root execution and receipt activation are being wired
-  into the validator driver.
+  descriptor. Generic root execution and receipt submission are wired. The
+  validator founded the Market in 258 transactions, then exposed a partial
+  JSON decoder rejecting the full selected-capability payload. That decoder
+  now consumes the canonical complete DTO; actual root/receipt poststates
+  remain owed.
 - Browser joining now carries the linked-basis binding, requires finalized
   confirmation and authenticated poststate, and resumes its transaction journal.
   Generated reference/client mirrors and the capability graph have converged.

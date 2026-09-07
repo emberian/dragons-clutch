@@ -19,6 +19,7 @@ use dclutch_claims::frame_spec_v1::{
 };
 use dclutch_custody::{
     CustodyFrameDataV1, CustodyFramePrivilegesV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
+    OperationV1,
 };
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
@@ -2503,6 +2504,47 @@ fn first_child_system_coordinate(action: Action) -> Result<Option<u16>> {
     Ok(None)
 }
 
+/// Return one physical account from PlaceOrder's Custody `Transfer` frame.
+///
+/// Every Custody operation repeats common roles such as `RealmRecord`, so a
+/// role alone would select the replay-create Realm rather than the external
+/// debit's Realm.  The typed adapter needs the four facts from the one transfer
+/// frame that consumes `TransferSource`; it therefore pins both operation and
+/// role here, rather than treating a repeated role as a global coordinate.
+pub fn general_place_order_transfer_custody_coordinate_v3(
+    wanted: CustodyFrameRoleV1,
+) -> Result<u16> {
+    let action = Action::PlaceOrder;
+    let mut route = 0_u16;
+    while route < general_effect_route_count_v3(action) {
+        let selected = general_effect_route_frame_v3(action, route)
+            .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+        if selected.frame == GeneralChildFrameV3::Custody(OperationV1::Transfer) {
+            let mut relative = 0_u16;
+            while relative
+                < selected
+                    .frame
+                    .account_count()
+                    .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?
+            {
+                if child_role(selected.frame, relative)? == ChildRoleV3::Custody(wanted) {
+                    return selected
+                        .account_start
+                        .checked_add(relative)
+                        .ok_or(GeneralAccountRuleErrorV3::Geometry);
+                }
+                relative = relative
+                    .checked_add(1)
+                    .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+            }
+        }
+        route = route
+            .checked_add(1)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    }
+    Err(GeneralAccountRuleErrorV3::Geometry)
+}
+
 const fn route_alias(representative: u16) -> AccountRuleWithPrestateInputV2 {
     AccountRuleWithPrestateInputV2 {
         rule: AccountRuleInputV2 {
@@ -4039,6 +4081,33 @@ mod tests {
                 }
                 None => assert_eq!(effect.route_count(), 0),
             }
+        }
+    }
+
+    #[test]
+    fn place_order_typed_token_adapter_resolves_each_custody_fact_by_role() {
+        let action = Action::PlaceOrder;
+        let mut coordinates = [0_u16; 4];
+        for (slot, role) in [
+            CustodyFrameRoleV1::RealmRecord,
+            CustodyFrameRoleV1::Mint,
+            CustodyFrameRoleV1::TokenProgram,
+            CustodyFrameRoleV1::TransferSource,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let coordinate =
+                general_place_order_transfer_custody_coordinate_v3(role).expect("PlaceOrder role");
+            let (frame, relative) = child_coordinate(action, coordinate).expect("child frame");
+            assert_eq!(child_role(frame, relative), Ok(ChildRoleV3::Custody(role)));
+            coordinates[slot] = coordinate;
+        }
+        for (left, right) in coordinates.iter().zip(coordinates.iter().skip(1)) {
+            assert_ne!(
+                left, right,
+                "distinct Custody facts cannot share a coordinate"
+            );
         }
     }
 

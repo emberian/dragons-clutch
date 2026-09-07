@@ -4113,6 +4113,43 @@ struct CompiledMarketBodiesV1 {
     domain_digest: [u8; 32],
 }
 
+/// Canonical record candidates before Registry publication.
+///
+/// Series commits future Market coordinates before those accounts exist. Its
+/// founder must use the same Product, mint-bound Realm, Source and manifest
+/// bytes that ordinary founding will publish. This projection invokes that
+/// compiler rather than reimplementing the Product or bounded-Source rules.
+pub(crate) struct MarketPublicationPreviewV1 {
+    pub(crate) realm: Vec<u8>,
+    pub(crate) product: Vec<u8>,
+    pub(crate) domain: Vec<u8>,
+    pub(crate) portfolio: Vec<u8>,
+    pub(crate) basis: Vec<u8>,
+    pub(crate) price_gate: Option<Vec<u8>>,
+    pub(crate) source: Vec<u8>,
+    pub(crate) manifest: Vec<u8>,
+}
+
+/// Compile candidates only. No record in this result claims chain finality.
+pub(crate) fn compile_market_publication_preview_v1(
+    registry: Pubkey,
+    input: &MarketRunInput,
+    collateral_mint: Pubkey,
+) -> Result<MarketPublicationPreviewV1> {
+    validate_market_input(input)?;
+    let bodies = compile_market_bodies(registry, input, collateral_mint)?;
+    Ok(MarketPublicationPreviewV1 {
+        realm: bodies.realm,
+        product: bodies.product.to_vec(),
+        domain: bodies.domain,
+        portfolio: bodies.portfolio,
+        basis: bodies.basis,
+        price_gate: bodies.price_gate,
+        source: bodies.source,
+        manifest: bodies.manifest,
+    })
+}
+
 struct AuthenticatedMarketBasisV1 {
     body: Vec<u8>,
     price_gate: Option<Vec<u8>>,
@@ -6528,7 +6565,10 @@ pub(crate) fn manifest_required_union_v1(entry_count: u16) -> Result<u16> {
 /// The selected kind is the one the input's own capability closure derived —
 /// Direct's, or a family-neutral closure's — so this census is
 /// capability-neutral: exactly one entry of the selected kind whose release is
-/// not the Resolution release, and three exact Resolution companions.
+/// not the Resolution release, and every other founded entry is an exact
+/// Resolution companion. The Resolution mask is derived from the canonical
+/// manifest width; member material can add funded rows without creating a
+/// second fixed-width authority in this host.
 fn selected_founding_controller_masks_v1(
     manifest: CapabilityManifestV1<'_>,
     resolution_release: [u8; 32],
@@ -6566,13 +6606,16 @@ fn selected_founding_controller_masks_v1(
         .checked_shl(u32::from(selected_index))
         .ok_or_else(|| Error::new("selected capability entry mask overflow"))?;
     let required_union = manifest_required_union_v1(manifest.entry_count())?;
-    if manifest.entry_count() != 4
-        || resolution_mask.count_ones() != 3
+    let expected_resolution_companions = manifest
+        .entry_count()
+        .checked_sub(1)
+        .ok_or_else(|| Error::new("the founding manifest has no selected capability entry"))?;
+    if resolution_mask.count_ones() != u32::from(expected_resolution_companions)
         || resolution_mask & trading_mask != 0
         || resolution_mask | trading_mask != required_union
     {
         return Err(Error::new(
-            "founding requires one selected trade entry and three exact Resolution companions",
+            "founding requires one selected trade entry and every other entry to be an exact Resolution companion",
         ));
     }
     Ok((selected_index, [resolution_mask, trading_mask]))
@@ -10901,11 +10944,67 @@ pub(crate) enum CoreProductGraphWalkV1 {
     ProjectedFounding,
 }
 
-fn predicted_state_bumps_v1(
+/// Immutable facts needed to predict the exact Core state a projected Found
+/// will write before that Market account exists.
+///
+/// This is deliberately smaller than [`FoundingOuterV1`]: Series uses the
+/// same Core kernel prediction for a child Market, but it has no ordinary
+/// founding prestate or caller-owned record map.  The four graph entries are
+/// in Core's Product/ResultDomain/Portfolio/Basis walk order, and each is the
+/// finalized `(schema, content digest)` pair the Core reader derives PDAs
+/// from.  They are inputs to address derivation only; they do not claim that
+/// the future Market or any projected Custody child already exists.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PredictedCoreStateInputV1 {
+    pub(crate) core: Pubkey,
+    pub(crate) registry: Pubkey,
+    pub(crate) identity: MarketIdentity,
+    pub(crate) product_graph: [([u8; 32], [u8; 32]); 4],
+    pub(crate) projection: CoreProductGraphProjectionV1,
+    pub(crate) walk: CoreProductGraphWalkV1,
+    pub(crate) principal_cap_sets: u64,
+    pub(crate) rent_beneficiary: Identity,
+}
+
+/// Predict the candidate `CoreState` using the same bump rules Core's Found
+/// kernel uses.  This has no RPC and creates no account: callers must still
+/// compare the prediction with the post-Find state after a real transaction.
+pub(crate) fn predict_core_state_v1(input: PredictedCoreStateInputV1) -> Result<CoreState> {
+    if input.principal_cap_sets == 0 {
+        return Err(Error::new(
+            "predicted Core state requires a nonzero principal cap",
+        ));
+    }
+    let bumps = predicted_state_bumps_from_pairs_v1(
+        input.core,
+        input.registry,
+        input.identity,
+        input.product_graph,
+        input.projection,
+        input.walk,
+    )?;
+    let state = CoreState {
+        phase: Phase::Founding,
+        readiness: dclutch_market::Readiness::Prepaid,
+        terminal_winner: 0,
+        identity: input.identity,
+        outstanding_capabilities: 0,
+        principal_cap_sets: input.principal_cap_sets,
+        rent_beneficiary: input.rent_beneficiary,
+        terminal_receipt: None,
+        bumps,
+    };
+    state
+        .encode()
+        .map_err(|error| Error::new(format!("predicted Core state: {error:?}")))?;
+    Ok(state)
+}
+
+fn predicted_state_bumps_from_pairs_v1(
     core: Pubkey,
     registry: Pubkey,
     identity: MarketIdentity,
-    records: &MarketRecords,
+    product_graph_pairs: [([u8; 32], [u8; 32]); 4],
     projection: CoreProductGraphProjectionV1,
     walk: CoreProductGraphWalkV1,
 ) -> Result<StateBumpsV1> {
@@ -10930,58 +11029,25 @@ fn predicted_state_bumps_v1(
         &registry,
     )
     .1;
-    // The Product graph pair-by-pair, in the reader's walk order. Core fills
-    // these from `authenticate_founding_product_basis_v3`, whose four record
-    // derivations are the RAW/STAGING pair under the Registry at each canonical
-    // schema id and the record's own content digest -- and the four digests are
-    // exactly what `publish_record` returned for the records this campaign put
-    // on chain. A pair this side leaves zero moves the same permit digest the
-    // realm pair does.
     let mut product_graph = [0_u8; PRODUCT_GRAPH_BUMP_COUNT];
-    for (slot, (schema, digest)) in [
-        (PRODUCT_RECORD_SCHEMA_ID_V2, records.product.digest),
-        (RESULT_DOMAIN_SCHEMA_ID_V2, records.domain.digest),
-        (PORTFOLIO_SCHEMA_ID_V2, records.portfolio.digest),
-        (GRADED_BASIS_RECORD_SCHEMA_ID_V3, records.basis.digest),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let seeds: [&[u8]; 2] = [schema.as_slice(), digest.as_slice()];
+    for (slot, (schema, digest)) in product_graph_pairs.into_iter().enumerate() {
         let raw =
-            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, seeds[0], seeds[1]], &registry)
-                .1;
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).1;
         let staging = Pubkey::find_program_address(
-            &[STAGING_CURSOR_PDA_SEED_V1, seeds[0], seeds[1]],
+            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
             &registry,
         )
         .1;
-        if let Some(cell) = product_graph.get_mut(slot * 2) {
-            *cell = raw;
-        }
-        if let Some(cell) = product_graph.get_mut(slot * 2 + 1) {
-            *cell = staging;
-        }
+        product_graph[slot * 2] = raw;
+        product_graph[slot * 2 + 1] = staging;
     }
-    // The basis pair is slot 3 of the walk, which is bytes 6 and 7 of the bank.
-    // The projected founding's Core never derives it, so predicting it is
-    // predicting a byte Core does not write. Cleared here rather than skipped
-    // above, so the derivation that `require_predicted_bump_coordinates_v1`
-    // checks the founding's coordinates against still runs in full.
     if walk == CoreProductGraphWalkV1::ProjectedFounding {
-        if let Some(pair) = product_graph.get_mut(6..8) {
-            pair.fill(0);
-        }
+        product_graph[6..8].fill(0);
     }
     let bumps = StateBumpsV1 {
         market: StateBumpsV1::record(market_bump),
         realm_raw_record: StateBumpsV1::record(raw_bump),
         realm_staging_record: StateBumpsV1::record(staging_bump),
-        // A Core from before `b312ce3c4` never wrote here, and `ABSENT` is the
-        // encoding of what it left: four zero bytes, eight unrecorded nibbles.
-        // The walk above still runs -- the derivation is what
-        // `require_predicted_bump_coordinates_v1` checks the founding's
-        // coordinates against -- and only the projection is withheld.
         product_graph: match projection {
             CoreProductGraphProjectionV1::Recorded => ProductGraphBumpsV1::record(product_graph),
             CoreProductGraphProjectionV1::Unrecorded => ProductGraphBumpsV1::ABSENT,
@@ -10996,6 +11062,29 @@ fn predicted_state_bumps_v1(
         ));
     }
     Ok(bumps)
+}
+
+fn predicted_state_bumps_v1(
+    core: Pubkey,
+    registry: Pubkey,
+    identity: MarketIdentity,
+    records: &MarketRecords,
+    projection: CoreProductGraphProjectionV1,
+    walk: CoreProductGraphWalkV1,
+) -> Result<StateBumpsV1> {
+    predicted_state_bumps_from_pairs_v1(
+        core,
+        registry,
+        identity,
+        [
+            (PRODUCT_RECORD_SCHEMA_ID_V2, records.product.digest),
+            (RESULT_DOMAIN_SCHEMA_ID_V2, records.domain.digest),
+            (PORTFOLIO_SCHEMA_ID_V2, records.portfolio.digest),
+            (GRADED_BASIS_RECORD_SCHEMA_ID_V3, records.basis.digest),
+        ],
+        projection,
+        walk,
+    )
 }
 
 /// Require the bump derivation to land on the founding's own coordinates.
@@ -15871,6 +15960,27 @@ mod tests {
             5,
             "Direct plus two members, exhaustion, failure"
         );
+        let direct_index = (0..manifest.entry_count())
+            .find(|index| {
+                manifest
+                    .entry(*index)
+                    .expect("manifest entry")
+                    .kind_id()
+                    .to_bytes()
+                    == DIRECT_SUCCESSOR_KIND_ID_V3
+            })
+            .expect("exactly one Direct entry");
+        let direct_mask = 1_u16 << direct_index;
+        assert_eq!(
+            selected_founding_controller_masks_v1(
+                manifest,
+                dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+                DIRECT_SUCCESSOR_KIND_ID_V3,
+            )
+            .expect("the five-row Ensemble manifest partitions canonically"),
+            (direct_index, [0b1_1111 ^ direct_mask, direct_mask]),
+            "two member rows lift Resolution's founded mask from three to four"
+        );
         validate_market_input(&input).expect("canonical Ensemble input validates");
         let compiled = compile_market_bodies(registry, &input, Pubkey::new_unique())
             .expect("Ensemble market bodies");
@@ -19211,6 +19321,108 @@ mod tests {
         .expect("founding targets, other mint");
         assert_ne!(other_mint.realm_record, first.realm_record);
         assert_ne!(other_mint.open_market, first.open_market);
+    }
+
+    #[test]
+    fn series_founder_uses_compiled_market_bodies_and_mint_bound_realm() {
+        use crate::series_founder::{
+            SeriesOccurrenceFundingV1, SeriesTemplatePolicyV1,
+            prepare_series_founder_from_market_v1,
+        };
+        use dclutch_core_contract::ContentId as SeriesId;
+        use dclutch_trading::series::{FoundingFundsV3, OccurrenceV3, TemplateV3, TicketV3};
+        let mut fixture = split_founding_fixture_v1();
+        fixture.plan.release_set_id = hex(&[7; 32]);
+        let registry = pubkey(&fixture.plan.registry.program_id).expect("Registry");
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        );
+        let input = demo_market_input(registry, direct.compiler()).expect("Market input");
+        let prepare = |mint| {
+            let id = |byte| SeriesId::new([byte; 32]).expect("authored policy identity");
+            prepare_series_founder_from_market_v1(
+                &fixture.plan,
+                &input,
+                mint,
+                fixture.founder,
+                fixture.payer,
+                SeriesTemplatePolicyV1 {
+                    product_generator: id(1),
+                    occurrence_generator: id(2),
+                    capability_template: id(3),
+                    product_derivation: id(4),
+                    occurrence_derivation: id(5),
+                    capability_derivation: id(6),
+                    funding_derivation: id(7),
+                    first_slot: 100,
+                    period_slots: 10,
+                    retry_window: 2,
+                    close_rent: 1,
+                },
+                [
+                    SeriesOccurrenceFundingV1 {
+                        funding_list: id(8),
+                        funds: FoundingFundsV3::new(9, 2, 3, 4).expect("funding"),
+                    },
+                    SeriesOccurrenceFundingV1 {
+                        funding_list: id(9),
+                        funds: FoundingFundsV3::new(18, 2, 3, 4).expect("funding"),
+                    },
+                ],
+            )
+            .expect("prepared Series candidates")
+        };
+        let first = prepare(fixture.mint);
+        let another = prepare(Pubkey::new_unique());
+        let template = TemplateV3::decode(&first.admitted.template).expect("Template");
+        assert_eq!(
+            template.realm().to_bytes(),
+            record_identity(&first.publication.realm)
+        );
+        assert_eq!(
+            template.release_set().to_bytes(),
+            hex32(&fixture.plan.release_set_id).expect("release")
+        );
+        let children = first
+            .admitted
+            .occurrences
+            .each_ref()
+            .map(|bytes| OccurrenceV3::decode(bytes).expect("occurrence"));
+        assert_ne!(children[0].market(), children[1].market());
+        for child in children {
+            assert_eq!(
+                child.product_record().to_bytes(),
+                record_identity(&first.publication.product)
+            );
+            assert_eq!(
+                child.resolution_policy().to_bytes(),
+                record_identity(&first.publication.source)
+            );
+            assert_eq!(
+                child.capability_manifest().to_bytes(),
+                record_identity(&first.publication.manifest)
+            );
+            assert_eq!(
+                child.rational_representation().to_bytes(),
+                record_identity(&first.publication.portfolio)
+            );
+        }
+        assert_ne!(first.facts.template.realm, another.facts.template.realm);
+        assert_ne!(first.admitted.occurrences, another.admitted.occurrences);
+        let tickets = first
+            .admitted
+            .tickets
+            .each_ref()
+            .map(|bytes| TicketV3::decode(bytes).expect("Ticket"));
+        assert_eq!(tickets[0].funds().hoard_principal(), 9);
+        assert_eq!(tickets[1].funds().hoard_principal(), 18);
+        assert_eq!(tickets[0].founder().to_bytes(), fixture.founder.to_bytes());
+        assert_eq!(
+            tickets[1].refund_owner().to_bytes(),
+            fixture.payer.to_bytes()
+        );
     }
 
     #[test]

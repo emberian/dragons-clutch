@@ -52,6 +52,7 @@ mod series_consume_campaign;
 mod series_founder;
 mod series_lifecycle_campaign;
 mod series_market;
+mod series_source;
 mod series_permit_expiry_campaign;
 mod series_terminal_campaign;
 // The journey campaign's conservation engine, shared textually the same way

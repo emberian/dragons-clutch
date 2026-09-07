@@ -90,6 +90,9 @@ mod seed;
 #[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
 #[allow(dead_code)]
 mod selected_capability;
+#[path = "../../../local-validator/bootstrap/successor/src/series_founder.rs"]
+#[allow(dead_code)]
+mod series_founder;
 #[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
 #[allow(dead_code)]
 mod structured_market;
@@ -234,6 +237,7 @@ fn run() -> Result<()> {
     let _program = arguments.next();
     match arguments.next().as_deref() {
         Some("run") => run_ladder(arguments.collect()),
+        Some("ensemble") => run_ensemble(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -326,9 +330,41 @@ fn run_ladder(arguments: Vec<String>) -> Result<()> {
     ladder::execute(request).map(|_| ())
 }
 
+fn run_ensemble(arguments: Vec<String>) -> Result<()> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(flag) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(Error::new(format!("{flag} was given twice")));
+        }
+    }
+    let rpc_port: u16 = required(&values, "--rpc-port")?
+        .parse()
+        .map_err(|_| Error::new("--rpc-port must be a port number"))?;
+    ensemble::execute(ensemble::EnsembleRequestV1 {
+        transcript: absolute(required(&values, "--transcript")?, "--transcript")?,
+        work: absolute(required(&values, "--work")?, "--work")?,
+        rpc_port,
+        checked_release_gate: absolute(
+            required(&values, "--checked-release-gate")?,
+            "--checked-release-gate",
+        )?,
+        expected_gate_sha256: required(&values, "--expected-gate-sha256")?.to_owned(),
+        expected_source_revision: required(&values, "--expected-source-revision")?.to_owned(),
+        expected_source_tree_sha256: required(&values, "--expected-source-tree-sha256")?.to_owned(),
+        seed: required(&values, "--seed")?.to_owned(),
+    })
+}
+
 fn usage() {
     println!(
-        "Usage:\n  dclutch-ladder-campaign run --walk exhaust|capture \\\n      \
+        "Usage:\n  dclutch-ladder-campaign ensemble --transcript ABSOLUTE_NEW_JSON --work ABSOLUTE_DIR --rpc-port PORT \
+      --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \
+      --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \
+      --expected-source-tree-sha256 HEX64 --seed HEX64\n  dclutch-ladder-campaign run --walk exhaust|capture \\\n      \
          --transcript ABSOLUTE_NEW_JSON --work ABSOLUTE_DIR --rpc-port PORT \\\n      \
          --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
          --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \

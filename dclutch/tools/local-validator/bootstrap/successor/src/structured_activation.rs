@@ -192,12 +192,6 @@ pub(crate) fn build_activate_receipt_header_v1(
     })
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SelectedCapabilityOnlyV1 {
-    family: String,
-}
-
 /// One Registry record that this driver re-derived from selected release bytes.
 #[derive(Clone, Debug)]
 pub(crate) struct FinalizedStructuredRecordV1 {
@@ -530,6 +524,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn complete_selected_capability_payload_keeps_its_activation_deadline() {
+        let selected = crate::model::SelectedCapabilityV1 {
+            family: "structured".into(),
+            program_set_hex: "aa".into(),
+            selected_descriptor_hex: "bb".into(),
+            config_hex: "cc".into(),
+            publication_hex: "dd".into(),
+            records: vec![crate::model::SelectedCapabilityRecordV1 {
+                label: "structured_00_descriptor_record".into(),
+                schema_hex: "11".repeat(32),
+                body_hex: "22".into(),
+            }],
+            activation_deadline_slot: 42,
+            root_rent_minimum_lamports: 1,
+            creation_principal_lamports: 7,
+            selected_manifest_entry_index: 3,
+        };
+        let encoded = serde_json::to_value(&selected).expect("complete selected payload encodes");
+        let decoded: crate::model::SelectedCapabilityV1 =
+            serde_json::from_value(encoded).expect("complete selected payload parses");
+        assert_eq!(decoded.family, "structured");
+        assert_eq!(decoded.activation_deadline_slot, 42);
+        assert_eq!(decoded.creation_principal_lamports, 7);
+    }
+
+    #[test]
     fn missing_compiled_receipt_record_names_its_role() {
         let selected = crate::model::SelectedCapabilityV1 {
             family: "structured".into(),
@@ -610,12 +630,11 @@ pub(crate) fn hydrate_activate_receipt_v1(
         .selected_capability
         .as_ref()
         .ok_or_else(|| Error::new("market input omitted its selected capability"))?;
-    let family: SelectedCapabilityOnlyV1 = serde_json::from_value(
-        serde_json::to_value(selected)
-            .map_err(|error| Error::new(format!("Structured selected capability: {error}")))?,
-    )
-    .map_err(|error| Error::new(format!("Structured selected capability shape: {error}")))?;
-    if family.family != "structured" {
+    // `MarketRunInput` has already parsed this complete selected-capability
+    // DTO. Re-decoding it through a one-field deny-unknown surrogate made a
+    // newly canonical selected field look hostile; the parsed DTO remains the
+    // sole schema authority here.
+    if selected.family != "structured" {
         return Err(Error::new(
             "market input selected another capability family for Structured activation",
         ));

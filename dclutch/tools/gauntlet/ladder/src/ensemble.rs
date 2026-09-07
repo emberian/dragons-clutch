@@ -11,7 +11,10 @@ use dclutch_provider_transport_v3_operator::{
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_source::{PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RecoveryPolicyV2, SourceMaterialV3};
-use solana_sdk::{pubkey::Pubkey, signature::Signer};
+use solana_sdk::{
+    pubkey::Pubkey,
+    signature::{Keypair, Signer},
+};
 
 use crate::{
     Error, Result,
@@ -146,4 +149,547 @@ fn record_pair_for_id_v1(registry: Pubkey, schema: [u8; 32], identity: [u8; 32])
         )
         .0,
     }
+}
+
+/// One real Pyth VAA transport followed by its authenticated direct-member
+/// capture.  The VAA is posted through the receiver before the operator sees
+/// `provider.update`; no fixture account or native substitute crosses this
+/// boundary.
+pub(crate) fn post_submit_and_capture_member_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    plan: &SuccessorPlan,
+    addresses: &ResolutionAddressesV1,
+    provider: &ProviderPlanV1,
+    publication: &crate::pyth_lab_publication::LabPublicationV1,
+    member: u8,
+    terminal_sequence: u64,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<ProviderTransportReportV3> {
+    let slot = rpc.finalized_slot()?;
+    let chain_now = rpc.block_time(slot)?;
+    let pyth = provider.addresses;
+    initialize_pyth_transport_v1(rpc, payer, pyth, transactions)?;
+    post_verified_vaa_v1(rpc, payer, provider, publication, transactions)?;
+
+    let artifact =
+        live_registry_artifact_pair_v1(rpc, addresses.core_program, addresses.registry_program)?;
+    let submit = dclutch_provider_transport_v3_operator::build_provider_submit_v3(
+        &submit_snapshot_v1(rpc, addresses, provider.encoded_vaa.pubkey(), plan)?,
+        dclutch_provider_transport_v3_operator::ProviderSubmitDeploymentV3 {
+            infrastructure: solana_sdk::pubkey::Pubkey::find_program_address(
+                &[dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+                &addresses.core_program,
+            )
+            .0,
+            registry_programdata: crate::plan::pubkey(&plan.registry.programdata_id)?,
+            registry_artifact: artifact.0,
+            registry_artifact_staging: artifact.1,
+            core_programdata: addresses.core_programdata,
+            resolution_program: addresses.resolution_program,
+            resolution_programdata: addresses.resolution_programdata,
+            receiver_config: pyth.config,
+            guardian_set: pyth.guardian_set,
+        },
+        &dclutch_provider_transport_v3_operator::ProviderSubmitIntentV3 {
+            submitter: payer.pubkey(),
+            refund_recipient: addresses.rent_beneficiary,
+            update_account: provider.update.pubkey(),
+            reclaim_after_unix_seconds: chain_now.saturating_add(3_600),
+            post_update_body: publication.post_update_body.clone(),
+        },
+    )
+    .map_err(|error| Error::new(format!("Ensemble provider submit builder: {error:?}")))?;
+    if submit.lifecycle != provider.lifecycle {
+        return Err(Error::new(
+            "Ensemble submit lifecycle disagrees with its derived provider plan",
+        ));
+    }
+    let lifecycle_rent =
+        rpc.minimum_balance(dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)?;
+    transactions.push(rpc.send_with_signers(
+        "ensemble: prepay the provider update lifecycle",
+        &[solana_system_interface::instruction::transfer(
+            &payer.pubkey(),
+            &submit.lifecycle,
+            lifecycle_rent,
+        )],
+        payer,
+        &[],
+    )?);
+    send_wide_v1(
+        rpc,
+        payer,
+        "ensemble: submit a verified real Pyth update",
+        &submit.instruction,
+        &[&provider.update],
+        transactions,
+    )?;
+    let posted = rpc.required_account(provider.update.pubkey(), "Ensemble posted PriceUpdateV2")?;
+    if posted.owner != pyth.receiver {
+        return Err(Error::new(
+            "the Ensemble receiver did not own the posted PriceUpdateV2",
+        ));
+    }
+
+    let deployment = ProviderExecuteDeploymentV3 {
+        registry_programdata: crate::plan::pubkey(&plan.registry.programdata_id)?,
+        registry_artifact: artifact.0,
+        registry_artifact_staging: artifact.1,
+        core_programdata: addresses.core_programdata,
+        trading_program: crate::plan::pubkey(&plan.trading.program_id)?,
+        trading_programdata: crate::plan::pubkey(&plan.trading.programdata_id)?,
+        resolution_program: addresses.resolution_program,
+        resolution_programdata: addresses.resolution_programdata,
+        receiver_config: pyth.config,
+    };
+    let capture = build_member_capture_v1(
+        rpc,
+        plan,
+        addresses,
+        provider,
+        submit.lifecycle,
+        deployment,
+        member,
+        terminal_sequence,
+        publication.post_update_body.clone(),
+    )?;
+    let seat = capture
+        .instruction
+        .accounts
+        .get(3)
+        .ok_or_else(|| Error::new("direct Ensemble frame omitted its fragment seat"))?
+        .pubkey;
+    let fragment_rent =
+        rpc.minimum_balance(dclutch_source::resolution::RESOLUTION_CERTIFICATE_BYTES_V2)?;
+    let resolver_rent = rpc.minimum_balance(0)?;
+    transactions.push(rpc.send_with_signers(
+        "ensemble: prepay the member fragment seat and distinct resolver",
+        &[
+            solana_system_interface::instruction::transfer(&payer.pubkey(), &seat, fragment_rent),
+            solana_system_interface::instruction::transfer(
+                &payer.pubkey(),
+                &provider.resolver.pubkey(),
+                resolver_rent,
+            ),
+        ],
+        payer,
+        &[],
+    )?);
+    send_wide_v1(
+        rpc,
+        payer,
+        "ensemble: Resolution captures one authenticated member fragment",
+        &capture.instruction,
+        &[&provider.resolver],
+        transactions,
+    )?;
+    Ok(capture)
+}
+
+const ROUTER_INITIALIZE_V1: &[u8] =
+    include_bytes!("../../../../fixtures/pyth/local-upgraded-2026-08-22/router-initialize.data");
+const RECEIVER_INITIALIZE_V1: &[u8] =
+    include_bytes!("../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-initialize.data");
+const ENCODED_VAA_HEADER_BYTES_V1: usize = 46;
+const WRITE_CHUNK_BYTES_V1: usize = 600;
+
+fn initialize_pyth_transport_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    pyth: crate::provider::ProviderAddressesV1,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<()> {
+    use solana_sdk::{
+        instruction::{AccountMeta, Instruction},
+        sysvar,
+    };
+    use solana_sdk_ids::system_program;
+    if rpc.account(pyth.guardian_set)?.is_none() {
+        transactions.push(rpc.send_with_signers(
+            "ensemble: initialize the real Pyth router",
+            &[Instruction {
+                program_id: pyth.router,
+                accounts: vec![
+                    AccountMeta::new(pyth.bridge, false),
+                    AccountMeta::new(pyth.guardian_set, false),
+                    AccountMeta::new(pyth.fee_collector, false),
+                    AccountMeta::new(payer.pubkey(), true),
+                    AccountMeta::new_readonly(sysvar::clock::ID, false),
+                    AccountMeta::new_readonly(sysvar::rent::ID, false),
+                    AccountMeta::new_readonly(system_program::ID, false),
+                ],
+                data: ROUTER_INITIALIZE_V1.to_vec(),
+            }],
+            payer,
+            &[],
+        )?);
+    }
+    if rpc.account(pyth.config)?.is_none() {
+        transactions.push(rpc.send_with_signers(
+            "ensemble: initialize the real Pyth receiver",
+            &[Instruction {
+                program_id: pyth.receiver,
+                accounts: vec![
+                    AccountMeta::new(payer.pubkey(), true),
+                    AccountMeta::new(pyth.config, false),
+                    AccountMeta::new_readonly(system_program::ID, false),
+                ],
+                data: RECEIVER_INITIALIZE_V1.to_vec(),
+            }],
+            payer,
+            &[],
+        )?);
+    }
+    let treasury_rent = rpc.minimum_balance(0)?;
+    if rpc
+        .account(pyth.treasury)?
+        .map(|account| account.lamports)
+        .unwrap_or(0)
+        < treasury_rent
+    {
+        transactions.push(rpc.send_with_signers(
+            "ensemble: capitalize the real Pyth receiver treasury",
+            &[solana_system_interface::instruction::transfer(
+                &payer.pubkey(),
+                &pyth.treasury,
+                treasury_rent,
+            )],
+            payer,
+            &[],
+        )?);
+    }
+    Ok(())
+}
+
+fn post_verified_vaa_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    provider: &ProviderPlanV1,
+    publication: &crate::pyth_lab_publication::LabPublicationV1,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<()> {
+    use solana_program::hash::hash;
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    let encoded = &provider.encoded_vaa;
+    let rent = rpc.minimum_balance(ENCODED_VAA_HEADER_BYTES_V1 + publication.signed_vaa.len())?;
+    transactions.push(rpc.send_with_signers(
+        "ensemble: create encoded real-Pyth VAA",
+        &[solana_system_interface::instruction::create_account(
+            &payer.pubkey(),
+            &encoded.pubkey(),
+            rent,
+            (ENCODED_VAA_HEADER_BYTES_V1 + publication.signed_vaa.len()) as u64,
+            &provider.addresses.router,
+        )],
+        payer,
+        &[encoded],
+    )?);
+    let discriminator = |name: &[u8]| hash(name).to_bytes()[..8].to_vec();
+    transactions.push(rpc.send_with_signers(
+        "ensemble: initialize encoded real-Pyth VAA",
+        &[Instruction {
+            program_id: provider.addresses.router,
+            accounts: vec![
+                AccountMeta::new_readonly(payer.pubkey(), true),
+                AccountMeta::new(encoded.pubkey(), false),
+            ],
+            data: discriminator(b"global:init_encoded_vaa"),
+        }],
+        payer,
+        &[],
+    )?);
+    for (index, chunk) in publication
+        .signed_vaa
+        .chunks(WRITE_CHUNK_BYTES_V1)
+        .enumerate()
+    {
+        let offset = index
+            .checked_mul(WRITE_CHUNK_BYTES_V1)
+            .ok_or_else(|| Error::new("Ensemble VAA chunk offset overflowed"))?;
+        let mut data = discriminator(b"global:write_encoded_vaa");
+        data.extend_from_slice(
+            &u32::try_from(offset)
+                .map_err(|_| Error::new("Ensemble VAA offset exceeds u32"))?
+                .to_le_bytes(),
+        );
+        data.extend_from_slice(
+            &u32::try_from(chunk.len())
+                .map_err(|_| Error::new("Ensemble VAA chunk exceeds u32"))?
+                .to_le_bytes(),
+        );
+        data.extend_from_slice(chunk);
+        transactions.push(rpc.send_with_signers(
+            &format!("ensemble: write signed real-Pyth VAA chunk {index}"),
+            &[Instruction {
+                program_id: provider.addresses.router,
+                accounts: vec![
+                    AccountMeta::new_readonly(payer.pubkey(), true),
+                    AccountMeta::new(encoded.pubkey(), false),
+                ],
+                data,
+            }],
+            payer,
+            &[],
+        )?);
+    }
+    transactions.push(rpc.send_with_signers(
+        "ensemble: cryptographically verify the real Pyth VAA",
+        &[Instruction {
+            program_id: provider.addresses.router,
+            accounts: vec![
+                AccountMeta::new_readonly(payer.pubkey(), true),
+                AccountMeta::new(encoded.pubkey(), false),
+                AccountMeta::new_readonly(provider.addresses.guardian_set, false),
+            ],
+            data: discriminator(b"global:verify_encoded_vaa_v1"),
+        }],
+        payer,
+        &[],
+    )?);
+    if rpc
+        .required_account(encoded.pubkey(), "Ensemble verified EncodedVaa")?
+        .data
+        .get(8)
+        != Some(&2)
+    {
+        return Err(Error::new(
+            "the real Pyth router did not verify the Ensemble VAA",
+        ));
+    }
+    Ok(())
+}
+
+fn submit_snapshot_v1(
+    rpc: &mut Rpc,
+    addresses: &ResolutionAddressesV1,
+    encoded_vaa: Pubkey,
+    plan: &SuccessorPlan,
+) -> Result<dclutch_provider_transport_v3_operator::ProviderSubmitSnapshotV3> {
+    let pyth_release = crate::runtime::record(plan, "pyth_release")?.0;
+    let (_, present) = rpc.finalized_observed_accounts(
+        &[
+            addresses.market,
+            addresses.source_state,
+            addresses.source_material.raw,
+            addresses.source_spec.raw,
+            addresses.provider_release.raw,
+            pyth_release,
+            addresses.window_spec.raw,
+            encoded_vaa,
+        ],
+        0,
+    )?;
+    let at = |index| {
+        present
+            .get(index)
+            .cloned()
+            .ok_or_else(|| Error::new("Ensemble submit observation lost an account"))
+    };
+    Ok(
+        dclutch_provider_transport_v3_operator::ProviderSubmitSnapshotV3 {
+            market: at(0)?,
+            source_state: at(1)?,
+            source_material: at(2)?,
+            source_spec: at(3)?,
+            source_provider_release: at(4)?,
+            pyth_release: at(5)?,
+            window: at(6)?,
+            encoded_vaa: at(7)?,
+        },
+    )
+}
+
+fn live_registry_artifact_pair_v1(
+    rpc: &mut Rpc,
+    core_program: Pubkey,
+    registry: Pubkey,
+) -> Result<(Pubkey, Pubkey)> {
+    use dclutch_registry::{
+        record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1},
+        release_set::{
+            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
+        },
+    };
+    let profile_address = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+        &core_program,
+    )
+    .0;
+    let account = rpc.required_account(profile_address, "Ensemble infrastructure profile")?;
+    if account.owner != core_program
+        || account.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+    {
+        return Err(Error::new(
+            "Ensemble infrastructure profile has the wrong owner or width",
+        ));
+    }
+    let profile = ProtocolInfrastructureProfileV2::decode(&account.data)
+        .map_err(|error| Error::new(format!("Ensemble infrastructure profile: {error:?}")))?;
+    let identity = profile.registry().artifact_release().to_bytes();
+    let schema = dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+    let raw =
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &identity], &registry).0;
+    let staging =
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &identity], &registry)
+            .0;
+    rpc.required_account(raw, "Ensemble live Registry artifact release")?;
+    Ok((raw, staging))
+}
+
+fn send_wide_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    label: &str,
+    instruction: &solana_sdk::instruction::Instruction,
+    signers: &[&Keypair],
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<()> {
+    let (routing, tables) = crate::market::publish_routing_table(
+        rpc,
+        payer,
+        label,
+        std::slice::from_ref(instruction),
+        transactions,
+    )?;
+    transactions.push(rpc.send_v0_with_signers(
+        label,
+        std::slice::from_ref(instruction),
+        payer,
+        signers,
+        routing,
+        &tables,
+    )?);
+    Ok(())
+}
+
+/// Arguments for the local-only first-member capture campaign.
+pub(crate) struct EnsembleRequestV1 {
+    pub(crate) transcript: std::path::PathBuf,
+    pub(crate) work: std::path::PathBuf,
+    pub(crate) rpc_port: u16,
+    pub(crate) checked_release_gate: std::path::PathBuf,
+    pub(crate) expected_gate_sha256: String,
+    pub(crate) expected_source_revision: String,
+    pub(crate) expected_source_tree_sha256: String,
+    pub(crate) seed: String,
+}
+
+/// Found a canonical two-member Ensemble market and execute its first direct
+/// capture against the checked local validator. The transcript is only written
+/// after the member fragment exists, so it cannot claim a transport that never
+/// crossed the real router/receiver boundary.
+pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
+    std::fs::create_dir_all(&request.work)?;
+    let substrate_dir = request.work.join("substrate");
+    let checked = crate::substrate::bring_up(&crate::substrate::SubstrateRequestV1 {
+        work: &substrate_dir,
+        checked_release_gate: &request.checked_release_gate,
+        expected_gate_sha256: &request.expected_gate_sha256,
+        expected_source_revision: &request.expected_source_revision,
+        expected_source_tree_sha256: &request.expected_source_tree_sha256,
+        seed: &request.seed,
+        rpc_port: request.rpc_port,
+    })?;
+    let mut rpc = Rpc::connect(&checked.rpc_url)?;
+    let finalized_slot = rpc.finalized_slot()?;
+    let minted_at = rpc.block_time(finalized_slot)?;
+    let publication = crate::pyth_lab_publication::mint_lab_publication_v1(
+        crate::pyth_lab_publication::LabPublicationRequestV1::at(minted_at, 1),
+        [0; 32],
+    )?;
+    let registry = crate::plan::pubkey(&checked.plan.registry.program_id)?;
+    let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
+        &checked.plan_path,
+        &checked.rpc_url,
+        registry,
+        Some(50),
+        Some(Keypair::new().pubkey()),
+    )?;
+    let shape = crate::market::LocalMarketShapeV1 {
+        ensemble: Some(crate::model::EnsembleMarketInputV1 {
+            members: 3,
+            quorum: 1,
+            rungs: 0,
+        }),
+        price_update_image: Some(publication.projected_price_update.clone()),
+        terminal_max_age_seconds: Some(1_200),
+        ..crate::market::LocalMarketShapeV1::default()
+    };
+    let input = crate::market::demo_market_input_shaped(registry, direct.compiler(), &shape)?;
+    if input.ensemble.is_none() || input.recovery_policy_hex.is_empty() {
+        return Err(Error::new(
+            "the Ensemble compiler did not publish member material and policy",
+        ));
+    }
+    let market_path = request.work.join("ensemble-market.json");
+    std::fs::write(&market_path, serde_json::to_vec_pretty(&input)?)?;
+    let founding = crate::substrate::found_market(
+        &checked,
+        &mut rpc,
+        &market_path,
+        &request.work.join("ensemble-founding-evidence.json"),
+    )?;
+    let accounts = founding.market.accounts;
+    let market_addresses = crate::stages::MarketAddressesV1::from_evidence(&accounts)?;
+    let addresses =
+        crate::resolution::derive(&mut rpc, &checked.plan, &market_addresses, &accounts)?;
+    let payer = crate::substrate::campaign_payer_keypair(&checked)?;
+    let provider = ProviderPlanV1::derive(&mut rpc, &checked.plan)?;
+    let mut transactions = founding.transactions;
+    let report = post_submit_and_capture_member_v1(
+        &mut rpc,
+        &payer,
+        &checked.plan,
+        &addresses,
+        &provider,
+        &publication,
+        0,
+        1,
+        &mut transactions,
+    )?;
+    let source = dclutch_source::SourceResolutionStateV2::decode(
+        &rpc.required_account(
+            addresses.source_state,
+            "Ensemble Source after member capture",
+        )?
+        .data,
+    )
+    .map_err(|error| Error::new(format!("Ensemble Source poststate: {error:?}")))?;
+    if source.phase() != dclutch_source::SourceResolutionPhaseV1::Primary {
+        return Err(Error::new(
+            "direct member capture changed Source before an Ensemble quorum fold",
+        ));
+    }
+    let fragment = report
+        .instruction
+        .accounts
+        .get(3)
+        .ok_or_else(|| Error::new("direct member report omitted fragment seat"))?
+        .pubkey;
+    let fragment_account = rpc.required_account(fragment, "captured Ensemble member fragment")?;
+    if fragment_account.owner != addresses.resolution_program {
+        return Err(Error::new(
+            "direct member capture did not create a Resolution-owned fragment",
+        ));
+    }
+    let transcript = serde_json::json!({
+        "campaign": "ensemble-first-member-capture-v1",
+        "evidence_level": "local-validator / real router+receiver ELFs / fresh checked cohort",
+        "checked_release_gate_sha256": request.expected_gate_sha256,
+        "expected_source_revision": request.expected_source_revision,
+        "publication": {"publish_time": minted_at, "sequence": publication.request.sequence, "signed_vaa_bytes": publication.signed_vaa.len()},
+        "member": 0,
+        "source_phase_after_capture": "Primary",
+        "fragment_seat": fragment.to_string(),
+        "transactions": transactions,
+    });
+    if request.transcript.exists() {
+        return Err(Error::new(
+            "--transcript already exists; evidence is immutable",
+        ));
+    }
+    std::fs::write(&request.transcript, serde_json::to_vec_pretty(&transcript)?)?;
+    Ok(())
 }

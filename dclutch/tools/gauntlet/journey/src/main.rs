@@ -222,6 +222,9 @@ mod selected_capability_activation;
 #[path = "../../../local-validator/bootstrap/successor/src/series_consume_campaign.rs"]
 #[allow(dead_code)]
 mod series_consume_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/series_founder.rs"]
+#[allow(dead_code)]
+mod series_founder;
 #[path = "../../../local-validator/bootstrap/successor/src/series_lifecycle_campaign.rs"]
 #[allow(dead_code)]
 mod series_lifecycle_campaign;

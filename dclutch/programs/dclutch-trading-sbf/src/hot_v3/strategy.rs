@@ -1135,6 +1135,33 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
             &mut current_identities,
         )
         .map_err(|_| TradingSbfError::Content)?;
+        // The signed header authenticates the maker assertion, while the
+        // external debit account supplies an independent observed authority.
+        // The selected Realm release owns the exact token layout; this helper
+        // authenticates that release before General joins the fact to OWNER.
+        let custody = |role| {
+            let coordinate = general_place_order_transfer_custody_coordinate_v3(role)
+                .map_err(|_| TradingSbfError::Content)?;
+            observations
+                .get(usize::from(coordinate))
+                .copied()
+                .ok_or(TradingSbfError::Content)
+        };
+        let realm = custody(CustodyFrameRoleV1::RealmRecord)?;
+        let mint = custody(CustodyFrameRoleV1::Mint)?;
+        let token_program = custody(CustodyFrameRoleV1::TokenProgram)?;
+        let source = custody(CustodyFrameRoleV1::TransferSource)?;
+        seed_general_place_order_custody_source_owner_v3(
+            realm.key(),
+            realm.data(),
+            mint.key(),
+            token_program.key(),
+            source.key(),
+            source.owner(),
+            source.data(),
+            &mut current_identities,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
     }
     require_projected_tail_count_agreement_v3(
         account_profile,

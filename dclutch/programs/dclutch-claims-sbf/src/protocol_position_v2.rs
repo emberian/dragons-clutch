@@ -30,7 +30,7 @@ use dclutch_claims::{
         SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1, SparseNativeTransferReceiptV1,
     },
 };
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_market::{CoreState, rent::lifecycle_v2::LifecycleRentCreditV2};
 use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -412,6 +412,7 @@ fn process_admit(
         CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1,
     )
     .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
+    authenticate_core_rent_beneficiary(accounts.core_market, accounts.rent_credit)?;
 
     let rent =
         Rent::from_account_info(accounts.rent).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
@@ -1056,6 +1057,23 @@ pub(crate) fn authenticate_rent_credit(
         return Err(ProtocolPositionSbfErrorV2::Rent.into());
     }
     Ok(data.to_vec())
+}
+
+/// The canonical RentCredit is a Core fact, not merely a self-consistent PDA
+/// under a program supplied in the Claims frame.  This runs only after the
+/// runtime Core join above authenticated `core_market` against its release.
+fn authenticate_core_rent_beneficiary(
+    core_market: &AccountInfo<'_>,
+    rent_credit: &AccountInfo<'_>,
+) -> Result<(), ProgramError> {
+    let data = core_market
+        .try_borrow_data()
+        .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
+    let core = CoreState::decode(&data).map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
+    if core.rent_beneficiary.to_bytes() != rent_credit.key.to_bytes() {
+        return Err(ProtocolPositionSbfErrorV2::Rent.into());
+    }
+    Ok(())
 }
 
 fn authenticate_vacancy(

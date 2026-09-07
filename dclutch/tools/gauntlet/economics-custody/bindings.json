@@ -1,0 +1,169 @@
+{
+  "campaign": "economics-custody",
+  "note": "Completed 15-transaction bounded local-validator campaign, folded from the durable evidence copy of hbox:/tank/dregg-build/dclutch-economics-c3d61aa97-20260907/economics-run. The campaign evidence SHA-256 is 89ee71853eff375a9f91899543a2ac64213531e407634326142d84f50b3fe93a and its transcript is the dclutch-economics-custody-campaign-v1 record. The two funding wrappers are retained as route-less executed transactions because their metadata was unavailable and their logs contain no first-party invocation. Every other row names only the Custody entry route and the action selected by the submitted command; no binding is made for an expected but unrun route. Refusal names and numeric codes are the checked inventory identities: FoundingAuthority 0x6104, Record 0x6102, UnauthorizedGovernance 0x6106, ProposalNotMatured 0x610A, NoPendingProposal 0x6109, and UpkeepVault Vault 0x6202. Local-validator evidence is not devnet or release evidence.",
+  "bindings": [
+    {
+      "label": "economics campaign: fund hostile governance signer",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Wrapper funding transaction; the campaign recorded no transaction metadata or first-party program invocation."
+    },
+    {
+      "label": "parameters Found hostile authority",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/found#Found"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/ProtocolParametersSbfErrorV1::FoundingAuthority",
+      "note": "Hostile signer; the finalized transaction reported Custom(0x6104), with no parameters record created."
+    },
+    {
+      "label": "parameters Found",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/found#Found"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Accepted parameters Found; the campaign reread the Custody-bound record and its zero-hoard-movement poststate."
+    },
+    {
+      "label": "parameters Found duplicate",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/found#Found"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/ProtocolParametersSbfErrorV1::Record",
+      "note": "Duplicate record Found; the finalized transaction reported Custom(0x6102) and the record was byte-unchanged."
+    },
+    {
+      "label": "parameters Propose hostile authority",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/propose#Propose"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/ProtocolParametersSbfErrorV1::UnauthorizedGovernance",
+      "note": "Hostile governance signer; the finalized transaction reported Custom(0x6106) and the record was byte-unchanged."
+    },
+    {
+      "label": "parameters Propose",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/propose#Propose"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Accepted governed proposal; the campaign reread pending=true, generation 0, and its earliest apply slot."
+    },
+    {
+      "label": "parameters Apply before maturity",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/apply#Apply"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/ProtocolParametersSbfErrorV1::ProposalNotMatured",
+      "note": "Early Apply; the finalized transaction reported Custom(0x610A) and the pending proposal remained unchanged."
+    },
+    {
+      "label": "parameters Apply",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/apply#Apply"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Accepted after the controlled local-validator warp and restart; the campaign authenticated the change receipt and generation-1 poststate."
+    },
+    {
+      "label": "parameters Withdraw after Apply",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/withdraw#Withdraw"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/ProtocolParametersSbfErrorV1::NoPendingProposal",
+      "note": "Withdraw after Apply; the finalized transaction reported Custom(0x6109) and the active record was unchanged."
+    },
+    {
+      "label": "parameters Propose for Withdraw",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/propose#Propose"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Accepted second proposal; the campaign reread pending=true with generation 1 retained and cap 2."
+    },
+    {
+      "label": "parameters Withdraw",
+      "routes": [
+        "custody/protocol_parameters_v1::process",
+        "custody/process_instruction",
+        "custody/withdraw#Withdraw"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Accepted governed Withdraw; the campaign reread pending=false and zero hoard movement."
+    },
+    {
+      "label": "economics campaign: fund voluntary upkeep payer",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Wrapper funding transaction; the campaign recorded no transaction metadata or first-party program invocation."
+    },
+    {
+      "label": "upkeep Found",
+      "routes": [
+        "custody/upkeep_vault_v1::process",
+        "custody/process_instruction",
+        "custody/found#(UpkeepOperationV1::Found,None)"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Accepted upkeep Found; the campaign reread the derived vault and founding rent of 1,781,760 lamports."
+    },
+    {
+      "label": "upkeep Deposit Credit",
+      "routes": [
+        "custody/upkeep_vault_v1::process",
+        "custody/process_instruction",
+        "custody/credit_route#(UpkeepOperationV1::Credit,Some(credit))"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Accepted nonzero upkeep Deposit Credit; the campaign reread creditAmount and depositInflow 17,001, count 1, donation 0, and no unreceipted lamports."
+    },
+    {
+      "label": "upkeep Found duplicate",
+      "routes": [
+        "custody/upkeep_vault_v1::process",
+        "custody/process_instruction",
+        "custody/found#(UpkeepOperationV1::Found,None)"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/UpkeepVaultSbfErrorV1::Vault",
+      "note": "Duplicate upkeep Found; the finalized transaction reported Custom(0x6202) and the vault was byte-unchanged."
+    }
+  ]
+}

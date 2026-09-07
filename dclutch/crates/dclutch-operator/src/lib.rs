@@ -130,6 +130,9 @@ pub mod series_current_acquisition_v5;
 /// Production construction of a Series V5 current-source bank from founder evidence.
 #[cfg(feature = "dealer-series")]
 pub mod series_current_source_v1;
+/// Dynamic typed Claims, permit, and projected-Custody founding children for Series.
+#[cfg(feature = "dealer-series")]
+pub mod series_founding_children_v1;
 /// Chain-derived Series V3 Hot lifecycle and packet construction.
 #[cfg(feature = "dealer-series")]
 pub mod series_hot_v3;

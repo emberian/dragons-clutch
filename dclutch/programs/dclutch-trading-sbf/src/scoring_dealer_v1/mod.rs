@@ -297,6 +297,8 @@ pub(crate) struct MarketFactsV1 {
     pub(crate) registry: [u8; 32],
     pub(crate) realm: [u8; 32],
     pub(crate) generation: u64,
+    /// The sole lifecycle RentCredit Core committed at founding.
+    pub(crate) rent_beneficiary: [u8; 32],
     pub(crate) phase: Phase,
 }
 
@@ -340,6 +342,7 @@ pub(crate) fn authenticate_market_v1(
         registry: state.identity.registry_program.to_bytes(),
         realm: state.identity.realm_id.to_bytes(),
         generation: state.identity.generation,
+        rent_beneficiary: state.rent_beneficiary.to_bytes(),
         phase: state.phase,
     })
 }

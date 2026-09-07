@@ -15,8 +15,13 @@ use crate::general_config::{
     v3::GeneralConfigV3,
 };
 use dclutch_claims::affine_batch_v2::DeltaDirectionV2;
-use dclutch_custody::OperationV1;
+use dclutch_custody::{
+    OperationV1,
+    token_svm::{ExactTransferProfileV1, PRODUCTION_ADAPTER_RELEASES},
+};
 use dclutch_market::execution_strategy::v2::{ExecutionCandidateV2, register_bank_bytes_v2};
+use dclutch_market::realm::RealmV1;
+use dclutch_sha256_adapter::digest;
 
 use crate::general::{
     cancel_order_clause_v3::CancelOrderClauseV3,
@@ -540,6 +545,107 @@ pub fn seed_general_place_order_terms_from_signed_terms_v3(
                 .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
         )
         .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = terms.order_id();
+    Ok(())
+}
+
+/// A typed actual token-account observation required before PlaceOrder plans
+/// its Custody child.
+///
+/// AccountProfile deliberately leaves Realm-selected token bodies opaque: the
+/// selected Realm release owns their admissible widths.  This adapter is the
+/// narrow exception that extracts the one outer semantic fact General owns,
+/// the source account's authority.  It binds the exact Custody frame keys to
+/// their projected identities, decodes the immutable Realm, selects its
+/// release-pinned transfer profile, and parses the actual source bytes before
+/// writing `CUSTODY_SOURCE_OWNER`.  The later Custody child remains the owner
+/// of transfer authorization and poststate, but it is not the proof for this
+/// General register.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralPlaceOrderTokenObservationErrorV1 {
+    /// The General common identity bank was not complete.
+    InvalidCapacity,
+    /// A supplied Custody physical key did not match its AccountProfile value.
+    FrameIdentity,
+    /// The immutable Realm record was not one exact canonical Realm.
+    Realm,
+    /// The Realm did not bind the frame's token program.
+    RealmTokenProgram,
+    /// The Realm did not bind the frame's collateral mint.
+    RealmMint,
+    /// No exact production token adapter release matched the Realm selection.
+    AdapterRelease,
+    /// The observed source account was not owned by the selected token program.
+    SourceProgram,
+    /// The selected transfer profile rejected the source token-account bytes.
+    SourceToken,
+    /// The actual source token account named a mint other than the Realm mint.
+    SourceMint,
+}
+
+/// Seed PlaceOrder's external Custody source owner from the actual selected
+/// token account, after AccountProfile has projected the route identities.
+///
+/// This is deliberately separate from signed-term seeding.  The signed header
+/// supplies the maker assertion; this adapter supplies the token-account fact;
+/// `project_general_place_order_candidate_in_place_v3` joins the two through
+/// `EnvironmentCustodySourceOwner`.
+pub fn seed_general_place_order_custody_source_owner_v3(
+    realm_key: [u8; 32],
+    realm_data: &[u8],
+    mint_key: [u8; 32],
+    token_program_key: [u8; 32],
+    source_key: [u8; 32],
+    source_program: [u8; 32],
+    source_data: &[u8],
+    identities: &mut [[u8; 32]],
+) -> core::result::Result<(), GeneralPlaceOrderTokenObservationErrorV1> {
+    let expected = |coordinate| identities.get(usize::try_from(coordinate).ok()?).copied();
+    if identities.len()
+        != usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+            .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity);
+    }
+    if expected(identity::REALM) != Some(realm_key)
+        || expected(identity::MINT) != Some(mint_key)
+        || expected(identity::TOKEN_PROGRAM) != Some(token_program_key)
+        || expected(identity::CUSTODY_SOURCE) != Some(source_key)
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity);
+    }
+    let realm =
+        RealmV1::decode(realm_data).map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::Realm)?;
+    if realm.token_program() != &token_program_key {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::RealmTokenProgram);
+    }
+    if realm.collateral_mint() != &mint_key {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::RealmMint);
+    }
+    let mut selected = None;
+    for release in PRODUCTION_ADAPTER_RELEASES {
+        let release_id = digest(&release.to_bytes());
+        if &release_id == realm.collateral_adapter_release_id() {
+            selected = Some(release.profile());
+            break;
+        }
+    }
+    let profile: ExactTransferProfileV1 =
+        selected.ok_or(GeneralPlaceOrderTokenObservationErrorV1::AdapterRelease)?;
+    if source_program != token_program_key {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::SourceProgram);
+    }
+    let source = profile
+        .check_transfer_account(token_program_key, source_data)
+        .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::SourceToken)?;
+    if source.mint != mint_key {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint);
+    }
+    *identities
+        .get_mut(
+            usize::try_from(identity::CUSTODY_SOURCE_OWNER)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = source.owner;
     Ok(())
 }
 
@@ -5226,10 +5332,202 @@ mod tests {
     };
     use crate::general_codec::successor_request_v3::{ControllerActionV3, ControllerRequestV3};
     use crate::general_config::v3::GeneralConfigV3Input;
+    use dclutch_custody::token_svm::state::TokenAccountLayoutV1;
+    use dclutch_custody::token_svm::{ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_SUFFIX};
+    use dclutch_market::realm::{
+        FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
+    };
     use dclutch_vm::v3::{ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic};
 
     fn put_test(output: &mut [u8], offset: usize, value: &[u8]) {
         output[offset..offset + value.len()].copy_from_slice(value);
+    }
+
+    fn place_order_token_observation_fixture(
+        release_index: usize,
+        immutable_owner_suffix: bool,
+    ) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32], Vec<u8>, Vec<u8>) {
+        let release = PRODUCTION_ADAPTER_RELEASES[release_index];
+        let realm_key = [0x41; 32];
+        let mint_key = [0x42; 32];
+        let token_program = release.profile().program_id();
+        let source_key = [0x43; 32];
+        let source_owner = [0x44; 32];
+        let realm = RealmV1::new(RealmV1Input {
+            token_program,
+            collateral_mint: mint_key,
+            collateral_adapter_release_id: digest(&release.to_bytes()),
+            mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+            freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+        })
+        .expect("canonical Realm");
+        let mut source = vec![0_u8; ACCOUNT_BYTES];
+        source[TokenAccountLayoutV1::MINT..TokenAccountLayoutV1::MINT + 32]
+            .copy_from_slice(&mint_key);
+        source[TokenAccountLayoutV1::OWNER..TokenAccountLayoutV1::OWNER + 32]
+            .copy_from_slice(&source_owner);
+        source[TokenAccountLayoutV1::AMOUNT..TokenAccountLayoutV1::AMOUNT + 8]
+            .copy_from_slice(&1_u64.to_le_bytes());
+        source[TokenAccountLayoutV1::STATE] = 1;
+        if immutable_owner_suffix {
+            source.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+        }
+        (
+            realm_key,
+            mint_key,
+            token_program,
+            source_key,
+            realm.to_bytes().to_vec(),
+            source,
+        )
+    }
+
+    fn place_order_token_identity_bank(
+        realm_key: [u8; 32],
+        mint_key: [u8; 32],
+        token_program: [u8; 32],
+        source_key: [u8; 32],
+    ) -> Vec<[u8; 32]> {
+        let mut identities = vec![
+            [0_u8; 32];
+            usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .expect("identity width")
+        ];
+        identities[usize::try_from(identity::REALM).expect("realm")] = realm_key;
+        identities[usize::try_from(identity::MINT).expect("mint")] = mint_key;
+        identities[usize::try_from(identity::TOKEN_PROGRAM).expect("token program")] =
+            token_program;
+        identities[usize::try_from(identity::CUSTODY_SOURCE).expect("source")] = source_key;
+        identities
+    }
+
+    #[test]
+    fn place_order_token_adapter_observes_selected_source_owner_and_refuses_hostiles_atomically() {
+        // The zero-extension release admits the ordinary 165-byte account;
+        // the ImmutableOwner release admits its exact 170-byte ATA form.
+        for (release_index, immutable_owner_suffix) in [(1, false), (2, true)] {
+            let (realm_key, mint_key, token_program, source_key, realm, source) =
+                place_order_token_observation_fixture(release_index, immutable_owner_suffix);
+            let mut identities =
+                place_order_token_identity_bank(realm_key, mint_key, token_program, source_key);
+            seed_general_place_order_custody_source_owner_v3(
+                realm_key,
+                &realm,
+                mint_key,
+                token_program,
+                source_key,
+                token_program,
+                &source,
+                &mut identities,
+            )
+            .expect("selected exact token profile admits its source");
+            assert_eq!(
+                identities[usize::try_from(identity::CUSTODY_SOURCE_OWNER).expect("owner")],
+                [0x44; 32]
+            );
+        }
+
+        let (realm_key, mint_key, token_program, source_key, realm, source) =
+            place_order_token_observation_fixture(1, false);
+        let identities =
+            place_order_token_identity_bank(realm_key, mint_key, token_program, source_key);
+        let mut wrong_program = identities.clone();
+        let before = wrong_program.clone();
+        assert_eq!(
+            seed_general_place_order_custody_source_owner_v3(
+                realm_key,
+                &realm,
+                mint_key,
+                token_program,
+                source_key,
+                [0x99; 32],
+                &source,
+                &mut wrong_program,
+            ),
+            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceProgram)
+        );
+        assert_eq!(wrong_program, before);
+
+        let mut wrong_mint = source.clone();
+        wrong_mint[TokenAccountLayoutV1::MINT] ^= 1;
+        let mut mint_bank = identities.clone();
+        let before = mint_bank.clone();
+        assert_eq!(
+            seed_general_place_order_custody_source_owner_v3(
+                realm_key,
+                &realm,
+                mint_key,
+                token_program,
+                source_key,
+                token_program,
+                &wrong_mint,
+                &mut mint_bank,
+            ),
+            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint)
+        );
+        assert_eq!(mint_bank, before);
+
+        let mut extension = source.clone();
+        extension.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+        let mut extension_bank = identities.clone();
+        let before = extension_bank.clone();
+        assert_eq!(
+            seed_general_place_order_custody_source_owner_v3(
+                realm_key,
+                &realm,
+                mint_key,
+                token_program,
+                source_key,
+                token_program,
+                &extension,
+                &mut extension_bank,
+            ),
+            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken)
+        );
+        assert_eq!(extension_bank, before);
+
+        let unknown_release_realm = RealmV1::new(RealmV1Input {
+            token_program,
+            collateral_mint: mint_key,
+            collateral_adapter_release_id: [0x77; 32],
+            mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+            freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+        })
+        .expect("syntactically canonical but unselected Realm release")
+        .to_bytes();
+        let mut release_bank = identities.clone();
+        let before = release_bank.clone();
+        assert_eq!(
+            seed_general_place_order_custody_source_owner_v3(
+                realm_key,
+                &unknown_release_realm,
+                mint_key,
+                token_program,
+                source_key,
+                token_program,
+                &source,
+                &mut release_bank,
+            ),
+            Err(GeneralPlaceOrderTokenObservationErrorV1::AdapterRelease)
+        );
+        assert_eq!(release_bank, before);
+
+        let mut frame_bank = identities.clone();
+        let before = frame_bank.clone();
+        assert_eq!(
+            seed_general_place_order_custody_source_owner_v3(
+                realm_key,
+                &realm,
+                mint_key,
+                [0x8a; 32],
+                source_key,
+                [0x8a; 32],
+                &source,
+                &mut frame_bank,
+            ),
+            Err(GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity)
+        );
+        assert_eq!(frame_bank, before);
     }
 
     /// The whole `296 + 16N` batch account one projector hostile-decodes.
@@ -7455,6 +7753,45 @@ mod tests {
             ),
             Err(GeneralHotCandidateErrorV3::PlaceOrderCoordinate(
                 PlaceOrderClauseV3::IdentityPayer
+            ))
+        );
+        assert_eq!(candidate, before);
+    }
+
+    #[test]
+    fn place_order_actual_token_owner_must_equal_the_authenticated_signed_maker() {
+        let outcome_count = 1;
+        let mut environment = environment();
+        let config = open_batch_config(environment);
+        let (root, batch) = opened_batch(outcome_count, environment, config);
+        let current_slot = 101;
+        let order_bytes = placed_order_bytes(outcome_count, environment, batch, current_slot);
+        let order = GeneralOrderV2::decode(&order_bytes).expect("order");
+        environment.destination_vault_context = order.order_id();
+        environment.custody_source_owner = [0xee; 32];
+        environment.settlement_position_owner = order.order_id();
+        environment.rent_credit = order.header().owner_id;
+        let mut candidate =
+            place_order_input(outcome_count, environment, root, batch, order, current_slot);
+        let before = candidate.clone();
+        let mut signed_terms =
+            vec![0; general_signed_order_terms_len_v2(outcome_count).expect("signed width")];
+        order
+            .encode_signed_terms_into(&mut signed_terms)
+            .expect("signed immutable terms");
+        assert_eq!(
+            project_general_place_order_candidate_in_place_v3(
+                &root.to_bytes(),
+                &batch_record(batch),
+                config,
+                outcome_count,
+                environment,
+                Some(order.order_id()),
+                &signed_terms,
+                &mut candidate,
+            ),
+            Err(GeneralHotCandidateErrorV3::PlaceOrderCoordinate(
+                PlaceOrderClauseV3::EnvironmentCustodySourceOwner
             ))
         );
         assert_eq!(candidate, before);

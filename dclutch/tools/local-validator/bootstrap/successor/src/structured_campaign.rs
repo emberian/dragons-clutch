@@ -8,21 +8,49 @@
 
 use std::path::PathBuf;
 
-use dclutch_claims::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2;
-use dclutch_market::{
-    capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-    realm::REALM_SCHEMA_RELEASE_ID_V1,
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_claims::{
+    rational_kernel::RepresentationDescriptorV2,
+    rational_lifecycle::{
+        LIFECYCLE_HEADER_BYTES_V2, LifecycleRequestV2,
+        hot_v6::STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1,
+    },
+    structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
 };
-use dclutch_operator::representation_composition::native_categorical_v1::{
-    NativeBasisCompositionInputV1, compile_native_basis_composition_v1,
+use dclutch_market::{
+    CoreState,
+    capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    capability_program::hot_v3::{
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
+        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+        HOT_REGISTRY_PROGRAM_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
+        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+        HOT_STRATEGY_RAW_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+        HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
+    },
+    realm::REALM_SCHEMA_RELEASE_ID_V1,
 };
 use dclutch_operator::structured_activation_bundle_v1::{
     STRUCTURED_CAPABILITY_ROOT_TAIL_V1, structured_activation_request_v1,
+};
+use dclutch_operator::{
+    capability_seal_v1::{CapabilitySealInstructionInputV1, capability_seal_instruction_v1},
+    observation::decode_rent,
+    rational_lifecycle_hot::CheckedRationalLifecycleHotOuterV3,
+    representation_composition::native_categorical_v1::{
+        NativeBasisCompositionInputV1, compile_native_basis_composition_v1,
+    },
 };
 use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use serde_json::json;
 use sha2::Digest as _;
 use solana_sdk::{
+    instruction::AccountMeta,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
 };
@@ -33,6 +61,7 @@ use crate::{
     cluster::{ClusterOriginV1, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::pubkey,
+    rational_lifecycle_hot_frame::AuthenticatedRationalLifecycleHotFrameV1,
     rpc::Rpc,
     selected_capability_activation::{
         SelectedActivationRecordPairV1, SelectedCapabilityActivationInputV1,
@@ -47,6 +76,9 @@ use crate::{
         publish_structured_publication_closure_v1,
     },
     structured_composition_admission::hydrate_structured_composition_admission_v1,
+    structured_physical_frame::{
+        ActivateReceiptPhysicalInputsV1, activate_receipt_claims_instruction_v1,
+    },
 };
 
 /// Public owned-loopback command for the Structured publication predecessor.
@@ -230,6 +262,23 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
     } else {
         None
     };
+    let receipt_activation = if let (Some(_published), Some(root_activation), Some(payer)) =
+        (published.as_ref(), root_activation.as_ref(), payer.as_ref())
+    {
+        Some(activate_structured_receipt_v1(
+            &mut rpc,
+            payer,
+            &plan,
+            &market_input,
+            &evidence,
+            &artifacts,
+            activation.market,
+            root_activation,
+            &mut transactions,
+        )?)
+    } else {
+        None
+    };
     write_json(
         &arguments.output,
         &json!({
@@ -249,6 +298,7 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             })).collect::<Vec<_>>()),
             "compositionAdmission": admitted,
             "rootActivation": root_activation,
+            "receiptActivation": receipt_activation,
             "transactions": transactions,
         }),
     )
@@ -503,6 +553,436 @@ fn activate_structured_root_v1(
     }
     Ok(
         json!({"root": plan.root.to_string(), "slot": plan.facts_slot, "activation": outcome.activation}),
+    )
+}
+
+/// Create the permissionless seal (when vacant) and execute the first real
+/// Structured lifecycle action in one routed, atomic transaction.  Every
+/// coordinate is recovered from finalized records or the root just accepted;
+/// the only fresh writable PDA is the receipt Mint the Claims instruction
+/// itself creates.
+fn activate_structured_receipt_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    plan: &SuccessorPlan,
+    market_input: &[u8],
+    evidence: &crate::campaign::CampaignTerminalEvidenceV1,
+    artifacts: &structured_activation::StructuredActivateReceiptArtifactsV1,
+    market: Pubkey,
+    root_activation: &serde_json::Value,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<serde_json::Value> {
+    use dclutch_claims::rational_kernel::{
+        DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+    };
+    use dclutch_registry::{ActivatedExecutionReleaseSetV1, release_set::ExecutionRoleV1};
+    use dclutch_release_tool::CheckedExecutionReleaseSetV1;
+    use solana_sdk_ids::sysvar;
+
+    let registry = pubkey(&plan.registry.program_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let trading = pubkey(&plan.trading.program_id)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+    let input: crate::model::MarketRunInput = serde_json::from_slice(market_input)?;
+    let selected = input
+        .selected_capability
+        .as_ref()
+        .ok_or_else(|| Error::new("Structured receipt omitted selected capability"))?;
+    let root = root_activation
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("Structured root activation omitted its root identity"))
+        .and_then(pubkey)?;
+    let manifest = selected_pair_v1(
+        registry,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        &crate::runtime::decode_hex(&input.capability_manifest_hex)?,
+    )?;
+    let program_set = selected_pair_v1(
+        registry,
+        dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        &crate::runtime::decode_hex(&selected.program_set_hex)?,
+    )?;
+    let receipt_descriptor = &artifacts.bundle_records[0];
+    let descriptor = selected_pair_v1(
+        registry,
+        receipt_descriptor.schema,
+        &receipt_descriptor.body,
+    )?;
+    let config = selected_pair_v1(registry, artifacts.config.schema, &artifacts.config.body)?;
+    let pair = |index: usize| -> Result<SelectedActivationRecordPairV1> {
+        let value = &artifacts.bundle_records[index];
+        selected_pair_v1(registry, value.schema, &value.body)
+    };
+    let profile = pair(1)?;
+    let request = pair(2)?;
+    let lifecycle = pair(3)?;
+    let strategy = pair(4)?;
+    let transition = pair(5)?;
+    let effect = pair(6)?;
+    let report_pair = |label: &str, schema: [u8; 32]| -> Result<SelectedActivationRecordPairV1> {
+        let row = evidence
+            .accounts
+            .get(label)
+            .ok_or_else(|| Error::new(format!("Structured receipt report omitted {label}")))?;
+        pair_from_digest_v1(registry, schema, crate::plan::hex32(&row.data_sha256)?)
+    };
+    let product = report_pair(
+        "product_record",
+        dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
+    )?;
+    let domain = report_pair(
+        "result_domain_record",
+        dclutch_product::admission::RESULT_DOMAIN_SCHEMA_ID_V2,
+    )?;
+    let portfolio = report_pair(
+        "portfolio_record",
+        dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2,
+    )?;
+    let basis = report_pair(
+        "linked_liability_basis_record",
+        dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    )?;
+
+    // The selected descriptor is the content address and Claims authority
+    // source.  Its authority is derived before observation, never accepted
+    // from a report or CLI.
+    let descriptor_id: [u8; 32] = sha2::Sha256::digest(&receipt_descriptor.body).into();
+    let representation_authority = Pubkey::find_program_address(
+        &[RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, &descriptor_id],
+        &claims,
+    )
+    .0;
+    let descriptor_value = RepresentationDescriptorV2::decode(
+        &receipt_descriptor.body,
+        DescriptorAdmissionV2 {
+            selected_descriptor_id: descriptor_id,
+            finalized_descriptor_id: descriptor_id,
+            recomputed_descriptor_digest: descriptor_id,
+            finalized_descriptor_digest: descriptor_id,
+            record_authenticated: true,
+            derived_representation_authority: representation_authority.to_bytes(),
+            authority_derivation_authenticated: true,
+        },
+    )
+    .map_err(|error| Error::new(format!("Structured receipt descriptor: {error:?}")))?;
+
+    let mut fixed = vec![Pubkey::default(); HOT_FIXED_ACCOUNT_COUNT_V3];
+    let mut place = |index: usize, key: Pubkey| -> Result<()> {
+        if index >= fixed.len() || key == Pubkey::default() {
+            return Err(Error::new(
+                "Structured receipt fixed frame has an invalid coordinate",
+            ));
+        }
+        fixed[index] = key;
+        Ok(())
+    };
+    place(HOT_MARKET_ACCOUNT_V3, market)?;
+    place(HOT_ROOT_ACCOUNT_V3, root)?;
+    for (index, record) in [
+        (HOT_MANIFEST_RAW_ACCOUNT_V3, manifest),
+        (HOT_PROGRAM_SET_RAW_ACCOUNT_V3, program_set),
+        (HOT_DESCRIPTOR_RAW_ACCOUNT_V3, descriptor),
+        (HOT_CONFIG_RAW_ACCOUNT_V3, config),
+        (HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, profile),
+        (HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, request),
+        (HOT_TRANSITION_RAW_ACCOUNT_V3, transition),
+        (HOT_EFFECT_RAW_ACCOUNT_V3, effect),
+        (HOT_LIFECYCLE_RAW_ACCOUNT_V3, lifecycle),
+        (HOT_STRATEGY_RAW_ACCOUNT_V3, strategy),
+        (HOT_PRODUCT_RAW_ACCOUNT_V3, product),
+        (HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, domain),
+        (HOT_PORTFOLIO_RAW_ACCOUNT_V3, portfolio),
+        (HOT_LINKED_BASIS_RAW_ACCOUNT_V3, basis),
+    ] {
+        place(index, record.raw)?;
+        place(index + 1, record.staging)?;
+    }
+    place(HOT_ACTIVATION_CACHE_ACCOUNT_V3, pubkey(&plan.activation)?)?;
+    place(HOT_CORE_PROGRAM_ACCOUNT_V3, core)?;
+    place(
+        HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
+        pubkey(&plan.core.programdata_id)?,
+    )?;
+    place(HOT_TRADING_PROGRAM_ACCOUNT_V3, trading)?;
+    place(
+        HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
+        pubkey(&plan.trading.programdata_id)?,
+    )?;
+    place(HOT_REGISTRY_PROGRAM_ACCOUNT_V3, registry)?;
+    place(HOT_RENT_SYSVAR_ACCOUNT_V3, sysvar::rent::ID)?;
+    place(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, sysvar::instructions::ID)?;
+
+    let core_state = CoreState::decode(
+        &rpc.account(market)?
+            .ok_or_else(|| Error::new("Structured receipt Market vanished after root activation"))?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("Structured receipt Market after root: {error:?}")))?;
+    let rent_credit = Pubkey::new_from_array(core_state.rent_beneficiary.to_bytes());
+    let aggregate = pubkey(
+        &evidence
+            .accounts
+            .get("claims_aggregate")
+            .ok_or_else(|| Error::new("Structured receipt report omitted claims aggregate"))?
+            .address,
+    )?;
+    let receipt_mint = Pubkey::new_from_array(descriptor_value.receipt_mint());
+    let addresses = [
+        market,
+        aggregate,
+        rent_credit,
+        receipt_mint,
+        sysvar::rent::ID,
+        root,
+        pubkey(&plan.activation)?,
+    ];
+    let (slot, accounts) = rpc.finalized_accounts(&addresses, artifacts.slot)?;
+    let account = |index: usize, label: &str| -> Result<crate::rpc::RpcAccount> {
+        accounts.get(index).cloned().flatten().ok_or_else(|| {
+            Error::new(format!(
+                "Structured receipt finalized snapshot omitted {label}"
+            ))
+        })
+    };
+    let market_account = account(0, "Market")?;
+    let aggregate_account = account(1, "Claims aggregate")?;
+    let rent_credit_account = account(2, "RentCredit")?;
+    let rent_account = account(4, "Rent sysvar")?;
+    let rent_observed = dclutch_operator::ObservedAccount {
+        observation: dclutch_operator::Observation {
+            slot,
+            unix_timestamp: rpc.block_time(slot)?,
+            finality: dclutch_operator::Finality::Finalized,
+        },
+        key: sysvar::rent::ID,
+        owner: rent_account.owner,
+        lamports: rent_account.lamports,
+        executable: rent_account.executable,
+        data: rent_account.data.clone(),
+    };
+    let rent = decode_rent(&rent_observed)
+        .map_err(|error| Error::new(format!("Structured receipt finalized Rent: {error:?}")))?;
+    let header = structured_activation::build_activate_receipt_header_v1(
+        structured_activation::ActivateReceiptHeaderObservationV1 {
+            market,
+            market_account: &market_account,
+            claims,
+            aggregate,
+            aggregate_account: &aggregate_account,
+            rent_credit,
+            rent_credit_account: &rent_credit_account,
+            rent_program,
+            receipt_mint_account: accounts.get(3).and_then(Option::as_ref),
+            rent: &rent,
+            descriptor: descriptor_value,
+        },
+    )?;
+    let mut lifecycle_bytes = vec![0; LIFECYCLE_HEADER_BYTES_V2];
+    LifecycleRequestV2::new(header, &[])
+        .map_err(|error| Error::new(format!("Structured receipt lifecycle header: {error:?}")))?
+        .encode_into(&mut lifecycle_bytes)
+        .map_err(|error| Error::new(format!("Structured receipt lifecycle encode: {error:?}")))?;
+    let claims_child = activate_receipt_claims_instruction_v1(
+        ActivateReceiptPhysicalInputsV1 {
+            trading,
+            trading_programdata: pubkey(&plan.trading.programdata_id)?,
+            claims,
+            claims_programdata: pubkey(&plan.claims.programdata_id)?,
+            registry,
+            activation_cache: pubkey(&plan.activation)?,
+            descriptor_raw: descriptor.raw,
+            descriptor_staging: descriptor.staging,
+            representation_authority,
+            receipt_mint,
+            rent_credit,
+            rent_program,
+            claims_market: aggregate,
+            core_market: market,
+            core,
+            core_programdata: pubkey(&plan.core.programdata_id)?,
+        },
+        &lifecycle_bytes,
+    )?;
+    let local = plan.checked_local_mutable_set.as_ref().ok_or_else(|| {
+        Error::new("Structured receipt requires checked local execution evidence")
+    })?;
+    let checked_bytes = BASE64
+        .decode(
+            &local
+                .execution_release_set
+                .checked_execution_release_set_base64,
+        )
+        .map_err(|error| {
+            Error::new(format!(
+                "Structured receipt checked release base64: {error}"
+            ))
+        })?;
+    let checked = CheckedExecutionReleaseSetV1::decode(&checked_bytes)
+        .map_err(|error| Error::new(format!("Structured receipt checked release: {error:?}")))?;
+    let activation_account = account(6, "activation cache")?;
+    let activated = ActivatedExecutionReleaseSetV1::decode(&activation_account.data)
+        .map_err(|error| Error::new(format!("Structured receipt activation cache: {error:?}")))?;
+    if activated.execution_release_set_id().as_bytes()
+        != &core_state.identity.selected_release_set.to_bytes()
+        || checked
+            .execution_release_set_id()
+            .map_err(|error| {
+                Error::new(format!(
+                    "Structured receipt checked release identity: {error:?}"
+                ))
+            })?
+            .as_bytes()
+            != activated.execution_release_set_id().as_bytes()
+    {
+        return Err(Error::new(
+            "Structured receipt checked release and activation cache select different release sets",
+        ));
+    }
+    let hot_outer = CheckedRationalLifecycleHotOuterV3 {
+        trading_program: trading,
+        artifact_release: sha2::Sha256::digest(
+            &activated
+                .role(ExecutionRoleV1::Trading)
+                .release()
+                .to_bytes(),
+        )
+        .into(),
+        checked_manifest_digest: checked
+            .checked_execution_release_set_id()
+            .map_err(|error| {
+                Error::new(format!(
+                    "Structured receipt checked manifest identity: {error:?}"
+                ))
+            })?
+            .to_bytes(),
+    };
+    let seal_key = dclutch_vm::capability_seal::CapabilitySealKeyV1::new(
+        dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
+        descriptor_id,
+        STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1,
+        activated
+            .role(ExecutionRoleV1::Trading)
+            .release()
+            .semantic_release_id()
+            .to_bytes(),
+        registry.to_bytes(),
+    )
+    .map_err(|error| Error::new(format!("Structured receipt seal key: {error:?}")))?;
+    place(
+        HOT_CAPABILITY_SEAL_ACCOUNT_V3,
+        Pubkey::find_program_address(&seal_key.seeds().as_slices(), &trading).0,
+    )?;
+    let metas = fixed
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            if index == HOT_ROOT_ACCOUNT_V3 {
+                AccountMeta::new(*key, false)
+            } else {
+                AccountMeta::new_readonly(*key, false)
+            }
+        })
+        .collect::<Vec<_>>();
+    let frame = AuthenticatedRationalLifecycleHotFrameV1 {
+        fixed_accounts: metas,
+        strategy_accounts: Vec::new(),
+        root_data: account(5, "capability root")?.data,
+        market_data: market_account.data.clone(),
+        release_set: core_state.identity.selected_release_set.to_bytes(),
+        market,
+        generation: core_state.identity.generation,
+        finalized_slot: slot,
+        hot_outer,
+    };
+    let hot = structured_activation::build_selected_activate_receipt_instruction_v1(
+        artifacts,
+        &frame.state()?,
+        &claims_child,
+        descriptor_value,
+        core_state.identity.realm_id.to_bytes(),
+    )?;
+    let seal_before = rpc.account(fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3])?;
+    let mut instructions = Vec::new();
+    if seal_before.is_none() {
+        instructions.push(
+            capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
+                trading_program: trading,
+                registry_program: registry,
+                trading_semantic_release: activated
+                    .role(ExecutionRoleV1::Trading)
+                    .release()
+                    .semantic_release_id()
+                    .to_bytes(),
+                descriptor_digest: descriptor_id,
+                action: STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1,
+                fixed_frame: &fixed,
+                payer: payer.pubkey(),
+            })
+            .map_err(|error| Error::new(format!("Structured receipt seal builder: {error:?}")))?
+            .instruction,
+        );
+    }
+    instructions.push(hot.instruction);
+    let mut routing_addresses = std::collections::BTreeSet::new();
+    for instruction in &instructions {
+        routing_addresses.insert(instruction.program_id);
+        routing_addresses.extend(instruction.accounts.iter().map(|meta| meta.pubkey));
+    }
+    let routing_addresses = routing_addresses.into_iter().collect::<Vec<_>>();
+    let (observation, tables) = crate::market::publish_routing_table_over_v1(
+        rpc,
+        payer,
+        "STRUCTURED-RECEIPT",
+        &routing_addresses,
+        transactions,
+    )?;
+    let sent = rpc.send_v0_on_heap(
+        "activate Structured receipt",
+        &instructions,
+        payer,
+        observation,
+        &tables,
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+    )?;
+    if let Some(error) = sent.error.as_ref() {
+        return Err(Error::new(format!(
+            "Structured receipt activation refused on chain: {error}"
+        )));
+    }
+    transactions.push(sent.clone());
+    let mint = rpc.account(receipt_mint)?.ok_or_else(|| {
+        Error::new("Structured receipt transaction landed without a receipt Mint")
+    })?;
+    let root_after = rpc
+        .account(root)?
+        .ok_or_else(|| Error::new("Structured receipt transaction removed its root"))?;
+    let root_tail = root_after
+        .data
+        .get(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or_else(|| Error::new("Structured receipt poststate omitted root state"))?;
+    dclutch_market::capability_program::CapabilityRootHeaderV1::decode(
+        root_after
+            .data
+            .get(..dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .ok_or_else(|| Error::new("Structured receipt poststate omitted root header"))?,
+    )
+    .map_err(|error| {
+        Error::new(format!(
+            "Structured receipt poststate root header: {error:?}"
+        ))
+    })?;
+    if mint.owner != Pubkey::new_from_array(descriptor_value.token_program())
+        || mint.data.len() != dclutch_custody::token_svm::TOKEN_2022_CLOSEABLE_MINT_BYTES_V2
+        || root_tail.is_empty()
+    {
+        return Err(Error::new(
+            "Structured receipt poststate differs from canonical Mint or root state",
+        ));
+    }
+    Ok(
+        json!({"slot": sent.slot, "receiptMint": receipt_mint.to_string(), "receiptMintLamports": mint.lamports, "receiptMintBytes": mint.data.len(), "root": root.to_string(), "rootBytes": root_after.data.len(), "rootStateSha256": sha256_hex(root_tail), "seal": fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3].to_string(), "routingTables": tables.iter().map(|table| table.key.to_string()).collect::<Vec<_>>() }),
     )
 }
 

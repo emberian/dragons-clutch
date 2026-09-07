@@ -497,6 +497,35 @@ pub(crate) fn run_engine_with_admitted_candidate(
             &mut current_identities,
         )
         .map_err(|_| BuilderError::Projection("general-place-order-terms"))?;
+        // The signed header names the maker; it does not get to assert the
+        // authority of the external account Custody will debit.  Read that
+        // fact through the selected Realm token profile from the exact Custody
+        // frame coordinates, matching Trading's typed adapter step below.
+        let custody = |role| {
+            let coordinate = dclutch_trading::general::account_rules_v3::general_place_order_transfer_custody_coordinate_v3(role)
+                .map_err(|_| BuilderError::Projection("general-place-order-custody-frame"))?;
+            observations
+                .get(usize::from(coordinate))
+                .copied()
+                .ok_or(BuilderError::Projection(
+                    "general-place-order-custody-frame",
+                ))
+        };
+        let realm = custody(dclutch_custody::CustodyFrameRoleV1::RealmRecord)?;
+        let mint = custody(dclutch_custody::CustodyFrameRoleV1::Mint)?;
+        let token_program = custody(dclutch_custody::CustodyFrameRoleV1::TokenProgram)?;
+        let source = custody(dclutch_custody::CustodyFrameRoleV1::TransferSource)?;
+        dclutch_trading::general::hot_candidate_v3::seed_general_place_order_custody_source_owner_v3(
+            realm.key(),
+            realm.data(),
+            mint.key(),
+            token_program.key(),
+            source.key(),
+            source.owner(),
+            source.data(),
+            &mut current_identities,
+        )
+        .map_err(|_| BuilderError::Projection("general-place-order-source-owner"))?;
     }
 
     // Phase 3: current-Rent quote projection.

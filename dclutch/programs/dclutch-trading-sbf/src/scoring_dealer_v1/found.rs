@@ -234,34 +234,23 @@ pub fn process_dealer_found_v1(
     let parent = hash(instruction_data).to_bytes();
     let rent_credit = get(admit_window, ADMIT_RENT_CREDIT_ACCOUNT)?;
     let rent_program = get(admit_window, ADMIT_RENT_PROGRAM_ACCOUNT)?;
-    if rent_credit.owner != rent_program.key {
-        return Err(ScoringDealerErrorV1::Custody.into());
-    }
     let rent_credit_state = LifecycleRentCreditV2::decode(
         &rent_credit
             .try_borrow_data()
             .map_err(|_| ScoringDealerErrorV1::Custody)?,
     )
     .map_err(|_| ScoringDealerErrorV1::Custody)?;
-    if rent_credit_state.refund_wallet().to_bytes() != sponsor.key.to_bytes()
-        || rent_credit_state.market().to_bytes() != request.market
-        || rent_credit_state.release_set().to_bytes() != facts.release_set
-        || rent_credit_state.generation() != facts.generation
-    {
-        return Err(ScoringDealerErrorV1::Custody.into());
-    }
-    let generation = facts.generation.to_le_bytes();
-    let (expected_rent_credit, expected_bump) = Pubkey::find_program_address(
-        &[
-            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
-            request.market.as_ref(),
-            &generation,
-        ],
-        rent_program.key,
-    );
-    if rent_credit.key != &expected_rent_credit || rent_credit_state.pda_bump() != expected_bump {
-        return Err(ScoringDealerErrorV1::Custody.into());
-    }
+    authenticate_rent_credit_v1(
+        *rent_credit.key,
+        *rent_credit.owner,
+        *rent_program.key,
+        rent_credit_state,
+        *sponsor.key,
+        request.market,
+        facts.release_set,
+        facts.generation,
+        facts.rent_beneficiary,
+    )?;
     let replay_rent = rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1);
     invoke_custody_v1(
         program_id,
@@ -441,6 +430,48 @@ const fn semantic_v1(parent: [u8; 32], facts: MarketFactsV1, transfer_index: u16
         execution_index: 0,
         transfer_index,
     }
+}
+
+/// Hold the Custody refund destination to the one lifecycle credit whose
+/// Claims Admit frame will also carry into its child request.
+///
+/// The credit itself commits the sponsor, Market lifecycle, and its canonical
+/// PDA bump.  Keeping this free of account borrows makes each binding
+/// independently testable before this route sends either Custody CPI.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_rent_credit_v1(
+    rent_credit: Pubkey,
+    rent_credit_owner: Pubkey,
+    rent_program: Pubkey,
+    credit: LifecycleRentCreditV2,
+    sponsor: Pubkey,
+    market: [u8; 32],
+    release_set: [u8; 32],
+    generation: u64,
+    core_rent_beneficiary: [u8; 32],
+) -> Result<(), ProgramError> {
+    if rent_credit_owner != rent_program
+        || rent_credit.to_bytes() != core_rent_beneficiary
+        || credit.refund_wallet().to_bytes() != sponsor.to_bytes()
+        || credit.market().to_bytes() != market
+        || credit.release_set().to_bytes() != release_set
+        || credit.generation() != generation
+    {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
+    let generation_bytes = generation.to_le_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            &market,
+            &generation_bytes,
+        ],
+        &rent_program,
+    );
+    if rent_credit != expected || credit.pda_bump() != bump {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
+    Ok(())
 }
 
 /// Create one Trading-owned PDA under the sponsor's lamports, returning its
@@ -739,6 +770,7 @@ mod tests {
         UserPositionAdmissionErrorV1, UserPositionAdmissionRequestV1,
     };
     use dclutch_claims::protocol_position_v2::ProtocolPositionAdmissionEvidenceV2;
+    use dclutch_market::rent::{RefundAuthority, lifecycle_v2::LifecycleAccountIdV2};
 
     fn request() -> ProtocolPositionRequestV2 {
         ProtocolPositionRequestV2 {
@@ -788,6 +820,202 @@ mod tests {
         .expect("receipt admission")
         .to_receipt_bytes()
         .expect("receipt bytes")
+    }
+
+    fn rent_credit(
+        beneficiary: Pubkey,
+        market: [u8; 32],
+        release_set: [u8; 32],
+        generation: u64,
+        bump: u8,
+    ) -> LifecycleRentCreditV2 {
+        LifecycleRentCreditV2::new(
+            RefundAuthority::new(beneficiary.to_bytes()).expect("beneficiary"),
+            LifecycleAccountIdV2::new(market).expect("market"),
+            LifecycleAccountIdV2::new(release_set).expect("release"),
+            generation,
+            bump,
+        )
+        .expect("RentCredit")
+    }
+
+    /// Custody receives rent only at the Market lifecycle's canonical
+    /// RentCredit.  Each control changes one authenticated coordinate and
+    /// must name DealerFound's exact Custody refusal.
+    #[test]
+    fn founding_rent_credit_binds_every_lifecycle_coordinate() {
+        let sponsor = Pubkey::new_from_array([1; 32]);
+        let market = [2; 32];
+        let release_set = [3; 32];
+        let generation = 4_u64;
+        let rent_program = Pubkey::new_from_array([5; 32]);
+        let (rent_credit_key, bump) = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                &market,
+                &generation.to_le_bytes(),
+            ],
+            &rent_program,
+        );
+        let canonical = rent_credit(sponsor, market, release_set, generation, bump);
+        assert_eq!(
+            authenticate_rent_credit_v1(
+                rent_credit_key,
+                rent_program,
+                rent_program,
+                canonical,
+                sponsor,
+                market,
+                release_set,
+                generation,
+                rent_credit_key.to_bytes(),
+            ),
+            Ok(()),
+            "canonical Core/Claims RentCredit reaches Custody"
+        );
+
+        let custody = Err(ScoringDealerErrorV1::Custody.into());
+        let forged_rent_program = Pubkey::new_from_array([11; 32]);
+        let (forged_credit_key, forged_bump) = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                &market,
+                &generation.to_le_bytes(),
+            ],
+            &forged_rent_program,
+        );
+        let controls = [
+            (
+                "Core rent beneficiary",
+                authenticate_rent_credit_v1(
+                    forged_credit_key,
+                    forged_rent_program,
+                    forged_rent_program,
+                    rent_credit(sponsor, market, release_set, generation, forged_bump),
+                    sponsor,
+                    market,
+                    release_set,
+                    generation,
+                    rent_credit_key.to_bytes(),
+                ),
+            ),
+            (
+                "owner",
+                authenticate_rent_credit_v1(
+                    rent_credit_key,
+                    Pubkey::new_from_array([6; 32]),
+                    rent_program,
+                    canonical,
+                    sponsor,
+                    market,
+                    release_set,
+                    generation,
+                    rent_credit_key.to_bytes(),
+                ),
+            ),
+            (
+                "beneficiary",
+                authenticate_rent_credit_v1(
+                    rent_credit_key,
+                    rent_program,
+                    rent_program,
+                    rent_credit(
+                        Pubkey::new_from_array([7; 32]),
+                        market,
+                        release_set,
+                        generation,
+                        bump,
+                    ),
+                    sponsor,
+                    market,
+                    release_set,
+                    generation,
+                    rent_credit_key.to_bytes(),
+                ),
+            ),
+            (
+                "Market",
+                authenticate_rent_credit_v1(
+                    rent_credit_key,
+                    rent_program,
+                    rent_program,
+                    rent_credit(sponsor, [8; 32], release_set, generation, bump),
+                    sponsor,
+                    market,
+                    release_set,
+                    generation,
+                    rent_credit_key.to_bytes(),
+                ),
+            ),
+            (
+                "release set",
+                authenticate_rent_credit_v1(
+                    rent_credit_key,
+                    rent_program,
+                    rent_program,
+                    rent_credit(sponsor, market, [9; 32], generation, bump),
+                    sponsor,
+                    market,
+                    release_set,
+                    generation,
+                    rent_credit_key.to_bytes(),
+                ),
+            ),
+            (
+                "generation",
+                authenticate_rent_credit_v1(
+                    rent_credit_key,
+                    rent_program,
+                    rent_program,
+                    rent_credit(sponsor, market, release_set, generation + 1, bump),
+                    sponsor,
+                    market,
+                    release_set,
+                    generation,
+                    rent_credit_key.to_bytes(),
+                ),
+            ),
+            (
+                "bump",
+                authenticate_rent_credit_v1(
+                    rent_credit_key,
+                    rent_program,
+                    rent_program,
+                    rent_credit(
+                        sponsor,
+                        market,
+                        release_set,
+                        generation,
+                        bump.wrapping_add(1),
+                    ),
+                    sponsor,
+                    market,
+                    release_set,
+                    generation,
+                    rent_credit_key.to_bytes(),
+                ),
+            ),
+            (
+                "address",
+                authenticate_rent_credit_v1(
+                    Pubkey::new_from_array([10; 32]),
+                    rent_program,
+                    rent_program,
+                    canonical,
+                    sponsor,
+                    market,
+                    release_set,
+                    generation,
+                    rent_credit_key.to_bytes(),
+                ),
+            ),
+        ];
+        for (field, result) in controls {
+            assert_eq!(
+                result, custody,
+                "red control: forged {field} refuses as Custody"
+            );
+        }
     }
 
     /// DealerFound owns a record, so it sends Claims' canonical child without
