@@ -38,6 +38,26 @@ operator whose continued presence is required for holders to get paid.
   The pre-existing dirty ensemble test expansion is preserved; it contains
   fixture support but no accepted fold test at intake.
 
+## Current execution findings
+
+- The committed Claims batch is recorded in
+  `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md` and published by cut `b08bc2a57`.
+- The initial local-validator tier at `0a869a766` completed atomic founding
+  through Open and active funding. Its compute-budget witness is red on
+  thirteen rows; the budgets are not widened. It has not exercised the other
+  lifecycle stages. Raw evidence is under
+  `hbox:/tank/dregg-build/dclutch-codex-validator-20260907`.
+- The strict release attempt at `cac1a0593` refused the profiled Trading Hot
+  execution frame: five compiler overwrite diagnostics, with a 3,904-byte
+  measured frame. Extracting the Series replay observation into its own stage
+  reduced that measurement to 3,840 and zero diagnostics. A full checked build
+  and frame-baseline capture remain required from the committed repair.
+- The Dealer now has four owned-loopback commands sharing the public commands'
+  planners, executor and evidence writer. Cluster selection also authenticates
+  the founding report; the local arm refuses even acknowledged public devnet
+  before I/O. The thirteen focused native controls pass. Nonzero ELF and
+  local-validator execution still determine whether the economic path works.
+
 ## Execution order and completion evidence
 
 | Work | Required result |

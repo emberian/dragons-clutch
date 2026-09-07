@@ -1,4 +1,4 @@
-//! The scoring Dealer's four routes, driven against a public cluster.
+//! The scoring Dealer's four routes, driven against an authenticated cluster.
 //!
 //! `DCLSFDR1`, `DCLSQTR1`, `DCLSFLR1` and `DCLSWDR1` are decision 0031's
 //! second mechanism. Until this module they had a program, a codec, a Lean-
@@ -133,6 +133,12 @@ pub(crate) const COMMAND_FILL_V1: &str = "devnet-dealer-fill-v1";
 /// The sponsor takes cash out down to the floor `Φ`.
 pub(crate) const COMMAND_WITHDRAW_V1: &str = "devnet-dealer-withdraw-v1";
 
+/// The same planners and executor, restricted to an owned local validator.
+pub(crate) const COMMAND_FOUND_LOCAL_V1: &str = "local-private-validator-dealer-found-v1";
+pub(crate) const COMMAND_QUOTE_LOCAL_V1: &str = "local-private-validator-dealer-quote-v1";
+pub(crate) const COMMAND_FILL_LOCAL_V1: &str = "local-private-validator-dealer-fill-v1";
+pub(crate) const COMMAND_WITHDRAW_LOCAL_V1: &str = "local-private-validator-dealer-withdraw-v1";
+
 /// The Claims signed-delta window: the fixed frame plus the two Positions.
 const FILL_CLAIMS_WINDOW_ACCOUNTS: usize = 22;
 /// The number of Custody `Transfer` legs a fill carries.
@@ -148,12 +154,16 @@ enum RouteV1 {
 }
 
 impl RouteV1 {
-    const fn command(self) -> &'static str {
-        match self {
-            Self::Found => COMMAND_FOUND_V1,
-            Self::Quote => COMMAND_QUOTE_V1,
-            Self::Fill => COMMAND_FILL_V1,
-            Self::Withdraw => COMMAND_WITHDRAW_V1,
+    const fn command(self, expected: ExpectedClusterV1) -> &'static str {
+        match (self, expected) {
+            (Self::Found, ExpectedClusterV1::Devnet) => COMMAND_FOUND_V1,
+            (Self::Quote, ExpectedClusterV1::Devnet) => COMMAND_QUOTE_V1,
+            (Self::Fill, ExpectedClusterV1::Devnet) => COMMAND_FILL_V1,
+            (Self::Withdraw, ExpectedClusterV1::Devnet) => COMMAND_WITHDRAW_V1,
+            (Self::Found, ExpectedClusterV1::OwnedLoopback) => COMMAND_FOUND_LOCAL_V1,
+            (Self::Quote, ExpectedClusterV1::OwnedLoopback) => COMMAND_QUOTE_LOCAL_V1,
+            (Self::Fill, ExpectedClusterV1::OwnedLoopback) => COMMAND_FILL_LOCAL_V1,
+            (Self::Withdraw, ExpectedClusterV1::OwnedLoopback) => COMMAND_WITHDRAW_LOCAL_V1,
         }
     }
 
@@ -181,6 +191,7 @@ pub(crate) fn usage() -> &'static str {
      \n  dclutch-local-successor-bootstrap devnet-dealer-quote-v1 --rpc-url URL --i-mean-devnet GENESIS --market PUBKEY --campaign-report ABSOLUTE_JSON --dealer-id HEX64 --fee-payer PUBKEY --evidence ABSOLUTE_JSON [--execute --fee-payer-keypair ABSOLUTE_JSON]\n\
      \n  dclutch-local-successor-bootstrap devnet-dealer-fill-v1 --rpc-url URL --i-mean-devnet GENESIS --market PUBKEY --campaign-report ABSOLUTE_JSON --dealer-id HEX64 --taker PUBKEY --taker-token PUBKEY --buy-outcome INDEX --buy-claims CLAIM_UNITS --evidence ABSOLUTE_JSON [--execute --taker-keypair ABSOLUTE_JSON]\n\
      \n  dclutch-local-successor-bootstrap devnet-dealer-withdraw-v1 --rpc-url URL --i-mean-devnet GENESIS --market PUBKEY --campaign-report ABSOLUTE_JSON --dealer-id HEX64 --sponsor PUBKEY --sponsor-token PUBKEY --amount ATOMS --evidence ABSOLUTE_JSON [--execute --sponsor-keypair ABSOLUTE_JSON]\n\
+     \nOwned local-validator equivalents are local-private-validator-dealer-found-v1, local-private-validator-dealer-quote-v1, local-private-validator-dealer-fill-v1 and local-private-validator-dealer-withdraw-v1. They take the same route arguments with --rpc-url http://127.0.0.1:PORT and no --i-mean-devnet. Each arm authenticates both the RPC origin and the founding evidence against its selected cluster.\n\
      \nThe scoring Dealer (decision 0031 mechanism two), and the only caller of DCLSFDR1/DCLSQTR1/DCLSFLR1/DCLSWDR1 anywhere. Nothing economic is guessed: K and the claim-unit conversion come off the Market's own linked-basis record, the rule off the sealed rule account, the inventory off the Dealer's Claims Position, and a fill's receive/deliver/prices out of the host solver that returns only fills the kernel admits. Preflight opens no key and sends nothing. Execute sends one transaction and then reads the fund back and joins it to the route's own receipt shape."
 }
 
@@ -188,6 +199,7 @@ pub(crate) fn usage() -> &'static str {
 #[derive(Debug)]
 struct ArgumentsV1 {
     route: RouteV1,
+    expected_cluster: ExpectedClusterV1,
     rpc_url: String,
     acknowledgment: Option<String>,
     market: Pubkey,
@@ -219,31 +231,59 @@ struct ArgumentsV1 {
 }
 
 pub(crate) fn run_found_devnet_v1(arguments: Vec<String>) -> Result<()> {
-    run(RouteV1::Found, arguments)
+    run(RouteV1::Found, ExpectedClusterV1::Devnet, arguments)
 }
 
 pub(crate) fn run_quote_devnet_v1(arguments: Vec<String>) -> Result<()> {
-    run(RouteV1::Quote, arguments)
+    run(RouteV1::Quote, ExpectedClusterV1::Devnet, arguments)
 }
 
 pub(crate) fn run_fill_devnet_v1(arguments: Vec<String>) -> Result<()> {
-    run(RouteV1::Fill, arguments)
+    run(RouteV1::Fill, ExpectedClusterV1::Devnet, arguments)
 }
 
 pub(crate) fn run_withdraw_devnet_v1(arguments: Vec<String>) -> Result<()> {
-    run(RouteV1::Withdraw, arguments)
+    run(RouteV1::Withdraw, ExpectedClusterV1::Devnet, arguments)
 }
 
-/// Everything the four share: origin, plan, report, evidence.
-fn run(route: RouteV1, arguments: Vec<String>) -> Result<()> {
-    let arguments = parse(route, arguments)?;
-    let acknowledgment = arguments.acknowledgment.as_deref().ok_or_else(|| {
-        Error::new(format!(
+pub(crate) fn run_found_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    run(RouteV1::Found, ExpectedClusterV1::OwnedLoopback, arguments)
+}
+
+pub(crate) fn run_quote_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    run(RouteV1::Quote, ExpectedClusterV1::OwnedLoopback, arguments)
+}
+
+pub(crate) fn run_fill_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    run(RouteV1::Fill, ExpectedClusterV1::OwnedLoopback, arguments)
+}
+
+pub(crate) fn run_withdraw_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    run(
+        RouteV1::Withdraw,
+        ExpectedClusterV1::OwnedLoopback,
+        arguments,
+    )
+}
+
+/// Authenticate before a socket, a founding report, or a key is opened.
+fn authenticate_origin(arguments: &ArgumentsV1) -> Result<ClusterOriginV1> {
+    if arguments.expected_cluster == ExpectedClusterV1::Devnet && arguments.acknowledgment.is_none()
+    {
+        return Err(Error::new(format!(
             "--i-mean-devnet GENESIS_HASH is required to reach a public cluster through {}",
-            route.command()
-        ))
-    })?;
-    let origin = ClusterOriginV1::parse(&arguments.rpc_url, Some(acknowledgment))?;
+            arguments.route.command(arguments.expected_cluster)
+        )));
+    }
+    let origin = ClusterOriginV1::parse(&arguments.rpc_url, arguments.acknowledgment.as_deref())?;
+    arguments.expected_cluster.authenticate(&origin)?;
+    Ok(origin)
+}
+
+/// Everything both clusters and all four routes share: origin, plan and evidence.
+fn run(route: RouteV1, expected_cluster: ExpectedClusterV1, arguments: Vec<String>) -> Result<()> {
+    let arguments = parse(route, expected_cluster, arguments)?;
+    let origin = authenticate_origin(&arguments)?;
     // ReadsOnly on a preflight is what makes "nothing was sent" a property of
     // the transport rather than a promise this function makes.
     let policy = if arguments.execute {
@@ -271,6 +311,7 @@ fn run(route: RouteV1, arguments: Vec<String>) -> Result<()> {
             None,
             None,
             &cluster,
+            expected_cluster,
         )?;
         println!("preflight only; no key was opened and nothing was sent");
         return Ok(());
@@ -361,6 +402,7 @@ fn run(route: RouteV1, arguments: Vec<String>) -> Result<()> {
         Some(signer.pubkey()),
         Some((&landed, &poststate)),
         &cluster,
+        expected_cluster,
     )?;
     Ok(())
 }
@@ -471,7 +513,7 @@ fn derive_coordinates(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<Coordina
         .map_err(|error| Error::new(format!("{}: {error}", arguments.campaign_report.display())))?;
     let evidence = parse_campaign_terminal_evidence_with_expected_cluster_v1(
         &evidence_bytes,
-        ExpectedClusterV1::Devnet,
+        arguments.expected_cluster,
     )?;
     let realm = routed_record(
         &evidence,
@@ -2211,11 +2253,12 @@ fn write_evidence(
     signer: Option<Pubkey>,
     landed: Option<(&TransactionEvidence, &PostStateV1)>,
     cluster: &str,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<()> {
     let document = json!({
         "schema": "dclutch-scoring-dealer-evidence-v1",
         "cluster": cluster,
-        "route": plan.route.command(),
+        "route": plan.route.command(expected_cluster),
         "market": coordinates.market.to_string(),
         "generation": coordinates.generation,
         "releaseSet": hex_lower(&coordinates.release_set),
@@ -2317,7 +2360,11 @@ fn authenticate_signer_evidence_v1(
     Ok(())
 }
 
-fn parse(route: RouteV1, arguments: Vec<String>) -> Result<ArgumentsV1> {
+fn parse(
+    route: RouteV1,
+    expected_cluster: ExpectedClusterV1,
+    arguments: Vec<String>,
+) -> Result<ArgumentsV1> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut market = None;
@@ -2381,6 +2428,7 @@ fn parse(route: RouteV1, arguments: Vec<String>) -> Result<ArgumentsV1> {
     }
     let arguments = ArgumentsV1 {
         route,
+        expected_cluster,
         rpc_url: rpc_url.ok_or_else(|| Error::new("--rpc-url is required"))?,
         acknowledgment,
         market: market.ok_or_else(|| Error::new("--market is required"))?,
@@ -2449,7 +2497,7 @@ fn require_route_flags_v1(arguments: &ArgumentsV1) -> Result<()> {
     if let Some((flag, _)) = foreign.iter().find(|(_, present)| *present) {
         return Err(Error::new(format!(
             "{flag} belongs to another scoring Dealer verb, not to {}",
-            arguments.route.command()
+            arguments.route.command(arguments.expected_cluster)
         )));
     }
     Ok(())
@@ -2504,8 +2552,12 @@ mod tests {
             RouteV1::Fill,
             RouteV1::Withdraw,
         ] {
-            let parsed = parse(route, args(&["--i-mean-devnet", "SomeGenesisHash"]))
-                .expect("the injected origin pair is admitted");
+            let parsed = parse(
+                route,
+                ExpectedClusterV1::Devnet,
+                args(&["--i-mean-devnet", "SomeGenesisHash"]),
+            )
+            .expect("the injected origin pair is admitted");
             assert_eq!(parsed.acknowledgment.as_deref(), Some("SomeGenesisHash"));
             assert_eq!(parsed.rpc_url, "https://api.devnet.solana.com");
         }
@@ -2517,6 +2569,7 @@ mod tests {
     fn a_public_arm_refuses_without_the_acknowledgment() {
         let refusal = run(
             RouteV1::Quote,
+            ExpectedClusterV1::Devnet,
             args(&["--fee-payer", "11111111111111111111111111111111"]),
         )
         .expect_err("the devnet arm must refuse without an acknowledgment");
@@ -2527,11 +2580,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_local_arm_admits_loopback_before_reading_any_files() {
+        for route in [
+            RouteV1::Found,
+            RouteV1::Quote,
+            RouteV1::Fill,
+            RouteV1::Withdraw,
+        ] {
+            let mut argv = args(&[]);
+            argv[1] = "http://127.0.0.1:20890".into();
+            let parsed = parse(route, ExpectedClusterV1::OwnedLoopback, argv).unwrap();
+            assert_eq!(
+                authenticate_origin(&parsed).unwrap(),
+                ClusterOriginV1::Loopback {
+                    url: "http://127.0.0.1:20890/".into(),
+                    port: 20890
+                }
+            );
+            assert!(
+                route
+                    .command(parsed.expected_cluster)
+                    .starts_with("local-private-validator-")
+            );
+        }
+    }
+
+    #[test]
+    fn local_arm_refuses_even_acknowledged_devnet_before_any_io() {
+        let refusal = run(
+            RouteV1::Quote,
+            ExpectedClusterV1::OwnedLoopback,
+            args(&["--i-mean-devnet", crate::cluster::DEVNET_GENESIS_HASH]),
+        )
+        .expect_err("the local command cannot leave its validator");
+        assert_eq!(
+            format!("{refusal}"),
+            "private-validator executor requires an owned loopback validator and refuses every external origin"
+        );
+    }
+
+    #[test]
+    fn local_arm_refuses_an_acknowledgment_on_loopback_before_any_io() {
+        let mut argv = args(&["--i-mean-devnet", crate::cluster::DEVNET_GENESIS_HASH]);
+        argv[1] = "http://127.0.0.1:20890".into();
+        let parsed = parse(RouteV1::Quote, ExpectedClusterV1::OwnedLoopback, argv).unwrap();
+        let refusal = authenticate_origin(&parsed).expect_err("conflicting origin intent");
+        assert_eq!(
+            format!("{refusal}"),
+            "--i-mean-devnet was given for the loopback origin http://127.0.0.1:20890/. A loopback origin needs no acknowledgment, so one of the two is a mistake and this refuses rather than guessing which."
+        );
+    }
+
     /// Another verb's flag is a refusal, not a silently ignored word.
     #[test]
     fn a_foreign_flag_is_refused_by_name() {
-        let refusal = parse(RouteV1::Found, args(&["--amount", "7"]))
-            .expect_err("a withdrawal flag has no place on a founding");
+        let refusal = parse(
+            RouteV1::Found,
+            ExpectedClusterV1::Devnet,
+            args(&["--amount", "7"]),
+        )
+        .expect_err("a withdrawal flag has no place on a founding");
         assert_eq!(
             format!("{refusal}"),
             "--amount belongs to another scoring Dealer verb, not to devnet-dealer-found-v1"

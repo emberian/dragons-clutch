@@ -319,6 +319,18 @@ fn run() -> Result<()> {
         Some(command) if command == direct_fee_settlement::COMMAND_DEVNET_V1 => {
             direct_fee_settlement::run_devnet_v1(arguments.collect())
         }
+        Some(command) if command == scoring_dealer::COMMAND_FOUND_LOCAL_V1 => {
+            scoring_dealer::run_found_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_QUOTE_LOCAL_V1 => {
+            scoring_dealer::run_quote_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_FILL_LOCAL_V1 => {
+            scoring_dealer::run_fill_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_WITHDRAW_LOCAL_V1 => {
+            scoring_dealer::run_withdraw_owned_loopback_v1(arguments.collect())
+        }
         Some(command) if command == scoring_dealer::COMMAND_FOUND_V1 => {
             scoring_dealer::run_found_devnet_v1(arguments.collect())
         }

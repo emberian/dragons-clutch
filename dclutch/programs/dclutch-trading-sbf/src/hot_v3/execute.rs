@@ -1388,30 +1388,11 @@ pub(super) fn execute_authenticated_hot_v3(
         series_expiry_premarket,
     )?;
     hot_cu_checkpoint!("preflight-children");
-    let series_expiry_replay_prestate = if series_expiry_premarket.is_some() {
-        let replay_root = runtime_accounts
-            .first()
-            .copied()
-            .ok_or(TradingSbfError::Content)?;
-        let replay_ticket = runtime_accounts
-            .get(series_expiry::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
-            .copied()
-            .ok_or(TradingSbfError::Content)?;
-        let ticket_digest = hash(
-            &replay_ticket
-                .try_borrow_data()
-                .map_err(|_| TradingSbfError::Content)?,
-        )
-        .to_bytes();
-        Some(SeriesExpiryReplayPrestateV1::authenticated(
-            replay_root,
-            root_prestate,
-            replay_ticket,
-            ticket_digest,
-        )?)
-    } else {
-        None
-    };
+    let series_expiry_replay_prestate = observe_series_expiry_replay_prestate_v1(
+        &runtime_accounts,
+        root_prestate,
+        series_expiry_premarket.is_some(),
+    )?;
     let strategy_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
         execute_shadow_candidate_v3(ShadowCandidateViewV3 {
             program_id,
@@ -1511,6 +1492,39 @@ pub(super) fn execute_authenticated_hot_v3(
         Ok(())
     } else {
         Err(ProgramError::from(commit_status))
+    }
+}
+
+/// Read the replay guard in its own frame before any child executes.
+#[inline(never)]
+fn observe_series_expiry_replay_prestate_v1(
+    runtime_accounts: &[&AccountInfo<'_>],
+    root_prestate: [u8; 32],
+    is_premarket: bool,
+) -> Result<Option<SeriesExpiryReplayPrestateV1>, ProgramError> {
+    if is_premarket {
+        let replay_root = runtime_accounts
+            .first()
+            .copied()
+            .ok_or(TradingSbfError::Content)?;
+        let replay_ticket = runtime_accounts
+            .get(series_expiry::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1)
+            .copied()
+            .ok_or(TradingSbfError::Content)?;
+        let ticket_digest = hash(
+            &replay_ticket
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Content)?,
+        )
+        .to_bytes();
+        Ok(Some(SeriesExpiryReplayPrestateV1::authenticated(
+            replay_root,
+            root_prestate,
+            replay_ticket,
+            ticket_digest,
+        )?))
+    } else {
+        Ok(None)
     }
 }
 
