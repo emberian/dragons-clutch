@@ -2,8 +2,10 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { SOLANA_PACKET_BYTES_V1 } from '@dclutch/sdk/solanaLimits';
+import { type DirectParticipantReadinessV1 } from '@dclutch/sdk/directParticipant';
+import { type SignatureStatusObservation } from '@dclutch/sdk/rpc';
 import { USER_POSITION_ADMISSION_PLAN_FORMAT_V1, USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1, USER_POSITION_ADMISSION_OWNER_ACCOUNT_V1 } from './generated/userPositionAdmissionWasmV1';
-import { compileUserPositionAdmissionTransactionV1 } from './userPositionAdmissionOperation';
+import { compileUserPositionAdmissionTransactionV1, requireFinalizedAdmissionPoststateV1 } from './userPositionAdmissionOperation';
 import { parseUserPositionAdmissionPlanV1 } from './userPositionAdmissionV1';
 
 const BLOCKHASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
@@ -73,5 +75,37 @@ describe('compiling the admission transaction', () => {
         parseUserPositionAdmissionPlanV1(plan(120)), { payer: OWNER, recentBlockhash: BLOCKHASH });
     } catch (error) { failed = error instanceof Error ? error.message : ''; }
     expect(failed).toMatch(/admission transaction does not fit Solana’s 1,232-byte packet bound: the frame reached \d+ distinct accounts/);
+  });
+});
+
+describe('admission completion evidence', () => {
+  const prepared = Object.freeze({
+    derived: Object.freeze({ position: distinctKey(31), admission: distinctKey(32), claimsAggregate: distinctKey(33), rentCredit: distinctKey(34), generation: '7' }),
+  });
+  const ready: DirectParticipantReadinessV1 = Object.freeze({
+    status: 'ready' as const,
+    observedSlot: '901', market: distinctKey(35), generation: 7n, owner: OWNER,
+    coordinates: Object.freeze({ aggregate: distinctKey(33), position: prepared.derived.position, admission: prepared.derived.admission, collateral: distinctKey(36), custodyAuthority: distinctKey(37) }),
+    collateralMint: distinctKey(38), tokenProgram: distinctKey(39), positionRevision: 0n,
+    positionBalances: Object.freeze([0n, 0n]), collateralAtoms: 0n, delegatedCollateralAtoms: 0n,
+    spendableCollateralAtoms: 0n, reason: 'authenticated',
+  });
+  const status = (confirmationStatus: string | null): SignatureStatusObservation => Object.freeze({
+    signature: 'signature', known: true, slot: '901', confirmationStatus, succeeded: true, errorText: null,
+  });
+
+  it('requires a successful finalized signature and the exact derived accounts', () => {
+    expect(() => requireFinalizedAdmissionPoststateV1(status('confirmed'), ready, prepared))
+      .toThrow(/not a successful finalized transaction/);
+    expect(requireFinalizedAdmissionPoststateV1(status('finalized'), ready, prepared).observedSlot).toBe('901');
+  });
+
+  it('does not clear a journal when the finalized read names another admission', () => {
+    const substituted: DirectParticipantReadinessV1 = Object.freeze({
+      ...ready,
+      coordinates: Object.freeze({ ...ready.coordinates, admission: distinctKey(40) }),
+    });
+    expect(() => requireFinalizedAdmissionPoststateV1(status('finalized'), substituted, prepared))
+      .toThrow(/different Position or admission coordinates/);
   });
 });

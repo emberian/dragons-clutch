@@ -1,20 +1,26 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
 import {
   inspectDirectParticipantReadinessV1,
   type DirectParticipantReadinessV1,
+  type DirectParticipantRequestV1,
 } from '@dclutch/sdk/directParticipant';
 import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 // The admission planner is typed against this app's own RPC client. The two
 // classes are structurally identical and nominally distinct; importing the one
 // the callee expects is smaller than widening a signature to paper over it.
 import { SolanaRpcClient as WebSolanaRpcClient } from '@dclutch/sdk/rpc';
-import { prepareUserPositionAdmissionV1, type PreparedAdmissionV1 } from '@/lib/userPositionAdmissionOperation';
+import {
+  prepareUserPositionAdmissionV1,
+  requireFinalizedAdmissionPoststateV1,
+  type PreparedAdmissionV1,
+} from '@/lib/userPositionAdmissionOperation';
 import {
   clearFinalizedClientOperationJournalV1,
+  findClientOperationJournalV1,
   markClientOperationSubmittedV1,
   requireSubmittedSignatureMatchV1,
   submittedClientOperationWireV1,
@@ -26,6 +32,7 @@ import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '
 import { hex, sha256 } from '@dclutch/sdk/bytes';
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import { type UserPositionAdmissionRequestV1 } from '@/lib/userPositionAdmissionSnapshot';
+import { publicFirstAdmissionBindingV1 } from '@/lib/publicMarketBindings';
 
 /**
  * The joining face of one Market: does the connected wallet hold a Position
@@ -36,20 +43,16 @@ import { type UserPositionAdmissionRequestV1 } from '@/lib/userPositionAdmission
  * them at one finalized floor. The panel never invents a probability, a
  * balance, or a state.
  *
- * Admission itself is not composed in the browser. The admission transaction
- * (Position + admission evidence + the seeded collateral account, with exact
- * rent top-ups) is built by the operator toolchain that the protocol's own
- * lifecycle tests drive, and it needs the position owner's signature over a
- * frame the browser cannot yet assemble byte-exactly. This panel says that
- * plainly and hands the reader the exact command instead of a button that
- * could not tell the truth.
+ * Admission is composed by the compiled Rust planner. The browser owns only
+ * finalized reads, wallet handoff, durable recovery, and an authenticated
+ * finalized poststate before it says the wallet joined.
  */
 
 type AdmissionState =
   | Readonly<{ kind: 'idle' | 'planning' }>
   | Readonly<{ kind: 'planned' | 'signing'; prepared: PreparedAdmissionV1 }>
-  | Readonly<{ kind: 'submitted'; prepared: PreparedAdmissionV1; signature: string; note: string }>
-  | Readonly<{ kind: 'joined'; signature: string }>
+  | Readonly<{ kind: 'submitted'; prepared: PreparedAdmissionV1 | null; signature: string; note: string }>
+  | Readonly<{ kind: 'joined'; signature: string; observedSlot: string }>
   | Readonly<{ kind: 'refused'; reason: string }>;
 
 function browserStorage(): Storage {
@@ -88,6 +91,7 @@ export function JoinStanding({
   walletAddress,
   endpoint,
   admission,
+  poststate,
   directory,
 }: Readonly<{
   readiness: DirectParticipantReadinessV1;
@@ -100,6 +104,8 @@ export function JoinStanding({
    * rather than offered and refused after a reader commits to it.
    */
   admission?: UserPositionAdmissionRequestV1;
+  /** The independent finalized reread required before admission is complete. */
+  poststate?: DirectParticipantRequestV1;
   /** The connected wallet's handoff. Absent renders the plan without signing. */
   directory?: WalletDirectoryHandleV1;
 }>) {
@@ -136,7 +142,7 @@ export function JoinStanding({
       ? <p className="market-refusal">This market has already resolved, so joining it now would buy nothing: no further trades or claims are possible on a terminal market.</p>
       : <>
         <p className="detail-subhead">How to join</p>
-        <AdmitInThisBrowser endpoint={endpoint} walletAddress={walletAddress} admission={admission} directory={directory} />
+        <AdmitInThisBrowser endpoint={endpoint} walletAddress={walletAddress} admission={admission} poststate={poststate} directory={directory} />
       </>}
   </>;
 }
@@ -176,6 +182,7 @@ export function admissionRequestV1(input: Readonly<{
   registryProgramId: string | null; claimsProgramId: string | null;
   tradingProgramId: string | null; rentProgramId: string | null;
   activationCache?: string | null;
+  linkedBasisRecordDigest?: string;
 }>): UserPositionAdmissionRequestV1 | undefined {
   const { registryProgramId, claimsProgramId, tradingProgramId, rentProgramId, activationCache } = input;
   if (registryProgramId === null || claimsProgramId === null || tradingProgramId === null
@@ -188,7 +195,30 @@ export function admissionRequestV1(input: Readonly<{
     tradingProgramId,
     registryProgramId,
     rentProgramId,
-    activationCache,
+    activationCache, linkedBasisRecordDigest: input.linkedBasisRecordDigest,
+  });
+}
+
+/** The complete independent read request that proves a submitted admission landed. */
+export function admissionPoststateRequestV1(input: Readonly<{
+  market: string; owner: string; coreProgramId: string;
+  registryProgramId: string | null; claimsProgramId: string | null;
+  tradingProgramId: string | null; custodyProgramId: string | null; rentProgramId: string | null;
+}>): DirectParticipantRequestV1 | undefined {
+  const {
+    registryProgramId, claimsProgramId, tradingProgramId, custodyProgramId, rentProgramId,
+  } = input;
+  if (registryProgramId === null || claimsProgramId === null || tradingProgramId === null
+    || custodyProgramId === null || rentProgramId === null) return undefined;
+  return Object.freeze({
+    market: input.market,
+    owner: input.owner,
+    coreProgram: input.coreProgramId,
+    registryProgram: registryProgramId,
+    claimsProgram: claimsProgramId,
+    tradingProgram: tradingProgramId,
+    custodyProgram: custodyProgramId,
+    rentProgram: rentProgramId,
   });
 }
 
@@ -196,15 +226,70 @@ function AdmitInThisBrowser({
   endpoint,
   walletAddress,
   admission,
+  poststate,
   directory,
 }: Readonly<{
   endpoint: string;
   walletAddress: string;
   admission?: UserPositionAdmissionRequestV1;
+  poststate?: DirectParticipantRequestV1;
   /** Absent in a read-only render: planning still works, signing is not offered. */
   directory?: WalletDirectoryHandleV1;
 }>) {
   const [state, setState] = useState<AdmissionState>({ kind: 'idle' });
+
+  async function pollSubmittedAdmission(
+    journal: ClientOperationJournalV1,
+    prepared: PreparedAdmissionV1 | null,
+  ): Promise<void> {
+    if (journal.phase !== 'submitted' || journal.signature === null) throw new Error('admission recovery requires one submitted signature');
+    if (poststate === undefined) throw new Error('this deployment does not name every program required to verify admission poststate');
+    const client = new WebSolanaRpcClient(endpoint);
+    const signature = journal.signature;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = (await client.signatureStatuses([signature]))[0];
+      if (status?.known && status.succeeded === false) {
+        setState({ kind: 'submitted', prepared, signature, note: `The chain reports an error (${status.errorText ?? 'unnamed chain error'}). This submitted record stays saved because it cannot be safely replayed or discarded.` });
+        return;
+      }
+      if (status?.known && status.succeeded === true && status.confirmationStatus === 'finalized') {
+        const readiness = await inspectDirectParticipantReadinessV1(client, poststate);
+        const completed = requireFinalizedAdmissionPoststateV1(status, readiness, prepared ?? undefined);
+        await clearFinalizedClientOperationJournalV1(browserStorage(), journal);
+        setState({ kind: 'joined', signature, observedSlot: completed.observedSlot });
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+    }
+    setState({ kind: 'submitted', prepared, signature, note: 'Not finalized yet. You can close this page; reloading resumes this exact signature and never submits it again.' });
+  }
+
+  const poststateKey = poststate === undefined ? null : [
+    poststate.market, poststate.owner, poststate.coreProgram, poststate.registryProgram,
+    poststate.claimsProgram, poststate.tradingProgram, poststate.custodyProgram, poststate.rentProgram,
+  ].join('|');
+  useEffect(() => {
+    let current = true;
+    if (admission === undefined || poststate === undefined) return () => { current = false; };
+    void (async () => {
+      try {
+        const client = new WebSolanaRpcClient(endpoint);
+        const facts = await client.probe();
+        const journal = await findClientOperationJournalV1(browserStorage(), {
+          clusterGenesis: facts.genesisHash, market: admission.market, owner: walletAddress,
+        }, 'user-position-admission-v1');
+        if (!current || journal === null || journal.phase !== 'submitted') return;
+        setState({ kind: 'submitted', prepared: null, signature: journal.signature!, note: 'Resuming the saved admission signature and finalized poststate. Nothing is resubmitted.' });
+        await pollSubmittedAdmission(journal, null);
+      } catch (error) {
+        if (current) setState({ kind: 'refused', reason: error instanceof Error ? error.message : 'admission recovery refused without a usable reason' });
+      }
+    })();
+    return () => { current = false; };
+    // poststateKey pins every request coordinate without an object-identity loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endpoint, admission?.market, walletAddress, poststateKey]);
+
   if (admission === undefined) {
     return <p className="direct-status">This deployment does not name every program the admission frame needs, so it is not offered here. Nothing about this market has refused.</p>;
   }
@@ -224,11 +309,12 @@ function AdmitInThisBrowser({
    * Sign and send, under the same recovery protocol every other mutation here
    * uses: the exact unsigned intent is journaled BEFORE the wallet opens, the
    * signature is journaled before submission, the packet is sent once, and the
-   * record clears only when the chain confirms it. A reload resumes that
+   * record clears only after a successful finalized signature and an
+   * authenticated finalized participant poststate. A reload resumes that
    * signature and never sends a second one.
    */
   async function signAndSend() {
-    if (state.kind !== 'planned' || directory === undefined || admission === undefined) return;
+    if (state.kind !== 'planned' || directory === undefined || admission === undefined || poststate === undefined) return;
     const prepared = state.prepared;
     setState({ kind: 'signing', prepared });
     let submitted: ClientOperationJournalV1 | null = null;
@@ -251,27 +337,16 @@ function AdmitInThisBrowser({
       setState({ kind: 'submitted', prepared, signature, note: 'Saved before submission; sending the exact signed packet…' });
       const returned = await submitSignedTransactionV1(client, submittedClientOperationWireV1(submitted));
       requireSubmittedSignatureMatchV1(signature, returned);
-      for (let attempt = 0; attempt < 30; attempt += 1) {
-        const status = (await client.signatureStatuses([signature]))[0];
-        if (status?.known && status.succeeded === false) {
-          setState({ kind: 'submitted', prepared, signature, note: `The chain reports an error (${status.errorText ?? 'unnamed chain error'}). This submitted record stays saved because it cannot be safely replayed or discarded.` });
-          return;
-        }
-        if (status?.known && status.succeeded === true) {
-          await clearFinalizedClientOperationJournalV1(browserStorage(), submitted);
-          setState({ kind: 'joined', signature });
-          return;
-        }
-        await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
-      }
-      setState({ kind: 'submitted', prepared, signature, note: 'Not finalized yet. You can close this page; reloading resumes this exact signature and never submits it again.' });
+      await pollSubmittedAdmission(submitted, prepared);
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'admission refused without a usable reason';
       if (submitted !== null) setState({ kind: 'submitted', prepared, signature: submitted.signature!, note: `${reason} The submitted record stays saved; reloading never resubmits it.` });
       else setState({ kind: 'refused', reason });
     }
   }
-
+  const preparedForDisplay = state.kind === 'planned' || state.kind === 'signing'
+    ? state.prepared
+    : state.kind === 'submitted' ? state.prepared : null;
 
   return <>
     <p className="direct-status">Joining is composed in this browser by the <strong>compiled Rust planner</strong> — the same
@@ -285,20 +360,21 @@ function AdmitInThisBrowser({
       </button>
     </div>
     {state.kind === 'refused' && <p className="market-refusal">Refused: {state.reason}</p>}
-    {(state.kind === 'planned' || state.kind === 'signing' || state.kind === 'submitted') && <dl className="detail-facts">
-      <div><dt>Your Position</dt><dd><code>{state.prepared.derived.position}</code></dd></div>
-      <div><dt>Your admission record</dt><dd><code>{state.prepared.derived.admission}</code></dd></div>
-      <div><dt>Refundable storage deposit</dt><dd>{state.prepared.plan.positionTopUpLamports} + {state.prepared.plan.admissionTopUpLamports} lamports</dd></div>
-      <div><dt>Transaction</dt><dd>{state.prepared.wireBytes.length} bytes · one signer · finalized slot {state.prepared.observedSlot}</dd></div>
+    {preparedForDisplay !== null && <dl className="detail-facts">
+      <div><dt>Your Position</dt><dd><code>{preparedForDisplay.derived.position}</code></dd></div>
+      <div><dt>Your admission record</dt><dd><code>{preparedForDisplay.derived.admission}</code></dd></div>
+      <div><dt>Refundable storage deposit</dt><dd>{preparedForDisplay.plan.positionTopUpLamports} + {preparedForDisplay.plan.admissionTopUpLamports} lamports</dd></div>
+      <div><dt>Transaction</dt><dd>{preparedForDisplay.wireBytes.length} bytes · one signer · finalized slot {preparedForDisplay.observedSlot}</dd></div>
       <div><dt>Signer</dt><dd><code>{walletAddress}</code></dd></div>
     </dl>}
-    {(state.kind === 'planned' || state.kind === 'signing') && directory !== undefined && <div className="direct-actions">
+    {(state.kind === 'planned' || state.kind === 'signing') && directory !== undefined && poststate !== undefined && <div className="direct-actions">
       <button type="button" disabled={state.kind === 'signing'} onClick={() => void signAndSend()}>
         {state.kind === 'signing' ? 'Waiting for your wallet…' : 'Sign and join'}
       </button>
     </div>}
     {state.kind === 'submitted' && <p className="direct-status" aria-live="polite">Submitted as <code>{state.signature}</code>. {state.note}</p>}
-    {state.kind === 'joined' && <p className="direct-status" aria-live="polite">You are a participant in this market. Signature <code>{state.signature}</code> is confirmed; your Position and admission record exist on chain.</p>}
+    {(state.kind === 'planned' || state.kind === 'signing') && poststate === undefined && <p className="market-refusal">This deployment does not name every program required to verify admission poststate, so signing is not offered.</p>}
+    {state.kind === 'joined' && <p className="direct-status" aria-live="polite">You are a participant in this market. Signature <code>{state.signature}</code> finalized, and your Position and admission record were authenticated again at finalized slot {state.observedSlot}.</p>}
   </>;
 }
 
@@ -380,7 +456,13 @@ export default function JoinPanel({
           admission={admissionRequestV1({
             market: marketAddress, owner: wallets.address, coreProgramId,
             registryProgramId, claimsProgramId, tradingProgramId, rentProgramId, activationCache,
+            linkedBasisRecordDigest: publicFirstAdmissionBindingV1(marketAddress)?.linkedBasisRecordDigest,
           })}
+          poststate={admissionPoststateRequestV1({
+            market: marketAddress, owner: wallets.address, coreProgramId,
+            registryProgramId, claimsProgramId, tradingProgramId, custodyProgramId, rentProgramId,
+          })}
+          directory={wallets}
         />}
     </div>
   </section>;

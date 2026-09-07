@@ -297,15 +297,7 @@ pub(crate) fn resolve_through_pyth(
     let chain_now = rpc.block_time(slot)?;
     let age = chain_now.saturating_sub(update_view.publish_time());
     let shelf_life_seconds = publication.shelf_life_seconds;
-    if age > shelf_life_seconds {
-        return Err(Error::new(format!(
-            "the Pyth publication this capture carries is {age} seconds old and its stated shelf \
-             life is {shelf_life_seconds}. A pinned capture that has outlived its shelf life must \
-             be RECAPTURED, or minted at the run's own hour by a producer that can; do not widen \
-             the number to make this run pass, which is exactly the failure the bound exists to \
-             prevent."
-        )));
-    }
+    require_primary_publication_freshness_v1(age, shelf_life_seconds, rung.is_some())?;
 
     // ---------------------------------------------------------- the router
     let addresses_p = provider.addresses;
@@ -844,6 +836,31 @@ pub(crate) fn resolve_through_pyth(
             "two address lookup tables, rent-funded to route the two oversized provider frames",
         ),
     ))
+}
+
+/// Apply the publication-age floor only to the primary Pyth leg.
+///
+/// `PythProviderAdapterObligationV2::normalize_authenticated_recovery_update`
+/// retains the terminal-window and future-skew checks but deliberately drops
+/// the primary's age floor. A recovery rung can be reached only after that
+/// primary grace expired, and its own committed deadline takes over. Keeping a
+/// second host-only age floor here would turn an accepted chain route into an
+/// unreachable campaign path.
+fn require_primary_publication_freshness_v1(
+    age: i64,
+    shelf_life_seconds: i64,
+    recovery: bool,
+) -> Result<()> {
+    if recovery || age <= shelf_life_seconds {
+        return Ok(());
+    }
+    Err(Error::new(format!(
+        "the Pyth publication this primary capture carries is {age} seconds old and its stated \
+         shelf life is {shelf_life_seconds}. A pinned capture that has outlived its shelf life \
+         must be RECAPTURED, or minted at the run's own hour by a producer that can; do not widen \
+         the number to make this run pass, which is exactly the failure the bound exists to \
+         prevent."
+    )))
 }
 
 /// Fees paid by every transaction appended since `from`.
@@ -1641,6 +1658,21 @@ mod tests {
             captured.post_update_body.len() + POST_UPDATE_TAG_BYTES == RECEIVER_POST_UPDATE.len(),
             "exactly the tag was dropped, not a byte more"
         );
+    }
+
+    /// The recovery transition is reachable only after the primary freshness
+    /// grace elapsed. The canonical adapter keeps the terminal-window and
+    /// future-skew bounds on that transition, while deliberately dropping this
+    /// lower age bound in favour of the rung's committed deadline.
+    #[test]
+    fn primary_age_floor_does_not_shadow_the_recovery_deadline() {
+        let age = 121_i64;
+        let shelf_life = 120_i64;
+        let primary = require_primary_publication_freshness_v1(age, shelf_life, false)
+            .expect_err("the primary leg still refuses a stale publication");
+        assert!(primary.to_string().contains("primary capture"));
+        require_primary_publication_freshness_v1(age, shelf_life, true)
+            .expect("the recovery leg delegates its later deadline to the canonical adapter");
     }
 
     /// A capture that answers the funded rung does not report the sentence a

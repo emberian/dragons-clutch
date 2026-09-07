@@ -42,15 +42,16 @@ use dclutch_source::pyth::{
     FullPriceUpdateV2, PostUpdateParamsView, PythReleaseV1, ReceiverConfigV2View,
 };
 use dclutch_source::resolution::{
-    PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_EXECUTION_REQUEST_MAGIC_V3,
-    PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3, PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
-    PROVIDER_RESOLUTION_CORE_TAIL_START_V3, PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3,
-    PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_TRADING_TAIL_START_V3,
-    PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
-    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3,
-    ProviderExecutionRequestV3, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
-    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V7, provider_resolution_direct_intent_digest_v1,
+    EnsembleFragmentSeatSeedsV1, PROVIDER_EXECUTION_REQUEST_BYTES_V3,
+    PROVIDER_EXECUTION_REQUEST_MAGIC_V3, PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3,
+    PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_CORE_TAIL_START_V3,
+    PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3, PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
+    PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
+    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    provider_resolution_direct_intent_digest_v1,
 };
 use dclutch_source::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
@@ -80,7 +81,8 @@ use crate::{
     pinned_deployment_refusal,
     provider_v3::{
         AuthenticatedProviderObservationV3, AuthenticatedRecoveryLadderV3,
-        AuthenticatedSourceRecordsV3, ProviderJoinErrorV3, plan_provider_resolution_v3,
+        AuthenticatedSourceRecordsV3, ProviderCaptureV3, ProviderJoinErrorV3,
+        plan_provider_resolution_v3,
     },
 };
 
@@ -112,12 +114,11 @@ pub(crate) fn process_provider_resolution_v3(
             .map_err(|_| ResolutionError::Instruction)?,
     );
     PostUpdateParamsView::parse(post_body).map_err(|_| ResolutionError::ProviderObservation)?;
-    // A capture on a rung above the primary brings the ladder that names its
-    // source, and brings it at the END so that every position a primary capture
-    // ever used keeps its index. `source_index` is not yet trusted here -- the
-    // Source state settles that below -- but it does have to be self-consistent
-    // with the frame it arrived in, and an account count is the cheapest place
-    // to say so.
+    // A recovery capture and every ensemble member capture bring the policy
+    // that names their declared source. It stays at the END so every legacy
+    // primary position keeps its index. A zero-index frame is therefore either
+    // the legacy primary width or the widened member-zero width; the
+    // authenticated material and Source state decide which action it is.
     let (base_count, tail_start) = match request.caller {
         ProviderCallerV3::Core | ProviderCallerV3::Resolution => (
             PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
@@ -128,20 +129,14 @@ pub(crate) fn process_provider_resolution_v3(
             PROVIDER_RESOLUTION_TRADING_TAIL_START_V3,
         ),
     };
-    let recovery_start = if request.source_index == 0 {
-        None
-    } else {
-        Some(base_count)
+    let with_policy = base_count
+        .checked_add(PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let recovery_start = match accounts.len() {
+        count if count == base_count => None,
+        count if count == with_policy => Some(base_count),
+        _ => return Err(ResolutionError::AccountFrame.into()),
     };
-    let expected_count = match recovery_start {
-        None => base_count,
-        Some(_) => base_count
-            .checked_add(PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3)
-            .ok_or(ResolutionError::AccountFrame)?,
-    };
-    if accounts.len() != expected_count {
-        return Err(ResolutionError::AccountFrame.into());
-    }
     authenticate_privileges(program_id, accounts, tail_start)?;
     let frame = ProviderFrameV3 {
         accounts,
@@ -202,6 +197,14 @@ pub(crate) fn process_provider_resolution_v3(
         &observation,
     )
     .map_err(map_provider_join_error)?;
+    if matches!(plan.capture, ProviderCaptureV3::Member(_))
+        && request.caller != ProviderCallerV3::Resolution
+    {
+        // Core's composed path accepts a terminal poststate; a fragment does
+        // not terminalize the Source and is therefore a direct Resolution
+        // action until a dedicated composition owns that poststate.
+        return Err(ResolutionError::SourceLadder.into());
+    }
     drop(source_data);
     drop(result_domain_data);
     drop(update_data);
@@ -374,6 +377,7 @@ fn commit_plan<'info>(
         &next_source,
         &certificate,
         &lifecycle_bytes,
+        plan.capture,
     )?;
     set_provider_receipt(plan)
 }
@@ -421,8 +425,8 @@ fn set_provider_receipt(plan: &crate::provider_v3::ProviderResolutionPlanV3) -> 
 struct ProviderFrameV3<'accounts, 'info> {
     accounts: &'accounts [AccountInfo<'info>],
     tail_start: usize,
-    /// Index of the `RecoveryPolicyV2` raw record, present exactly when this
-    /// capture answers on a rung above the primary.
+    /// Index of the `RecoveryPolicyV2` raw record, present for an active
+    /// recovery rung or an ensemble member capture.
     recovery_start: Option<usize>,
 }
 
@@ -1109,6 +1113,7 @@ fn commit_outputs<'info>(
     source: &[u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
     certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES_V2],
     lifecycle: &[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V3],
+    capture: ProviderCaptureV3,
 ) -> ProgramResult {
     let source_account = frame.account(2);
     let certificate_account = frame.account(3);
@@ -1119,9 +1124,11 @@ fn commit_outputs<'info>(
     {
         return Err(ResolutionError::OutputState.into());
     }
-    source_account
-        .try_borrow_mut_data()
-        .map_err(|_| ResolutionError::OutputState)?;
+    if matches!(capture, ProviderCaptureV3::Terminal) {
+        source_account
+            .try_borrow_mut_data()
+            .map_err(|_| ResolutionError::OutputState)?;
+    }
     if lifecycle_account.owner != program_id
         || lifecycle_account.data_len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
         || lifecycle_account.executable
@@ -1138,10 +1145,8 @@ fn commit_outputs<'info>(
         certificate_account,
         frame.system(),
         rent,
+        capture,
     )?;
-    let mut source_output = source_account
-        .try_borrow_mut_data()
-        .map_err(|_| ResolutionError::OutputState)?;
     let mut certificate_output = certificate_account
         .try_borrow_mut_data()
         .map_err(|_| ResolutionError::OutputState)?;
@@ -1153,7 +1158,12 @@ fn commit_outputs<'info>(
     {
         return Err(ResolutionError::OutputState.into());
     }
-    source_output.copy_from_slice(source);
+    if matches!(capture, ProviderCaptureV3::Terminal) {
+        let mut source_output = source_account
+            .try_borrow_mut_data()
+            .map_err(|_| ResolutionError::OutputState)?;
+        source_output.copy_from_slice(source);
+    }
     certificate_output.copy_from_slice(certificate);
     lifecycle_output.copy_from_slice(lifecycle);
     Ok(())
@@ -1166,19 +1176,33 @@ fn initialize_certificate<'info>(
     certificate: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     rent: &Rent,
+    capture: ProviderCaptureV3,
 ) -> ProgramResult {
-    // Lean-owned Runtime V2 wire tag for ResolutionSuccess.
-    let kind_seed = [1_u8];
     let sequence_seed = request.terminal_sequence.to_le_bytes();
-    let (expected, bump) = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-            source.key.as_ref(),
-            &kind_seed,
-            &sequence_seed,
-        ],
-        program_id,
-    );
+    let expected = match capture {
+        ProviderCaptureV3::Terminal => {
+            // Lean-owned Runtime V2 wire tag for ResolutionSuccess.
+            let kind_seed = [1_u8];
+            let (expected, _) = Pubkey::find_program_address(
+                &[
+                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                    source.key.as_ref(),
+                    &kind_seed,
+                    &sequence_seed,
+                ],
+                program_id,
+            );
+            expected
+        }
+        ProviderCaptureV3::Member(member) => {
+            let seeds = EnsembleFragmentSeatSeedsV1::new(
+                source.key.to_bytes(),
+                member,
+                request.terminal_sequence,
+            );
+            Pubkey::find_program_address(&seeds.seeds(), program_id).0
+        }
+    };
     if certificate.key != &expected {
         return Err(ResolutionError::OutputState.into());
     }
@@ -1201,31 +1225,82 @@ fn initialize_certificate<'info>(
     {
         return Err(ResolutionError::OutputState.into());
     }
-    let bump_seed = [bump];
-    let signer = [
-        RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-        source.key.as_ref(),
-        kind_seed.as_slice(),
-        sequence_seed.as_slice(),
-        bump_seed.as_slice(),
-    ];
+    match capture {
+        ProviderCaptureV3::Terminal => {
+            let kind_seed = [1_u8];
+            let (_, bump) = Pubkey::find_program_address(
+                &[
+                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                    source.key.as_ref(),
+                    &kind_seed,
+                    &sequence_seed,
+                ],
+                program_id,
+            );
+            let bump_seed = [bump];
+            allocate_and_assign_output(
+                program_id,
+                certificate,
+                system,
+                &[
+                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                    source.key.as_ref(),
+                    kind_seed.as_slice(),
+                    sequence_seed.as_slice(),
+                    bump_seed.as_slice(),
+                ],
+            )
+        }
+        ProviderCaptureV3::Member(member) => {
+            let (_, bump) = Pubkey::find_program_address(
+                &EnsembleFragmentSeatSeedsV1::new(
+                    source.key.to_bytes(),
+                    member,
+                    request.terminal_sequence,
+                )
+                .seeds(),
+                program_id,
+            );
+            let member_seed = [member];
+            let bump_seed = [bump];
+            allocate_and_assign_output(
+                program_id,
+                certificate,
+                system,
+                &[
+                    dclutch_source::ENSEMBLE_FRAGMENT_PDA_DOMAIN_V1,
+                    source.key.as_ref(),
+                    member_seed.as_slice(),
+                    sequence_seed.as_slice(),
+                    bump_seed.as_slice(),
+                ],
+            )
+        }
+    }
+}
+
+fn allocate_and_assign_output<'info>(
+    program_id: &Pubkey,
+    output: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    signer: &[&[u8]],
+) -> ProgramResult {
     invoke_signed(
         &allocate(
-            certificate.key,
+            output.key,
             u64::try_from(RESOLUTION_CERTIFICATE_BYTES_V2)
                 .map_err(|_| ResolutionError::Arithmetic)?,
         ),
-        &[certificate.clone(), system.clone()],
-        &[&signer],
+        &[output.clone(), system.clone()],
+        &[signer],
     )
     .map_err(|_| ResolutionError::OutputState)?;
     invoke_signed(
-        &assign(certificate.key, program_id),
-        &[certificate.clone(), system.clone()],
-        &[&signer],
+        &assign(output.key, program_id),
+        &[output.clone(), system.clone()],
+        &[signer],
     )
-    .map_err(|_| ResolutionError::OutputState)?;
-    Ok(())
+    .map_err(|_| ResolutionError::OutputState.into())
 }
 
 #[cfg(test)]

@@ -130,6 +130,19 @@ pub struct ProviderResolutionPlanV3 {
     pub(crate) next_source: SourceResolutionStateV2,
     pub(crate) certificate: ResolutionCertificateV2,
     pub(crate) receipt: ProviderExecutionReceiptV3,
+    /// Whether this provider result terminalizes the Source or is one
+    /// independently captured ensemble fragment.
+    pub(crate) capture: ProviderCaptureV3,
+}
+
+/// The destination semantics authenticated from the material and Source state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProviderCaptureV3 {
+    /// The ordinary one-source or active-recovery terminal.
+    Terminal,
+    /// A declared ensemble member's fragment seat.  The Source remains Primary
+    /// until the post-window fold consumes a quorum of these records.
+    Member(u8),
 }
 
 /// Join one exact real-provider update to Source and Product Runtime V2.
@@ -182,7 +195,13 @@ pub fn plan_provider_resolution_v3(
     // ladder had a capture route: same join, same transition, same certificate
     // fields. Rung `n` is recovery attempt `n - 1`, and reaching it requires
     // the market to have advanced onto exactly that attempt.
-    let rung = select_rung(&request, source_state, ladder)?;
+    let rung = select_rung(
+        &request,
+        source_state,
+        source_records.material,
+        source_records.window,
+        ladder,
+    )?;
     let obligation = match rung {
         LadderRungV3::Primary => PythProviderAdapterObligationV2::from_authenticated_records(
             source_records.material,
@@ -202,6 +221,29 @@ pub fn plan_provider_resolution_v3(
         .map_err(|_| ProviderJoinErrorV3::Source)?,
         LadderRungV3::Recovery { attempt, ladder } => {
             join_recovery_rung(source_records, ladder, attempt)?
+        }
+        LadderRungV3::Member {
+            attempt: Some(attempt),
+            ladder,
+            ..
+        } => join_recovery_rung(source_records, ladder, attempt)?,
+        LadderRungV3::Member { attempt: None, .. } => {
+            PythProviderAdapterObligationV2::from_authenticated_records(
+                source_records.material,
+                source_records.material.product_record_digest(),
+                source_records.source_spec_id,
+                source_records.source,
+                source_records.provider_release_id,
+                source_records.provider_release,
+                source_records.adapter_config_id,
+                source_records.adapter_config,
+                source_records.window_spec_id,
+                source_records.window,
+                source_records.statistic_spec_id,
+                source_records.statistic,
+                source_records.failure_policy_release,
+            )
+            .map_err(|_| ProviderJoinErrorV3::Source)?
         }
     };
     authenticate_provider_release(obligation, source_records.provider_release, observation)?;
@@ -282,6 +324,15 @@ pub fn plan_provider_resolution_v3(
             update.publish_time(),
             observation.current_unix_seconds,
         ),
+        LadderRungV3::Member { .. } => obligation.normalize_authenticated_update(
+            evidence,
+            update.feed_id(),
+            update.price(),
+            update.confidence(),
+            update.exponent(),
+            update.publish_time(),
+            observation.current_unix_seconds,
+        ),
     }
     .map_err(map_normalization_error)?;
 
@@ -316,6 +367,27 @@ pub fn plan_provider_resolution_v3(
             obligation.source_scale_exponent(),
             &request,
         )?,
+        LadderRungV3::Member { .. } => {
+            // Reuse the Source-owned primary mapping on a private copy: it is
+            // the one authority for Product selection, but a member capture
+            // deliberately leaves the persisted Source at Primary.
+            let mut member_source = *source_state;
+            member_source
+                .resolve_primary_from_authenticated_domain(
+                    source_records.material_id,
+                    source_records.material,
+                    source_records.material.product_record_digest(),
+                    observation.result_domain,
+                    evidence,
+                    normalized.atoms(),
+                    1,
+                    obligation.source_scale_exponent(),
+                    request.generation,
+                    observation.current_unix_seconds,
+                    request.terminal_sequence,
+                )
+                .map_err(|_| ProviderJoinErrorV3::Transition)?
+        }
     };
     let outcome_count = observation
         .result_domain
@@ -327,6 +399,10 @@ pub fn plan_provider_resolution_v3(
     {
         return Err(ProviderJoinErrorV3::Product);
     }
+    let capture = match rung {
+        LadderRungV3::Member { member, .. } => ProviderCaptureV3::Member(member),
+        LadderRungV3::Primary | LadderRungV3::Recovery { .. } => ProviderCaptureV3::Terminal,
+    };
     finish_plan(
         request_bytes,
         &request,
@@ -340,6 +416,7 @@ pub fn plan_provider_resolution_v3(
         update.publish_time(),
         update.posted_slot(),
         observation.current_slot,
+        capture,
     )
 }
 
@@ -351,6 +428,14 @@ enum LadderRungV3<'a> {
     /// Rung `n`: recovery attempt `n - 1`, the market standing on exactly it.
     Recovery {
         attempt: RecoveryAttemptV2,
+        ladder: &'a AuthenticatedRecoveryLadderV3,
+    },
+    /// One independently captured ensemble member while the Source remains
+    /// Primary. Member zero is the material's primary source; later members
+    /// are the policy's leading attempt slots.
+    Member {
+        member: u8,
+        attempt: Option<RecoveryAttemptV2>,
         ladder: &'a AuthenticatedRecoveryLadderV3,
     },
 }
@@ -418,7 +503,7 @@ fn resolve_recovery_rung(
             source_records.provider_release_id,
             observation.result_domain,
             evidence,
-            atoms,
+        atoms,
             1,
             source_scale_exponent,
             request.generation,
@@ -440,10 +525,49 @@ fn resolve_recovery_rung(
 fn select_rung<'a>(
     request: &ProviderExecutionRequestV3,
     source_state: &SourceResolutionStateV2,
+    material: SourceMaterialV3,
+    window: WindowSpecV1,
     ladder: Option<&'a AuthenticatedRecoveryLadderV3>,
 ) -> Result<LadderRungV3<'a>, ProviderJoinErrorV3> {
     match (request.source_index, source_state.phase()) {
-        (0, SourceResolutionPhaseV1::Primary) => Ok(LadderRungV3::Primary),
+        (0, SourceResolutionPhaseV1::Primary) if material.ensemble().is_single() => {
+            if ladder.is_some() {
+                return Err(ProviderJoinErrorV3::SourceLadder);
+            }
+            Ok(LadderRungV3::Primary)
+        }
+        (member, SourceResolutionPhaseV1::Primary)
+            if material.ensemble().declares_member(member) =>
+        {
+            let ladder = ladder.ok_or(ProviderJoinErrorV3::SourceLadder)?;
+            let deadline = window
+                .end_unix_seconds()
+                .checked_add(i64::from(window.max_age_seconds()))
+                .ok_or(ProviderJoinErrorV3::Arithmetic)?;
+            ladder
+                .policy
+                .validate_ensemble_membership(
+                    material.ensemble(),
+                    material.ensemble_rungs(),
+                    deadline,
+                )
+                .map_err(|_| ProviderJoinErrorV3::SourceLadder)?;
+            let attempt = if member == 0 {
+                None
+            } else {
+                Some(
+                    ladder
+                        .policy
+                        .member_attempt(material.ensemble(), member)
+                        .map_err(|_| ProviderJoinErrorV3::SourceLadder)?,
+                )
+            };
+            Ok(LadderRungV3::Member {
+                member,
+                attempt,
+                ladder,
+            })
+        }
         (index, SourceResolutionPhaseV1::Recovery) if index != 0 => {
             let attempt_index = index
                 .checked_sub(1)
@@ -477,6 +601,7 @@ fn finish_plan(
     publish_time: i64,
     posted_slot: u64,
     consumed_slot: u64,
+    capture: ProviderCaptureV3,
 ) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
     let observed_at = u64::try_from(publish_time).map_err(|_| ProviderJoinErrorV3::Arithmetic)?;
     let product_record_digest = request.product_record;
@@ -488,7 +613,14 @@ fn finish_plan(
         product_record_digest,
         provider_evidence,
         funding_allocation: [0; 32],
-        receipt_account: request.certificate_account,
+        // A terminal certificate is its own deterministic receipt. A fragment
+        // is consumed later by the ensemble fold, which releases its bounty
+        // to the resolver that captured it; the fragment must therefore name
+        // that captor rather than its Resolution-owned seat.
+        receipt_account: match capture {
+            ProviderCaptureV3::Terminal => request.certificate_account,
+            ProviderCaptureV3::Member(_) => request.resolver,
+        },
         generation: request.generation,
         // How many recovery legs the market had entered when it was answered,
         // which is the rung and is zero for every primary capture ever written.
@@ -545,6 +677,7 @@ fn finish_plan(
         next_source,
         certificate,
         receipt,
+        capture,
     })
 }
 
@@ -579,9 +712,9 @@ mod tests {
     use dclutch_source::pyth::PythReleaseV1Input;
     use dclutch_source::resolution::ProviderCallerV3;
     use dclutch_source::{
-        CapacityEnvelope, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
-        SourceAccessProfile, SourceCapacityProfileV1, SourceResolutionPhaseV1, StatisticKind,
-        WindowKind,
+        CapacityEnvelope, EnsembleSpecV1, RecoveryAttemptV2, RecoveryPolicyV2, RoundingBoundary,
+        SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceAccessProfile, SourceCapacityProfileV1,
+        SourceResolutionPhaseV1, StatisticKind, WindowKind,
     };
     use solana_program::pubkey::Pubkey;
 
@@ -638,6 +771,132 @@ mod tests {
         let mut bytes = [0_u8; 32];
         bytes[0] = tag;
         ProductContentId::new(bytes).expect("nonzero Product content ID")
+    }
+
+    fn selection_request(source_index: u8) -> ProviderExecutionRequestV3 {
+        ProviderExecutionRequestV3 {
+            caller: ProviderCallerV3::Resolution,
+            source_index,
+            generation: 7,
+            terminal_sequence: 1,
+            market: [1; 32],
+            source_state: [2; 32],
+            certificate_account: [3; 32],
+            source_material: [4; 32],
+            source_spec: [5; 32],
+            product_record: [6; 32],
+            result_domain: [7; 32],
+            provider_release: [8; 32],
+            update_account: [9; 32],
+            expected_update_digest: [10; 32],
+            provider_submitter: [11; 32],
+            resolver: [12; 32],
+            caller_program: [13; 32],
+            release_set: [14; 32],
+            capability_program_set: [0; 32],
+            selected_capability_program: [0; 32],
+            parent_request_digest: [15; 32],
+            post_params_body_digest: [16; 32],
+        }
+    }
+
+    #[test]
+    fn an_ensemble_member_capture_keeps_the_source_on_primary() {
+        let primary = source_id(1);
+        let policy = RecoveryPolicyV2::new(
+            source_id(2),
+            [
+                Some(
+                    RecoveryAttemptV2::new(primary, source_id(3), 100, source_id(4))
+                        .expect("first member"),
+                ),
+                Some(
+                    RecoveryAttemptV2::new(source_id(5), source_id(6), 101, source_id(7))
+                        .expect("second member"),
+                ),
+                None,
+                None,
+            ],
+            2,
+        )
+        .expect("two member policy");
+        let policy_id = source_id(8);
+        let material = SourceMaterialV3::explicitly_unbounded(
+            source_id(9),
+            primary,
+            source_id(10),
+            source_id(11),
+            Some(policy_id),
+            source_id(12),
+        )
+        .with_ensemble(EnsembleSpecV1::new(3, 3).expect("odd quorum"), 0)
+        .expect("ensemble material");
+        let window = WindowSpecV1::new(primary, WindowKind::Terminal, 0, 90, 10, 1, source_id(13))
+            .expect("terminal window");
+        let state = SourceResolutionStateV2::fresh([14; 32], 7, source_id(15), [16; 32], 1, 0, 0)
+            .expect("primary source")
+            .state();
+        let ladder = AuthenticatedRecoveryLadderV3 { policy_id, policy };
+
+        for member in 0..3_u8 {
+            let selected = select_rung(
+                &selection_request(member),
+                &state,
+                material,
+                window,
+                Some(&ladder),
+            )
+            .expect("declared member is selectable while primary");
+            assert!(
+                matches!(selected, LadderRungV3::Member { member: seen, .. } if seen == member)
+            );
+            assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
+        }
+        assert!(matches!(
+            select_rung(
+                &selection_request(3),
+                &state,
+                material,
+                window,
+                Some(&ladder)
+            ),
+            Err(ProviderJoinErrorV3::SourceLadder)
+        ));
+    }
+
+    #[test]
+    fn an_ensemble_fragment_names_its_resolver_as_captor() {
+        let source = SourceResolutionStateV2::fresh(
+            [14; 32],
+            7,
+            source_id(15),
+            [16; 32],
+            1,
+            0,
+            0,
+        )
+        .expect("primary source")
+        .state();
+        let request = selection_request(2);
+        let plan = finish_plan(
+            b"ensemble-member-capture",
+            &request,
+            source,
+            [17; 32],
+            [18; 32],
+            [19; 32],
+            0,
+            2,
+            0,
+            1,
+            2,
+            3,
+            ProviderCaptureV3::Member(2),
+        )
+        .expect("fragment certificate");
+        assert_eq!(plan.certificate.receipt_account, request.resolver);
+        assert_eq!(plan.certificate.attempt_index, 2);
+        assert_eq!(plan.capture, ProviderCaptureV3::Member(2));
     }
 
     fn runtime_record(digest: [u8; 32], tag: u8) -> AuthenticatedRecordV2 {

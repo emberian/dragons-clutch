@@ -49,12 +49,19 @@ SCHEMA_STATUS = "dclutch-aquarium-status-v1"
 SCHEMA_JOURNAL = "dclutch-aquarium-epoch-journal-v1"
 COHORT_SCHEMA = "dclutch-cohort-manifest-v1"
 DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
+# PROVISIONAL operational caps. Their lifting plan is
+# docs/operators/AQUARIUM_V1.md "Bounded epochs": measure child process count,
+# storage, authoring time and browser list handling, then change these constants
+# with their hostile bound tests and the document in one revision.
 MAX_ACTIVE_MARKETS_HARD = 32
 MAX_EPOCH_CYCLES_HARD = 256
 MAX_WALLETS_HARD = 512
+COHORT_ROLES = ("registry", "rent", "custody", "resolution", "claims", "trading", "core")
+REPRODUCIBLE_GATE_SCHEMA = "dclutch-reproducible-release-gate-v1"
 STATES = frozenset({"preflight", "running", "stopping", "stopped", "halted", "stale"})
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+ENVIRONMENT_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
@@ -139,6 +146,27 @@ def read_json(path: Path, field: str) -> dict:
     return result
 
 
+def verify_release_gate(path: Path, digest: str) -> None:
+    """Delegate every named-file check to the release gate's semantic owner.
+
+    Checking that a JSON object merely *says* this commit is a release gate is
+    the same self-authentication error as a manifest timestamp. The release
+    verifier rehashes every link and refuses a missing, substituted, or
+    diagnostic-bearing release input. It performs no RPC call and opens no key.
+    """
+    verifier = HERE.parent / "release" / "artifact_provenance.py"
+    if not verifier.is_file():
+        raise Refusal(f"release gate verifier is absent: {verifier}")
+    child = subprocess.run(
+        [sys.executable, str(verifier), "verify-reproducible-gate", "--root", str(path.parent),
+         "--gate-sha256", digest],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    if child.returncode != 0:
+        detail = (child.stdout or b"").decode("utf-8", errors="replace").strip()
+        raise Refusal(f"cohort.release_gate failed its release-owned reauthentication: {simcore.redact_text(detail[-800:])}")
+
+
 def simulator_config(path: Path, market_address: str, maximum_spend: int) -> dict:
     """Validate only public/configuration facts; never read a keypair path."""
     body = read_json(path, "epoch simulator_config")
@@ -211,21 +239,54 @@ def validate_config(path: Path) -> dict:
         dt.datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
     except ValueError as error:
         raise Refusal("cohort.checked_at must be an ISO timestamp") from error
+    roles = manifest.get("roles")
+    if not isinstance(roles, list) or tuple(roles) != COHORT_ROLES:
+        raise Refusal(f"cohort manifest roles must be the exact current ordered set {list(COHORT_ROLES)}")
     programs = manifest.get("programs") or {}
+    if not isinstance(programs, dict) or set(programs) != set(COHORT_ROLES):
+        raise Refusal("cohort manifest programs must contain exactly the current cohort roles")
     expected_programs = cohort_cfg.get("program_ids")
-    if not isinstance(expected_programs, dict):
+    if not isinstance(expected_programs, dict) or set(expected_programs) != set(COHORT_ROLES):
         raise Refusal("cohort.program_ids must repeat the checked manifest program ids")
-    for role in manifest.get("roles") or []:
+    for role in COHORT_ROLES:
         actual = address(programs.get(role), f"cohort manifest programs.{role}")
         if expected_programs.get(role) != actual:
             raise Refusal(f"cohort.program_ids.{role} does not match the checked manifest")
+    accelerator = manifest.get("general_accelerator")
+    expected_accelerator = cohort_cfg.get("general_accelerator")
+    if not isinstance(accelerator, dict) or not isinstance(expected_accelerator, dict):
+        raise Refusal("cohort must carry and pin its separately deployed general_accelerator")
+    accelerator_id = address(accelerator.get("program_id"), "cohort manifest general_accelerator.program_id")
+    accelerator_slot_text = text(accelerator.get("deployment_slot"), "general_accelerator.deployment_slot")
+    if not accelerator_slot_text.isdecimal():
+        raise Refusal("general_accelerator.deployment_slot must be a canonical non-negative decimal")
+    accelerator_slot = whole(int(accelerator_slot_text), "general_accelerator.deployment_slot")
+    accelerator_elf = text(accelerator.get("elf_sha256"), "general_accelerator.elf_sha256")
+    accelerator_semantic = text(accelerator.get("semantic_release_id"), "general_accelerator.semantic_release_id")
+    if not HEX64.fullmatch(accelerator_elf) or not HEX64.fullmatch(accelerator_semantic):
+        raise Refusal("general_accelerator ELF and semantic release digests must be lowercase SHA-256")
+    expected_accelerator_body = {"program_id": accelerator_id, "deployment_slot": accelerator_slot,
+                                 "elf_sha256": accelerator_elf, "semantic_release_id": accelerator_semantic}
+    if expected_accelerator != expected_accelerator_body:
+        raise Refusal("cohort.general_accelerator does not match the checked manifest")
+    gate_cfg = cohort_cfg.get("release_gate")
+    if not isinstance(gate_cfg, dict):
+        raise Refusal("cohort.release_gate must bind the manifest to a reproducible release gate")
+    gate_path = absolute(gate_cfg.get("path"), "cohort.release_gate.path")
+    gate_digest = text(gate_cfg.get("sha256"), "cohort.release_gate.sha256")
+    if gate_path.name != "RELEASE_GATE.json" or not HEX64.fullmatch(gate_digest) or sha256_file(gate_path) != gate_digest:
+        raise Refusal("cohort.release_gate must name and hash the exact RELEASE_GATE.json")
+    gate = read_json(gate_path, "cohort.release_gate")
+    if gate.get("schema") != REPRODUCIBLE_GATE_SCHEMA or gate.get("source_revision") != deploy_commit:
+        raise Refusal("cohort.release_gate does not authenticate this manifest's deploy commit")
+    verify_release_gate(gate_path, gate_digest)
     prior_path = absolute(cohort_cfg.get("prior_manifest"), "cohort.prior_manifest")
     prior = read_json(prior_path, "cohort.prior_manifest")
     if prior.get("schema") != COHORT_SCHEMA:
         raise Refusal("cohort.prior_manifest has another schema")
     if whole(prior.get("cohort"), "prior cohort") >= cohort_number:
         raise Refusal("cohort.prior_manifest is not older than this cohort")
-    for role in manifest.get("roles") or []:
+    for role in COHORT_ROLES:
         previous = (prior.get("programs") or {}).get(role)
         if previous and previous == programs[role]:
             raise Refusal(f"cohort {cohort_number} reused prior {role} program identity")
@@ -257,11 +318,12 @@ def validate_config(path: Path) -> dict:
         source = manifest_markets.get(source_label)
         if source is None or source.get("kind") != "direct" or source.get("address") != market_address:
             raise Refusal(f"markets[{index}] is not a checked live Direct market from this manifest")
-        # There is no public noncustodial admission handoff yet. Configured actor
-        # keypair paths are intentionally never read here, and must never be
-        # represented as a stranger-facing join route.
+        # A public admission route may exist elsewhere, but the checked release
+        # material accepted by this v1 schema has no published first-admission
+        # linked-basis binding for this market. Configured actor keypair paths
+        # are intentionally never read here and are never a visitor join route.
         if row.get("join_open", False) is not False:
-            raise Refusal("join_open=true is unavailable: no public noncustodial admission entrance exists")
+            raise Refusal("join_open=true is unavailable until a checked release binding proves public first admission")
         epochs = row.get("epochs")
         if not isinstance(epochs, list) or not epochs:
             raise Refusal(f"markets[{index}].epochs must precommit at least one bounded epoch")
@@ -288,10 +350,10 @@ def validate_config(path: Path) -> dict:
                 seller, buyer = pair.get("seller_ticket_sha256"), pair.get("buyer_ticket_sha256")
                 if not isinstance(seller, str) or not isinstance(buyer, str) or not HEX64.fullmatch(seller) or not HEX64.fullmatch(buyer):
                     raise Refusal(f"epoch {epoch_id} pair {pair_index} needs lowercase pinned ticket digests")
-                key = (seller, buyer)
-                if key in seen_ticket_digests:
-                    raise Refusal("a Direct ticket pair appears in more than one aquarium cycle")
-                seen_ticket_digests.add(key)
+                for side, digest in (("seller", seller), ("buyer", buyer)):
+                    if digest in seen_ticket_digests:
+                        raise Refusal(f"a Direct {side} ticket digest appears in more than one aquarium cycle")
+                    seen_ticket_digests.add(digest)
             parsed_epochs.append({"epoch_id": epoch_id, "cycles": cycles, "simulator_config": sim_path})
         parsed_markets.append({"market_id": market_id, "address": market_address, "epochs": parsed_epochs})
     if len(parsed_markets) < min_active:
@@ -311,8 +373,11 @@ def validate_config(path: Path) -> dict:
         )
     return {"body": body, "work": work, "public_status": public_status, "limits": limits,
             "cohort": {"number": cohort_number, "digest": stated_manifest_digest,
-                       "deploy_commit": deploy_commit, "checked_at": checked_at},
-            "actors": actor_addresses, "markets": parsed_markets}
+                       "deploy_commit": deploy_commit, "checked_at": checked_at,
+                       "release_gate_sha256": gate_digest, "general_accelerator": expected_accelerator_body},
+            "actors": actor_addresses, "markets": parsed_markets,
+            "reserved_lamports": total_reserved_spend,
+            "ticket_digests": frozenset(seen_ticket_digests)}
 
 
 class Aquarium:
@@ -374,7 +439,9 @@ class Aquarium:
         heartbeat = float(self.config["limits"].get("heartbeat_seconds", 90))
         body = {"schema": SCHEMA_STATUS,
                 "cohort": {"number": self.config["cohort"]["number"], "manifest_sha256": self.config["cohort"]["digest"],
-                           "deployment_commit": self.config["cohort"]["deploy_commit"], "checked_at": self.config["cohort"]["checked_at"]},
+                           "deployment_commit": self.config["cohort"]["deploy_commit"], "checked_at": self.config["cohort"]["checked_at"],
+                           "release_gate_sha256": self.config["cohort"]["release_gate_sha256"],
+                           "general_accelerator": self.config["cohort"]["general_accelerator"]},
                 "state": state,
                 "run": {"started_at": self.started_at, "updated_at": simcore.utc_now_iso(),
                         "expected_next_update_by": None if state in ("stopped", "halted") else utc_after(heartbeat),
@@ -479,6 +546,205 @@ class Aquarium:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Epoch preparation: offline ticket authoring, then review before admission.
+
+SCHEMA_PREPARE = "dclutch-aquarium-epoch-preparation-v1"
+
+
+def decimal(value: Any, field: str, *, maximum: Optional[int] = None) -> int:
+    raw = text(value, field)
+    if not raw.isdecimal():
+        raise Refusal(f"{field} must be a canonical non-negative decimal")
+    return whole(int(raw), field, maximum=maximum)
+
+
+def ticket_author(value: Any, field: str, market: str, side: str) -> dict:
+    if not isinstance(value, dict):
+        raise Refusal(f"{field} must be an object")
+    env = text(value.get("keypair_env"), f"{field}.keypair_env")
+    if not ENVIRONMENT_NAME.fullmatch(env):
+        raise Refusal(f"{field}.keypair_env must name one uppercase environment variable")
+    lifecycle = text(value.get("lifecycle"), f"{field}.lifecycle")
+    if lifecycle != "fok":
+        raise Refusal(f"{field}.lifecycle must be fok for a bounded aquarium epoch")
+    return {
+        "keypair_env": env,
+        "maker": address(value.get("maker"), f"{field}.maker"),
+        "market": market,
+        "side": side,
+        "lifecycle": lifecycle,
+        "outcome": decimal(value.get("outcome"), f"{field}.outcome", maximum=(1 << 32) - 1),
+        "generation": decimal(value.get("generation"), f"{field}.generation"),
+        "nonce": decimal(value.get("nonce"), f"{field}.nonce"),
+        "valid_from": decimal(value.get("valid_from"), f"{field}.valid_from"),
+        "valid_through": decimal(value.get("valid_through"), f"{field}.valid_through"),
+        "maximum_fill": decimal(value.get("maximum_fill"), f"{field}.maximum_fill"),
+        "limit_price": decimal(value.get("limit_price"), f"{field}.limit_price"),
+        "fee_basis_points": decimal(value.get("fee_basis_points"), f"{field}.fee_basis_points", maximum=10_000),
+        "collateral_account": address(value.get("collateral_account"), f"{field}.collateral_account"),
+    }
+
+
+def prepare_spec(path: Path) -> dict:
+    body = read_json(path, "epoch preparation")
+    if body.get("schema") != SCHEMA_PREPARE:
+        raise Refusal(f"epoch preparation schema must be {SCHEMA_PREPARE}")
+    aquarium_path = absolute(body.get("aquarium_config"), "epoch preparation aquarium_config")
+    aquarium = validate_config(aquarium_path)
+    market_id = text(body.get("market_id"), "epoch preparation market_id")
+    market = next((row for row in aquarium["markets"] if row["market_id"] == market_id), None)
+    if market is None:
+        raise Refusal("epoch preparation market_id is not in the checked active inventory")
+    epoch_id = text(body.get("epoch_id"), "epoch preparation epoch_id")
+    if any(epoch["epoch_id"] == epoch_id for epoch in market["epochs"]):
+        raise Refusal("epoch preparation epoch_id already exists; use a new epoch identity")
+    cycles = whole(body.get("cycles"), "epoch preparation cycles", maximum=MAX_EPOCH_CYCLES_HARD)
+    if cycles < 1:
+        raise Refusal("epoch preparation cycles must be positive")
+    output_dir = absolute(body.get("output_dir"), "epoch preparation output_dir")
+    simulator_work = absolute(body.get("simulator_work_dir"), "epoch preparation simulator_work_dir")
+    if output_dir.exists() and not (output_dir / "prepared-epoch.json").is_file():
+        raise Refusal("epoch preparation output_dir already exists without a sealed preparation; inspect it, then use a new epoch identity")
+    if simulator_work.exists():
+        raise Refusal("epoch preparation simulator_work_dir already exists; a fresh epoch may not bypass an old driver journal")
+    occupied = {
+        str(read_json(epoch["simulator_config"], "existing epoch simulator config")["work_dir"])
+        for row in aquarium["markets"] for epoch in row["epochs"]
+    }
+    if str(simulator_work) in occupied:
+        raise Refusal("epoch preparation simulator_work_dir reuses an existing signed-journal root")
+    template_path = absolute(body.get("simulator_template"), "epoch preparation simulator_template")
+    template = simulator_config(template_path, market["address"], aquarium["limits"]["max_lamports_spent"])
+    candidate_spend = whole((template.get("budget") or {}).get("max_lamports_spent"),
+                            "epoch preparation template budget.max_lamports_spent")
+    cumulative_spend = aquarium["reserved_lamports"] + candidate_spend
+    if cumulative_spend > aquarium["limits"]["max_lamports_spent"]:
+        raise Refusal("epoch preparation would exceed limits.max_lamports_spent after existing reserved epochs")
+    bootstrap = absolute(template.get("bootstrap_bin"), "epoch preparation bootstrap_bin")
+    if not os.access(bootstrap, os.X_OK):
+        raise Refusal("epoch preparation bootstrap_bin is not executable")
+    pairs = body.get("ticket_pairs")
+    if not isinstance(pairs, list) or len(pairs) != cycles:
+        raise Refusal("epoch preparation needs exactly one explicit ticket pair per cycle")
+    parsed_pairs = []
+    for index, pair in enumerate(pairs):
+        if not isinstance(pair, dict):
+            raise Refusal(f"ticket_pairs[{index}] must be an object")
+        seller = ticket_author(pair.get("seller"), f"ticket_pairs[{index}].seller", market["address"], "sell")
+        buyer = ticket_author(pair.get("buyer"), f"ticket_pairs[{index}].buyer", market["address"], "buy")
+        for field in ("outcome", "generation", "valid_from", "valid_through", "maximum_fill", "limit_price", "fee_basis_points"):
+            if seller[field] != buyer[field]:
+                raise Refusal(f"ticket_pairs[{index}] seller and buyer disagree on {field}")
+        if seller["maker"] == buyer["maker"]:
+            raise Refusal(f"ticket_pairs[{index}] needs distinct seller and buyer makers")
+        if seller["valid_from"] > seller["valid_through"]:
+            raise Refusal(f"ticket_pairs[{index}] has an empty validity interval")
+        parsed_pairs.append({"seller": seller, "buyer": buyer})
+    return {"aquarium": aquarium, "market": market, "epoch_id": epoch_id, "cycles": cycles,
+            "output_dir": output_dir, "simulator_work": simulator_work, "template": template,
+            "template_path": template_path, "bootstrap": bootstrap, "pairs": parsed_pairs,
+            "reserved_lamports_before": aquarium["reserved_lamports"],
+            "candidate_lamports": candidate_spend, "reserved_lamports_after": cumulative_spend,
+            "existing_ticket_digests": aquarium["ticket_digests"]}
+
+
+def preparation_plan(spec: dict) -> dict:
+    """The exact offline signing plan; key paths and values are absent by design."""
+    return {
+        "market_id": spec["market"]["market_id"], "market_address": spec["market"]["address"],
+        "epoch_id": spec["epoch_id"], "cycles": spec["cycles"],
+        "template_sha256": sha256_file(spec["template_path"]),
+        "reserved_lamports_before": spec["reserved_lamports_before"],
+        "candidate_lamports": spec["candidate_lamports"],
+        "reserved_lamports_after": spec["reserved_lamports_after"],
+        "simulator_work_dir": str(spec["simulator_work"]),
+        "pairs": [{role: {key: value for key, value in ticket.items() if key != "keypair_env"}
+                   for role, ticket in pair.items()} for pair in spec["pairs"]],
+    }
+
+
+def ticket_command(bootstrap: Path, ticket: dict, output: Path) -> list[str]:
+    return [str(bootstrap), "direct-intent-ticket-author-v1", "--keypair-env", ticket["keypair_env"],
+            "--maker", ticket["maker"], "--market", ticket["market"], "--side", ticket["side"],
+            "--lifecycle", ticket["lifecycle"], "--outcome", str(ticket["outcome"]),
+            "--generation", str(ticket["generation"]), "--nonce", str(ticket["nonce"]),
+            "--valid-from", str(ticket["valid_from"]), "--valid-through", str(ticket["valid_through"]),
+            "--maximum-fill", str(ticket["maximum_fill"]), "--limit-price", str(ticket["limit_price"]),
+            "--fee-basis-points", str(ticket["fee_basis_points"]), "--collateral-account", ticket["collateral_account"],
+            "--out", str(output)]
+
+
+def author_ticket(bootstrap: Path, ticket: dict, output: Path, receipt: Path) -> str:
+    """Author one portable ticket. Explicit caller configuration names its env.
+
+    The supervisor does not inspect the environment entry or its key-file path;
+    the single shared ticket author consumes that named variable. Nothing here
+    opens a socket, builds a transaction, or submits a packet.
+    """
+    if output.exists() or receipt.exists():
+        raise Refusal(
+            f"ticket output {output} already exists; ticket authoring is one-shot and an "
+            "interrupted preparation must be inspected before a fresh epoch is named"
+        )
+    argv = ticket_command(bootstrap, ticket, output)
+    child = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, check=False)
+    transcript = (child.stdout or b"").decode("utf-8", errors="replace")
+    if child.returncode != 0:
+        raise Refusal(f"ticket author refused {ticket['side']} ticket: {simcore.redact_text(transcript[-800:])}")
+    if not output.is_file():
+        raise Refusal(f"ticket author succeeded without writing {output}")
+    simcore.write_atomic(receipt, transcript.encode("utf-8"))
+    return sha256_file(output)
+
+
+def cmd_prepare_epoch(args: argparse.Namespace) -> int:
+    spec = prepare_spec(Path(args.spec))
+    plan = preparation_plan(spec)
+    if not args.author:
+        print(json.dumps({"schema": SCHEMA_PREPARE, "phase": "preflight", "plan": plan,
+                          "plan_digest": simcore.digest_of(plan)}, indent=2, sort_keys=True))
+        return 0
+    output = spec["output_dir"]
+    prepared = output / "prepared-epoch.json"
+    if prepared.exists():
+        existing = read_json(prepared, "prepared epoch")
+        if existing.get("plan_digest") != simcore.digest_of(plan):
+            raise simcore.JournalConflict("prepared epoch describes another ticket-authoring plan")
+        print(f"prepared epoch already sealed: {prepared}")
+        return 0
+    output.mkdir(parents=True, exist_ok=False)
+    simcore.write_json_atomic(output / "prepare-journal.json", {"schema": SCHEMA_PREPARE, "phase": "authoring",
+        "plan": plan, "plan_digest": simcore.digest_of(plan), "recorded_at": simcore.utc_now_iso()})
+    generated_pairs = []
+    occupied_digests = set(spec["existing_ticket_digests"])
+    for index, pair in enumerate(spec["pairs"]):
+        pair_dir = output / f"pair-{index:03d}"
+        pair_dir.mkdir()
+        seller = author_ticket(spec["bootstrap"], pair["seller"], pair_dir / "seller.json", pair_dir / "seller.receipt.json")
+        buyer = author_ticket(spec["bootstrap"], pair["buyer"], pair_dir / "buyer.json", pair_dir / "buyer.receipt.json")
+        for side, digest in (("seller", seller), ("buyer", buyer)):
+            if digest in occupied_digests:
+                raise Refusal(f"newly authored {side} ticket duplicates a ticket in the checked aquarium plan")
+            occupied_digests.add(digest)
+        generated_pairs.append({"seller_ticket": str(pair_dir / "seller.json"), "seller_ticket_sha256": seller,
+                                "buyer_ticket": str(pair_dir / "buyer.json"), "buyer_ticket_sha256": buyer})
+    simulator = json.loads(json.dumps(spec["template"]))
+    simulator["work_dir"] = str(spec["simulator_work"])
+    simulator["trade"]["devnet"]["pairs"] = generated_pairs
+    simulator_path = output / "simulator-config.json"
+    simcore.write_json_atomic(simulator_path, simulator)
+    result = {"schema": SCHEMA_PREPARE, "phase": "prepared", "plan": plan,
+              "plan_digest": simcore.digest_of(plan), "prepared_at": simcore.utc_now_iso(),
+              "epoch": {"epoch_id": spec["epoch_id"], "cycles": spec["cycles"],
+                        "simulator_config": str(simulator_path)}, "ticket_pairs": generated_pairs}
+    simcore.write_json_atomic(prepared, result)
+    simcore.write_json_atomic(output / "prepare-journal.json", result)
+    print(json.dumps({"prepared_epoch": str(prepared), "epoch": result["epoch"]}, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     config = validate_config(Path(args.config))
     print(f"aquarium: cohort {config['cohort']['number']} checked; {len(config['markets'])} active Direct markets, "
@@ -498,9 +764,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         child.add_argument("--config", required=True)
         if name == "run":
             child.add_argument("--execute", action="store_true")
+    prepare = sub.add_parser("prepare-epoch", help="preflight or explicitly author one bounded replacement epoch")
+    prepare.add_argument("--spec", required=True)
+    prepare.add_argument("--author", action="store_true",
+                         help="authorize local portable-ticket signatures; submits no transaction")
     args = parser.parse_args(argv)
     try:
-        return cmd_check(args) if args.command == "check" else cmd_run(args)
+        if args.command == "check":
+            return cmd_check(args)
+        if args.command == "prepare-epoch":
+            return cmd_prepare_epoch(args)
+        return cmd_run(args)
     except (Refusal, simcore.JournalConflict, OSError, ValueError, KeyError) as error:
         print(f"REFUSED: {error}", file=sys.stderr)
         return 2

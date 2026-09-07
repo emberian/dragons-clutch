@@ -8,7 +8,11 @@ export type AquariumStateV1 = 'preflight' | 'running' | 'stopping' | 'stopped' |
 
 export type AquariumStatusV1 = Readonly<{
   schema: typeof AQUARIUM_STATUS_SCHEMA_V1;
-  cohort: Readonly<{ number: number; manifestSha256: string; deploymentCommit: string; checkedAt: string }>;
+  cohort: Readonly<{
+    number: number; manifestSha256: string; deploymentCommit: string; checkedAt: string;
+    releaseGateSha256?: string;
+    generalAccelerator?: Readonly<{ programId: string; deploymentSlot: number; elfSha256: string; semanticReleaseId: string }>;
+  }>;
   state: AquariumStateV1;
   run: Readonly<{
     startedAt: string;
@@ -52,6 +56,15 @@ function exactKeys(value: Record<string, unknown>, keys: ReadonlyArray<string>, 
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new Error(`${field} has missing or unknown fields`);
 }
 
+/** Permit an additive public identity fact, but never silently accept an unknown field. */
+function requiredAndKnownKeys(
+  value: Record<string, unknown>, required: ReadonlyArray<string>, optional: ReadonlyArray<string>, field: string,
+): void {
+  const allowed = new Set([...required, ...optional]);
+  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`${field} has missing or unknown fields`);
+  for (const key of required) if (!(key in value)) throw new Error(`${field} has missing or unknown fields`);
+}
+
 function text(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new Error(`${field} must be one non-empty string`);
   return value;
@@ -60,6 +73,13 @@ function text(value: unknown, field: string): string {
 function count(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error(`${field} must be one exact non-negative integer`);
   return value;
+}
+
+/** Producer config may serialize a slot as JSON number or canonical decimal text. */
+function slot(value: unknown, field: string): number {
+  if (typeof value === 'number') return count(value, field);
+  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(value)) throw new Error(`${field} must be one exact non-negative integer`);
+  return count(Number(value), field);
 }
 
 function instant(value: unknown, field: string): string {
@@ -92,11 +112,34 @@ export function parseAquariumStatusV1(value: unknown): AquariumStatusV1 {
   if (!STATES.includes(root.state as AquariumStateV1)) throw new Error('aquarium state is unknown');
 
   const cohort = object(root.cohort, 'cohort');
-  exactKeys(cohort, ['number', 'manifest_sha256', 'deployment_commit', 'checked_at'], 'cohort');
+  requiredAndKnownKeys(
+    cohort,
+    ['number', 'manifest_sha256', 'deployment_commit', 'checked_at'],
+    ['release_gate_sha256', 'general_accelerator'],
+    'cohort',
+  );
   const manifestSha256 = text(cohort.manifest_sha256, 'cohort manifest_sha256');
   if (!/^[0-9a-f]{64}$/.test(manifestSha256)) throw new Error('cohort manifest_sha256 must be 64 lowercase hex characters');
   const deploymentCommit = text(cohort.deployment_commit, 'cohort deployment_commit');
   if (!/^[0-9a-f]{7,64}$/.test(deploymentCommit)) throw new Error('cohort deployment_commit must be one lowercase git digest');
+  const releaseGateSha256 = cohort.release_gate_sha256 === undefined ? undefined : text(cohort.release_gate_sha256, 'cohort release_gate_sha256');
+  if (releaseGateSha256 !== undefined && !/^[0-9a-f]{64}$/.test(releaseGateSha256)) throw new Error('cohort release_gate_sha256 must be 64 lowercase hex characters');
+  let generalAccelerator: AquariumStatusV1['cohort']['generalAccelerator'];
+  if (cohort.general_accelerator !== undefined) {
+    const accelerator = object(cohort.general_accelerator, 'cohort general_accelerator');
+    exactKeys(accelerator, ['program_id', 'deployment_slot', 'elf_sha256', 'semantic_release_id'], 'cohort general_accelerator');
+    const programId = addressOrNull(accelerator.program_id, 'cohort general_accelerator program_id');
+    if (programId === null) throw new Error('cohort general_accelerator program_id must be one canonical Solana address');
+    const elfSha256 = text(accelerator.elf_sha256, 'cohort general_accelerator elf_sha256');
+    const semanticReleaseId = text(accelerator.semantic_release_id, 'cohort general_accelerator semantic_release_id');
+    if (!/^[0-9a-f]{64}$/.test(elfSha256) || !/^[0-9a-f]{64}$/.test(semanticReleaseId)) throw new Error('cohort general_accelerator ELF and semantic release digests must be 64 lowercase hex characters');
+    generalAccelerator = Object.freeze({
+      programId,
+      deploymentSlot: slot(accelerator.deployment_slot, 'cohort general_accelerator deployment_slot'),
+      elfSha256,
+      semanticReleaseId,
+    });
+  }
 
   const run = object(root.run, 'run');
   exactKeys(run, ['started_at', 'updated_at', 'expected_next_update_by', 'planned_market_count', 'active_market_target', 'joined_wallet_target', 'max_wallets', 'max_lamports_spent', 'lamports_spent_observed'], 'run');
@@ -149,7 +192,11 @@ export function parseAquariumStatusV1(value: unknown): AquariumStatusV1 {
 
   return Object.freeze({
     schema: AQUARIUM_STATUS_SCHEMA_V1,
-    cohort: Object.freeze({ number: count(cohort.number, 'cohort number'), manifestSha256, deploymentCommit, checkedAt: instant(cohort.checked_at, 'cohort checked_at') }),
+    cohort: Object.freeze({
+      number: count(cohort.number, 'cohort number'), manifestSha256, deploymentCommit, checkedAt: instant(cohort.checked_at, 'cohort checked_at'),
+      ...(releaseGateSha256 === undefined ? {} : { releaseGateSha256 }),
+      ...(generalAccelerator === undefined ? {} : { generalAccelerator }),
+    }),
     state: root.state as AquariumStateV1,
     run: Object.freeze({
       startedAt: instant(run.started_at, 'run started_at'), updatedAt: instant(run.updated_at, 'run updated_at'), expectedNextUpdateBy: instantOrNull(run.expected_next_update_by, 'run expected_next_update_by'),

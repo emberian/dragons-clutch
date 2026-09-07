@@ -101,7 +101,7 @@ export default function FeaturedMarketStanding() {
   if (phrase === null) {
     return <>This build names {link} as a featured record. Its cohort link and state are read from the chain when this page loads; <Anchor href="/markets">browse the selected deployment</Anchor> in the meantime.</>;
   }
-  if (standing.phase === 'Retiring' || standing.phase === 'Retired') {
+  if ('phase' in standing && (standing.phase === 'Retiring' || standing.phase === 'Retired')) {
     return <>The featured market, {link}, is <strong>{phrase}</strong>. <Anchor href="/markets">Browse the selected deployment</Anchor> for a market that is open.</>;
   }
   return <>The featured market is {link} — <strong>{phrase}</strong>, read from its own record.</>;

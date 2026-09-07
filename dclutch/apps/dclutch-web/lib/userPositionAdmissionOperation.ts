@@ -11,7 +11,8 @@ import {
   parseUserPositionAdmissionPlanV1,
   type UserPositionAdmissionPlanV1,
 } from './userPositionAdmissionV1';
-import { type SolanaRpcClient } from '@dclutch/sdk/rpc';
+import { type DirectParticipantReadinessV1 } from '@dclutch/sdk/directParticipant';
+import { type SignatureStatusObservation, type SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * The step between the planner's answer and a wallet signature.
@@ -95,6 +96,33 @@ export type PreparedAdmissionV1 = CompiledAdmissionTransactionV1 & Readonly<{
   derived: UserPositionAdmissionDerivedV1;
   observedSlot: string;
 }>;
+
+/**
+ * The recovery journal may clear only after both kinds of evidence agree.
+ *
+ * A successful signature only says the validator accepted one packet. The
+ * authenticated participant reader is the evidence that the Position and its
+ * admission record now exist at the addresses this exact plan named. Keep the
+ * two checks together so a caller cannot accidentally turn a merely confirmed
+ * packet into a public "joined" statement.
+ */
+export function requireFinalizedAdmissionPoststateV1(
+  status: SignatureStatusObservation | undefined,
+  readiness: DirectParticipantReadinessV1,
+  prepared?: Pick<PreparedAdmissionV1, 'derived'>,
+): Extract<DirectParticipantReadinessV1, { status: 'ready' }> {
+  if (status === undefined || !status.known || status.succeeded !== true || status.confirmationStatus !== 'finalized') {
+    throw new Error('admission signature is not a successful finalized transaction');
+  }
+  if (readiness.status !== 'ready') {
+    throw new Error(`admission transaction finalized but participant poststate read back ${readiness.status}: ${readiness.reason}`);
+  }
+  if (prepared !== undefined && (readiness.coordinates.position !== prepared.derived.position
+      || readiness.coordinates.admission !== prepared.derived.admission)) {
+    throw new Error('admission transaction finalized but participant poststate names different Position or admission coordinates');
+  }
+  return readiness;
+}
 
 /**
  * Acquire, plan, and compile — the whole browser path to an unsigned admission.

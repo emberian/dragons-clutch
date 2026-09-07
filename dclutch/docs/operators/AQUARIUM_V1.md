@@ -28,10 +28,12 @@ Do not make an aquarium config until all of these are true:
 2. The manifest's sha256, commit, and program ids are copied into the aquarium
    config and match byte-for-byte. Its prior manifest is also named. Every role
    must have a new program identity; reuse is a refusal.
-3. The cohort's own post-deploy/release gate has been checked by its owner. The
-   aquarium records the gate's checked timestamp and refuses a manifest whose
-   bytes, commit, or program set disagree. It does not substitute its own
-   shallow file check for that gate.
+3. The cohort's reproducible `RELEASE_GATE.json` is present and its digest is
+   recorded separately. The aquarium rehashes it, requires schema
+   `dclutch-reproducible-release-gate-v1`, and requires that its
+   `source_revision` equals the manifest's `deploy_commit`. A timestamp alone
+   is not a release check. The separately deployed General accelerator is also
+   pinned by program id, deployment slot, ELF digest, and semantic release id.
 4. Every simulator epoch has a credential-free HTTPS devnet configuration,
    devnet genesis acknowledgement, the exact inventory market address, a
    positive `budget.max_lamports_spent`, and distinct sha-pinned Direct ticket
@@ -54,6 +56,15 @@ The child ledger measures cumulative payer outflow, including fees, account
 rent, and any other debits; it does not call a refill a negative spend. This is
 the meaningful spend ceiling available to the current driver, rather than a
 made-up fee estimate. Market count is capped at 32 and wallet count at 512.
+
+The caps of 32 active markets, 256 cycles per epoch, and 512 synthetic wallets
+are **provisional operational bounds**, not protocol limits. Lift one only with
+a measured profile of child process count, work-directory storage, ticket
+authoring time, and the browser parser's bounded-list behavior; then change the
+named hard cap, its hostile bound test, and this runbook together. The 32-market
+lift needs a bounded-feed browser measurement, the 256-cycle lift needs a
+single-child journal/storage profile, and the 512-wallet lift needs ticket
+preparation time and actor-population process measurements.
 
 When all precommitted epochs finish, the supervisor writes `stopped`. It leaves
 every market in the active inventory. More activity requires a reviewed config
@@ -84,7 +95,9 @@ public status feed.
     "deploy_commit": "<40 lowercase hex>",
     "checked_at": "2026-09-07T00:00:00+00:00",
     "program_ids": {"registry": "<pubkey>", "rent": "<pubkey>", "custody": "<pubkey>", "resolution": "<pubkey>", "claims": "<pubkey>", "trading": "<pubkey>", "core": "<pubkey>"},
-    "prior_manifest": "/private/job/cohort-17.json"
+    "prior_manifest": "/private/job/cohort-17.json",
+    "general_accelerator": {"program_id": "<pubkey>", "deployment_slot": 0, "elf_sha256": "<64 lowercase hex>", "semantic_release_id": "<64 lowercase hex>"},
+    "release_gate": {"path": "/private/release/RELEASE_GATE.json", "sha256": "<64 lowercase hex>"}
   },
   "synthetic_actors": ["<explicit actor pubkey>"],
   "markets": [{
@@ -100,6 +113,35 @@ public status feed.
   }]
 }
 ```
+
+## Preparing a replenishment epoch
+
+`prepare-epoch` is the bounded, offline half of replenishment. It takes a
+separate `dclutch-aquarium-epoch-preparation-v1` specification naming a checked
+aquarium config, an existing inventory market, a fresh epoch id and simulator
+work directory, a credential-free simulator template, and exactly one explicit
+seller/buyer ticket pair per requested cycle. Each author input states every
+ticket term and names a `keypair_env`; it never gives a key path on the command
+line. Both sides must agree on market, outcome, generation, validity interval,
+fill, price, and fee, and must be distinct makers.
+
+```
+python3 tools/load-simulator/aquarium.py prepare-epoch --spec /private/job/replenish.json
+python3 tools/load-simulator/aquarium.py prepare-epoch --spec /private/job/replenish.json --author
+```
+
+The first command only validates and prints the exact signing plan. `--author`
+explicitly permits the existing `direct-intent-ticket-author-v1` to sign local
+portable ticket files; it makes no RPC request and submits no transaction. It
+produces a new simulator config with its ticket digests and a private
+`prepared-epoch.json`. Its plan records the prior, candidate, and cumulative
+reserved lamports. It refuses a candidate that would exceed the existing
+configuration's global spend limit, a simulator work directory that already
+exists, and a generated ticket digest that is already pinned by the checked
+plan. Review its epoch stanza, add it to the aquarium config, and run
+`aquarium.py check` again; full-inventory validation repeats the cumulative
+spend and global ticket-unique checks. It never edits an accepted aquarium
+config itself.
 
 Run the nonmutating admission check, then a preflight, then the reviewed
 execution. The latter is an authorized devnet action only after the fresh
@@ -128,15 +170,16 @@ list of at most `limits.max_active_markets` market ids and addresses. It never
 carries a local path, RPC credential, signature transcript, or keypair path.
 
 `activity.synthetic_actors` is always `true` in v1. `join_open` is always
-`false`: the current admission driver requires an operator-supplied owner
-keypair path, so it is not a stranger-facing wallet handoff. The browser must
-describe this feed as observed, untrusted real-chain activity by configured
-synthetic actors. It must not call it an official market source or claim that
-an ordinary visitor can join.
+`false` while the checked release material has no canonical, published
+first-admission linked-basis binding for that market. The browser must describe
+this feed as observed, untrusted real-chain activity by configured synthetic
+actors. It must not call it an official market source or claim that an ordinary
+visitor can join.
 
-Delivering a public join requires a separate noncustodial frontend/adapter that
-accepts a visitor's wallet signature, builds the current admission route without
-the supervisor learning their key, reports the finalized admission evidence,
-and then allocates a fresh pinned Direct ticket pair. That capability is not
-present in the current drivers or this supervisor. Until it lands, a visible
-active market is a watchable devnet market, not an open public entrance.
+A public join implementation can accept a visitor's wallet signature, build the
+admission route without the supervisor learning their key, report the finalized
+evidence, and allocate a fresh pinned Direct ticket pair. The current launch
+gate is its canonical published first-admission linked-basis binding in checked
+market/release material, plus its matching chain read. Until that evidence is
+accepted by the aquarium schema, a visible active market is watchable devnet
+activity rather than an open public entrance.

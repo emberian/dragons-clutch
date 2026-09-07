@@ -38,26 +38,26 @@ pub const PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3: usize = 47;
 /// Exact account count for the Trading caller frame, including its selected
 /// ProgramSet and descriptor raw/staging pairs.
 pub const PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3: usize = 51;
-/// What a capture on a recovery rung adds to either count: the
-/// `RecoveryPolicyV2` raw record and its staging vacancy, in that order, at the
-/// very END of the frame.
+/// What a recovery or ensemble-member capture adds to either count: the
+/// `RecoveryPolicyV2` raw record and its staging vacancy, in that order, at
+/// the very END of the frame.
 ///
 /// The tail is where they go, and that is a control rather than a convenience.
 /// Every existing position keeps its index, so a primary capture's account
 /// list, request bytes and poststates are the ones it always had -- the honest
 /// path is unchanged, which decision 0027 requires and which the existing
-/// campaign proves by still passing unedited. The rung is the only caller that
-/// pays for the two extra reads and the only caller that needs the record:
-/// which source may answer is a fact only the ladder holds.
+/// campaign proves by still passing unedited. A recovery rung or ensemble
+/// member is the only caller that pays for the two extra reads and the only
+/// caller that needs the record: which source may answer is a fact the policy
+/// holds.
 ///
-/// **Reachable through the Core caller only, today.** Both Core and the
-/// Resolution child derive the widened count from the declared rung, and
+/// **Trading composition cannot reach this tail today.** Core and direct
+/// Resolution derive the widened count from the authenticated source, while
 /// `dclutch-trading-sbf`'s `resolution_composition_v3` still compares its child
-/// frame against a hard `PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3`, so a
-/// rung capture composed by Trading refuses on the count. That is a correct
-/// refusal and not a wrong result -- nothing is admitted -- but it is a
-/// reachability gap and it is owed: a Trading-composed market cannot yet be
-/// answered on its funded alternative.
+/// frame against a hard `PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3`.
+/// Trading therefore refuses a recovery rung or ensemble member on the count.
+/// That is a correct refusal -- nothing is admitted -- and leaves the
+/// Trading-composed recovery route owed.
 pub const PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3: usize = 2;
 /// Byte offset of `ProviderExecutionRequestV3::source_index` in the encoded
 /// request.
@@ -147,14 +147,15 @@ impl ProviderCallerV3 {
 pub struct ProviderExecutionRequestV3 {
     /// Typed protocol caller.
     pub caller: ProviderCallerV3,
-    /// Which rung of the market's source ladder this capture answers on.
+    /// Which declared source this capture answers on.
     ///
     /// Zero is the primary, and every request written before the ladder had a
     /// capture route encoded a zero in this byte because it was reserved. One
-    /// is recovery attempt zero, two is attempt one, and so on: the index is
-    /// the RUNG, not an array subscript, so the primary and the alternatives
-    /// are one ordered sequence and a later ensemble member can take the next
-    /// number without the wire learning a second vocabulary.
+    /// is recovery attempt zero, two is attempt one, and so on for a
+    /// single-source market. For an ensemble while the Source is `Primary`,
+    /// the same byte is the member number: zero is the primary member and the
+    /// policy's leading slots name the later members. No second vocabulary is
+    /// needed because the persisted Source phase and material decide it.
     ///
     /// It is a DECLARATION, never a choice. The outer refuses unless it equals
     /// the rung the market's own Source state currently stands on, so naming

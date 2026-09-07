@@ -283,6 +283,10 @@ mod substrate;
 mod failure;
 mod journey;
 mod dealer_campaign;
+mod economics_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/economics_campaign.rs"]
+#[allow(dead_code)]
+mod economics_successor;
 #[path = "../../../local-validator/bootstrap/successor/src/scoring_dealer.rs"]
 #[allow(dead_code)]
 mod scoring_dealer;
@@ -382,6 +386,7 @@ fn run() -> Result<()> {
     match arguments.next().as_deref() {
         Some("run") => run_journey(arguments.collect()),
         Some("dealer") => dealer_campaign::execute(parse_journey_request(arguments.collect())?),
+        Some("economics") => economics_campaign::execute(parse_journey_request(arguments.collect())?),
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();

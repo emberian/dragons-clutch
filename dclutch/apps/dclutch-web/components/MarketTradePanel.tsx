@@ -4,8 +4,9 @@ import Anchor from '@/components/Anchor';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
-import { admissionRequestV1, JoinStanding } from '@/components/JoinPanel';
+import { admissionPoststateRequestV1, admissionRequestV1, JoinStanding } from '@/components/JoinPanel';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
+import { publicFirstAdmissionBindingV1 } from '@/lib/publicMarketBindings';
 import FlowRail from '@/components/trade/FlowRail';
 import FlowStep from '@/components/trade/FlowStep';
 import MarketGateCard from '@/components/trade/MarketGateCard';
@@ -320,13 +321,36 @@ export default function MarketTradePanel({
                       market: marketAddress, owner: wallets.address, coreProgramId,
                       registryProgramId, claimsProgramId, tradingProgramId, rentProgramId,
                       activationCache: deployment.activationCache,
+                      linkedBasisRecordDigest: publicFirstAdmissionBindingV1(marketAddress)?.linkedBasisRecordDigest,
+                    })}
+                    poststate={admissionPoststateRequestV1({
+                      market: marketAddress, owner: wallets.address, coreProgramId,
+                      registryProgramId, claimsProgramId, tradingProgramId, custodyProgramId, rentProgramId,
                     })}
                     directory={wallets}
                   />
                 </details>
               </>;
             })()
-            : null}
+            : participant !== null && participant.status === 'incomplete'
+              ? <JoinStanding
+                readiness={participant}
+                marketPhase={inspected.phase}
+                walletAddress={wallets.address}
+                endpoint={endpoint}
+                admission={admissionRequestV1({
+                  market: marketAddress, owner: wallets.address, coreProgramId,
+                  registryProgramId, claimsProgramId, tradingProgramId, rentProgramId,
+                  activationCache: deployment.activationCache,
+                  linkedBasisRecordDigest: publicFirstAdmissionBindingV1(marketAddress)?.linkedBasisRecordDigest,
+                })}
+                poststate={admissionPoststateRequestV1({
+                  market: marketAddress, owner: wallets.address, coreProgramId,
+                  registryProgramId, claimsProgramId, tradingProgramId, custodyProgramId, rentProgramId,
+                })}
+                directory={wallets}
+              />
+              : null}
         {refusalFor(1) !== null && <StepRefusal refusal={refusalFor(1)!} />}
         {participant !== null && participant.status === 'incomplete' && prestateWall === null && <p className="market-refusal">Not ready: {participant.reason}</p>}
         {participant !== null && participant.status === 'refused' && <p className="market-refusal">Participant state refused: {participant.reason}</p>}

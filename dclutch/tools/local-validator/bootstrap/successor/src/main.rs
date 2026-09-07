@@ -32,6 +32,7 @@ mod direct_trade_producer;
 mod direct_trade_setup;
 mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
+mod economics_campaign;
 mod evidence_refresh;
 mod family_hot_campaign;
 mod flagship_resolution;
@@ -230,6 +231,30 @@ fn run() -> Result<()> {
         Some(command) if command == evidence_refresh::LOCAL_REFRESH_EVIDENCE_COMMAND_V1 => {
             evidence_refresh::run_owned_loopback(arguments.collect())
         }
+        Some(economics_campaign::PARAMETERS_FOUND_LOCAL_COMMAND_V1) => {
+            economics_campaign::run(
+                economics_campaign::RouteV1::Parameters,
+                economics_campaign::ClusterV1::OwnedLoopback,
+                arguments.collect(),
+            )
+        }
+        Some(economics_campaign::PARAMETERS_FOUND_DEVNET_COMMAND_V1) => {
+            economics_campaign::run(
+                economics_campaign::RouteV1::Parameters,
+                economics_campaign::ClusterV1::Devnet,
+                arguments.collect(),
+            )
+        }
+        Some(economics_campaign::UPKEEP_FOUND_LOCAL_COMMAND_V1) => economics_campaign::run(
+            economics_campaign::RouteV1::Upkeep,
+            economics_campaign::ClusterV1::OwnedLoopback,
+            arguments.collect(),
+        ),
+        Some(economics_campaign::UPKEEP_FOUND_DEVNET_COMMAND_V1) => economics_campaign::run(
+            economics_campaign::RouteV1::Upkeep,
+            economics_campaign::ClusterV1::Devnet,
+            arguments.collect(),
+        ),
         Some("devnet-direct-trade-v1") => direct_trade::run_devnet(arguments.collect()),
         Some(general_session::DEVNET_GENERAL_SESSION_COMMAND_V1) => {
             general_session::run_devnet(arguments.collect())
@@ -2415,6 +2440,13 @@ fn usage() {
     println!("{}", general_session::usage());
     println!("{}", release_lineage::usage());
     println!("{}", infrastructure_succession::usage());
+    println!(
+        "\n  dclutch-local-successor-bootstrap parameters-found --rpc-url http://127.0.0.1:PORT --custody CUSTODY_PROGRAM --payer PAYER [--execute --payer-keypair ABSOLUTE_JSON]\n\
+         dclutch-local-successor-bootstrap devnet-parameters-found --rpc-url URL --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG --custody CUSTODY_PROGRAM --payer PAYER [--execute --payer-keypair ABSOLUTE_JSON]\n\
+         dclutch-local-successor-bootstrap upkeep-found --rpc-url http://127.0.0.1:PORT --custody CUSTODY_PROGRAM --payer PAYER --amount LAMPORTS [--execute --payer-keypair ABSOLUTE_JSON]\n\
+         dclutch-local-successor-bootstrap devnet-upkeep-found --rpc-url URL --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG --custody CUSTODY_PROGRAM --payer PAYER --amount LAMPORTS [--execute --payer-keypair ABSOLUTE_JSON]\n\
+         \nparameters-found creates Custody's canonical governed record once and reads it back. upkeep-found creates the upkeep vault then receipts one nonzero voluntary Deposit, proving its exact rent-plus-credit balance and zero unreceipted remainder. It does not impersonate the Direct close-maker's protocol-only Donation CPI. Without --execute these are read-only preflights."
+    );
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", sponsored_push::usage());

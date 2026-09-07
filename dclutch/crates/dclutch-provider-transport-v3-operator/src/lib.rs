@@ -15,17 +15,19 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
 use dclutch_source::pyth::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1};
+use dclutch_source::resolution::{
+    EnsembleFragmentSeatSeedsV1, PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
+    PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    ProviderAbandonRequestV3, ProviderCallerV3, ProviderExecutionRequestV3,
+    ProviderReclaimRequestV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV3,
+    ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    provider_resolution_direct_intent_digest_v1,
+};
 #[cfg(feature = "transaction-planning")]
 use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_BYTES_V3,
     PROVIDER_SUBMIT_REQUEST_BYTES_V3,
-};
-use dclutch_source::resolution::{
-    PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3,
-    PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderAbandonRequestV3, ProviderCallerV3,
-    ProviderExecutionRequestV3, ProviderReclaimRequestV3, ProviderSubmitRequestV3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
 };
 use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -437,6 +439,30 @@ pub struct ProviderExecuteIntentV3 {
     pub terminal_sequence: u64,
     /// Exact Receiver PostUpdateParams body committed at submission.
     pub post_update_body: Vec<u8>,
+}
+
+/// Permissionless direct Resolution capture of one declared ensemble member.
+///
+/// The member is not an operator-selected source: the builder authenticates it
+/// against the market's material and recovery policy before emitting the
+/// packet. Its result occupies that member's fragment seat and leaves Source
+/// in `Primary` for the later quorum fold.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderEnsembleMemberExecuteIntentV3 {
+    /// Transaction signer that captures the member fragment.
+    pub resolver: Pubkey,
+    /// Positive sequence shared by all fragments and their eventual fold.
+    pub terminal_sequence: u64,
+    /// Declared ensemble member to capture.
+    pub member: u8,
+    /// Exact Receiver PostUpdateParams body committed at submission.
+    pub post_update_body: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProviderExecuteTargetV3 {
+    CoreTerminal,
+    EnsembleMember(u8),
 }
 
 /// Same-finalized accounts needed to derive one Core provider execution.
@@ -897,6 +923,44 @@ pub fn build_provider_execute_v3(
     deployment: ProviderExecuteDeploymentV3,
     intent: &ProviderExecuteIntentV3,
 ) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
+    build_provider_execute_for_v3(
+        snapshot,
+        deployment,
+        intent,
+        ProviderExecuteTargetV3::CoreTerminal,
+    )
+}
+
+/// Build a direct Resolution packet that captures one declared ensemble member.
+///
+/// This is a producer for a fragment, not a terminal. It is intentionally a
+/// separate public entrypoint from [`build_provider_execute_v3`]: Core's
+/// composed provider action commits a terminal Source state, whereas an
+/// ensemble capture must retain `Primary` until the fold has a quorum.
+pub fn build_provider_ensemble_member_execute_v3(
+    snapshot: &ProviderExecuteSnapshotV3,
+    deployment: ProviderExecuteDeploymentV3,
+    intent: &ProviderEnsembleMemberExecuteIntentV3,
+) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
+    let terminal_intent = ProviderExecuteIntentV3 {
+        resolver: intent.resolver,
+        terminal_sequence: intent.terminal_sequence,
+        post_update_body: intent.post_update_body.clone(),
+    };
+    build_provider_execute_for_v3(
+        snapshot,
+        deployment,
+        &terminal_intent,
+        ProviderExecuteTargetV3::EnsembleMember(intent.member),
+    )
+}
+
+fn build_provider_execute_for_v3(
+    snapshot: &ProviderExecuteSnapshotV3,
+    deployment: ProviderExecuteDeploymentV3,
+    intent: &ProviderExecuteIntentV3,
+    target: ProviderExecuteTargetV3,
+) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
     let observation = require_same_finalized_observation(&[
         &snapshot.market,
         &snapshot.source_state,
@@ -913,6 +977,15 @@ pub fn build_provider_execute_v3(
         &snapshot.result_domain,
         &snapshot.portfolio,
     ])?;
+    if matches!(target, ProviderExecuteTargetV3::EnsembleMember(_))
+        && snapshot
+            .recovery_ladder
+            .as_ref()
+            .map(|ladder| ladder.policy.observation != observation)
+            != Some(false)
+    {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
     PostUpdateParamsView::parse(&intent.post_update_body)
         .map_err(ProviderTransportOperatorErrorV3::PostUpdateParams)?;
     let market = CoreState::decode(&snapshot.market.data)
@@ -955,37 +1028,81 @@ pub fn build_provider_execute_v3(
     )?;
     let material = SourceMaterialV3::decode(&snapshot.source_material.data)
         .map_err(ProviderTransportOperatorErrorV3::Source)?;
-    // WHICH SOURCE THIS CAPTURE ANSWERS ON, decided by the market rather than
-    // by the caller. The ladder's position is the Source state's own, so the
-    // builder derives both the request's `source_index` and its source-spec
-    // identity from it: an operator cannot construct a transaction that answers
-    // on a leg the market has not reached, and the frame it emits is the one
-    // that rung needs.
-    let (source_index, expected_source_spec) = match (source.phase(), &snapshot.recovery_ladder) {
-        (SourceResolutionPhaseV1::Primary, None) => (0_u8, material.primary_source_spec()),
-        (SourceResolutionPhaseV1::Recovery, Some(ladder)) => {
-            let policy_id = material
-                .recovery_policy()
-                .ok_or(ProviderTransportOperatorErrorV3::Record)?;
-            authenticate_raw(
-                registry,
-                &ladder.policy,
-                RECOVERY_POLICY_SCHEMA_ID_V2,
-                policy_id.to_bytes(),
-            )?;
-            let policy = RecoveryPolicyV2::decode(&ladder.policy.data)
-                .map_err(ProviderTransportOperatorErrorV3::Source)?;
-            let attempt = policy
-                .attempt(source.active_attempt())
-                .map_err(ProviderTransportOperatorErrorV3::Source)?;
-            let rung = source
-                .active_attempt()
-                .checked_add(1)
-                .ok_or(ProviderTransportOperatorErrorV3::State)?;
-            (rung, attempt.source_spec_id())
-        }
-        _ => return Err(ProviderTransportOperatorErrorV3::State),
-    };
+    // WHICH SOURCE THIS CAPTURE ANSWERS ON, decided by finalized Source and
+    // material records. Core's established route derives an active recovery
+    // rung from Source. The direct route derives a declared ensemble member
+    // while Source remains Primary, and refuses to construct any other shape.
+    let (source_index, expected_source_spec) =
+        match (target, source.phase(), &snapshot.recovery_ladder) {
+            (ProviderExecuteTargetV3::CoreTerminal, SourceResolutionPhaseV1::Primary, None) => {
+                (0_u8, material.primary_source_spec())
+            }
+            (
+                ProviderExecuteTargetV3::CoreTerminal,
+                SourceResolutionPhaseV1::Recovery,
+                Some(ladder),
+            ) => {
+                let policy_id = material
+                    .recovery_policy()
+                    .ok_or(ProviderTransportOperatorErrorV3::Record)?;
+                authenticate_raw(
+                    registry,
+                    &ladder.policy,
+                    RECOVERY_POLICY_SCHEMA_ID_V2,
+                    policy_id.to_bytes(),
+                )?;
+                let policy = RecoveryPolicyV2::decode(&ladder.policy.data)
+                    .map_err(ProviderTransportOperatorErrorV3::Source)?;
+                let attempt = policy
+                    .attempt(source.active_attempt())
+                    .map_err(ProviderTransportOperatorErrorV3::Source)?;
+                let rung = source
+                    .active_attempt()
+                    .checked_add(1)
+                    .ok_or(ProviderTransportOperatorErrorV3::State)?;
+                (rung, attempt.source_spec_id())
+            }
+            (
+                ProviderExecuteTargetV3::EnsembleMember(member),
+                SourceResolutionPhaseV1::Primary,
+                Some(ladder),
+            ) if material.ensemble().declares_member(member) => {
+                let policy_id = material
+                    .recovery_policy()
+                    .ok_or(ProviderTransportOperatorErrorV3::Record)?;
+                authenticate_raw(
+                    registry,
+                    &ladder.policy,
+                    RECOVERY_POLICY_SCHEMA_ID_V2,
+                    policy_id.to_bytes(),
+                )?;
+                let policy = RecoveryPolicyV2::decode(&ladder.policy.data)
+                    .map_err(ProviderTransportOperatorErrorV3::Source)?;
+                let window = WindowSpecV1::decode(&snapshot.window.data)
+                    .map_err(ProviderTransportOperatorErrorV3::Source)?;
+                let deadline = window
+                    .end_unix_seconds()
+                    .checked_add(i64::from(window.max_age_seconds()))
+                    .ok_or(ProviderTransportOperatorErrorV3::State)?;
+                policy
+                    .validate_ensemble_membership(
+                        material.ensemble(),
+                        material.ensemble_rungs(),
+                        deadline,
+                    )
+                    .map_err(ProviderTransportOperatorErrorV3::Source)?;
+                let spec = if member == 0 {
+                    material.primary_source_spec()
+                } else {
+                    policy
+                        .member_attempt(material.ensemble(), member)
+                        .map_err(ProviderTransportOperatorErrorV3::Source)?
+                        .source_spec_id()
+                };
+                (member, spec)
+            }
+            _ => return Err(ProviderTransportOperatorErrorV3::State),
+        };
     authenticate_raw(
         registry,
         &snapshot.source_spec,
@@ -1084,27 +1201,42 @@ pub fn build_provider_execute_v3(
     {
         return Err(ProviderTransportOperatorErrorV3::Address);
     }
-    let certificate = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-            snapshot.source_state.key.as_ref(),
-            &[1],
-            &intent.terminal_sequence.to_le_bytes(),
-        ],
-        &deployment.resolution_program,
-    )
-    .0;
-    let (core_bytes, caller_authority) = provider_execute_caller_authority_v3(
-        release_set,
-        snapshot.market.key,
-        market.identity.market_id,
-        market.identity.generation,
-        snapshot.source_state.key,
-        snapshot.market.owner,
-    )?;
-    let parent_request_digest = hash(&core_bytes).to_bytes();
-    let provider_request = ProviderExecutionRequestV3 {
-        caller: ProviderCallerV3::Core,
+    let certificate = match target {
+        ProviderExecuteTargetV3::CoreTerminal => {
+            Pubkey::find_program_address(
+                &[
+                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                    snapshot.source_state.key.as_ref(),
+                    &[1],
+                    &intent.terminal_sequence.to_le_bytes(),
+                ],
+                &deployment.resolution_program,
+            )
+            .0
+        }
+        ProviderExecuteTargetV3::EnsembleMember(member) => {
+            Pubkey::find_program_address(
+                &EnsembleFragmentSeatSeedsV1::new(
+                    snapshot.source_state.key.to_bytes(),
+                    member,
+                    intent.terminal_sequence,
+                )
+                .seeds(),
+                &deployment.resolution_program,
+            )
+            .0
+        }
+    };
+    let caller = match target {
+        ProviderExecuteTargetV3::CoreTerminal => ProviderCallerV3::Core,
+        ProviderExecuteTargetV3::EnsembleMember(_) => ProviderCallerV3::Resolution,
+    };
+    let caller_program = match target {
+        ProviderExecuteTargetV3::CoreTerminal => snapshot.market.owner,
+        ProviderExecuteTargetV3::EnsembleMember(_) => deployment.resolution_program,
+    };
+    let mut provider_request = ProviderExecutionRequestV3 {
+        caller,
         source_index,
         generation: market.identity.generation,
         terminal_sequence: intent.terminal_sequence,
@@ -1120,14 +1252,48 @@ pub fn build_provider_execute_v3(
         expected_update_digest: lifecycle.update_digest,
         provider_submitter: lifecycle.provider_submitter,
         resolver: intent.resolver.to_bytes(),
-        caller_program: snapshot.market.owner.to_bytes(),
+        caller_program: caller_program.to_bytes(),
         release_set,
         capability_program_set: [0; 32],
         selected_capability_program: [0; 32],
-        parent_request_digest,
+        // The direct digest helper encodes then clears this field, but the
+        // canonical request encoder still requires every identity coordinate
+        // to be nonzero. A nonzero placeholder therefore precedes derivation.
+        parent_request_digest: [1; 32],
         post_params_body_digest: lifecycle.post_body_digest,
     };
-    let mut data = core_bytes;
+    let (caller_authority, mut data, instruction_program) = match target {
+        ProviderExecuteTargetV3::CoreTerminal => {
+            let (core_bytes, caller_authority) = provider_execute_caller_authority_v3(
+                release_set,
+                snapshot.market.key,
+                market.identity.market_id,
+                market.identity.generation,
+                snapshot.source_state.key,
+                snapshot.market.owner,
+            )?;
+            provider_request.parent_request_digest = hash(&core_bytes).to_bytes();
+            (caller_authority, core_bytes, snapshot.market.owner)
+        }
+        ProviderExecuteTargetV3::EnsembleMember(_) => {
+            provider_request.parent_request_digest =
+                provider_resolution_direct_intent_digest_v1(provider_request)
+                    .map_err(ProviderTransportOperatorErrorV3::Resolution)?;
+            let seeds = CallerAuthoritySeedsV1::from_bytes(
+                release_set,
+                snapshot.market.key.to_bytes(),
+                ExecutionRoleV1::Resolution,
+                snapshot.source_state.key.to_bytes(),
+                provider_request.parent_request_digest,
+            )
+            .map_err(ProviderTransportOperatorErrorV3::ReleaseSet)?;
+            (
+                Pubkey::find_program_address(&seeds.as_slices(), &deployment.resolution_program).0,
+                Vec::new(),
+                deployment.resolution_program,
+            )
+        }
+    };
     data.extend_from_slice(
         &provider_request
             .to_bytes()
@@ -1241,12 +1407,16 @@ pub fn build_provider_execute_v3(
                 .ok_or(ProviderTransportOperatorErrorV3::Address)?
         }
     };
-    if accounts.len() != expected_accounts || !distinct(&accounts) {
+    if (matches!(target, ProviderExecuteTargetV3::EnsembleMember(_))
+        && snapshot.recovery_ladder.is_none())
+        || accounts.len() != expected_accounts
+        || !distinct(&accounts)
+    {
         return Err(ProviderTransportOperatorErrorV3::Address);
     }
     Ok(ProviderTransportReportV3 {
         instruction: Instruction {
-            program_id: snapshot.market.owner,
+            program_id: instruction_program,
             accounts,
             data,
         },
@@ -1546,6 +1716,20 @@ pub fn compile_provider_execute_v0(
     compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
 }
 
+/// Compile a direct ensemble-member capture after rechecking its independent
+/// Resolution caller authority and widened policy frame.
+#[cfg(feature = "transaction-planning")]
+pub fn compile_provider_ensemble_member_execute_v0(
+    report: &ProviderTransportReportV3,
+    recent_blockhash: Hash,
+    lookup_tables: &[ObservedAccount],
+    payer: Pubkey,
+) -> Result<ProviderTransportTransactionPlanV3, ProviderTransportTransactionErrorV3> {
+    let request = validate_ensemble_member_execute_report(report)?;
+    let required_signers = readonly_signer_frame_signers(report, payer, request.resolver)?;
+    compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
+}
+
 /// Compile one exact permissionless reclaim into an unsigned v0 message.
 ///
 /// Reclaim's frame is Execute's shape, not Submit's:
@@ -1742,6 +1926,64 @@ fn validate_execute_report(
                     request.release_set,
                     request.market,
                     ExecutionRoleV1::Core,
+                    request.source_state,
+                    request.parent_request_digest,
+                )
+                .map_err(ProviderTransportTransactionErrorV3::ReleaseSet)?
+                .as_slices(),
+                &report.instruction.program_id,
+            )
+            .0
+        || account_key(accounts, 1)?.to_bytes() != request.resolver
+        || account_key(accounts, 2)?.to_bytes() != request.source_state
+        || account_key(accounts, 3)?.to_bytes() != request.certificate_account
+        || account_key(accounts, 4)?.to_bytes() != request.market
+        || account_key(accounts, 37)? != report.lifecycle
+        || account_key(accounts, 38)?.to_bytes() != request.update_account
+        || hash(body).to_bytes() != request.post_params_body_digest
+        || !exact_execute_privileges(accounts)
+        || !distinct(accounts)
+    {
+        return Err(ProviderTransportTransactionErrorV3::Frame);
+    }
+    Ok(request)
+}
+
+#[cfg(feature = "transaction-planning")]
+fn validate_ensemble_member_execute_report(
+    report: &ProviderTransportReportV3,
+) -> Result<ProviderExecutionRequestV3, ProviderTransportTransactionErrorV3> {
+    let accounts = &report.instruction.accounts;
+    let provider_end = PROVIDER_EXECUTION_REQUEST_BYTES_V3;
+    let provider_bytes = report
+        .instruction
+        .data
+        .get(..provider_end)
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    let request = ProviderExecutionRequestV3::decode(provider_bytes)
+        .map_err(ProviderTransportTransactionErrorV3::Resolution)?;
+    let body = report
+        .instruction
+        .data
+        .get(provider_end..)
+        .filter(|bytes| !bytes.is_empty())
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    let widened = PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
+        .checked_add(PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3)
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    if report.instruction.program_id != account_key(accounts, 15)?
+        || accounts.len() != widened
+        || request.caller != ProviderCallerV3::Resolution
+        || request.caller_program != report.instruction.program_id.to_bytes()
+        || request.parent_request_digest
+            != provider_resolution_direct_intent_digest_v1(request)
+                .map_err(ProviderTransportTransactionErrorV3::Resolution)?
+        || account_key(accounts, 0)?
+            != Pubkey::find_program_address(
+                &CallerAuthoritySeedsV1::from_bytes(
+                    request.release_set,
+                    request.market,
+                    ExecutionRoleV1::Resolution,
                     request.source_state,
                     request.parent_request_digest,
                 )
@@ -2041,6 +2283,70 @@ mod tests {
         }
     }
 
+    fn ensemble_member_execute_report() -> ProviderTransportReportV3 {
+        let widened = PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
+            .checked_add(PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3)
+            .expect("widened frame");
+        let mut accounts = account_frame(widened, 15);
+        for index in [2, 3, 37] {
+            accounts[index].is_writable = true;
+        }
+        accounts[1].is_signer = true;
+        let body = vec![0xa5; 94];
+        let mut request = ProviderExecutionRequestV3 {
+            caller: ProviderCallerV3::Resolution,
+            source_index: 2,
+            generation: 7,
+            terminal_sequence: 3,
+            market: accounts[4].pubkey.to_bytes(),
+            source_state: accounts[2].pubkey.to_bytes(),
+            certificate_account: accounts[3].pubkey.to_bytes(),
+            source_material: key(101).to_bytes(),
+            source_spec: key(102).to_bytes(),
+            product_record: key(103).to_bytes(),
+            result_domain: key(104).to_bytes(),
+            provider_release: key(105).to_bytes(),
+            update_account: accounts[38].pubkey.to_bytes(),
+            expected_update_digest: key(107).to_bytes(),
+            provider_submitter: key(108).to_bytes(),
+            resolver: accounts[1].pubkey.to_bytes(),
+            caller_program: accounts[15].pubkey.to_bytes(),
+            release_set: key(110).to_bytes(),
+            capability_program_set: [0; 32],
+            selected_capability_program: [0; 32],
+            parent_request_digest: [1; 32],
+            post_params_body_digest: hash(&body).to_bytes(),
+        };
+        request.parent_request_digest =
+            provider_resolution_direct_intent_digest_v1(request).expect("direct intent digest");
+        let authority = Pubkey::find_program_address(
+            &CallerAuthoritySeedsV1::from_bytes(
+                request.release_set,
+                request.market,
+                ExecutionRoleV1::Resolution,
+                request.source_state,
+                request.parent_request_digest,
+            )
+            .expect("Resolution caller seeds")
+            .as_slices(),
+            &accounts[15].pubkey,
+        )
+        .0;
+        accounts[0].pubkey = authority;
+        let mut data = request.to_bytes().expect("member request").to_vec();
+        data.extend_from_slice(&body);
+        ProviderTransportReportV3 {
+            instruction: Instruction {
+                program_id: accounts[15].pubkey,
+                accounts,
+                data,
+            },
+            observation: observation(90),
+            lifecycle: key(38),
+            update_authority: key(111),
+        }
+    }
+
     fn lookup_table(report: &ProviderTransportReportV3) -> ObservedAccount {
         let addresses = report
             .instruction
@@ -2325,6 +2631,53 @@ mod tests {
         assert_eq!(
             dclutch_versioned_message_operator::PACKET_DATA_BYTES - plan.message.wire_bytes,
             64,
+        );
+    }
+
+    #[test]
+    fn direct_ensemble_member_execution_binds_the_resolution_intent_and_policy_tail() {
+        let report = ensemble_member_execute_report();
+        let request = ProviderExecutionRequestV3::decode(
+            &report.instruction.data[..PROVIDER_EXECUTION_REQUEST_BYTES_V3],
+        )
+        .expect("direct member request");
+        assert_eq!(request.caller, ProviderCallerV3::Resolution);
+        assert_eq!(request.source_index, 2);
+        assert_eq!(
+            report.instruction.program_id,
+            report.instruction.accounts[15].pubkey
+        );
+        assert_eq!(
+            report.instruction.accounts.len(),
+            PROVIDER_EXECUTE_ACCOUNT_COUNT_V3 + PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3,
+        );
+        assert_eq!(
+            request.parent_request_digest,
+            provider_resolution_direct_intent_digest_v1(request).expect("direct intent digest"),
+        );
+        let table = lookup_table(&report);
+        let plan = compile_provider_ensemble_member_execute_v0(
+            &report,
+            Hash::new_from_array([7; 32]),
+            core::slice::from_ref(&table),
+            stage_payer(),
+        )
+        .expect("table-routed member capture");
+        assert_eq!(
+            plan.required_signers,
+            vec![stage_payer(), report.instruction.accounts[1].pubkey]
+        );
+
+        let mut missing_policy = report.clone();
+        missing_policy.instruction.accounts.pop();
+        assert_eq!(
+            compile_provider_ensemble_member_execute_v0(
+                &missing_policy,
+                Hash::new_from_array([7; 32]),
+                &[],
+                stage_payer(),
+            ),
+            Err(ProviderTransportTransactionErrorV3::Frame),
         );
     }
 

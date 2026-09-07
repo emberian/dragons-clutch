@@ -318,6 +318,7 @@
     "settle_certificate_bytes": "312",
     "payer_capital_sol": "2",
     "participant_capital_sol": "0.05",
+    "upkeep_campaign_deposit_lamports": "1",
     "ticket_valid_slots": "3000",
     "crank_max_wait_seconds": "2000",
     "checked_roles": [

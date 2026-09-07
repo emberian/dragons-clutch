@@ -1123,6 +1123,26 @@ Capitalize the campaign payer — a DISTINCT keypair from the deployer, because
 the founding's fee payer is writable while the consenting authority is readonly
 — before the ladder runs on it.
 
+### parameters-found
+
+Found the one governed economic record under the new Custody deployment before
+any market can reach the Direct close-maker. The founder is the Custody
+ProgramData's current upgrade authority, read by the route itself; the command
+rejects a different payer before it opens that key. Its read-back proves the
+record is the canonical genesis value, with no take, beneficiary, or pending
+proposal. A later governed change has its own proposal, delay, and receipt
+ceremony; this row only establishes the record those acts address.
+
+### upkeep-found
+
+Found the global upkeep vault and then credit a one-lamport voluntary Deposit
+as an executable nonzero witness. The witness amount is a manifest field, so it
+is neither a fee nor a claim about operating revenue. The poststate proves the
+vault's rent floor plus that exact amount, its Deposit-class counter, and zero
+unreceipted remainder. A `Donation` credit remains the Direct close-maker's
+protocol-only CPI: this row does not invent one, and it never moves Hoard
+principal.
+
 ### administration
 
 `ladder`'s successor: `campaign --through activation` from `plan.json`, the

@@ -18,11 +18,10 @@
 extern crate alloc;
 
 use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2;
-use dclutch_claims::position_admission::{
-    USER_POSITION_ADMISSION_CHILD_ACCOUNT_COUNT_V1, UserPositionAdmissionRequestV1,
-};
+use dclutch_claims::position_admission::USER_POSITION_ADMISSION_CHILD_ACCOUNT_COUNT_V1;
 use dclutch_claims::protocol_position_v2::{
-    PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2, ProtocolPositionOwnerKindV2,
+    PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_REQUEST_BYTES_V2,
+    ProtocolPositionActionV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
     ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
 };
 use dclutch_custody::{
@@ -533,9 +532,9 @@ fn invoke_custody_v1<'info>(
 }
 
 /// Admit the Dealer's Position through Claims' protocol-Position lifecycle,
-/// the fund PDA as owner (`TradingRecord`), this program signing the
-/// request-bound caller authority exactly as `user_position_admission_v1`
-/// does for a wallet.
+/// the fund PDA as owner (`TradingRecord`).  The User lifecycle outer is
+/// deliberately not involved: it is wallet-only, whereas this route must
+/// send the canonical Claims child request under its request-bound authority.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn invoke_claims_admit_v1<'info>(
@@ -615,11 +614,7 @@ fn invoke_claims_admit_v1<'info>(
     }
     .new()
     .map_err(|_| ScoringDealerErrorV1::Claims)?;
-    let outer = UserPositionAdmissionRequestV1::new(claims_request)
-        .map_err(|_| ScoringDealerErrorV1::Claims)?;
-    let child_data = outer
-        .claims_request_bytes()
-        .map_err(|_| ScoringDealerErrorV1::Claims)?;
+    let child_data = encode_dealer_claims_admit_v1(claims_request)?;
     let request_digest = hash(&child_data).to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
         facts.release_set,
@@ -655,14 +650,152 @@ fn invoke_claims_admit_v1<'info>(
     if producer != *claims_program.key {
         return Err(ScoringDealerErrorV1::Claims.into());
     }
-    outer
-        .validate_claims_receipt(
-            &receipt,
-            request_digest,
-            claims_program.key.to_bytes(),
-            program_id.to_bytes(),
-        )
-        .map_err(|_| ScoringDealerErrorV1::Claims)?;
+    verify_dealer_claims_admit_receipt_v1(
+        claims_request,
+        &receipt,
+        request_digest,
+        claims_program.key.to_bytes(),
+        program_id.to_bytes(),
+    )?;
     let _ = invoke;
     Ok(())
+}
+
+/// Encode the one Claims child that DealerFound is authorized to submit.
+///
+/// This intentionally does not use `UserPositionAdmissionRequestV1`: that
+/// outer authenticates a wallet owner and rejects `TradingRecord`.  The
+/// Claims wire is already the canonical request whose digest pins both the
+/// caller authority and the callee receipt.
+fn encode_dealer_claims_admit_v1(
+    request: ProtocolPositionRequestV2,
+) -> Result<[u8; PROTOCOL_POSITION_REQUEST_BYTES_V2], ProgramError> {
+    if request.action != ProtocolPositionActionV2::Admit
+        || request.presence != ProtocolPositionPresenceV2::Vacant
+        || request.owner_kind != ProtocolPositionOwnerKindV2::TradingRecord
+    {
+        return Err(ScoringDealerErrorV1::Claims.into());
+    }
+    request
+        .to_bytes()
+        .map_err(|_| ScoringDealerErrorV1::Claims.into())
+}
+
+/// Verify Claims' immediate receipt against DealerFound's exact child wire.
+///
+/// The route pins the digest plus both sides of the CPI boundary; a receipt
+/// from another Claims callee or Trading caller cannot authorize this fund.
+fn verify_dealer_claims_admit_receipt_v1(
+    request: ProtocolPositionRequestV2,
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+    trading_program: [u8; 32],
+) -> Result<(), ProgramError> {
+    ProtocolPositionAdmissionV2::decode_receipt(receipt)
+        .and_then(|value| {
+            value.validate_request(request, request_digest, claims_program, trading_program)
+        })
+        .map_err(|_| ScoringDealerErrorV1::Claims.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dclutch_claims::position_admission::{
+        UserPositionAdmissionErrorV1, UserPositionAdmissionRequestV1,
+    };
+    use dclutch_claims::protocol_position_v2::ProtocolPositionAdmissionEvidenceV2;
+
+    fn request() -> ProtocolPositionRequestV2 {
+        ProtocolPositionRequestV2 {
+            action: ProtocolPositionActionV2::Admit,
+            owner_kind: ProtocolPositionOwnerKindV2::TradingRecord,
+            presence: ProtocolPositionPresenceV2::Vacant,
+            release_set: [1; 32],
+            market: [2; 32],
+            position_owner: [3; 32],
+            parent_request_digest: [4; 32],
+            rent_credit: [5; 32],
+            rent_program: [6; 32],
+            generation: 7,
+            expected_market_revision: 8,
+            expected_position_revision: 0,
+            observed_position_lamports: 12,
+            observed_admission_lamports: 13,
+            position_rent_principal: 10,
+            admission_rent_principal: 11,
+            capability_descriptor: [0; 32],
+            capability_outcome: 0,
+        }
+        .new()
+        .expect("canonical TradingRecord request")
+    }
+
+    fn receipt(
+        request: ProtocolPositionRequestV2,
+        request_digest: [u8; 32],
+        claims_program: [u8; 32],
+        trading_program: [u8; 32],
+    ) -> [u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2] {
+        ProtocolPositionAdmissionV2::new(
+            request,
+            ProtocolPositionAdmissionEvidenceV2 {
+                product_record_digest: [7; 32],
+                semantic_basis_id: [8; 32],
+                linked_basis_record_digest: [9; 32],
+                request_digest,
+                claims_program,
+                trading_program,
+                capability_descriptor: [0; 32],
+                capability_outcome: 0,
+                outcome_count: 2,
+            },
+        )
+        .expect("receipt admission")
+        .to_receipt_bytes()
+        .expect("receipt bytes")
+    }
+
+    /// DealerFound owns a record, so it sends Claims' canonical child without
+    /// widening the separate wallet-only lifecycle outer.
+    #[test]
+    fn trading_record_admission_uses_raw_claims_child_not_wallet_outer() {
+        let request = request();
+        assert_eq!(
+            UserPositionAdmissionRequestV1::new(request),
+            Err(UserPositionAdmissionErrorV1::InvalidOwnerKind),
+            "red control: the wallet outer remains User-only"
+        );
+
+        let child = encode_dealer_claims_admit_v1(request).expect("TradingRecord child");
+        assert_eq!(
+            ProtocolPositionRequestV2::decode(&child),
+            Ok(request),
+            "Dealer sends the canonical Claims request verbatim"
+        );
+        let digest = hash(&child).to_bytes();
+        let claims = [20; 32];
+        let trading = [21; 32];
+        let returned = receipt(request, digest, claims, trading);
+        verify_dealer_claims_admit_receipt_v1(request, &returned, digest, claims, trading)
+            .expect("the exact non-user request-bound receipt is admitted");
+    }
+
+    /// A receipt with another caller identity cannot be substituted for the
+    /// request-bound TradingRecord admission that DealerFound just invoked.
+    #[test]
+    fn trading_record_admission_refuses_foreign_caller_receipt() {
+        let request = request();
+        let child = encode_dealer_claims_admit_v1(request).expect("TradingRecord child");
+        let digest = hash(&child).to_bytes();
+        let claims = [20; 32];
+        let trading = [21; 32];
+        let returned = receipt(request, digest, claims, [99; 32]);
+        assert_eq!(
+            verify_dealer_claims_admit_receipt_v1(request, &returned, digest, claims, trading),
+            Err(ScoringDealerErrorV1::Claims.into()),
+            "red control: a receipt must name this Trading caller"
+        );
+    }
 }

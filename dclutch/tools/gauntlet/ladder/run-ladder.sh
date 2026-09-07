@@ -157,8 +157,12 @@ printf '%s\n' "$GATE_TREE" | grep -Eq '^[0-9a-f]{64}$' || die "gate names no 64-
 say "gate $GATE_SHA256 at $GATE_REVISION"
 
 SOURCE="$WORK/source"
+CAMPAIGN_BUILD_MODE="checked-gate-archive"
+CAMPAIGN_HOST_REVISION="$GATE_REVISION"
 if [ "$WORKTREE" = 1 ]; then
     SOURCE="$REPO"
+    CAMPAIGN_BUILD_MODE="working-tree-diagnostic"
+    CAMPAIGN_HOST_REVISION="$(git -C "$REPO" rev-parse HEAD)"
     say "building the campaign from the WORKING TREE (development mode; not release evidence)"
 elif [ ! -f "$WORK/stamps.archive" ] || [ "$(cat "$WORK/stamps.archive")" != "$GATE_REVISION" ]; then
     say "stage archive ($GATE_REVISION)"
@@ -240,6 +244,13 @@ for ARM in "${ARMS[@]}"; do
     fi
     [ -f "$ARM_RUN/transcript.json" ] || die "transcript missing: $ARM_RUN/transcript.json"
     [ -f "$ARM_RUN/campaign/evidence.json" ] || die "evidence missing: $ARM_RUN/campaign/evidence.json"
+    TRANSCRIPT_TMP="$ARM_RUN/transcript.json.tmp"
+    jq --arg mode "$CAMPAIGN_BUILD_MODE" --arg revision "$CAMPAIGN_HOST_REVISION" \
+       --arg gate "$GATE_REVISION" \
+       '. + {campaign_build:{mode:$mode, source_revision:$revision, gate_revision:$gate}}' \
+       "$ARM_RUN/transcript.json" > "$TRANSCRIPT_TMP" \
+       || die "could not label campaign build provenance"
+    mv "$TRANSCRIPT_TMP" "$ARM_RUN/transcript.json"
 
     # The arm-independent witnesses, then the ones about THIS arm. The second
     # file is the whole point of running both: its witnesses carry no disjunct

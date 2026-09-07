@@ -57,14 +57,7 @@ const adapterSource = readFileSync(
 
 // ------------------------------------------------------ the pinned registry
 
-/**
- * The version `Cargo.lock` pins for one crate.
- *
- * Refuses on two entries rather than picking one: a workspace carrying two
- * copies of the runtime would make "the vocabulary" ambiguous, and guessing
- * which is the real one is exactly the kind of quiet choice this module exists
- * to remove.
- */
+/** The single lock stanza for a crate which this generator reads directly. */
 function lockedVersion(name) {
   const versions = [...lockSource.matchAll(
     new RegExp(`\\[\\[package\\]\\]\\nname = "${name}"\\nversion = "([^"]+)"`, 'g'),
@@ -75,6 +68,26 @@ function lockedVersion(name) {
 }
 
 /**
+ * The version of one dependency selected by a crate that owns this vocabulary.
+ *
+ * Cargo may legitimately retain an unrelated older copy elsewhere in the
+ * workspace. That does not make the VM's vocabulary ambiguous: the runtime
+ * crate that emits it names its own `solana-sbpf` dependency in the lockfile.
+ * This follows that declared edge and still refuses a missing, unversioned, or
+ * multiply stated edge rather than choosing a version by sort order.
+ */
+function lockedDependencyVersion(owner, dependency) {
+  const packagePattern = new RegExp(`\\[\\[package\\]\\]\\nname = "${owner}"\\nversion = "([^"]+)"([\\s\\S]*?)(?=\\n\\[\\[package\\]\\]|$)`, 'g');
+  const owners = [...lockSource.matchAll(packagePattern)];
+  if (owners.length === 0) throw new Error(`Cargo.lock pins no ${owner} to select ${dependency}`);
+  if (owners.length > 1) throw new Error(`Cargo.lock pins ${owners.length} copies of ${owner}; ${dependency} authority is ambiguous`);
+  const entries = [...owners[0][2].matchAll(new RegExp(`^ "${dependency} ([^"]+)",$`, 'gm'))].map((match) => match[1]);
+  if (entries.length === 0) throw new Error(`${owner} names no versioned ${dependency} dependency in Cargo.lock`);
+  if (entries.length > 1) throw new Error(`${owner} names ${entries.length} ${dependency} versions in Cargo.lock`);
+  return entries[0];
+}
+
+/**
  * Where cargo unpacked one pinned crate.
  *
  * The registry index directory carries a hash that changes with the protocol
@@ -82,8 +95,8 @@ function lockedVersion(name) {
  * with the fix in it: this generator reads sources, and an absent source is not
  * a reason to emit anything.
  */
-function crateSource(name, relative) {
-  const version = lockedVersion(name);
+function crateSource(name, relative, selectedVersion = lockedVersion(name)) {
+  const version = selectedVersion;
   const registry = join(process.env.CARGO_HOME ?? join(homedir(), '.cargo'), 'registry', 'src');
   if (!existsSync(registry)) throw new Error(`no cargo registry at ${registry}; run \`cargo fetch\` at the workspace root`);
   const hits = readdirSync(registry)
@@ -95,9 +108,14 @@ function crateSource(name, relative) {
   return { version, text: readFileSync(join(hits[0], relative), 'utf8') };
 }
 
-const sbpfEbpf = crateSource('solana-sbpf', 'src/ebpf.rs');
-const sbpfError = crateSource('solana-sbpf', 'src/error.rs');
 const syscalls = crateSource('solana-syscalls', 'src/lib.rs');
+const runtimeSbpf = lockedDependencyVersion('solana-program-runtime', 'solana-sbpf');
+const syscallSbpf = lockedDependencyVersion('solana-syscalls', 'solana-sbpf');
+if (runtimeSbpf !== syscallSbpf) {
+  throw new Error(`the runtime and syscall owners select different solana-sbpf versions: ${runtimeSbpf}, ${syscallSbpf}`);
+}
+const sbpfEbpf = crateSource('solana-sbpf', 'src/ebpf.rs', runtimeSbpf);
+const sbpfError = crateSource('solana-sbpf', 'src/error.rs', runtimeSbpf);
 const entrypoint = crateSource('solana-program-entrypoint', 'src/lib.rs');
 
 // ------------------------------------------------------------ Rust constants

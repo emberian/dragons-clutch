@@ -29,6 +29,22 @@ describe('the aquarium status decoder', () => {
     }))).toThrow('keep public joining closed');
   });
 
+  it('accepts the checked cohort identity additions and still refuses malformed ones', () => {
+    const loaded = parseAquariumStatusV1(mutated((copy) => {
+      const cohort = copy.cohort as Record<string, unknown>;
+      cohort.release_gate_sha256 = 'a'.repeat(64);
+      cohort.general_accelerator = {
+        program_id: '11111111111111111111111111111111', deployment_slot: '900',
+        elf_sha256: 'b'.repeat(64), semantic_release_id: 'c'.repeat(64),
+      };
+    }));
+    expect(loaded.cohort.releaseGateSha256).toBe('a'.repeat(64));
+    expect(loaded.cohort.generalAccelerator?.deploymentSlot).toBe(900);
+    expect(() => parseAquariumStatusV1(mutated((copy) => {
+      (copy.cohort as Record<string, unknown>).release_gate_sha256 = 'not-a-digest';
+    }))).toThrow('release_gate_sha256');
+  });
+
   it('refuses duplicate active coordinates and an over-bound public list', () => {
     expect(() => parseAquariumStatusV1(mutated((copy) => {
       const activity = copy.activity as Record<string, unknown>;

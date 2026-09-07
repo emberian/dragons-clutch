@@ -76,9 +76,7 @@ use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketSeedsV2,
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2, liability_basis_vector_width_v2,
 };
-use dclutch_claims::position_admission::{
-    USER_POSITION_ADMISSION_CHILD_ACCOUNT_COUNT_V1, UserPositionAdmissionRequestV1,
-};
+use dclutch_claims::position_admission::USER_POSITION_ADMISSION_CHILD_ACCOUNT_COUNT_V1;
 use dclutch_claims::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
     ProtocolPositionAdmissionSeedsV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
@@ -1363,10 +1361,11 @@ fn plan_admit_window_v1(
     }
     .new()
     .map_err(|error| Error::new(format!("Claims Position admission request: {error:?}")))?;
-    let outer = UserPositionAdmissionRequestV1::new(claims_request)
-        .map_err(|error| Error::new(format!("Claims admission outer: {error:?}")))?;
-    let child = outer
-        .claims_request_bytes()
+    // DealerFound owns a TradingRecord, not a wallet.  The user-lifecycle
+    // outer intentionally rejects that owner kind, so derive this PDA from
+    // the canonical Claims child wire that the route itself will invoke.
+    let child = claims_request
+        .to_bytes()
         .map_err(|error| Error::new(format!("Claims admission child bytes: {error:?}")))?;
     let authority = coordinates.authority(fund.to_bytes(), hash(&child).to_bytes())?;
 
