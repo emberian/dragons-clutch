@@ -5,7 +5,7 @@
 //   tools/gauntlet/census                        (the route/refusal enumeration)
 //   crates/dclutch-refusal-registry/src/generated_bands.rs   (the band allocation)
 //
-// 8 programs, 86 magic-selected routes, 26 predicate-selected routes, 451 refusal codes.
+// 8 programs, 88 magic-selected routes, 29 predicate-selected routes, 451 refusal codes.
 
 /** Whether a band is deployed to a real cluster or exists only under `program-test`. */
 export type RefusalBandTier = 'program' | 'test-caller';
@@ -569,6 +569,7 @@ export const INSTRUCTION_MAGICS: ReadonlyArray<InstructionMagic> = Object.freeze
   Object.freeze({ magic: "DCLCRH01", hex: "44434c4352483031", constant: "dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1", program: "core", routeId: "core/retirement_replay_handoff_v1::process", handler: "retirement_replay_handoff_v1::process", provenance: "programs/dclutch-core-sbf/src/lib.rs:403" }),
   Object.freeze({ magic: "DCLCRH01", hex: "44434c4352483031", constant: "dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1", program: "custody", routeId: "custody/retirement_replay_handoff_v1::process", handler: "retirement_replay_handoff_v1::process", provenance: "programs/dclutch-custody-sbf/src/lib.rs:255" }),
   Object.freeze({ magic: "DCLCUDQ2", hex: "44434c4355445132", constant: "DELEGATED_CUSTODY_REQUEST_MAGIC_V2", program: "custody", routeId: "custody/delegated::process", handler: "delegated::process", provenance: "programs/dclutch-custody-sbf/src/lib.rs:266" }),
+  Object.freeze({ magic: "DCLCUPQ1", hex: "44434c4355505131", constant: "UPKEEP_VAULT_REQUEST_MAGIC_V1", program: "custody", routeId: "custody/upkeep_vault_v1::process", handler: "upkeep_vault_v1::process", provenance: "programs/dclutch-custody-sbf/src/lib.rs:243" }),
   Object.freeze({ magic: "DCLFDC05", hex: "44434c4644433035", constant: "CLAIMS_FOUNDING_RECEIPT_MAGIC_V5", program: "core", routeId: "core/series_open::process", handler: "series_open::process", provenance: "programs/dclutch-core-sbf/src/lib.rs:509" }),
   Object.freeze({ magic: "DCLFDR05", hex: "44434c4644523035", constant: "dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5", program: "claims", routeId: "claims/founding_v5::process", handler: "founding_v5::process", provenance: "programs/dclutch-claims-sbf/src/lib.rs:511" }),
   Object.freeze({ magic: "DCLMCQ01", hex: "44434c4d43513031", constant: "dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1", program: "claims", routeId: "claims/market_closure_v1::process", handler: "market_closure_v1::process", provenance: "programs/dclutch-claims-sbf/src/lib.rs:462" }),
@@ -634,6 +635,7 @@ export const INSTRUCTION_MAGICS: ReadonlyArray<InstructionMagic> = Object.freeze
   Object.freeze({ magic: "DCLTPCB2", hex: "44434c5450434232", constant: "PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2", program: "trading", routeId: "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2", handler: "projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2", provenance: "programs/dclutch-trading-sbf/src/lib.rs:993" }),
   Object.freeze({ magic: "DCLTPFQ2", hex: "44434c5450465132", constant: "PROJECT_FOUND_REQUEST_MAGIC_V2", program: "core", routeId: "core/found::project", handler: "found::project", provenance: "programs/dclutch-core-sbf/src/lib.rs:555" }),
   Object.freeze({ magic: "DCLTPRL3", hex: "44434c5450524c33", constant: "PROVIDER_RECLAIM_REQUEST_MAGIC_V3", program: "resolution", routeId: "resolution/process_reclaim#magic", handler: "process_reclaim", provenance: "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:96" }),
+  Object.freeze({ magic: "DCLTPRQ1", hex: "44434c5450525131", constant: "PROTOCOL_PARAMETERS_REQUEST_MAGIC_V1", program: "custody", routeId: "custody/protocol_parameters_v1::process", handler: "protocol_parameters_v1::process", provenance: "programs/dclutch-custody-sbf/src/lib.rs:246" }),
   Object.freeze({ magic: "DCLTPRQ3", hex: "44434c5450525133", constant: "PROVIDER_EXECUTION_REQUEST_MAGIC_V3", program: "resolution", routeId: "resolution/provider_instruction_v3::process_provider_resolution_v3", handler: "provider_instruction_v3::process_provider_resolution_v3", provenance: "programs/dclutch-resolution-proof-sbf/src/lib.rs:435" }),
   Object.freeze({ magic: "DCLTPSB3", hex: "44434c5450534233", constant: "PROVIDER_SUBMIT_REQUEST_MAGIC_V3", program: "resolution", routeId: "resolution/process_submit#magic", handler: "process_submit", provenance: "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:93" }),
   Object.freeze({ magic: "DCLTPUA1", hex: "44434c5450554131", constant: "USER_POSITION_ADMISSION_MAGIC_V1", program: "trading", routeId: "trading/user_position_admission_v1::process_user_position_admission_v1", handler: "user_position_admission_v1::process_user_position_admission_v1", provenance: "programs/dclutch-trading-sbf/src/lib.rs:869" }),
@@ -656,6 +658,7 @@ export const INSTRUCTION_MAGICS: ReadonlyArray<InstructionMagic> = Object.freeze
  * rather than guessing, and this list is what it says it from.
  */
 export const UNSELECTED_ENTRY_ROUTES: ReadonlyArray<UnselectedEntryRoute> = Object.freeze([
+  Object.freeze({ routeId: "accelerator/dealer::process", program: "accelerator", handler: "dealer::process", selectors: Object.freeze(["predicate dealer_family_selected()", "len == ADMITTED_INSTRUCTIONS_ACCOUNT_V3 (30)"]), provenance: "programs/dclutch-accelerator-sbf/src/lib.rs:97" }),
   Object.freeze({ routeId: "accelerator/process_instruction", program: "accelerator", handler: "process_instruction", selectors: Object.freeze([]), provenance: "programs/dclutch-accelerator-sbf/src/lib.rs:1" }),
   Object.freeze({ routeId: "claims/process_instruction", program: "claims", handler: "process_instruction", selectors: Object.freeze([]), provenance: "programs/dclutch-claims-sbf/src/lib.rs:1" }),
   Object.freeze({ routeId: "core/infrastructure::process_initialize", program: "core", handler: "infrastructure::process_initialize", selectors: Object.freeze(["len == INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1 (16)"]), provenance: "programs/dclutch-core-sbf/src/lib.rs:423" }),
@@ -688,6 +691,9 @@ export const UNSELECTED_ENTRY_ROUTES: ReadonlyArray<UnselectedEntryRoute> = Obje
  * instruction is named by its program and its first eight bytes either way.
  */
 export const PREDICATE_SELECTED_ROUTES: ReadonlyArray<PredicateSelectedRoute> = Object.freeze([
+  Object.freeze({ magic: "DCLCUPQ1", constant: "UPKEEP_VAULT_REQUEST_MAGIC_V1", program: "custody", routeId: "custody/upkeep_vault_v1::process", handler: "upkeep_vault_v1::process", predicate: "upkeep_vault_v1::selects", provenance: "programs/dclutch-custody-sbf/src/upkeep_vault_v1.rs" }),
+  Object.freeze({ magic: "DCLMEQ03", constant: "DEALER_EQUITY_REQUEST_MAGIC_V3", program: "accelerator", routeId: "accelerator/dealer::process", handler: "dealer::process", predicate: "dealer_family_selected", provenance: "programs/dclutch-accelerator-sbf/src/lib.rs" }),
+  Object.freeze({ magic: "DCLMLP03", constant: "DEALER_MULTI_LP_REQUEST_MAGIC_V3", program: "accelerator", routeId: "accelerator/dealer::process", handler: "dealer::process", predicate: "dealer_family_selected", provenance: "programs/dclutch-accelerator-sbf/src/lib.rs" }),
   Object.freeze({ magic: "DCLRFAQ1", constant: "FUNDING_ACTIVATION_REQUEST_MAGIC_V1", program: "resolution", routeId: "resolution/core_effect::process_direct_funding_activation_v1", handler: "core_effect::process_direct_funding_activation_v1", predicate: "core_effect::is_direct_funding_activation_v1", provenance: "programs/dclutch-resolution-proof-sbf/src/core_effect.rs" }),
   Object.freeze({ magic: "DCLRFCQ1", constant: "DIRECT_FUNDING_CLOSE_REQUEST_MAGIC_V1", program: "resolution", routeId: "resolution/core_effect::process_direct_funding_close_v1", handler: "core_effect::process_direct_funding_close_v1", predicate: "core_effect::is_direct_funding_close_v1", provenance: "programs/dclutch-resolution-proof-sbf/src/core_effect.rs" }),
   Object.freeze({ magic: "DCLRPAQ1", constant: "PRE_MARKET_FUNDING_ABORT_REQUEST_MAGIC_V1", program: "resolution", routeId: "resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1", handler: "pre_market_funding_abort_v1::process_pre_market_funding_abort_v1", predicate: "pre_market_funding_abort_v1::is_pre_market_funding_abort_v1", provenance: "programs/dclutch-resolution-proof-sbf/src/pre_market_funding_abort_v1.rs" }),
@@ -727,6 +733,7 @@ export const PREDICATE_SELECTED_ROUTES: ReadonlyArray<PredicateSelectedRoute> = 
  */
 export const UNRESOLVED_PREDICATE_ARMS_V1: ReadonlyArray<UnresolvedPredicateArm> = Object.freeze([
   Object.freeze({ routeId: "claims/claims_conservation_v1::process", program: "claims", predicate: "claims_conservation_v1::is_claims_conservation_v1", reason: "dclutch_claims::conservation::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1 did not resolve to eight ASCII bytes" }),
+  Object.freeze({ routeId: "custody/protocol_parameters_v1::process", program: "custody", predicate: "protocol_parameters_v1::selects", reason: "PROTOCOL_PARAMETERS_REQUEST_MAGIC_V1 did not resolve to eight ASCII bytes" }),
   Object.freeze({ routeId: "resolution/derived_transport_v1::process_derived_settle_v1", program: "resolution", predicate: "derived_transport_v1::is_derived_settle", reason: "is_derived_settle compares no leading magic: is_derived_settle_v1(bytes)" }),
   Object.freeze({ routeId: "trading/generic_founding_stages_v1::process_generic_found_and_permit_v1", program: "trading", predicate: "generic_founding_stages_v1::is_generic_found_and_permit_v1", reason: "is_generic_found_and_permit_v1 compares no leading magic: GenericFoundAndPermitCallerBumpsV1::decode(instruction_data).is_ok()" }),
   Object.freeze({ routeId: "trading/generic_market_founding_v1::process_generic_market_founding_v3", program: "trading", predicate: "generic_market_founding_v1::is_generic_market_founding_v3", reason: "is_generic_market_founding_v3 compares no leading magic: GenericMarketFoundingCallerBumpsV3::decode(instruction_data).is_ok()" }),

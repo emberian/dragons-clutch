@@ -26,7 +26,7 @@ these pages always match the source they describe. Regenerate with
 - [abi/](abi/README.md) -- byte layouts: magics, PDA seed domains, record
   widths and offsets, account tables.
 
-Current totals: **8 programs**, **162 routes**
+Current totals: **8 programs**, **165 routes**
 (111 with a witness -- a campaign binding or a corroborated devnet
 transaction), **451 refusal codes**.
 

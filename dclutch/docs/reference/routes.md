@@ -45,16 +45,16 @@ stands:
 
 ## Two never-executed numbers, and neither one is the other
 
-Currently **6** of **162** routes are in
+Currently **9** of **165** routes are in
 that last group. That is not the number of routes nothing has ever run, and a
 reader who takes it for one will conclude the register's work queue is empty.
 Both figures are derived here, from the same classification:
 
-- **unrecorded: 6 of 162** -- no campaign
+- **unrecorded: 9 of 165** -- no campaign
   binding, no devnet witness, and no entry in `tools/gauntlet/blocked.json`.
   Nobody has written anything at all about this route. This is the number the
   register has always printed under the name NEVER-EXECUTED.
-- **undriven: 43 of 162** -- unrecorded, PLUS every
+- **undriven: 46 of 165** -- unrecorded, PLUS every
   blocked route whose entry is classed `status-report` ("no campaign or tier
   drives it yet", with nothing structural in the way), PLUS every blocked route
   whose entry is classed `unwired` (it admits the route is driven today and
@@ -103,7 +103,7 @@ only under a boolean branch or inside a loop that may not be entered, a guard
 in a crate this program's dispatch does not reach, or a route the enumerator
 could not follow into. It does not mean the route admits every phase, and a
 consumer that treats the two alike is repeating the defect this column was
-added to close. **70** of **162** routes
+added to close. **70** of **165** routes
 carry a gate today.
 
 **no state machine** is a DIFFERENT fact, and it is the program's own
@@ -121,6 +121,7 @@ instead:
 
 | route | kind | selector | phase | status | provenance |
 | --- | --- | --- | --- | --- | --- |
+| `accelerator/dealer::process` | entry | predicate ``; length `ADMITTED_INSTRUCTIONS_ACCOUNT_V3` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-accelerator-sbf/src/lib.rs:97` |
 | `accelerator/dealer::process_scoring_row_v1` | entry | magic `DCLSFLW1` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-accelerator-sbf/src/lib.rs:94` |
 | `accelerator/process_instruction` | entry | -- | no phase gate | executed (general-accelerator-programtest); refused (general-accelerator-programtest) | `programs/dclutch-accelerator-sbf/src/lib.rs:1` |
 | `accelerator/series::evaluate_selected_and_publish#accepted` | action | tag `` | no phase gate | blocked by rule `accelerator/series::*` (status-report): The Series arm of dclutch-accelerator-sbf (folded 2026-09-04; sub-band 0xC200). | `programs/dclutch-accelerator-sbf/src/series/mod.rs:155` |
@@ -221,9 +222,11 @@ instead:
 | `custody/process_instruction` | entry | -- | no phase gate | executed (custody-family-programtest); executed (devnet cohort 13); executed (devnet cohort 14); executed (devnet cohort 15); executed (devnet cohort 16); executed (devnet cohort 17); executed (source-abort-programtest); executed (tier1); refused (custody-family-programtest); refused (source-abort-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:1` |
 | `custody/projected::process` | entry | length `PROJECTED_CUSTODY_REQUEST_BYTES_V1`; magic `DCLPCQ01` | no phase gate | executed (devnet cohort 13); executed (source-abort-programtest); executed (tier1); refused (source-abort-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:274` |
 | `custody/propose#Propose` | action | variant `GovernanceActV1::Propose` | no phase gate | blocked by rule `custody/propose#Propose` (status-report): GovernanceActV1 -- the governed protocol-parameters record's own act, arrived with build/economics and reached through custody's `protocol_parameters_v1::selects` dispatch. | `programs/dclutch-custody-sbf/src/protocol_parameters_v1.rs:152` |
+| `custody/protocol_parameters_v1::process` | entry | predicate ``; length `PROTOCOL_PARAMETERS_REQUEST_BYTES_V1`; magic `DCLTPRQ1` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-custody-sbf/src/lib.rs:246` |
 | `custody/realize_and_close#RealizeAndClose` | action | variant `ProjectedCustodyOperationV1::RealizeAndClose` | `projected-custody: HoardLocked` | executed (devnet cohort 13); executed (tier1) | `programs/dclutch-custody-sbf/src/projected.rs:159` |
 | `custody/refund_and_close#RefundAndClose` | action | variant `ProjectedCustodyOperationV1::RefundAndClose` | `projected-custody: HoardLocked` | blocked by rule `custody/refund_and_close#RefundAndClose` (status-report): Projected-Custody refund path; reachable only after a projected compartment exists. | `programs/dclutch-custody-sbf/src/projected.rs:156` |
 | `custody/retirement_replay_handoff_v1::process` | entry | length `dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1`; magic `DCLCRH01` | `market: Retiring` | executed (retirement-replay-handoff-programtest) | `programs/dclutch-custody-sbf/src/lib.rs:255` |
+| `custody/upkeep_vault_v1::process` | entry | predicate ``; length `UPKEEP_VAULT_REQUEST_BYTES_V1`; magic `DCLCUPQ1` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-custody-sbf/src/lib.rs:243` |
 | `custody/withdraw#Withdraw` | action | variant `GovernanceActV1::Withdraw` | no phase gate | blocked by rule `custody/withdraw#Withdraw` (status-report): GovernanceActV1 -- the governed protocol-parameters record's own act, arrived with build/economics and reached through custody's `protocol_parameters_v1::selects` dispatch. | `programs/dclutch-custody-sbf/src/protocol_parameters_v1.rs:153` |
 
 ## registry

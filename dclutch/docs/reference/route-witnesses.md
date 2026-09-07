@@ -22,16 +22,16 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | **local validator** | 24 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
 | **ProgramTest only** | 40 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
 | **blocked** | 45 | no campaign and no devnet witness; `tools/gauntlet/blocked.json` records a reason, a class and an owner |
-| **unrecorded** | 6 | no campaign, no devnet witness, and no reason recorded |
+| **unrecorded** | 9 | no campaign, no devnet witness, and no reason recorded |
 
-Those five classes partition the 162, and the last one is NOT the count of
+Those five classes partition the 165, and the last one is NOT the count of
 routes nothing has ever run:
 
-- **unrecorded: 6 of 162** -- no campaign
+- **unrecorded: 9 of 165** -- no campaign
   binding, no devnet witness, and no entry in `tools/gauntlet/blocked.json`.
   Nobody has written anything at all about this route. This is the number the
   register has always printed under the name NEVER-EXECUTED.
-- **undriven: 43 of 162** -- unrecorded, PLUS every
+- **undriven: 46 of 165** -- unrecorded, PLUS every
   blocked route whose entry is classed `status-report` ("no campaign or tier
   drives it yet", with nothing structural in the way), PLUS every blocked route
   whose entry is classed `unwired` (it admits the route is driven today and
@@ -52,7 +52,7 @@ entries classify 45 routes.
 By class of blocking entry: **out-of-release-set** 0, **structural** 6, **repointing** 2, **unwired** 8, **status-report** 29.
 
 **A real Agave runtime drives 71 of the
-162.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
+165.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
 validator or devnet transaction where the route is chain-facing; those are the
 rows that meet it. The ProgramTest column is not a lesser version of the same
 thing -- `tools/gauntlet/DESIGN.md` admits that substrate only as a labelled
@@ -239,6 +239,7 @@ entries whose route now executes.
 
 | route | class | evidence | artifact |
 | --- | --- | --- | --- |
+| `accelerator/dealer::process` | never-executed | no campaign, no reason recorded | -- |
 | `accelerator/dealer::process_scoring_row_v1` | never-executed | no campaign, no reason recorded | -- |
 | `accelerator/process_instruction` | program-test | `general-accelerator-programtest` | `tools/gauntlet/general/bindings.json` |
 | `accelerator/series::evaluate_selected_and_publish#accepted` | blocked | blocked by rule `accelerator/series::*` | `tools/gauntlet/blocked.json` |
@@ -324,9 +325,11 @@ entries whose route now executes.
 | `custody/process_instruction` | devnet | cohort 13 `DCLCCR01` slot 492,151,322; cohort 13 `DCLTDFS1` slot 492,094,058; cohort 13 `DCLTDRS1` slot 492,091,905; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTHOT3` slot 492,092,896; cohort 13 `DCLTPCB2` slot 491,962,044; cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLCCR01` slot 492,550,558; cohort 14 `DCLTDFS1` slot 492,249,852; cohort 14 `DCLTHOT3` slot 492,249,302; cohort 14 `DCLTHOT3` slot 492,437,260; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; cohort 15 `DCLTDFS1` slot 492,865,496; cohort 15 `DCLTGMF3` slot 492,861,027; cohort 15 `DCLTHOT3` slot 492,865,197; cohort 15 `DCLTPCB2` slot 492,860,006; cohort 15 `DCLTSQ03` slot 492,896,353; cohort 16 `DCLCCR01` slot 493,826,534; cohort 16 `DCLTDFS1` slot 493,777,469; cohort 16 `DCLTGMF3` slot 493,681,311; cohort 16 `DCLTGMF3` slot 493,760,908; cohort 16 `DCLTGMF3` slot 493,809,152; cohort 16 `DCLTPCB2` slot 493,680,300; cohort 16 `DCLTPCB2` slot 493,759,885; cohort 16 `DCLTPCB2` slot 493,808,124; cohort 16 `DCLTSQ03` slot 493,827,300; cohort 17 `DCLCCR01` slot 494,151,055; cohort 17 `DCLCRH01` slot 494,191,265; cohort 17 `DCLTDFS1` slot 493,995,908; cohort 17 `DCLTDFS1` slot 494,092,706; cohort 17 `DCLTHOT3` slot 493,995,625; cohort 17 `DCLTHOT3` slot 494,092,572; cohort 17 `DCLTSQ03` slot 494,043,824; cohort 17 `DCLTSQ03` slot 494,046,626; cohort 17 `DCLTSQ03` slot 494,153,397; also bound by `custody-family-programtest`, `source-abort-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-16-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `custody/projected::process` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `source-abort-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `custody/propose#Propose` | blocked | blocked by rule `custody/propose#Propose` | `tools/gauntlet/blocked.json` |
+| `custody/protocol_parameters_v1::process` | never-executed | no campaign, no reason recorded | -- |
 | `custody/realize_and_close#RealizeAndClose` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `custody/refund_and_close#RefundAndClose` | blocked | blocked by rule `custody/refund_and_close#RefundAndClose` | `tools/gauntlet/blocked.json` |
 | `custody/retirement_replay_handoff_v1::process` | program-test | `retirement-replay-handoff-programtest` | `tools/gauntlet/retirement-replay-handoff/bindings.json` |
+| `custody/upkeep_vault_v1::process` | never-executed | no campaign, no reason recorded | -- |
 | `custody/withdraw#Withdraw` | blocked | blocked by rule `custody/withdraw#Withdraw` | `tools/gauntlet/blocked.json` |
 | `registry/continuation_v1::process` | blocked | blocked by rule `registry/continuation_v1::process` | `tools/gauntlet/blocked.json` |
 | `registry/hot_continuation_v2::process` | blocked | blocked by rule `registry/hot_continuation_v2::process` | `tools/gauntlet/blocked.json` |
