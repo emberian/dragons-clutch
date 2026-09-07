@@ -719,6 +719,37 @@ all six of its journals finalize AND the Market account is exactly closed --
 which its stage 16, the one-shot route, refuses by name for a seated escrow.
 A refunding market can never produce that file.
 
+**BOTH ARE ANSWERED, AND THE ROW CARRIES THEM** (lane COHORT-17F, 2026-09-06).
+
+*The producer exists.* `devnet-aggregate-retirement-lookup-table-v1` plans the
+same campaign from the same finalized state and derives the address set from
+the four packets' own metas -- `aggregate_retirement_routing_addresses_v1`
+offers each packet to the message compiler exactly as the signer will, alone
+behind the two ComputeBudget declarations `bounded_instructions` owns, and takes
+the compiler's answer for what a table may carry. **A lookup table holds
+PUBKEYS**: `extend_lookup_table` never reads the accounts behind them, so the
+four addresses that read `AccountNotFound` were never the obstacle and the
+missing thing was only the hand that derives them. It freezes one table through
+`publish_routing_table_over_v1` -- the same create/extend/freeze/readback the
+General row uses -- and then compiles all four packets over the table it just
+froze, refusing unless each lands at the exact width the frame fixes. It is an
+ACT on this row, so a resume reuses the table it already froze; it carries a
+literal `--execute` like this row's other two acts, because a preflight of a
+retirement can compile nothing without a table. Run it by hand without
+`--execute` to print the set and what the bare tableless route would cost before
+any rent is paid. The campaign now also refuses a table that cannot route its
+own packets, by name and with the missing addresses, instead of leaving that to
+`PacketTooLarge` -- which reports that the route does not fit and nothing about
+which coordinate is absent.
+
+*The gate is the handoff.* This row retires through the CHECKPOINTED route, so
+the terminal sequence's job here ends at stage five and its sixth stage -- the
+one-shot -- is not this row's route for any shape. The first loop now waits on
+`$OUT/terminal/journal/15-retirement-replay-handoff.json` reading `finalized`,
+which every shape reaches. A categorical market therefore retires through the
+four packets here too (`AggregateRetirementFrameShapeV1::Categorical`, 35
+accounts): one rule, not a shape-dependent one.
+
 **A SECOND wall sits behind that one, and it is a program change rather than a
 founding input: a market founded REFUNDING cannot reach this row at all.**
 Decision 0025 seats the failure coordinate in an escrow Position whose owner is

@@ -136,18 +136,6 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
             "--journal-dir must be an existing absolute directory",
         ));
     }
-    let plan_source = read_bounded(&arguments.plan, "successor plan")?;
-    let evidence_source = read_bounded(&arguments.evidence, "terminal evidence")?;
-    let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
-    let founding_evidence =
-        parse_campaign_terminal_evidence_with_expected_cluster_v1(&evidence_source, expected)?;
-    authenticate_plan_source(&plan_source, &founding_evidence.plan_sha256)?;
-    let refreshed_source = arguments
-        .refreshed_evidence
-        .as_ref()
-        .map(|path| read_bounded(path, "refreshed terminal evidence"))
-        .transpose()?;
-
     let mut rpc = Rpc::connect_cluster(
         &arguments.origin,
         if arguments.execute {
@@ -156,12 +144,89 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
             WritePolicyV1::ReadsOnly
         },
     )?;
+    let inputs = read_retirement_inputs_v1(
+        &mut rpc,
+        &arguments.origin,
+        expected,
+        &arguments.plan,
+        &arguments.evidence,
+        arguments.refreshed_evidence.as_deref(),
+        arguments.market,
+    )?;
+
+    let campaign = load_or_create_campaign_v1(
+        &mut rpc,
+        &arguments,
+        &inputs.plan,
+        &inputs.evidence,
+        &inputs.plan_source,
+        &inputs.evidence_source,
+        inputs.genesis_hash.clone(),
+    )?;
+    authenticate_invocation_v1(
+        &campaign,
+        &arguments,
+        &inputs.plan,
+        &inputs.evidence,
+        &inputs.plan_source,
+        &inputs.evidence_source,
+        rpc.url(),
+    )?;
+
+    run_authenticated_aggregate_retirement_v1(
+        &mut rpc,
+        &campaign,
+        AggregateRetirementTransportV1 {
+            campaign_path: &arguments.campaign,
+            journal_dir: &arguments.journal_dir,
+            completion: &arguments.completion,
+            payer: arguments.payer,
+            payer_keypair: &arguments.payer_keypair,
+            lookup_table: arguments.lookup_table,
+            execute: arguments.execute,
+        },
+    )
+}
+
+/// Everything one retirement is planned from, read once and authenticated once.
+///
+/// The campaign and the table it routes through are two commands over the same
+/// retirement, and a second reader of these documents would be a second answer
+/// to "which market, which plan, which evidence". So this is the one reader,
+/// and both entry points take its result.
+struct RetirementInputsV1 {
+    plan: SuccessorPlan,
+    plan_source: Vec<u8>,
+    evidence: CampaignTerminalEvidenceV1,
+    evidence_source: Vec<u8>,
+    genesis_hash: String,
+}
+
+fn read_retirement_inputs_v1(
+    rpc: &mut Rpc,
+    origin: &ClusterOriginV1,
+    expected: ExpectedClusterV1,
+    plan_path: &Path,
+    evidence_path: &Path,
+    refreshed_evidence: Option<&Path>,
+    market: Pubkey,
+) -> Result<RetirementInputsV1> {
+    let plan_source = read_bounded(plan_path, "successor plan")?;
+    let evidence_source = read_bounded(evidence_path, "terminal evidence")?;
+    let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
+    let founding_evidence =
+        parse_campaign_terminal_evidence_with_expected_cluster_v1(&evidence_source, expected)?;
+    authenticate_plan_source(&plan_source, &founding_evidence.plan_sha256)?;
+    let refreshed_source = refreshed_evidence
+        .map(|path| read_bounded(path, "refreshed terminal evidence"))
+        .transpose()?;
+
     let genesis_hash = rpc
         .call("getGenesisHash", &json!([]))?
         .as_str()
         .ok_or_else(|| refusal("getGenesisHash returned a non-string"))?
         .to_owned();
-    arguments.origin.authenticate_genesis(&genesis_hash)?;
+    origin.authenticate_genesis(&genesis_hash)?;
     // `direct_capability_root` names two different addresses, and the founding
     // campaign carries the wrong one for this stage: the founding checkpoint's
     // scalar is the founding-PERMIT root, at which no account can ever exist,
@@ -200,40 +265,14 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         }
     };
     require_direct_retirement_evidence(&evidence)?;
-    authenticate_campaign_market_v1(&evidence, arguments.market)?;
-
-    let campaign = load_or_create_campaign_v1(
-        &mut rpc,
-        &arguments,
-        &plan,
-        &evidence,
-        &plan_source,
-        &evidence_source,
+    authenticate_campaign_market_v1(&evidence, market)?;
+    Ok(RetirementInputsV1 {
+        plan,
+        plan_source,
+        evidence,
+        evidence_source,
         genesis_hash,
-    )?;
-    authenticate_invocation_v1(
-        &campaign,
-        &arguments,
-        &plan,
-        &evidence,
-        &plan_source,
-        &evidence_source,
-        rpc.url(),
-    )?;
-
-    run_authenticated_aggregate_retirement_v1(
-        &mut rpc,
-        &campaign,
-        AggregateRetirementTransportV1 {
-            campaign_path: &arguments.campaign,
-            journal_dir: &arguments.journal_dir,
-            completion: &arguments.completion,
-            payer: arguments.payer,
-            payer_keypair: &arguments.payer_keypair,
-            lookup_table: arguments.lookup_table,
-            execute: arguments.execute,
-        },
-    )
+    })
 }
 
 /// Advance one exact generic retirement operation. The caller cannot bypass
@@ -611,7 +650,7 @@ fn load_or_create_campaign_v1(
     let report = build_checkpoint_market_retirement_v1(&snapshot)
         .map_err(|error| Error::new(format!("checkpoint AggregateRetirement: {error:?}")))?;
     let table = find_observed_v1(&prestate, arguments.lookup_table, "retirement lookup table")?;
-    authenticate_lookup_table_v1(table, arguments.lookup_table)?;
+    let lookup_table_addresses = authenticate_lookup_table_v1(table, arguments.lookup_table)?;
     let campaign = build_aggregate_retirement_campaign_v1(
         AggregateRetirementCampaignInputV1 {
             genesis_hash,
@@ -621,6 +660,7 @@ fn load_or_create_campaign_v1(
             payer: arguments.payer,
             lookup_table: arguments.lookup_table,
             lookup_table_sha256: sha256_hex(&table.data),
+            lookup_table_addresses,
             core_program: snapshot.core_program.key,
             claims_program: snapshot.claims_program.key,
             market: initial_account(&snapshot.market),
@@ -727,7 +767,12 @@ fn observe_lookup_table_v1(
     Ok(table)
 }
 
-fn authenticate_lookup_table_v1(table: &ObservedAccount, expected: Pubkey) -> Result<()> {
+/// Authenticate one frozen routing table and return the addresses it holds.
+///
+/// The list is returned rather than discarded because it is what says whether
+/// this table routes THIS retirement; the campaign builder compares it against
+/// the four packets' own derived coordinates.
+fn authenticate_lookup_table_v1(table: &ObservedAccount, expected: Pubkey) -> Result<Vec<Pubkey>> {
     let decoded = AddressLookupTable::deserialize(&table.data)
         .map_err(|_| refusal("retirement lookup table bytes did not decode"))?;
     if table.key != expected
@@ -742,7 +787,7 @@ fn authenticate_lookup_table_v1(table: &ObservedAccount, expected: Pubkey) -> Re
             "retirement lookup table was not exact, frozen, activated routing data",
         ));
     }
-    Ok(())
+    Ok(decoded.addresses.to_vec())
 }
 
 fn resolve_packet_keys_v1(
@@ -914,6 +959,362 @@ fn progress_v1(
         "completion": transport.completion.display().to_string(),
         "message": message
     }))
+}
+
+// ---------------------------------------------------------------------------
+// The table the four packets require, which nothing in this tree ever built.
+// ---------------------------------------------------------------------------
+
+/// Publish the frozen routing table one checkpointed retirement routes through.
+///
+/// `devnet-aggregate-retirement-v1` takes `--lookup-table` and no producer
+/// answered it. Every table this cohort freezes earlier is frozen over some
+/// OTHER frame -- the founding's, the terminal sequence's six-stage union, a
+/// General plan's -- and a retirement's frame is not a subset of any of them:
+/// four of its coordinates are accounts the retirement CREATES, at addresses
+/// derived from the campaign's own plan, which read `AccountNotFound` until the
+/// packet that makes them lands. A lookup table holds public keys and
+/// `extend_lookup_table` never reads the accounts behind them, so a table over
+/// those addresses is publishable today; what was missing was the hand that
+/// derives them from the plan rather than from a list.
+///
+/// The shape is the General `openbatch` row's, for the same reason: plan first,
+/// freeze a table over the plan's own union second, execute against it third.
+/// The set is DERIVED here -- `aggregate_retirement_routing_addresses_v1` off
+/// the campaign's own four operations -- so the packets and the table cannot
+/// disagree, and the campaign refuses by name a table that does not carry them.
+pub(crate) const COMMAND_DEVNET_TABLE_V1: &str = "devnet-aggregate-retirement-lookup-table-v1";
+
+const TABLE_EVIDENCE_SCHEMA_V1: &str =
+    "dclutch-devnet-aggregate-retirement-lookup-table-evidence-v1";
+/// What `publish_routing_table_over_v1` calls this table in its own evidence.
+const TABLE_LABEL_V1: &str = "AGGREGATE-RETIREMENT";
+
+pub(crate) fn table_usage() -> &'static str {
+    "\n  dclutch-local-successor-bootstrap devnet-aggregate-retirement-lookup-table-v1 \\\n     \
+     --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS \\\n     \
+     --plan ABSOLUTE_JSON \\\n     \
+     --evidence ABSOLUTE_JSON [--refreshed-evidence ABSOLUTE_JSON] --market PUBKEY \\\n     \
+     --source-receipt PUBKEY --fee-payer PUBKEY \\\n     \
+     --output ABSOLUTE_NEW_JSON [--fee-payer-keypair ABSOLUTE_KEYPAIR --execute]\n\nPlans \
+     the checkpointed retirement from finalized chain state, derives the exact address set its \
+     four packets route through, and publishes one frozen table holding it. Without --execute no \
+     key is opened, nothing is sent, and the set is printed beside the wire bytes the bare \
+     tableless route would cost. The retirement's own fee payer signs, because the set is \
+     relative to that payer."
+}
+
+struct TableArgumentsV1 {
+    origin: ClusterOriginV1,
+    plan: PathBuf,
+    evidence: PathBuf,
+    refreshed_evidence: Option<PathBuf>,
+    market: Pubkey,
+    source_receipt: Pubkey,
+    payer: Pubkey,
+    payer_keypair: Option<PathBuf>,
+    output: PathBuf,
+    execute: bool,
+}
+
+pub(crate) fn run_devnet_lookup_table(arguments: Vec<String>) -> Result<()> {
+    let expected = ExpectedClusterV1::Devnet;
+    let arguments = parse_table_arguments_v1(arguments)?;
+    expected.authenticate(&arguments.origin)?;
+    if arguments.output.exists() {
+        return Err(refusal(format!(
+            "refusing to overwrite {}; a resumed stage reuses the table it already froze rather \
+             than paying rent for a second one",
+            arguments.output.display()
+        )));
+    }
+    let mut rpc = Rpc::connect_cluster(
+        &arguments.origin,
+        if arguments.execute {
+            WritePolicyV1::Writes
+        } else {
+            WritePolicyV1::ReadsOnly
+        },
+    )?;
+    let inputs = read_retirement_inputs_v1(
+        &mut rpc,
+        &arguments.origin,
+        expected,
+        &arguments.plan,
+        &arguments.evidence,
+        arguments.refreshed_evidence.as_deref(),
+        arguments.market,
+    )?;
+    // The campaign's own snapshot, planned exactly as `load_or_create_campaign_v1`
+    // plans it. The lookup table is NOT among the additional keys here: this is
+    // the command that produces it, and requiring it would be the circle that
+    // left the frame with no producer at all.
+    let (snapshot, prestate) = aggregate_retirement_snapshot_from_chain_v1(
+        &mut rpc,
+        &inputs.plan,
+        &inputs.evidence,
+        arguments.market,
+        arguments.source_receipt,
+        &[arguments.payer],
+    )?;
+    let report = build_checkpoint_market_retirement_v1(&snapshot)
+        .map_err(|error| Error::new(format!("checkpoint AggregateRetirement: {error:?}")))?;
+    let operations = crate::aggregate_retirement_journal::aggregate_retirement_operations_v1(
+        arguments.payer,
+        &report,
+    )?;
+    let required = crate::aggregate_retirement_journal::aggregate_retirement_routing_addresses_v1(
+        arguments.payer,
+        &operations,
+    )?;
+    let observation = prestate
+        .first()
+        .map(|account| account.observation)
+        .ok_or_else(|| refusal("retirement prestate carried no observation"))?;
+
+    // WHY THE TABLE IS NEEDED, IN BYTES, BEFORE ANY RENT IS PAID. A refusal
+    // that says only `PacketTooLarge` reports that the route does not fit and
+    // nothing about by how much; this is the same compile with the cap lifted
+    // and no table offered, which is exactly the question "how far over is the
+    // bare route".
+    let mut bare = Vec::with_capacity(operations.len());
+    for operation in &operations {
+        let instruction = operation.instruction()?;
+        let bounded = crate::rpc::bounded_instructions(std::slice::from_ref(&instruction), None)?;
+        let wire_bytes = dclutch_versioned_message_operator::measure_v0_wire_bytes(
+            arguments.payer,
+            &bounded,
+            solana_hash::Hash::default(),
+            observation,
+            &[],
+        )
+        .map_err(|error| {
+            Error::new(format!(
+                "{}: tableless measurement: {error:?}",
+                operation.operation.label()
+            ))
+        })?;
+        bare.push(json!({
+            "operation": operation.operation,
+            "tablelessWireBytes": wire_bytes,
+            "overPacketCeilingBy": wire_bytes
+                .saturating_sub(dclutch_versioned_message_operator::PACKET_DATA_BYTES),
+            "routedWireBytes": operation.expected_wire_bytes,
+        }));
+    }
+
+    println!("market               {}", arguments.market);
+    println!("retirement payer     {}", arguments.payer);
+    println!("frame accounts       {}", operations[0].account_count());
+    println!("table addresses      {}", required.len());
+    let mut evidence = json!({
+        "schema": TABLE_EVIDENCE_SCHEMA_V1,
+        "cluster": "devnet",
+        "rpcUrl": arguments.origin.redacted_url(),
+        "planSha256": sha256_hex(&inputs.plan_source),
+        "evidenceSha256": sha256_hex(&inputs.evidence_source),
+        "market": arguments.market.to_string(),
+        "sourceReceipt": arguments.source_receipt.to_string(),
+        "payer": arguments.payer.to_string(),
+        "frameAccounts": operations[0].account_count(),
+        "addressCount": required.len(),
+        "addresses": required.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "packets": bare,
+        "executed": arguments.execute,
+    });
+    if !arguments.execute {
+        create_json_v1(
+            &arguments.output,
+            &evidence,
+            "retirement lookup table evidence",
+        )?;
+        println!("dry run; no key was opened and nothing was sent");
+        return Ok(());
+    }
+    let path = arguments
+        .payer_keypair
+        .as_deref()
+        .ok_or_else(|| refusal("--execute requires --fee-payer-keypair"))?;
+    let signer = Keypair::new_from_array(read_keypair_file(
+        path,
+        "AggregateRetirement lookup table payer",
+    )?);
+    // THE RETIREMENT'S OWN FEE PAYER IS THE ONE THAT MAY SIGN THIS.
+    //
+    // `canonical_route_lookup_addresses_v1` excludes the payer and every
+    // instruction signer from the set, so a table published against a different
+    // payer holds a different list and would refuse at the compiler for a
+    // reason that names the table rather than the key that built it.
+    if signer.pubkey() != arguments.payer {
+        return Err(refusal(format!(
+            "the retirement names fee payer {} and the keypair holds {}; the address set is \
+             relative to the payer",
+            arguments.payer,
+            signer.pubkey()
+        )));
+    }
+    let mut transactions = Vec::new();
+    let (observation, tables) = crate::market::publish_routing_table_over_v1(
+        &mut rpc,
+        &signer,
+        TABLE_LABEL_V1,
+        &required,
+        &mut transactions,
+    )?;
+    let table = tables
+        .first()
+        .ok_or_else(|| refusal("the retirement table publication omitted its table"))?;
+    let held = authenticate_lookup_table_v1(table, table.key)?;
+    crate::aggregate_retirement_journal::require_aggregate_retirement_routing_table_v1(
+        arguments.payer,
+        &operations,
+        &held,
+    )?;
+    // THE FOUR PACKETS, COMPILED OVER THE TABLE THAT WAS JUST FROZEN. The
+    // blockhash is a placeholder because its VALUE never moves a message's
+    // width, and this is the measurement the campaign will have to reproduce:
+    // each packet under the 1,232-byte ceiling and at the exact width
+    // `AggregateRetirementOperationV1::expected_wire_bytes` fixes for this
+    // frame, which `authenticate_packet_binding_v1` refuses by name.
+    let mut routed = Vec::with_capacity(operations.len());
+    for operation in &operations {
+        let instruction = operation.instruction()?;
+        let bounded = crate::rpc::bounded_instructions(std::slice::from_ref(&instruction), None)?;
+        let plan = dclutch_versioned_message_operator::compile_v0_message(
+            arguments.payer,
+            &bounded,
+            solana_hash::Hash::default(),
+            observation,
+            std::slice::from_ref(table),
+        )
+        .map_err(|error| {
+            Error::new(format!(
+                "{}: v0 message over the frozen retirement table: {error:?}",
+                operation.operation.label()
+            ))
+        })?;
+        if plan.wire_bytes != operation.expected_wire_bytes {
+            return Err(refusal(format!(
+                "{} compiled to {} wire bytes over this table and the frame fixes {}",
+                operation.operation.label(),
+                plan.wire_bytes,
+                operation.expected_wire_bytes,
+            )));
+        }
+        println!(
+            "{:<32} {} bytes, {} resolved through the table",
+            operation.operation.label(),
+            plan.wire_bytes,
+            plan.loaded_addresses
+        );
+        routed.push(json!({
+            "operation": operation.operation,
+            "wireBytes": plan.wire_bytes,
+            "loadedAddresses": plan.loaded_addresses,
+        }));
+    }
+    println!("lookup table         {}", table.key);
+    evidence["lookupTable"] = json!(table.key.to_string());
+    evidence["lookupTableSha256"] = json!(sha256_hex(&table.data));
+    evidence["compiledPackets"] = json!(routed);
+    evidence["transactions"] = json!(
+        transactions
+            .iter()
+            .map(|value| json!({
+                "label": value.label,
+                "signature": value.signature,
+                "slot": value.slot,
+            }))
+            .collect::<Vec<_>>()
+    );
+    create_json_v1(
+        &arguments.output,
+        &evidence,
+        "retirement lookup table evidence",
+    )
+}
+
+fn parse_table_arguments_v1(arguments: Vec<String>) -> Result<TableArgumentsV1> {
+    let mut values = BTreeMap::new();
+    let mut acknowledgment = None;
+    let mut execute = false;
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        if argument == "--execute" {
+            if execute {
+                return Err(Error::new("--execute may be supplied only once"));
+            }
+            execute = true;
+            continue;
+        }
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if argument == DEVNET_ACKNOWLEDGMENT_FLAG {
+            if acknowledgment.replace(value).is_some() {
+                return Err(Error::new(format!("{argument} may be supplied only once")));
+            }
+            continue;
+        }
+        if !matches!(
+            argument.as_str(),
+            "--rpc-url"
+                | "--plan"
+                | "--evidence"
+                | "--refreshed-evidence"
+                | "--market"
+                | "--source-receipt"
+                | "--fee-payer"
+                | "--fee-payer-keypair"
+                | "--output"
+        ) {
+            return Err(Error::new(format!(
+                "unknown {COMMAND_DEVNET_TABLE_V1} argument: {argument}"
+            )));
+        }
+        if values.insert(argument.clone(), value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let take = |values: &mut BTreeMap<String, String>, flag: &str| {
+        values
+            .remove(flag)
+            .ok_or_else(|| Error::new(format!("{flag} is required")))
+    };
+    let absolute = |value: String, flag: &str| -> Result<PathBuf> {
+        let path = PathBuf::from(value);
+        if !path.is_absolute() {
+            return Err(Error::new(format!("{flag} must be absolute")));
+        }
+        Ok(path)
+    };
+    let rpc_url = take(&mut values, "--rpc-url")?;
+    if acknowledgment.is_none() {
+        return Err(Error::new(format!(
+            "{DEVNET_ACKNOWLEDGMENT_FLAG} is required by {COMMAND_DEVNET_TABLE_V1}"
+        )));
+    }
+    let parse_key = |value: String, flag: &str| {
+        Pubkey::from_str(&value).map_err(|error| Error::new(format!("{flag}: {error}")))
+    };
+    Ok(TableArgumentsV1 {
+        origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
+        plan: absolute(take(&mut values, "--plan")?, "--plan")?,
+        evidence: absolute(take(&mut values, "--evidence")?, "--evidence")?,
+        refreshed_evidence: values
+            .remove("--refreshed-evidence")
+            .map(|value| absolute(value, "--refreshed-evidence"))
+            .transpose()?,
+        market: parse_key(take(&mut values, "--market")?, "--market")?,
+        source_receipt: parse_key(take(&mut values, "--source-receipt")?, "--source-receipt")?,
+        payer: parse_key(take(&mut values, "--fee-payer")?, "--fee-payer")?,
+        payer_keypair: values
+            .remove("--fee-payer-keypair")
+            .map(|value| absolute(value, "--fee-payer-keypair"))
+            .transpose()?,
+        output: absolute(take(&mut values, "--output")?, "--output")?,
+        execute,
+    })
 }
 
 fn parse_arguments_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<ArgumentsV1> {
@@ -1481,6 +1882,18 @@ mod tests {
             burned_failure_units: 0,
             failure_escrow_rent_lamports: 0,
         };
+        // The table a producer would have frozen for this campaign: the four
+        // packets' own routing coordinates, derived rather than listed.
+        let lookup_table_addresses =
+            crate::aggregate_retirement_journal::aggregate_retirement_routing_addresses_v1(
+                key(80),
+                &crate::aggregate_retirement_journal::aggregate_retirement_operations_v1(
+                    key(80),
+                    &report,
+                )
+                .expect("retirement operations"),
+            )
+            .expect("retirement routing addresses");
         build_aggregate_retirement_campaign_v1(
             AggregateRetirementCampaignInputV1 {
                 genesis_hash: key(90).to_string(),
@@ -1490,6 +1903,7 @@ mod tests {
                 payer: key(80),
                 lookup_table: key(81),
                 lookup_table_sha256: "33".repeat(32),
+                lookup_table_addresses,
                 core_program: core,
                 claims_program: claims,
                 market: initial_account_v1(market, core, 10, vec![1]),

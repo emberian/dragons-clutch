@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_custody::CustodyReplayV1;
 use dclutch_market::{
     AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
     AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1,
@@ -21,6 +22,7 @@ use dclutch_market_retirement_v1_operator::{
     CORE_RETIREMENT_ACCOUNT_COUNT_V1, CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1,
     CheckpointMarketRetirementReportV1,
 };
+use dclutch_versioned_message_operator::canonical_route_lookup_addresses_v1;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_compute_budget_interface::ID as COMPUTE_BUDGET_PROGRAM_ID;
@@ -258,6 +260,13 @@ pub(crate) struct AggregateRetirementCampaignInputV1 {
     pub(crate) payer: Pubkey,
     pub(crate) lookup_table: Pubkey,
     pub(crate) lookup_table_sha256: String,
+    /// The frozen table's own address list, as the chain holds it.
+    ///
+    /// The campaign refuses a table that cannot carry its four packets, by
+    /// name and with the missing addresses, rather than letting the compiler
+    /// discover it later as `PacketTooLarge` -- a refusal that says the route
+    /// does not fit and nothing about which coordinate is absent.
+    pub(crate) lookup_table_addresses: Vec<Pubkey>,
     pub(crate) core_program: Pubkey,
     pub(crate) claims_program: Pubkey,
     pub(crate) market: AggregateRetirementInitialAccountV1,
@@ -331,6 +340,11 @@ pub(crate) struct DurableRetirementOperationV1 {
 }
 
 impl DurableRetirementOperationV1 {
+    /// The frame width this operation presents, from its own metas.
+    pub(crate) fn account_count(&self) -> usize {
+        self.accounts.len()
+    }
+
     pub(crate) fn instruction(&self) -> Result<Instruction> {
         let program_id = self
             .program_id
@@ -486,6 +500,130 @@ pub(crate) struct AggregateRetirementConservationReceiptV1 {
     pub(crate) receipt_sha256: String,
 }
 
+/// The four durable operations one checkpoint report presents, in run order.
+///
+/// The campaign document and the table this retirement routes through are two
+/// readers of ONE derivation. A second list -- a table planned from addresses
+/// transcribed beside the packets rather than taken from them -- is exactly the
+/// second author this module exists to refuse, and it fails silently: a table
+/// that omits one coordinate still compiles, just larger, until the packet
+/// crosses 1,232 bytes and the compiler says only `PacketTooLarge`.
+pub(crate) fn aggregate_retirement_operations_v1(
+    payer: Pubkey,
+    report: &CheckpointMarketRetirementReportV1,
+) -> Result<Vec<DurableRetirementOperationV1>> {
+    let instructions = [
+        (AggregateRetirementOperationV1::Prepare, &report.prepare),
+        (
+            AggregateRetirementOperationV1::CloseVault,
+            &report.close_vault,
+        ),
+        (
+            AggregateRetirementOperationV1::CloseReplay,
+            &report.close_replay,
+        ),
+        (AggregateRetirementOperationV1::Finish, &report.finish),
+    ];
+    let operations = instructions
+        .into_iter()
+        .map(|(operation, instruction)| durable_operation_v1(operation, payer, instruction))
+        .collect::<Result<Vec<_>>>()?;
+    if operations
+        .windows(2)
+        .any(|pair| pair[0].accounts != pair[1].accounts)
+    {
+        return Err(refusal(
+            "checkpoint retirement operations changed their exact account frame",
+        ));
+    }
+    Ok(operations)
+}
+
+/// The addresses a lookup table must carry for these four packets to compile.
+///
+/// Offered to the message compiler exactly as the signer will offer them --
+/// each operation alone, behind the two ComputeBudget declarations
+/// `bounded_instructions` owns -- and the answer is the compiler's, not a
+/// hand-written filter. Program ids and signers stay inline whatever a table
+/// says, so they are not here; `canonical_route_lookup_addresses_v1` reports
+/// only what the compiler actually resolved through a table.
+///
+/// **The accounts need not exist.** A lookup table holds public keys, and
+/// `extend_lookup_table` never reads the accounts at those addresses -- which
+/// is the whole reason a retirement can route through a table of its own: four
+/// of this frame's coordinates are accounts the retirement CREATES, at
+/// addresses derived from the campaign's own plan, and read `AccountNotFound`
+/// until the packet that makes them lands.
+///
+/// The four operations present one frame, so they yield one set; a divergence
+/// is refused here rather than left to produce a table that routes some of the
+/// packets.
+pub(crate) fn aggregate_retirement_routing_addresses_v1(
+    payer: Pubkey,
+    operations: &[DurableRetirementOperationV1],
+) -> Result<Vec<Pubkey>> {
+    if operations.len() != 4 {
+        return Err(refusal(
+            "retirement routing derivation wants the campaign's four operations",
+        ));
+    }
+    let mut answer: Option<Vec<Pubkey>> = None;
+    for operation in operations {
+        let instruction = operation.instruction()?;
+        let bounded = crate::rpc::bounded_instructions(std::slice::from_ref(&instruction), None)?;
+        let addresses = canonical_route_lookup_addresses_v1(payer, &bounded)
+            .map_err(|error| refusal(format!("retirement routing addresses: {error:?}")))?;
+        match answer.as_ref() {
+            None => answer = Some(addresses),
+            Some(first) if *first == addresses => {}
+            Some(_) => {
+                return Err(refusal(
+                    "the four retirement packets asked for different routing addresses",
+                ));
+            }
+        }
+    }
+    answer.ok_or_else(|| refusal("retirement routing derivation produced no address set"))
+}
+
+/// Refuse a supplied table that cannot route this retirement, by name.
+///
+/// A superset is admitted: an address the compiler never selects costs the
+/// message nothing. What is refused is an ABSENCE, and the refusal names how
+/// many coordinates are missing and which, because "this table is the wrong
+/// one" is a fact a caller can act on and `PacketTooLarge` is not.
+pub(crate) fn require_aggregate_retirement_routing_table_v1(
+    payer: Pubkey,
+    operations: &[DurableRetirementOperationV1],
+    table_addresses: &[Pubkey],
+) -> Result<()> {
+    let required = aggregate_retirement_routing_addresses_v1(payer, operations)?;
+    let held = table_addresses.iter().copied().collect::<BTreeSet<_>>();
+    let missing = required
+        .iter()
+        .copied()
+        .filter(|address| !held.contains(address))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let named = missing
+        .iter()
+        .take(4)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(refusal(format!(
+        "the supplied lookup table holds {} of this retirement's {} routing addresses; {} are \
+         missing, beginning {named}. These are the campaign's own plan coordinates and some of \
+         them are accounts the retirement creates, so no earlier-frozen table carries them: this \
+         retirement needs its own",
+        required.len() - missing.len(),
+        required.len(),
+        missing.len(),
+    )))
+}
+
 pub(crate) fn build_aggregate_retirement_campaign_v1(
     input: AggregateRetirementCampaignInputV1,
     report: &CheckpointMarketRetirementReportV1,
@@ -536,30 +674,12 @@ pub(crate) fn build_aggregate_retirement_campaign_v1(
             "operator refund delta differed from exact classified account lamports",
         ));
     }
-    let instructions = [
-        (AggregateRetirementOperationV1::Prepare, &report.prepare),
-        (
-            AggregateRetirementOperationV1::CloseVault,
-            &report.close_vault,
-        ),
-        (
-            AggregateRetirementOperationV1::CloseReplay,
-            &report.close_replay,
-        ),
-        (AggregateRetirementOperationV1::Finish, &report.finish),
-    ];
-    let operations = instructions
-        .into_iter()
-        .map(|(operation, instruction)| durable_operation_v1(operation, input.payer, instruction))
-        .collect::<Result<Vec<_>>>()?;
-    if operations
-        .windows(2)
-        .any(|pair| pair[0].accounts != pair[1].accounts)
-    {
-        return Err(refusal(
-            "checkpoint retirement operations changed their exact account frame",
-        ));
-    }
+    let operations = aggregate_retirement_operations_v1(input.payer, report)?;
+    require_aggregate_retirement_routing_table_v1(
+        input.payer,
+        &operations,
+        &input.lookup_table_addresses,
+    )?;
     let classified_lamports = AggregateRetirementClassifiedLamportsV1 {
         market: input.market.lamports,
         rent_credit: input.rent_credit.lamports,
@@ -751,7 +871,7 @@ pub(crate) fn classify_aggregate_retirement_chain_v1(
                     let replay = replay.as_ref().ok_or_else(|| {
                         refusal("HoardVaultClosed checkpoint omitted live Custody replay")
                     })?;
-                    authenticate_live_initial_account(replay, &campaign.custody_replay, true)?;
+                    authenticate_advanced_custody_replay_v1(replay, campaign)?;
                     require_rent_account(
                         rent,
                         &campaign.rent_credit,
@@ -1636,6 +1756,67 @@ fn authenticate_live_initial_account(
     Ok(())
 }
 
+/// The Custody replay cursor after the Hoard-vault close, authenticated as a
+/// CURSOR rather than as bytes.
+///
+/// The close-vault packet IS a Custody action under this cursor, so the cursor
+/// must have moved. `CustodyReplayV1::advance` writes exactly four words --
+/// `next_revision`, `open_vault_count`, `last_request_digest` and
+/// `last_poststate_commitment` -- and copies every identity field through
+/// `..self`, refusing `ReplayBindingMismatch` on any request that disagrees
+/// with one. A byte-equality check against the planning-time reading therefore
+/// refused the ONE poststate the deployed Custody program can produce.
+///
+/// MEASURED, on market `AvKSizb7…`: close-vault `3VteUAQT…` landed at slot
+/// 494,212,468 for 146,687 CU with no error, and the next pass refused "live
+/// retirement account differed from its exact initial fact" against a replay
+/// whose lamports, owner, width and address were all unchanged and whose bytes
+/// read revision 2, zero open Vaults. The host was the only thing that
+/// disagreed.
+///
+/// WHAT REPLACES IT IS NOT WEAKER. The account is still exactly the address,
+/// owner, executable bit, width and lamport balance the campaign recorded; its
+/// bytes must have MOVED, because a cursor that did not move would mean the
+/// close was not replayed through it; it must still decode as THIS Market's
+/// cursor under THIS campaign's Core program; and it must now count ZERO open
+/// Vaults, because the Vault it counted is the one the packet just closed.
+fn authenticate_advanced_custody_replay_v1(
+    live: &AggregateRetirementChainAccountV1,
+    campaign: &AggregateRetirementCampaignV1,
+) -> Result<()> {
+    let initial = &campaign.custody_replay;
+    if live.key.to_string() != initial.address
+        || live.owner.to_string() != initial.owner
+        || live.executable != initial.executable
+        || live.data.len() != initial.data_len
+        || live.lamports != initial.lamports
+    {
+        return Err(refusal(
+            "Custody replay changed its address, owner, width or rent across the Hoard-vault close",
+        ));
+    }
+    if sha256_hex(&live.data) == initial.data_sha256 {
+        return Err(refusal(
+            "Custody replay did not advance across the Hoard-vault close",
+        ));
+    }
+    let replay = CustodyReplayV1::decode(&live.data)
+        .map_err(|_| refusal("advanced Custody replay was noncanonical"))?;
+    let market = parse_pubkey(&campaign.market.address, "campaign Market")?;
+    let core = parse_pubkey(&campaign.core_program, "campaign Core")?;
+    if replay.market != market.to_bytes() || replay.caller_program != core.to_bytes() {
+        return Err(refusal(
+            "advanced Custody replay named another Market or caller program",
+        ));
+    }
+    if replay.open_vault_count != 0 {
+        return Err(refusal(
+            "the Hoard-vault close left the Custody replay counting an open Vault",
+        ));
+    }
+    Ok(())
+}
+
 fn require_rent_account(
     live: &AggregateRetirementChainAccountV1,
     initial: &DurableRetirementAccountV1,
@@ -1806,6 +1987,7 @@ fn refusal(message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_market_retirement_v1_operator::{Observation, ObservedAccount};
     use solana_program::instruction::AccountMeta;
 
     fn key(byte: u8) -> Pubkey {
@@ -1903,11 +2085,313 @@ mod tests {
         }
     }
 
+    /// One frozen, activated routing table over exactly these addresses.
+    fn frozen_table(
+        key_byte: u8,
+        addresses: &[Pubkey],
+        observation: Observation,
+    ) -> ObservedAccount {
+        let table = solana_address_lookup_table_interface::state::AddressLookupTable {
+            meta: solana_address_lookup_table_interface::state::LookupTableMeta {
+                authority: None,
+                deactivation_slot: u64::MAX,
+                last_extended_slot: observation.slot - 1,
+                ..Default::default()
+            },
+            addresses: std::borrow::Cow::Owned(addresses.to_vec()),
+        };
+        ObservedAccount {
+            observation,
+            key: key(key_byte),
+            owner: solana_address_lookup_table_interface::program::ID,
+            lamports: 1,
+            executable: false,
+            data: table.serialize_for_tests().expect("table bytes"),
+        }
+    }
+
+    fn finalized_observation() -> Observation {
+        Observation {
+            slot: 9,
+            unix_timestamp: 10,
+            finality: dclutch_market_retirement_v1_operator::Finality::Finalized,
+        }
+    }
+
+    /// SIZED, on both sides: what the four packets cost with this retirement's
+    /// own table and what they cost without it.
+    ///
+    /// The devnet wall COHORT-17E stopped at was `aggregate-retirement-prepare:
+    /// v0 message: PacketTooLarge` against a table frozen for another frame --
+    /// four coordinates short, because four of this frame's accounts are ones
+    /// the retirement CREATES and no earlier table could name them. That is
+    /// reproduced here as arithmetic rather than as a story: every address a
+    /// table cannot carry becomes a 32-byte static key and gives back one index
+    /// byte, so a four-short table costs each packet exactly 124 bytes, which
+    /// puts the prepare over the 1,232-byte ceiling and the finish under it.
+    /// A table over the derived set puts all four at the exact width the frame
+    /// fixes, which is the width `authenticate_packet_binding_v1` demands.
+    #[test]
+    fn the_four_packets_fit_over_this_retirement_own_table_and_a_short_one_refuses_by_bytes() {
+        const STATIC_KEY_COST_V1: usize = 32 - 1;
+        for shape in [
+            AggregateRetirementFrameShapeV1::Categorical,
+            AggregateRetirementFrameShapeV1::Refunding,
+        ] {
+            let payer = key(80);
+            let report = report_with_shape(key(5), key(40), key(41), shape);
+            let operations =
+                aggregate_retirement_operations_v1(payer, &report).expect("operations");
+            let required =
+                aggregate_retirement_routing_addresses_v1(payer, &operations).expect("routing");
+            // The Core program id is a frame meta AND the instruction's
+            // program, and a program id is resolved before the tables load, so
+            // it stays inline. Nothing else in this frame signs.
+            assert_eq!(required.len(), shape.accounts() - 1);
+            assert!(!required.contains(&key(5)));
+
+            let observation = finalized_observation();
+            let complete = frozen_table(81, &required, observation);
+            let short = frozen_table(82, &required[..required.len() - 4], observation);
+
+            for operation in &operations {
+                let instruction = operation.instruction().expect("instruction");
+                let bounded =
+                    crate::rpc::bounded_instructions(std::slice::from_ref(&instruction), None)
+                        .expect("bounded instructions");
+                let routed = dclutch_versioned_message_operator::compile_v0_message(
+                    payer,
+                    &bounded,
+                    solana_hash::Hash::default(),
+                    observation,
+                    std::slice::from_ref(&complete),
+                )
+                .expect("v0 message over the derived table");
+                assert_eq!(
+                    routed.wire_bytes, operation.expected_wire_bytes,
+                    "{:?} {:?} over its own table",
+                    shape, operation.operation
+                );
+                assert!(
+                    routed.wire_bytes <= dclutch_versioned_message_operator::PACKET_DATA_BYTES,
+                    "{:?} {:?} is {} bytes",
+                    shape,
+                    operation.operation,
+                    routed.wire_bytes
+                );
+
+                let bare = dclutch_versioned_message_operator::measure_v0_wire_bytes(
+                    payer,
+                    &bounded,
+                    solana_hash::Hash::default(),
+                    observation,
+                    std::slice::from_ref(&short),
+                )
+                .expect("measurement over the four-short table");
+                assert_eq!(
+                    bare,
+                    operation.expected_wire_bytes + 4 * STATIC_KEY_COST_V1,
+                    "{:?} {:?} four coordinates short",
+                    shape,
+                    operation.operation
+                );
+            }
+
+            // The prepare is the packet the devnet run refused, and it refuses
+            // here for the same reason and by the same name.
+            let prepare = operations[0].instruction().expect("prepare instruction");
+            let bounded = crate::rpc::bounded_instructions(std::slice::from_ref(&prepare), None)
+                .expect("bounded instructions");
+            assert!(matches!(
+                dclutch_versioned_message_operator::compile_v0_message(
+                    payer,
+                    &bounded,
+                    solana_hash::Hash::default(),
+                    observation,
+                    std::slice::from_ref(&short),
+                ),
+                Err(dclutch_versioned_message_operator::Error::PacketTooLarge)
+            ));
+        }
+    }
+
+    /// The four packets and their table are ONE derivation, and a table that is
+    /// not this retirement's refuses by name before a key is opened.
+    #[test]
+    fn a_table_short_of_the_packets_own_coordinates_refuses_naming_what_is_absent() {
+        let payer = key(80);
+        let report = report_with_shape(
+            key(5),
+            key(40),
+            key(41),
+            AggregateRetirementFrameShapeV1::Refunding,
+        );
+        let operations = aggregate_retirement_operations_v1(payer, &report).expect("operations");
+        let required =
+            aggregate_retirement_routing_addresses_v1(payer, &operations).expect("routing");
+        require_aggregate_retirement_routing_table_v1(payer, &operations, &required)
+            .expect("the derived set routes its own packets");
+        // A SUPERSET is admitted: an address the compiler never selects costs
+        // the message nothing.
+        let mut superset = required.clone();
+        superset.push(key(200));
+        require_aggregate_retirement_routing_table_v1(payer, &operations, &superset)
+            .expect("a superset still routes them");
+
+        let short = &required[..required.len() - 4];
+        let error = require_aggregate_retirement_routing_table_v1(payer, &operations, short)
+            .expect_err("a four-short table");
+        let text = error.to_string();
+        assert!(
+            text.contains(&format!("holds {} of this retirement's", short.len())),
+            "{text}"
+        );
+        assert!(text.contains("4 are missing"), "{text}");
+        assert!(
+            text.contains(&required[required.len() - 4].to_string()),
+            "{text}"
+        );
+        assert!(text.contains("this retirement needs its own"), "{text}");
+
+        // And the campaign refuses to be built against it at all.
+        let input = AggregateRetirementCampaignInputV1 {
+            genesis_hash: key(90).to_string(),
+            rpc_url: "http://127.0.0.1:43210/".into(),
+            plan_sha256: "11".repeat(32),
+            evidence_sha256: "22".repeat(32),
+            payer,
+            lookup_table: key(81),
+            lookup_table_sha256: "33".repeat(32),
+            lookup_table_addresses: short.to_vec(),
+            core_program: key(5),
+            claims_program: key(6),
+            market: account(key(40), key(5), 10, vec![1]),
+            rent_credit: account(key(42), key(7), 20, vec![2]),
+            checkpoint: account(key(41), key(6), 30, vec![3]),
+            custody_replay: account(key(43), key(8), 40, vec![4]),
+            hoard_vault: account(key(44), key(8), 50, vec![5]),
+            source_receipt: account(key(45), key(9), 1, vec![6]),
+            refund_wallet: account(key(46), system_program::ID, 1_000, Vec::new()),
+            failure_escrow: None,
+        };
+        let error = build_aggregate_retirement_campaign_v1(input, &report)
+            .expect_err("campaign over a table that cannot route it");
+        assert!(error.to_string().contains("4 are missing"), "{error}");
+    }
+
+    /// One encoded Custody replay cursor for this fixture's campaign.
+    fn replay_bytes(open_vault_count: u32, revision: u64, market: Pubkey, core: Pubkey) -> Vec<u8> {
+        CustodyReplayV1 {
+            caller_role: dclutch_custody::CallerRoleV1::Core,
+            release_set: [0x51; 32],
+            market: market.to_bytes(),
+            realm: [0x52; 32],
+            context: [0x53; 32],
+            caller_program: core.to_bytes(),
+            rent_refund: [0x54; 32],
+            open_vault_count,
+            next_revision: revision,
+            generation: 2,
+            last_request_digest: [u8::try_from(revision).expect("revision byte"); 32],
+            last_poststate_commitment: [0x56; 32],
+        }
+        .to_bytes()
+        .expect("replay bytes")
+        .to_vec()
+    }
+
+    /// The Hoard-vault close ADVANCES this cursor, and the host must say so.
+    ///
+    /// The reading that convicted the old check is on chain: close-vault
+    /// `3VteUAQT…` landed for 146,687 CU and the next pass refused the replay
+    /// for having moved. What the deployed Custody program writes is exactly
+    /// four words; every other byte it copies through.
+    #[test]
+    fn the_hoard_vault_close_must_advance_the_custody_replay_and_leave_no_open_vault() {
+        let mut campaign = campaign();
+        let market = parse_pubkey(&campaign.market.address, "market").expect("market");
+        let core = parse_pubkey(&campaign.core_program, "core").expect("core");
+        let before = replay_bytes(1, 7, market, core);
+        campaign.custody_replay =
+            DurableRetirementAccountV1::from_initial(&AggregateRetirementInitialAccountV1 {
+                key: key(43),
+                owner: key(8),
+                lamports: 40,
+                executable: false,
+                data: before.clone(),
+            });
+        let live = |data: Vec<u8>| AggregateRetirementChainAccountV1 {
+            key: key(43),
+            owner: key(8),
+            lamports: 40,
+            executable: false,
+            data,
+        };
+
+        // The cursor that moved, counting no open Vault: admitted.
+        let after = replay_bytes(0, 8, market, core);
+        authenticate_advanced_custody_replay_v1(&live(after), &campaign)
+            .expect("the advanced cursor");
+
+        // The cursor that did not move at all: the close was not replayed.
+        let error = authenticate_advanced_custody_replay_v1(&live(before), &campaign)
+            .expect_err("an unmoved cursor");
+        assert!(error.to_string().contains("did not advance"), "{error}");
+
+        // Moved, but still counting the Vault the packet was supposed to close.
+        let error = authenticate_advanced_custody_replay_v1(
+            &live(replay_bytes(1, 8, market, core)),
+            &campaign,
+        )
+        .expect_err("a cursor still counting a Vault");
+        assert!(
+            error.to_string().contains("counting an open Vault"),
+            "{error}"
+        );
+
+        // Moved, but another Market's cursor.
+        let error = authenticate_advanced_custody_replay_v1(
+            &live(replay_bytes(0, 8, key(120), core)),
+            &campaign,
+        )
+        .expect_err("another Market's cursor");
+        assert!(error.to_string().contains("another Market"), "{error}");
+
+        // Moved, but under another caller program.
+        let error = authenticate_advanced_custody_replay_v1(
+            &live(replay_bytes(0, 8, market, key(121))),
+            &campaign,
+        )
+        .expect_err("another caller program");
+        assert!(error.to_string().contains("caller program"), "{error}");
+
+        // And the account itself is still held exactly: a changed lamport
+        // balance is a refusal whatever the cursor says.
+        let mut moved = live(replay_bytes(0, 8, market, core));
+        moved.lamports = 41;
+        let error = authenticate_advanced_custody_replay_v1(&moved, &campaign)
+            .expect_err("a re-rented replay");
+        assert!(error.to_string().contains("width or rent"), "{error}");
+    }
+
+    /// The table a producer freezes for one report: the packets' own set.
+    fn derived_routing_addresses(
+        payer: Pubkey,
+        report: &CheckpointMarketRetirementReportV1,
+    ) -> Vec<Pubkey> {
+        aggregate_retirement_routing_addresses_v1(
+            payer,
+            &aggregate_retirement_operations_v1(payer, report).expect("operations"),
+        )
+        .expect("routing addresses")
+    }
+
     fn campaign() -> AggregateRetirementCampaignV1 {
         let core = key(5);
         let claims = key(6);
         let market = key(40);
         let checkpoint = key(41);
+        let report = report(core, market, checkpoint);
         let input = AggregateRetirementCampaignInputV1 {
             genesis_hash: key(90).to_string(),
             rpc_url: "http://127.0.0.1:43210/".into(),
@@ -1916,6 +2400,7 @@ mod tests {
             payer: key(80),
             lookup_table: key(81),
             lookup_table_sha256: "33".repeat(32),
+            lookup_table_addresses: derived_routing_addresses(key(80), &report),
             core_program: core,
             claims_program: claims,
             market: account(market, core, 10, vec![1]),
@@ -1927,8 +2412,7 @@ mod tests {
             refund_wallet: account(key(46), system_program::ID, 1_000, Vec::new()),
             failure_escrow: None,
         };
-        build_aggregate_retirement_campaign_v1(input, &report(core, market, checkpoint))
-            .expect("campaign")
+        build_aggregate_retirement_campaign_v1(input, &report).expect("campaign")
     }
 
     /// The same campaign a REFUNDING Market retires through: three trailing
@@ -1938,6 +2422,12 @@ mod tests {
         let claims = key(6);
         let market = key(40);
         let checkpoint = key(41);
+        let report = report_with_shape(
+            core,
+            market,
+            checkpoint,
+            AggregateRetirementFrameShapeV1::Refunding,
+        );
         let input = AggregateRetirementCampaignInputV1 {
             genesis_hash: key(90).to_string(),
             rpc_url: "http://127.0.0.1:43210/".into(),
@@ -1946,6 +2436,7 @@ mod tests {
             payer: key(80),
             lookup_table: key(81),
             lookup_table_sha256: "33".repeat(32),
+            lookup_table_addresses: derived_routing_addresses(key(80), &report),
             core_program: core,
             claims_program: claims,
             market: account(market, core, 10, vec![1]),
@@ -1957,16 +2448,7 @@ mod tests {
             refund_wallet: account(key(46), system_program::ID, 1_000, Vec::new()),
             failure_escrow: None,
         };
-        build_aggregate_retirement_campaign_v1(
-            input,
-            &report_with_shape(
-                core,
-                market,
-                checkpoint,
-                AggregateRetirementFrameShapeV1::Refunding,
-            ),
-        )
-        .expect("refunding campaign")
+        build_aggregate_retirement_campaign_v1(input, &report).expect("refunding campaign")
     }
 
     fn projection(phase: AggregateRetirementChainPhaseV1) -> AggregateRetirementChainProjectionV1 {

@@ -2829,15 +2829,21 @@ fn load_or_create_series_aggregate_campaign_v1(
         .data_base64
         .as_ref()
         .ok_or_else(|| refusal("Series retirement lookup table was absent"))?;
-    let observed_table_sha256 = sha256_hex(&decode_base64(
-        table_data,
-        "Series retirement lookup table",
-    )?);
+    let table_bytes = decode_base64(table_data, "Series retirement lookup table")?;
+    let observed_table_sha256 = sha256_hex(&table_bytes);
     if observed_table_sha256 != input.lookup_table_sha256 {
         return Err(refusal(
             "Series retirement lookup table changed from campaign admission",
         ));
     }
+    // The campaign refuses a table that cannot route its own four packets, and
+    // the durable capture carries the table's bytes, so the Series path answers
+    // that question from the same authority the live path does.
+    let lookup_table_addresses =
+        solana_address_lookup_table_interface::state::AddressLookupTable::deserialize(&table_bytes)
+            .map_err(|_| refusal("Series retirement lookup table bytes did not decode"))?
+            .addresses
+            .to_vec();
     let initial = |account: &dclutch_market_retirement_v1_operator::ObservedAccount| {
         AggregateRetirementInitialAccountV1 {
             key: account.key,
@@ -2856,6 +2862,7 @@ fn load_or_create_series_aggregate_campaign_v1(
             payer,
             lookup_table,
             lookup_table_sha256: observed_table_sha256,
+            lookup_table_addresses,
             core_program: snapshot.core_program.key,
             claims_program: snapshot.claims_program.key,
             market: initial(&snapshot.market),

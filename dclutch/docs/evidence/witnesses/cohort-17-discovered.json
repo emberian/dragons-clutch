@@ -48,6 +48,34 @@
     {
       "signature": "2ne4KgkvMLqgrVNAmne9Vfe8MoMTerg67gTNB9GANaLoSRH1B1uN9efzKStnvesh7XUjqxm5x83Vr6GxS8CQKxNb",
       "reason": "devnet has no finalized transaction with this signature"
+    },
+    {
+      "signature": "3VteUAQT2pJmx28R6PwwsndsNnZvHiEyCskJLzWUWuj5ZbYrBXQXLUDrtvd5pbzjbCB56c6HPwJ1WA4p2MbnFATV",
+      "reason": "DCLTARV1 to core resolves to no core route (0 route(s) elsewhere)"
+    },
+    {
+      "signature": "65RsvS8xVE2opJTCPXQVyqzHLhbirA7QpGnehBXi7VW9TYGDFYhxuhZg5rnF3kGYayv2XfVX5J4vvJ2agRLAvCdM",
+      "reason": "DCLTARR1 to core resolves to no core route (0 route(s) elsewhere)"
+    },
+    {
+      "signature": "53m47rGS36MbivKCJ98rQhCxnYnJSUxn4dvCWD89U27AEhLunTopeQEjr1QcqvmGbzZdViFn2vPeGmhpR8WdV5Xd",
+      "reason": "DCLTARF1 to core resolves to no core route (0 route(s) elsewhere)"
+    },
+    {
+      "signature": "5fZd1BHiXBFnjDXkb4cD4q3TSxyzzwuRx9AxLqTc36CwP65vt1JBABYqw1RtRGbxNeNvSaAbdbzJzC7Bk6DiRrW9",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4esp2qzDq5uwzkKXwYbewRyaEu1CDxQ22VxwxBJqAdfBCssac2yhXzQTLTVLEAPDP6mMsrctGHkVttDTFQm8Brkb",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4wDohBTryTMC86EEcx1VVyhazVR1zGghXujeJCAHJkJJrDX16syPkGVHgz1YGkqWPSZLzaknRkzhvNHCni5vBTAv",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "5dHAZDaxikjkcJus7sRfUHHc9vVLpSYVRZNeCe27ejY8iZkLevJFhEEDijdNf4fZ8nE7fcgTJUMrmNwWswknBQTj",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
     }
   ],
   "records": [
@@ -958,7 +986,81 @@
         "custody/process_instruction"
       ],
       "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-retire-494212407",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "3w2F2n5EGoCwf3RNig2NBzg83Y6ZMUkYLMWBX4FWYcDvKnVoUNY8554yvsUrvFbHj5Q6gzzVbKYrc6NAidxFnAga",
+      "instruction_data_len": 808,
+      "routes": [
+        "claims/process_instruction",
+        "core/process_instruction",
+        "core/process_instruction#Retire",
+        "core/retire_v1::process_checkpoint_prepare#Retire"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 7 = `Action::Retire`, which selects core/process_instruction#Retire, core/retire_v1::process_checkpoint_prepare#Retire. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "Retire",
+        "tag": 7,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 7 = `Action::Retire` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/capability::process#CloseCapability",
+          "reason": "the payload's Action tag is 7 = `Action::Retire` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 7 = `Action::Retire` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/found::process#Found",
+          "reason": "the payload's Action tag is 7 = `Action::Retire` at offset 10; this route dispatches on `Action::Found`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 7 = `Action::Retire` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#CloseCapability",
+          "reason": "the payload's Action tag is 7 = `Action::Retire` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 7 = `Action::Retire` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/resolution::process#Retire",
+          "reason": "the instruction is 808 bytes and this arm of `Action::Retire` is guarded on 592"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the instruction is 808 bytes and this arm of `Action::Retire` is guarded on 2152"
+        }
+      ],
+      "slot": 494212407,
+      "compute_units": 158024,
+      "programs_invoked": [
+        "claims",
+        "core"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "core/process_instruction",
+        "core/process_instruction#Retire",
+        "core/retire_v1::process_checkpoint_prepare#Retire"
+      ],
+      "not_corroborated": []
     }
   ],
-  "corroborated_route_count": 19
+  "corroborated_route_count": 21
 }

@@ -1217,3 +1217,315 @@ distinct routes, 0 problems.
              other refusal this lane met came before a key was read, so it
              cost nothing.)
     deployer 26.572399090   UNCHANGED. This lane deployed nothing.
+
+---
+
+# ADDENDUM, 2026-09-06 night. Lane COHORT-17F.
+
+**Devnet evidence. Not mainnet evidence.** The deployed eight, the candidate
+`932edc83f` and the release gate `a98ed988…` are all UNCHANGED; every commit in
+this addendum is host or runbook, and `tools/gate frames owed` names only
+`108f950f` — COHORT-17's pre-existing debt over a `#[cfg(test)]` module —
+before this lane's first change and after its last.
+
+## 1. A MARKET IS RETIRED. IT IS THE FIRST ONE, ON ANY CHAIN
+
+Market `AvKSizb7j3VCzB41bKxYXntoXyRojDVM9UzyjgFvAadR`, founded REFUNDING,
+traded, settled, paid out and now **Retired**, through the four checkpointed
+packets in their ruled order:
+
+    prepare        3w2F2n5EGoCwf3RNig2NBzg83Y6ZMUkYLMWBX4FWYcDvKnVoUNY8554yvsUrvFbHj5Q6gzzVbKYrc6NAidxFnAga
+                   slot 494,212,407   158,024 CU   fee 75,000   1,141 wire bytes
+    close-vault    3VteUAQT2pJmx28R6PwwsndsNnZvHiEyCskJLzWUWuj5ZbYrBXQXLUDrtvd5pbzjbCB56c6HPwJ1WA4p2MbnFATV
+                   slot 494,212,468   146,687 CU   fee 75,000   1,197 wire bytes
+    close-replay   65RsvS8xVE2opJTCPXQVyqzHLhbirA7QpGnehBXi7VW9TYGDFYhxuhZg5rnF3kGYayv2XfVX5J4vvJ2agRLAvCdM
+                   slot 494,214,505   139,205 CU   fee 75,000   1,197 wire bytes
+    finish         53m47rGS36MbivKCJ98rQhCxnYnJSUxn4dvCWD89U27AEhLunTopeQEjr1QcqvmGbzZdViFn2vPeGmhpR8WdV5Xd
+                   slot 494,214,573   127,016 CU   fee 75,000   1,077 wire bytes
+
+Read off devnet at finalized slot 494,214,666, every account this retirement
+was stated about:
+
+    market          AvKSizb7j3VCzB41bKxYXntoXyRojDVM9UzyjgFvAadR   AccountNotFound
+    rent credit     6MJ63PAX1cWUZ6Lr6bfE9nzRLhNmsamPjpFT8CtVfTKx   AccountNotFound
+    checkpoint      DbnUvBnHvJy1SuxCMnF6yewFWmB9JeBudFMXQyizzjso   AccountNotFound
+    custody replay  DzQWrBbwi2J8Hmyof488zxC3Dj6Rr7LY23uCJbBzxv97   AccountNotFound
+    Hoard vault     86ZYfCNMX5uwc9NFRbDk5oUBF8NU3bVYkQkPLHwzs6Ub   AccountNotFound
+    escrow Position 68d1nDjNAczqGLCMw3HEHbLXEChdc6j7HZmnvCvpB1GU   AccountNotFound
+    escrow admission D4UkUraKbKRNggLQk3NTjCu1qkNKMdhZpEgA8cdoBWyr  AccountNotFound
+    refund wallet   CuSvrfJ3rTEdkwNGW9EEWhTX9Y4db3iiy6RHDgcTDRdB   43,738,809 lamports
+
+**The rent is reclaimed to the lamport.** 5,852,160 before, plus the operator's
+own `expected_refund_delta` of 37,886,649, is 43,738,809 — the number the chain
+reads. The classification behind that sum is INDEPENDENT of the operator's:
+market 2,519,680 + rent credit 24,937,729 + Claims refund 6,827,520 + custody
+replay 2,113,280 + Hoard vault 1,488,440, and the equality between the two is
+what makes the completion receipt a check rather than a copy.
+
+**AGAINST THE LOCAL HARNESS, PACKET FOR PACKET.**
+`tools/gauntlet/retirement-checkpoint` drove the same four refunding packets on
+a private validator: its README's table records 148,544 / 124,440 / 110,718 /
+96,182 CU and its `bindings.json` notes the v0 extents 1,089 / 1,145 / 1,145 /
+1,025. Devnet:
+
+    packet          harness CU    devnet CU    delta      harness bytes   devnet bytes
+    prepare            148,544      158,024    + 9,480          1,089          1,141
+    close-vault        124,440      146,687    +22,247          1,145          1,197
+    close-replay       110,718      139,205    +28,487          1,145          1,197
+    finish              96,182      127,016    +30,834          1,025          1,077
+
+The widths differ by exactly 52 in all four, and the devnet number is the one
+`AggregateRetirementOperationV1::expected_wire_bytes` fixes for this frame --
+the packet the campaign signs, which the harness's figure is the message inside
+of. **The CU gap is NOT explained here.** Both sides run the same ELFs; a
+devnet transaction loads real account data where the fixture loads its own, and
+that is a hypothesis this run did not test. What the gap is not is a
+regression in the route: the ordering of the four is identical and every one is
+well inside its declared budget.
+
+**THE PHASE BYTE IS NOT THE OBSERVABLE, AND THE ROW'S VERIFIER SAYS ONE THING
+THIS RUN CANNOT SHOW.** The row asks for the Market's phase byte at CoreState
+offset 10 to read 4 Retired. The finish packet does not leave a Market account
+at phase 4; it CLOSES it, which is why `AggregateRetirementChainPhaseV1::Complete`
+is the branch where all five accounts read absent. A reader wanting "this market
+retired" reads the closure and the refund, not a byte. The row's verifier should
+say so; it is the one line of it this run refutes.
+
+## 2. THE BURN, READ FROM THE PREPARE PACKET'S OWN TRANSACTION
+
+Not inferred from the Retired phase. Against `3w2F2n5E…` itself, the only three
+balances that moved besides the fee:
+
+    68d1nDjN…  escrow Position    1,463,040 -> 0
+    D4UkUraK…  escrow admission   3,251,200 -> 0
+    DbnUvBnH…  checkpoint         2,113,280 -> 6,827,520   (+4,714,240)
+
+4,714,240 is 1,463,040 + 3,251,200 exactly, and 6,827,520 is the campaign's
+`claims_refund` exactly. **That is decision 0025's shape A observed**: the
+closure burned the failure column, closed the escrow Position and its admission
+into the checkpoint, and the checkpoint carried their rent onward to the refund
+wallet. The failure column held 166,666,667 units against an aggregate supply
+of `[0, 0, 0, 166666667]` and no certificate could ever pay it.
+
+The completion receipt does NOT carry a `burned_failure_units` field; the row's
+verifier names one. What it carries is the classification above, and the burn's
+evidence is the prepare transaction's own three balances.
+
+## 3. THE PRODUCER THAT WAS MISSING, AND WHAT IT COST
+
+COHORT-17E stopped at `aggregate-retirement-prepare: v0 message:
+PacketTooLarge` — a MISSING PRODUCER. `devnet-aggregate-retirement-v1` requires
+a supplied `--lookup-table` and nothing in the tree built one for the
+checkpointed 38-account frame; both of this cohort's frozen tables together
+left four coordinates static and all four read `AccountNotFound`, because they
+are accounts the retirement CREATES at addresses the campaign's own plan
+derives.
+
+**A lookup table holds PUBKEYS.** `extend_lookup_table` never reads the accounts
+behind them, so that table was always publishable and the missing thing was the
+hand that derives the set from the plan rather than from a list.
+
+`devnet-aggregate-retirement-lookup-table-v1` plans the campaign from the same
+finalized state and derives its address set from the four packets' own metas.
+`aggregate_retirement_routing_addresses_v1` offers each packet to the message
+compiler exactly as the signer will — alone, behind the two ComputeBudget
+declarations `bounded_instructions` owns — and takes the compiler's own answer
+for what a table may carry, so the packets and the table cannot disagree.
+Measured on market 2: a 38-account frame, **37 table addresses**, all four of
+COHORT-17E's missing coordinates among them.
+
+    create   5fZd1BHiXBFnjDXkb4cD4q3TSxyzzwuRx9AxLqTc36CwP65vt1JBABYqw1RtRGbxNeNvSaAbdbzJzC7Bk6DiRrW9  slot 494,211,936  10,805 CU
+    extend 0 4esp2qzDq5uwzkKXwYbewRyaEu1CDxQ22VxwxBJqAdfBCssac2yhXzQTLTVLEAPDP6mMsrctGHkVttDTFQm8Brkb  slot 494,211,976  11,957 CU
+    extend 1 4wDohBTryTMC86EEcx1VVyhazVR1zGghXujeJCAHJkJJrDX16syPkGVHgz1YGkqWPSZLzaknRkzhvNHCni5vBTAv  slot 494,212,016  11,077 CU
+    freeze   5dHAZDaxikjkcJus7sRfUHHc9vVLpSYVRZNeCe27ejY8iZkLevJFhEEDijdNf4fZ8nE7fcgTJUMrmNwWswknBQTj  slot 494,212,056   1,817 CU
+
+    frozen table  8QkhoQ68zd34w2HAGgdkkf8SfE3KNnWMvtALEeQyenFB   37 addresses, 6,949,440 lamports
+
+It then compiles all four packets over the table it just froze and refuses
+unless each lands at the exact width the frame fixes. It did: **1,141 / 1,197 /
+1,197 / 1,077 bytes, 37 addresses resolved through the table in every one**,
+against the 1,232-byte ceiling — and those are the widths the four signed
+packets actually carry.
+
+**SIZED ON BOTH SIDES, before any rent was paid.** The producer's dry run
+(`--output` without `--execute`: no key opened, nothing sent) reports what the
+bare tableless route costs:
+
+    prepare        2,254 bytes, 1,022 over the ceiling      routed 1,141
+    close-vault    2,310 bytes, 1,078 over                  routed 1,197
+    close-replay   2,310 bytes, 1,078 over                  routed 1,197
+    finish         2,190 bytes,   958 over                  routed 1,077
+
+The host test
+`the_four_packets_fit_over_this_retirement_own_table_and_a_short_one_refuses_by_bytes`
+carries the same measurement offline for BOTH frames: all four packets compile
+over the derived table at their exact fixed widths, and over a table four
+coordinates short each measures exactly +124 bytes — 32 for the static key,
+less the one index byte it gives back — which puts the prepare over the ceiling
+and the finish under it. The prepare then refuses `PacketTooLarge` there, which
+is COHORT-17E's wall reproduced as arithmetic.
+
+**And the campaign now refuses a table that cannot route its own packets**, by
+name and with the count and the missing addresses, rather than leaving that to
+the compiler's `PacketTooLarge` — a refusal that says the route does not fit and
+nothing about which coordinate is absent. A superset is admitted; only an
+absence refuses. Both retirement paths ask it: the live exterior off the
+observed table, the Series path off its durable capture's bytes.
+
+## 4. TWO RULINGS THE ROW NOW CARRIES
+
+**The terminal sequence stops at the handoff.** The row's first loop waited on
+`$OUT/terminal/completion.json`, which the sequence writes only when all six of
+its journals finalize — and its sixth stage is the ONE-SHOT AggregateRetirement,
+which refuses by name for a seated escrow and points at the checkpointed route.
+A refunding market could never satisfy that gate, so the row could never reach
+its own packets. The gate is now the fifth stage's own journal reading
+`finalized`. **This row retires through the CHECKPOINTED route for every shape**
+— the sixth stage is not its route, because the next act performs the retirement
+— so a categorical market takes the four packets here too
+(`AggregateRetirementFrameShapeV1::Categorical`, 35 accounts). One rule, not a
+shape-dependent one.
+
+**The retirement freezes its own table**, as an act between the terminal
+sequence and the four packets, `--lookup-table` reading `lookupTable` out of its
+evidence. Being an act is the `?`-guard: a resume reuses the table it already
+froze rather than paying rent for a second one. Like the row's other two acts it
+carries a literal `--execute`, because a preflight of a retirement can compile
+nothing without a table — the same call `openbatch-frozen-tables` makes.
+
+## 5. ONE MORE HOST WALL, AND IT WAS THE HOST DISAGREEING WITH A LANDED PACKET
+
+Between close-vault and close-replay:
+
+    REFUSED aggregate retirement: live retirement account differed from its
+            exact initial fact
+
+`3VteUAQT…` had already landed — slot 494,212,468, 146,687 CU, no error. The
+account it refused was the Custody replay, whose address, owner, executable bit,
+width and lamport balance were all exactly what the campaign recorded. Its BYTES
+had moved, and they had to: **the close-vault packet IS a Custody action under
+that cursor.** `CustodyReplayV1::advance` writes exactly four words —
+`next_revision`, `open_vault_count`, `last_request_digest`,
+`last_poststate_commitment` — and copies every identity field through `..self`,
+refusing `ReplayBindingMismatch` on a request that disagrees with one. The chain
+read revision 2 and ZERO open Vaults. A byte-equality check against the
+planning-time reading refused the one poststate the deployed program can
+produce.
+
+The replay is authenticated as a CURSOR now, and that is four accusations where
+there was one digest: the same account exactly (address, owner, executable bit,
+width, lamports); bytes that MUST have moved, because a cursor that did not move
+would mean the close was not replayed through it; still THIS Market's cursor
+under THIS campaign's Core program; and zero open Vaults, because the Vault it
+counted is the one the packet just closed. `the_hoard_vault_close_must_advance_
+the_custody_replay_and_leave_no_open_vault` drives all five refusals by name.
+
+**No program changed and none refused.** This was the host disagreeing with a
+transaction that had already succeeded, which is the fourth time on this
+market's terminal path and the fourth time it was host-only.
+
+## 6. THE CENSUS CANNOT READ A RETIRED MARKET, AND THAT IS A FINDING
+
+`ledger-census --stage post-retire` refuses by name:
+
+    missing Claims aggregate account DbnUvBnHvJy1SuxCMnF6yewFWmB9JeBudFMXQyizzjso
+
+Every account the instrument is stated about is closed. So there is no L1–L8
+verdict at the retirement boundary, and there cannot be one from this tool as
+written. The last measured boundary stands where COHORT-17C left it
+(`census-2/post-payout.json`, slot 494,153,475: L1 holds, L3 holds, L4
+inapplicable by name, L5/L6/L8 hold; L2 and L7 read VIOLATED because the row
+hardcodes `--declared-hoard-delta 0` and the payout drained 500,000,001 atoms
+out of the Hoard that the invocation had no way to declare — a runbook
+declaration defect, not a protocol one, and it is owed a row that can state it).
+
+What stands in place of a post-retirement census is the conservation statement
+above: two independent classifications of the same lamports agreeing exactly,
+and a refund wallet whose observed balance is their sum.
+
+## 7. THE LEDGER
+
+    payer     1.671206137 -> 1.663656697   (-0.007549440 exactly: the frozen
+              table's 6,949,440-lamport rent, its four 75,000-lamport
+              transaction fees, and the four packets' four 75,000-lamport fees.
+              Nothing else moved.)
+    deployer  26.572399090   UNCHANGED. This lane deployed nothing.
+
+    refund wallet CuSvrfJ3…   5,852,160 -> 43,738,809
+
+## 8. THE SITE CANNOT FEATURE THE RETIRED MARKET, AND ITS FEATURED MARKET IS ALREADY DEAD
+
+Three cohorts of evidence documents have ended "the site's featured market is
+UNCHANGED, because there is no retired market to feature." There is one now,
+and the site still cannot feature it — for a reason worth stating exactly,
+because it is not a missing fixture.
+
+**Measured, through the site's own SDK, at finalized slot 494,221,111:**
+
+    AvKSizb7j3VCzB41bKxYXntoXyRojDVM9UzyjgFvAadR   refused
+        account is absent at the finalized observation floor
+    GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY   refused
+        account owner differs from the selected Core program, or it is
+        executable program data
+    9e8fTH75s82pjcEK8pY8PaLPoZW6W1am1qQ6J4JHjagQ   decoded   Retiring, terminal
+    7yaJUoUk8qjzPUMVeehs3owsmdfHy6Ud2nyJNNMruEYt   decoded   Founding, open
+    CJVARrAjDvv45GnExJfRKn2LdGCyNXFVqRr1GdaNg7Ne   decoded   Founding, open
+
+**The retired market is refused because it has no account**, which is the whole
+point of a retirement, and `readDeploymentLivenessV1` refuses an absent featured
+market BY NAME — a refusal `deploymentLiveness.test.ts`'s case `refuses an
+absent featured market rather than reporting on the programs alone` pins with
+`expect(liveness.reason).toContain('does not exist')`. Featuring a retired
+market means weakening that refusal, and this project does not weaken a refusal
+to make a page render. **`public-cut.devnet.json` was NOT changed.**
+
+**AND THE SITE'S FEATURED MARKET WAS ALREADY DEAD, INDEPENDENTLY OF THIS
+RETIREMENT.** `tools/gate web`'s live liveness suite is RED today, both of its
+cases, with one message:
+
+    The featured market GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY is owned
+    by 4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe, and this deployment's Core
+    program is 2PAzXCkAhCtznHEk3QwcBMDdAyEZbRjttvTGvRMJG8fM. The cut features a
+    market from another cohort.
+
+`DEVNET_DEPLOYMENT_V1.programs` moved to cohort-17 and the market the cut
+headlines did not. That is AGENTS.md's own rule unmet — "banishing a program is
+finished only when every non-Rust consumer is swept in the same commit,
+`apps/dclutch-web` above all" — and it is a cohort-17 debt, not this lane's
+retirement.
+
+**THE COHORT-18 RULING THIS ASKS FOR: A COHORT THAT WANTS TO HEADLINE ITS
+MARKET MUST KEEP ONE ALIVE.** Cohort-17 has no market the site can honestly
+headline. Market 2 completed its lifecycle and is therefore unreadable; market
+1 is `Retiring` and cannot be retired (its Resolution funding ledger is gone);
+the Found31 and General markets are `Founding`. Re-featuring is not a fixture
+swap either — it needs, together and consistently:
+
+- `public-cut.devnet.json`'s `market` (hand-written; no generator);
+- an editorial `market-registry.devnet.json` row, whose charter
+  `marketRegistry.test.ts` pins: `title`, `question` and `outcomes` NULL, a
+  truthy `coordinate.label` and `story`, and a `resolution` naming Pyth and the
+  source-failure outcome;
+- a fresh 368-byte `DCLTCOR3` capture to replace
+  `cohort16-featured-market.devnet.json`, which the liveness gate's OFFLINE
+  cases decode — and which a retired market cannot supply, because there are no
+  bytes at its address;
+- the share-card facts, staged by the reader that checks them
+  (`DCLUTCH_LIVE_DEVNET=1 DCLUTCH_OG_FACTS_WRITE=1 npx vitest run --config
+  vitest.config.ts lib/ogCards.live.test.ts`) — and note the trap: a registry
+  row with a null `title` MUST have a staged facts row, which a market that
+  does not decode can never get, so a retired market cannot be registered
+  titleless either;
+- `/pulse`'s `public/simulator-series.json`, whose `market` is still
+  `GyD95eyE…` and whose generator joins `ledger-census` observations — which,
+  per §6, cannot read a retired market at all.
+
+Every one of those is a reading of a LIVE market. **The site's whole vocabulary
+for "featured" is present-tense**, and the first complete lifecycle this
+protocol has produced is the one thing that vocabulary cannot say. A front door
+that could headline a finished market would need a fourth
+`DeploymentLivenessV1` verdict beside `alive | closed | refused`, derived from
+finalized signatures — which the witness register
+(`docs/evidence/witnesses/cohort-17-discovered.json`, 21 corroborated routes)
+already holds for exactly this market. That is a design step with an owner, and
+naming it is as far as this lane takes it.
