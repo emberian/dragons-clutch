@@ -197,11 +197,7 @@ pub fn derive_series_expire_requests_v1(
 fn derive_expire(
     input: &SeriesExpireDerivedRequestInputV1<'_>,
 ) -> Result<SeriesExpireDerivedRequestsV1> {
-    let expected = build_expire_v3(input.snapshot)
-        .map_err(|_| SeriesTerminalDerivedRequestErrorV1::Content)?;
-    if expected.as_bytes() != input.family_request {
-        return Err(SeriesTerminalDerivedRequestErrorV1::FamilyRequest);
-    }
+    require_expire_family(input)?;
     if input.parent_root == [0; 32]
         || input.projected.parent_capability_root != input.parent_root
         || input.custody.caller_program != input.projected.caller_program
@@ -246,6 +242,16 @@ fn derive_expire(
         parent_root: input.parent_root,
         requests,
     })
+}
+
+#[inline(never)]
+fn require_expire_family(input: &SeriesExpireDerivedRequestInputV1<'_>) -> Result<()> {
+    let expected = build_expire_v3(input.snapshot)
+        .map_err(|_| SeriesTerminalDerivedRequestErrorV1::Content)?;
+    if expected.as_bytes() != input.family_request {
+        return Err(SeriesTerminalDerivedRequestErrorV1::FamilyRequest);
+    }
+    Ok(())
 }
 
 #[inline(never)]

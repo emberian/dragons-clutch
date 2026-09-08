@@ -8,11 +8,20 @@ GitHub Pages site/explorer with a running population of markets and participants
 The completion scope remains `docs/MASTER_COMPLETION_CONTRACT.md`; this plan
 orders the work and does not close or defer any of its rows.
 
+On 2026-09-08 Ember explicitly requested an active completion goal for the
+entire implementation and testing. The goal includes every retained protocol
+feature, complete local-validator lifecycles against one exact committed
+eight-program build, fresh devnet deployment, a running supervised simulator,
+and the existing Pages app and documentation. Diagnostic checkpoints, fixtures,
+refusal-only cases and compiled tests are intermediate work. A named execution
+wall is a repair target, not an endpoint. Superseded paths converge into the
+accepted implementation; intended behavior is not dropped to improve coverage.
+
 The intended product is a stranger-operable compiler and market kernel: express
 an objective bounded-state payoff, fund it, exchange fully backed claims, resolve
 from the committed observation policy, receive tokens in an ordinary wallet,
 and recover or close every temporary resource. Venue families are capabilities.
-The optional simulator makes this behavior visible; it must not become an
+The delivered simulator makes this behavior visible; it must not become an
 operator whose continued presence is required for holders to get paid.
 
 ## What the first inspection changed
@@ -39,6 +48,20 @@ operator whose continued presence is required for holders to get paid.
   fixture support but no accepted fold test at intake.
 
 ## Current execution findings
+
+- General requires a structural runtime cost repair before its first nonempty
+  PlaceOrder can finish. The phase-only trace at `da5fa29b2` locates roughly
+  167k CU in artifact/effect admission, 168k in account projection and 167k in
+  admitted CPI-buffer construction. The instruction exhausts its 1.4M CU limit
+  before any of its five native child routes. Integration owns CPI buffers;
+  the General Sol owner handles artifact/projection costs and full accepted
+  lifecycle execution. Shared runtime improvements must preserve sealed
+  artifact checks, native request ownership, account privileges and rollback.
+  The measured trace is
+  `/tank/dregg-build/dclutch-general-da5fa29-phase-profile-20260908/logs/program-test-phase-profile.log`,
+  SHA-256 `9128b9098f70dcef1a6b51a8f780a42642d79bcdece43c95c784f93f7003add9`.
+  This profiled diagnostic uses the retained 551 runtime companions; it is not
+  accepted current-source execution.
 
 - The exact execution census is recorded in
   `docs/evidence/EXECUTION_COVERAGE_CENSUS_2026_09_08.md`: 164 routes and 456

@@ -663,6 +663,7 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
                 .iter()
                 .map(|account| AccountMeta::new_readonly(*account.key, false)),
         );
+        hot_cu_checkpoint!("cx-cpi-metas");
         // The CPI instruction retains EVERY ordered meta above.  Its backing
         // AccountInfo bank is a different input to the syscall: both the SDK's
         // `invoke_signed` borrow check and the runtime translator select the
@@ -677,6 +678,7 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
         // first one.  That keeps a malformed frame from turning a different
         // owner, body, or privilege into an invisible heap optimization.
         let infos = deduplicated_admitted_cpi_infos_v5(frame, authority, runtime_accounts)?;
+        hot_cu_checkpoint!("cx-cpi-infos");
         // Fallibly, and at the contract's bound rather than the runtime's: a
         // return wider than this buffer is a refusal `get_return_data_into_v1`
         // makes by name, and an infallible `with_capacity` on an exhausted heap
@@ -746,12 +748,14 @@ where
         });
     }
     hot_heap_mark!("admitted-cpi-index");
+    hot_cu_checkpoint!("cx-cpi-source-keys");
     sorted_source_keys.sort_unstable_by(|left, right| {
         left.key_prefix
             .cmp(&right.key_prefix)
             .then_with(|| left.key.cmp(&right.key))
             .then(left.source_index.cmp(&right.source_index))
     });
+    hot_cu_checkpoint!("cx-cpi-sort-keys");
 
     let mut unique_count = 0_usize;
     let mut group_start = 0_usize;
@@ -780,10 +784,12 @@ where
                 .ok_or(TradingSbfError::AdmittedTransport)?;
         require_matching_account_representation_v4(first, account)?;
     }
+    hot_cu_checkpoint!("cx-cpi-duplicate-checks");
 
     // Sorting back by source index preserves the first matching AccountInfo
     // the installed CPI translator selects for every ordered meta.
     sorted_source_keys.sort_unstable_by_key(|entry| entry.source_index);
+    hot_cu_checkpoint!("cx-cpi-sort-back");
     let mut infos: Vec<AccountInfo<'info>> = Vec::new();
     infos
         .try_reserve_exact(unique_count)

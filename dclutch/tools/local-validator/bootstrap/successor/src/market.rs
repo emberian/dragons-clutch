@@ -11441,21 +11441,13 @@ pub(crate) fn predict_core_state_v1(input: PredictedCoreStateInputV1) -> Result<
         input.projection,
         input.walk,
     )?;
-    let state = CoreState {
-        phase: Phase::Founding,
-        readiness: dclutch_market::Readiness::Prepaid,
-        terminal_winner: 0,
-        identity: input.identity,
-        outstanding_capabilities: 0,
-        principal_cap_sets: input.principal_cap_sets,
-        rent_beneficiary: input.rent_beneficiary,
-        terminal_receipt: None,
+    dclutch_trading_sbf::series::founding_children_v1::project_found_core_state_v1(
+        input.identity,
+        input.principal_cap_sets,
+        input.rent_beneficiary,
         bumps,
-    };
-    state
-        .encode()
-        .map_err(|error| Error::new(format!("predicted Core state: {error:?}")))?;
-    Ok(state)
+    )
+    .map_err(|error| Error::new(format!("predicted Core state: {error:?}")))
 }
 
 fn predicted_state_bumps_from_pairs_v1(

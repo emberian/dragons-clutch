@@ -1028,7 +1028,12 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
     request_profile: RequestProfileKindV3<'artifact>,
     lifecycle: StateLifecyclePolicyV5<'artifact>,
     profile_join: ValidatedProfileJoinV3<'artifact>,
+    selected_kind: [u8; 32],
     action: u32,
+    program_id: &Pubkey,
+    product: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    rent: &Rent,
+    child_programs: Option<AuthenticatedChildProgramsV3>,
     general_place_order_terms: Option<&[u8]>,
     current_rent_quotes: &[AuthenticatedRentQuoteV5],
     span_counts: &[u32],
@@ -1263,6 +1268,23 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
         .map_err(|_| TradingSbfError::Content)?;
     hot_cu_checkpoint!("p5r-rent-quote-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
+
+    #[cfg(feature = "series-family")]
+    {
+        super::series_registers::seed_authenticated_series_derived_scalars_v1(
+            selected_kind,
+            action,
+            family_request,
+            program_id,
+            &frame,
+            product,
+            rent,
+            child_programs,
+            observations,
+            &mut current_scalars,
+        )?;
+        hot_cu_checkpoint!("p5r-series-derived-bank");
+    }
 
     if let RequestProfileKindV3::Signed(profile) = request_profile {
         next_identities.copy_from_slice(&current_identities);

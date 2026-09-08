@@ -912,7 +912,7 @@ impl<'a> AccountProfileV2<'a> {
         Self::decode_shape(bytes)
     }
 
-    fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
+    pub(super) fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }

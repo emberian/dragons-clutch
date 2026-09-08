@@ -17,8 +17,8 @@ use syn::{Attribute, BinOp, Block, Expr, File, Item, ItemEnum, Pat, Stmt, spanne
 
 use crate::{
     model::{
-        Entrypoint, Inventory, ProgramSurface, Provenance, Refusal, Route, RouteKind, Selector,
-        Unclassified,
+        Entrypoint, Inventory, NativeVariantSelector, ProgramSurface, Provenance, Refusal, Route,
+        RouteKind, Selector, Unclassified,
     },
     phases::{AdmissionIndex, GuardMap},
     sources::Sources,
@@ -551,6 +551,15 @@ pub(crate) struct CrateIndex {
     functions: Vec<FunctionFact>,
     /// Struct name -> field name -> the field's declared type.
     fields: BTreeMap<String, BTreeMap<String, String>>,
+    /// `Enum::Variant` -> explicit source discriminants. A collision is
+    /// retained so resolution can refuse instead of picking one.
+    variants: BTreeMap<String, Vec<VariantFact>>,
+}
+
+#[derive(Clone)]
+struct VariantFact {
+    value: i64,
+    provenance: Provenance,
 }
 
 impl CrateIndex {
@@ -672,6 +681,14 @@ impl CrateIndex {
     /// The declared type of one field of one struct.
     pub(crate) fn field_type(&self, owner: &str, field: &str) -> Option<&str> {
         self.fields.get(owner)?.get(field).map(String::as_str)
+    }
+
+    fn variant(&self, path: &str) -> Option<&VariantFact> {
+        let mut segments = path.rsplit("::");
+        let variant = segments.next()?;
+        let enumeration = segments.next()?;
+        let facts = self.variants.get(&format!("{enumeration}::{variant}"))?;
+        (facts.len() == 1).then(|| &facts[0])
     }
 }
 
@@ -978,6 +995,24 @@ fn collect_functions(items: &[Item], module: &str, relative: &str, out: &mut Cra
                         continue;
                     };
                     entry.insert(name.to_string(), declared);
+                }
+            }
+            Item::Enum(enumeration) => {
+                let owner = enumeration.ident.to_string();
+                for variant in &enumeration.variants {
+                    let Some((_, expression)) = &variant.discriminant else {
+                        continue;
+                    };
+                    let Some(ConstantValue::Integer(value)) = constant_value(expression) else {
+                        continue;
+                    };
+                    out.variants
+                        .entry(format!("{owner}::{}", variant.ident))
+                        .or_default()
+                        .push(VariantFact {
+                            value,
+                            provenance: at(relative, variant.ident.span()),
+                        });
                 }
             }
             Item::Mod(inner) => {
@@ -1695,12 +1730,42 @@ impl DispatchWalk<'_> {
                             }],
                         },
                         None if screaming => vec![Selector::Tag { text: path }],
-                        None => vec![Selector::Variant { path }],
+                        None => vec![Selector::Variant {
+                            native: self.native_variant_selector(&path),
+                            path,
+                        }],
                     }
                 }
                 None => vec![Selector::Tag { text: render(pat) }],
             },
         }
+    }
+
+    /// Resolve the shipped byte selector for action enums whose decoder's
+    /// offset is explicitly mapped here.
+    ///
+    /// The discriminant value itself is not mirrored: it comes from the enum
+    /// declaration indexed out of the first-party dependency closure. The
+    /// offset comes from the named public codec constant. A family absent from
+    /// this closed map remains a path-only variant and therefore cannot gain
+    /// native execution credit.
+    fn native_variant_selector(&self, path: &str) -> Option<NativeVariantSelector> {
+        let enumeration = path.rsplit("::").nth(1)?;
+        let offset_name = match enumeration {
+            "FractionalExposureActionV2" => "FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2",
+            _ => return None,
+        };
+        let offset = self.constants.resolve(offset_name)?;
+        let ConstantValue::Integer(offset_value) = &offset.value else {
+            return None;
+        };
+        let variant = self.predicates.variant(path)?;
+        Some(NativeVariantSelector {
+            offset: usize::try_from(*offset_value).ok()?,
+            value: u8::try_from(variant.value).ok()?,
+            offset_provenance: offset.provenance.clone(),
+            value_provenance: variant.provenance.clone(),
+        })
     }
 
     /// Pull wire discriminants out of an `if` guard.
@@ -2568,7 +2633,7 @@ fn specific_tag(selectors: &[Selector]) -> String {
     let mut fallthrough = false;
     for selector in selectors {
         match selector {
-            Selector::Variant { path } => {
+            Selector::Variant { path, .. } => {
                 last = Some(path.rsplit("::").next().unwrap_or(path).to_string());
             }
             Selector::Tag { text } => last = Some(text.replace(' ', "")),
@@ -2585,6 +2650,149 @@ fn specific_tag(selectors: &[Selector]) -> String {
         (Some(tag), _) => tag,
         (None, true) => "else".to_string(),
         (None, false) => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod native_variant_tests {
+    use super::{
+        ConstantFact, ConstantIndex, ConstantValue, DispatchWalk, Selector, collect_imports,
+        fold_pending_constants, index_constants_in_items, index_source,
+    };
+    use crate::ledger::{
+        CLAIMS_FRACTIONAL_V2_ACTION_OFFSET, CLAIMS_FRACTIONAL_V2_HEADER_RESERVED,
+        CLAIMS_FRACTIONAL_V2_MAGIC, CLAIMS_FRACTIONAL_V2_REQUEST_BYTES,
+        CLAIMS_FRACTIONAL_V2_SCHEMA_VERSION, CLAIMS_FRACTIONAL_V2_TAIL_RESERVED,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn fractional_variants_carry_source_derived_action_bytes() {
+        let mut facts = BTreeMap::new();
+        facts.insert(
+            "FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2".into(),
+            vec![ConstantFact {
+                value: ConstantValue::Integer(10),
+                provenance: "crates/dclutch-claims/src/fractional/request_v2.rs:23".into(),
+                krate: "dclutch_claims".into(),
+            }],
+        );
+        let constants = ConstantIndex {
+            facts,
+            crates: BTreeSet::new(),
+        };
+        let index = index_source(
+            "fractional::request_v2",
+            r#"
+                #[repr(u8)]
+                enum FractionalExposureActionV2 {
+                    Wrap = 0,
+                    WholeUnwrap = 2,
+                    TerminalRedeem = 3,
+                    TerminalZeroBurn = 4,
+                }
+            "#,
+        );
+        let walk = DispatchWalk {
+            label: "claims",
+            index: &index,
+            predicates: &index,
+            constants: &constants,
+            routes: Vec::new(),
+            unclassified: Vec::new(),
+            visited: BTreeSet::new(),
+            declined_entries: 0,
+        };
+        let arm: syn::Arm = syn::parse_quote!(
+            FractionalExposureActionV2::Wrap
+                | FractionalExposureActionV2::WholeUnwrap => Ok(())
+        );
+        let selectors = walk.arm_selectors(&arm.pat);
+        let native: Vec<(&str, usize, u8)> = selectors
+            .iter()
+            .filter_map(|selector| match selector {
+                Selector::Variant {
+                    path,
+                    native: Some(native),
+                } => Some((path.as_str(), native.offset, native.value)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            native,
+            vec![
+                ("FractionalExposureActionV2::Wrap", 10, 0),
+                ("FractionalExposureActionV2::WholeUnwrap", 10, 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn fractional_native_envelope_is_pinned_to_the_shipped_codec() {
+        const RELATIVE: &str = "crates/dclutch-claims/src/fractional/request_v2.rs";
+        let source = include_str!("../../../../crates/dclutch-claims/src/fractional/request_v2.rs");
+        let file = syn::parse_file(source).expect("shipped Fractional V2 codec parses");
+        let mut constants = ConstantIndex::default();
+        constants.crates.insert("dclutch_claims".into());
+        let mut imports = BTreeMap::new();
+        collect_imports(&file.items, &mut imports);
+        let mut pending = Vec::new();
+        index_constants_in_items(
+            &file.items,
+            RELATIVE,
+            "dclutch_claims",
+            &imports,
+            &mut constants,
+            &mut pending,
+        );
+        fold_pending_constants(&mut constants, pending);
+
+        let integer = |name: &str| match &constants.resolve(name).expect(name).value {
+            ConstantValue::Integer(value) => usize::try_from(*value).expect(name),
+            ConstantValue::Bytes { .. } => panic!("{name} is not an integer"),
+        };
+        let magic = match &constants
+            .resolve("FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2")
+            .expect("fractional magic")
+            .value
+        {
+            ConstantValue::Bytes { hex, .. } => hex.clone(),
+            ConstantValue::Integer(_) => panic!("fractional magic is not bytes"),
+        };
+
+        let native_magic: String = CLAIMS_FRACTIONAL_V2_MAGIC
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(native_magic, magic);
+        assert_eq!(
+            usize::from(CLAIMS_FRACTIONAL_V2_SCHEMA_VERSION),
+            integer("VERSION_V2")
+        );
+        assert_eq!(
+            CLAIMS_FRACTIONAL_V2_ACTION_OFFSET,
+            integer("FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2")
+        );
+        assert_eq!(
+            CLAIMS_FRACTIONAL_V2_REQUEST_BYTES,
+            integer("FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2")
+        );
+        assert_eq!(
+            CLAIMS_FRACTIONAL_V2_HEADER_RESERVED.start,
+            integer("FRACTIONAL_EXPOSURE_REQUEST_HEADER_RESERVED_OFFSET_V2")
+        );
+        assert_eq!(
+            CLAIMS_FRACTIONAL_V2_HEADER_RESERVED.end,
+            integer("FRACTIONAL_EXPOSURE_REQUEST_RELEASE_SET_OFFSET_V2")
+        );
+        assert_eq!(
+            CLAIMS_FRACTIONAL_V2_TAIL_RESERVED.start,
+            integer("FRACTIONAL_EXPOSURE_REQUEST_TAIL_RESERVED_OFFSET_V2")
+        );
+        assert_eq!(
+            CLAIMS_FRACTIONAL_V2_TAIL_RESERVED.end,
+            integer("FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2")
+        );
     }
 }
 

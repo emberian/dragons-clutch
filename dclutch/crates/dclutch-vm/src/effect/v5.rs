@@ -467,14 +467,30 @@ impl<'a> ProgramV5<'a> {
     }
 
     /// Decode bytes authenticated by the current Trading capability seal.
+    ///
+    /// The seal is minted only after the hostile decoder has validated the
+    /// complete V5 record, including its embedded V4 tables. It also binds the
+    /// exact byte range below. Repeating both table sweeps here can therefore
+    /// produce no new verdict; the headers and all derived section offsets are
+    /// still parsed from the authenticated bytes on every construction.
     pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> ResultV5<Self> {
         sealed
             .require(SealedRoleV1::EffectProgram, bytes)
             .map_err(|_| ErrorV5::Wire)?;
-        Self::decode(bytes)
+        Self::decode_sealed_shape(bytes)
     }
 
     fn decode_shape(bytes: &'a [u8]) -> ResultV5<Self> {
+        Self::decode_shape_with(bytes, false)
+    }
+
+    /// Parse the V5 and embedded V4 geometry after the enclosing Trading seal
+    /// has authenticated the complete record and its prior full validation.
+    fn decode_sealed_shape(bytes: &'a [u8]) -> ResultV5<Self> {
+        Self::decode_shape_with(bytes, true)
+    }
+
+    fn decode_shape_with(bytes: &'a [u8], sealed: bool) -> ResultV5<Self> {
         if bytes.len() < HEADER_BYTES_V5
             || bytes.get(..4) != Some(MAGIC_V5.as_slice())
             || read_u8(bytes, 4)? != VERSION_V5
@@ -513,7 +529,12 @@ impl<'a> ProgramV5<'a> {
         if base_bytes == 0 || base_end != bytes.len() {
             return Err(ErrorV5::Wire);
         }
-        let base = ProgramV4::decode(slice(bytes, base_start, base_bytes)?)?;
+        let body = slice(bytes, base_start, base_bytes)?;
+        let base = if sealed {
+            ProgramV4::decode_shape(body)?
+        } else {
+            ProgramV4::decode(body)?
+        };
         Ok(Self {
             bytes,
             base,
@@ -991,6 +1012,106 @@ mod tests {
         encode_program_v5_atomic(&base, &actions, &seeds, &mut scratch, &mut output)
             .expect("V5 program");
         output
+    }
+
+    /// Build one canonical seal whose Effect row names `bytes`.
+    fn seal_for(bytes: &[u8]) -> [u8; crate::capability_seal::CAPABILITY_SEAL_BYTES_V1] {
+        use crate::capability_seal::{
+            CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, SealedDescriptorClosureV1,
+            SealedRecordRowV1, SealedRoleV1,
+        };
+        let key = CapabilitySealKeyV1::new([0x11; 32], [0x22; 32], 3, [0x33; 32], [0x44; 32])
+            .expect("key");
+        let width = u32::try_from(bytes.len()).expect("record width");
+        let rows = SealedRoleV1::canonical_order().map(|role| {
+            let tag = u8::try_from(role.tag()).expect("role tag");
+            let row_width = if role == SealedRoleV1::EffectProgram {
+                width
+            } else {
+                64
+            };
+            let (schema, digest) = if role == SealedRoleV1::Descriptor {
+                ([0x11; 32], [0x22; 32])
+            } else {
+                (
+                    [0x40_u8.saturating_add(tag); 32],
+                    [0x50_u8.saturating_add(tag); 32],
+                )
+            };
+            SealedRecordRowV1::new(
+                role,
+                row_width,
+                schema,
+                digest,
+                [0x60_u8.saturating_add(tag); 32],
+                [0x70_u8.saturating_add(tag); 32],
+            )
+            .expect("row")
+        });
+        let mut output = [0_u8; CAPABILITY_SEAL_BYTES_V1];
+        SealedDescriptorClosureV1::encode(key, rows, 255, &mut output).expect("seal");
+        output
+    }
+
+    #[test]
+    fn sealed_v5_view_matches_full_decode_and_keeps_its_range_and_header_boundary() {
+        use crate::capability_seal::{SealedDescriptorClosureV1, SealedRoleV1};
+
+        let bytes = exact_program();
+        let sealed_bytes = seal_for(&bytes);
+        let seal = SealedDescriptorClosureV1::decode(&sealed_bytes).expect("seal");
+        let row = seal.row(SealedRoleV1::EffectProgram).expect("effect row");
+        let token = seal
+            .authenticate_artifact(
+                SealedRoleV1::EffectProgram,
+                row.schema(),
+                row.content_digest(),
+                &bytes,
+            )
+            .expect("token");
+        assert_eq!(
+            ProgramV5::from_sealed(&bytes, token),
+            ProgramV5::decode(&bytes)
+        );
+
+        let twin = bytes.clone();
+        assert_eq!(ProgramV5::from_sealed(&twin, token), Err(ErrorV5::Wire));
+
+        let profile_row = seal.row(SealedRoleV1::AccountProfile).expect("profile row");
+        let profile_body = [0_u8; 64];
+        let profile_token = seal
+            .authenticate_artifact(
+                SealedRoleV1::AccountProfile,
+                profile_row.schema(),
+                profile_row.content_digest(),
+                &profile_body,
+            )
+            .expect("profile token");
+        assert_eq!(
+            ProgramV5::from_sealed(&bytes, profile_token),
+            Err(ErrorV5::Wire)
+        );
+
+        let mut malformed = bytes;
+        malformed[5] = 1;
+        let malformed_seal_bytes = seal_for(&malformed);
+        let malformed_seal =
+            SealedDescriptorClosureV1::decode(&malformed_seal_bytes).expect("malformed seal");
+        let malformed_row = malformed_seal
+            .row(SealedRoleV1::EffectProgram)
+            .expect("malformed row");
+        let malformed_token = malformed_seal
+            .authenticate_artifact(
+                SealedRoleV1::EffectProgram,
+                malformed_row.schema(),
+                malformed_row.content_digest(),
+                &malformed,
+            )
+            .expect("malformed token");
+        assert_eq!(
+            ProgramV5::from_sealed(&malformed, malformed_token),
+            Err(ErrorV5::Wire)
+        );
     }
 
     #[test]

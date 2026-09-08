@@ -167,14 +167,30 @@ impl<'a> AccountProfileV3<'a> {
     }
 
     /// Decode bytes already authenticated by one current Trading seal.
+    ///
+    /// The seal is minted only after the hostile decoder has validated the
+    /// complete V3 record, including its embedded V2 body. It also binds the
+    /// exact byte range below. Repeating both table sweeps here can therefore
+    /// produce no new verdict; the headers and all derived section offsets are
+    /// still parsed from the authenticated bytes on every construction.
     pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> ResultV3<Self> {
         sealed
             .require(SealedRoleV1::AccountProfile, bytes)
             .map_err(|_| ErrorV3::Wire)?;
-        Self::decode(bytes)
+        Self::decode_sealed_shape(bytes)
     }
 
     fn decode_shape(bytes: &'a [u8]) -> ResultV3<Self> {
+        Self::decode_shape_with(bytes, false)
+    }
+
+    /// Parse the V3 and embedded V2 geometry after the enclosing Trading seal
+    /// has authenticated the complete record and its prior full validation.
+    fn decode_sealed_shape(bytes: &'a [u8]) -> ResultV3<Self> {
+        Self::decode_shape_with(bytes, true)
+    }
+
+    fn decode_shape_with(bytes: &'a [u8], sealed: bool) -> ResultV3<Self> {
         if bytes.len() < HEADER_BYTES_V3
             || bytes.get(..8) != Some(MAGIC_V3.as_slice())
             || read_u16(bytes, 8)? != VERSION_V3
@@ -198,7 +214,12 @@ impl<'a> AccountProfileV3<'a> {
         if base_bytes == 0 || base_end != bytes.len() {
             return Err(ErrorV3::Wire);
         }
-        let base = AccountProfileV2::decode(slice(bytes, base_start, base_bytes)?)?;
+        let body = slice(bytes, base_start, base_bytes)?;
+        let base = if sealed {
+            AccountProfileV2::decode_shape(body)?
+        } else {
+            AccountProfileV2::decode(body)?
+        };
         Ok(Self {
             bytes,
             base,
@@ -464,6 +485,120 @@ mod tests {
             .expect("exact base profile");
         }
         output
+    }
+
+    /// Build one canonical seal whose AccountProfile row names `bytes`.
+    fn seal_for(bytes: &[u8]) -> [u8; crate::capability_seal::CAPABILITY_SEAL_BYTES_V1] {
+        use crate::capability_seal::{
+            CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, SealedDescriptorClosureV1,
+            SealedRecordRowV1, SealedRoleV1,
+        };
+        let key = CapabilitySealKeyV1::new([0x11; 32], [0x22; 32], 3, [0x33; 32], [0x44; 32])
+            .expect("key");
+        let width = u32::try_from(bytes.len()).expect("record width");
+        let rows = SealedRoleV1::canonical_order().map(|role| {
+            let tag = u8::try_from(role.tag()).expect("role tag");
+            let row_width = if role == SealedRoleV1::AccountProfile {
+                width
+            } else {
+                64
+            };
+            let (schema, digest) = if role == SealedRoleV1::Descriptor {
+                ([0x11; 32], [0x22; 32])
+            } else {
+                (
+                    [0x40_u8.saturating_add(tag); 32],
+                    [0x50_u8.saturating_add(tag); 32],
+                )
+            };
+            SealedRecordRowV1::new(
+                role,
+                row_width,
+                schema,
+                digest,
+                [0x60_u8.saturating_add(tag); 32],
+                [0x70_u8.saturating_add(tag); 32],
+            )
+            .expect("row")
+        });
+        let mut output = [0_u8; CAPABILITY_SEAL_BYTES_V1];
+        SealedDescriptorClosureV1::encode(key, rows, 255, &mut output).expect("seal");
+        output
+    }
+
+    #[test]
+    fn sealed_v3_view_matches_full_decode_and_keeps_its_range_and_header_boundary() {
+        use crate::capability_seal::{SealedDescriptorClosureV1, SealedRoleV1};
+
+        let base = base_profile(true, 64);
+        let bound = [FundingBoundV3::new(
+            0,
+            FundingActionMaskV3::CREATE_AND_CLOSE,
+            64,
+        )];
+        let width = HEADER_BYTES_V3 + FUNDING_BOUND_BYTES_V3 + base.len();
+        let mut scratch = vec![0_u8; width];
+        let mut bytes = vec![0_u8; width];
+        encode_account_profile_v3_atomic(&base, &bound, &mut scratch, &mut bytes)
+            .expect("successor profile");
+        let sealed_bytes = seal_for(&bytes);
+        let seal = SealedDescriptorClosureV1::decode(&sealed_bytes).expect("seal");
+        let row = seal
+            .row(SealedRoleV1::AccountProfile)
+            .expect("account profile row");
+        let token = seal
+            .authenticate_artifact(
+                SealedRoleV1::AccountProfile,
+                row.schema(),
+                row.content_digest(),
+                &bytes,
+            )
+            .expect("token");
+        assert_eq!(
+            AccountProfileV3::from_sealed(&bytes, token),
+            AccountProfileV3::decode(&bytes)
+        );
+
+        let twin = bytes.clone();
+        assert_eq!(
+            AccountProfileV3::from_sealed(&twin, token),
+            Err(ErrorV3::Wire)
+        );
+
+        let effect_row = seal.row(SealedRoleV1::EffectProgram).expect("effect row");
+        let effect_body = [0_u8; 64];
+        let effect_token = seal
+            .authenticate_artifact(
+                SealedRoleV1::EffectProgram,
+                effect_row.schema(),
+                effect_row.content_digest(),
+                &effect_body,
+            )
+            .expect("effect token");
+        assert_eq!(
+            AccountProfileV3::from_sealed(&bytes, effect_token),
+            Err(ErrorV3::Wire)
+        );
+
+        bytes[12] = 1;
+        let malformed_seal_bytes = seal_for(&bytes);
+        let malformed_seal =
+            SealedDescriptorClosureV1::decode(&malformed_seal_bytes).expect("malformed seal");
+        let malformed_row = malformed_seal
+            .row(SealedRoleV1::AccountProfile)
+            .expect("malformed row");
+        let malformed_token = malformed_seal
+            .authenticate_artifact(
+                SealedRoleV1::AccountProfile,
+                malformed_row.schema(),
+                malformed_row.content_digest(),
+                &bytes,
+            )
+            .expect("malformed token");
+        assert_eq!(
+            AccountProfileV3::from_sealed(&bytes, malformed_token),
+            Err(ErrorV3::Wire)
+        );
     }
 
     #[test]

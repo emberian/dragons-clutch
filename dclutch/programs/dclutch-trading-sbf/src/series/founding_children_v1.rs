@@ -103,6 +103,33 @@ pub enum SeriesFoundingChildrenErrorV1 {
     Permit,
 }
 
+/// Predict the exact native Found state from authenticated adapter facts.
+///
+/// This is a commitment projection, not Core admission or permission to write.
+/// The real Found child must persist these bytes before its receipt is accepted.
+/// Both the operator and runtime use this constructor; PDA bump derivation
+/// stays with the authenticated physical reader that supplies `bumps`.
+pub fn project_found_core_state_v1(
+    identity: dclutch_market::MarketIdentity,
+    principal_cap_sets: u64,
+    rent_beneficiary: Identity,
+    bumps: dclutch_market::StateBumpsV1,
+) -> Result<CoreState, dclutch_market::Error> {
+    let state = CoreState {
+        phase: Phase::Founding,
+        readiness: Readiness::Prepaid,
+        terminal_winner: 0,
+        identity,
+        outstanding_capabilities: 0,
+        principal_cap_sets,
+        rent_beneficiary,
+        terminal_receipt: None,
+        bumps,
+    };
+    state.encode()?;
+    Ok(state)
+}
+
 /// Derived dynamic children and the physical projection carrying their receipt digest.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SeriesFoundingChildrenV1 {

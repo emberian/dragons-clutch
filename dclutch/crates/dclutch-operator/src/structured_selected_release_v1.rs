@@ -73,19 +73,33 @@ use dclutch_claims::rational_lifecycle::{
 use dclutch_claims::structured_kernel::{
     STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
 };
+use dclutch_claims::{
+    composition::composition_exposure_bytes_v3,
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        liability_basis_vector_width_v2,
+    },
+    rational::RATIONAL_REPLAY_BYTES_V2,
+    rational_kernel::descriptor_v3::representation_descriptor_bytes_v3,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
 };
 use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1,
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
         encode_program_set_v2, encoded_program_set_bytes_v2,
     },
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_product::{
+    admission::PRODUCT_RECORD_BYTES_V2, payoff::runtime_v3::ProductBasisV3, portfolio_record_bytes,
+    result_domain_record_bytes,
+};
+use dclutch_registry::{ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, release_set::ExecutionRoleV1};
 use solana_program::hash::hash;
 
 /// Number of action bundles one selectable Structured release compiles.
@@ -891,53 +905,140 @@ fn item_lengths(input: StructuredSelectedReleaseInputV1<'_>) -> [u32; 4] {
     [input.item_state_bytes, 0, 0, 0]
 }
 
+/// Fill every live fixed observation shared by the representation profiles.
+/// Finalized Registry staging coordinates deliberately remain zero-width: the
+/// finalization transition closes them, so a live staging cursor here would be
+/// a different state rather than the selected record's companion.
+fn common_representation_lengths(
+    input: StructuredSelectedReleaseInputV1<'_>,
+    logical: usize,
+) -> Result<Vec<u32>> {
+    let basis = ProductBasisV3::decode(input.product_basis)
+        .map_err(|_| StructuredSelectedReleaseErrorV1::Input)?;
+    let product_width = basis.basis_width();
+    let product_width_usize =
+        usize::try_from(product_width).map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
+    let representation_width = input.representation_outcome_count;
+    let representation_width_usize = usize::try_from(representation_width)
+        .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
+    let mut lengths = vec![0_u32; logical];
+    let mut set = |coordinate: usize, width: usize| -> Result<()> {
+        *lengths
+            .get_mut(coordinate)
+            .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? =
+            u32::try_from(width).map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
+        Ok(())
+    };
+    set(
+        0,
+        CAPABILITY_ROOT_HEADER_BYTES_V1
+            .checked_add(
+                usize::try_from(input.root_state_bytes)
+                    .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?,
+            )
+            .ok_or(StructuredSelectedReleaseErrorV1::Encoding)?,
+    )?;
+    set(2, PRODUCT_RECORD_BYTES_V2)?;
+    set(
+        3,
+        portfolio_record_bytes(product_width_usize)
+            .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?,
+    )?;
+    set(4, input.product_basis.len())?;
+    // The structured builder validates this supplied observation before its
+    // encoder canonicalizes coordinate 29 to the fixed coordinate-4 alias.
+    set(29, input.product_basis.len())?;
+    set(
+        10,
+        representation_descriptor_bytes_v3(representation_width_usize)
+            .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?,
+    )?;
+    set(
+        12,
+        composition_exposure_bytes_v3(representation_width, representation_width)
+            .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?,
+    )?;
+    set(
+        14,
+        usize::try_from(crate::general_selected_release_v1::RENT_SYSVAR_ACCOUNT_BYTES_V1)
+            .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?,
+    )?;
+    set(16, RATIONAL_REPLAY_BYTES_V2)?;
+    set(
+        17,
+        liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, product_width)
+            .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?,
+    )?;
+    set(18, ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?;
+    set(22, dclutch_market::STATE_BYTES)?;
+    set(
+        33,
+        result_domain_record_bytes(
+            product_width_usize
+                .checked_sub(2)
+                .ok_or(StructuredSelectedReleaseErrorV1::Encoding)?,
+        )
+        .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?,
+    )?;
+    Ok(lengths)
+}
+
 /// Account observations for the two selected-coordinate actions, derived not
 /// supplied: the basis body is observed at its own coordinate and at its alias.
 fn selected_lengths(input: StructuredSelectedReleaseInputV1<'_>) -> Result<Vec<u32>> {
-    let mut lengths = vec![0_u32; usize::from(RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3)];
-    let width = basis_width(input)?;
+    let mut lengths = common_representation_lengths(
+        input,
+        usize::from(RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3),
+    )?;
+    let position = liability_basis_vector_width_v2(
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        ProductBasisV3::decode(input.product_basis)
+            .map_err(|_| StructuredSelectedReleaseErrorV1::Input)?
+            .basis_width(),
+    )
+    .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
     *lengths
-        .get_mut(4)
-        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? = width;
+        .get_mut(28)
+        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? =
+        u32::try_from(position).map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
     *lengths
-        .get_mut(29)
-        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? = width;
+        .get_mut(37)
+        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? =
+        u32::try_from(position).map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
     Ok(lengths)
 }
 
 /// Fixed account observations for the two structured actions.
 fn structured_lengths(input: StructuredSelectedReleaseInputV1<'_>) -> Result<Vec<u32>> {
-    let mut lengths = vec![0_u32; usize::from(RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3)];
-    let width = basis_width(input)?;
-    *lengths
-        .get_mut(4)
-        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? = width;
-    *lengths
-        .get_mut(29)
-        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? = width;
-    Ok(lengths)
+    common_representation_lengths(
+        input,
+        usize::from(RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3),
+    )
 }
 
 /// Account observations for terminal redemption, which also observes the config.
 fn terminal_lengths(input: StructuredSelectedReleaseInputV1<'_>) -> Result<Vec<u32>> {
-    let mut lengths = vec![0_u32; usize::from(RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3)];
-    let width = basis_width(input)?;
+    let mut lengths = common_representation_lengths(
+        input,
+        usize::from(RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3),
+    )?;
     *lengths
         .get_mut(1)
         .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? =
         u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2)
             .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
+    let position = liability_basis_vector_width_v2(
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        ProductBasisV3::decode(input.product_basis)
+            .map_err(|_| StructuredSelectedReleaseErrorV1::Input)?
+            .basis_width(),
+    )
+    .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
     *lengths
-        .get_mut(4)
-        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? = width;
-    *lengths
-        .get_mut(29)
-        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? = width;
+        .get_mut(37)
+        .ok_or(StructuredSelectedReleaseErrorV1::Encoding)? =
+        u32::try_from(position).map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
     Ok(lengths)
-}
-
-fn basis_width(input: StructuredSelectedReleaseInputV1<'_>) -> Result<u32> {
-    u32::try_from(input.product_basis.len()).map_err(|_| StructuredSelectedReleaseErrorV1::Input)
 }
 
 fn compile_selected(
@@ -1135,6 +1236,121 @@ mod tests {
             .expect("open producer set");
         assert_eq!(open.program_set, release.program_set);
         assert_eq!(open.program_set_id, release.publication.program_set_id);
+    }
+
+    #[test]
+    fn every_representation_profile_uses_native_live_widths_and_vacant_staging() {
+        use dclutch_vm::account_profile::v2::AccountProfileV2;
+
+        let basis = basis();
+        let release = structured_selected_release_v1(input(&basis)).expect("release");
+        let root =
+            u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1 + STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
+                .expect("root width");
+        let portfolio = u32::try_from(
+            portfolio_record_bytes(usize::try_from(PRODUCT_N).expect("N")).expect("portfolio"),
+        )
+        .expect("portfolio width");
+        let descriptor = u32::try_from(
+            representation_descriptor_bytes_v3(usize::try_from(K).expect("K")).expect("descriptor"),
+        )
+        .expect("descriptor width");
+        let exposure =
+            u32::try_from(composition_exposure_bytes_v3(K, K).expect("composition exposure"))
+                .expect("exposure width");
+        let aggregate = u32::try_from(
+            liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, PRODUCT_N)
+                .expect("aggregate"),
+        )
+        .expect("aggregate width");
+        let position = u32::try_from(
+            liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, PRODUCT_N)
+                .expect("position"),
+        )
+        .expect("position width");
+        let result = u32::try_from(
+            result_domain_record_bytes(usize::try_from(PRODUCT_N - 2).expect("cuts"))
+                .expect("result domain"),
+        )
+        .expect("result width");
+        let common = [
+            (0_u16, root),
+            (
+                2,
+                u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width"),
+            ),
+            (3, portfolio),
+            (4, u32::try_from(basis.len()).expect("basis width")),
+            (10, descriptor),
+            (12, exposure),
+            (
+                14,
+                crate::general_selected_release_v1::RENT_SYSVAR_ACCOUNT_BYTES_V1,
+            ),
+            (
+                16,
+                u32::try_from(RATIONAL_REPLAY_BYTES_V2).expect("replay width"),
+            ),
+            (17, aggregate),
+            (
+                18,
+                u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation width"),
+            ),
+            (
+                22,
+                u32::try_from(dclutch_market::STATE_BYTES).expect("Market width"),
+            ),
+            (33, result),
+        ];
+        let assert_common = |profile: AccountProfileV2<'_>| {
+            for (coordinate, expected) in common {
+                assert_eq!(
+                    profile
+                        .rule(false, coordinate)
+                        .expect("common logical rule")
+                        .data_length(),
+                    expected,
+                    "common live coordinate {coordinate}"
+                );
+            }
+            for coordinate in [11_u16, 13, 25, 27, 29, 31, 34] {
+                assert_eq!(
+                    profile
+                        .rule(false, coordinate)
+                        .expect("finalized staging rule")
+                        .data_length(),
+                    0,
+                    "finalized staging coordinate {coordinate} is vacant"
+                );
+            }
+        };
+        for bundle in &release.selected {
+            let profile = AccountProfileV2::decode(&bundle.account_profile).expect("selected");
+            assert_common(profile);
+            for coordinate in [28_u16, 37] {
+                assert_eq!(
+                    profile
+                        .rule(false, coordinate)
+                        .expect("Position")
+                        .data_length(),
+                    position,
+                    "selected Position coordinate {coordinate}"
+                );
+            }
+        }
+        for bundle in &release.structured {
+            assert_common(AccountProfileV2::decode(&bundle.account_profile).expect("structured"));
+        }
+        let terminal =
+            AccountProfileV2::decode(&release.terminal.account_profile).expect("terminal profile");
+        assert_common(terminal);
+        assert_eq!(
+            terminal
+                .rule(false, 37)
+                .expect("terminal Position")
+                .data_length(),
+            position
+        );
     }
 
     /// *** THE SEAM'S INVARIANT, AT COMPILER LEVEL. ***

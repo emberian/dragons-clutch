@@ -290,7 +290,7 @@ pub(crate) fn build_series_found_prepare_selection_input_v1<'a>(
                 .map_err(|_| Error::new("Ticket identity"))?,
         )
         .as_slices(),
-        &trading,
+        &core,
     )
     .1;
     let ticket_state = Pubkey::find_program_address(

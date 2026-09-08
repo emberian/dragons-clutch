@@ -14,8 +14,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    Binding, Bindings, EvidenceLevel, Inventory, LEDGER_SCHEMA_V1, Ledger, Observation, Outcome,
-    ProgramMap, Route, Selector,
+    Binding, Bindings, EvidenceLevel, Inventory, LEDGER_SCHEMA_V1, Ledger, NativeVariantSelector,
+    Observation, Outcome, ProgramMap, Route, Selector,
 };
 
 pub struct FoldReport {
@@ -296,6 +296,39 @@ fn relay_v1_variant_selected(path: &str, data: &[u8]) -> bool {
                 .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0)))
 }
 
+/// Match a source-derived Fractional Exposure V2 action selector against the
+/// exact canonical request header that reaches Claims' inner action dispatch.
+///
+/// The inventory obtains `offset` from the codec's public offset constant and
+/// `value` from the enum variant's explicit discriminant. This function adds
+/// the surrounding fixed-width/header guards the decoder enforces before the
+/// match. It deliberately recognises no other enum family.
+pub(crate) const CLAIMS_FRACTIONAL_V2_MAGIC: &[u8; 8] = b"DCFREQ02";
+pub(crate) const CLAIMS_FRACTIONAL_V2_SCHEMA_VERSION: u16 = 2;
+pub(crate) const CLAIMS_FRACTIONAL_V2_ACTION_OFFSET: usize = 10;
+pub(crate) const CLAIMS_FRACTIONAL_V2_HEADER_RESERVED: core::ops::Range<usize> = 11..16;
+pub(crate) const CLAIMS_FRACTIONAL_V2_REQUEST_BYTES: usize = 416;
+pub(crate) const CLAIMS_FRACTIONAL_V2_TAIL_RESERVED: core::ops::Range<usize> = 388..416;
+
+fn claims_fractional_v2_variant_selected(
+    path: &str,
+    native: &NativeVariantSelector,
+    data: &[u8],
+) -> bool {
+    path.starts_with("FractionalExposureActionV2::")
+        && native.offset == CLAIMS_FRACTIONAL_V2_ACTION_OFFSET
+        && data.len() == CLAIMS_FRACTIONAL_V2_REQUEST_BYTES
+        && data.get(..CLAIMS_FRACTIONAL_V2_MAGIC.len()) == Some(CLAIMS_FRACTIONAL_V2_MAGIC)
+        && data.get(8..10) == Some(&CLAIMS_FRACTIONAL_V2_SCHEMA_VERSION.to_le_bytes())
+        && data.get(native.offset) == Some(&native.value)
+        && data
+            .get(CLAIMS_FRACTIONAL_V2_HEADER_RESERVED)
+            .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
+        && data
+            .get(CLAIMS_FRACTIONAL_V2_TAIL_RESERVED)
+            .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
+}
+
 /// Whether one finalized instruction's native bytes select this route.
 ///
 /// A route with a selector the census cannot evaluate is deliberately not a
@@ -305,15 +338,38 @@ fn route_selected(route: &Route, program_address: &str, instruction: &CampaignIn
     // Enumeration folds every selector seen while reaching one handler into
     // this vector. That vector can contain conjunctive guards, or alternatives
     // from two dispatch arms merged under one route id; the persisted model
-    // does not preserve which shape it was. A single native selector is the
-    // only unambiguous form this adapter can authenticate. Refuse every wider
-    // vector rather than treating alternatives as a conjunction (or a union).
-    if instruction.program_id != program_address || route.selectors.len() != 1 {
+    // does not preserve which shape it was. A path-only selector vector is
+    // therefore ambiguous. The one exception below is a vector whose every
+    // alternative has a source-derived native byte selector in the closed
+    // Claims family.
+    if instruction.program_id != program_address || route.selectors.is_empty() {
         return false;
     }
     let Some(data) = decode_hex(&instruction.data_hex) else {
         return false;
     };
+
+    // Several source variants may dispatch to one handler. When every one has
+    // a source-derived byte selector in the same closed native family, they
+    // are alternatives: one exact action byte selects the handler. Any mixed
+    // or path-only vector still fails closed below.
+    if route.selectors.len() > 1 {
+        return route.selectors.iter().all(|selector| {
+            matches!(
+                selector,
+                Selector::Variant {
+                    native: Some(_),
+                    ..
+                }
+            )
+        }) && route.selectors.iter().any(|selector| match selector {
+            Selector::Variant {
+                path,
+                native: Some(native),
+            } => claims_fractional_v2_variant_selected(path, native, &data),
+            _ => false,
+        });
+    }
     route.selectors.iter().all(|selector| match selector {
         Selector::Magic { bytes, ascii, .. } => {
             let expected = if let Some(ascii) = ascii {
@@ -331,7 +387,10 @@ fn route_selected(route: &Route, program_address: &str, instruction: &CampaignIn
         Selector::Length { value, .. } => value
             .and_then(|value| usize::try_from(value).ok())
             .is_some_and(|value| data.len() == value),
-        Selector::Variant { path } => relay_v1_variant_selected(path, &data),
+        Selector::Variant { path, native } => native.as_ref().map_or_else(
+            || relay_v1_variant_selected(path, &data),
+            |native| claims_fractional_v2_variant_selected(path, native, &data),
+        ),
         // These selectors depend on deserializing the instruction payload or
         // on a predicate body. The census has no native decoder for them, so
         // finalized bytes alone are insufficient to credit this route.
@@ -935,7 +994,10 @@ mod tests {
             handler: "process".into(),
             provenance: "programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:1".into(),
             cfg: Vec::new(),
-            selectors: vec![Selector::Variant { path: path.into() }],
+            selectors: vec![Selector::Variant {
+                path: path.into(),
+                native: None,
+            }],
             admissible_prestates: Vec::new(),
             selected_prestates: Vec::new(),
         };
@@ -996,6 +1058,109 @@ mod tests {
             &reclaim,
             "ResolutionProgram1111",
             &instruction(&hex(&noncanonical))
+        ));
+    }
+
+    #[test]
+    fn claims_fractional_variants_require_exact_native_action_and_header() {
+        let native = |value: u8| NativeVariantSelector {
+            offset: 10,
+            value,
+            offset_provenance: "crates/dclutch-claims/src/fractional/request_v2.rs:23".into(),
+            value_provenance: "crates/dclutch-claims/src/fractional/request_v2.rs:85".into(),
+        };
+        let route = |id: &str, variants: &[(&str, u8)]| Route {
+            id: id.into(),
+            kind: RouteKind::Action,
+            parent: Some("claims/fractional_atomic_v3::process".into()),
+            handler: id.split('/').nth(1).expect("handler").into(),
+            provenance: "programs/dclutch-claims-sbf/src/fractional_atomic_v3.rs:1".into(),
+            cfg: Vec::new(),
+            selectors: variants
+                .iter()
+                .map(|(path, value)| Selector::Variant {
+                    path: (*path).into(),
+                    native: Some(native(*value)),
+                })
+                .collect(),
+            admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
+        };
+        let instruction = |data: &[u8]| CampaignInstruction {
+            program_id: "ClaimsProgram1111".into(),
+            data_hex: hex(data),
+        };
+        let packet = |action: u8| {
+            let mut data = vec![0_u8; 416];
+            data[..8].copy_from_slice(b"DCFREQ02");
+            data[8..10].copy_from_slice(&2_u16.to_le_bytes());
+            data[10] = action;
+            data
+        };
+
+        let open = route(
+            "claims/process_open#WholeUnwrap",
+            &[
+                ("FractionalExposureActionV2::Wrap", 0),
+                ("FractionalExposureActionV2::WholeUnwrap", 2),
+            ],
+        );
+        let terminal = route(
+            "claims/process_terminal#TerminalZeroBurn",
+            &[
+                ("FractionalExposureActionV2::TerminalRedeem", 3),
+                ("FractionalExposureActionV2::TerminalZeroBurn", 4),
+            ],
+        );
+        let whole_unwrap = packet(2);
+        assert!(route_selected(
+            &open,
+            "ClaimsProgram1111",
+            &instruction(&whole_unwrap)
+        ));
+        assert!(!route_selected(
+            &terminal,
+            "ClaimsProgram1111",
+            &instruction(&whole_unwrap)
+        ));
+        assert!(!route_selected(
+            &open,
+            "DifferentClaimsProgram1111",
+            &instruction(&whole_unwrap)
+        ));
+
+        for hostile in [1_u8, 3, 4, u8::MAX] {
+            assert!(!route_selected(
+                &open,
+                "ClaimsProgram1111",
+                &instruction(&packet(hostile))
+            ));
+        }
+        let mut malformed = whole_unwrap.clone();
+        malformed[8] = 3;
+        assert!(!route_selected(
+            &open,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        malformed = whole_unwrap.clone();
+        malformed[11] = 1;
+        assert!(!route_selected(
+            &open,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        malformed = whole_unwrap.clone();
+        malformed[415] = 1;
+        assert!(!route_selected(
+            &open,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        assert!(!route_selected(
+            &open,
+            "ClaimsProgram1111",
+            &instruction(&whole_unwrap[..415])
         ));
     }
 

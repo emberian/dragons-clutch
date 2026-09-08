@@ -507,9 +507,13 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
 
 /// Compile a Series-selected capability from admitted two-occurrence facts.
 ///
-/// The function deliberately projects only the first occurrence.  The
-/// immutable Template still commits both occurrence records, and the release
-/// compiler owns the bounded bank for every action of that Template.
+/// The immutable Template commits both occurrences, while this compiler
+/// observes only the first publication's physical geometry. Its provisional
+/// compatibility constraint requires later occurrences to fit those fixed
+/// record widths; runtime AccountProfile admission refuses another shape.
+/// This result is not an all-occurrence geometry certificate. Publication
+/// admission over every canonical future-Market closure remains queued in
+/// `SERIES_RECURRING_REQUEST_PARAMETERIZATION_2026_09_08.md`.
 pub(crate) fn compile_series_found_prepare_selection_v1(
     mut input: SeriesFoundPrepareSelectionInputV1<'_>,
     consume_shadow_certificate_program: dclutch_core_contract::ContentId,

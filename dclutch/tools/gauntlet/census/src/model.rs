@@ -215,7 +215,15 @@ pub enum Selector {
     /// as much as `is_x` is.
     Predicate { function: String },
     /// An enum action tag matched in a handler.
-    Variant { path: String },
+    Variant {
+        path: String,
+        /// The byte the shipped decoder reads for this variant, when the
+        /// census can prove both its offset and explicit discriminant from
+        /// source. Absence means reports may name the variant but the native
+        /// evidence fold must still refuse to infer its wire representation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native: Option<NativeVariantSelector>,
+    },
     /// A decoded value matched in a dispatch `match` — a width, an action
     /// byte, a named constant the pattern names directly.
     Tag { text: String },
@@ -245,12 +253,27 @@ impl Selector {
                 None => format!("len == {constant}"),
             },
             Self::Predicate { function } => format!("predicate {function}()"),
-            Self::Variant { path } => format!("tag {path}"),
+            Self::Variant { path, native } => match native {
+                Some(native) => format!(
+                    "tag {path} at byte {} = 0x{:02X}",
+                    native.offset, native.value
+                ),
+                None => format!("tag {path}"),
+            },
             Self::Tag { text } => format!("tag {text}"),
             Self::Literal { text } => format!("literal {text}"),
             Self::Fallthrough => "fallthrough (no earlier guard matched)".into(),
         }
     }
+}
+
+/// One source-derived byte selector for an enum variant.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NativeVariantSelector {
+    pub offset: usize,
+    pub value: u8,
+    pub offset_provenance: Provenance,
+    pub value_provenance: Provenance,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

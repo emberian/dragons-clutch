@@ -34,7 +34,6 @@ use dclutch_market::capability_program::{
 };
 use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-use dclutch_registry::record::STAGING_CURSOR_BYTES_V1;
 use solana_program::hash::hash;
 
 /// Canonical action order for the only two creation transitions.
@@ -273,10 +272,6 @@ fn compile(
         .ok_or(StructuredLifecycleSelectedErrorV1::Input)? = u32::try_from(DESCRIPTOR_HEADER_BYTES)
         .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
     *lengths
-        .get_mut(15)
-        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? = u32::try_from(STAGING_CURSOR_BYTES_V1)
-        .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
-    *lengths
         .get_mut(19)
         .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
         u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2)
@@ -300,13 +295,6 @@ fn compile(
             .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
             u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
                 .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
-        for coordinate in [32_usize, 34, 36, 38] {
-            *lengths
-                .get_mut(coordinate)
-                .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
-                u32::try_from(STAGING_CURSOR_BYTES_V1)
-                    .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
-        }
         *lengths
             .get_mut(35)
             .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
@@ -440,10 +428,7 @@ mod tests {
                     u32::try_from(DESCRIPTOR_HEADER_BYTES).expect("descriptor header"),
                 ),
                 31 | 33 | 37 => (AuthenticatedRouteAlias, 0),
-                15 | 32 | 34 | 36 | 38 => (
-                    Exact,
-                    u32::try_from(STAGING_CURSOR_BYTES_V1).expect("staging cursor"),
-                ),
+                15 | 32 | 34 | 36 | 38 => (Exact, 0),
                 19 => (
                     Exact,
                     u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("RentCredit"),
@@ -597,12 +582,7 @@ mod tests {
                 u32::try_from(dclutch_market::STATE_BYTES).expect("Core market width"),
                 "Core market",
             ),
-            (
-                15,
-                u32::try_from(dclutch_registry::record::STAGING_CURSOR_BYTES_V1)
-                    .expect("staging cursor width"),
-                "descriptor staging",
-            ),
+            (15, 0, "vacant descriptor staging"),
         ] {
             assert_eq!(
                 profile.rule(false, coordinate).expect(label).data_length(),
@@ -651,8 +631,8 @@ mod tests {
                     .rule(false, coordinate)
                     .expect("staging cursor")
                     .data_length(),
-                u32::try_from(dclutch_registry::record::STAGING_CURSOR_BYTES_V1)
-                    .expect("staging cursor width")
+                0,
+                "finalized record staging {coordinate} is vacant"
             );
         }
         let result = coordinate_profile.rule(false, 35).expect("result record");

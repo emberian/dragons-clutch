@@ -149,8 +149,9 @@ fn derive_roles_v1<'a>(
         record_source("Portfolio", input.registry, input.records.portfolio)?,
     )?;
     put(&mut roles, 4, m0_source(input, input.m0.project_found[12])?)?;
-    let ticket = ContentId::new(hash(input.records.ticket.body).to_bytes())
-        .map_err(|_| Error::new("Series Expire Ticket identity was zero"))?;
+    let ticket = dclutch_trading::series::admit_ticket(input.records.ticket.body)
+        .map_err(|_| Error::new("Series Expire Ticket record refused"))?
+        .content_id();
     let ticket_state = Pubkey::find_program_address(
         &[
             dclutch_trading::series::replay::SERIES_TICKET_STATE_PDA_DOMAIN_V3,

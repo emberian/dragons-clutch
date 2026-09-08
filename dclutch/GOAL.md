@@ -59,6 +59,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-08 | Ember requests an active whole-protocol completion goal: complete implementation and exact-source validator lifecycles, followed by fresh devnet, simulator and existing-site delivery | — | [completion scope and active repairs](docs/design/DEVELOPMENT_WAVE_2026_09_07.md) |
 | 2026-09-08 | Fractional Wrap, transfer to an independent holder and WholeUnwrap finalize with exact reserve backing; the native census credits the corroborated parent route | — | [fractional validator evidence](docs/evidence/claims-fractional-validator-2026-09-08/README.md) |
 | 2026-09-08 | existing Pages publishes a converged reference separating checked execution from authored claims, plus Ensemble and Series evidence | — | [execution-reference publication](docs/evidence/PAGES_EXECUTION_REFERENCE_2026_09_08.md) |
 | 2026-09-08 | an isolated exact-source Series native test retains one five-action publication through two occurrences, whole replay poststates, both Ticket retirements and Root close | — | [native recurrence proof and runtime boundaries](docs/evidence/SERIES_NATIVE_RECURRENCE_2026_09_08.md) |

@@ -82,6 +82,25 @@ counts. The profile must state which geometry is common, which is dynamically
 selected, and which variation is refused by the Template's declared profile.
 First-occurrence observations cannot silently establish all-occurrence geometry.
 
+The current selected compiler has a **provisional geometry compatibility
+constraint**: every occurrence must fit the exact fixed widths observed for the
+first publication. Portfolio coefficient tails and the declared FundingState
+span use their existing dynamic geometry; nested Basis/Source record widths do
+not. In particular, a differently sized Basis or a change between absent and
+present manipulation-Floor evidence is not established executable by this
+compiler. The runtime AccountProfile refuses incompatible observations before
+bank seeding. The compatible two-occurrence proof is not a publication-wide
+compatibility certificate.
+
+The lifting plan is concrete: after the first actual selected evaluator/Effect/
+child-prefix resource probe, extend publication admission to consume every
+occurrence's canonical future-Market closure and compare its owner-derived
+profile geometry with the selected profile. Reject a differing shape before
+publication, or use an existing dynamic span where its semantic owner supports
+one. Until that admission exists, full Series completion and heterogeneous
+Template support remain unclaimed.
+
+
 ## Required executable closure
 
 Retain one exact ProgramSet, descriptor bank, certificate and selected include

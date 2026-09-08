@@ -430,7 +430,7 @@ impl<'a> ProgramV4<'a> {
         Self::decode_shape(bytes)
     }
 
-    fn decode_shape(bytes: &'a [u8]) -> ResultV4<Self> {
+    pub(super) fn decode_shape(bytes: &'a [u8]) -> ResultV4<Self> {
         if bytes.len() < HEADER_BYTES_V4
             || bytes.get(MAGIC_OFFSET..MAGIC_OFFSET + MAGIC_V4.len()) != Some(MAGIC_V4.as_slice())
             || read_u8(bytes, VERSION_OFFSET)? != VERSION_V4

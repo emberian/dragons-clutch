@@ -959,7 +959,12 @@ function phaseGate(route, program) {
             const a = s.ascii ?? asciiBytes(bytes);
             return a ? `magic \`${a}\`` : `magic \`${s.bytes}\``;
           }
-          if (s.kind === "variant") return `variant \`${s.path}\``;
+          if (s.kind === "variant") {
+            const wire = s.native
+              ? ` at byte ${s.native.offset} = 0x${s.native.value.toString(16).padStart(2, "0")}`
+              : "";
+            return `variant \`${s.path}\`${wire}`;
+          }
           // Every selector carries its value under its OWN field name --
           // `constant`, `path`, `function`, `text` -- and reading only the
           // first two printed an empty pair of backticks for 50 of them:
