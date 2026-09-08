@@ -163,9 +163,12 @@ pub(crate) fn execute_claims_route_v3<'info>(
         return Err(TradingSbfError::Content.into());
     }
     let raw_request = invocation_request(invocation, request_bank, borrowed_ranges)?;
+    gather_invocation_accounts(&mut buffers.accounts, invocation, effect_accounts)?;
+    let mut compact_wire = Vec::new();
+    let raw_request =
+        canonical_compact_retirement_wire_v1(raw_request, &buffers.accounts, &mut compact_wire)?;
     let mut lifecycle_wire = Vec::new();
     let request = canonical_lifecycle_child_wire_v6(raw_request, &mut lifecycle_wire)?;
-    gather_invocation_accounts(&mut buffers.accounts, invocation, effect_accounts)?;
     let mut general_place_order_wire = Vec::new();
     let request = canonical_general_place_order_affine_child_wire_v1(
         borrowed_ranges.family_request(),
@@ -355,6 +358,11 @@ pub(crate) fn claims_child_wire_capacity_v3(
     borrowed_ranges: BorrowedRouteRangesV4<'_, '_, '_>,
 ) -> Result<usize, ProgramError> {
     let raw_request = invocation_request(invocation, request_bank, borrowed_ranges)?;
+    if raw_request.get(..8) == Some(dclutch_claims::rational_lifecycle::compact_hot_v4::RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4.as_slice()) {
+        dclutch_claims::rational_lifecycle::compact_hot_v4::RationalLifecycleCompactHotRequestV4::decode(raw_request).map_err(|_| TradingSbfError::Content)?;
+        if invocation.kind != RouteKindV3::Once || receipt_dependency_width_v3(invocation) != 0 { return Err(TradingSbfError::Content.into()); }
+        return compact_retirement_child_width_v1(usize::from(invocation.fixed_account_count));
+    }
     let mut lifecycle_wire = Vec::new();
     let request = canonical_lifecycle_child_wire_v6(raw_request, &mut lifecycle_wire)?;
     let receipt_bytes = receipt_dependency_width_v3(invocation);
@@ -528,6 +536,21 @@ fn invocation_request<'a>(
         (None, _) | (Some(_), _) => return Err(TradingSbfError::Content.into()),
     };
     let (request, source_offset) = borrowed;
+    if family_request.get(..8)
+        == Some(dclutch_claims::rational_lifecycle::hot_v6::DYNAMIC_RETIREMENT_MAGIC_V1.as_slice())
+    {
+        let child = dclutch_claims::rational_lifecycle::hot_v6::validate_dynamic_retirement_v1(
+            family_request,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        if child.as_bytes() != request
+            || source_offset
+                != dclutch_claims::rational_lifecycle::hot_v6::DYNAMIC_RETIREMENT_PREFIX_BYTES_V1
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+    }
+
     if request.get(..8) == Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice()) {
         let plan = SignedDeltaPlanV3::decode(request).map_err(|_| TradingSbfError::Content)?;
         let parent = family_request
@@ -538,6 +561,125 @@ fn invocation_request<'a>(
         }
     }
     Ok(request)
+}
+
+/// Compute the canonical Claims wire width from this invocation's transport
+/// frame. Execution independently joins this count to descriptor support.
+fn compact_retirement_child_width_v1(accounts: usize) -> Result<usize, ProgramError> {
+    use dclutch_claims::rational_lifecycle::{
+        LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_BYTES_V2,
+        LIFECYCLE_HEADER_BYTES_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
+    };
+    let tail = accounts
+        .checked_sub(LIFECYCLE_COMMON_ACCOUNT_COUNT_V2)
+        .ok_or(TradingSbfError::Content)?;
+    if tail == 0 || tail % LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2 != 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+    (tail / LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2)
+        .checked_mul(LIFECYCLE_COORDINATE_BYTES_V2)
+        .and_then(|rows| rows.checked_add(LIFECYCLE_HEADER_BYTES_V2))
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+/// Specialize the compact transport using authenticated descriptor support.
+/// Claims' kernel owns row derivation and `prepare`; Claims' program remains
+/// the sole physical mutation authority. The exact result is used for caller
+/// derivation, the CPI, and receipt verification.
+#[inline(never)]
+fn canonical_compact_retirement_wire_v1<'a>(
+    request: &'a [u8],
+    accounts: &[AccountInfo<'_>],
+    output: &'a mut Vec<u8>,
+) -> Result<&'a [u8], ProgramError> {
+    use dclutch_claims::rational_kernel::{
+        DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+        RepresentationDescriptorV2,
+    };
+    use dclutch_claims::rational_lifecycle::{
+        LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_HEADER_BYTES_V2,
+        compact_hot_v4::{
+            RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4, RationalLifecycleCompactHotRequestV4,
+        },
+    };
+    if request.get(..8) != Some(RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4.as_slice()) {
+        return Ok(request);
+    }
+    let compact = RationalLifecycleCompactHotRequestV4::decode(request)
+        .map_err(|_| TradingSbfError::Content)?;
+    let length = compact_retirement_child_width_v1(accounts.len())?;
+    let mut header_bytes = [0; LIFECYCLE_HEADER_BYTES_V2];
+    let header = compact
+        .specialize_child_header_into(hash(request).to_bytes(), 1, &mut header_bytes)
+        .map_err(|_| TradingSbfError::Content)?;
+    let account = |index| {
+        accounts
+            .get(index)
+            .ok_or_else(|| ProgramError::from(TradingSbfError::Content))
+    };
+    let raw = account(9)?;
+    dclutch_product::svm_reader::authenticate_record(
+        account(5)?.key,
+        dclutch_product::svm_reader::FinalizedRecordFrameV2 {
+            raw,
+            staging: account(10)?,
+        },
+        REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+        dclutch_product::ContentId::new(header.descriptor_id)
+            .map_err(|_| TradingSbfError::Content)?,
+        dclutch_product::svm_reader::Error::RepresentationDescriptorRecord,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let authority = Pubkey::find_program_address(
+        &[
+            dclutch_claims::rational::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+            &header.descriptor_id,
+        ],
+        account(3)?.key,
+    )
+    .0;
+    if authority.to_bytes() != header.representation_authority {
+        return Err(TradingSbfError::Content.into());
+    }
+    let bytes = raw.try_borrow_data()?;
+    let descriptor = RepresentationDescriptorV2::decode(
+        &bytes,
+        DescriptorAdmissionV2 {
+            selected_descriptor_id: header.descriptor_id,
+            finalized_descriptor_id: header.descriptor_id,
+            recomputed_descriptor_digest: hash(&bytes).to_bytes(),
+            finalized_descriptor_digest: header.descriptor_id,
+            record_authenticated: true,
+            derived_representation_authority: authority.to_bytes(),
+            authority_derivation_authenticated: true,
+        },
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let keys = accounts
+        .get(LIFECYCLE_COMMON_ACCOUNT_COUNT_V2..)
+        .ok_or(TradingSbfError::Content)?
+        .iter()
+        .map(|account| account.key.to_bytes())
+        .collect::<Vec<_>>();
+    let mut scratch = alloc::vec![0; length];
+    output.clear();
+    output
+        .try_reserve(length)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    output.resize(length, 0);
+    compact
+        .specialize_child_into(
+            hash(request).to_bytes(),
+            descriptor,
+            &keys,
+            &mut scratch,
+            output,
+        )
+        .map_err(|cause| {
+            solana_program::msg!("compact retirement specialization: {:?}", cause);
+            TradingSbfError::Content
+        })?;
+    Ok(output.as_slice())
 }
 
 /// Turn a V6 lifecycle family envelope into the only Claims wire it can

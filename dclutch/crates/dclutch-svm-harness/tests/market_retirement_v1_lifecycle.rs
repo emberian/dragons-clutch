@@ -753,6 +753,7 @@ async fn execute_same_lineage_funding_and_open(
     let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
         pending: verify_snapshot(context, &fixture.base).await,
         system_program: required_observed(context, system_program::ID).await,
+        member_seats: Vec::new(),
     })
     .expect("chain-derived direct same-Market activation");
     let mut activation_instructions = Vec::with_capacity(2);

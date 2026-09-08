@@ -18,17 +18,17 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **456** codes, with meanings taken
+The tables below carry all **458** codes, with meanings taken
 from the source code's own documentation.
 
 ## Checked firings and binding claims
 
-**0 of 456** codes have a checked firing in a durable
+**4 of 458** codes have a checked firing in a durable
 census ledger. The `checked firing` column names the campaign and slot from an
 observation that `census observe` admitted using the finalized log's exact
 custom code and the program address that raised it.
 
-A separate **84 of 456** codes appear in authored
+A separate **84 of 458** codes appear in authored
 refusal bindings. The `binding claim` column preserves those campaign claims
 without calling them observed. A binding can be written before its evidence is
 folded or survive after a run artifact disappears; it never promotes itself
@@ -40,12 +40,13 @@ Without a checked ledger row, this page does not say which program or code
 actually refused.
 
 **And the denominator is the narrower of two.** These tables carry the
-456 codes belonging to the programs the route census enumerates.
+458 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
 
-No checked ledger in the manifest currently carries a named refusal firing.
+The 1 checked campaigns contributing:
+`claims-claim-check-local-validator-v1`.
 
 The 23 campaigns contributing binding claims:
 `claims-affine-batch-programtest`, `claims-claim-check-programtest`, `claims-family-programtest`, `claims-fractional-atomic-programtest`, `claims-fractional-signed-delta-programtest`, `claims-rational-lifecycle-programtest`, `claims-rational-representation-v2-programtest`, `custody-family-programtest`, `direct-begin-retiring-programtest`, `direct-fee-pair-programtest`, `economics-custody`, `general-accelerator-programtest`, `journey`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest`, `retirement-checkpoint-programtest`, `retirement-replay-handoff-programtest`, `source-abort-programtest`, `structured-v2-programtest`, `tier1`, `tier4-series-occurrence-programtest`.
@@ -209,6 +210,8 @@ The 23 campaigns contributing binding claims:
 | `0x521A` | `RationalLifecycleSbfErrorV2::CustodyLayout` | The structured custody account's bytes are not a Token-2022 account. | -- | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:210` |
 | `0x521B` | `RationalLifecycleSbfErrorV2::CustodyState` | The structured custody account parses and is not the one this route requires: program owner, mint, owner, amount, initialization state, delegate, delegated amount, native reserve or close authority. | -- | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:214` |
 | `0x521C` | `RationalLifecycleSbfErrorV2::Allocation` | A resource this program allocates for itself was refused by the System program, or came back with the wrong owner or width. | -- | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:217` |
+| `0x521D` | `RationalLifecycleSbfErrorV2::InvalidSupport` | Missing, extra, duplicate, reordered, or zero-weight descriptor support. | -- | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:219` |
+| `0x521E` | `RationalLifecycleSbfErrorV2::InvalidPhysicalState` | Declared nonzero supply, custody, or invalid vacancy observations. | -- | -- | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:221` |
 | `0x5260` | `SparseNativeTransferSbfErrorV1::Instruction` | Request bytes refused the canonical fixed codec. | -- | claims-family-programtest | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:80` |
 | `0x5261` | `SparseNativeTransferSbfErrorV1::Accounts` | Account count, privilege, owner, or alias refused. | -- | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:82` |
 | `0x5262` | `SparseNativeTransferSbfErrorV1::Release` | Registry current-role or caller authority refused. | -- | -- | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:84` |
@@ -254,7 +257,7 @@ The 23 campaigns contributing binding claims:
 | `0x5622` | `ClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or the vault did not match. | -- | -- | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:52` |
 | `0x5623` | `ClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit did not equal the record's entitlement. | -- | -- | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:54` |
 | `0x5624` | `ClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | -- | -- | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:56` |
-| `0x5625` | `ClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while claim-checks were still live. | -- | claims-claim-check-programtest; claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:58` |
+| `0x5625` | `ClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while claim-checks were still live. | claims-claim-check-local-validator-v1 slot 196 | claims-claim-check-programtest; claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:58` |
 | `0x5640` | `FractionalClaimCheckCompactionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | -- | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:104` |
 | `0x5641` | `FractionalClaimCheckCompactionSbfErrorV1::Authority` | A signer the route does not admit was present, or a required one absent. | -- | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:110` |
 | `0x5642` | `FractionalClaimCheckCompactionSbfErrorV1::Identity` | Coordinates did not derive the passed account, or aliased, or were zero. | -- | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:112` |
@@ -285,11 +288,11 @@ The 23 campaigns contributing binding claims:
 | `0x565B` | `FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaPrincipalCapacity` | A positive SignedDelta would exceed the Market's principal-capacity cap. | -- | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:175` |
 | `0x565C` | `FractionalClaimCheckCompactionSbfErrorV1::SelectionConfig` | The exposure terms are not the terms the founded Market's capability manifest selected. | -- | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:186` |
 | `0x5660` | `FractionalClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | -- | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:325` |
-| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | -- | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:330` |
+| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | claims-claim-check-local-validator-v1 slot 100; claims-claim-check-local-validator-v1 slot 132 | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:330` |
 | `0x5662` | `FractionalClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or a mint did not match. | -- | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:332` |
-| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | -- | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:334` |
+| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | claims-claim-check-local-validator-v1 slot 68 | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:334` |
 | `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | -- | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:336` |
-| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | -- | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:343` |
+| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | claims-claim-check-local-validator-v1 slot 36 | claims-fractional-atomic-programtest | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:343` |
 | `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | -- | -- | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:345` |
 | `0x5680` | `RationalReplayCloseSbfErrorV1::Accounts` | The fixed two-account frame, ownership, writability or length refused. | -- | -- | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:282` |
 | `0x5681` | `RationalReplayCloseSbfErrorV1::Authority` | The actor named by the cursor did not sign, or a second signer appeared. | -- | claims-rational-representation-v2-programtest | `programs/dclutch-claims-sbf/src/rational_representation_v2.rs:284` |

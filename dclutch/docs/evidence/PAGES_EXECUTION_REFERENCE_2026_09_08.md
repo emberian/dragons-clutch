@@ -116,3 +116,25 @@ indexes. Logs: `/private/tmp/dclutch-cut-fe02f0813-20260908.log`,
 `/private/tmp/dclutch-pages-34262138884.log`. This remains a source and site
 checkpoint; it does not establish a fresh devnet cohort or completed
 current-source execution.
+
+## Addendum — Bearer console delivery, 2026-09-08 22:22 UTC
+
+Cut `e1bcbb5e4e1b861195b60b6a74625b4bf5744fbb` publishes source
+`73a2503d65ee75608f2ade4ded3b9e6ec1d0f9cb`, tree
+`2fe5bf0a037a0373ace2466325915e7ade37fa8b`. It adds the existing representation
+workspace to the Console at `/representation`, independent transfer-authority
+and payer signatures, durable operation recovery, exact finalized Token-2022
+balance checks, and the trader guide's wallet instructions. It also carries
+the durable Pyth recovery producer and checkpoint packet extent repairs.
+The credential sweep found zero findings, published and source trees matched,
+and the committed reference check converged unchanged.
+
+[Workflow 34285462083](https://github.com/emberian/dragons-clutch/actions/runs/34285462083)
+and deployment `6338327616` succeeded at `2026-09-08T22:22:08Z`, still in the
+existing Pages environment. The workflow rendered 43 app routes and assembled
+462 files: 197 documentation pages, 269 link-checked pages, six guides and 26
+directory indexes. Logs: `/private/tmp/dclutch-cut-73a2503d6-20260908.log`,
+`/private/tmp/dclutch-reference-check-73a2503d6-20260908.log`, and
+`/private/tmp/dclutch-pages-34285462083.log`. The new console's build and
+targeted tests are source evidence; a current-cohort wallet execution and
+browser visual review remain separate outstanding checks.

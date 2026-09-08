@@ -19,6 +19,7 @@ dclutch-claims-sbf = { path = "../../../programs/dclutch-claims-sbf", features =
 dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
 dclutch-custody = { path = "../../../crates/dclutch-custody" }
 dclutch-trading = { path = "../../../crates/dclutch-trading" }
+dclutch-trading-sbf = { path = "../../../programs/dclutch-trading-sbf", features = ["no-entrypoint"] }
 dclutch-market-retirement-v1-operator = { path = "../../../crates/dclutch-market-retirement-v1-operator" }
 dclutch-operator = { path = "../../../crates/dclutch-operator" }
 dclutch-product = { path = "../../../crates/dclutch-product" }

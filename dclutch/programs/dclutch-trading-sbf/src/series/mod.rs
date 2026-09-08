@@ -108,3 +108,7 @@ pub use kernel_adapter::{funding_list_id, require_funding_list, require_market_p
 
 #[cfg(test)]
 mod tests;
+
+/// Shared authenticated occurrence reader used by Trading and its Shadow evaluator.
+pub mod runtime_registers_v1;
+mod runtime_source_v1;

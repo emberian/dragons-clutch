@@ -34,11 +34,13 @@ use dclutch_resolution_core_v3_operator::{
     validate_resolution_admit_terminal_report_v3, validate_resolution_create_fund_report_v3,
     validate_resolution_verify_fund_ready_report_v3,
 };
+use dclutch_source::ENSEMBLE_MAX_MEMBERS_V1;
 use solana_program::{instruction::Instruction, pubkey::Pubkey};
 use solana_sdk_ids::{system_program, sysvar};
 
 /// Maximum semantic accounts in one readiness observation.
-pub const FUNDING_READINESS_MAX_OBSERVATION_ACCOUNTS_V1: usize = 20;
+pub const FUNDING_READINESS_MAX_OBSERVATION_ACCOUNTS_V1: usize =
+    20 + ENSEMBLE_MAX_MEMBERS_V1 as usize;
 /// Exact semantic account count in one terminal-admission observation.
 pub const SOURCE_TERMINAL_OBSERVATION_ACCOUNTS_V1: usize = 21;
 /// Maximum semantic account count in one Source close observation.
@@ -72,6 +74,8 @@ pub struct FundingReadinessCoordinatesV1 {
     pub beneficiary: Pubkey,
     /// Canonical activation receipt.
     pub activation_receipt: Pubkey,
+    /// Canonical sequence-one member seats; absent entries are not observed.
+    pub member_seats: [Option<Pubkey>; ENSEMBLE_MAX_MEMBERS_V1 as usize],
 }
 
 /// Release-selected program frame surrounding the Market coordinates.
@@ -306,6 +310,7 @@ pub fn funding_readiness_observation_addresses_v1(
         addresses.push(recovery.raw);
         addresses.push(recovery.staging);
     }
+    addresses.extend(coordinates.member_seats.into_iter().flatten());
     if addresses.iter().copied().collect::<BTreeSet<_>>().len() != addresses.len() {
         return Err(refusal(
             "funding-readiness coordinates aliased two semantic frame positions",
@@ -313,7 +318,7 @@ pub fn funding_readiness_observation_addresses_v1(
     }
     if addresses.len() > FUNDING_READINESS_MAX_OBSERVATION_ACCOUNTS_V1 {
         return Err(refusal(
-            "funding-readiness observation exceeded its measured 20-account bound",
+            "funding-readiness observation exceeded its measured bounded-account limit",
         ));
     }
     Ok(addresses)
@@ -696,6 +701,12 @@ fn plan_from_map_v1(
     let activate = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
         pending: verify_snapshot.clone(),
         system_program: account(system_program::ID)?,
+        member_seats: coordinates
+            .member_seats
+            .into_iter()
+            .flatten()
+            .map(account)
+            .collect::<Result<Vec<_>, _>>()?,
     });
     let accept = build_resolution_verify_fund_ready_v3(&verify_snapshot);
     let refusals = format!(
@@ -957,6 +968,7 @@ mod tests {
                 funding_ledger: key(13),
                 beneficiary: key(14),
                 activation_receipt: key(15),
+                member_seats: [None; ENSEMBLE_MAX_MEMBERS_V1 as usize],
             },
             activation_cache: key(2),
             registry_program: key(3),

@@ -98,14 +98,14 @@ use dclutch_source::resolution::{
     SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_source::{
-    CapacityEnvelope, ContentId as SourceContentId, EnsembleSpecV1, PROVIDER_RELEASE_SCHEMA_ID_V1,
-    PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
-    RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2, RoundingBoundary,
-    SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-    SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
-    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
-    SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionRouteV1,
-    SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
+    CapacityEnvelope, ContentId as SourceContentId, ENSEMBLE_FOLD_RECEIPT_V1_BYTES, EnsembleSpecV1,
+    EnsembleTerminalCapitalPlanV1, PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+    ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2,
+    RecoveryPolicyV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_BYTES_V2,
+    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
+    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1,
+    SourceResolutionRouteV1, SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
 };
 use dclutch_trading::{
@@ -1225,6 +1225,37 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         None,
     )
     .expect("funding quote");
+    let ensemble_terminal_quote = if ensemble_terms {
+        let rent = Rent::default();
+        let plan = EnsembleTerminalCapitalPlanV1::for_material(
+            material_value,
+            recovery_policy_value.attempt_count(),
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            rent.minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+        )
+        .expect("Ensemble terminal capital");
+        Some(
+            FundingQuoteV1::new(
+                FundingAmountsV1::new(
+                    CompartmentFundingV1::native_lamports(plan.member_seat_rent_lamports())
+                        .expect("member-seat rent"),
+                    CompartmentFundingV1::native_lamports(plan.source_creation_reserve_lamports())
+                        .expect("Source terminal reserve"),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::native_lamports(BOUNTY).expect("worker bounty"),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                )
+                .expect("typed Ensemble terminal funding"),
+                None,
+            )
+            .expect("Ensemble terminal quote"),
+        )
+    } else {
+        None
+    };
     let entries = if ensemble_terms {
         vec![
             (0xa1, recovery_allocation.to_bytes()),
@@ -1242,6 +1273,11 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let entries = entries
         .into_iter()
         .map(|(seed, config)| {
+            let entry_quote = if config == material_id {
+                ensemble_terminal_quote.unwrap_or(quote)
+            } else {
+                quote
+            };
             CapabilityEntryV1::new(
                 id([seed; 32]),
                 id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
@@ -1253,7 +1289,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
                 0,
                 0,
                 [0; MAX_DEPENDENCIES_PER_CAPABILITY],
-                quote,
+                entry_quote,
             )
             .expect("Resolution funding entry")
         })
@@ -1940,6 +1976,17 @@ async fn observed_or_vacant(context: &mut ProgramTestContext, key: Pubkey) -> Ob
     }
 }
 
+async fn observed_accounts(
+    context: &mut ProgramTestContext,
+    keys: &[Pubkey],
+) -> Vec<Option<Account>> {
+    let mut accounts = Vec::with_capacity(keys.len());
+    for key in keys {
+        accounts.push(observed(context, *key).await);
+    }
+    accounts
+}
+
 async fn assert_funding_ledger_status(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -2578,6 +2625,36 @@ async fn verify_snapshot(
     }
 }
 
+async fn activation_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> ResolutionActivateFundSnapshotV1 {
+    let pending = verify_snapshot(context, fixture).await;
+    let material =
+        SourceMaterialV3::decode(&pending.source_material.data).expect("Source material");
+    let source = SourceResolutionStateV2::decode(&pending.source_state.data).expect("Source state");
+    let terminal_sequence = source
+        .next_terminal_sequence()
+        .expect("next terminal sequence");
+    let mut member_seats = Vec::new();
+    if !material.ensemble().is_single() {
+        for member in 0..material.ensemble().members() {
+            let seeds = EnsembleFragmentSeatSeedsV1::new(
+                pending.source_state.key.to_bytes(),
+                member,
+                terminal_sequence,
+            );
+            let seat = Pubkey::find_program_address(&seeds.seeds(), &RESOLUTION_PROGRAM_ID).0;
+            member_seats.push(observed_or_vacant(context, seat).await);
+        }
+    }
+    ResolutionActivateFundSnapshotV1 {
+        pending,
+        system_program: required_observed(context, system_program::ID).await,
+        member_seats,
+    }
+}
+
 async fn admit_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -3043,11 +3120,22 @@ async fn ensemble_five_row_funding_activates_every_resolution_compartment() {
     .expect("five-row Ensemble CreateFund accepts");
     assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Pending).await;
 
-    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
-        pending: verify_snapshot(&mut context, &fixture).await,
-        system_program: required_observed(&mut context, system_program::ID).await,
-    })
-    .expect("five-row Ensemble activation derives from the Pending ledger");
+    let activation_snapshot = activation_snapshot(&mut context, &fixture).await;
+    let source_lamports_before = activation_snapshot.pending.source_state.lamports;
+    let ledger_lamports_before = activation_snapshot.pending.funding_ledger.lamports;
+    let beneficiary_lamports_before = activation_snapshot.pending.beneficiary.lamports;
+    let seat_lamports_before = activation_snapshot
+        .member_seats
+        .iter()
+        .map(|seat| seat.lamports)
+        .collect::<Vec<_>>();
+    let seat_keys = activation_snapshot
+        .member_seats
+        .iter()
+        .map(|seat| seat.key)
+        .collect::<Vec<_>>();
+    let activation = build_resolution_activate_fund_v1(&activation_snapshot)
+        .expect("five-row Ensemble activation derives from the Pending ledger");
     let mut instructions = Vec::with_capacity(2);
     if activation.receipt_top_up_lamports != 0 {
         instructions.push(transfer(
@@ -3057,13 +3145,104 @@ async fn ensemble_five_row_funding_activates_every_resolution_compartment() {
         ));
     }
     instructions.push(activation.instruction);
+
+    // HOSTILE — one lamport less than the immutable Pending custody cannot
+    // mint a partially capitalized Source. Build the exact honest packet first
+    // so the on-chain check, rather than the operator, is the refusing wall.
+    let honest_ledger = observed(&mut context, fixture.funding)
+        .await
+        .expect("honest Pending funding ledger");
+    let mut underfunded_ledger = honest_ledger.clone();
+    underfunded_ledger.lamports = underfunded_ledger
+        .lamports
+        .checked_sub(1)
+        .expect("funded ledger is nonzero");
+    context.set_account(
+        &fixture.funding,
+        &AccountSharedData::from(underfunded_ledger),
+    );
+    let mut rollback_keys = vec![
+        fixture.market,
+        fixture.source,
+        fixture.funding,
+        fixture.activation_receipt,
+        fixture.rent_credit,
+    ];
+    rollback_keys.extend(seat_keys.iter().copied());
+    let before_underfunded = observed_accounts(&mut context, &rollback_keys).await;
+    let activation_index = instructions.len() - 1;
+    let refused = submit(&mut context, &instructions)
+        .await
+        .expect_err("one-lamport-short Pending custody must refuse activation");
+    assert!(
+        matches!(
+            refused,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                index,
+                InstructionError::Custom(code),
+            )) if usize::from(index) == activation_index && code == ResolutionError::Funding as u32
+        ),
+        "one-lamport-short Pending custody must refuse as Resolution Funding, got {refused:?}"
+    );
+    assert_eq!(
+        observed_accounts(&mut context, &rollback_keys).await,
+        before_underfunded,
+        "underfunded activation rolls back the Source, ledger, receipt, beneficiary, and every member seat"
+    );
+    context.set_account(&fixture.funding, &AccountSharedData::from(honest_ledger));
+    let current_slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock")
+        .slot;
+    context
+        .warp_to_slot(current_slot.checked_add(1).expect("bounded fixture slot"))
+        .expect("advance past the hostile activation blockhash");
     submit(&mut context, &instructions)
         .await
         .expect("five-row Ensemble activation accepts every selected Resolution row");
+    let source_lamports_after = observed(&mut context, fixture.source)
+        .await
+        .expect("capitalized Source")
+        .lamports;
+    let beneficiary_lamports_after = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("beneficiary")
+        .lamports;
+    let mut seat_lamports_after = Vec::new();
+    for seat in &seat_keys {
+        seat_lamports_after.push(
+            observed(&mut context, *seat)
+                .await
+                .expect("prepaid member seat")
+                .lamports,
+        );
+    }
+    assert_eq!(source_lamports_after, activation.expected_source_lamports);
+    assert_eq!(
+        seat_lamports_after,
+        activation.expected_member_seat_lamports
+    );
+    assert_eq!(
+        beneficiary_lamports_after,
+        beneficiary_lamports_before + activation.expected_beneficiary_credit_lamports
+    );
     assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
     let ledger_account = observed(&mut context, fixture.funding)
         .await
         .expect("active four-row FundingLedgerV2");
+    let source_credit = source_lamports_after - source_lamports_before;
+    let seat_credit = seat_lamports_after
+        .iter()
+        .zip(seat_lamports_before)
+        .map(|(after, before)| after - before)
+        .sum::<u64>();
+    assert_eq!(
+        ledger_lamports_before - ledger_account.lamports,
+        source_credit + seat_credit + activation.expected_beneficiary_credit_lamports,
+        "every activated lamport reaches the Source reserve, one member seat, or the beneficiary"
+    );
     let manifest_account = observed(&mut context, fixture.capability_manifest.raw)
         .await
         .expect("canonical five-row capability manifest");
@@ -3183,11 +3362,9 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     );
     assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Pending).await;
 
-    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
-        pending: verify_snapshot(&mut context, &fixture).await,
-        system_program: required_observed(&mut context, system_program::ID).await,
-    })
-    .expect("chain-derived direct activation");
+    let activation =
+        build_resolution_activate_fund_v1(&activation_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived direct activation");
     let beneficiary_before = observed(&mut context, fixture.rent_credit)
         .await
         .expect("RentCredit")
@@ -3222,11 +3399,9 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     let activation_receipt_after_activation = observed(&mut context, fixture.activation_receipt)
         .await
         .expect("durable activation receipt");
-    let activation_replay = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
-        pending: verify_snapshot(&mut context, &fixture).await,
-        system_program: required_observed(&mut context, system_program::ID).await,
-    })
-    .expect("receipt-authenticated activation replay");
+    let activation_replay =
+        build_resolution_activate_fund_v1(&activation_snapshot(&mut context, &fixture).await)
+            .expect("receipt-authenticated activation replay");
     assert_eq!(activation_replay.receipt_top_up_lamports, 0);
     assert_eq!(activation_replay.expected_beneficiary_credit_lamports, 0);
     assert_eq!(activation_replay.request_digest, activation.request_digest);
@@ -4584,11 +4759,9 @@ async fn a_two_source_market_walks_its_funded_ladder_and_every_rung_pays_a_stran
     )
     .await
     .expect("Core mints a Source over material that bought a named alternative");
-    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
-        pending: verify_snapshot(&mut context, &fixture).await,
-        system_program: required_observed(&mut context, system_program::ID).await,
-    })
-    .expect("chain-derived activation");
+    let activation =
+        build_resolution_activate_fund_v1(&activation_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived activation");
     let mut activation_instructions = Vec::with_capacity(2);
     if activation.receipt_top_up_lamports != 0 {
         activation_instructions.push(transfer(
@@ -5006,11 +5179,9 @@ async fn a_market_is_answered_on_its_funded_second_rung() {
     )
     .await
     .expect("Core mints a Source over material that bought a named alternative");
-    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
-        pending: verify_snapshot(&mut context, &fixture).await,
-        system_program: required_observed(&mut context, system_program::ID).await,
-    })
-    .expect("chain-derived activation");
+    let activation =
+        build_resolution_activate_fund_v1(&activation_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived activation");
     let mut activation_instructions = Vec::with_capacity(2);
     if activation.receipt_top_up_lamports != 0 {
         activation_instructions.push(transfer(
@@ -5338,11 +5509,9 @@ async fn a_silent_provider_cannot_strand_a_market_and_the_walker_is_paid() {
     )
     .await
     .expect("an Open Market creates its Source against the pre-Market ledger");
-    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
-        pending: verify_snapshot(&mut context, &fixture).await,
-        system_program: required_observed(&mut context, system_program::ID).await,
-    })
-    .expect("chain-derived activation");
+    let activation =
+        build_resolution_activate_fund_v1(&activation_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived activation");
     let mut activation_instructions = Vec::with_capacity(2);
     if activation.receipt_top_up_lamports != 0 {
         activation_instructions.push(transfer(
@@ -5937,11 +6106,9 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
     // `VerifyFundReady` straight off a Pending ledger, which no builder
     // accepts; it was unreachable behind the recovery-material refusal above
     // and so had never run.
-    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
-        pending: verify_snapshot(&mut context, &fixture).await,
-        system_program: required_observed(&mut context, system_program::ID).await,
-    })
-    .expect("chain-derived direct activation against an Open Market");
+    let activation =
+        build_resolution_activate_fund_v1(&activation_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived direct activation against an Open Market");
     let activation_beneficiary_before = observed(&mut context, fixture.rent_credit)
         .await
         .expect("RentCredit")

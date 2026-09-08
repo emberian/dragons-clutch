@@ -32,12 +32,13 @@ const MANIPULATION_FLOOR_STAGING: usize = 38;
 ///
 /// `expected_source`, `product_record`, `collateral_mint`, and `payout_scale`
 /// come from the already-admitted Occurrence and Product Runtime graph. The
-/// selected AccountProfile has already enforced these coordinates' readonly
-/// privileges and exact data widths; this function independently authenticates
+/// selected AccountProfile owns these coordinates' readonly privileges and
+/// exact data widths; the caller must require its successful projection before
+/// accepting a candidate. This function independently authenticates
 /// Registry ownership, content, PDA derivation, finality, and every semantic
 /// edge before the Source kernel performs the cap projection.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn derive_series_prepare_principal_cap_v1(
+pub(crate) fn derive_series_prepare_principal_cap_v1(
     registry: &Pubkey,
     expected_source: [u8; 32],
     product_record: [u8; 32],
@@ -145,7 +146,7 @@ fn authenticate_record<'a>(
 /// The selected AccountProfile owns privilege and fixed-width admission. This
 /// shared runtime check owns the content digest, Registry ownership, canonical
 /// PDA derivation, persistent funding, and vacant staging-cursor witness.
-pub(super) fn authenticate_series_record_observations_v1<'a>(
+pub(crate) fn authenticate_series_record_observations_v1<'a>(
     registry: &Pubkey,
     raw: AccountObservationV1<'a>,
     staging: AccountObservationV1<'a>,

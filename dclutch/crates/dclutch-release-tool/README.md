@@ -267,6 +267,44 @@ shown by `inspect-translation`. This is finite-corpus three-way differential
 evidence. It is not universal Rust refinement, an SBF artifact proof, or an
 Agave/runtime proof.
 
+## Series Consume comparison evidence
+
+Series uses `CheckedSeriesTranslationV1` (`DCLTSV01`), not Direct's manifest.
+The successor's checked Series reader requires its exact semantic source,
+compiler source inventory and toolchain identities before generating a Shadow
+certificate. The commands consume a completed comparison run; they do not run
+the three executors themselves:
+
+```text
+dclutch-release-tool create-series-translation --evidence-dir <directory> --out <series.checked>
+dclutch-release-tool verify-series-translation --evidence-dir <directory> --manifest <series.checked>
+dclutch-release-tool inspect-series-translation --manifest <series.checked>
+```
+
+The eight `<label>.bin` files are `semantic_source`, `compiler_source_manifest`,
+`toolchain_manifest`, `corpus`, `validator_source`, `validator_result`,
+`rustc_verbose` and `cargo_lock`. The compiler inventory is the checked
+candidate's exact `source-tree.txt`, emitted by
+`git ls-tree -r --full-tree <commit>`. It covers the native owners, interpreted
+evaluator, Shadow evaluator, generator and all other tracked inputs. Its
+SHA-256 must equal the accelerator role's checked source digest; a consistently
+rehashed inventory from another tree cannot authorize Series.
+The corpus and result use compact sorted-key JSON, with one optional trailing
+newline. Their schemas are `dclutch-series-consume-corpus-v1` and
+`dclutch-series-consume-result-v1`; each has exactly `schema` and `cases` keys.
+
+Each corpus row has `case` and `input_sha256`. Each corresponding result row
+has those same fields plus `outcome` (`accepted` or `refused`),
+`native_projection_sha256`, `interpreted_projection_sha256` and
+`shadow_projection_sha256`. The driver must obtain those three digests from
+actual normalized executor observations. Refusal projections include the
+specific accusation; they cannot collapse any error into a generic success.
+Every ordered corpus row must have one matching result, all three projections
+must agree, and the run must include an accepted case and a refused case.
+Duplicate keys, missing rows, foreign inputs and disagreeing projections are
+refused. A valid comparison is finite evidence, separate from full lifecycle
+execution, an SBF artifact proof or universal refinement.
+
 ## Metadata V1
 
 The metadata input is canonical UTF-8 text. Lines must occur in this exact

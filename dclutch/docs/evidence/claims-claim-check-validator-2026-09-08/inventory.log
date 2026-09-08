@@ -1,0 +1,16 @@
+census: parsing every first-party source under /tank/dregg-build/dclutch-claimcheck-c444d4d459771505d53caf9bd5c04a180d9beb1f-20260908
+census: 523 refusal codes declared across 85 packages, against 22 registered bands
+census: 386 eight-byte magics declared, 372 distinct values, 4 mirrored under one name, 5 collisions adjudicated in tools/gauntlet/magic-collisions.json
+census: magic mirrored across packages: DCLTCF1A = CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1 in 2 packages
+census: magic mirrored across packages: DCLTCF2A = CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1 in 2 packages
+census: magic mirrored across packages: DCLTPCA1 = PROJECTED_CUSTODY_ABORT_MAGIC_V1 in 2 packages
+census: magic mirrored across packages: DCLTPGT1 = PRICE_GATE_MAGIC_V1 in 2 packages
+census: 0 constant names bound to more than one magic, 0 of them shared only by unexported declarations
+census: 94 documented schema identities, 94 recomputed from their label, 41 labels hashed only at run time
+census: indexing constants under /tank/dregg-build/dclutch-claimcheck-c444d4d459771505d53caf9bd5c04a180d9beb1f-20260908
+census: 39 admissible-prestate constants, 0 unreadable
+census: enumerating 8 programs
+census: 162 routes, 456 refusal codes, 0 unclassified positions
+census: 69 routes carry a named phase gate, 93 carry none
+census: 2 gates lie behind 2 selection(s), necessary to a family and not to a route
+inventory_exit=0

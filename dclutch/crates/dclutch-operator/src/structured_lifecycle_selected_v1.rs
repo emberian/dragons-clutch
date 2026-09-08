@@ -1,7 +1,7 @@
 //! Market-free activation artifacts for a Structured representation.
 //!
 //! Structured's selected ProgramSet owns issue, unwrap, denomination,
-//! reconstitution, redemption, and two normalized V6 creation selectors.
+//! reconstitution, redemption, and four lifecycle selectors.
 //! Receipt-Mint creation and shard/structured-custody creation retain their
 //! distinct Claims lifecycle wire, Profile13, request, transition, lifecycle,
 //! strategy, effect, and descriptor records. This module is the single
@@ -65,6 +65,10 @@ pub struct StructuredActivationSelectedClosureV1 {
     pub activate_receipt: RationalLifecycleSelectedBundleV6,
     /// One selected-coordinate shard/custody creation, always second.
     pub activate_coordinate: RationalLifecycleSelectedBundleV6,
+    /// Single-coordinate retirement using the canonical V6 lifecycle.
+    pub retire_coordinate: RationalLifecycleSelectedBundleV6,
+    /// Complete sparse-support retirement using the existing Claims semantic owner.
+    pub retire_receipt: RationalLifecycleSelectedBundleV6,
     /// Exact immutable Realm/release Token behavior record shared by both.
     pub config: Vec<u8>,
 }
@@ -103,35 +107,52 @@ pub fn structured_activation_selected_closure_v1(
     Ok(StructuredActivationSelectedClosureV1 {
         activate_receipt,
         activate_coordinate,
+        retire_coordinate: compile(
+            input,
+            selection,
+            &lifecycle,
+            LifecycleActionV2::RetireCoordinate,
+        )?,
+        retire_receipt: compile(
+            input,
+            selection,
+            &lifecycle,
+            LifecycleActionV2::RetireReceipt,
+        )?,
         config: selection.to_bytes().to_vec(),
     })
 }
 
 impl StructuredActivationSelectedClosureV1 {
-    /// Return the selected bundle for a creation action and refuse all other
-    /// lifecycle actions.  Retirement has separate semantic ownership.
+    /// Return the selected bundle for a canonical Claims lifecycle action.
     #[must_use]
     pub fn bundle(&self, action: LifecycleActionV2) -> Option<&RationalLifecycleSelectedBundleV6> {
         match action {
             LifecycleActionV2::ActivateReceipt => Some(&self.activate_receipt),
             LifecycleActionV2::ActivateCoordinate => Some(&self.activate_coordinate),
-            LifecycleActionV2::RetireCoordinate | LifecycleActionV2::RetireReceipt => None,
+            LifecycleActionV2::RetireCoordinate => Some(&self.retire_coordinate),
+            LifecycleActionV2::RetireReceipt => Some(&self.retire_receipt),
         }
     }
 
     /// Enumerate the Registry records the activation route authenticates.
     ///
     /// There is deliberately no ProgramSet record here: the enclosing
-    /// `StructuredSelectedReleaseV1` owns the single eight-entry set and
+    /// `StructuredSelectedReleaseV1` owns the single ten-entry set and
     /// publishes this closure's records in selector order.
     pub fn publication_records(&self) -> Result<Vec<StructuredPublicationRecordV1<'_>>> {
-        let mut records = Vec::with_capacity(1 + 7 * STRUCTURED_ACTIVATION_ACTIONS_V1.len());
+        let mut records = Vec::with_capacity(1 + 7 * 4);
         records.push(StructuredPublicationRecordV1 {
             label: "activation-config",
             schema: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
             body: &self.config,
         });
-        for bundle in [&self.activate_receipt, &self.activate_coordinate] {
+        for bundle in [
+            &self.activate_receipt,
+            &self.activate_coordinate,
+            &self.retire_coordinate,
+            &self.retire_receipt,
+        ] {
             let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
                 .map_err(StructuredLifecycleSelectedErrorV1::Descriptor)?;
             let artifacts = descriptor.artifacts();
@@ -193,6 +214,8 @@ impl StructuredActivationSelectedClosureV1 {
                 self.config.as_slice(),
                 self.activate_receipt.descriptor.as_slice(),
                 self.activate_coordinate.descriptor.as_slice(),
+                self.retire_coordinate.descriptor.as_slice(),
+                self.retire_receipt.descriptor.as_slice(),
             ]
             .concat(),
         )
@@ -226,8 +249,15 @@ fn compile(
     .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
     let logical = usize::from(
         lifecycle_logical_account_count_v3(
-            action,
-            u32::from(action == LifecycleActionV2::ActivateCoordinate),
+            if action == LifecycleActionV2::RetireReceipt {
+                LifecycleActionV2::ActivateReceipt
+            } else {
+                action
+            },
+            u32::from(matches!(
+                action,
+                LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate
+            )),
         )
         .map_err(StructuredLifecycleSelectedErrorV1::Lifecycle)?,
     );
@@ -285,7 +315,10 @@ fn compile(
         .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
         u32::try_from(dclutch_market::STATE_BYTES)
             .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
-    if action == LifecycleActionV2::ActivateCoordinate {
+    if matches!(
+        action,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate
+    ) {
         *lengths
             .get_mut(26)
             .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
@@ -301,7 +334,7 @@ fn compile(
             u32::try_from(dclutch_product::DOMAIN_HEADER_BYTES)
                 .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
     }
-    build_rational_lifecycle_selected_bundle_v6(RationalLifecycleSelectedBundleInputV6 {
+    let bundle_input = RationalLifecycleSelectedBundleInputV6 {
         action,
         account_profile: RationalLifecycleSelectedAccountProfileInputV5 {
             logical_data_lengths: &lengths,
@@ -313,7 +346,15 @@ fn compile(
         lifecycle_policy: lifecycle,
         capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
         root_state_bytes: input.root_state_bytes,
-    })
+    };
+    if action == LifecycleActionV2::RetireReceipt {
+        crate::rational_lifecycle_hot::build_dynamic_retirement_bundle_v1(
+            bundle_input,
+            input.representation_outcome_count,
+        )
+    } else {
+        build_rational_lifecycle_selected_bundle_v6(bundle_input)
+    }
     .map_err(StructuredLifecycleSelectedErrorV1::Lifecycle)
 }
 
@@ -498,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn activation_closure_is_market_free_and_has_only_creation_actions() {
+    fn lifecycle_closure_is_market_free_and_contains_creation_and_retirement() {
         let basis = basis();
         let first = structured_activation_selected_closure_v1(input(&basis)).expect("first");
         let second = structured_activation_selected_closure_v1(input(&basis)).expect("second");
@@ -515,8 +556,18 @@ mod tests {
                 .map(|b| b.action),
             Some(LifecycleActionV2::ActivateCoordinate)
         );
-        assert_eq!(first.bundle(LifecycleActionV2::RetireCoordinate), None);
-        assert_eq!(first.bundle(LifecycleActionV2::RetireReceipt), None);
+        assert_eq!(
+            first
+                .bundle(LifecycleActionV2::RetireCoordinate)
+                .map(|bundle| bundle.action),
+            Some(LifecycleActionV2::RetireCoordinate)
+        );
+        assert_eq!(
+            first
+                .bundle(LifecycleActionV2::RetireReceipt)
+                .map(|bundle| bundle.action),
+            Some(LifecycleActionV2::RetireReceipt)
+        );
         assert_ne!(first.activation_id(), [0; 32]);
         let profile = dclutch_vm::account_profile::v2::AccountProfileV2::decode(
             &first.activate_receipt.account_profile,
@@ -651,10 +702,7 @@ mod tests {
         let basis = basis();
         let closure = structured_activation_selected_closure_v1(input(&basis)).expect("closure");
         let records = closure.publication_records().expect("records");
-        assert_eq!(
-            records.len(),
-            1 + 7 * STRUCTURED_ACTIVATION_ACTIONS_V1.len()
-        );
+        assert_eq!(records.len(), 1 + 7 * 4);
         let descriptors = records
             .iter()
             .filter(|record| record.label == "activation-descriptor")
@@ -664,7 +712,9 @@ mod tests {
             descriptors,
             vec![
                 hash(&closure.activate_receipt.descriptor).to_bytes(),
-                hash(&closure.activate_coordinate.descriptor).to_bytes()
+                hash(&closure.activate_coordinate.descriptor).to_bytes(),
+                hash(&closure.retire_coordinate.descriptor).to_bytes(),
+                hash(&closure.retire_receipt.descriptor).to_bytes()
             ]
         );
     }

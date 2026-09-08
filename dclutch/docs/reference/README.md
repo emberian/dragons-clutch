@@ -26,9 +26,9 @@ these pages always match the source they describe. Regenerate with
   widths and offsets, account tables.
 
 Current totals: **8 programs**, **162 routes**
-(**54 in the historical accepted Agave union**,
-**72 successful-binding-only**, **1 checked
-refused-only**, **0 refusal-binding-only**), **456
+(**56 in the historical accepted Agave union**,
+**70 successful-binding-only**, **1 checked
+refused-only**, **0 refusal-binding-only**), **458
 refusal codes**.
 
 If you'd rather start with prose, the [guides](../guides/README.md)

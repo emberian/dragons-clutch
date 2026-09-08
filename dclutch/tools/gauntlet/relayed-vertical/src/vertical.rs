@@ -642,6 +642,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             funding_ledger: funding,
             beneficiary: rent_beneficiary,
             activation_receipt: readiness_activation_receipt,
+            member_seats: [None; dclutch_source::ENSEMBLE_MAX_MEMBERS_V1 as usize],
         },
         0,
     )?;

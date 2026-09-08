@@ -27,6 +27,15 @@ use dclutch_market::{
     Readiness, STATE_BYTES, StateBumpsV1,
 };
 
+use dclutch_claims::composition::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
+};
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product::payoff::{
     price_gate_v1::verify_price_gate_v1,
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -36,17 +45,8 @@ use dclutch_product::payoff::{
     },
 };
 use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_claims::composition::{
-    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
-    CompositionExposureTermV3, composition_exposure_bytes_v3,
-    encode_composition_exposure_v3_atomic,
-};
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,
@@ -294,6 +294,20 @@ pub fn compile_narrow_fixture_v3(
     input: NarrowFixtureInputV2,
     basis_input: NarrowBasisInputV3<'_>,
 ) -> Result<NarrowFixtureV2> {
+    compile_narrow_fixture_v4(input, basis_input, [0x51; 32], [0x52; 32])
+}
+
+/// Compile the narrow fixture with authenticated Resolution record identities.
+///
+/// The older fixture entry points retain their fixed nonterminal sentinels.
+/// A lifecycle that actually enters Resolution must instead bind the hashes of
+/// the Source material and capability manifest that it stages.
+pub fn compile_narrow_fixture_v4(
+    input: NarrowFixtureInputV2,
+    basis_input: NarrowBasisInputV3<'_>,
+    resolution_policy: [u8; 32],
+    capability_manifest: [u8; 32],
+) -> Result<NarrowFixtureV2> {
     // Two outcomes are the closed tails either side of the cut vector, so a
     // usable Product needs at least one interior cut.
     if input.outcome_count < 3
@@ -303,6 +317,8 @@ pub fn compile_narrow_fixture_v3(
         || input.realm_id == [0; 32]
         || input.custody_context == [0; 32]
         || input.actor_owner == input.reserve_owner
+        || resolution_policy == [0; 32]
+        || capability_manifest == [0; 32]
     {
         return Err(NarrowFixtureError::Width);
     }
@@ -446,8 +462,8 @@ pub fn compile_narrow_fixture_v3(
         realm_id: identity(input.realm_id)?,
         product_record: identity(product.digest)?,
         product_id: identity(product_id.to_bytes())?,
-        resolution_policy: identity([0x51; 32])?,
-        capability_manifest: identity([0x52; 32])?,
+        resolution_policy: identity(resolution_policy)?,
+        capability_manifest: identity(capability_manifest)?,
         selected_release_set: identity(input.release_set)?,
         registry_program: identity(input.registry_program.to_bytes())?,
         generation: input.generation,
@@ -793,4 +809,69 @@ fn content(bytes: [u8; 32]) -> Result<ContentId> {
 
 fn identity(bytes: [u8; 32]) -> Result<Identity> {
     Identity::new(bytes).map_err(|_| NarrowFixtureError::Identity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input() -> NarrowFixtureInputV2 {
+        NarrowFixtureInputV2 {
+            outcome_count: 4,
+            registry_program: Pubkey::new_from_array([0xa2; 32]),
+            core_program: Pubkey::new_from_array([0xa3; 32]),
+            claims_program: Pubkey::new_from_array([0xa1; 32]),
+            release_set: [0x71; 32],
+            realm_id: [0x72; 32],
+            custody_context: [0x73; 32],
+            generation: 1,
+            actor_owner: Pubkey::new_from_array([0x74; 32]),
+            reserve_owner: Pubkey::new_from_array([0x75; 32]),
+            funded_coordinate: 1,
+            funded_balance: 80,
+            position_revision: 0,
+            reserve_balance: 0,
+            terminal: None,
+            rent_beneficiary: Pubkey::new_from_array([0x76; 32]),
+            graph_id: [0x77; 32],
+            exposure_id: [0x78; 32],
+        }
+    }
+
+    #[test]
+    fn v3_is_the_exact_sentinel_wrapper() {
+        let legacy = compile_narrow_fixture_v3(input(), NarrowBasisInputV3::Categorical).unwrap();
+        let explicit = compile_narrow_fixture_v4(
+            input(),
+            NarrowBasisInputV3::Categorical,
+            [0x51; 32],
+            [0x52; 32],
+        )
+        .unwrap();
+        assert_eq!(legacy, explicit);
+    }
+
+    #[test]
+    fn v4_binds_records_before_deriving_the_market() {
+        let policy = [0x91; 32];
+        let manifest = [0x92; 32];
+        let fixture =
+            compile_narrow_fixture_v4(input(), NarrowBasisInputV3::Categorical, policy, manifest)
+                .unwrap();
+        let state = CoreState::decode(&fixture.core_state).unwrap();
+        assert_eq!(state.identity.resolution_policy.to_bytes(), policy);
+        assert_eq!(state.identity.capability_manifest.to_bytes(), manifest);
+        assert_eq!(
+            Pubkey::find_program_address(
+                &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
+                &input().core_program,
+            )
+            .0,
+            fixture.core_market,
+        );
+        assert_eq!(
+            compile_narrow_fixture_v4(input(), NarrowBasisInputV3::Categorical, [0; 32], manifest,),
+            Err(NarrowFixtureError::Width),
+        );
+    }
 }

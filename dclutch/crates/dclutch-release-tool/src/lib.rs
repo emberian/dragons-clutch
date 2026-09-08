@@ -20,12 +20,14 @@ mod capability_execution;
 mod infrastructure;
 mod multiprogram;
 mod seal_probe;
+mod series_translation;
 mod translation;
 
 pub use capability_execution::*;
 pub use infrastructure::*;
 pub use multiprogram::*;
 pub use seal_probe::*;
+pub use series_translation::*;
 pub use translation::*;
 
 /// Canonical checked-release magic.

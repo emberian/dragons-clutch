@@ -103,7 +103,7 @@ use dclutch_registry::{ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, release_set::Ex
 use solana_program::hash::hash;
 
 /// Number of action bundles one selectable Structured release compiles.
-pub const STRUCTURED_SELECTED_ACTION_COUNT_V1: usize = 7;
+pub const STRUCTURED_SELECTED_ACTION_COUNT_V1: usize = 9;
 
 /// Canonical Structured publication magic.
 pub const STRUCTURED_SELECTED_PUBLICATION_MAGIC_V1: [u8; 8] = *b"DCSTPB01";
@@ -306,15 +306,15 @@ pub struct StructuredSelectedReleaseV1 {
     pub structured: Vec<RationalOpenStructuredHotBundleV3>,
     /// RedeemTerminal.
     pub terminal: RationalTerminalHotBundleV3,
-    /// The separately built receipt/coordinate creation bundles.
+    /// The separately built receipt/coordinate lifecycle bundles.
     ///
-    /// Their Claims wires retain lifecycle action tags zero and one.  The
-    /// authenticated Structured ProgramSet maps those two wires to selectors
-    /// six and seven beside the five representation actions.
+    /// Their Claims wires retain canonical lifecycle action tags. The
+    /// authenticated Structured ProgramSet maps those four actions to selectors
+    /// six through nine beside the five representation actions.
     pub activation: StructuredActivationSelectedClosureV1,
     /// The sole V1 descriptor that creates this release's capability root.
     pub root_activation: dclutch_market::capability_activation::ActivationBundleV1,
-    /// Exact eight-entry CapabilityProgramSetV2 bytes.
+    /// Exact ten-entry CapabilityProgramSetV2 bytes.
     pub program_set: Vec<u8>,
     /// Exact immutable config-record bytes.
     pub config: Vec<u8>,
@@ -352,7 +352,7 @@ pub enum StructuredSelectedReleaseErrorV1 {
 /// Result alias for Structured release compilation.
 pub type Result<T> = core::result::Result<T, StructuredSelectedReleaseErrorV1>;
 
-/// Compile the five representation actions and two lifecycle creation actions
+/// Compile the five representation actions and four lifecycle actions
 /// into one publishable, selected Structured release.
 pub fn structured_selected_release_v1(
     input: StructuredSelectedReleaseInputV1<'_>,
@@ -449,7 +449,7 @@ impl StructuredSelectedReleaseV1 {
     ///
     /// The carrier predates lifecycle selectors, but its selection routine
     /// reads the V3 representation request and therefore selects only entries
-    /// one through five.  The returned bytes remain the single eight-entry
+    /// one through five.  The returned bytes remain the single ten-entry
     /// Structured ProgramSet; this is not a second authority or a projection
     /// with lifecycle entries removed.
     pub fn open_action_program_set(&self) -> Result<RationalOpenCapabilityProgramSetV3> {
@@ -564,6 +564,8 @@ impl StructuredSelectedReleaseV1 {
             StructuredBundleBytesV1::from_terminal(&self.terminal),
             StructuredBundleBytesV1::from_lifecycle(&self.activation.activate_receipt),
             StructuredBundleBytesV1::from_lifecycle(&self.activation.activate_coordinate),
+            StructuredBundleBytesV1::from_lifecycle(&self.activation.retire_coordinate),
+            StructuredBundleBytesV1::from_lifecycle(&self.activation.retire_receipt),
         ])
     }
 }
@@ -798,9 +800,9 @@ fn validate_input(input: StructuredSelectedReleaseInputV1<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Selectors 6 and 7 are reserved for V6 lifecycle creation.  Trading maps
-/// only authenticated Structured V6 family requests to them; the Claims child
-/// continues to carry its canonical lifecycle tags 0 and 1.
+/// Selectors 6 through 9 reserve the four Claims lifecycle actions within the
+/// same selected Structured release. Receipt retirement uses a compact dynamic
+/// transport whose canonical child support is derived from its descriptor.
 fn assemble_program_set(
     activation: &StructuredActivationSelectedClosureV1,
     root_activation: &dclutch_market::capability_activation::ActivationBundleV1,
@@ -821,6 +823,14 @@ fn assemble_program_set(
     )
     .ok_or(StructuredSelectedReleaseErrorV1::ProgramSet)?;
     let bundles = [
+        (
+            dclutch_claims::rational_lifecycle::hot_v6::STRUCTURED_RETIRE_COORDINATE_SELECTOR_V1,
+            activation.retire_coordinate.descriptor.as_slice(),
+        ),
+        (
+            dclutch_claims::rational_lifecycle::hot_v6::STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1,
+            activation.retire_receipt.descriptor.as_slice(),
+        ),
         (
             STRUCTURED_ACTIVATION_SELECTOR_V1,
             root_activation.descriptor.as_slice(),
@@ -1160,7 +1170,7 @@ mod tests {
         }
     }
 
-    /// The compiled release self-authenticates all seven selected coordinates.
+    /// The compiled release self-authenticates all nine selected coordinates.
     #[test]
     fn the_release_compiles_and_its_own_selected_set_accepts_it() {
         let basis = basis();
@@ -1168,10 +1178,10 @@ mod tests {
         let set = dclutch_market::capability_program::set_v2::CapabilityProgramSetV2::decode(
             &release.program_set,
         )
-        .expect("eight-entry set");
+        .expect("ten-entry set");
         assert_eq!(set.selector_offset(), 10);
         assert_eq!(set.selector_width(), SelectorWidthV2::U8);
-        assert_eq!(set.entry_count(), 8);
+        assert_eq!(set.entry_count(), 10);
         let descriptors: Vec<[u8; 32]> = (0..u16::try_from(STRUCTURED_SELECTED_ACTION_COUNT_V1)
             .expect("action count"))
             .map(|index| {
@@ -1194,11 +1204,11 @@ mod tests {
         );
         assert_eq!(set.entry(6).expect("coordinate entry").selector(), 7);
         assert_eq!(
-            set.entry(7).expect("root activation entry").selector(),
+            set.entry(9).expect("root activation entry").selector(),
             STRUCTURED_ACTIVATION_SELECTOR_V1
         );
         assert_eq!(
-            set.entry(7)
+            set.entry(9)
                 .expect("root activation entry")
                 .descriptor()
                 .schema()
@@ -1383,10 +1393,10 @@ mod tests {
         let release = structured_selected_release_v1(input(&basis)).expect("release");
         let bytes = release.publication.to_bytes();
         assert_eq!(bytes.len(), STRUCTURED_SELECTED_PUBLICATION_BYTES_V1);
-        // 8 fixed identities + 7 descriptors, after a 16-byte header, then the
+        // 8 fixed identities + 9 descriptors, after a 16-byte header, then the
         // scalar block. Stated independently of the constant arithmetic so a
         // change to either has to agree with the other.
-        assert_eq!(STRUCTURED_SELECTED_PUBLICATION_BYTES_V1, 16 + 15 * 32 + 20);
+        assert_eq!(STRUCTURED_SELECTED_PUBLICATION_BYTES_V1, 16 + 17 * 32 + 20);
         assert_eq!(&bytes[..8], &STRUCTURED_SELECTED_PUBLICATION_MAGIC_V1);
         assert_eq!(
             release.publication.publication_id(),
@@ -1417,7 +1427,7 @@ mod tests {
         assert_eq!(config.label, "config");
         assert_eq!(config.content_id(), release.publication.config_id);
 
-        // The seven descriptor records ARE the publication's seven descriptors,
+        // The nine descriptor records ARE the publication's nine descriptors,
         // in canonical action order.
         let descriptors: Vec<[u8; 32]> = records
             .iter()
@@ -1540,7 +1550,7 @@ mod tests {
     /// A substituted selected-program entry refuses publication.
     ///
     /// The table remains decodable, so this proves publication rebuilds all
-    /// seven canonical entries instead of merely trusting a set-shaped blob.
+    /// nine canonical action entries instead of merely trusting a set-shaped blob.
     #[test]
     fn a_substituted_selected_program_set_refuses_publication() {
         let basis = basis();

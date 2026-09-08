@@ -1,0 +1,169 @@
+{
+  "claims_elf_sha256": "b18309487b59dd39745e7937fe59e6e49eb6a983b1a0f4ea6c2f2ed056039ef2",
+  "compaction_bridge_sha256": "9a1c1c1b5d14a24f2c55eccd982984c924e77941aa5224b737c584e30a257220",
+  "entries": [
+    {
+      "accepted": false,
+      "account_frame_sha256": "6b96c1eb203a63af348efb8867e6b47f19b13d384cdeb1d9a8f5109b56a6a20e",
+      "action": "dust-refusal",
+      "instruction_data_sha256": "e22152a196bdd95752c94ee854250d4cbf09b23c47c80f2b97887079cd91a8c5",
+      "poststate": {
+        "closer_collateral_atoms": 0,
+        "escrow_lamports": 2672640,
+        "escrow_outstanding_claim_checks": 1,
+        "holder_collateral_atoms": 0,
+        "holder_lamports": 1000000000,
+        "holder_shard_atoms": 40,
+        "record_escrowed_atoms": 16,
+        "record_lamports": 3118080,
+        "shard_mint_supply": 40,
+        "vault_collateral_atoms": 16,
+        "vault_lamports": 2039280
+      },
+      "refusal": 22117
+    },
+    {
+      "accepted": false,
+      "account_frame_sha256": "6b96c1eb203a63af348efb8867e6b47f19b13d384cdeb1d9a8f5109b56a6a20e",
+      "action": "overdraw-refusal",
+      "instruction_data_sha256": "16d77201e76639f543ce490a380c1abe0b5778fbbcddfa2a5ef5dc9497fbc2cb",
+      "poststate": {
+        "closer_collateral_atoms": 0,
+        "escrow_lamports": 2672640,
+        "escrow_outstanding_claim_checks": 1,
+        "holder_collateral_atoms": 0,
+        "holder_lamports": 1000000000,
+        "holder_shard_atoms": 40,
+        "record_escrowed_atoms": 16,
+        "record_lamports": 3118080,
+        "shard_mint_supply": 40,
+        "vault_collateral_atoms": 16,
+        "vault_lamports": 2039280
+      },
+      "refusal": 22115
+    },
+    {
+      "accepted": false,
+      "account_frame_sha256": "dc5fbd11b16938df2a80143008610ea00a553d9bcc6253a61b4a986e3eed6b7f",
+      "action": "substituted-payout-refusal",
+      "instruction_data_sha256": "b532ad041c969dd27be78defee8999a98a4a806b370c36c887575b73e8647548",
+      "poststate": {
+        "closer_collateral_atoms": 0,
+        "escrow_lamports": 2672640,
+        "escrow_outstanding_claim_checks": 1,
+        "holder_collateral_atoms": 0,
+        "holder_lamports": 1000000000,
+        "holder_shard_atoms": 40,
+        "record_escrowed_atoms": 16,
+        "record_lamports": 3118080,
+        "shard_mint_supply": 40,
+        "vault_collateral_atoms": 16,
+        "vault_lamports": 2039280
+      },
+      "refusal": 22113
+    },
+    {
+      "accepted": false,
+      "account_frame_sha256": "ccba5c1bca19a71ef99acad560eda994925211a1647a1460c544986237b5f4eb",
+      "action": "substituted-holder-refusal",
+      "instruction_data_sha256": "b532ad041c969dd27be78defee8999a98a4a806b370c36c887575b73e8647548",
+      "poststate": {
+        "closer_collateral_atoms": 0,
+        "escrow_lamports": 2672640,
+        "escrow_outstanding_claim_checks": 1,
+        "holder_collateral_atoms": 0,
+        "holder_lamports": 1000000000,
+        "holder_shard_atoms": 40,
+        "record_escrowed_atoms": 16,
+        "record_lamports": 3118080,
+        "shard_mint_supply": 40,
+        "vault_collateral_atoms": 16,
+        "vault_lamports": 2039280
+      },
+      "refusal": 22113
+    },
+    {
+      "accepted": true,
+      "account_frame_sha256": "6b96c1eb203a63af348efb8867e6b47f19b13d384cdeb1d9a8f5109b56a6a20e",
+      "action": "partial-redemption",
+      "instruction_data_sha256": "62a828cd4aa9e1f674f8b1c8a3332f351202279380a2f6e16676e347ce7d4876",
+      "poststate": {
+        "closer_collateral_atoms": 0,
+        "escrow_lamports": 2672640,
+        "escrow_outstanding_claim_checks": 1,
+        "holder_collateral_atoms": 8,
+        "holder_lamports": 1000000000,
+        "holder_shard_atoms": 20,
+        "record_escrowed_atoms": 8,
+        "record_lamports": 3118080,
+        "shard_mint_supply": 20,
+        "vault_collateral_atoms": 8,
+        "vault_lamports": 2039280
+      },
+      "refusal": null
+    },
+    {
+      "accepted": false,
+      "account_frame_sha256": "fb51a3d90a15b824cde621eeb791b05f97f820aa1f85f766c555e4e019a4f592",
+      "action": "premature-close-refusal",
+      "instruction_data_sha256": "27b3e53ca14dcffa58b7df5ca681b993b1db2405518d55e0c4d730594d84f758",
+      "poststate": {
+        "closer_collateral_atoms": 0,
+        "escrow_lamports": 2672640,
+        "escrow_outstanding_claim_checks": 1,
+        "holder_collateral_atoms": 8,
+        "holder_lamports": 1000000000,
+        "holder_shard_atoms": 20,
+        "record_escrowed_atoms": 8,
+        "record_lamports": 3118080,
+        "shard_mint_supply": 20,
+        "vault_collateral_atoms": 8,
+        "vault_lamports": 2039280
+      },
+      "refusal": 22053
+    },
+    {
+      "accepted": true,
+      "account_frame_sha256": "6b96c1eb203a63af348efb8867e6b47f19b13d384cdeb1d9a8f5109b56a6a20e",
+      "action": "settling-redemption",
+      "instruction_data_sha256": "62a828cd4aa9e1f674f8b1c8a3332f351202279380a2f6e16676e347ce7d4876",
+      "poststate": {
+        "closer_collateral_atoms": 0,
+        "escrow_lamports": 2672640,
+        "escrow_outstanding_claim_checks": 0,
+        "holder_collateral_atoms": 16,
+        "holder_lamports": 1003118080,
+        "holder_shard_atoms": 0,
+        "record_escrowed_atoms": null,
+        "record_lamports": 0,
+        "shard_mint_supply": 0,
+        "vault_collateral_atoms": 0,
+        "vault_lamports": 2039280
+      },
+      "refusal": null
+    },
+    {
+      "accepted": true,
+      "account_frame_sha256": "fb51a3d90a15b824cde621eeb791b05f97f820aa1f85f766c555e4e019a4f592",
+      "action": "permissionless-close",
+      "instruction_data_sha256": "27b3e53ca14dcffa58b7df5ca681b993b1db2405518d55e0c4d730594d84f758",
+      "poststate": {
+        "closer_collateral_atoms": 0,
+        "escrow_lamports": 0,
+        "escrow_outstanding_claim_checks": null,
+        "holder_collateral_atoms": 16,
+        "holder_lamports": 1003118080,
+        "holder_shard_atoms": 0,
+        "record_escrowed_atoms": null,
+        "record_lamports": 0,
+        "shard_mint_supply": 0,
+        "vault_collateral_atoms": null,
+        "vault_lamports": 0
+      },
+      "refusal": null
+    }
+  ],
+  "rounding_boundary": "whole_claims=floor(requested_shard_atoms/denominator); consumed_shards=whole_claims*denominator",
+  "schema": "dclutch/fractional-claim-check-exterior/canonical/v2",
+  "token_2022_elf_sha256": "e2acdfb750881462ad613a15cc9c54ae17ce066580e867e1e635fbdfe01f5697"
+}

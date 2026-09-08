@@ -60,6 +60,27 @@ replay snapshot. Core's canonical expected ProjectFound receipt constructor is
 shared with Trading. No request-bank input supplies a future receipt or digest.
 The subsequent Custody CPI still verifies the actual Core producer and receipt.
 
+`series::runtime_registers_v1` owns the authenticated observation-to-bank reader
+for both Trading and its accelerator. The Hot wrapper supplies authenticated
+program roles, Template body, Product runtime, Rent and Clock; the accelerator
+must authenticate the same context before calling that reader. Context contains
+no derived requests, receipt digest or principal ceiling. The reader joins the
+native occurrence/Ticket identities, root replay, Registry raw/staging records,
+Custody state and physical addresses before seeding request words. Registry
+record addresses use the raw content SHA256; action requests retain their
+separate native domain-separated identities. Consume and Expire also join their
+actual Template raw/staging pairs to the common config projection. A stable
+controller root selects the Template; its parent Market identity is not required
+to equal the changing child Market identity.
+
+The accelerator's old common-only projection left the widened Consume request
+region zero-filled. Its callback derives the bank from observations normalized
+under decoded AccountProfile geometry; the evaluator must successfully project
+that Profile and preserve the derived region before RequestProfile evaluation,
+then compare the resulting candidate through the existing sealed VM. Adding a
+second caller-authored bank or duplicating the observation reader would
+preserve the original defect.
+
 Matched Claims requests and Core permits now have one pure construction owner,
 `dclutch-claims::founding_plan_v1`. Core supplies authenticated physical facts
 and retains admission and the actual permit write; Trading predicts the pair

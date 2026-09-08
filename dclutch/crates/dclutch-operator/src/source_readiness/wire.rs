@@ -62,6 +62,8 @@ struct CoordinatesWireV1 {
     funding_ledger: String,
     beneficiary: String,
     activation_receipt: String,
+    #[serde(default)]
+    member_seats: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -362,6 +364,8 @@ struct CoordinatesOutputV1 {
     funding_ledger: String,
     beneficiary: String,
     activation_receipt: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    member_seats: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -545,6 +549,7 @@ pub fn derive_source_readiness_detail_json_v1(source: &[u8]) -> Result<String, S
             funding_ledger: result.funding_ledger,
             beneficiary: base.beneficiary,
             activation_receipt: base.activation_receipt,
+            member_seats: result.member_seats,
         },
         activation_cache: base.activation_cache,
         registry_program,
@@ -707,6 +712,13 @@ fn frame_output(frame: &FundingReadinessFrameV1) -> FrameOutputV1 {
             funding_ledger: frame.coordinates.funding_ledger.to_string(),
             beneficiary: frame.coordinates.beneficiary.to_string(),
             activation_receipt: frame.coordinates.activation_receipt.to_string(),
+            member_seats: frame
+                .coordinates
+                .member_seats
+                .into_iter()
+                .flatten()
+                .map(|seat| seat.to_string())
+                .collect(),
         },
         activation_cache: frame.activation_cache.to_string(),
         registry_program: frame.registry_program.to_string(),
@@ -975,6 +987,13 @@ fn decode_frame(wire: FrameWireV1) -> Result<FundingReadinessFrameV1, String> {
             staging: exact_key(&value.staging, &format!("{label} staging"))?,
         })
     };
+    if wire.coordinates.member_seats.len() > dclutch_source::ENSEMBLE_MAX_MEMBERS_V1 as usize {
+        return Err("Source readiness frame carried too many member seats".to_owned());
+    }
+    let mut member_seats = [None; dclutch_source::ENSEMBLE_MAX_MEMBERS_V1 as usize];
+    for (index, value) in wire.coordinates.member_seats.iter().enumerate() {
+        member_seats[index] = Some(exact_key(value, "member seat")?);
+    }
     Ok(FundingReadinessFrameV1 {
         coordinates: FundingReadinessCoordinatesV1 {
             market: exact_key(&wire.coordinates.market, "Market")?,
@@ -995,6 +1014,7 @@ fn decode_frame(wire: FrameWireV1) -> Result<FundingReadinessFrameV1, String> {
                 &wire.coordinates.activation_receipt,
                 "activation receipt",
             )?,
+            member_seats,
         },
         activation_cache: exact_key(&wire.activation_cache, "activation cache")?,
         registry_program: exact_key(&wire.registry_program, "Registry program")?,

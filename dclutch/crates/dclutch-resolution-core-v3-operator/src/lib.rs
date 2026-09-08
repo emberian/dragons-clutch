@@ -23,7 +23,7 @@ use dclutch_market::capability_manifest::{
     CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2,
-    FundingLedgerCloseCustodyV2, FundingLedgerV2, funding_ledger_bytes_v2,
+    FundingAssetClassV1, FundingLedgerCloseCustodyV2, FundingLedgerV2, funding_ledger_bytes_v2,
 };
 use dclutch_market::{
     Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
@@ -43,8 +43,9 @@ use dclutch_registry::{
 };
 use dclutch_source::resolution::{
     DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DirectFundingCloseRequestV1,
-    FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
-    FundingActivationReceiptV1, FundingActivationRequestV1, RESOLUTION_CERTIFICATE_BYTES_V2,
+    EnsembleFragmentSeatSeedsV1, FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, FundingActivationReceiptV1,
+    FundingActivationRequestV1, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     ResolutionCertificateKindV2, ResolutionCertificateV2, ResolutionCoreActionV1,
     ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
@@ -52,10 +53,10 @@ use dclutch_source::resolution::{
     SourceClosureReceiptV3, funding_lifecycle_account_digest_v1,
 };
 use dclutch_source::{
-    RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_BYTES_V2,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV3, SourceResolutionPhaseV1,
-    SourceResolutionStateV2,
+    ENSEMBLE_FOLD_RECEIPT_V1_BYTES, EnsembleTerminalCapitalPlanV1, RECOVERY_POLICY_BYTES_V2,
+    RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV3,
+    SourceResolutionPhaseV1, SourceResolutionStateV2,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -117,8 +118,10 @@ pub const RESOLUTION_ADMIT_TERMINAL_ACCOUNT_COUNT_V3: usize = 22;
 pub const RESOLUTION_CREATE_FUND_ACCOUNT_COUNT_V3: usize = 18;
 /// Exact account count consumed by Core and Resolution for funding readiness.
 pub const RESOLUTION_VERIFY_FUND_ACCOUNT_COUNT_V3: usize = 20;
-/// Exact direct Resolution account count for activation with a recovery-policy pair.
-pub const RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1: usize = 20;
+/// Fixed direct activation prefix before a policy pair and Ensemble seats.
+pub const RESOLUTION_ACTIVATE_FUND_PREFIX_ACCOUNT_COUNT_V1: usize = 18;
+/// Maximum direct activation account count with a policy and all five seats.
+pub const RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1: usize = 25;
 /// Exact direct Resolution account count for terminal close with a recovery-policy pair.
 pub const RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1: usize = 21;
 
@@ -282,6 +285,8 @@ pub struct ResolutionFundingDetailCoordinatesV3 {
     pub funding_ledger: Pubkey,
     /// Ordered recovery, exhaustion, and failure entry indices.
     pub funding_entry_indices: [u16; 3],
+    /// Canonical sequence-one Ensemble member seats, absent for a single source.
+    pub member_seats: [Option<Pubkey>; dclutch_source::ENSEMBLE_MAX_MEMBERS_V1 as usize],
 }
 
 /// Terminal-admission coordinates selected before the Product root is read.
@@ -734,11 +739,33 @@ pub fn derive_resolution_funding_detail_coordinates_v3(
         }
         None => (None, None),
     };
+    let mut member_seats = [None; dclutch_source::ENSEMBLE_MAX_MEMBERS_V1 as usize];
+    if !material.ensemble().is_single() {
+        let source_state = Pubkey::find_program_address(
+            &[
+                SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+                market_key.as_ref(),
+                &generation_le,
+            ],
+            &resolution_program,
+        )
+        .0;
+        let mut member = 0_u8;
+        while member < material.ensemble().members() {
+            let seeds = EnsembleFragmentSeatSeedsV1::new(source_state.to_bytes(), member, 1);
+            member_seats[usize::from(member)] =
+                Some(Pubkey::find_program_address(&seeds.seeds(), &resolution_program).0);
+            member = member
+                .checked_add(1)
+                .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+        }
+    }
     Ok(ResolutionFundingDetailCoordinatesV3 {
         recovery_policy,
         recovery_policy_staging,
         funding_ledger,
         funding_entry_indices,
+        member_seats,
     })
 }
 
@@ -801,6 +828,8 @@ pub struct ResolutionActivateFundSnapshotV1 {
     pub pending: ResolutionVerifyFundReadySnapshotV3,
     /// Canonical executable System Program used to allocate the prefunded receipt PDA.
     pub system_program: ObservedAccount,
+    /// Canonical sequence-one Ensemble member seats, empty for a single source.
+    pub member_seats: Vec<ObservedAccount>,
 }
 
 /// Exact direct Resolution activation instruction and durable receipt projection.
@@ -816,10 +845,22 @@ pub struct ResolutionActivateFundReportV1 {
     pub receipt_top_up_lamports: u64,
     /// Exact debit credited to the immutable beneficiary.
     pub expected_beneficiary_credit_lamports: u64,
+    /// Exact Source balance after activation, or its replayed current balance.
+    pub expected_source_lamports: u64,
+    /// Exact post-activation balances of the member seats, in member order.
+    pub expected_member_seat_lamports: Vec<u64>,
     /// Exact activation request digest persisted by the receipt.
     pub request_digest: [u8; 32],
     /// Chain-derived ordered recovery/exhaustion/failure indices.
     pub funding_entry_indices: [u16; 3],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OperatorEnsembleCapitalV1 {
+    plan: EnsembleTerminalCapitalPlanV1,
+    expected_source_lamports: u64,
+    expected_member_seat_lamports: Vec<u64>,
+    beneficiary_credit_lamports: u64,
 }
 
 /// Same-finalized chain state selecting one terminal Resolution admission.
@@ -1585,13 +1626,134 @@ pub fn build_resolution_verify_fund_ready_v3(
     })
 }
 
+fn authenticate_operator_ensemble_capital_v1(
+    snapshot: &ResolutionActivateFundSnapshotV1,
+    material: SourceMaterialV3,
+    recovery_policy: Option<RecoveryPolicyV2>,
+    manifest: CapabilityManifestV1<'_>,
+    failure_entry_index: u16,
+    rent: &Rent,
+    completed: bool,
+) -> Result<Option<OperatorEnsembleCapitalV1>, ResolutionCoreOperatorErrorV3> {
+    if material.ensemble().is_single() {
+        if !snapshot.member_seats.is_empty() {
+            return Err(ResolutionCoreOperatorErrorV3::Frame);
+        }
+        return Ok(None);
+    }
+    let policy = recovery_policy.ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+    let plan = EnsembleTerminalCapitalPlanV1::for_material(
+        material,
+        policy.attempt_count(),
+        rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+        rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+        rent.minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+    )
+    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    let amounts = manifest
+        .entry(failure_entry_index)
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?
+        .funding_quote()
+        .amounts();
+    if amounts.rent().asset_class() != FundingAssetClassV1::NativeLamports
+        || amounts.creation().asset_class() != FundingAssetClassV1::NativeLamports
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    }
+    plan.authenticate_quote(amounts.rent().amount(), amounts.creation().amount())
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    if snapshot.member_seats.len() != usize::from(plan.member_seat_count()) {
+        return Err(ResolutionCoreOperatorErrorV3::Frame);
+    }
+    let state = SourceResolutionStateV2::decode(&snapshot.pending.source_state.data)
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
+    let terminal_sequence = state
+        .next_terminal_sequence()
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
+    let seat_minimum = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
+    let mut expected_member_seat_lamports = Vec::with_capacity(snapshot.member_seats.len());
+    let mut total_top_up = 0_u64;
+    for (member, seat) in snapshot.member_seats.iter().enumerate() {
+        let member = u8::try_from(member).map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        let seeds = EnsembleFragmentSeatSeedsV1::new(
+            snapshot.pending.source_state.key.to_bytes(),
+            member,
+            terminal_sequence,
+        );
+        let canonical =
+            Pubkey::find_program_address(&seeds.seeds(), &snapshot.pending.resolution_program.key)
+                .0;
+        if seat.key != canonical || seat.executable {
+            return Err(ResolutionCoreOperatorErrorV3::Frame);
+        }
+        if completed {
+            if seat.lamports < seat_minimum
+                || !((seat.owner == system_program::ID && seat.data.is_empty())
+                    || (seat.owner == snapshot.pending.resolution_program.key
+                        && seat.data.len() == RESOLUTION_CERTIFICATE_BYTES_V2))
+            {
+                return Err(ResolutionCoreOperatorErrorV3::Funding);
+            }
+            expected_member_seat_lamports.push(seat.lamports);
+        } else {
+            if seat.owner != system_program::ID || !seat.data.is_empty() {
+                return Err(ResolutionCoreOperatorErrorV3::Funding);
+            }
+            let top_up = seat_minimum.saturating_sub(seat.lamports);
+            total_top_up = total_top_up
+                .checked_add(top_up)
+                .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+            expected_member_seat_lamports.push(
+                seat.lamports
+                    .checked_add(top_up)
+                    .ok_or(ResolutionCoreOperatorErrorV3::Funding)?,
+            );
+        }
+    }
+    let source_minimum = rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2);
+    let expected_source_lamports = if completed {
+        let required = source_minimum
+            .checked_add(plan.source_creation_reserve_lamports())
+            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+        if snapshot.pending.source_state.lamports < required {
+            return Err(ResolutionCoreOperatorErrorV3::Funding);
+        }
+        snapshot.pending.source_state.lamports
+    } else {
+        snapshot
+            .pending
+            .source_state
+            .lamports
+            .checked_add(plan.source_creation_reserve_lamports())
+            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?
+    };
+    let beneficiary_credit_lamports = if completed {
+        0
+    } else {
+        plan.member_seat_rent_lamports()
+            .checked_sub(total_top_up)
+            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?
+    };
+    Ok(Some(OperatorEnsembleCapitalV1 {
+        plan,
+        expected_source_lamports,
+        expected_member_seat_lamports,
+        beneficiary_credit_lamports,
+    }))
+}
+
 /// Construct the V7 permissionless direct Resolution Pending-to-Active mutation.
 pub fn build_resolution_activate_fund_v1(
     snapshot: &ResolutionActivateFundSnapshotV1,
 ) -> Result<ResolutionActivateFundReportV1, ResolutionCoreOperatorErrorV3> {
     let pending = &snapshot.pending;
     let observation = same_finalized_verify_observation(pending)?;
-    if snapshot.system_program.observation != observation {
+    if snapshot.system_program.observation != observation
+        || snapshot
+            .member_seats
+            .iter()
+            .any(|seat| seat.observation != observation)
+    {
         return Err(ResolutionCoreOperatorErrorV3::Snapshot);
     }
     let market = CoreState::decode(&pending.market.data)
@@ -1657,6 +1819,16 @@ pub fn build_resolution_activate_fund_v1(
     if pending.activation_receipt.key != expected_receipt || pending.activation_receipt.executable {
         return Err(ResolutionCoreOperatorErrorV3::Frame);
     }
+    let completed = pending.activation_receipt.owner == pending.resolution_program.key;
+    let ensemble_capital = authenticate_operator_ensemble_capital_v1(
+        snapshot,
+        material,
+        recovery_policy,
+        manifest,
+        entries[2],
+        &rent,
+        completed,
+    )?;
     let (
         expected_beneficiary_credit_lamports,
         expected_pending_ledger_digest,
@@ -1687,10 +1859,25 @@ pub fn build_resolution_activate_fund_v1(
                 clock.slot,
             )
             .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
-            beneficiary_credit = beneficiary_credit
-                .checked_add(debit.rent_lamports())
-                .and_then(|value| value.checked_add(debit.creation_lamports()))
+            let row_debit = debit
+                .rent_lamports()
+                .checked_add(debit.creation_lamports())
                 .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+            if let Some(capital) = ensemble_capital.as_ref()
+                && entry_index == entries[2]
+            {
+                capital
+                    .plan
+                    .authenticate_quote(debit.rent_lamports(), debit.creation_lamports())
+                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+                beneficiary_credit = beneficiary_credit
+                    .checked_add(capital.beneficiary_credit_lamports)
+                    .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+            } else {
+                beneficiary_credit = beneficiary_credit
+                    .checked_add(row_debit)
+                    .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+            }
         }
         (
             beneficiary_credit,
@@ -1780,7 +1967,11 @@ pub fn build_resolution_activate_fund_v1(
         AccountMeta::new_readonly(pending.source_material_staging.key, false),
         AccountMeta::new_readonly(pending.capability_manifest.key, false),
         AccountMeta::new_readonly(pending.capability_manifest_staging.key, false),
-        AccountMeta::new_readonly(pending.source_state.key, false),
+        if ensemble_capital.is_some() {
+            AccountMeta::new(pending.source_state.key, false)
+        } else {
+            AccountMeta::new_readonly(pending.source_state.key, false)
+        },
         AccountMeta::new(pending.funding_ledger.key, false),
         AccountMeta::new(pending.beneficiary.key, false),
         AccountMeta::new(pending.activation_receipt.key, false),
@@ -1798,15 +1989,33 @@ pub fn build_resolution_activate_fund_v1(
             false,
         ));
     }
-    let expected_count = if material.recovery_policy().is_some() {
-        RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1
-    } else {
-        RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1.saturating_sub(2)
-    };
+    accounts.extend(
+        snapshot
+            .member_seats
+            .iter()
+            .map(|seat| AccountMeta::new(seat.key, false)),
+    );
+    let expected_count = RESOLUTION_ACTIVATE_FUND_PREFIX_ACCOUNT_COUNT_V1
+        + if material.recovery_policy().is_some() {
+            2
+        } else {
+            0
+        }
+        + snapshot.member_seats.len();
     if accounts.len() != expected_count
+        || accounts.len() > RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1
         || accounts.iter().any(|account| account.is_signer)
         || accounts.iter().enumerate().any(|(index, account)| {
-            account.is_writable != matches!(index, 12..=14)
+            let expected_writable = matches!(index, 12..=14)
+                || (ensemble_capital.is_some() && index == 11)
+                || index
+                    >= RESOLUTION_ACTIVATE_FUND_PREFIX_ACCOUNT_COUNT_V1
+                        + if material.recovery_policy().is_some() {
+                            2
+                        } else {
+                            0
+                        };
+            account.is_writable != expected_writable
                 || accounts
                     .iter()
                     .skip(index.saturating_add(1))
@@ -1833,6 +2042,13 @@ pub fn build_resolution_activate_fund_v1(
             .minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1)
             .saturating_sub(pending.activation_receipt.lamports),
         expected_beneficiary_credit_lamports,
+        expected_source_lamports: ensemble_capital
+            .as_ref()
+            .map_or(pending.source_state.lamports, |capital| {
+                capital.expected_source_lamports
+            }),
+        expected_member_seat_lamports: ensemble_capital
+            .map_or_else(Vec::new, |capital| capital.expected_member_seat_lamports),
         request_digest,
         funding_entry_indices: entries,
     })

@@ -152,31 +152,51 @@ pub(crate) fn compact_profile13_claims_accounts_v5(
     const INJECTED: usize = 5;
     const TAIL_COUNT: u32 = 0;
     let expected_logical = INJECTED.checked_add(child.len()).ok_or(Error::Operator)?;
+    let counts = if profile.dynamic_fixed_span_count() == 1 {
+        let span = profile
+            .dynamic_fixed_span(0)
+            .map_err(Error::AccountProfile)?;
+        if usize::from(span.insertion_coordinate()) != usize::from(profile.fixed_account_count())
+            || span.rule_stride() != 1
+        {
+            return Err(Error::Operator);
+        }
+        vec![
+            u32::try_from(
+                expected_logical
+                    .checked_sub(usize::from(profile.fixed_account_count()))
+                    .ok_or(Error::Operator)?,
+            )
+            .map_err(|_| Error::Operator)?,
+        ]
+    } else {
+        Vec::new()
+    };
     if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
-        || profile.dynamic_fixed_span_count() != 0
+        || usize::from(profile.dynamic_fixed_span_count()) != counts.len()
         || profile
-            .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
+            .logical_account_count_with_dynamic_spans(TAIL_COUNT, &counts)
             .map_err(Error::AccountProfile)?
             != expected_logical
     {
         return Err(Error::Operator);
     }
     let physical = profile
-        .physical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
+        .physical_account_count_with_dynamic_spans(TAIL_COUNT, &counts)
         .map_err(Error::AccountProfile)?;
     if physical < INJECTED {
         return Err(Error::Operator);
     }
     for coordinate in 0..INJECTED {
         if profile
-            .representative_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+            .representative_with_dynamic_spans(TAIL_COUNT, &counts, coordinate)
             .map_err(Error::AccountProfile)?
             != coordinate
         {
             return Err(Error::Operator);
         }
         let meta = injected_meta_v5(state, coordinate)?;
-        let (signer, writable) = physical_privileges_v5(profile, coordinate)?;
+        let (signer, writable) = physical_privileges_v5(profile, coordinate, &counts)?;
         if meta.is_signer != signer || meta.is_writable != writable {
             return Err(Error::Operator);
         }
@@ -185,7 +205,7 @@ pub(crate) fn compact_profile13_claims_accounts_v5(
     for (child_index, account) in child.iter().enumerate() {
         let logical = INJECTED.checked_add(child_index).ok_or(Error::Operator)?;
         let route = profile
-            .route_privileges_with_dynamic_spans(TAIL_COUNT, &[], logical)
+            .route_privileges_with_dynamic_spans(TAIL_COUNT, &counts, logical)
             .map_err(Error::AccountProfile)?;
         if account.is_writable != route.writable()
             || (child_index != 0 && account.is_signer != route.signer())
@@ -194,7 +214,7 @@ pub(crate) fn compact_profile13_claims_accounts_v5(
             return Err(Error::Operator);
         }
         let representative = profile
-            .representative_with_dynamic_spans(TAIL_COUNT, &[], logical)
+            .representative_with_dynamic_spans(TAIL_COUNT, &counts, logical)
             .map_err(Error::AccountProfile)?;
         let representative_meta = if representative < INJECTED {
             injected_meta_v5(state, representative)?
@@ -211,7 +231,7 @@ pub(crate) fn compact_profile13_claims_accounts_v5(
             return Err(Error::Operator);
         }
         if representative == logical {
-            let (signer, writable) = physical_privileges_v5(profile, representative)?;
+            let (signer, writable) = physical_privileges_v5(profile, representative, &counts)?;
             let mut outer = account.clone();
             outer.is_signer = signer;
             outer.is_writable = writable;
@@ -227,21 +247,22 @@ pub(crate) fn compact_profile13_claims_accounts_v5(
 fn physical_privileges_v5(
     profile: AccountProfileV2<'_>,
     representative: usize,
+    counts: &[u32],
 ) -> Result<(bool, bool)> {
     const TAIL_COUNT: u32 = 0;
     let logical = profile
-        .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
+        .logical_account_count_with_dynamic_spans(TAIL_COUNT, &counts)
         .map_err(Error::AccountProfile)?;
     let mut signer = false;
     let mut writable = false;
     for coordinate in 0..logical {
         if profile
-            .representative_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+            .representative_with_dynamic_spans(TAIL_COUNT, &counts, coordinate)
             .map_err(Error::AccountProfile)?
             == representative
         {
             let route = profile
-                .route_privileges_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+                .route_privileges_with_dynamic_spans(TAIL_COUNT, &counts, coordinate)
                 .map_err(Error::AccountProfile)?;
             signer |= route.signer();
             writable |= route.writable();

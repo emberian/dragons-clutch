@@ -19,6 +19,12 @@
       "substrate": "local-validator",
       "source_relation": "historical-source-split",
       "note": "The additive selector-corroboration ledger retains both accepted parent observations and adds the exact action-2 WholeUnwrap child observation. It replaces the original Claims ledger in this current view to avoid duplicating parent observations; the original evidence stays immutable. Host a84f5a197 and retained 551ffc1b9 Claims runtime remain an explicit historical source split."
+    },
+    {
+      "path": "docs/evidence/claims-claim-check-validator-2026-09-08/ledger.json",
+      "substrate": "local-validator",
+      "source_relation": "historical-source-split",
+      "note": "Fresh Agave validator accepted partial and settling fractional claim-check redemptions plus permissionless CloseEscrow, and finalized five exact hostile refusals. Host c444d4d45 used the retained 551ffc1b9 Claims ELF; the two handlers and three codecs exercised are byte-identical across those sources, while unrelated Claims dispatch differs. Starting compaction state was staged."
     }
   ]
 }

@@ -33,8 +33,8 @@ usage: checked-release-candidate.sh [options]
                  absolute canonical source manifest that regenerates the
                  selected include.
   --series-shadow-compiler-source PATH
-                 absolute canonical compiler-source manifest committed by the
-                 Series Shadow source manifest.
+                 absolute canonical complete git ls-tree source inventory for
+                 the pinned commit, committed by the Series Shadow manifest.
   --series-shadow-toolchain-manifest PATH
                  absolute canonical toolchain manifest committed by the Series
                  Shadow source manifest.
@@ -570,6 +570,11 @@ if [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
         || { echo "staged Series Shadow compiler source differs from its admitted input" >&2; exit 1; }
     cmp -s "$SERIES_SHADOW_TOOLCHAIN_MANIFEST" "$SERIES_SHADOW_STAGED_TOOLCHAIN_MANIFEST" \
         || { echo "staged Series Shadow toolchain manifest differs from its admitted input" >&2; exit 1; }
+    # Hash agreement among caller-supplied witnesses does not establish which
+    # compiler produced them. Reuse the checked candidate's complete inventory
+    # owner, including native constructors, VM, generator, and workspace lock.
+    cmp -s "$SERIES_SHADOW_STAGED_COMPILER_SOURCE" "$SOURCE_TREE" \
+        || { echo "Series Shadow compiler source is not the pinned complete source inventory" >&2; exit 1; }
     SERIES_SHADOW_SEMANTIC_SOURCE="$SOURCE/programs/dclutch-trading-sbf/src/series/consume_artifacts_v4.rs"
     SERIES_SHADOW_VERIFIER="$SOURCE/programs/dclutch-accelerator-sbf/generator/src/bin/series_shadow_checked_include.rs"
     [ -f "$SERIES_SHADOW_SEMANTIC_SOURCE" ] && [ -f "$SERIES_SHADOW_VERIFIER" ] \

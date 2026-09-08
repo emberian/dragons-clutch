@@ -10,7 +10,7 @@ use dclutch_market::execution_strategy::v2::ExecutionStrategyCertificateV2;
 use dclutch_registry::release_set::ArtifactReleaseIdV1;
 use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use dclutch_release_tool::{
-    CheckedReleaseV1, CheckedTranslationValidationV1, artifact_release_from_checked,
+    CheckedReleaseV1, CheckedSeriesTranslationV1, artifact_release_from_checked,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -147,13 +147,28 @@ pub(crate) fn authenticate_checked_series_shadow_evidence_v1(
         ));
     }
     let compiler_manifest = read_regular(&files.compiler_manifest, "Series compiler manifest")?;
+    authenticate_series_compiler_source_v1(
+        &compiler_manifest,
+        checked.source_digest(),
+        checked.source_revision(),
+        &gate.source_tree_sha256,
+        &gate.source_revision,
+    )?;
     let toolchain = read_regular(&files.toolchain, "Series toolchain")?;
     let translation_bytes = read_regular(
         &files.translation_validation,
         "Series translation validation",
     )?;
-    let translation = CheckedTranslationValidationV1::decode(&translation_bytes)
-        .map_err(|error| Error::new(format!("Series translation validation: {error:?}")))?
+    let checked_translation = CheckedSeriesTranslationV1::decode(&translation_bytes)
+        .map_err(|error| Error::new(format!("Series Consume comparison evidence: {error:?}")))?;
+    checked_translation
+        .require_sources(
+            SERIES_CONSUME_SEMANTIC_SOURCE_V4,
+            &compiler_manifest,
+            &toolchain,
+        )
+        .map_err(|error| Error::new(format!("Series comparison source binding: {error:?}")))?;
+    let translation = checked_translation
         .translation_validation_id()
         .map_err(|error| Error::new(format!("Series translation identity: {error:?}")))?;
     Ok(CheckedSeriesShadowEvidenceV1 {
@@ -242,8 +257,20 @@ pub(crate) fn authenticate_selected_series_accelerator_build_v1(
         &evidence.checked_manifest_path,
         "baseline Series checked manifest",
     )?;
+    if crate::plan::hex(&Sha256::digest(&baseline)) != evidence.checked_manifest_sha256 {
+        return Err(Error::new(
+            "baseline Series checked manifest changed after authentication",
+        ));
+    }
     let baseline = CheckedReleaseV1::decode(&baseline)
         .map_err(|error| Error::new(format!("baseline Series checked manifest: {error:?}")))?;
+    authenticate_series_selected_source_v1(
+        &evidence.compiler_manifest,
+        baseline.source_digest(),
+        baseline.source_revision(),
+        selected.source_digest(),
+        selected.source_revision(),
+    )?;
     let artifact_sha256 = crate::plan::hex(&Sha256::digest(&elf));
     if crate::plan::hex(&selected.artifact_digest()) != artifact_sha256
         || selected.semantic_release_id() != evidence.accelerator_semantic_release
@@ -265,6 +292,47 @@ pub(crate) fn authenticate_selected_series_accelerator_build_v1(
         artifact_release,
         artifact_release_id,
     })
+}
+
+fn authenticate_series_compiler_source_v1(
+    compiler_manifest: &[u8],
+    checked_digest: [u8; 32],
+    checked_revision: &str,
+    gate_digest: &str,
+    gate_revision: &str,
+) -> Result<()> {
+    // The candidate owner emits source-tree.txt with git ls-tree -r --full-tree.
+    // Reusing that whole-tree inventory covers every compiler/native/runtime
+    // file and binds this comparison to the admitted artifact's actual source.
+    let digest: [u8; 32] = Sha256::digest(compiler_manifest).into();
+    if digest != checked_digest
+        || crate::plan::hex(&digest) != gate_digest
+        || checked_revision != gate_revision
+    {
+        return Err(Error::new(
+            "Series compiler inventory differs from checked accelerator source",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_series_selected_source_v1(
+    compiler_manifest: &[u8],
+    baseline_digest: [u8; 32],
+    baseline_revision: &str,
+    selected_digest: [u8; 32],
+    selected_revision: &str,
+) -> Result<()> {
+    let digest: [u8; 32] = Sha256::digest(compiler_manifest).into();
+    if baseline_digest != digest
+        || selected_digest != digest
+        || selected_revision != baseline_revision
+    {
+        return Err(Error::new(
+            "selected Series accelerator source differs from checked compiler inventory",
+        ));
+    }
+    Ok(())
 }
 
 fn authenticate_series_shadow_certificate_v1(
@@ -323,6 +391,88 @@ mod tests {
 
     fn id(byte: u8) -> ContentId {
         ContentId::new([byte; 32]).expect("nonzero identity")
+    }
+
+    #[test]
+    fn rehashed_foreign_compiler_inventory_cannot_cross_the_release_gate() {
+        let inventory = b"the candidate owner's complete source-tree.txt";
+        let digest: [u8; 32] = Sha256::digest(inventory).into();
+        let gate_digest = crate::plan::hex(&digest);
+        authenticate_series_compiler_source_v1(
+            inventory,
+            digest,
+            "revision",
+            &gate_digest,
+            "revision",
+        )
+        .expect("actual inventory joins both source pins");
+        let foreign = b"unrelated inventory consistently rehashed by a caller";
+        let foreign_digest: [u8; 32] = Sha256::digest(foreign).into();
+        for (bytes, checked, checked_revision, gate, gate_revision) in [
+            (
+                foreign.as_slice(),
+                digest,
+                "revision",
+                gate_digest.clone(),
+                "revision",
+            ),
+            (
+                foreign.as_slice(),
+                foreign_digest,
+                "revision",
+                gate_digest.clone(),
+                "revision",
+            ),
+            (
+                inventory.as_slice(),
+                foreign_digest,
+                "revision",
+                gate_digest.clone(),
+                "revision",
+            ),
+            (
+                inventory.as_slice(),
+                digest,
+                "other",
+                gate_digest.clone(),
+                "revision",
+            ),
+        ] {
+            assert_eq!(
+                authenticate_series_compiler_source_v1(
+                    bytes,
+                    checked,
+                    checked_revision,
+                    &gate,
+                    gate_revision
+                )
+                .unwrap_err()
+                .to_string(),
+                "Series compiler inventory differs from checked accelerator source"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_source_digest_must_match_even_when_revision_is_unchanged() {
+        let inventory = b"complete source-tree.txt";
+        let digest: [u8; 32] = Sha256::digest(inventory).into();
+        authenticate_series_selected_source_v1(inventory, digest, "revision", digest, "revision")
+            .expect("same source with a separately checked selected artifact");
+        for (baseline, selected, revision) in [
+            ([7; 32], digest, "revision"),
+            (digest, [7; 32], "revision"),
+            (digest, digest, "other"),
+        ] {
+            assert_eq!(
+                authenticate_series_selected_source_v1(
+                    inventory, baseline, "revision", selected, revision
+                )
+                .unwrap_err()
+                .to_string(),
+                "selected Series accelerator source differs from checked compiler inventory"
+            );
+        }
     }
 
     #[test]

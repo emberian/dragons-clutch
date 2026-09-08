@@ -102,15 +102,14 @@ use dclutch_source::pyth::{PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PythSponsor
 use dclutch_source::resolution::{
     EnsembleFragmentSeatSeedsV1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
     PreMarketFundingAbortRequestV1, PreMarketFundingRequestV2, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2,
     pre_market_funding_ledger_account_digest_v1, pre_market_funding_prestate_digest_v1,
 };
 use dclutch_source::{
-    ContentId as SourceContentId, ENSEMBLE_FOLD_RECEIPT_V1_BYTES,
-    EnsembleSpecV1, EnsembleTerminalCapitalPlanV1, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
-    ManipulationFloorV1, PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
-    ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2,
-    RecoveryPolicyV2, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    ContentId as SourceContentId, ENSEMBLE_FOLD_RECEIPT_V1_BYTES, EnsembleSpecV1,
+    EnsembleTerminalCapitalPlanV1, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
+    PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2,
+    SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
     SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
@@ -4183,6 +4182,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     execute_funding_readiness_suffix_v1(
         rpc,
         plan,
+        input,
         &context.records,
         &context.coordinates,
         payer,
@@ -12441,6 +12441,7 @@ fn authenticate_generic_market_open_frame_v1(
 
 fn funding_readiness_coordinates_v1(
     plan: &SuccessorPlan,
+    input: &MarketRunInput,
     records: &MarketRecords,
     coordinates: &FoundingCoordinates,
 ) -> Result<FundingReadinessCoordinatesV1> {
@@ -12469,6 +12470,18 @@ fn funding_readiness_coordinates_v1(
         &resolution,
     )
     .0;
+    let mut member_seats = [None; dclutch_source::ENSEMBLE_MAX_MEMBERS_V1 as usize];
+    if let Some(ensemble) = input.ensemble.as_ref() {
+        let mut member = 0_u8;
+        while member < ensemble.members {
+            let seeds = EnsembleFragmentSeatSeedsV1::new(source_state.to_bytes(), member, 1);
+            member_seats[usize::from(member)] =
+                Some(Pubkey::find_program_address(&seeds.seeds(), &resolution).0);
+            member = member
+                .checked_add(1)
+                .ok_or_else(|| Error::new("Ensemble member-seat derivation overflow"))?;
+        }
+    }
     Ok(FundingReadinessCoordinatesV1 {
         market: coordinates.market,
         source_material: FundingReadinessRecordCoordinatesV1 {
@@ -12489,6 +12502,7 @@ fn funding_readiness_coordinates_v1(
         funding_ledger,
         beneficiary: coordinates.credit,
         activation_receipt,
+        member_seats,
     })
 }
 
@@ -12843,6 +12857,7 @@ fn recover_readiness_prefix_v1(
 fn execute_funding_readiness_suffix_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
+    input: &MarketRunInput,
     records: &MarketRecords,
     founding: &FoundingCoordinates,
     payer: &Keypair,
@@ -12853,7 +12868,7 @@ fn execute_funding_readiness_suffix_v1(
     routing_table_keys: &[Pubkey],
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<()> {
-    let coordinates = funding_readiness_coordinates_v1(plan, records, founding)?;
+    let coordinates = funding_readiness_coordinates_v1(plan, input, records, founding)?;
 
     let FundingReadinessRoutedPlanV1 {
         plan: current,
@@ -13014,16 +13029,6 @@ fn execute_funding_readiness_suffix_v1(
         }
     }
 
-    prepay_ensemble_terminal_coordinates_before_accept_v1(
-        rpc,
-        plan,
-        records,
-        founding,
-        payer,
-        transactions,
-        completed,
-    )?;
-
     let FundingReadinessRoutedPlanV1 {
         plan: current,
         routing_tables,
@@ -13142,124 +13147,6 @@ fn execute_funding_readiness_suffix_v1(
         "completed the post-Open V7 funding readiness suffix in exact order: core-funding-create-v1, resolution-funding-activate-v1, core-funding-accept-v1"
             .into(),
     );
-    Ok(())
-}
-
-/// Prepay every deterministic Ensemble output before Core accepts funding
-/// readiness.
-///
-/// The Source material fixes the member count, the fresh Source fixes sequence
-/// one, and the Resolution program fixes all PDA domains.  A later capture may
-/// allocate one member seat, and the fold may allocate the success certificate;
-/// neither transition is allowed to discover missing rent after the Market's
-/// funding state has become Ready.  The fold receipt is different: it exists
-/// only because a worker folded, and the on-chain fold creates it from that
-/// worker's account.
-#[allow(clippy::too_many_arguments)]
-fn prepay_ensemble_terminal_coordinates_before_accept_v1(
-    rpc: &mut Rpc,
-    plan: &SuccessorPlan,
-    records: &MarketRecords,
-    founding: &FoundingCoordinates,
-    payer: &Keypair,
-    transactions: &mut Vec<TransactionEvidence>,
-    completed: &mut Vec<String>,
-) -> Result<()> {
-    let material_account =
-        rpc.required_account(records.source.raw, "founding Ensemble Source material")?;
-    let material = SourceMaterialV3::decode(&material_account.data)
-        .map_err(|error| Error::new(format!("founding Ensemble SourceMaterialV3: {error:?}")))?;
-    let ensemble = material.ensemble();
-    if ensemble.is_single() {
-        return Ok(());
-    }
-
-    let resolution_program = pubkey(&plan.resolution.program_id)?;
-    let source_state = Pubkey::find_program_address(
-        &[
-            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
-            founding.market.as_ref(),
-            &founding.generation.to_le_bytes(),
-        ],
-        &resolution_program,
-    )
-    .0;
-    let terminal_sequence = 1_u64;
-    let success_certificate = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-            source_state.as_ref(),
-            &[ResolutionCertificateKindV2::ResolutionSuccess.kind_seed()],
-            &terminal_sequence.to_le_bytes(),
-        ],
-        &resolution_program,
-    )
-    .0;
-    let required = rpc.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2)?;
-    let mut coordinates = Vec::with_capacity(usize::from(ensemble.members()).saturating_add(1));
-    coordinates.push(success_certificate);
-    for member in 0..ensemble.members() {
-        coordinates.push(
-            Pubkey::find_program_address(
-                &EnsembleFragmentSeatSeedsV1::new(
-                    source_state.to_bytes(),
-                    member,
-                    terminal_sequence,
-                )
-                .seeds(),
-                &resolution_program,
-            )
-            .0,
-        );
-    }
-
-    let mut transfers = Vec::with_capacity(coordinates.len());
-    for coordinate in &coordinates {
-        let current = rpc.account(*coordinate)?;
-        let held = match current {
-            None => 0,
-            Some(account)
-                if account.owner == system_program::ID
-                    && !account.executable
-                    && account.data.is_empty() =>
-            {
-                account.lamports
-            }
-            Some(_) => {
-                return Err(Error::new(format!(
-                    "founding Ensemble coordinate {coordinate} is occupied before funding readiness acceptance"
-                )));
-            }
-        };
-        let top_up = required.saturating_sub(held);
-        if top_up != 0 {
-            transfers.push(transfer(&payer.pubkey(), coordinate, top_up));
-        }
-    }
-    if !transfers.is_empty() {
-        transactions.push(rpc.send_with_signers(
-            "prepay Ensemble success certificate and every member seat before funding readiness acceptance",
-            &transfers,
-            payer,
-            &[],
-        )?);
-    }
-    for coordinate in &coordinates {
-        let account = rpc.required_account(*coordinate, "prepaid founding Ensemble coordinate")?;
-        if account.owner != system_program::ID
-            || account.executable
-            || !account.data.is_empty()
-            || account.lamports < required
-        {
-            return Err(Error::new(format!(
-                "founding Ensemble coordinate {coordinate} is not a prepaid vacant System account"
-            )));
-        }
-    }
-    completed.push(format!(
-        "prepaid the success certificate and all {} Ensemble member seats at sequence one before core-funding-accept-v1; each holds at least {required} lamports, while the fold worker remains responsible for its receipt",
-        ensemble.members(),
-    ));
     Ok(())
 }
 
@@ -13616,7 +13503,8 @@ fn execute_generic_market_founding(
         hex(&founding_census.key_privilege_digest),
     );
     let founding = prepared_founding.instruction;
-    let readiness_coordinates = funding_readiness_coordinates_v1(plan, records, coordinates)?;
+    let readiness_coordinates =
+        funding_readiness_coordinates_v1(plan, input, records, coordinates)?;
     let readiness_routing = Instruction {
         // This instruction is never submitted. It gives the one pre-Open ALT
         // plan an exhaustive address scope for the three packet-heavy V7
@@ -13833,6 +13721,7 @@ fn execute_generic_market_founding(
     execute_funding_readiness_suffix_v1(
         rpc,
         plan,
+        input,
         records,
         coordinates,
         payer,
@@ -14252,6 +14141,7 @@ fn execute_split_market_founding(
     execute_funding_readiness_suffix_v1(
         rpc,
         plan,
+        input,
         records,
         coordinates,
         payer,

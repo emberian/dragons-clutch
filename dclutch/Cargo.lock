@@ -2419,6 +2419,7 @@ dependencies = [
  "dclutch-resolution-core-v3-operator",
  "dclutch-source",
  "dclutch-trading",
+ "dclutch-trading-sbf",
  "dclutch-versioned-message-operator",
  "dclutch-vm",
  "libsecp256k1",

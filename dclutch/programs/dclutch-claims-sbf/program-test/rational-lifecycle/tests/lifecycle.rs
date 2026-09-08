@@ -2,14 +2,6 @@
 
 use std::{env, fs, path::PathBuf, vec::Vec};
 
-use dclutch_claims_affine_batch_program_test::fixture::{
-    FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, ProductLbv2FixtureV2,
-    compile_product_lbv2_fixture_v2,
-};
-use dclutch_claims_sbf::rational_lifecycle_v2::{
-    RATIONAL_LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, RATIONAL_LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
-    RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, RationalLifecycleSbfErrorV2,
-};
 use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2;
 use dclutch_claims::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
@@ -17,9 +9,6 @@ use dclutch_claims::protocol_position_v2::{
     ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
     ProtocolPositionSeedsV2,
 };
-use dclutch_core_contract::ContentId;
-use dclutch_market::{CoreState, Identity, Phase};
-use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_claims::rational::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
     RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReceiptMintSeedsV2,
@@ -33,16 +22,18 @@ use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_RECEIPT_BYTES_V2, LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2,
     LifecycleReceiptV2, LifecycleRequestV2,
 };
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
+use dclutch_claims_affine_batch_program_test::fixture::{
+    FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, ProductLbv2FixtureV2,
+    compile_product_lbv2_fixture_v2,
 };
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
-    ExecutionRoleV1, ProgramIdentityV1,
+use dclutch_claims_sbf::rational_lifecycle_v2::{
+    RATIONAL_LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, RATIONAL_LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
+    RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, RationalLifecycleSbfErrorV2,
+};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{
+    ACCOUNT_BYTES, InertMetadataV2, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
+    Token2022BehaviorProfileV2, Token2022CloseableMintProfileV2, TokenAccount,
 };
 use dclutch_market::rent::{
     RefundAuthority,
@@ -50,9 +41,18 @@ use dclutch_market::rent::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_custody::token_svm::{
-    ACCOUNT_BYTES, InertMetadataV2, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
-    Token2022BehaviorProfileV2, Token2022CloseableMintProfileV2, TokenAccount,
+use dclutch_market::{CoreState, Identity, Phase};
+use dclutch_program_test_evidence::TransactionEvidence;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
+    ExecutionRoleV1, ProgramIdentityV1,
+};
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1,
 };
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
@@ -835,23 +835,25 @@ fn wrapped(f: &Fixture, bytes: Vec<u8>, fail_after: bool, old_ata: bool) -> Inst
             );
         }
         LifecycleActionV2::RetireReceipt => {
-            // One proven-vacant coordinate, in the contract's vacancy slot
-            // order: shard Mint, structured custody, CLAIMS CUSTODY OWNER,
-            // Position, admission. The owner is slot 2 -- the compact row
-            // supplies it rather than baking it into the effect -- so it sits
-            // between the custody account and the Position, exactly where the
-            // coordinate group puts it.
-            forwarded.extend([
-                AccountMeta::new_readonly(f.shard_mint, false),
-                AccountMeta::new_readonly(f.structured_custody, false),
-                AccountMeta::new_readonly(f.claims_owner, false),
-                AccountMeta::new_readonly(f.position, false),
-                AccountMeta::new_readonly(f.admission, false),
-            ]);
+            for coordinate in lifecycle.coordinates() {
+                let row = coordinate.expect("vacancy row");
+                forwarded.extend(
+                    [
+                        row.shard_mint,
+                        row.structured_custody_account,
+                        row.claims_custody_owner,
+                        row.claims_custody_position,
+                        row.position_admission,
+                    ]
+                    .into_iter()
+                    .map(|key| AccountMeta::new_readonly(Pubkey::new_from_array(key), false)),
+                );
+            }
             assert_eq!(
                 forwarded.len(),
                 RATIONAL_LIFECYCLE_COMMON_ACCOUNT_COUNT_V2
-                    + RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2
+                    + usize::try_from(header.coordinate_count).expect("row count")
+                        * RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2
             );
         }
         LifecycleActionV2::ActivateReceipt => {
@@ -2147,5 +2149,101 @@ async fn a_substituted_custody_owner_identity_still_refuses_the_retirement() {
         refused_with(&logs, ACCOUNTS_REFUSAL),
         "the substitution must refuse at {ACCOUNTS_REFUSAL:#x}, not merely fail:\n{}",
         logs.join("\n")
+    );
+}
+
+#[tokio::test]
+async fn complete_sparse_support_refuses_omitted_duplicate_and_extra_rows_without_mutation() {
+    let (mut context, f, accepted, table, addresses) =
+        retired_coordinate_awaiting_its_receipt("sparse support guards").await;
+    let rent = account(&mut context, f.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+    let canonical = request(&f, LifecycleActionV2::RetireReceipt, rent);
+    let header = LifecycleRequestV2::decode(&canonical)
+        .expect("canonical")
+        .header();
+    let row = coordinate(&f, true);
+    let mut zero_weight = row;
+    zero_weight.outcome = 1;
+    zero_weight.coefficient = 0;
+    let keys = [
+        f.graph.core_market,
+        f.graph.claims_market,
+        f.receipt_mint,
+        f.rent_credit,
+        f.shard_mint,
+        f.structured_custody,
+        f.position,
+        f.admission,
+    ];
+    for (label, rows) in [
+        ("omitted", vec![]),
+        ("duplicate", vec![row, row]),
+        ("extra", vec![row, zero_weight]),
+    ] {
+        let mut hostile_header = header;
+        hostile_header.coordinate_count = u32::try_from(rows.len()).expect("support count");
+        let mut row_bytes = vec![0; rows.len() * LIFECYCLE_COORDINATE_BYTES_V2];
+        for (index, row) in rows.into_iter().enumerate() {
+            row.encode_into(
+                &mut row_bytes[index * LIFECYCLE_COORDINATE_BYTES_V2
+                    ..(index + 1) * LIFECYCLE_COORDINATE_BYTES_V2],
+            )
+            .expect("hostile row");
+        }
+        let mut bytes = vec![0; LIFECYCLE_HEADER_BYTES_V2 + row_bytes.len()];
+        LifecycleRequestV2::new(hostile_header, &row_bytes)
+            .expect("structurally valid hostile")
+            .encode_into(&mut bytes)
+            .expect("hostile bytes");
+        let mut before = Vec::new();
+        for key in keys {
+            before.push(account(&mut context, key).await);
+        }
+        let (committed, logs, _, _) = submit(
+            &mut context,
+            wrapped(&f, bytes, false, false),
+            table,
+            &addresses,
+            label,
+        )
+        .await
+        .expect("hostile transaction executed");
+        assert!(!committed, "{label} must refuse");
+        let refusal = format!(
+            "Program {CLAIMS} failed: custom program error: {:#x}",
+            RationalLifecycleSbfErrorV2::InvalidSupport as u32
+        );
+        assert!(
+            logs.iter().any(|line| line == &refusal),
+            "{label}: {}",
+            logs.join("\n")
+        );
+        let mut after = Vec::new();
+        for key in keys {
+            after.push(account(&mut context, key).await);
+        }
+        assert_eq!(after, before, "{label}: exact rollback");
+    }
+    let (committed, logs, returned, _) = submit(
+        &mut context,
+        accepted,
+        table,
+        &addresses,
+        "complete sparse support accepted control",
+    )
+    .await
+    .expect("accepted control");
+    assert!(committed, "{}", logs.join("\n"));
+    assert_lifecycle_receipt(returned, &canonical, LifecycleActionV2::RetireReceipt);
+    assert_eq!(account(&mut context, f.receipt_mint).await, None);
+    assert_eq!(
+        account(&mut context, f.rent_credit)
+            .await
+            .expect("reclaimed RentCredit")
+            .lamports,
+        rent + f.receipt_lamports
     );
 }

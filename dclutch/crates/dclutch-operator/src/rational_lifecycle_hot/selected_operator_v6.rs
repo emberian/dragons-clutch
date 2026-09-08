@@ -65,7 +65,7 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
     let coordinate_count = match header.action {
         LifecycleActionV2::ActivateReceipt => 0,
         LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => 1,
-        LifecycleActionV2::RetireReceipt => return Err(Error::ActionGeometry),
+        LifecycleActionV2::RetireReceipt => header.coordinate_count,
     };
     if header.action != selection.bundle.action
         || header.release_set != state.release_set
@@ -88,17 +88,54 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
     }
     validate_selected_child_frame_v6(claims_child, header.action)?;
 
-    let mut family_bytes = vec![0_u8; claims_child.data.len()];
-    let family = RationalLifecycleHotRequestV6::from_child_into(child, &mut family_bytes)
+    let (family_bytes, family_digest) = if header.action == LifecycleActionV2::RetireReceipt {
+        use dclutch_claims::rational_lifecycle::{
+            LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_HEADER_BYTES_V2,
+            compact_hot_v4::RationalLifecycleCompactHotRequestV4,
+            hot_v6::{DYNAMIC_RETIREMENT_PREFIX_BYTES_V1, encode_dynamic_retirement_v1},
+        };
+        let mut compact_header = header;
+        compact_header.coordinate_count = 0;
+        let mut compact_bytes = [0; LIFECYCLE_HEADER_BYTES_V2];
+        let compact = RationalLifecycleCompactHotRequestV4::from_header_into(
+            compact_header,
+            &mut compact_bytes,
+        )
         .map_err(Error::Lifecycle)?;
-    let family_digest = hash(family.as_bytes()).to_bytes();
-    let mut exact_child = vec![0_u8; claims_child.data.len()];
-    family
-        .specialize_child_into(family_digest, &mut exact_child)
-        .map_err(Error::Lifecycle)?;
-    if exact_child != claims_child.data {
-        return Err(Error::ChildSpecialization);
-    }
+        let digest = hash(compact.as_bytes()).to_bytes();
+        let keys = claims_child
+            .accounts
+            .get(LIFECYCLE_COMMON_ACCOUNT_COUNT_V2..)
+            .ok_or(Error::ChildFrame)?
+            .iter()
+            .map(|meta| meta.pubkey.to_bytes())
+            .collect::<Vec<_>>();
+        let mut scratch = vec![0; claims_child.data.len()];
+        let mut exact = vec![0; claims_child.data.len()];
+        compact
+            .specialize_child_into(digest, descriptor, &keys, &mut scratch, &mut exact)
+            .map_err(Error::Lifecycle)?;
+        if exact != claims_child.data {
+            return Err(Error::ChildSpecialization);
+        }
+        let mut family = vec![0; DYNAMIC_RETIREMENT_PREFIX_BYTES_V1 + LIFECYCLE_HEADER_BYTES_V2];
+        encode_dynamic_retirement_v1(compact, header.coordinate_count, &mut family)
+            .map_err(Error::Lifecycle)?;
+        (family, digest)
+    } else {
+        let mut family_bytes = vec![0_u8; claims_child.data.len()];
+        let family = RationalLifecycleHotRequestV6::from_child_into(child, &mut family_bytes)
+            .map_err(Error::Lifecycle)?;
+        let family_digest = hash(family.as_bytes()).to_bytes();
+        let mut exact_child = vec![0_u8; claims_child.data.len()];
+        family
+            .specialize_child_into(family_digest, &mut exact_child)
+            .map_err(Error::Lifecycle)?;
+        if exact_child != claims_child.data {
+            return Err(Error::ChildSpecialization);
+        }
+        (family_bytes, family_digest)
+    };
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(family_bytes.len()).map_err(|_| Error::Packet)?,
         state.release_set,

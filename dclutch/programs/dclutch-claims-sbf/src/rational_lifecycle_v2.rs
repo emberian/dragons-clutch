@@ -215,6 +215,10 @@ pub enum RationalLifecycleSbfErrorV2 {
     /// A resource this program allocates for itself was refused by the System
     /// program, or came back with the wrong owner or width.
     Allocation = 0x521C,
+    /// Missing, extra, duplicate, reordered, or zero-weight descriptor support.
+    InvalidSupport = 0x521D,
+    /// Declared nonzero supply, custody, or invalid vacancy observations.
+    InvalidPhysicalState = 0x521E,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -233,9 +237,25 @@ dclutch_refusal_registry::pin_refusal_band!(
         MintProfile,
         CustodyLayout,
         CustodyState,
-        Allocation
+        Allocation,
+        InvalidSupport,
+        InvalidPhysicalState
     ]
 );
+
+impl From<dclutch_claims::rational_lifecycle::Error> for RationalLifecycleSbfErrorV2 {
+    fn from(cause: dclutch_claims::rational_lifecycle::Error) -> Self {
+        use dclutch_claims::rational_lifecycle::Error;
+        match cause {
+            Error::InvalidSupport => Self::InvalidSupport,
+            Error::InvalidPhysicalState => Self::InvalidPhysicalState,
+            other => {
+                solana_program::msg!("lifecycle semantic refusal: {:?}", other);
+                Self::Instruction
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct CommonAccounts<'accounts, 'info> {
@@ -287,8 +307,8 @@ pub(crate) fn process(
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    let request = LifecycleRequestV2::decode(instruction_data)
-        .map_err(|_| RationalLifecycleSbfErrorV2::Instruction)?;
+    let request =
+        LifecycleRequestV2::decode(instruction_data).map_err(RationalLifecycleSbfErrorV2::from)?;
     let common = CommonAccounts::parse(account_infos)?;
     let request_digest = hash(instruction_data).to_bytes();
     authenticate_common(program_id, account_infos, common, request, request_digest)?;
@@ -322,8 +342,7 @@ pub(crate) fn process(
     .map_err(|_| RationalLifecycleSbfErrorV2::Descriptor)?;
     authenticate_descriptor_resources(program_id, common, request, descriptor)?;
     let graph_digest = descriptor.graph_digest();
-    let prepared =
-        prepare(request, descriptor).map_err(|_| RationalLifecycleSbfErrorV2::Instruction)?;
+    let prepared = prepare(request, descriptor).map_err(RationalLifecycleSbfErrorV2::from)?;
     drop(descriptor_data);
 
     let position_receipt_digest = match prepared.action() {

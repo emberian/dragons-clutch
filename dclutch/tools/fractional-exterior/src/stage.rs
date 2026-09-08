@@ -9,8 +9,6 @@
 
 use solana_program::{hash::hash, pubkey::Pubkey};
 
-use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-use dclutch_core_contract::ContentId;
 use dclutch_claims::fractional::{
     FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4, FractionalExposureActionV2,
     FractionalExposureRequestInputV2, FractionalExposureRequestV2, FractionalRootInputV1,
@@ -22,6 +20,25 @@ use dclutch_claims::fractional_kernel::{
     encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
     fractional_exposure_terms_bytes_v2, fractional_selection_config_from_terms_v1,
 };
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{
+    PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
+};
+use dclutch_custody::{
+    CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+};
+use dclutch_market::capability_manifest::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1,
+    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1, FundingLedgerV2,
+    FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
+};
+use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
 use dclutch_product::payoff::price_gate_v1::{
     PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
     PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
@@ -30,8 +47,9 @@ use dclutch_product::payoff::price_gate_v1::{
     PRICE_GATE_SCALE_OFFSET_V1, PRICE_GATE_SCHEMA_VERSION_V1, PRICE_GATE_VERSION_OFFSET_V1,
     PRICE_GATE_WEIGHTS_OFFSET_V1, PRICE_GATE_WIDTH_OFFSET_V1,
 };
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
+    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -39,18 +57,19 @@ use dclutch_registry::{
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
-    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
+use dclutch_source::resolution::{
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    ResolutionCertificateKindV2,
 };
-use dclutch_custody::token_svm::{
-    PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-    TokenBehaviorSelectionV2,
+use dclutch_source::{
+    ContentId as SourceContentId, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV3,
+    SourceResolutionStateV2, WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
 };
 
 use crate::narrow_fixture::{
     NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, NarrowRecordV2,
-    NarrowSplineBasisInputV3, compile_narrow_fixture_v3, finalized,
+    NarrowSplineBasisInputV3, compile_narrow_fixture_v4, finalized,
 };
 
 /// Program identities, matched to the ProgramTest campaign so a refusal seen in
@@ -62,6 +81,8 @@ pub const REGISTRY: Pubkey = Pubkey::new_from_array([0xa2; 32]);
 pub const CORE: Pubkey = Pubkey::new_from_array([0xa3; 32]);
 /// Custody program.
 pub const CUSTODY: Pubkey = Pubkey::new_from_array([0xa4; 32]);
+/// Resolution program used by the terminal continuation.
+pub const RESOLUTION: Pubkey = Pubkey::new_from_array([0xa5; 32]);
 /// Test caller standing in for Trading.
 pub const CALLER: Pubkey = Pubkey::new_from_array([0xa9; 32]);
 
@@ -83,6 +104,9 @@ const EXPOSURE_ID: [u8; 32] = [0x7a; 32];
 const HOLDER_TOKEN: Pubkey = Pubkey::new_from_array([0x78; 32]);
 const SLEEPER_TOKEN: Pubkey = Pubkey::new_from_array([0xc1; 32]);
 const SLEEPER_SHARDS: u64 = 40;
+const FAILURE_BOUNTY: u64 = 40_000;
+const TERMINAL_SEQUENCE: u64 = 1;
+const RECIPIENT_TOKEN: Pubkey = Pubkey::new_from_array([0xc2; 32]);
 /// Representation width the exterior runs at, inside the settleable bound.
 pub const WIDTH: usize = 4;
 
@@ -95,6 +119,325 @@ pub struct StagedAccount {
     pub owner: Pubkey,
     /// Exact account bytes.
     pub data: Vec<u8>,
+}
+
+/// Stage one open Fractional market with a live funded Source, but no terminal.
+///
+/// The Source and active funding ledger are the genesis boundary. The failure
+/// certificate and Core terminal receipt are deliberately absent and can only
+/// be produced by executing Resolution and Core.
+pub fn stage_terminal(
+    elves: &Elves<'_>,
+    resolution_elf: &[u8],
+    actor: Pubkey,
+    sleeper_owner: Pubkey,
+) -> TerminalStaged {
+    stage_terminal_at(elves, resolution_elf, actor, sleeper_owner, OUTCOME)
+}
+
+/// Stage the same preterminal lifecycle with the sleeper holding the eventual
+/// failure winner, so the produced terminal can execute `TerminalRedeem`.
+pub fn stage_terminal_redeem(
+    elves: &Elves<'_>,
+    resolution_elf: &[u8],
+    actor: Pubkey,
+    sleeper_owner: Pubkey,
+) -> TerminalStaged {
+    stage_terminal_at(
+        elves,
+        resolution_elf,
+        actor,
+        sleeper_owner,
+        u32::try_from(WIDTH - 1).expect("failure winner"),
+    )
+}
+
+fn stage_terminal_at(
+    elves: &Elves<'_>,
+    resolution_elf: &[u8],
+    actor: Pubkey,
+    sleeper_owner: Pubkey,
+    represented_outcome: u32,
+) -> TerminalStaged {
+    let probe = stage_with_resolution_identities(
+        elves,
+        Some(resolution_elf),
+        actor,
+        sleeper_owner,
+        [0x51; 32],
+        [0x52; 32],
+        represented_outcome,
+    );
+    let source_spec = SourceContentId::new([0x91; 32]).expect("source spec identity");
+    let window_value = WindowSpecV1::new(
+        source_spec,
+        WindowKind::Terminal,
+        0,
+        1,
+        1,
+        0,
+        SourceContentId::new([0x92; 32]).expect("schedule identity"),
+    )
+    .expect("expired terminal window");
+    let window = finalized(
+        REGISTRY,
+        WINDOW_SPEC_SCHEMA_ID_V1,
+        window_value.to_bytes().to_vec(),
+    );
+    let material_value = SourceMaterialV3::explicitly_unbounded(
+        SourceContentId::new(probe.product).expect("product identity"),
+        source_spec,
+        SourceContentId::new(window.digest).expect("window identity"),
+        SourceContentId::new([0x93; 32]).expect("statistic identity"),
+        None,
+        SourceContentId::new(SOURCE_FAILURE_POLICY_RELEASE_ID_V2).expect("failure policy identity"),
+    );
+    let source_material = finalized(
+        REGISTRY,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        material_value.to_bytes().to_vec(),
+    );
+
+    let funding_rent = solana_program::rent::Rent::default().minimum_balance(FUNDING_STATE_BYTES);
+    let entry = |seed: u8, config: [u8; 32], bounty: u64| {
+        CapabilityEntryV1::new(
+            ContentId::new([seed; 32]).expect("capability kind"),
+            ContentId::new(RESOLUTION_CONTROLLER_RELEASE_ID_V7).expect("Resolution release"),
+            ContentId::new(config).expect("funding config"),
+            ContentId::new([0xa4; 32]).expect("request schema"),
+            ContentId::new([0xa5; 32]).expect("root schema"),
+            ContentId::new([0xa6; 32]).expect("retirement schema"),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(
+                FundingAmountsV1::new(
+                    CompartmentFundingV1::native_lamports(funding_rent).expect("funding rent"),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    if bounty == 0 {
+                        CompartmentFundingV1::not_applicable()
+                    } else {
+                        CompartmentFundingV1::native_lamports(bounty).expect("failure bounty")
+                    },
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                )
+                .expect("typed Resolution funding"),
+                None,
+            )
+            .expect("Resolution funding quote"),
+        )
+        .expect("Resolution manifest entry")
+    };
+    let mut entries = vec![
+        entry(0xa1, [0xb1; 32], 0),
+        entry(0xa2, [0xb2; 32], 0),
+        entry(0xa3, source_material.digest, FAILURE_BOUNTY),
+    ];
+    entries.sort_by(|left, right| left.kind_id().to_bytes().cmp(&right.kind_id().to_bytes()));
+    let mut manifest_bytes =
+        vec![0; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&entries, &mut manifest_bytes)
+        .expect("Resolution capability manifest");
+    let capability_manifest = finalized(
+        REGISTRY,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest_bytes,
+    );
+    let manifest = CapabilityManifestV1::decode(&capability_manifest.bytes)
+        .expect("Resolution capability manifest view");
+    let selected_mask = (1_u16 << entries.len()) - 1;
+
+    let mut base = stage_with_resolution_identities(
+        elves,
+        Some(resolution_elf),
+        actor,
+        sleeper_owner,
+        source_material.digest,
+        capability_manifest.digest,
+        represented_outcome,
+    );
+    let market_account = base
+        .accounts
+        .iter_mut()
+        .find(|account| account.key == base.market)
+        .expect("staged Core Market");
+    let mut market_state =
+        dclutch_market::CoreState::decode(&market_account.data).expect("open Core Market state");
+    // The narrow fixture already carries the live Fractional root. The Primary
+    // Source is the second admitted capability at this continuation boundary.
+    market_state.outstanding_capabilities = 2;
+    market_account.data = market_state
+        .encode()
+        .expect("open Core Market state")
+        .to_vec();
+    let (source_state, source_bump) = Pubkey::find_program_address(
+        &[
+            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            base.market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RESOLUTION,
+    );
+    let source = SourceResolutionStateV2::fresh(
+        base.market.to_bytes(),
+        GENERATION,
+        SourceContentId::new(source_material.digest).expect("material identity"),
+        RENT_CREDIT.to_bytes(),
+        source_bump,
+        1,
+        1,
+    )
+    .expect("fresh primary Source")
+    .state();
+
+    let slot_count = u16::try_from(selected_mask.count_ones()).expect("funding slot count");
+    let funding_bytes = funding_ledger_bytes_v2(slot_count).expect("funding ledger width");
+    let mut funding_data = vec![0; funding_bytes];
+    let rent = solana_program::rent::Rent::default();
+    let funded_rate = derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        funding_bytes,
+        rent.minimum_balance(funding_bytes),
+    )
+    .expect("affine default rent");
+    let manifest_id =
+        CapabilityContentId::new(capability_manifest.digest).expect("manifest identity");
+    FundingLedgerV2::initialize(
+        &mut funding_data,
+        manifest_id,
+        manifest,
+        selected_mask,
+        funded_rate,
+    )
+    .expect("pending funding ledger");
+    for index in 0_u16..u16::try_from(entries.len()).expect("manifest width") {
+        FundingLedgerV2::activate_in_place(&mut funding_data, manifest_id, manifest, index, 1)
+            .expect("active Resolution funding row");
+    }
+    let ledger = FundingLedgerV2::decode(&funding_data)
+        .and_then(|value| value.authenticate(manifest_id, manifest))
+        .expect("authenticated active funding ledger");
+    let funding_principal = ledger
+        .remaining_native_lamports_total()
+        .expect("bounded Resolution principal");
+    let derivation = CapabilityFundingLedgerDerivationV2::new(
+        RESOLUTION.to_bytes(),
+        base.market.to_bytes(),
+        GENERATION,
+        manifest_id,
+        FundingLedgerV2::decode(&funding_data).expect("funding ledger"),
+    )
+    .expect("funding ledger derivation");
+    let funding_ledger = Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION).0;
+    let certificate = Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+            source_state.as_ref(),
+            &[ResolutionCertificateKindV2::ResolutionFailure.kind_seed()],
+            &TERMINAL_SEQUENCE.to_le_bytes(),
+        ],
+        &RESOLUTION,
+    )
+    .0;
+    let custody_replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::new(
+            base.market.to_bytes(),
+            base.release_set,
+            CallerRoleV1::Claims,
+            CUSTODY_CONTEXT,
+        )
+        .as_slices(),
+        &CUSTODY,
+    )
+    .0;
+    let custody_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(base.market.to_bytes(), base.release_set).as_slices(),
+        &CUSTODY,
+    )
+    .0;
+    let hoard = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            base.market.to_bytes(),
+            base.release_set,
+            CUSTODY_CONTEXT,
+            CompartmentV1::HoardPrincipal,
+        )
+        .as_slices(),
+        &CUSTODY,
+    )
+    .0;
+
+    for record in [&source_material, &window, &capability_manifest] {
+        base.accounts.push(StagedAccount {
+            key: record.raw,
+            owner: record.owner,
+            data: record.bytes.clone(),
+        });
+        base.accounts.push(StagedAccount {
+            key: record.staging,
+            owner: system(),
+            data: Vec::new(),
+        });
+    }
+    let winning_collateral = if represented_outcome == u32::try_from(WIDTH - 1).expect("winner") {
+        SLEEPER_SHARDS / DENOMINATOR
+    } else {
+        0
+    };
+    base.accounts.extend([
+        StagedAccount {
+            key: source_state,
+            owner: RESOLUTION,
+            data: source.to_bytes().to_vec(),
+        },
+        StagedAccount {
+            key: funding_ledger,
+            owner: RESOLUTION,
+            data: funding_data,
+        },
+        StagedAccount {
+            key: COLLATERAL_MINT,
+            owner: token_program(),
+            data: collateral_mint_bytes(winning_collateral),
+        },
+        StagedAccount {
+            key: hoard,
+            owner: token_program(),
+            data: token_account_bytes(COLLATERAL_MINT, custody_authority, winning_collateral),
+        },
+        StagedAccount {
+            key: RECIPIENT_TOKEN,
+            owner: token_program(),
+            data: token_account_bytes(COLLATERAL_MINT, sleeper_owner, 0),
+        },
+    ]);
+
+    TerminalStaged {
+        base,
+        source_material,
+        capability_manifest,
+        source_state,
+        funding_ledger,
+        funding_principal,
+        certificate,
+        custody_replay,
+        custody_authority,
+        hoard,
+        recipient_token: RECIPIENT_TOKEN,
+        winning_collateral,
+        terminal_sequence: TERMINAL_SEQUENCE,
+    }
+}
+
+fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
+    let mut bytes = vec![0; 82];
+    put(&mut bytes, 36, &supply.to_le_bytes());
+    bytes[45] = 1;
+    bytes
 }
 
 /// One account reference inside a submitted instruction.
@@ -196,6 +539,8 @@ pub struct Staged {
     pub product: [u8; 32],
     /// ProductBasisV3 record content identity.
     pub product_basis: [u8; 32],
+    /// CompositionExposureV3 record content identity.
+    pub exposure: [u8; 32],
     /// Fractional terms record content identity.
     pub terms: [u8; 32],
     /// Claims aggregate carried into compaction.
@@ -208,6 +553,37 @@ pub struct Staged {
     pub sleeper_owner: Pubkey,
     /// Exact outstanding shard atoms carried into compaction.
     pub sleeper_shards: u64,
+}
+
+/// Resolution and Custody coordinates added to the open Fractional stage.
+#[derive(Clone, Debug)]
+pub struct TerminalStaged {
+    /// The shared open-market stage and its three preterminal actions.
+    pub base: Staged,
+    /// Finalized Source material record.
+    pub source_material: NarrowRecordV2,
+    /// Finalized capability manifest record.
+    pub capability_manifest: NarrowRecordV2,
+    /// Live primary Source state; the terminal transition itself is not staged.
+    pub source_state: Pubkey,
+    /// Active Resolution funding ledger debited by the failure walk.
+    pub funding_ledger: Pubkey,
+    /// Native principal the runner must transfer into the ledger before walking.
+    pub funding_principal: u64,
+    /// Vacant ResolutionFailure certificate seat written by the walk.
+    pub certificate: Pubkey,
+    /// Claims-role Custody replay created by the real first-use route.
+    pub custody_replay: Pubkey,
+    /// Market Custody authority.
+    pub custody_authority: Pubkey,
+    /// Market Hoard token account.
+    pub hoard: Pubkey,
+    /// Holder collateral recipient.
+    pub recipient_token: Pubkey,
+    /// Exact collateral atoms paid when the sleeper holds the failure winner.
+    pub winning_collateral: u64,
+    /// Terminal sequence committed by Resolution and Core.
+    pub terminal_sequence: u64,
 }
 
 fn selection_config_digest(terms: &NarrowRecordV2) -> [u8; 32] {
@@ -303,16 +679,19 @@ pub struct Elves<'a> {
     pub caller: &'a [u8],
 }
 
-fn activation_cache(elves: &Elves<'_>) -> ([u8; 32], Vec<u8>) {
+fn activation_cache(elves: &Elves<'_>, resolution_elf: Option<&[u8]>) -> ([u8; 32], Vec<u8>) {
     let core = release(CORE, 0x31, elves.core);
     let claims = release(CLAIMS, 0x32, elves.claims);
     let trading = release(CALLER, 0x33, elves.caller);
     let custody = release(CUSTODY, 0x34, elves.custody);
+    let resolution = resolution_elf
+        .map(|elf| release(RESOLUTION, 0x35, elf))
+        .unwrap_or(claims);
     let set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(claims),
         binding(trading),
-        binding(claims),
+        binding(resolution),
         binding(custody),
     )
     .expect("release set");
@@ -324,7 +703,7 @@ fn activation_cache(elves: &Elves<'_>) -> ([u8; 32], Vec<u8>) {
         (ExecutionRoleV1::Core, core),
         (ExecutionRoleV1::Claims, claims),
         (ExecutionRoleV1::Trading, trading),
-        (ExecutionRoleV1::Resolution, claims),
+        (ExecutionRoleV1::Resolution, resolution),
         (ExecutionRoleV1::Custody, custody),
     ] {
         activate_execution_role_into_v1(
@@ -371,7 +750,27 @@ fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
 
 /// Stage the open-market Fractional exterior: Wrap then WholeUnwrap.
 pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged {
-    let (release_set, cache) = activation_cache(elves);
+    stage_with_resolution_identities(
+        elves,
+        None,
+        actor,
+        sleeper_owner,
+        [0x51; 32],
+        [0x52; 32],
+        OUTCOME,
+    )
+}
+
+fn stage_with_resolution_identities(
+    elves: &Elves<'_>,
+    resolution_elf: Option<&[u8]>,
+    actor: Pubkey,
+    sleeper_owner: Pubkey,
+    resolution_policy: [u8; 32],
+    capability_manifest: [u8; 32],
+    represented_outcome: u32,
+) -> Staged {
+    let (release_set, cache) = activation_cache(elves, resolution_elf);
     let cache_key =
         Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set], &REGISTRY).0;
 
@@ -393,11 +792,14 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged 
         .to_bytes()
         .to_vec(),
     );
-    let probe = compile(
+    let probe = compile_with_resolution(
         release_set,
         realm.digest,
         actor,
         Pubkey::new_from_array([0xef; 32]),
+        resolution_policy,
+        capability_manifest,
+        represented_outcome,
     );
     let core_market = probe.core_market;
 
@@ -409,7 +811,9 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged 
             bytes
         })
         .collect();
-    let shard_mint = Pubkey::new_from_array(shard_mints[OUTCOME as usize]);
+    let shard_mint = Pubkey::new_from_array(
+        shard_mints[usize::try_from(represented_outcome).expect("represented outcome")],
+    );
     let behavior = finalized(
         REGISTRY,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
@@ -450,8 +854,7 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged 
     let selection = CapabilityExecutionSelectionV1::new(
         0,
         ContentId::new([0x81; 32]).expect("manifest"),
-        ContentId::new(dclutch_claims::fractional::FRACTIONAL_CAPABILITY_KIND_ID_V1)
-            .expect("kind"),
+        ContentId::new(dclutch_claims::fractional::FRACTIONAL_CAPABILITY_KIND_ID_V1).expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
         ContentId::new(selection_config_digest(&terms)).expect("config"),
     )
@@ -465,7 +868,15 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged 
     )
     .expect("root header");
     let (root, bump) = Pubkey::find_program_address(&header.seeds().as_slices(), &CALLER);
-    let shared = compile(release_set, realm.digest, actor, root);
+    let shared = compile_with_resolution(
+        release_set,
+        realm.digest,
+        actor,
+        root,
+        resolution_policy,
+        capability_manifest,
+        represented_outcome,
+    );
     assert_eq!(shared.core_market, core_market, "Market must not move");
 
     let state = FractionalRootV1::new(FractionalRootInputV1 {
@@ -586,7 +997,7 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged 
                 terminal_digest: [0; 32],
                 expected_revision: ROOT_REVISION,
                 quantity,
-                representation_coordinate: OUTCOME,
+                representation_coordinate: represented_outcome,
             },
         )
         .expect("request");
@@ -713,11 +1124,13 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged 
         sleeper_token: SLEEPER_TOKEN,
         actor_position: shared.actor_position.account,
         reserve_position: shared.reserve_position.account,
-        representation_coordinate: OUTCOME as usize,
+        representation_coordinate: usize::try_from(represented_outcome)
+            .expect("represented outcome"),
         release_set,
         realm: realm.digest,
         product: shared.product.digest,
         product_basis: shared.linked_basis.digest,
+        exposure: shared.exposure.digest,
         terms: terms.digest,
         aggregate: shared.claims_market,
         market: shared.core_market,
@@ -733,10 +1146,30 @@ fn compile(
     actor: Pubkey,
     reserve: Pubkey,
 ) -> NarrowFixtureV2 {
+    compile_with_resolution(
+        release_set,
+        realm_id,
+        actor,
+        reserve,
+        [0x51; 32],
+        [0x52; 32],
+        OUTCOME,
+    )
+}
+
+fn compile_with_resolution(
+    release_set: [u8; 32],
+    realm_id: [u8; 32],
+    actor: Pubkey,
+    reserve: Pubkey,
+    resolution_policy: [u8; 32],
+    capability_manifest: [u8; 32],
+    represented_outcome: u32,
+) -> NarrowFixtureV2 {
     let knots = [0_i128, 0, 0, 0, 3, 3, 3, 3];
     let failure_payouts = [0_u64, 0, 0, CUBIC_PAYOUT_SCALE];
     let price_gate = curved_price_gate_certificate();
-    compile_narrow_fixture_v3(
+    compile_narrow_fixture_v4(
         NarrowFixtureInputV2 {
             outcome_count: WIDTH,
             registry_program: REGISTRY,
@@ -748,7 +1181,7 @@ fn compile(
             generation: GENERATION,
             actor_owner: actor,
             reserve_owner: reserve,
-            funded_coordinate: OUTCOME as usize,
+            funded_coordinate: usize::try_from(represented_outcome).expect("represented outcome"),
             funded_balance: ACTOR_FUNDED_BALANCE,
             reserve_balance: 0,
             position_revision: 0,
@@ -766,6 +1199,8 @@ fn compile(
             failure_payouts: &failure_payouts,
             price_gate_certificate: &price_gate,
         }),
+        resolution_policy,
+        capability_manifest,
     )
     .expect("narrow fixture at the exterior width")
 }
@@ -824,4 +1259,63 @@ fn rent_sysvar() -> Pubkey {
         6, 167, 213, 23, 25, 44, 92, 81, 33, 140, 201, 76, 61, 74, 241, 127, 88, 218, 238, 8, 155,
         161, 253, 68, 227, 219, 217, 138, 0, 0, 0, 0,
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_modes_stage_only_preterminal_facts_and_exact_collateral() {
+        let claims = [1_u8];
+        let registry = [2_u8];
+        let core = [3_u8];
+        let custody = [4_u8];
+        let caller = [5_u8];
+        let resolution = [6_u8];
+        let elves = Elves {
+            claims: &claims,
+            registry: &registry,
+            core: &core,
+            custody: &custody,
+            caller: &caller,
+        };
+        let actor = Pubkey::new_from_array([0x31; 32]);
+        let sleeper = Pubkey::new_from_array([0x32; 32]);
+        let zero = stage_terminal(&elves, &resolution, actor, sleeper);
+        let redeem = stage_terminal_redeem(&elves, &resolution, actor, sleeper);
+
+        assert_eq!(zero.base.representation_coordinate, OUTCOME as usize);
+        assert_eq!(zero.winning_collateral, 0);
+        assert_eq!(redeem.base.representation_coordinate, WIDTH - 1);
+        assert_eq!(redeem.winning_collateral, SLEEPER_SHARDS / DENOMINATOR);
+        for staged in [&zero, &redeem] {
+            assert!(
+                staged
+                    .base
+                    .accounts
+                    .iter()
+                    .all(|account| account.key != staged.certificate
+                        && account.key != staged.custody_replay)
+            );
+            let market = staged
+                .base
+                .accounts
+                .iter()
+                .find(|account| account.key == staged.base.market)
+                .unwrap();
+            let state = dclutch_market::CoreState::decode(&market.data).unwrap();
+            assert_eq!(state.phase, dclutch_market::Phase::Open);
+            assert!(state.terminal_receipt.is_none());
+            assert_eq!(state.outstanding_capabilities, 2);
+            assert_eq!(
+                state.identity.resolution_policy.to_bytes(),
+                staged.source_material.digest,
+            );
+            assert_eq!(
+                state.identity.capability_manifest.to_bytes(),
+                staged.capability_manifest.digest,
+            );
+        }
+    }
 }

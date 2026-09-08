@@ -16,24 +16,24 @@ remains a separate substrate.
 
 | partition | routes | authority |
 | --- | ---: | --- |
-| **historical accepted Agave** | **54** | checked native local-validator ledgers and successful devnet records; not final-source coverage |
+| **historical accepted Agave** | **56** | checked native local-validator ledgers and successful devnet records; not final-source coverage |
 | **checked ProgramTest accepted** | 0 | checked native ProgramTest ledgers; no validator claim |
-| **successful binding only** | 72 | authored `executed` bindings without a checked native row |
+| **successful binding only** | 70 | authored `executed` bindings without a checked native row |
 | **checked refused-only** | 1 | finalized native refusal and no native acceptance |
 | **refusal binding only** | 0 | authored `refused` binding without a checked native row |
 | **blocked** | 32 | no evidence or binding; a blocker records why and who owns it |
 | **unrecorded** | 3 | no evidence, binding or reason |
 
-- **historical accepted Agave union: 54 of 162** -- an
+- **historical accepted Agave union: 56 of 162** -- an
   `executed` finalized native observation in a checked census ledger or an
   `executed` corroborated devnet record. A binding cannot enter this set, and
   this count is not final-source acceptance.
-- **historical local-validator accepted: 9 of 162** --
+- **historical local-validator accepted: 11 of 162** --
   checked successful local-validator ledger rows.
 - **historical devnet accepted: 46 of 162** --
   checked successful devnet records. The local and devnet sets can overlap, so
   their counts do not add to the union.
-- **successful-binding-only: 72 of 162** -- at
+- **successful-binding-only: 70 of 162** -- at
   least one campaign binding says `executed`, but no checked native observation
   in the repository does. Its declared substrate is useful provenance, not an
   acceptance result.
@@ -62,6 +62,7 @@ totals are never edited by hand.
 | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` | local-validator | historical-source-split | 5 | 0 | `f5f1d29961ccf7f4` |
 | `docs/evidence/ensemble-execution-coverage-2026-09-08/ledger.json` | local-validator | historical-source-split | 2 | 0 | `c9683a66e493fe4d` |
 | `docs/evidence/claims-fractional-selector-corroboration-2026-09-08/ledger.json` | local-validator | historical-source-split | 2 | 0 | `b63a9b0336a12416` |
+| `docs/evidence/claims-claim-check-validator-2026-09-08/ledger.json` | local-validator | historical-source-split | 2 | 2 | `0c20af14141c8dd2` |
 
 Existing devnet witness files are also exact native evidence, split by their
 recorded outcome:
@@ -149,14 +150,14 @@ not decide which.
 | `claims/affine_batch_v2::process` | program-test success claim | `claims-affine-batch-programtest` (executed); no checked native ledger row; binding register: `claims-affine-batch-programtest` (refused) | `tools/gauntlet/claims-affine-batch/bindings.json` |
 | `claims/claim_check_compaction_v1::process_compaction` | program-test success claim | `claims-claim-check-programtest` (executed); no checked native ledger row; binding register: `claims-claim-check-programtest` (refused) | `tools/gauntlet/claims-claim-check/bindings.json` |
 | `claims/claim_check_compaction_v1::process_open_escrow` | program-test success claim | `claims-claim-check-programtest` (executed), `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-claim-check-programtest` (refused) | `tools/gauntlet/claims-claim-check/bindings.json`<br>`tools/gauntlet/claims-fractional-atomic/bindings.json` |
-| `claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow` | program-test success claim | `claims-claim-check-programtest` (executed), `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-claim-check-programtest` (refused), `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-claim-check/bindings.json`<br>`tools/gauntlet/claims-fractional-atomic/bindings.json` |
+| `claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow` | local-validator accepted (historical) | local-validator `claims-claim-check-local-validator-v1` slot 260 `5oGSmdK3YREz...`; binding register: `claims-claim-check-programtest` (executed), `claims-claim-check-programtest` (refused), `claims-fractional-atomic-programtest` (executed), `claims-fractional-atomic-programtest` (refused) | `docs/evidence/claims-claim-check-validator-2026-09-08/ledger.json` |
 | `claims/claim_check_redemption_v1::process_redemption#else` | program-test success claim | `claims-claim-check-programtest` (executed); no checked native ledger row; binding register: `claims-claim-check-programtest` (refused) | `tools/gauntlet/claims-claim-check/bindings.json` |
 | `claims/claims_conservation_v1::process` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/custody_replay_v1::process` | devnet accepted (historical) | devnet `cohort-13` slot 492,151,322 `5JKdUXJurc4j...`; devnet `cohort-14` slot 492,550,558 `4aXbeYtXiVkA...`; devnet `cohort-16` slot 493,826,534 `4LfQK3ReWZKP...`; devnet `cohort-17` slot 494,151,055 `5BKhaEC86PK5...`; binding register: `claims-claim-check-programtest` (executed), `claims-fractional-atomic-programtest` (executed), `claims-rational-representation-v2-programtest` (executed), `claims-rational-representation-v2-programtest` (refused) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `claims/founding_v5::process` | devnet accepted (historical) | devnet `cohort-13` slot 491,963,072 `5Ji1babqGgui...`; local-validator `live-structured-control` slot 9,789 `2U3PJ1SLaQ7Q...`; binding register: `claims-fractional-atomic-programtest` (executed), `claims-fractional-atomic-programtest` (refused), `tier1` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
 | `claims/fractional_atomic_v3::process` | local-validator accepted (historical) | local-validator `claims-fractional-local-validator-v1-selector-corroboration` slot 132 `3RtSzWNB3oRf...`; local-validator `claims-fractional-local-validator-v1-selector-corroboration` slot 197 `59KbAa5rSzew...` | `docs/evidence/claims-fractional-selector-corroboration-2026-09-08/ledger.json` |
 | `claims/fractional_claim_check_v1::process_fractional_compaction` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
-| `claims/fractional_claim_check_v1::process_fractional_redemption` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
+| `claims/fractional_claim_check_v1::process_fractional_redemption` | local-validator accepted (historical) | local-validator `claims-claim-check-local-validator-v1` slot 164 `2NE3qthWCMrF...`; local-validator `claims-claim-check-local-validator-v1` slot 228 `58oJZmU1a9yM...`; binding register: `claims-fractional-atomic-programtest` (executed), `claims-fractional-atomic-programtest` (refused) | `docs/evidence/claims-claim-check-validator-2026-09-08/ledger.json` |
 | `claims/fractional_retirement_v3::process` | program-test success claim | `claims-family-programtest` (executed); no checked native ledger row; binding register: `claims-family-programtest` (refused) | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/market_closure_v1::process_checkpoint_handoff` | program-test success claim | `retirement-checkpoint-programtest` (executed); no checked native ledger row; binding register: `retirement-checkpoint-programtest` (refused) | `tools/gauntlet/retirement-checkpoint/bindings.json` |
 | `claims/process_begin#Begin` | program-test success claim | `claims-family-programtest` (executed); no checked native ledger row | `tools/gauntlet/claims-custody/claims-bindings.json` |

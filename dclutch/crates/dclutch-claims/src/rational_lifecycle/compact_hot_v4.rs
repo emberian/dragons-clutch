@@ -224,6 +224,99 @@ impl<'a> RationalLifecycleCompactHotRequestV4<'a> {
         Ok(header)
     }
 
+    /// Derive the canonical child from descriptor support and supplied vacancy
+    /// keys. All semantic validation is the existing `prepare` owner. Output
+    /// remains byte-identical on refusal; scratch is explicitly disposable.
+    pub fn specialize_child_into<'b>(
+        self,
+        family_digest: [u8; 32],
+        descriptor: RepresentationDescriptorV2<'_>,
+        vacancy_keys: &[[u8; 32]],
+        scratch: &mut [u8],
+        output: &'b mut [u8],
+    ) -> Result<LifecycleRequestV2<'b>> {
+        let mut support = 0_u32;
+        for outcome in 0..descriptor.outcome_count() {
+            if descriptor
+                .coefficient(outcome)
+                .map_err(|_| Error::DescriptorMismatch)?
+                != 0
+            {
+                support = support.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+        }
+        let count = usize::try_from(support).map_err(|_| Error::InvalidLength)?;
+        if count == 0
+            || vacancy_keys.len()
+                != count
+                    .checked_mul(LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2)
+                    .ok_or(Error::InvalidLength)?
+        {
+            return Err(Error::InvalidSupport);
+        }
+        let width = count
+            .checked_mul(LIFECYCLE_COORDINATE_BYTES_V2)
+            .and_then(|rows| rows.checked_add(LIFECYCLE_HEADER_BYTES_V2))
+            .ok_or(Error::InvalidLength)?;
+        if output.len() != width || scratch.len() != width {
+            return Err(Error::InvalidLength);
+        }
+        let mut header = [0; LIFECYCLE_HEADER_BYTES_V2];
+        self.specialize_child_header_into(family_digest, support, &mut header)?;
+        scratch.fill(0);
+        put(scratch, 0, &header)?;
+        let mut row = 0_usize;
+        for outcome in 0..descriptor.outcome_count() {
+            let coefficient = descriptor
+                .coefficient(outcome)
+                .map_err(|_| Error::DescriptorMismatch)?;
+            if coefficient == 0 {
+                continue;
+            }
+            let base = row
+                .checked_mul(LIFECYCLE_COORDINATE_BYTES_V2)
+                .and_then(|offset| offset.checked_add(LIFECYCLE_HEADER_BYTES_V2))
+                .ok_or(Error::InvalidLength)?;
+            put(scratch, base + ROW_OUTCOME_OFFSET, &outcome.to_le_bytes())?;
+            put(
+                scratch,
+                base + ROW_COEFFICIENT_OFFSET,
+                &coefficient.to_le_bytes(),
+            )?;
+            let keys = row
+                .checked_mul(LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2)
+                .ok_or(Error::InvalidLength)?;
+            for (field, offset) in [
+                ROW_SHARD_MINT_OFFSET,
+                ROW_STRUCTURED_CUSTODY_OFFSET,
+                ROW_CUSTODY_OWNER_OFFSET,
+                ROW_CUSTODY_POSITION_OFFSET,
+                ROW_POSITION_ADMISSION_OFFSET,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                put(
+                    scratch,
+                    base + offset,
+                    vacancy_keys
+                        .get(keys + field)
+                        .ok_or(Error::InvalidSupport)?,
+                )?;
+            }
+            put(
+                scratch,
+                base + ROW_POSITION_REVISION_OFFSET,
+                &ABSENT_POSITION_REVISION_V2.to_le_bytes(),
+            )?;
+            row = row.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        let request = LifecycleRequestV2::decode(scratch)?;
+        prepare(request, descriptor)?;
+        output.copy_from_slice(scratch);
+        LifecycleRequestV2::decode(output)
+    }
+
     /// Encode one chain-observed fixed header into the compact family form.
     ///
     /// The input must already select RetireReceipt with no caller-owned row

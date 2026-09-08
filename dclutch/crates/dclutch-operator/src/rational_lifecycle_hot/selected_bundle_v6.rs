@@ -106,7 +106,6 @@ pub fn build_rational_lifecycle_selected_bundle_v6(
     let selection = input.token_behavior_selection;
     let release_set = selection.release_set();
     let token_program = selection.token_program();
-    let token_behavior_selection = selection.to_bytes();
     if release_set == [0; 32] || token_program == [0; 32] {
         return Err(Error::ContentIdentity);
     }
@@ -115,6 +114,30 @@ pub fn build_rational_lifecycle_selected_bundle_v6(
     let request_profile = encode_rational_lifecycle_selected_request_profile_v6(input.action)?;
     let transition = encode_rational_lifecycle_transition_v6(input.action, coordinate_count)?;
     let effect = encode_rational_lifecycle_selected_effect_v6(input.action)?;
+    assemble_selected_bundle_v6(
+        input,
+        account_profile,
+        request_profile,
+        transition,
+        effect,
+        RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6,
+        dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
+    )
+}
+
+pub(super) fn assemble_selected_bundle_v6(
+    input: RationalLifecycleSelectedBundleInputV6<'_>,
+    account_profile: Vec<u8>,
+    request_profile: Vec<u8>,
+    transition: Vec<u8>,
+    effect: Vec<u8>,
+    request_schema: [u8; 32],
+    profile_schema: [u8; 32],
+) -> Result<RationalLifecycleSelectedBundleV6> {
+    let selection = input.token_behavior_selection;
+    let release_set = selection.release_set();
+    let token_program = selection.token_program();
+    let token_behavior_selection = selection.to_bytes();
     let lifecycle_policy = Vec::from(input.lifecycle_policy);
     let lifecycle_id = digest(&lifecycle_policy)?;
     let strategy = ExecutionStrategyProgramV2::new(
@@ -133,7 +156,7 @@ pub fn build_rational_lifecycle_selected_bundle_v6(
     let descriptor = CapabilityProgramV4::new(
         content(input.kind)?,
         content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
-        content(RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6)?,
+        content(request_schema)?,
         content(input.root_schema)?,
         lifecycle_id,
         content(input.capacity_profile)?,
@@ -142,10 +165,7 @@ pub fn build_rational_lifecycle_selected_bundle_v6(
                 dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 hash(&account_profile).to_bytes(),
             )?,
-            request_profile: artifact(
-                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
-                hash(&request_profile).to_bytes(),
-            )?,
+            request_profile: artifact(profile_schema, hash(&request_profile).to_bytes())?,
             lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
             strategy: artifact(
                 EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
@@ -182,6 +202,9 @@ pub fn build_rational_lifecycle_selected_bundle_v6(
 pub fn validate_rational_lifecycle_selected_bundle_v6(
     bundle: &RationalLifecycleSelectedBundleV6,
 ) -> Result<()> {
+    if bundle.action == LifecycleActionV2::RetireReceipt {
+        return super::dynamic_retirement_v1::validate_dynamic_retirement_bundle_v1(bundle);
+    }
     let coordinate_count = coordinate_count(bundle.action)?;
     let coordinates = usize::try_from(coordinate_count).map_err(|_| Error::InvalidLength)?;
     let descriptor = CapabilityProgramV4::decode(&bundle.descriptor).map_err(Error::Descriptor)?;

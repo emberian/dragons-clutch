@@ -26,7 +26,7 @@ use dclutch_registry::{
 };
 use dclutch_source::resolution::{
     DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DIRECT_FUNDING_CLOSE_REQUEST_MAGIC_V1,
-    DirectFundingCloseRequestV1, FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
+    DirectFundingCloseRequestV1, EnsembleFragmentSeatSeedsV1, FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
     FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, FUNDING_ACTIVATION_REQUEST_BYTES_V1,
     FUNDING_ACTIVATION_REQUEST_MAGIC_V1, FundingActivationReceiptV1, FundingActivationRequestV1,
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
@@ -38,9 +38,9 @@ use dclutch_source::resolution::{
     funding_lifecycle_account_digest_v1,
 };
 use dclutch_source::{
-    RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-    SOURCE_RESOLUTION_STATE_BYTES_V2, SourceMaterialV3, SourceResolutionPhaseV1,
-    SourceResolutionRouteV1, SourceResolutionStateV2,
+    ENSEMBLE_MAX_MEMBERS_V1, EnsembleTerminalCapitalPlanV1, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_BYTES_V2,
+    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionRouteV1, SourceResolutionStateV2,
 };
 use solana_program::{
     account_info::{AccountInfo, next_account_info},
@@ -76,8 +76,11 @@ pub(crate) const VERIFY_FUND_ACCOUNT_COUNT: usize = 19;
 pub(crate) const ADMIT_TERMINAL_ACCOUNT_COUNT: usize = 22;
 /// Close: common fourteen, certificate/closure/beneficiary/Clock/Rent/System, and recovery pair.
 pub(crate) const CLOSE_FUND_ACCOUNT_COUNT: usize = 22;
-/// Direct activation: fixed eighteen accounts and optional finalized RecoveryPolicy pair.
-pub(crate) const DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1: usize = 20;
+/// Direct activation prefix before an optional policy pair and Ensemble seats.
+pub(crate) const DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1: usize = 18;
+/// Largest direct activation: prefix, policy pair, and every bounded member seat.
+pub(crate) const DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1: usize =
+    DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1 + 2 + ENSEMBLE_MAX_MEMBERS_V1 as usize;
 /// Direct close: fixed nineteen accounts and optional finalized RecoveryPolicy pair.
 pub(crate) const DIRECT_FUNDING_CLOSE_ACCOUNT_COUNT_V1: usize = 21;
 
@@ -124,6 +127,20 @@ struct DirectFundingAccounts<'a, 'info> {
     clock: &'a AccountInfo<'info>,
     rent: &'a AccountInfo<'info>,
     system: &'a AccountInfo<'info>,
+}
+
+#[derive(Clone, Copy)]
+struct DirectFundingPlanV1 {
+    expected_mask: u16,
+    terminal_capital: Option<EnsembleTerminalCapitalPlanV1>,
+}
+
+#[derive(Clone, Copy)]
+struct DirectEnsembleCapitalCommitV1 {
+    seat_lamports_after: [u64; ENSEMBLE_MAX_MEMBERS_V1 as usize],
+    seat_count: u8,
+    source_lamports_after: Option<u64>,
+    beneficiary_credit_lamports: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -224,18 +241,28 @@ pub(crate) fn process_direct_funding_activation_v1(
         .map_err(|_| ResolutionError::Funding)?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
-    let expected_mask =
-        authenticate_direct_material_and_funding(direct, accounts, request.as_ref(), manifest)
-            .map_err(|error| {
+    let next_terminal_sequence =
+        authenticate_direct_source(program_id, direct, request.as_ref(), state).map_err(
+            |error| {
                 solana_program::msg!(
-                    "funding activation refused: material and funding {:?}",
+                    "funding activation refused: source authentication {:?}",
                     error
                 );
                 error
-            })?;
-    authenticate_direct_source(program_id, direct, request.as_ref(), state).map_err(|error| {
+            },
+        )?;
+    let funding_plan = authenticate_direct_material_and_funding(
+        program_id,
+        direct,
+        accounts,
+        request.as_ref(),
+        manifest,
+        &rent,
+        next_terminal_sequence,
+    )
+    .map_err(|error| {
         solana_program::msg!(
-            "funding activation refused: source authentication {:?}",
+            "funding activation refused: material and funding {:?}",
             error
         );
         error
@@ -247,6 +274,7 @@ pub(crate) fn process_direct_funding_activation_v1(
     commit_direct_activation(
         program_id,
         direct,
+        accounts,
         request.as_ref(),
         request_digest,
         state.identity.generation,
@@ -254,7 +282,7 @@ pub(crate) fn process_direct_funding_activation_v1(
         manifest,
         clock.slot,
         &rent,
-        expected_mask,
+        funding_plan,
     )
     .map_err(|error| {
         solana_program::msg!("funding activation refused: activation commit {:?}", error);
@@ -293,11 +321,14 @@ pub(crate) fn process_direct_funding_activation_v1(
 /// was.
 #[inline(never)]
 fn authenticate_direct_material_and_funding(
+    program_id: &Pubkey,
     direct: DirectFundingAccounts<'_, '_>,
     accounts: &[AccountInfo<'_>],
     request: &FundingActivationRequestV1,
     manifest: CapabilityManifestV1<'_>,
-) -> Result<u16, ProgramError> {
+    rent: &Rent,
+    terminal_sequence: u64,
+) -> Result<DirectFundingPlanV1, ProgramError> {
     let material_data = direct
         .source_material
         .try_borrow_data()
@@ -307,7 +338,189 @@ fn authenticate_direct_material_and_funding(
     let recovery_policy =
         authenticate_direct_recovery_policy(direct, accounts.get(18), accounts.get(19), material)?;
     authenticate_funding_entries(material, recovery_policy, manifest, request.role)?;
-    expected_funding_mask(request.role, recovery_policy)
+    let expected_mask = expected_funding_mask(request.role, recovery_policy)?;
+    let terminal_capital = if material.ensemble().is_single() {
+        let expected_count = DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1
+            + if recovery_policy.is_some() { 2 } else { 0 };
+        if accounts.len() != expected_count {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+        None
+    } else {
+        let policy = recovery_policy.ok_or(ResolutionError::SourceMaterial)?;
+        let plan = EnsembleTerminalCapitalPlanV1::for_material(
+            material,
+            policy.attempt_count(),
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            rent.minimum_balance(dclutch_source::ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+        )
+        .map_err(|_| ResolutionError::Funding)?;
+        let entry = manifest
+            .entry(request.role.failure_entry_index)
+            .map_err(|_| ResolutionError::Funding)?;
+        let amounts = entry.funding_quote().amounts();
+        plan.authenticate_quote(amounts.rent().amount(), amounts.creation().amount())
+            .map_err(|_| ResolutionError::Funding)?;
+        authenticate_direct_ensemble_seats(
+            program_id,
+            direct,
+            accounts,
+            plan,
+            terminal_sequence,
+            rent,
+        )?;
+        Some(plan)
+    };
+    Ok(DirectFundingPlanV1 {
+        expected_mask,
+        terminal_capital,
+    })
+}
+
+fn authenticate_direct_ensemble_seats(
+    program_id: &Pubkey,
+    direct: DirectFundingAccounts<'_, '_>,
+    accounts: &[AccountInfo<'_>],
+    plan: EnsembleTerminalCapitalPlanV1,
+    terminal_sequence: u64,
+    rent: &Rent,
+) -> ProgramResult {
+    let seat_start = DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1 + 2;
+    let seat_count = usize::from(plan.member_seat_count());
+    if !direct.source_state.is_writable
+        || accounts.len()
+            != seat_start
+                .checked_add(seat_count)
+                .ok_or(ResolutionError::Arithmetic)?
+        || accounts
+            .get(DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1..seat_start)
+            .ok_or(ResolutionError::AccountFrame)?
+            .iter()
+            .any(|account| account.is_writable)
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    let minimum = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
+    for (member, seat) in accounts
+        .get(seat_start..)
+        .ok_or(ResolutionError::AccountFrame)?
+        .iter()
+        .enumerate()
+    {
+        let member = u8::try_from(member).map_err(|_| ResolutionError::Arithmetic)?;
+        let seeds = EnsembleFragmentSeatSeedsV1::new(
+            direct.source_state.key.to_bytes(),
+            member,
+            terminal_sequence,
+        );
+        if seat.key != &Pubkey::find_program_address(&seeds.seeds(), program_id).0
+            || !seat.is_writable
+            || seat.executable
+            || !((seat.owner == &system_program::ID && seat.data_len() == 0)
+                || (seat.owner == program_id
+                    && seat.data_len() == RESOLUTION_CERTIFICATE_BYTES_V2
+                    && seat.lamports() >= minimum))
+        {
+            return Err(ResolutionError::OutputState.into());
+        }
+    }
+    Ok(())
+}
+
+fn plan_direct_ensemble_capital(
+    direct: DirectFundingAccounts<'_, '_>,
+    accounts: &[AccountInfo<'_>],
+    capital: Option<EnsembleTerminalCapitalPlanV1>,
+    rent: &Rent,
+) -> Result<DirectEnsembleCapitalCommitV1, ProgramError> {
+    let mut plan = DirectEnsembleCapitalCommitV1 {
+        seat_lamports_after: [0_u64; ENSEMBLE_MAX_MEMBERS_V1 as usize],
+        seat_count: 0,
+        source_lamports_after: None,
+        beneficiary_credit_lamports: 0,
+    };
+    let Some(capital) = capital else {
+        return Ok(plan);
+    };
+    if !direct.source_state.is_writable {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    let source_minimum = rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2);
+    if direct.source_state.lamports() < source_minimum {
+        return Err(ResolutionError::OutputState.into());
+    }
+    plan.source_lamports_after = Some(
+        direct
+            .source_state
+            .lamports()
+            .checked_add(capital.source_creation_reserve_lamports())
+            .ok_or(ResolutionError::Arithmetic)?,
+    );
+    plan.seat_count = capital.member_seat_count();
+    let seat_start = DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1 + 2;
+    let seat_minimum = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
+    let mut total_top_up = 0_u64;
+    for (member, seat) in accounts
+        .get(seat_start..)
+        .ok_or(ResolutionError::AccountFrame)?
+        .iter()
+        .enumerate()
+    {
+        if seat.owner != &system_program::ID || seat.data_len() != 0 {
+            return Err(ResolutionError::OutputState.into());
+        }
+        let top_up = seat_minimum.saturating_sub(seat.lamports());
+        total_top_up = total_top_up
+            .checked_add(top_up)
+            .ok_or(ResolutionError::Arithmetic)?;
+        *plan
+            .seat_lamports_after
+            .get_mut(member)
+            .ok_or(ResolutionError::Arithmetic)? = seat
+            .lamports()
+            .checked_add(top_up)
+            .ok_or(ResolutionError::Arithmetic)?;
+    }
+    plan.beneficiary_credit_lamports = capital
+        .member_seat_rent_lamports()
+        .checked_sub(total_top_up)
+        .ok_or(ResolutionError::Funding)?;
+    Ok(plan)
+}
+
+fn authenticate_completed_ensemble_capital(
+    direct: DirectFundingAccounts<'_, '_>,
+    accounts: &[AccountInfo<'_>],
+    capital: Option<EnsembleTerminalCapitalPlanV1>,
+) -> ProgramResult {
+    let Some(capital) = capital else {
+        return Ok(());
+    };
+    let rent = authenticate_rent(direct.rent)?;
+    let source_minimum = rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2);
+    if direct.source_state.lamports()
+        < source_minimum
+            .checked_add(capital.source_creation_reserve_lamports())
+            .ok_or(ResolutionError::Arithmetic)?
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let seat_minimum = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
+    let seat_start = DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1 + 2;
+    for seat in accounts
+        .get(seat_start..)
+        .ok_or(ResolutionError::AccountFrame)?
+    {
+        if seat.lamports() < seat_minimum
+            || !((seat.owner == &system_program::ID && seat.data_len() == 0)
+                || (seat.owner == direct.resolution_program.key
+                    && seat.data_len() == RESOLUTION_CERTIFICATE_BYTES_V2))
+        {
+            return Err(ResolutionError::OutputState.into());
+        }
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -315,6 +528,7 @@ fn authenticate_direct_material_and_funding(
 fn commit_direct_activation(
     program_id: &Pubkey,
     direct: DirectFundingAccounts<'_, '_>,
+    accounts: &[AccountInfo<'_>],
     request: &FundingActivationRequestV1,
     request_digest: [u8; 32],
     generation: u64,
@@ -322,17 +536,18 @@ fn commit_direct_activation(
     manifest: CapabilityManifestV1<'_>,
     activation_slot: u64,
     rent: &Rent,
-    expected_mask: u16,
+    funding_plan: DirectFundingPlanV1,
 ) -> ProgramResult {
     if direct.receipt.owner == program_id {
         return authenticate_completed_activation(
             program_id,
             direct,
+            accounts,
             *request,
             request_digest,
             manifest_id,
             manifest,
-            expected_mask,
+            funding_plan,
         );
     }
 
@@ -366,13 +581,14 @@ fn commit_direct_activation(
         manifest_id,
         manifest,
         request.role,
-        expected_mask,
+        funding_plan.expected_mask,
         FundingLedgerStatusV2::Pending,
         ledger_bytes.as_ref(),
         direct.funding_ledger.lamports(),
         false,
     )?;
     let mut beneficiary_credit = 0_u64;
+    let mut total_activation_debit = 0_u64;
     let selected_mask = FundingLedgerV2::decode(ledger_bytes.as_ref())
         .map_err(|_| ResolutionError::Funding)?
         .selected_mask();
@@ -388,15 +604,36 @@ fn commit_direct_activation(
             activation_slot,
         )
         .map_err(|_| ResolutionError::Funding)?;
-        beneficiary_credit = beneficiary_credit
-            .checked_add(debit.rent_lamports())
-            .and_then(|value| value.checked_add(debit.creation_lamports()))
+        let row_debit = debit
+            .rent_lamports()
+            .checked_add(debit.creation_lamports())
             .ok_or(ResolutionError::Arithmetic)?;
+        total_activation_debit = total_activation_debit
+            .checked_add(row_debit)
+            .ok_or(ResolutionError::Arithmetic)?;
+        if funding_plan.terminal_capital.is_some()
+            && entry_index == request.role.failure_entry_index
+        {
+            funding_plan
+                .terminal_capital
+                .ok_or(ResolutionError::Funding)?
+                .authenticate_quote(debit.rent_lamports(), debit.creation_lamports())
+                .map_err(|_| ResolutionError::Funding)?;
+        } else {
+            beneficiary_credit = beneficiary_credit
+                .checked_add(row_debit)
+                .ok_or(ResolutionError::Arithmetic)?;
+        }
     }
+    let ensemble =
+        plan_direct_ensemble_capital(direct, accounts, funding_plan.terminal_capital, rent)?;
+    beneficiary_credit = beneficiary_credit
+        .checked_add(ensemble.beneficiary_credit_lamports)
+        .ok_or(ResolutionError::Arithmetic)?;
     let post_ledger_lamports = direct
         .funding_ledger
         .lamports()
-        .checked_sub(beneficiary_credit)
+        .checked_sub(total_activation_debit)
         .ok_or(ResolutionError::Arithmetic)?;
     let beneficiary_lamports = direct
         .beneficiary
@@ -410,7 +647,7 @@ fn commit_direct_activation(
         manifest_id,
         manifest,
         request.role,
-        expected_mask,
+        funding_plan.expected_mask,
         FundingLedgerStatusV2::Active,
         ledger_bytes.as_ref(),
         post_ledger_lamports,
@@ -455,12 +692,15 @@ fn commit_direct_activation(
         solana_program::msg!("funding activation refused: receipt encode {:?}", error);
         ResolutionError::OutputState
     })?);
-    commit_activated_ledger(
+    commit_activated_ledger_and_ensemble_capital(
         direct.funding_ledger,
         ledger_bytes.as_ref(),
         post_ledger_lamports,
         direct.beneficiary,
         beneficiary_lamports,
+        direct.source_state,
+        accounts,
+        ensemble,
     )
     .map_err(|error| {
         solana_program::msg!(
@@ -780,8 +1020,8 @@ fn parse_direct_funding_accounts<'a, 'info>(
     accounts: &'a [AccountInfo<'info>],
     request: &FundingActivationRequestV1,
 ) -> Result<DirectFundingAccounts<'a, 'info>, ProgramError> {
-    if accounts.len() != DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1
-        && accounts.len() != DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1.saturating_sub(2)
+    if accounts.len() < DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1
+        || accounts.len() > DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1
     {
         return Err(ResolutionError::AccountFrame.into());
     }
@@ -838,7 +1078,6 @@ fn parse_direct_funding_accounts<'a, 'info>(
         || direct.capability_manifest.executable
         || direct.capability_manifest_staging.is_writable
         || direct.capability_manifest_staging.executable
-        || direct.source_state.is_writable
         || direct.source_state.executable
         || !direct.funding_ledger.is_writable
         || direct.funding_ledger.executable
@@ -861,8 +1100,11 @@ fn parse_direct_funding_accounts<'a, 'info>(
     {
         return Err(ResolutionError::AccountFrame.into());
     }
-    for account in accounts.iter().skip(18) {
-        if account.is_writable || account.executable {
+    for account in accounts
+        .iter()
+        .skip(DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1)
+    {
+        if account.executable {
             return Err(ResolutionError::AccountFrame.into());
         }
     }
@@ -1328,7 +1570,7 @@ fn authenticate_direct_source(
     direct: DirectFundingAccounts<'_, '_>,
     request: &FundingActivationRequestV1,
     state: CoreState,
-) -> ProgramResult {
+) -> Result<u64, ProgramError> {
     let source_data = direct
         .source_state
         .try_borrow_data()
@@ -1348,7 +1590,9 @@ fn authenticate_direct_source(
     {
         return Err(ResolutionError::Transition.into());
     }
-    Ok(())
+    source
+        .next_terminal_sequence()
+        .map_err(|_| ResolutionError::Arithmetic.into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1388,11 +1632,12 @@ fn authenticate_direct_ledger(
 fn authenticate_completed_activation(
     program_id: &Pubkey,
     direct: DirectFundingAccounts<'_, '_>,
+    accounts: &[AccountInfo<'_>],
     request: FundingActivationRequestV1,
     request_digest: [u8; 32],
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
-    expected_mask: u16,
+    funding_plan: DirectFundingPlanV1,
 ) -> ProgramResult {
     let receipt_data = direct
         .receipt
@@ -1413,7 +1658,7 @@ fn authenticate_completed_activation(
         manifest_id,
         manifest,
         request.role,
-        expected_mask,
+        funding_plan.expected_mask,
         FundingLedgerStatusV2::Active,
         &ledger_bytes,
         direct.funding_ledger.lamports(),
@@ -1440,6 +1685,7 @@ fn authenticate_completed_activation(
     {
         return Err(ResolutionError::Funding.into());
     }
+    authenticate_completed_ensemble_capital(direct, accounts, funding_plan.terminal_capital)?;
     set_return_data(&receipt_data);
     Ok(())
 }
@@ -3128,6 +3374,49 @@ fn build_ack(
         return Err(ResolutionError::Transition.into());
     }
     Ok(encoded)
+}
+
+fn commit_activated_ledger_and_ensemble_capital(
+    ledger: &AccountInfo<'_>,
+    ledger_bytes: &[u8],
+    ledger_lamports_after: u64,
+    beneficiary: &AccountInfo<'_>,
+    beneficiary_lamports_after: u64,
+    source: &AccountInfo<'_>,
+    accounts: &[AccountInfo<'_>],
+    ensemble: DirectEnsembleCapitalCommitV1,
+) -> ProgramResult {
+    commit_activated_ledger(
+        ledger,
+        ledger_bytes,
+        ledger_lamports_after,
+        beneficiary,
+        beneficiary_lamports_after,
+    )?;
+    let Some(source_lamports_after) = ensemble.source_lamports_after else {
+        return Ok(());
+    };
+    **source
+        .try_borrow_mut_lamports()
+        .map_err(|_| ResolutionError::OutputState)? = source_lamports_after;
+    let seat_start = DIRECT_FUNDING_ACTIVATION_PREFIX_ACCOUNT_COUNT_V1 + 2;
+    for (member, seat) in accounts
+        .get(seat_start..)
+        .ok_or(ResolutionError::AccountFrame)?
+        .iter()
+        .enumerate()
+    {
+        if member >= usize::from(ensemble.seat_count) {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+        **seat
+            .try_borrow_mut_lamports()
+            .map_err(|_| ResolutionError::OutputState)? = *ensemble
+            .seat_lamports_after
+            .get(member)
+            .ok_or(ResolutionError::Arithmetic)?;
+    }
+    Ok(())
 }
 
 fn commit_activated_ledger(

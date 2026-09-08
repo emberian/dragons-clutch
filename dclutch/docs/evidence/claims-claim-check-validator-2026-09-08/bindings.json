@@ -1,0 +1,83 @@
+{
+  "campaign": "claims-claim-check-local-validator-v1",
+  "note": "Exact finalized local-validator evidence from c444d4d459771505d53caf9bd5c04a180d9beb1f. Bindings claim only routes selected by the finalized top-level Claims instruction bytes; refused outcomes remain refusal evidence and do not count as accepted execution. The starting post-compaction accounts are staged, so this corpus does not claim Open-to-terminal continuity.",
+  "bindings": [
+    {
+      "label": "dust-refusal",
+      "routes": [
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "note": "A sub-denominator shard request finalized as the exact Claims NoWholeClaim refusal with unchanged protocol and Token-2022 poststate.",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim"
+    },
+    {
+      "label": "overdraw-refusal",
+      "routes": [
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "note": "A request above the holder shard balance finalized as the exact Claims Conservation refusal with unchanged protocol and Token-2022 poststate.",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Conservation"
+    },
+    {
+      "label": "substituted-payout-refusal",
+      "routes": [
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "note": "The payout token account substitution finalized as the exact Claims Authority refusal with unchanged protocol and Token-2022 poststate.",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Authority"
+    },
+    {
+      "label": "substituted-holder-refusal",
+      "routes": [
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "note": "The holder signer substitution finalized as the exact Claims Authority refusal with unchanged protocol and Token-2022 poststate.",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Authority"
+    },
+    {
+      "label": "partial-redemption",
+      "routes": [
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The first exact DCLTFCR1 packet burned 20 of 40 shards and paid 8 of 16 collateral atoms while leaving the record live with 8 escrowed atoms."
+    },
+    {
+      "label": "premature-close-refusal",
+      "routes": [
+        "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "note": "The exact DCLTCCR1 CloseEscrow packet finalized as the Claims Vault refusal while one claim check and 8 vault atoms remained; all protocol and Token-2022 poststate was unchanged.",
+      "refusal": "claims/ClaimCheckRedemptionSbfErrorV1::Vault"
+    },
+    {
+      "label": "settling-redemption",
+      "routes": [
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The second exact DCLTFCR1 packet burned the remaining 20 shards, paid the remaining 8 collateral atoms, closed the fractional record into the holder, and reduced outstanding claim checks from one to zero."
+    },
+    {
+      "label": "permissionless-close",
+      "routes": [
+        "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The exact DCLTCCR1 CloseEscrow packet closed the empty vault and settled escrow into the permissionless cranker after outstanding claim checks reached zero."
+    }
+  ]
+}

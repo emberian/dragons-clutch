@@ -1107,8 +1107,6 @@ mod lifecycle;
 mod series_expiry;
 #[cfg(feature = "series-family")]
 mod series_registers;
-#[cfg(feature = "series-family")]
-mod series_source;
 mod strategy;
 #[cfg(test)]
 mod tests;

@@ -269,6 +269,8 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x521A, name: "RationalLifecycleSbfErrorV2::CustodyLayout", meaning: "The structured custody account's bytes are not a Token-2022 account.", band: "claims" },
   { code: 0x521B, name: "RationalLifecycleSbfErrorV2::CustodyState", meaning: "The structured custody account parses and is not the one this route requires: program owner, mint, owner, amount, initialization state, delegate, delegated amount, native reserve or close authority.", band: "claims" },
   { code: 0x521C, name: "RationalLifecycleSbfErrorV2::Allocation", meaning: "A resource this program allocates for itself was refused by the System program, or came back with the wrong owner or width.", band: "claims" },
+  { code: 0x521D, name: "RationalLifecycleSbfErrorV2::InvalidSupport", meaning: "Missing, extra, duplicate, reordered, or zero-weight descriptor support.", band: "claims" },
+  { code: 0x521E, name: "RationalLifecycleSbfErrorV2::InvalidPhysicalState", meaning: "Declared nonzero supply, custody, or invalid vacancy observations.", band: "claims" },
   { code: 0x5260, name: "SparseNativeTransferSbfErrorV1::Instruction", meaning: "Request bytes refused the canonical fixed codec.", band: "claims" },
   { code: 0x5261, name: "SparseNativeTransferSbfErrorV1::Accounts", meaning: "Account count, privilege, owner, or alias refused.", band: "claims" },
   { code: 0x5262, name: "SparseNativeTransferSbfErrorV1::Release", meaning: "Registry current-role or caller authority refused.", band: "claims" },

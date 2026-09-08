@@ -1,0 +1,149 @@
+{
+  "schema": "dclutch-gauntlet-execution-ledger-v1",
+  "observations": [
+    {
+      "route": "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow",
+      "campaign": "claims-claim-check-local-validator-v1",
+      "label": "premature-close-refusal",
+      "signature": "344PA4wj8T1JaoNHV7Y1DGVmnTjsxfutcJopnXSXeZLYsh6fHXnEpGJPkbrb77R9EcqsvStVp55zQyyFq5BJt7Nk",
+      "slot": 196,
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckRedemptionSbfErrorV1::Vault",
+      "refusal_program": "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+      "compute_units": 8670,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "8c5cd60fef05c8d651406252d830b6339f6de6f724c8cf1fa052f247a40284d7",
+      "evidence_path": "docs/evidence/claims-claim-check-validator-2026-09-08/claim-check-native-evidence.json"
+    },
+    {
+      "route": "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow",
+      "campaign": "claims-claim-check-local-validator-v1",
+      "label": "permissionless-close",
+      "signature": "5oGSmdK3YREzzACcMT3Dua5VXe56qtzDS2hb9MVxxMxQp5nfeKWefj7ZkKRCHDdezLPLsqATa3Jo2J8Rhc3TetLa",
+      "slot": 260,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 12226,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "8c5cd60fef05c8d651406252d830b6339f6de6f724c8cf1fa052f247a40284d7",
+      "evidence_path": "docs/evidence/claims-claim-check-validator-2026-09-08/claim-check-native-evidence.json"
+    },
+    {
+      "route": "claims/fractional_claim_check_v1::process_fractional_redemption",
+      "campaign": "claims-claim-check-local-validator-v1",
+      "label": "dust-refusal",
+      "signature": "2yjPCY93FUvQj4gnuELpq8htFtK5nb2yjKWU2kqoVtaCNDg7jEan5cJREPfnuULLpBMqsh5kmqJBZKUY3a4bKDKs",
+      "slot": 36,
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim",
+      "refusal_program": "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+      "compute_units": 14520,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "8c5cd60fef05c8d651406252d830b6339f6de6f724c8cf1fa052f247a40284d7",
+      "evidence_path": "docs/evidence/claims-claim-check-validator-2026-09-08/claim-check-native-evidence.json"
+    },
+    {
+      "route": "claims/fractional_claim_check_v1::process_fractional_redemption",
+      "campaign": "claims-claim-check-local-validator-v1",
+      "label": "overdraw-refusal",
+      "signature": "3NpbLeyZJZqRShJqrM3fFK5NfPGLonoQNZE9cdFGygLE1EUKr1e4x6CWDwgeywDtKuUupErYnuZhoYs3tgRWQZbq",
+      "slot": 68,
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Conservation",
+      "refusal_program": "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+      "compute_units": 14518,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "8c5cd60fef05c8d651406252d830b6339f6de6f724c8cf1fa052f247a40284d7",
+      "evidence_path": "docs/evidence/claims-claim-check-validator-2026-09-08/claim-check-native-evidence.json"
+    },
+    {
+      "route": "claims/fractional_claim_check_v1::process_fractional_redemption",
+      "campaign": "claims-claim-check-local-validator-v1",
+      "label": "substituted-payout-refusal",
+      "signature": "2WJnJChLUhAkzTiqEoksXtM9fuJgF89fnmQDtqwjq4WSAU958M2QH7yy3CUJmr9SVYLkSKjgiBNFjkNXLek9gprR",
+      "slot": 100,
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Authority",
+      "refusal_program": "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+      "compute_units": 12775,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "8c5cd60fef05c8d651406252d830b6339f6de6f724c8cf1fa052f247a40284d7",
+      "evidence_path": "docs/evidence/claims-claim-check-validator-2026-09-08/claim-check-native-evidence.json"
+    },
+    {
+      "route": "claims/fractional_claim_check_v1::process_fractional_redemption",
+      "campaign": "claims-claim-check-local-validator-v1",
+      "label": "substituted-holder-refusal",
+      "signature": "5oLx2j5u3X2zVy8VX9xszzJQE53Zh9eN7r1N4AytEiCiB445jkoi4Fpa85B1azThoqmkeGVskFwhtSj9mnCpNpgy",
+      "slot": 132,
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Authority",
+      "refusal_program": "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+      "compute_units": 12544,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "8c5cd60fef05c8d651406252d830b6339f6de6f724c8cf1fa052f247a40284d7",
+      "evidence_path": "docs/evidence/claims-claim-check-validator-2026-09-08/claim-check-native-evidence.json"
+    },
+    {
+      "route": "claims/fractional_claim_check_v1::process_fractional_redemption",
+      "campaign": "claims-claim-check-local-validator-v1",
+      "label": "partial-redemption",
+      "signature": "2NE3qthWCMrF7epZr8Ppy2smuE9vNwmnKeLPHftRTiDu9Fxe1JjhGuTyQxmuXvLhSi6ndZzfjELr4wGgdzMcKUir",
+      "slot": 164,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 27500,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "8c5cd60fef05c8d651406252d830b6339f6de6f724c8cf1fa052f247a40284d7",
+      "evidence_path": "docs/evidence/claims-claim-check-validator-2026-09-08/claim-check-native-evidence.json"
+    },
+    {
+      "route": "claims/fractional_claim_check_v1::process_fractional_redemption",
+      "campaign": "claims-claim-check-local-validator-v1",
+      "label": "settling-redemption",
+      "signature": "58oJZmU1a9yMatih4dVSZ613es2FGW12Pc1CtoWxZVjG5vfRMZnyoqaGmpfXB4KwCa5Dt5T5oQg2FQQp74YnNRVK",
+      "slot": 228,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 26656,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "8c5cd60fef05c8d651406252d830b6339f6de6f724c8cf1fa052f247a40284d7",
+      "evidence_path": "docs/evidence/claims-claim-check-validator-2026-09-08/claim-check-native-evidence.json"
+    }
+  ]
+}

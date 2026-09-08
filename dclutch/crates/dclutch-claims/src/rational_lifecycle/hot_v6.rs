@@ -11,6 +11,87 @@ use super::*;
 pub const STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1: u32 = 6;
 /// Reserved selectors in a unified Structured selected ProgramSet.
 pub const STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1: u32 = 7;
+/// Selected single-coordinate retirement in the same Structured release.
+pub const STRUCTURED_RETIRE_COORDINATE_SELECTOR_V1: u32 = 8;
+/// Selected complete-support receipt retirement in the same Structured release.
+pub const STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1: u32 = 9;
+
+/// Dynamic retirement transport magic; Claims V2 remains the semantic wire.
+pub const DYNAMIC_RETIREMENT_MAGIC_V1: [u8; 8] = *b"DCRLDT01";
+/// Exact transport prefix before the borrowed compact lifecycle header.
+pub const DYNAMIC_RETIREMENT_PREFIX_BYTES_V1: usize = 24;
+
+/// Validate the transport of one compact receipt-retirement header. The span
+/// count is only a byte/account routing hint; Claims derives and checks support.
+pub fn validate_dynamic_retirement_v1(
+    input: &[u8],
+) -> Result<compact_hot_v4::RationalLifecycleCompactHotRequestV4<'_>> {
+    if input.get(..8) != Some(DYNAMIC_RETIREMENT_MAGIC_V1.as_slice())
+        || read_u16(input, 8)? != 1
+        || read_byte(input, 10)?
+            != u8::try_from(STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1)
+                .map_err(|_| Error::InvalidHeader)?
+        || read_byte(input, 11)? != 0
+        || read_u32(input, 20)? != 0
+    {
+        return Err(Error::InvalidHeader);
+    }
+    let accounts = read_u32(input, 12)?;
+    let stride =
+        u32::try_from(LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2).map_err(|_| Error::InvalidLength)?;
+    if accounts == 0
+        || accounts % stride != 0
+        || usize::try_from(read_u32(input, 16)?).map_err(|_| Error::InvalidLength)?
+            != LIFECYCLE_HEADER_BYTES_V2
+    {
+        return Err(Error::InvalidLength);
+    }
+    compact_hot_v4::RationalLifecycleCompactHotRequestV4::decode(
+        input
+            .get(DYNAMIC_RETIREMENT_PREFIX_BYTES_V1..)
+            .ok_or(Error::InvalidLength)?,
+    )
+}
+
+/// Encode a fixed compact header and an untrusted physical span-count hint.
+pub fn encode_dynamic_retirement_v1(
+    child: compact_hot_v4::RationalLifecycleCompactHotRequestV4<'_>,
+    support_count: u32,
+    output: &mut [u8],
+) -> Result<()> {
+    if output.len() != DYNAMIC_RETIREMENT_PREFIX_BYTES_V1 + LIFECYCLE_HEADER_BYTES_V2
+        || support_count == 0
+    {
+        return Err(Error::InvalidLength);
+    }
+    let accounts = support_count
+        .checked_mul(
+            u32::try_from(LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2).map_err(|_| Error::InvalidLength)?,
+        )
+        .ok_or(Error::InvalidLength)?;
+    output.fill(0);
+    put(output, 0, &DYNAMIC_RETIREMENT_MAGIC_V1)?;
+    put(output, 8, &1_u16.to_le_bytes())?;
+    put(
+        output,
+        10,
+        &[
+            u8::try_from(STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1)
+                .map_err(|_| Error::InvalidHeader)?,
+        ],
+    )?;
+    put(output, 12, &accounts.to_le_bytes())?;
+    put(
+        output,
+        16,
+        &u32::try_from(LIFECYCLE_HEADER_BYTES_V2)
+            .map_err(|_| Error::InvalidLength)?
+            .to_le_bytes(),
+    )?;
+    put(output, DYNAMIC_RETIREMENT_PREFIX_BYTES_V1, child.as_bytes())?;
+    validate_dynamic_retirement_v1(output)?;
+    Ok(())
+}
 
 /// Map one typed lifecycle action under the authenticated Structured kind to
 /// its reserved selected-table selector.
@@ -25,13 +106,14 @@ pub fn structured_lifecycle_action_selector_v1(
     match action {
         LifecycleActionV2::ActivateReceipt => Some(STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1),
         LifecycleActionV2::ActivateCoordinate => Some(STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1),
-        LifecycleActionV2::RetireCoordinate | LifecycleActionV2::RetireReceipt => None,
+        LifecycleActionV2::RetireCoordinate => Some(STRUCTURED_RETIRE_COORDINATE_SELECTOR_V1),
+        LifecycleActionV2::RetireReceipt => Some(STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1),
     }
 }
 
-/// Map only a typed V6 lifecycle creation request under the authenticated
+/// Map a typed V6 lifecycle request under the authenticated
 /// Structured capability kind to its ProgramSet selector.  The family and
-/// Claims wires retain their canonical action tags (zero and one).
+/// Claims wires retain their canonical action tags.
 #[must_use]
 pub fn structured_lifecycle_selector_v1(
     capability_kind: [u8; 32],
@@ -287,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_selector_normalizes_only_authenticated_creation_wires() {
+    fn structured_selector_normalizes_authenticated_lifecycle_wires() {
         let child_bytes = child();
         let child = LifecycleRequestV2::decode(&child_bytes).expect("child");
         let mut receipt = [0_u8; LIFECYCLE_HEADER_BYTES_V2];
@@ -327,7 +409,15 @@ mod tests {
                 crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
                 &retirement,
             ),
-            None
+            Some(STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1)
+        );
+        retirement[ACTION_OFFSET] = LifecycleActionV2::RetireCoordinate.tag();
+        assert_eq!(
+            structured_lifecycle_selector_v1(
+                crate::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
+                &retirement,
+            ),
+            Some(STRUCTURED_RETIRE_COORDINATE_SELECTOR_V1)
         );
         let mut unknown = receipt;
         unknown[ACTION_OFFSET] = 255;

@@ -1,0 +1,24 @@
+{
+  "accounts": 13,
+  "actions": [
+    "dust-refusal",
+    "overdraw-refusal",
+    "substituted-payout-refusal",
+    "substituted-holder-refusal",
+    "partial-redemption",
+    "premature-close-refusal",
+    "settling-redemption",
+    "permissionless-close"
+  ],
+  "aggregate": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+  "claims_elf_sha256": "b18309487b59dd39745e7937fe59e6e49eb6a983b1a0f4ea6c2f2ed056039ef2",
+  "compaction_bridge_sha256": "9a1c1c1b5d14a24f2c55eccd982984c924e77941aa5224b737c584e30a257220",
+  "escrow": "2QBq8bZknAyQ5atnXVQjeSXodHXPQStwxt5ihntw5Nhu",
+  "holder": "Gymcte79ALGtFrWybRxqb7M7uRjnbjgaHjGgQf1v4qB8",
+  "permissionless_closer": "7e5pxK83ceXb2iWXBizF1U8MdL7C5VcVBBXpDWaYo3x1",
+  "record": "CqX1ZU5aA9CdBteuSULGC31KcrhDt5saQwWPzyxXXDLy",
+  "schema": "dclutch/fractional-claim-check-exterior/manifest/v1",
+  "shard_mint": "2RJD1KnDRGEkvuFfAGrJ7PD28LRE9LRDjZznDywagzmr",
+  "token_2022_elf_sha256": "e2acdfb750881462ad613a15cc9c54ae17ce066580e867e1e635fbdfe01f5697",
+  "vault": "3vhYMNomricKCdCVuJAfr9kNTAuZzUDWefBJDZtwKoqk"
+}

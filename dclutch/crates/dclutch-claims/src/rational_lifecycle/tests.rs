@@ -334,3 +334,94 @@ fn the_rational_lifecycle_capability_kind_is_the_digest_of_its_preimage() {
     // constructor refuses, so the domain must not hash to it.
     assert_ne!(RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1, [0; 32]);
 }
+
+#[test]
+fn compact_dynamic_retirement_derives_sparse_rows_and_preserves_output_on_wrong_geometry() {
+    use super::compact_hot_v4::RationalLifecycleCompactHotRequestV4;
+    let descriptor_bytes = descriptor_bytes();
+    let descriptor = descriptor(&descriptor_bytes);
+    let mut family = [0; LIFECYCLE_HEADER_BYTES_V2];
+    let compact = RationalLifecycleCompactHotRequestV4::from_header_into(
+        header(LifecycleActionV2::RetireReceipt, 0),
+        &mut family,
+    )
+    .expect("compact");
+    let mut transport = [0; hot_v6::DYNAMIC_RETIREMENT_PREFIX_BYTES_V1 + LIFECYCLE_HEADER_BYTES_V2];
+    hot_v6::encode_dynamic_retirement_v1(compact, 2, &mut transport).expect("transport");
+    assert_eq!(
+        hot_v6::validate_dynamic_retirement_v1(&transport),
+        Ok(compact)
+    );
+    for (offset, bytes, expected) in [
+        (12, 0_u32.to_le_bytes(), Error::InvalidLength),
+        (12, 9_u32.to_le_bytes(), Error::InvalidLength),
+        (16, 399_u32.to_le_bytes(), Error::InvalidLength),
+        (20, 1_u32.to_le_bytes(), Error::InvalidHeader),
+    ] {
+        let mut hostile = transport;
+        hostile[offset..offset + 4].copy_from_slice(&bytes);
+        assert_eq!(
+            hot_v6::validate_dynamic_retirement_v1(&hostile),
+            Err(expected)
+        );
+    }
+    let mut wrong_action = transport;
+    wrong_action[10] =
+        u8::try_from(hot_v6::STRUCTURED_RETIRE_COORDINATE_SELECTOR_V1).expect("selector");
+    assert_eq!(
+        hot_v6::validate_dynamic_retirement_v1(&wrong_action),
+        Err(Error::InvalidHeader)
+    );
+    let rows = [coordinate(0, 3, true), coordinate(2, 7, true)];
+    let keys = rows
+        .iter()
+        .flat_map(|row| {
+            [
+                row.shard_mint,
+                row.structured_custody_account,
+                row.claims_custody_owner,
+                row.claims_custody_position,
+                row.position_admission,
+            ]
+        })
+        .collect::<std::vec::Vec<_>>();
+    let width = LIFECYCLE_HEADER_BYTES_V2 + rows.len() * LIFECYCLE_COORDINATE_BYTES_V2;
+    let mut scratch = std::vec![0; width];
+    let mut output = std::vec![0xa5; width];
+    let request = compact
+        .specialize_child_into(id(11), descriptor, &keys, &mut scratch, &mut output)
+        .expect("complete sparse support");
+    assert_eq!(request.header().coordinate_count, 2);
+    assert_eq!(
+        request
+            .coordinates()
+            .collect::<Result<std::vec::Vec<_>>>()
+            .expect("rows"),
+        rows
+    );
+    let accepted = output.clone();
+    for bad in [&keys[..5], &keys[..9]] {
+        assert_eq!(
+            compact.specialize_child_into(id(11), descriptor, bad, &mut scratch, &mut output),
+            Err(Error::InvalidSupport)
+        );
+        assert_eq!(output, accepted);
+    }
+    let mut extra = keys.clone();
+    extra.extend_from_slice(&keys[..5]);
+    assert_eq!(
+        compact.specialize_child_into(id(11), descriptor, &extra, &mut scratch, &mut output),
+        Err(Error::InvalidSupport)
+    );
+    assert_eq!(output, accepted);
+    let mut nonzero_header = header(LifecycleActionV2::RetireReceipt, 0);
+    nonzero_header.expected_receipt_supply = 1;
+    let mut nonzero_bytes = [0; LIFECYCLE_HEADER_BYTES_V2];
+    let before_header = nonzero_bytes;
+    assert_eq!(
+        RationalLifecycleCompactHotRequestV4::from_header_into(nonzero_header, &mut nonzero_bytes),
+        Err(Error::InvalidPhysicalState)
+    );
+    assert_eq!(nonzero_bytes, before_header);
+    assert_eq!(output, accepted);
+}
