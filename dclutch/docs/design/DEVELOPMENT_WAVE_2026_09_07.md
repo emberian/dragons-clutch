@@ -172,9 +172,11 @@ cohort 16; the evidence now follows the actual configured program set and
 identifies historical observations separately from fresh reads. Reader, trader
 and operator explanations remain in the existing guide hierarchy.
 
-Publication requires the existing static export, documentation renderer and
-link checks, then a cut and the existing Pages workflow. Runtime execution and
-the new devnet cohort remain separate outstanding work.
+The first renovation is published through the existing static export, renderer,
+cut and Pages workflow; `docs/evidence/PAGES_RENOVATION_2026_09_07.md` records the
+checked source, publication SHA, workflow result and validation limits. Explorer
+navigation races and further generated mappings are the next frontend work.
+Runtime execution and the new devnet cohort remain outstanding.
 
 ## Execution order and completion evidence
 

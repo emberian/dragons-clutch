@@ -34,7 +34,10 @@ use crate::{Error, Result};
 /// past them before a checked plan snapshot is coherent.
 const CHECKED_SLOT_FLOOR: u64 = 8;
 
-const VALIDATOR_READY: Duration = Duration::from_secs(90);
+/// Bounded startup allowance for a checked validator on the shared hbox.
+/// Agave may consume most of a minute loading the prepared account image
+/// before it starts producing the eight slots whose finalized root we require.
+const VALIDATOR_READY: Duration = Duration::from_secs(180);
 const VALIDATOR_GRACEFUL_STOP: Duration = Duration::from_secs(30);
 
 /// Everything the checked-mutable bring-up needs from the caller.
@@ -246,7 +249,7 @@ fn wait_for_finalized_slot(
         }
         if Instant::now() >= deadline {
             return Err(Error::new(format!(
-                "validator at {rpc_url} did not reach finalized slot {minimum_slot} within 90 seconds"
+                "validator at {rpc_url} did not reach finalized slot {minimum_slot} within 180 seconds"
             )));
         }
         std::thread::sleep(Duration::from_millis(250));
@@ -394,7 +397,7 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
         if Instant::now() >= deadline {
             return Err(Error::new(format!(
                 "validator at {rpc_url} did not reach finalized slot {CHECKED_SLOT_FLOOR} within \
-                 90 seconds"
+                 180 seconds"
             )));
         }
         std::thread::sleep(Duration::from_millis(250));

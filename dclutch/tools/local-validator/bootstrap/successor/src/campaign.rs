@@ -4227,6 +4227,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                 &authority,
                 &forge,
                 args.origin.may_airdrop(),
+                wallet.shortfall(),
                 None,
                 None,
                 None,
@@ -4682,6 +4683,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             &payer,
             &forge,
             args.origin.may_airdrop(),
+            wallet.shortfall(),
             Some(actors),
             market.as_ref(),
             founding_keys,
@@ -5072,6 +5074,7 @@ fn execute_stages(
     authority: &Keypair,
     forge: &KeyForge,
     may_airdrop: bool,
+    loopback_wallet_shortfall_lamports: u64,
     founding_actors: Option<crate::market::FoundingActorsV1>,
     market: Option<&crate::model::MarketRunInput>,
     founding_keys: Option<(Pubkey, Pubkey)>,
@@ -5102,6 +5105,17 @@ fn execute_stages(
         ));
     }
     let mut transactions = Vec::new();
+    // `wallet_arithmetic` just read the validator's current rent and every
+    // remaining canonical record/profile/activation debit. The loopback
+    // faucet may cover precisely that shortfall; a non-loopback campaign
+    // remains externally funded and never reaches this write.
+    if may_airdrop && loopback_wallet_shortfall_lamports != 0 {
+        transactions.push(rpc.airdrop(
+            "fund loopback campaign payer",
+            authority.pubkey(),
+            loopback_wallet_shortfall_lamports,
+        )?);
+    }
     let mut market_evidence = None;
     let mut recovery_to_complete = None;
     for (stage, state) in states {
