@@ -1411,6 +1411,50 @@ async fn seed_refunding_failure_escrow_v1(
     (escrow, position_rent + admission_rent, bond)
 }
 
+/// The four checkpoint routes' categorical extents, one per route.
+///
+/// Every hostile submits the same instruction as the honest route it attacks,
+/// so a class has one extent and the hostiles check it too. The request bytes
+/// dominate these 35-meta frames; the frozen table carries their stable keys
+/// under the packet ceiling.
+const PREPARE_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_101,
+    v0_bytes: 1_083,
+    static_keys: 2,
+    loaded_addresses: 34,
+};
+
+const CLOSE_VAULT_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_157,
+    v0_bytes: 1_139,
+    static_keys: 2,
+    loaded_addresses: 34,
+};
+
+const CLOSE_REPLAY_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_157,
+    v0_bytes: 1_139,
+    static_keys: 2,
+    loaded_addresses: 34,
+};
+
+const FINISH_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_037,
+    v0_bytes: 1_019,
+    static_keys: 2,
+    loaded_addresses: 34,
+};
+
+/// The substituted-wallet hostile is 32 bytes narrower than the honest finish:
+/// the substitution collapses two coordinates onto one address, so the frame
+/// carries one fewer unique key.
+const FINISH_SUBSTITUTED_EXTENT: PacketExtentV1 = PacketExtentV1 {
+    legacy_bytes: 2_005,
+    v0_bytes: 1_018,
+    static_keys: 2,
+    loaded_addresses: 33,
+};
+
 /// The four extents a refunding retirement's packets occupy.
 ///
 /// Three more accounts than the categorical walk on every packet -- the escrow

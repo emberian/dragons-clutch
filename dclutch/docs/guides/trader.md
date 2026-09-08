@@ -30,6 +30,31 @@ order book, a buyer, a price, or an executable route for every market. The
 [reader guide](reader.md) explains what the market is backing; this guide
 explains what the Direct terms mean once one is available.
 
+## Moving a bearer claim to another wallet
+
+The Console links to `/representation`, where a compatible local or custom
+chain can transfer an already-issued bearer claim between ordinary Token-2022
+accounts. No current devnet market supplies the selected representation route,
+so the page says that before asking anyone to begin. This transfer does not
+open, wrap, redeem, or retire a representation; those are separate privileged
+protocol actions with their own checked routes.
+
+The page derives the Token behavior record from the Market, then reads the
+Mint, source account, destination account, and address lookup table at finalized
+commitment. Enter the quantity in raw token atoms. The Mint's decimal count is
+shown as metadata and is never used to round or scale the quantity.
+
+The source owner is the **transfer authority**. The wallet that pays the Solana
+transaction fee is the **transaction payer**. They may be different people:
+connect the transfer authority first, sign its slot, then connect the exact
+payer and sign the unchanged packet. One wallet signature cannot silently
+replace the other identity. The browser saves the operation before it opens a
+wallet, saves the completely signed packet before its only send, and never
+resubmits during recovery. It reports completion only after the signature is
+finalized and fresh Mint, source, and destination reads match the exact expected
+raw balances. If you leave before finalization, enter and authenticate the same
+route again to resume that saved signature.
+
 ## What a claim is
 
 A market asks one question with a bounded, checkable answer — say, where

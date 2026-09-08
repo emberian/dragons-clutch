@@ -1091,6 +1091,13 @@ impl SourceResolutionStateV2 {
         self.rent_beneficiary
     }
 
+    /// Return the next positive replay sequence without changing the state.
+    pub fn next_terminal_sequence(self) -> Result<u64> {
+        self.terminal_sequence
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
     /// Return the optional authenticated reopen-link identity.
     pub const fn reopen_link_id(self) -> Option<ContentId> {
         self.reopen_link_id

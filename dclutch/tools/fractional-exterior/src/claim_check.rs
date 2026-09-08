@@ -22,6 +22,7 @@ use dclutch_fractional_exterior::bridge::{
 };
 use serde_json::{Value, json};
 use solana_client::rpc_client::RpcClient;
+use solana_client::rpc_config::RpcSendTransactionConfig;
 use solana_commitment_config::CommitmentConfig;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::pubkey::Pubkey as ProgramPubkey;
@@ -29,7 +30,7 @@ use solana_sdk::{
     account::Account,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    signature::{Keypair, Signer, keypair_from_seed},
+    signature::{Keypair, Signature, Signer, keypair_from_seed},
     transaction::Transaction,
 };
 
@@ -44,11 +45,16 @@ use dclutch_claims::{
         FractionalClaimCheckSeedsV1, FractionalClaimCheckV1, FractionalRedeemClaimCheckRequestV1,
     },
 };
+use dclutch_claims_sbf::{
+    claim_check_redemption_v1::ClaimCheckRedemptionSbfErrorV1,
+    fractional_claim_check_v1::FractionalClaimCheckRedemptionSbfErrorV1,
+};
 
 use crate::{
     Error, Result, journal, stage,
     validator::{
-        Validator, account_file, await_health, program_account_bytes, programdata_address,
+        NativeInstructionExpectation, NativeInstructionLocation, Validator, account_file,
+        await_health, finalized_instruction_evidence, program_account_bytes, programdata_address,
         programdata_bytes, refusal_code, rent_exempt, rpc, write_account,
     },
 };
@@ -58,6 +64,9 @@ const PREFIX: &str = "claim-check-";
 const CANONICAL: &str = "claim-check-canonical.json";
 const OBSERVED: &str = "claim-check-observed.jsonl";
 const MANIFEST: &str = "claim-check-manifest.json";
+const NATIVE_EVIDENCE: &str = "claim-check-native-evidence.json";
+const NATIVE_EVIDENCE_SCHEMA: &str =
+    "dclutch/fractional-claim-check-exterior/finalized-instructions/v1";
 const SCHEMA: &str = "dclutch/fractional-claim-check-exterior/canonical/v2";
 const ROUNDING_BOUNDARY: &str = "whole_claims=floor(requested_shard_atoms/denominator); consumed_shards=whole_claims*denominator";
 const HOLDER_SEED: [u8; 32] = [0x5c; 32];
@@ -138,6 +147,16 @@ struct Entry {
 struct ProgramDigests {
     claims: String,
     token_2022: String,
+}
+
+struct Submission {
+    accepted: bool,
+    refusal: Option<u32>,
+    detail: String,
+    signature: Signature,
+    transaction: Transaction,
+    wire_bytes: usize,
+    fee_lamports: u64,
 }
 
 fn fixed(byte: u8) -> Pubkey {
@@ -549,7 +568,7 @@ fn actions(staged: &Stage) -> Result<Vec<Action>> {
             )?,
             signers: Signers::Holder,
             accepted: false,
-            refusal: Some(0x5665),
+            refusal: Some(FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim as u32),
             phase: Phase::Opening,
         },
         Action {
@@ -562,7 +581,7 @@ fn actions(staged: &Stage) -> Result<Vec<Action>> {
             )?,
             signers: Signers::Holder,
             accepted: false,
-            refusal: Some(0x5663),
+            refusal: Some(FractionalClaimCheckRedemptionSbfErrorV1::Conservation as u32),
             phase: Phase::Opening,
         },
         Action {
@@ -575,7 +594,7 @@ fn actions(staged: &Stage) -> Result<Vec<Action>> {
             )?,
             signers: Signers::Holder,
             accepted: false,
-            refusal: Some(0x5661),
+            refusal: Some(FractionalClaimCheckRedemptionSbfErrorV1::Authority as u32),
             phase: Phase::Opening,
         },
         Action {
@@ -588,7 +607,7 @@ fn actions(staged: &Stage) -> Result<Vec<Action>> {
             )?,
             signers: Signers::Payer,
             accepted: false,
-            refusal: Some(0x5661),
+            refusal: Some(FractionalClaimCheckRedemptionSbfErrorV1::Authority as u32),
             phase: Phase::Opening,
         },
         Action {
@@ -609,7 +628,7 @@ fn actions(staged: &Stage) -> Result<Vec<Action>> {
             instruction: close_instruction(staged)?,
             signers: Signers::Payer,
             accepted: false,
-            refusal: Some(0x5625),
+            refusal: Some(ClaimCheckRedemptionSbfErrorV1::Vault as u32),
             phase: Phase::Partial,
         },
         Action {
@@ -647,7 +666,7 @@ fn prepare_with_bridge(elf_dir: &Path, out: &Path, bridge: Option<&Path>) -> Res
         fs::remove_dir_all(&accounts_dir)?;
     }
     fs::create_dir_all(&accounts_dir)?;
-    for name in [CANONICAL, OBSERVED] {
+    for name in [CANONICAL, OBSERVED, NATIVE_EVIDENCE] {
         let path = out.join(name);
         if path.exists() {
             fs::remove_file(path)?;
@@ -890,7 +909,7 @@ fn submit(
     payer: &Keypair,
     holder: &Keypair,
     action: &Action,
-) -> Result<(bool, Option<u32>, String, usize, u64)> {
+) -> Result<Submission> {
     let budget = ComputeBudgetInstruction::set_compute_unit_limit(500_000);
     let blockhash = client.get_latest_blockhash()?;
     let signers: Vec<&dyn Signer> = match action.signers {
@@ -903,15 +922,56 @@ fn submit(
         &signers,
         blockhash,
     );
-    let wire = bincode::serialize(&transaction)?.len();
-    let fee = client.get_fee_for_message(&transaction.message)?;
-    match client.send_and_confirm_transaction(&transaction) {
-        Ok(signature) => Ok((true, None, signature.to_string(), wire, fee)),
-        Err(error) => {
-            let detail = error.to_string();
-            Ok((false, refusal_code(&detail), detail, wire, fee))
-        }
+    let wire_bytes = bincode::serialize(&transaction)?.len();
+    let fee_lamports = client.get_fee_for_message(&transaction.message)?;
+    let signed_signature = transaction
+        .signatures
+        .first()
+        .copied()
+        .ok_or_else(|| Error::new("claim-check transaction has no signature"))?;
+    let signature = client.send_transaction_with_config(
+        &transaction,
+        RpcSendTransactionConfig {
+            skip_preflight: true,
+            ..RpcSendTransactionConfig::default()
+        },
+    )?;
+    if signature != signed_signature {
+        return Err(Error::new("validator returned a different claim-check signature").into());
     }
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = client
+            .get_signature_status_with_commitment(&signature, CommitmentConfig::finalized())?
+        {
+            break status;
+        }
+        if Instant::now() > deadline {
+            return Err(Error::new(format!(
+                "{} did not reach finalized commitment",
+                action.name
+            ))
+            .into());
+        }
+        sleep(Duration::from_millis(250));
+    };
+    let (accepted, refusal, detail) = match status {
+        Ok(()) => (true, None, String::new()),
+        Err(error) => {
+            let detail = format!("{error:?}");
+            (false, refusal_code(&detail), detail)
+        }
+    };
+    Ok(Submission {
+        accepted,
+        refusal,
+        detail,
+        signature,
+        transaction,
+        wire_bytes,
+        fee_lamports,
+    })
 }
 
 fn manifest_digests(out: &Path) -> Result<ProgramDigests> {
@@ -968,6 +1028,179 @@ fn write_canonical(
     Ok(journal::digest(&bytes))
 }
 
+fn verify_native_value(value: &Value, expected_actions: &[Action]) -> Result<usize> {
+    if value.get("schema").and_then(Value::as_str) != Some(NATIVE_EVIDENCE_SCHEMA) {
+        return Err(Error::new("claim-check native evidence has the wrong schema").into());
+    }
+    let transactions = value
+        .get("transactions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("claim-check native evidence has no transactions"))?;
+    if transactions.len() != expected_actions.len() {
+        return Err(Error::new(format!(
+            "claim-check native evidence has {} transactions; {} are required",
+            transactions.len(),
+            expected_actions.len()
+        ))
+        .into());
+    }
+    let claims = rpc(stage::CLAIMS).to_string();
+    for (transaction, expected) in transactions.iter().zip(expected_actions) {
+        if transaction.get("label").and_then(Value::as_str) != Some(expected.name) {
+            return Err(Error::new(format!(
+                "claim-check native evidence order refused: expected {}",
+                expected.name
+            ))
+            .into());
+        }
+        let signature = transaction
+            .get("signature")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new(format!("{} omitted its signature", expected.name)))?;
+        if signature.parse::<Signature>().is_err()
+            || transaction.get("slot").and_then(Value::as_u64).unwrap_or(0) == 0
+            || transaction
+                .get("transaction_metadata_available")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || transaction
+                .get("fee_lamports")
+                .and_then(Value::as_u64)
+                .is_none()
+            || transaction
+                .get("compute_units_consumed")
+                .and_then(Value::as_u64)
+                .is_none()
+            || transaction
+                .get("wire_bytes")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+        {
+            return Err(Error::new(format!(
+                "{} lacks exact finalized transaction metadata",
+                expected.name
+            ))
+            .into());
+        }
+        let error = transaction
+            .get("error")
+            .ok_or_else(|| Error::new(format!("{} omitted its outcome", expected.name)))?;
+        if expected.accepted != error.is_null() {
+            return Err(
+                Error::new(format!("{} has the wrong native outcome", expected.name)).into(),
+            );
+        }
+        let logs = transaction
+            .get("logs")
+            .and_then(Value::as_array)
+            .filter(|logs| !logs.is_empty() && logs.iter().all(Value::is_string))
+            .ok_or_else(|| Error::new(format!("{} has malformed native logs", expected.name)))?;
+        let reported = logs
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(refusal_code)
+            .last();
+        if reported != expected.refusal {
+            return Err(Error::new(format!(
+                "{} native refusal drifted: expected {:?}, got {reported:?}",
+                expected.name, expected.refusal
+            ))
+            .into());
+        }
+        let instructions = transaction
+            .get("instructions")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new(format!("{} omitted native instructions", expected.name)))?;
+        if instructions.iter().any(|instruction| {
+            instruction
+                .get("program_id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+                || instruction
+                    .get("data_hex")
+                    .and_then(Value::as_str)
+                    .is_none_or(|hex| {
+                        hex.len() % 2 != 0
+                            || !hex
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    })
+                || !matches!(
+                    instruction.get("location").and_then(Value::as_str),
+                    Some("top-level" | "inner")
+                )
+        }) {
+            return Err(Error::new(format!(
+                "{} has malformed native instructions",
+                expected.name
+            ))
+            .into());
+        }
+        let expected_data = expected
+            .instruction
+            .data
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let exact_claims = instructions
+            .iter()
+            .filter(|instruction| {
+                instruction.get("program_id").and_then(Value::as_str) == Some(claims.as_str())
+                    && instruction.get("data_hex").and_then(Value::as_str)
+                        == Some(expected_data.as_str())
+                    && instruction.get("location").and_then(Value::as_str) == Some("top-level")
+            })
+            .count();
+        if exact_claims != 1 {
+            return Err(Error::new(format!(
+                "{} has {exact_claims} exact top-level Claims instructions; expected one",
+                expected.name
+            ))
+            .into());
+        }
+        if transaction.get("poststate") != Some(&expected_poststate(expected.phase)) {
+            return Err(
+                Error::new(format!("{} native poststate is not exact", expected.name)).into(),
+            );
+        }
+    }
+    Ok(transactions.len())
+}
+
+fn write_native_evidence(out: &Path, transactions: &[Value], staged: &Stage) -> Result<String> {
+    let value = json!({
+        "schema": NATIVE_EVIDENCE_SCHEMA,
+        "transactions": transactions,
+    });
+    verify_native_value(&value, &actions(staged)?)?;
+    let mut bytes = serde_json::to_vec_pretty(&value)?;
+    bytes.push(b'\n');
+    let target = out.join(NATIVE_EVIDENCE);
+    let temporary = out.join(format!(".{NATIVE_EVIDENCE}.tmp"));
+    fs::write(&temporary, &bytes)?;
+    fs::rename(&temporary, &target)?;
+    Ok(journal::digest(&bytes))
+}
+
+fn verify_native_evidence(out: &Path, staged: &Stage) -> Result<(usize, String)> {
+    let path = out.join(NATIVE_EVIDENCE);
+    let bytes = fs::read(&path).map_err(|error| {
+        Error::new(format!(
+            "no claim-check native evidence at {}: {error}",
+            path.display()
+        ))
+    })?;
+    let value: Value = serde_json::from_slice(&bytes)?;
+    let transactions = verify_native_value(&value, &actions(staged)?)?;
+    let mut canonical = serde_json::to_vec_pretty(&value)?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(Error::new("claim-check native evidence is not canonical JSON").into());
+    }
+    Ok((transactions, journal::digest(&bytes)))
+}
+
 fn run_with_bridge(elf_dir: &Path, out: &Path, keep: bool, bridge: Option<&Path>) -> Result<()> {
     let written = prepare_with_bridge(elf_dir, out, bridge)?;
     println!("staged {written} post-compaction genesis accounts");
@@ -982,7 +1215,7 @@ fn run_with_bridge(elf_dir: &Path, out: &Path, keep: bool, bridge: Option<&Path>
         format!("http://127.0.0.1:{RPC_PORT}"),
         CommitmentConfig::finalized(),
     );
-    let outcome = (|| -> Result<Vec<Entry>> {
+    let outcome = (|| -> Result<(Vec<Entry>, Vec<Value>)> {
         await_health(&client)?;
         let signature = client.request_airdrop(&payer.pubkey(), 5_000_000_000)?;
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -993,6 +1226,7 @@ fn run_with_bridge(elf_dir: &Path, out: &Path, keep: bool, bridge: Option<&Path>
             sleep(Duration::from_millis(250));
         }
         let mut entries = Vec::new();
+        let mut native_evidence = Vec::new();
         for action in actions(&staged)? {
             let before = protocol_snapshot(&client, &staged)?;
             let closer_before = client.get_balance(&staged.cranker)?;
@@ -1000,16 +1234,20 @@ fn run_with_bridge(elf_dir: &Path, out: &Path, keep: bool, bridge: Option<&Path>
                 account_at(&client, staged.vault)?.map_or(0, |account| account.lamports);
             let escrow_rent_before =
                 account_at(&client, staged.escrow)?.map_or(0, |account| account.lamports);
-            let (accepted, refusal, signature_or_detail, wire, fee) =
-                submit(&client, &payer, &holder, &action)?;
-            if accepted != action.accepted || refusal != action.refusal {
+            let submission = submit(&client, &payer, &holder, &action)?;
+            if submission.accepted != action.accepted || submission.refusal != action.refusal {
                 return Err(Error::new(format!(
-                    "{} outcome drifted: expected accepted={} refusal={:?}, got accepted={accepted} refusal={refusal:?}: {signature_or_detail}",
-                    action.name, action.accepted, action.refusal,
+                    "{} outcome drifted: expected accepted={} refusal={:?}, got accepted={} refusal={:?}: {}",
+                    action.name,
+                    action.accepted,
+                    action.refusal,
+                    submission.accepted,
+                    submission.refusal,
+                    submission.detail,
                 ))
                 .into());
             }
-            if !accepted {
+            if !submission.accepted {
                 let after = protocol_snapshot(&client, &staged)?;
                 if after != before {
                     return Err(Error::new(format!(
@@ -1036,21 +1274,37 @@ fn run_with_bridge(elf_dir: &Path, out: &Path, keep: bool, bridge: Option<&Path>
                     .checked_add(escrow_rent_before)
                     .ok_or_else(|| Error::new("closer rent credit overflow"))?;
                 let expected = closer_before
-                    .checked_sub(fee)
+                    .checked_sub(submission.fee_lamports)
                     .and_then(|balance| balance.checked_add(protocol_credit))
                     .ok_or_else(|| Error::new("closer balance conservation overflow"))?;
                 if closer_after != expected {
                     return Err(Error::new("closer did not receive both live rent balances").into());
                 }
             }
+            let submitted_bytes = bincode::serialize(&submission.transaction)?;
+            let finalized = finalized_instruction_evidence(
+                &client,
+                action.name,
+                &submission.signature,
+                &submitted_bytes,
+                Some(NativeInstructionExpectation {
+                    program: rpc(stage::CLAIMS),
+                    data: &action.instruction.data,
+                    location: NativeInstructionLocation::TopLevel,
+                }),
+                action.refusal,
+                submission.wire_bytes,
+                &state,
+            )?;
             append_observed(
                 out,
                 &json!({
                     "action": action.name,
-                    "accepted": accepted,
-                    "signature_or_detail": signature_or_detail,
-                    "wire_bytes": wire,
-                    "transaction_fee_lamports": fee,
+                    "accepted": submission.accepted,
+                    "signature": submission.signature.to_string(),
+                    "detail": submission.detail,
+                    "wire_bytes": submission.wire_bytes,
+                    "transaction_fee_lamports": submission.fee_lamports,
                     "closer_balance_before": closer_before,
                     "closer_balance_after": closer_after,
                 }),
@@ -1058,18 +1312,21 @@ fn run_with_bridge(elf_dir: &Path, out: &Path, keep: bool, bridge: Option<&Path>
             println!(
                 "{:>30}  accepted={accepted} refusal={refusal:?}  {}",
                 action.name,
-                serde_json::to_string(&state)?
+                serde_json::to_string(&state)?,
+                accepted = submission.accepted,
+                refusal = submission.refusal,
             );
             entries.push(Entry {
                 name: action.name.to_string(),
                 data_digest: journal::digest(&action.instruction.data),
                 frame_digest: journal::digest(&frame_bytes(&action.instruction)),
-                accepted,
-                refusal,
+                accepted: submission.accepted,
+                refusal: submission.refusal,
                 poststate: state,
             });
+            native_evidence.push(finalized);
         }
-        Ok(entries)
+        Ok((entries, native_evidence))
     })();
 
     if keep {
@@ -1077,10 +1334,12 @@ fn run_with_bridge(elf_dir: &Path, out: &Path, keep: bool, bridge: Option<&Path>
     } else {
         validator.stop();
     }
-    let entries = outcome?;
+    let (entries, native_evidence) = outcome?;
     let programs = manifest_digests(out)?;
     let digest = write_canonical(out, &entries, &programs, &staged)?;
     println!("claim-check canonical journal sha256 {digest}");
+    let native_digest = write_native_evidence(out, &native_evidence, &staged)?;
+    println!("claim-check native instruction evidence sha256 {native_digest}");
     Ok(())
 }
 
@@ -1177,6 +1436,10 @@ fn verify_with_bridge(out: &Path, bridge: Option<&Path>) -> Result<(usize, Strin
     if canonical != bytes {
         return Err(Error::new("claim-check journal bytes are not canonical JSON").into());
     }
+    let (native_entries, _) = verify_native_evidence(out, &staged)?;
+    if native_entries != entries.len() {
+        return Err(Error::new("claim-check native evidence count does not match journal").into());
+    }
     Ok((entries.len(), journal::digest(&bytes)))
 }
 
@@ -1193,6 +1456,52 @@ pub fn verify_propagated(out: &Path, bridge: &Path) -> Result<(usize, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn native_evidence_fixture(staged: &Stage) -> Value {
+        let claims = rpc(stage::CLAIMS).to_string();
+        let transactions = actions(staged)
+            .expect("actions")
+            .into_iter()
+            .enumerate()
+            .map(|(index, action)| {
+                let error = action
+                    .refusal
+                    .map_or(Value::Null, |code| json!({"InstructionError": [1, {"Custom": code}]}));
+                let outcome_log = action.refusal.map_or_else(
+                    || format!("Program {claims} success"),
+                    |code| format!("Program {claims} failed: custom program error: 0x{code:x}"),
+                );
+                json!({
+                    "label": action.name,
+                    "signature": Signature::default().to_string(),
+                    "slot": index + 1,
+                    "transaction_metadata_available": true,
+                    "fee_lamports": 5_000,
+                    "compute_units_consumed": 10_000 + index,
+                    "error": error,
+                    "logs": [format!("Program {claims} invoke [1]"), outcome_log],
+                    "instructions": [
+                        {
+                            "program_id": "ComputeBudget111111111111111111111111111111",
+                            "data_hex": "02a0860100",
+                            "location": "top-level",
+                        },
+                        {
+                            "program_id": claims,
+                            "data_hex": action.instruction.data.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+                            "location": "top-level",
+                        }
+                    ],
+                    "wire_bytes": 512,
+                    "poststate": expected_poststate(action.phase),
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "schema": NATIVE_EVIDENCE_SCHEMA,
+            "transactions": transactions,
+        })
+    }
 
     #[test]
     fn staged_claim_check_is_exact_and_internally_joined() {
@@ -1227,11 +1536,55 @@ mod tests {
                 .filter(|action| !action.accepted)
                 .map(|action| action.refusal.expect("refusal"))
                 .collect::<Vec<_>>(),
-            vec![0x5665, 0x5663, 0x5661, 0x5661, 0x5625]
+            vec![
+                FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim as u32,
+                FractionalClaimCheckRedemptionSbfErrorV1::Conservation as u32,
+                FractionalClaimCheckRedemptionSbfErrorV1::Authority as u32,
+                FractionalClaimCheckRedemptionSbfErrorV1::Authority as u32,
+                ClaimCheckRedemptionSbfErrorV1::Vault as u32,
+            ]
         );
         assert!(matches!(
             actions.last().map(|action| action.phase),
             Some(Phase::Closed)
         ));
+    }
+
+    #[test]
+    fn native_evidence_binds_every_finalized_outcome_and_top_level_instruction() {
+        let staged = stage(None).expect("canonical stage");
+        let actions = actions(&staged).expect("actions");
+        let accepted = native_evidence_fixture(&staged);
+        assert_eq!(
+            verify_native_value(&accepted, &actions).expect("native evidence"),
+            actions.len()
+        );
+
+        let mut inner_substitution = accepted.clone();
+        inner_substitution["transactions"][0]["instructions"][1]["location"] = json!("inner");
+        assert_eq!(
+            verify_native_value(&inner_substitution, &actions)
+                .expect_err("top-level location is evidence")
+                .to_string(),
+            "dust-refusal has 0 exact top-level Claims instructions; expected one"
+        );
+
+        let mut accepted_refusal = accepted.clone();
+        accepted_refusal["transactions"][0]["error"] = Value::Null;
+        assert_eq!(
+            verify_native_value(&accepted_refusal, &actions)
+                .expect_err("a refused action cannot become accepted")
+                .to_string(),
+            "dust-refusal has the wrong native outcome"
+        );
+
+        let mut poststate_substitution = accepted;
+        poststate_substitution["transactions"][4]["poststate"]["vault_collateral_atoms"] = json!(9);
+        assert_eq!(
+            verify_native_value(&poststate_substitution, &actions)
+                .expect_err("poststate substitution")
+                .to_string(),
+            "partial-redemption native poststate is not exact"
+        );
     }
 }

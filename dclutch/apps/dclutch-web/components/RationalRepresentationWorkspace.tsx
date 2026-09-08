@@ -10,12 +10,26 @@ import {
   buildUnsignedBearerTransferV2,
   inspectBearerTransferV2,
   tokenBehaviorSummaryV2,
+  verifyBearerTransferFinalizedPoststateV2,
 } from '@dclutch/sdk/rationalTokenV2';
 import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   type WalletSignedTransactionV1,
-  requestWalletTransactionSignatureV1,
+  requestWalletAddTransactionSignatureV1,
+  submitSignedTransactionV1,
 } from '@dclutch/sdk/walletHandoff';
+import {
+  clearFinalizedClientOperationJournalV1,
+  discardUnsignedClientOperationJournalV1,
+  findClientOperationJournalV1,
+  markClientOperationSubmittedV1,
+  requireSubmittedSignatureMatchV1,
+  submittedClientOperationWireV1,
+  transactionSignatureV1,
+  writeUnsignedClientOperationJournalV1,
+  type ClientOperationJournalV1,
+} from '@/lib/clientOperationJournal';
+import { bearerTransferJournalInputV2, nextBearerTransferSignerV2, restoreBearerTransferJournalV2 } from '@/lib/bearerTransferOperationV2';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import RationalRetireReceiptPanel from './RationalRetireReceiptPanel';
@@ -47,6 +61,20 @@ function short(value: string): string {
   return value.length <= 20 ? value : `${value.slice(0, 10)}…${value.slice(-8)}`;
 }
 
+function browserStorage(): Storage {
+  if (typeof window === 'undefined' || window.localStorage === undefined) {
+    throw new Error('this browser does not expose local recovery storage, so no wallet signature was requested');
+  }
+  return window.localStorage;
+}
+
+type TransferCompletion = Readonly<{
+  signature: string;
+  observedSlot: string;
+  sourceAfter: bigint;
+  destinationAfter: bigint;
+}>;
+
 export default function RationalRepresentationWorkspace() {
   const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
   const [payer, setPayer] = useState('');
@@ -65,11 +93,15 @@ export default function RationalRepresentationWorkspace() {
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
   const wallets = useWalletDirectoryV1();
   const [signed, setSigned] = useState<WalletSignedTransactionV1 | null>(null);
+  const [lastValidBlockHeight, setLastValidBlockHeight] = useState<string | null>(null);
+  const [journal, setJournal] = useState<ClientOperationJournalV1 | null>(null);
+  const [submitStatus, setSubmitStatus] = useState('No signed packet has been submitted.');
+  const [completion, setCompletion] = useState<TransferCompletion | null>(null);
   const inspection = state.kind === 'ready' ? state.inspection : null;
   const summary = inspection === null ? null : tokenBehaviorSummaryV2(inspection);
 
   async function inspect(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setPlan(null); setSigned(null);
+    event.preventDefault(); setPlan(null); setSigned(null); setJournal(null); setLastValidBlockHeight(null); setCompletion(null);
     setState({ kind: 'loading', message: 'Deriving the behavior record from finalized Market state and reacquiring the Mint, Token Accounts, and ALT…' });
     try {
       const next = await inspectBearerTransferV2(new SolanaRpcClient(endpoint), {
@@ -79,6 +111,25 @@ export default function RationalRepresentationWorkspace() {
         kind: 'ready', inspection: next,
         message: `Exact TokenBehaviorSelectionV2 and extension-safe Token-2022 route joined at finalized slot ${next.observedSlot}.`,
       });
+      const client = new SolanaRpcClient(endpoint);
+      const admission = await client.probe();
+      const saved = await findClientOperationJournalV1(browserStorage(), {
+        clusterGenesis: admission.genesisHash, market: next.market, owner: next.payer,
+      }, 'bearer-transfer-v2');
+      if (saved !== null) {
+        const restored = await restoreBearerTransferJournalV2(saved);
+        if (restored.poststate.authority !== next.authority || restored.poststate.mint !== next.mint.mint
+            || restored.poststate.source !== next.source.address || restored.poststate.destination !== next.destination.address) {
+          throw new Error('saved Bearer transfer coordinates differ from the authenticated route');
+        }
+        setJournal(saved);
+        if (saved.phase === 'submitted') {
+          setSubmitStatus('Resuming the saved signature and finalized balance check. Nothing is resubmitted.');
+          await pollSubmitted(saved);
+        } else {
+          setSubmitStatus('An unsigned transfer plan is saved for this payer and Market. Discard it explicitly before building a different packet.');
+        }
+      }
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
@@ -86,12 +137,13 @@ export default function RationalRepresentationWorkspace() {
 
   async function build() {
     if (inspection === null) return;
-    setPlan(null); setSigned(null);
+    setPlan(null); setSigned(null); setJournal(null); setCompletion(null);
     try {
       const client = new SolanaRpcClient(endpoint);
       const blockhash = await client.latestMutationBlockhash(inspection.observedSlot);
       const next = buildUnsignedBearerTransferV2(inspection, blockhash.blockhash, parseRawU64(rawAmount));
       setPlan(next);
+      setLastValidBlockHeight(blockhash.lastValidBlockHeight);
       setBuildStatus(`Unsigned v0 TransferChecked packet: ${next.wireBytes.length} / 1232 bytes · ${next.loadedAddresses} ALT addresses · ${next.rawAmount.toString()} raw atoms.`);
     } catch (error) {
       setBuildStatus(`Refused: ${errorMessage(error)}`);
@@ -106,17 +158,85 @@ export default function RationalRepresentationWorkspace() {
   }
 
   async function signTransaction() {
-    if (plan === null) return;
-    if (payer !== authority) {
-      setWalletStatus('This packet has distinct payer and transfer-authority signers. Export it for explicit multisigner coordination.');
-      return;
-    }
+    if (plan === null || lastValidBlockHeight === null) return;
     try {
-      const next = await requestWalletTransactionSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), plan.transaction, authority);
+      const client = new SolanaRpcClient(endpoint);
+      const admission = await client.assertMutationCluster();
+      const height = BigInt(await client.blockHeight());
+      if (height > BigInt(lastValidBlockHeight)) throw new Error(`packet expired at block height ${lastValidBlockHeight}; rebuild it before signing`);
+      const current = signed?.transaction ?? plan.transaction;
+      const expectedSigner = nextBearerTransferSignerV2(current, payer, authority);
+      if (expectedSigner === null) throw new Error('every required signature is already present');
+      if (wallet !== expectedSigner.address) throw new Error(`connect the ${expectedSigner.role} wallet ${expectedSigner.address}`);
+      const retained = journal ?? await writeUnsignedClientOperationJournalV1(browserStorage(),
+        await bearerTransferJournalInputV2({ clusterGenesis: admission.genesisHash, market: plan.poststate.market, owner: payer }, plan, lastValidBlockHeight));
+      setJournal(retained);
+      const next = await requestWalletAddTransactionSignatureV1(client, wallets.handoff(endpoint), current, expectedSigner.address);
       setSigned(next);
-      setWalletStatus(next.complete ? 'The sole required signature is complete. Nothing has been submitted.' : 'Wallet signed its authorized slot; more signatures remain.');
+      setWalletStatus(next.complete
+        ? 'Every required wallet signature is valid over the exact packet. Nothing has been submitted.'
+        : `The transfer authority signed without changing the packet. Connect the transaction payer ${payer} to finish.`);
     } catch (error) {
       setWalletStatus(`Refused: ${errorMessage(error)}`);
+    }
+  }
+
+  async function pollSubmitted(saved: ClientOperationJournalV1): Promise<void> {
+    if (saved.phase !== 'submitted' || saved.signature === null) throw new Error('Bearer transfer recovery requires one submitted signature');
+    const restored = await restoreBearerTransferJournalV2(saved);
+    const client = new SolanaRpcClient(endpoint);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      try {
+        const status = (await client.signatureStatuses([saved.signature]))[0];
+        if (status?.known && status.succeeded === false) {
+          setSubmitStatus(`The chain reports an error (${status.errorText ?? 'unnamed chain error'}). The saved record remains because this packet cannot be replayed.`);
+          return;
+        }
+        if (status?.known && status.succeeded === true && status.confirmationStatus === 'finalized') {
+          const verified = await verifyBearerTransferFinalizedPoststateV2(client, restored.poststate, status.slot ?? undefined);
+          await clearFinalizedClientOperationJournalV1(browserStorage(), saved);
+          setCompletion({ signature: saved.signature, observedSlot: verified.observedSlot,
+            sourceAfter: verified.poststate.sourceAfter, destinationAfter: verified.poststate.destinationAfter });
+          setJournal(null);
+          setSubmitStatus(`Finalized at slot ${verified.observedSlot}; exact source and destination balances now match the transfer.`);
+          return;
+        }
+        setSubmitStatus('The saved signature is not finalized yet. You can close this page; authenticating the same route resumes it without sending again.');
+      } catch (error) {
+        setSubmitStatus(`${errorMessage(error)} The saved signature remains; recovery never resubmits it.`);
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+    }
+  }
+
+  async function submitTransaction() {
+    if (plan === null || signed?.complete !== true || journal === null || lastValidBlockHeight === null) return;
+    let submitted: ClientOperationJournalV1 | null = null;
+    const signature = transactionSignatureV1(signed.transaction.signatures[0]!);
+    try {
+      const client = new SolanaRpcClient(endpoint);
+      const admission = await client.assertMutationCluster();
+      if (admission.genesisHash !== journal.clusterGenesis) throw new Error('RPC genesis changed after signing');
+      if (BigInt(await client.blockHeight()) > BigInt(lastValidBlockHeight)) throw new Error(`signed packet expired at block height ${lastValidBlockHeight}`);
+      submitted = await markClientOperationSubmittedV1(browserStorage(), journal, signature, signed.wireBytes);
+      setJournal(submitted); setSubmitStatus('Saved before submission; sending the exact signed packet once…');
+      const returned = await submitSignedTransactionV1(client, submittedClientOperationWireV1(submitted));
+      requireSubmittedSignatureMatchV1(signature, returned);
+      await pollSubmitted(submitted);
+    } catch (error) {
+      setSubmitStatus(`${errorMessage(error)}${submitted === null ? '' : ' The submitted record stays saved; recovery never resubmits it.'}`);
+    }
+  }
+
+  async function discardUnsignedPlan() {
+    if (journal?.phase !== 'unsigned') return;
+    try {
+      await discardUnsignedClientOperationJournalV1(browserStorage(), journal);
+      setJournal(null); setSigned(null); setPlan(null); setLastValidBlockHeight(null);
+      setSubmitStatus('The unsigned saved plan was discarded. No transaction was submitted.');
+    } catch (error) {
+      setSubmitStatus(`Refused: ${errorMessage(error)}`);
     }
   }
 
@@ -130,7 +250,7 @@ export default function RationalRepresentationWorkspace() {
     link.click(); URL.revokeObjectURL(link.href);
   }
 
-  return <PageShell className="product-shell trade-v3-shell" header={<ConsoleHeader path="/redeem" title="Representation" purpose="Inspect claim-transfer and redemption constructors for a local or compatible custom chain." />}>
+  return <PageShell className="product-shell trade-v3-shell" header={<ConsoleHeader path="/representation" title="Representation" purpose="Transfer bearer claims and inspect representation lifecycle routes on a local or compatible custom chain." />}>
 
     <section className="trade-v3-hero"><div><h1>Claims &amp;<br /><em>redemption.</em></h1><p>The constructors below have local execution evidence and derive their routes from on-chain state. No current devnet market can supply that route today. Opening a representation and retiring a receipt produce unsigned candidates; where a step is unavailable, the console says exactly what is missing.</p></div><aside><span>Local/custom chain</span><strong>Bearer transfer</strong><p>No current devnet market can use this surface. Terminal redemption is SBF-tested, while browser payout remains read-only until it consumes the canonical Rust emitter.</p></aside></section>
 
@@ -154,9 +274,11 @@ export default function RationalRepresentationWorkspace() {
     </section>
 
     <section className="trade-v3-card signing-card">
-      <header><span>03</span><div><h2>Wallet handoff and exact packet export</h2><p>Connecting reads identity only. Signing is a separate explicit action. Distinct payer/authority packets remain valid but are exported for multisigner coordination; nothing is submitted here.</p></div></header>
+      <header><span>03</span><div><h2>Sign with each required wallet, then submit once</h2><p>Connecting reads identity only. The source authority signs first; when the payer is distinct, connect that wallet next. Each wallet may fill only its own slot, and every earlier signature is verified and preserved.</p></div></header>
       <WalletDirectory directory={wallets} onConnected={adoptIdentity} />
-      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no packet built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign sole-wallet packet</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>No automatic submission or hidden retry.</p></article></div>
+      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no packet built'}</strong><button type="button" disabled={plan === null || signed?.complete === true} onClick={() => void signTransaction()}>{signed === null ? 'Sign as transfer authority' : signed.complete ? 'All signatures complete' : 'Sign as transaction payer'}</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><button type="button" disabled={signed?.complete !== true || journal === null || journal.phase === 'submitted'} onClick={() => void submitTransaction()}>Submit fully signed transfer</button><button type="button" disabled={journal?.phase !== 'unsigned'} onClick={() => void discardUnsignedPlan()}>Discard unsigned saved plan</button><p>No automatic submission or hidden retry. {submitStatus}</p></article></div>
+      {plan && <div className="direct-output"><dl><div><dt>Expected source</dt><dd>{plan.poststate.sourceBefore.toString()} → {plan.poststate.sourceAfter.toString()} raw atoms</dd></div><div><dt>Expected destination</dt><dd>{plan.poststate.destinationBefore.toString()} → {plan.poststate.destinationAfter.toString()} raw atoms</dd></div></dl></div>}
+      {completion && <div className="direct-output"><dl><div><dt>Verified finalized balances</dt><dd>source {completion.sourceAfter.toString()} raw atoms · destination {completion.destinationAfter.toString()} raw atoms</dd></div><div><dt>Transaction</dt><dd>slot {completion.observedSlot} · signature {short(completion.signature)}</dd></div></dl></div>}
       {plan && <details className="trade-v3-bytes"><summary>Exact transfer material</summary><dl><div><dt>Instruction bytes · base64</dt><dd>{base64(plan.instructionBytes)}</dd></div><div><dt>Packet bytes · base64</dt><dd>{base64(signed?.wireBytes ?? plan.wireBytes)}</dd></div></dl></details>}
     </section>
 
@@ -166,6 +288,6 @@ export default function RationalRepresentationWorkspace() {
 
     <RationalRetireReceiptPanel />
 
-    <footer className="product-footer"><span>Arbitrary u8 display decimals · exact raw-u64 economics</span><span>No mock token state · no hidden rounding · no submit path</span></footer>
+    <footer className="product-footer"><span>Arbitrary u8 display decimals · exact raw-u64 economics</span><span>No mock token state · no hidden rounding · one saved send, finalized balance proof</span></footer>
   </PageShell>;
 }

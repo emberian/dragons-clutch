@@ -22,7 +22,9 @@ import {
   decodeTokenBehaviorSelectionV2,
   decodeRationalTokenCoreMarketV2,
   encodeTokenBehaviorSelectionV2,
+  verifyBearerTransferFinalizedPoststateV2,
   type BearerTransferInspectionV2,
+  inspectBearerTransferV2,
 } from './rationalTokenV2';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
@@ -87,6 +89,19 @@ function tokenAccountFixture(mint: string, owner: string, amount: bigint): RpcAc
 }
 
 describe('TokenBehaviorSelectionV2 and ordinary Bearer transfer', () => {
+  it('refuses a signer identity that aliases transfer state before any chain read', async () => {
+    let read = false;
+    const source = key(2);
+    await expect(inspectBearerTransferV2({
+      finalizedSlot: async () => { read = true; return '1'; },
+      accountInfo: async () => { read = true; throw new Error('unexpected read'); },
+      multipleAccounts: async () => { read = true; throw new Error('unexpected read'); },
+      minimumBalanceForRentExemption: async () => { read = true; throw new Error('unexpected read'); },
+    }, { payer: source, authority: key(3), coreProgram: key(4), market: key(5), mint: key(6),
+      source, destination: key(7), lookupTable: key(8) })).rejects.toThrow(/signer identity aliases/);
+    expect(read).toBe(false);
+  });
+
   it('uses the generated 360-byte Core authority and refuses an absent principal cap', () => {
     const decoded = decodeRationalTokenCoreMarketV2(currentCoreFixture(42n));
     expect(decoded.phase).toBe('Open');
@@ -183,7 +198,45 @@ describe('TokenBehaviorSelectionV2 and ordinary Bearer transfer', () => {
     expect(plan.requiredSigners).toEqual([payer]);
     expect(plan.loadedAddresses).toBeGreaterThan(0);
     expect(plan.wireBytes.length).toBeLessThanOrEqual(1_232);
+    expect(plan.poststate).toMatchObject({ sourceBefore: 77n, sourceAfter: 6n, destinationBefore: 2n, destinationAfter: 73n });
     expect(() => buildUnsignedBearerTransferV2(inspection, key(26), 78n)).toThrow('raw balance');
     expect(() => buildUnsignedBearerTransferV2(inspection, key(26), 0n)).toThrow('1..u64');
+    expect(() => buildUnsignedBearerTransferV2({ ...inspection,
+      destination: { ...inspection.destination, rawAmount: MAX_U64 } }, key(26), 1n)).toThrow('overflow');
+  });
+
+  it('accepts only the exact finalized source, destination, and unchanged Mint projection', async () => {
+    const mint = key(31); const controller = key(32); const source = key(33); const destination = key(34);
+    const owner = key(35); const destinationOwner = key(36);
+    const poststate = Object.freeze({
+      market: key(37), payer: owner, authority: owner, mint, mintController: controller, mintMetadata: 'absent' as const, source, destination,
+      rawAmount: 71n, displayDecimals: 255, mintSupply: 900n,
+      sourceOwner: owner, sourceBefore: 77n, sourceAfter: 6n,
+      destinationOwner, destinationBefore: 2n, destinationAfter: 73n,
+    });
+    const client = {
+      finalizedSlot: async () => '90',
+      multipleAccounts: async (addresses: ReadonlyArray<string>, floor: string) => Object.freeze({
+        slot: floor,
+        accounts: Object.freeze(addresses.map((address) => Object.freeze({ address, account:
+          address === mint ? mintFixture(mint, controller) : address === source
+            ? tokenAccountFixture(mint, owner, 6n) : tokenAccountFixture(mint, destinationOwner, 73n),
+        }))),
+      }),
+    };
+    await expect(verifyBearerTransferFinalizedPoststateV2(client, poststate, '91'))
+      .resolves.toMatchObject({ observedSlot: '91', poststate });
+    const wrong = {
+      ...client,
+      multipleAccounts: async (addresses: ReadonlyArray<string>, floor: string) => Object.freeze({
+        slot: floor,
+        accounts: Object.freeze(addresses.map((address) => Object.freeze({ address, account:
+          address === mint ? mintFixture(mint, controller) : address === source
+            ? tokenAccountFixture(mint, owner, 7n) : tokenAccountFixture(mint, destinationOwner, 73n),
+        }))),
+      }),
+    };
+    await expect(verifyBearerTransferFinalizedPoststateV2(wrong, poststate))
+      .rejects.toThrow(/differ from the exact transfer poststate/);
   });
 });

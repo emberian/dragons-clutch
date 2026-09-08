@@ -12,7 +12,6 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_claims::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
@@ -21,6 +20,7 @@ use dclutch_claims::{
         ProtocolPositionSeedsV2,
     },
 };
+use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_market::{CoreState, Identity, Phase as CorePhase, Readiness};
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
@@ -40,24 +40,24 @@ use dclutch_operator::{
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_source::pyth::{
-    FullPriceUpdateV2, GuardianSetV1, PostUpdateParamsView, ProgramDataV3View, ProgramV3View,
-    PythReleaseV1, ReceiverConfigV2View, VerifiedEncodedVaaV1, devnet_release_v1,
-    local_validator_release_v1,
-};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::ExecutionRoleV1;
-use dclutch_source::resolution::{
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2, ResolutionCertificateV2,
-};
 use dclutch_resolution_core_v3_operator::provider_finalized_projection_v3::{
     ProviderExecuteFinalizedInputV3, ProviderExecuteWritableAccountsV3,
     ProviderReclaimFinalizedInputV3, ProviderReclaimWritableAccountsV3,
     ProviderSubmitFinalizedInputV3, ProviderSubmitWritableAccountsV3,
     project_finalized_provider_execute_v3, project_finalized_provider_reclaim_v3,
     project_finalized_provider_submit_v3,
+};
+use dclutch_source::pyth::{
+    FullPriceUpdateV2, GuardianSetV1, PostUpdateParamsView, ProgramDataV3View, ProgramV3View,
+    PythReleaseV1, ReceiverConfigV2View, VerifiedEncodedVaaV1, devnet_release_v1,
+    local_validator_release_v1,
+};
+use dclutch_source::resolution::{
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -201,6 +201,9 @@ struct AccountSelectorsV1 {
     source_material: String,
     source_material_staging: String,
     source_spec: String,
+    /// Primary source used by Submit when Execute selects a recovery source.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    primary_source_spec: String,
     /// The six Execute-only staging cursors. `default` is carried so a producer
     /// checkpoint minted before §7.9 named them still deserializes; an empty
     /// value never reaches a message, because `nonzero_pubkey` refuses it.
@@ -231,9 +234,7 @@ struct AccountSelectorsV1 {
     capability_manifest_staging: String,
     /// The funded ordered ladder's `RecoveryPolicyV2` record pair.
     ///
-    /// EMPTY IS A PRIMARY CAPTURE, and it is what every input this producer has
-    /// ever written carries, so no existing document moves and no primary
-    /// campaign changes a byte. Both fields present is a capture answering a
+    /// Empty selects primary capture. Both fields present selects a capture answering a
     /// market that has ADVANCED: the three finalized-record positions above
     /// (`source_spec`, `adapter_config`, `source_provider_release`) then carry
     /// the rung's own alternative source, and the policy record is the only
@@ -637,6 +638,9 @@ impl SelectedInputV1 {
         account!("source_material", source_material);
         account!("source_material_staging", source_material_staging);
         account!("source_spec", source_spec);
+        if !input.accounts.primary_source_spec.is_empty() {
+            account!("primary_source_spec", primary_source_spec);
+        }
         account!("source_spec_staging", source_spec_staging);
         account!("source_provider_release", source_provider_release);
         account!(
@@ -683,6 +687,11 @@ impl SelectedInputV1 {
                 ));
             }
         };
+        if recovery_ladder.is_some() != accounts.contains_key("primary_source_spec") {
+            return Err(Error::new(
+                "a recovery capture must retain its primary Submit source; a primary capture has no alternative source",
+            ));
+        }
         account!("funding_ledger", funding_ledger);
         account!("certificate", certificate);
         account!("activation_cache", activation_cache);
@@ -906,7 +915,7 @@ fn classify(facts: ChainFactsV1) -> Result<StageV1> {
         (
             CorePhase::Open,
             Readiness::Consumed,
-            SourceResolutionPhaseV1::Primary,
+            SourceResolutionPhaseV1::Primary | SourceResolutionPhaseV1::Recovery,
             Vacant,
             Vacant,
             Vacant,
@@ -914,7 +923,7 @@ fn classify(facts: ChainFactsV1) -> Result<StageV1> {
         (
             CorePhase::Open,
             Readiness::Consumed,
-            SourceResolutionPhaseV1::Primary,
+            SourceResolutionPhaseV1::Primary | SourceResolutionPhaseV1::Recovery,
             Submitted,
             Submitted,
             Vacant,
@@ -1416,7 +1425,11 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
             common_release!();
             selected!("source_state", SourceState);
             selected!("source_material", FinalizedRecord);
-            selected!("source_spec", FinalizedRecord);
+            if selected.accounts.contains_key("primary_source_spec") {
+                selected!("primary_source_spec", FinalizedRecord);
+            } else {
+                selected!("source_spec", FinalizedRecord);
+            }
             selected!("source_provider_release", FinalizedRecord);
             selected!("pyth_release", FinalizedRecord);
             selected!("window", FinalizedRecord);
@@ -1483,6 +1496,10 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
                 StableAddressClassV1::CallerAuthority,
                 execute_caller_authority(selected)?,
             )?;
+            if selected.recovery_ladder.is_some() {
+                selected!("recovery_policy", FinalizedRecord);
+                selected!("recovery_policy_staging", FinalizedRecordStaging);
+            }
             provider_programs!();
         }
         StageV1::Reclaim => {
@@ -1961,6 +1978,7 @@ fn preflight_posted_observation(
         snapshot.observation.unix_timestamp,
         window,
         adapter,
+        selected_recovery_deadline_v1(selected, snapshot)?,
     )
 }
 
@@ -1974,7 +1992,16 @@ fn validate_observation_fields(
     finalized_now: i64,
     window: WindowSpecV1,
     adapter: PythAdapterConfigV1,
+    recovery_deadline: Option<i64>,
 ) -> Result<()> {
+    if recovery_deadline.is_some_and(|deadline| finalized_now > deadline) {
+        return Err(Error::new(
+            "the funded recovery attempt deadline has elapsed",
+        ));
+    }
+    // Recovery preserves the original observation period and future-skew
+    // ceiling. Its prepaid attempt deadline replaces the expired primary age
+    // floor, exactly as Source's normalize_authenticated_recovery_update.
     let oldest = finalized_now
         .checked_sub(i64::from(window.max_age_seconds()))
         .ok_or_else(|| Error::new("Pyth freshness lower bound overflow"))?;
@@ -1984,7 +2011,8 @@ fn validate_observation_fields(
     let in_schedule = window
         .contains_observation(publication)
         .map_err(|error| Error::new(format!("Pyth observation schedule: {error:?}")))?;
-    if !in_schedule || publication < oldest || publication > newest {
+    if !in_schedule || (recovery_deadline.is_none() && publication < oldest) || publication > newest
+    {
         return Err(Error::new(format!(
             "stale or wrong-period Pyth observation: publication {publication}, Market window [{}, {}], finalized freshness band [{oldest}, {newest}]",
             window.start_unix_seconds(),
@@ -3442,6 +3470,53 @@ fn campaign_record_staging(
     Ok(staging)
 }
 
+fn provider_record_pair_v1(
+    registry: Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> (Pubkey, Pubkey) {
+    (
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0,
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry).0,
+    )
+}
+
+fn active_recovery_attempt_v1(
+    source: SourceResolutionStateV2,
+    policy: &[u8],
+) -> Result<dclutch_source::RecoveryAttemptV2> {
+    if source.phase() != SourceResolutionPhaseV1::Recovery {
+        return Err(Error::new(
+            "recovery selection requires the Source's active recovery leg",
+        ));
+    }
+    dclutch_source::RecoveryPolicyV2::decode(policy)
+        .and_then(|policy| policy.attempt(source.active_attempt()))
+        .map_err(|error| Error::new(format!("active recovery attempt: {error:?}")))
+}
+
+fn selected_recovery_deadline_v1(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+) -> Result<Option<i64>> {
+    selected
+        .recovery_ladder
+        .map(|(policy, _)| {
+            let source = SourceResolutionStateV2::decode(
+                &snapshot
+                    .account(selected.account("source_state")?, "Source")?
+                    .data,
+            )
+            .map_err(|error| Error::new(format!("recovery Source: {error:?}")))?;
+            Ok(active_recovery_attempt_v1(
+                source,
+                &snapshot.account(policy, "RecoveryPolicyV2")?.data,
+            )?
+            .deadline_unix_seconds())
+        })
+        .transpose()
+}
+
 fn producer_selected_input(
     plan: &SuccessorPlan,
     campaign: &CampaignMarketEvidenceV1,
@@ -3495,13 +3570,16 @@ fn producer_selected_input(
         .map_err(|error| Error::new(format!("Source state: {error:?}")))?;
     if source_account.owner != resolution_program
         || source_account.executable
-        || source.phase() != SourceResolutionPhaseV1::Primary
+        || !matches!(
+            source.phase(),
+            SourceResolutionPhaseV1::Primary | SourceResolutionPhaseV1::Recovery
+        )
         || source.market() != market.to_bytes()
         || source.generation() != generation
         || source.material_id().to_bytes() != market_state.identity.resolution_policy.to_bytes()
     {
         return Err(Error::new(
-            "Source state is not this Open Market's canonical fresh primary child",
+            "Source state is not this Open Market's canonical live provider child",
         ));
     }
     let beneficiary = Pubkey::new_from_array(source.rent_beneficiary());
@@ -3527,7 +3605,47 @@ fn producer_selected_input(
     )
     .0;
     let window_key = campaign_account(campaign, "window_spec_record")?;
-    let adapter_key = campaign_account(campaign, "pyth_adapter_config_record")?;
+    let recovery_attempt = if source.phase() == SourceResolutionPhaseV1::Recovery {
+        Some(active_recovery_attempt_v1(
+            source,
+            &coherent
+                .account(
+                    campaign_account(campaign, "recovery_policy_record")?,
+                    "RecoveryPolicyV2",
+                )?
+                .data,
+        )?)
+    } else {
+        None
+    };
+    let primary_source_key = campaign_account(campaign, "source_spec_record")?;
+    let source_spec_key = recovery_attempt
+        .map(|attempt| {
+            provider_record_pair_v1(
+                registry_program,
+                SOURCE_SPEC_SCHEMA_ID_V1,
+                attempt.source_spec_id().to_bytes(),
+            )
+            .0
+        })
+        .unwrap_or(primary_source_key);
+    let adapter_key = match recovery_attempt {
+        None => campaign_account(campaign, "pyth_adapter_config_record")?,
+        Some(_) => {
+            let spec = dclutch_source::SourceSpecV1::decode(
+                &coherent
+                    .account(source_spec_key, "recovery SourceSpecV1")?
+                    .data,
+            )
+            .map_err(|error| Error::new(format!("recovery SourceSpecV1: {error:?}")))?;
+            provider_record_pair_v1(
+                registry_program,
+                PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+                spec.adapter_config_id().to_bytes(),
+            )
+            .0
+        }
+    };
     let window = WindowSpecV1::decode(&coherent.account(window_key, "WindowSpec")?.data)
         .map_err(|error| Error::new(format!("WindowSpec: {error:?}")))?;
     let adapter =
@@ -3543,15 +3661,16 @@ fn producer_selected_input(
         coherent.observation.unix_timestamp,
         window,
         adapter,
+        recovery_attempt.map(|attempt| attempt.deadline_unix_seconds()),
     )?;
     let reclaim_after_unix_seconds = pinned_reclaim_after_unix_seconds(
         prior,
         coherent.observation.unix_timestamp,
         window.end_unix_seconds(),
     )?;
-    // A fresh Primary state hostile-decodes only with terminal sequence zero;
-    // the first terminal decision is therefore the canonical next sequence.
-    let terminal_sequence = 1_u64;
+    let terminal_sequence = source
+        .next_terminal_sequence()
+        .map_err(|error| Error::new(format!("next Source terminal sequence: {error:?}")))?;
     let certificate = Pubkey::find_program_address(
         &[
             RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
@@ -3655,6 +3774,36 @@ fn producer_selected_input(
                 .to_string(),
             ),
         };
+    let source_spec_staging = if recovery_attempt.is_some() {
+        provider_record_pair_v1(
+            registry_program,
+            SOURCE_SPEC_SCHEMA_ID_V1,
+            hash(
+                &coherent
+                    .account(source_spec_key, "recovery SourceSpecV1")?
+                    .data,
+            )
+            .to_bytes(),
+        )
+        .1
+    } else {
+        source_spec_staging
+    };
+    let adapter_config_staging = if recovery_attempt.is_some() {
+        provider_record_pair_v1(
+            registry_program,
+            PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+            hash(&coherent.account(adapter_key, "recovery adapter")?.data).to_bytes(),
+        )
+        .1
+    } else {
+        adapter_config_staging
+    };
+    let (recovery_policy, recovery_policy_staging) = if recovery_attempt.is_some() {
+        (recovery_policy, recovery_policy_staging)
+    } else {
+        (String::new(), String::new())
+    };
     Ok(PlanInputV1 {
         format: input_format(expected_cluster).to_owned(),
         generation,
@@ -3671,7 +3820,12 @@ fn producer_selected_input(
             source_state: source_state.to_string(),
             source_material: campaign_account(campaign, "source_material_record")?.to_string(),
             source_material_staging: source_material_staging.to_string(),
-            source_spec: campaign_account(campaign, "source_spec_record")?.to_string(),
+            source_spec: source_spec_key.to_string(),
+            primary_source_spec: if recovery_attempt.is_some() {
+                primary_source_key.to_string()
+            } else {
+                String::new()
+            },
             source_spec_staging: source_spec_staging.to_string(),
             source_provider_release: campaign_account(campaign, "provider_release_record")?
                 .to_string(),
@@ -3848,6 +4002,35 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
         ]),
         first.observation.slot,
     )?;
+    let source =
+        SourceResolutionStateV2::decode(&coherent.account(source_state, "Source state")?.data)
+            .map_err(|error| Error::new(format!("Source state: {error:?}")))?;
+    let coherent = if source.phase() == SourceResolutionPhaseV1::Recovery {
+        let policy_key = campaign_account(campaign, "recovery_policy_record")?;
+        let policy_account = rpc.required_account(policy_key, "RecoveryPolicyV2")?;
+        let attempt = active_recovery_attempt_v1(source, &policy_account.data)?;
+        let registry = nonzero_pubkey(&plan.registry.program_id, "Registry program")?;
+        let spec_key = provider_record_pair_v1(
+            registry,
+            SOURCE_SPEC_SCHEMA_ID_V1,
+            attempt.source_spec_id().to_bytes(),
+        )
+        .0;
+        let spec_account = rpc.required_account(spec_key, "recovery SourceSpecV1")?;
+        let spec = dclutch_source::SourceSpecV1::decode(&spec_account.data)
+            .map_err(|error| Error::new(format!("recovery SourceSpecV1: {error:?}")))?;
+        let adapter_key = provider_record_pair_v1(
+            registry,
+            PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+            spec.adapter_config_id().to_bytes(),
+        )
+        .0;
+        let mut keys = coherent.accounts.keys().copied().collect::<BTreeSet<_>>();
+        keys.extend([policy_key, spec_key, adapter_key]);
+        observe_keys(&mut rpc, keys, coherent.observation.slot)?
+    } else {
+        coherent
+    };
     let slots = lookup_creation_slots(prior.as_ref(), coherent.observation.slot)?;
     let input = producer_selected_input(
         &plan,
@@ -3875,7 +4058,7 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
     )?;
     if classify(chain_facts(&selected, &snapshot)?)? != StageV1::Submit {
         return Err(Error::new(
-            "flagship producer requires the canonical pre-submit Open/Primary state",
+            "flagship producer requires the canonical pre-submit Open live-source state",
         ));
     }
     authenticate_current_deployments(&selected, &snapshot)?;
@@ -3906,6 +4089,7 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
         snapshot.observation.unix_timestamp,
         actual_window,
         actual_adapter,
+        selected_recovery_deadline_v1(&selected, &snapshot)?,
     )?;
     for (label, selector) in [
         ("founding_market", "market"),
@@ -3921,7 +4105,19 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
         ("result_domain_record", "result_domain"),
         ("portfolio_record", "portfolio"),
     ] {
-        authenticate_campaign_account(campaign, label, selected.account(selector)?, &snapshot)?;
+        if selected.recovery_ladder.is_some() && selector == "adapter_config" {
+            continue;
+        }
+        let key = if selector == "source_spec" {
+            selected
+                .accounts
+                .get("primary_source_spec")
+                .copied()
+                .unwrap_or(selected.account(selector)?)
+        } else {
+            selected.account(selector)?
+        };
+        authenticate_campaign_account(campaign, label, key, &snapshot)?;
     }
     let mut tables = BTreeMap::new();
     let mut routes = BTreeMap::new();
@@ -5138,7 +5334,14 @@ fn provider_submit_report(
             source_state: snapshot.observed(selected.account("source_state")?, "Source state")?,
             source_material: snapshot
                 .observed(selected.account("source_material")?, "SourceMaterial")?,
-            source_spec: snapshot.observed(selected.account("source_spec")?, "SourceSpec")?,
+            source_spec: snapshot.observed(
+                selected
+                    .accounts
+                    .get("primary_source_spec")
+                    .copied()
+                    .unwrap_or(selected.account("source_spec")?),
+                "primary SourceSpec",
+            )?,
             source_provider_release: snapshot.observed(
                 selected.account("source_provider_release")?,
                 "ProviderRelease",
@@ -5512,7 +5715,8 @@ fn canonical_stage_semantics(
         StageV1::Submit => {
             let report = provider_submit_report(selected, snapshot)?;
             let lifecycle_rent = rpc.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)?;
-            let update_rent = rpc.minimum_balance(dclutch_source::pyth::FULL_PRICE_UPDATE_V2_LEN)?;
+            let update_rent =
+                rpc.minimum_balance(dclutch_source::pyth::FULL_PRICE_UPDATE_V2_LEN)?;
             let config = ReceiverConfigV2View::parse(
                 &snapshot
                     .account(selected.account("receiver_config")?, "Receiver Config")?
@@ -5959,7 +6163,7 @@ pub(crate) fn usage() -> &'static str {
      [--execute --authority-keypair ABSOLUTE_JSON]\n\n  \
      dclutch-local-successor-bootstrap flagship-resolution-v1 --rpc-url URL \
      --i-mean-devnet DEVNET_GENESIS --input ABSOLUTE_JSON \
-     --checkpoint ABSOLUTE_JSON [--through submit|execute|reclaim|complete] \
+     --checkpoint ABSOLUTE_JSON [--through submit|execute|accept|reclaim|complete] \
      [--adopt-receipts ABSOLUTE_JSON] \
      [--execute --submitter-keypair ABSOLUTE_JSON --resolver-keypair ABSOLUTE_JSON \
      --update-keypair ABSOLUTE_JSON]\n\nThe producer is key-free, read-only, and devnet-only. It \
@@ -5967,7 +6171,9 @@ pub(crate) fn usage() -> &'static str {
      writes the flagship input only after a fresh finalized snapshot proves all three are frozen \
      and exact. The table provisioner defaults to key-free preflight and executes exactly one \
      journaled create, ordered extension, or freeze per invocation. The resolution executor \
-     defaults to key-free finalized preflight. \
+     defaults to key-free finalized preflight. A Source standing on a funded recovery rung \
+     selects that rung from finalized policy; the observation must still answer the original \
+     period and arrive before the rung deadline. \
      With --execute, each next chain-derived stage is durably written before the minimum \
      necessary key file is opened; no signer bytes or key paths enter the checkpoint."
 }
@@ -5986,14 +6192,15 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
      dclutch-local-successor-bootstrap \
      local-private-validator-flagship-resolution-v1 \
      --rpc-url http://127.0.0.1:PORT --input ABSOLUTE_JSON \
-     --checkpoint ABSOLUTE_JSON [--through submit|execute|reclaim|complete] \
+     --checkpoint ABSOLUTE_JSON [--through submit|execute|accept|reclaim|complete] \
      [--execute --submitter-keypair ABSOLUTE_JSON --resolver-keypair ABSOLUTE_JSON \
      --update-keypair ABSOLUTE_JSON]\n\nThis command exposes the same authenticated provider \
      lifecycle to a validator launched and owned by the private lifecycle runner. It accepts \
      only 127.0.0.1 with an explicit permitted port, requires the distinct owned-loopback input, \
      checkpoint, table-journal, and pinned local Pyth release domains, and refuses every external \
      origin, including devnet and mainnet-beta. Without --execute it remains key-free and \
-     read-only."
+     read-only. Primary and funded recovery captures use the same durable stages; the Source \
+     chooses the active leg and its immutable policy bounds the deadline."
 }
 
 struct ProviderFinalizedTransactionV1 {
@@ -6677,6 +6884,12 @@ fn authenticate_provider_finalized_projection(
                     sum.checked_add(transfer.lamports)
                         .ok_or_else(|| Error::new("certificate top-up overflow"))
                 })?;
+            let source_provider_release =
+                durable_pre_account(plan, selected.account("source_provider_release")?)?;
+            let recovery_policy = selected
+                .recovery_ladder
+                .map(|(policy, _)| durable_pre_account(plan, policy))
+                .transpose()?;
             project_finalized_provider_execute_v3(ProviderExecuteFinalizedInputV3 {
                 instruction: &instruction,
                 return_data_program: resolution,
@@ -6688,6 +6901,8 @@ fn authenticate_provider_finalized_projection(
                 source_material: &source_material,
                 result_domain: &result_domain,
                 statistic: &statistic,
+                source_provider_release: &source_provider_release,
+                recovery_policy: recovery_policy.as_ref(),
                 update: &update,
                 writable: ProviderExecuteWritableAccountsV3 {
                     source_before: &before2,
@@ -8114,18 +8329,9 @@ fn verify_terminal(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -
     .0;
     let source_material =
         snapshot.account(selected.account("source_material")?, "SourceMaterial")?;
-    // Wall 11: two records, one word. `certificate.route` is the *Pyth* release
-    // record's content digest — `provider_finalized_projection_v3` writes
-    // `route: request.provider_release`, and the transport builder sets that to
-    // `pyth_id`, which it reads *out of* the Source's ProviderRelease record and
-    // then pins to the Pyth release account with `authenticate_raw`. Digesting
-    // the Source's ProviderRelease here compared the wrong one of the two, and
-    // nothing caught it because no market had ever passed Execute.
-    //
-    // The join is checked whole rather than merely repointed: the Source's
-    // ProviderRelease must name the Pyth release the certificate routed
-    // through, and that Pyth release account must be the record it names. Both
-    // records stay read; neither is dropped to make a clause pass.
+    // The certificate names the Source ProviderRelease. The provider request
+    // and receipt separately name its Pyth deployment; both immutable links
+    // must agree with the finalized records.
     let source_provider_release = snapshot.account(
         selected.account("source_provider_release")?,
         "ProviderRelease",
@@ -8133,6 +8339,39 @@ fn verify_terminal(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -
     let pyth_release = snapshot.account(selected.account("pyth_release")?, "PythRelease")?;
     let source_provider = ProviderReleaseV1::decode(&source_provider_release.data)
         .map_err(|error| Error::new(format!("ProviderRelease: {error:?}")))?;
+    let (expected_route, expected_attempt) = match selected.recovery_ladder {
+        None => (SourceResolutionRouteV1::Primary, 0),
+        Some((policy_key, _)) => {
+            let policy_account = snapshot.account(policy_key, "RecoveryPolicyV2")?;
+            let policy = dclutch_source::RecoveryPolicyV2::decode(&policy_account.data)
+                .map_err(|error| Error::new(format!("terminal RecoveryPolicyV2: {error:?}")))?;
+            let material = dclutch_source::SourceMaterialV3::decode(&source_material.data)
+                .map_err(|error| Error::new(format!("terminal SourceMaterialV3: {error:?}")))?;
+            let index = certificate
+                .attempt_index
+                .checked_sub(1)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| {
+                    Error::new("recovery certificate omitted its positive attempt index")
+                })?;
+            let attempt = policy
+                .attempt(index)
+                .map_err(|error| Error::new(format!("terminal recovery attempt: {error:?}")))?;
+            let spec =
+                snapshot.account(selected.account("source_spec")?, "recovery SourceSpecV1")?;
+            if material.recovery_policy().map(|value| value.to_bytes())
+                != Some(hash(&policy_account.data).to_bytes())
+                || attempt.source_spec_id().to_bytes() != hash(&spec.data).to_bytes()
+                || attempt.provider_release_id().to_bytes()
+                    != hash(&source_provider_release.data).to_bytes()
+            {
+                return Err(Error::new(
+                    "terminal recovery policy, source or provider identity changed",
+                ));
+            }
+            (SourceResolutionRouteV1::Recovery, u32::from(index) + 1)
+        }
+    };
     let product = snapshot.account(selected.account("product")?, "Product")?;
     // Thirty-four conjuncts behind one string is a refusal that can be reported
     // and not acted on: it says the terminal join failed and nothing about
@@ -8188,12 +8427,13 @@ fn verify_terminal(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -
             certificate.selector == market.terminal_winner,
         ),
         (
-            "certificate route digests the Pyth release record",
-            certificate.route == hash(&pyth_release.data).to_bytes(),
+            "certificate route digests the Source ProviderRelease record",
+            certificate.route == hash(&source_provider_release.data).to_bytes(),
         ),
         (
-            "the Source ProviderRelease names that Pyth release",
-            source_provider.provider_deployment_release_id().to_bytes() == certificate.route,
+            "the Source ProviderRelease names the Pyth deployment release",
+            source_provider.provider_deployment_release_id().to_bytes()
+                == hash(&pyth_release.data).to_bytes(),
         ),
         (
             "certificate source material is the market's resolution policy",
@@ -8212,8 +8452,8 @@ fn verify_terminal(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -
             certificate.funding_allocation == [0; 32],
         ),
         (
-            "certificate attempt index is zero",
-            certificate.attempt_index == 0,
+            "certificate attempt index matches the selected Source leg",
+            certificate.attempt_index == expected_attempt,
         ),
         (
             "certificate result denominator is one",
@@ -8233,8 +8473,8 @@ fn verify_terminal(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -
             source.generation() == selected.generation,
         ),
         (
-            "Source terminal route is Primary",
-            source_terminal.route() == SourceResolutionRouteV1::Primary,
+            "Source terminal route matches the selected Source leg",
+            source_terminal.route() == expected_route,
         ),
         (
             "Source terminal selector matches the certificate",
@@ -8352,6 +8592,108 @@ mod tests {
             update,
             certificate,
         }
+    }
+
+    #[test]
+    fn recovery_capture_preserves_submit_execute_and_prepaid_deadline_boundaries() {
+        use SlotKindV1::{Submitted, Vacant};
+        assert_eq!(
+            classify(facts(
+                CorePhase::Open,
+                SourceResolutionPhaseV1::Recovery,
+                Vacant,
+                Vacant,
+                Vacant
+            ))
+            .expect("rung Submit"),
+            StageV1::Submit
+        );
+        assert_eq!(
+            classify(facts(
+                CorePhase::Open,
+                SourceResolutionPhaseV1::Recovery,
+                Submitted,
+                Submitted,
+                Vacant
+            ))
+            .expect("rung Execute"),
+            StageV1::Execute
+        );
+        let window = WindowSpecV1::new(
+            dclutch_source::ContentId::new([1; 32]).expect("source"),
+            dclutch_source::WindowKind::Terminal,
+            90,
+            110,
+            20,
+            5,
+            dclutch_source::ContentId::new([2; 32]).expect("schedule"),
+        )
+        .expect("window");
+        let adapter = PythAdapterConfigV1::new([3; 32], -8, 100).expect("adapter");
+        let check = |publication, now, deadline| {
+            validate_observation_fields(
+                publication,
+                [3; 32],
+                10_000,
+                50,
+                -8,
+                now,
+                window,
+                adapter,
+                deadline,
+            )
+        };
+        // Primary grace has expired. The exact same-period publication may
+        // answer through the funded attempt's inclusive deadline.
+        check(100, 200, Some(200)).expect("funded deadline includes its final second");
+        assert_eq!(
+            check(100, 201, Some(200)).expect_err("late recovery").0,
+            "the funded recovery attempt deadline has elapsed"
+        );
+        assert_eq!(
+            check(100, 200, None).expect_err("primary grace expired").0,
+            "stale or wrong-period Pyth observation: publication 100, Market window [90, 110], finalized freshness band [180, 205]"
+        );
+        assert_eq!(
+            check(89, 200, Some(200))
+                .expect_err("wrong question period")
+                .0,
+            "stale or wrong-period Pyth observation: publication 89, Market window [90, 110], finalized freshness band [180, 205]"
+        );
+    }
+
+    #[test]
+    fn recovery_capture_lookup_tables_keep_primary_submission_and_selected_execution() {
+        let mut input = sample_input();
+        input.accounts.primary_source_spec = Pubkey::new_from_array([201; 32]).to_string();
+        input.accounts.recovery_policy = Pubkey::new_from_array([202; 32]).to_string();
+        input.accounts.recovery_policy_staging = Pubkey::new_from_array([203; 32]).to_string();
+        let selected =
+            SelectedInputV1::parse(&input, ExpectedClusterV1::Devnet).expect("rung selectors");
+        let submit = stable_lookup_union(&selected, StageV1::Submit).expect("Submit table");
+        let execute = stable_lookup_union(&selected, StageV1::Execute).expect("Execute table");
+        assert!(submit.iter().any(|row| row.label == "primary_source_spec"));
+        assert!(!submit.iter().any(|row| row.label == "source_spec"));
+        for label in ["source_spec", "recovery_policy", "recovery_policy_staging"] {
+            assert!(
+                execute.iter().any(|row| row.label == label),
+                "missing {label}"
+            );
+        }
+        assert!(!execute.iter().any(|row| row.label == "primary_source_spec"));
+        input.accounts.primary_source_spec.clear();
+        assert_eq!(
+            SelectedInputV1::parse(&input, ExpectedClusterV1::Devnet)
+                .expect_err("recovery Submit source missing")
+                .0,
+            "a recovery capture must retain its primary Submit source; a primary capture has no alternative source"
+        );
+        let primary = sample_input();
+        assert!(
+            !serde_json::to_string(&primary)
+                .expect("primary input")
+                .contains("primarySourceSpec")
+        );
     }
 
     #[test]
@@ -8534,17 +8876,19 @@ mod tests {
         .expect("window");
         let adapter = PythAdapterConfigV1::new([3; 32], -8, 100).expect("adapter");
         assert!(
-            validate_observation_fields(100, [3; 32], 10_000, 50, -8, 105, window, adapter).is_ok()
+            validate_observation_fields(100, [3; 32], 10_000, 50, -8, 105, window, adapter, None)
+                .is_ok()
         );
         assert!(
-            validate_observation_fields(80, [3; 32], 10_000, 50, -8, 105, window, adapter).is_err()
-        );
-        assert!(
-            validate_observation_fields(100, [4; 32], 10_000, 50, -8, 105, window, adapter)
+            validate_observation_fields(80, [3; 32], 10_000, 50, -8, 105, window, adapter, None)
                 .is_err()
         );
         assert!(
-            validate_observation_fields(100, [3; 32], 10_000, 101, -8, 105, window, adapter)
+            validate_observation_fields(100, [4; 32], 10_000, 50, -8, 105, window, adapter, None)
+                .is_err()
+        );
+        assert!(
+            validate_observation_fields(100, [3; 32], 10_000, 101, -8, 105, window, adapter, None)
                 .is_err()
         );
     }
@@ -8583,6 +8927,7 @@ mod tests {
             value
         };
         let accounts = AccountSelectorsV1 {
+            primary_source_spec: String::new(),
             market: key(),
             source_state: key(),
             source_material: key(),

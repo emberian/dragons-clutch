@@ -313,6 +313,64 @@ export async function requestWalletTransactionSignatureV1(
   return Object.freeze({ transaction: signed, wireBytes: signed.serialize(), signer: canonicalSigner, complete });
 }
 
+/**
+ * Add one wallet signature to a canonical packet while preserving every
+ * signature already collected from another required signer.
+ */
+export async function requestWalletAddTransactionSignatureV1(
+  client: MutationAdmissionClient,
+  candidate: unknown,
+  transaction: VersionedTransaction,
+  expectedSigner: string,
+): Promise<WalletSignedTransactionV1> {
+  await client.assertMutationCluster();
+  const wallet = handoff(candidate);
+  if (typeof wallet.signTransaction !== 'function') throw new Error('wallet does not expose signTransaction');
+  const signer = new PublicKey(expectedSigner);
+  if (signer.toBase58() !== expectedSigner || walletAddress(wallet) !== expectedSigner) {
+    throw new Error('connected wallet is not the expected transaction signer');
+  }
+  const message = messageView(transaction);
+  const required = message.header.numRequiredSignatures;
+  if (required < 1 || transaction.signatures.length !== required) {
+    throw new Error('transaction signature vector does not match the message header');
+  }
+  const signerIndex = message.staticAccountKeys.slice(0, required)
+    .findIndex((address) => address.toBase58() === expectedSigner);
+  if (signerIndex < 0) throw new Error('connected wallet is not required by this transaction');
+  const beforeMessage = transaction.message.serialize();
+  const beforeSignatures = transaction.signatures.map((signature) => new Uint8Array(signature));
+  if (beforeSignatures[signerIndex]!.some((byte) => byte !== 0)) {
+    throw new Error('expected transaction signature slot is already occupied');
+  }
+  for (let index = 0; index < beforeSignatures.length; index += 1) {
+    const signature = beforeSignatures[index]!;
+    if (signature.every((byte) => byte === 0)) continue;
+    const priorSigner = message.staticAccountKeys[index];
+    if (priorSigner === undefined || !(await verifyEd25519SignatureV1(priorSigner, beforeMessage, signature))) {
+      throw new Error('transaction contains an invalid existing signature');
+    }
+  }
+  const signed = canonicalWalletTransactionV1(await wallet.signTransaction(
+    VersionedTransaction.deserialize(transaction.serialize()),
+  ));
+  if (!sameBytes(signed.message.serialize(), beforeMessage) || signed.signatures.length !== required) {
+    throw new Error('wallet rewrote the transaction message');
+  }
+  for (let index = 0; index < signed.signatures.length; index += 1) {
+    if (index !== signerIndex && !sameBytes(signed.signatures[index]!, beforeSignatures[index]!)) {
+      throw new Error('wallet changed another transaction signature slot');
+    }
+  }
+  const added = signed.signatures[signerIndex]!;
+  if (added.every((byte) => byte === 0)
+      || !(await verifyEd25519SignatureV1(signer, beforeMessage, added))) {
+    throw new Error('wallet did not add one valid expected transaction signature');
+  }
+  const complete = signed.signatures.every((signature) => signature.some((byte) => byte !== 0));
+  return Object.freeze({ transaction: signed, wireBytes: signed.serialize(), signer: expectedSigner, complete });
+}
+
 async function verifyEd25519SignatureV1(
   signer: PublicKey,
   message: Uint8Array,

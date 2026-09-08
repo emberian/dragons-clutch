@@ -343,20 +343,34 @@ fn decode_base58(value: &str) -> Result<Vec<u8>> {
     Ok(answer)
 }
 
-/// Recover one accepted packet from finalized transaction history.
+/// Recover one accepted or refused packet from finalized transaction history.
 ///
 /// The route census accepts neither the host's planned instruction nor an
 /// invoke log as route evidence. This re-reads the chain's packet, requires it
 /// to be byte-identical to the signed packet submitted above, then resolves
 /// top-level and CPI instruction program indexes through the finalized loaded
-/// addresses. The Claims request therefore comes from the validator's inner
-/// instruction metadata rather than from the fixture that authored it.
-fn finalized_instruction_evidence(
+/// addresses. The expected instruction therefore comes from finalized native
+/// metadata rather than from the fixture that authored it.
+#[derive(Clone, Copy)]
+pub(crate) enum NativeInstructionLocation {
+    TopLevel,
+    Inner,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct NativeInstructionExpectation<'a> {
+    pub(crate) program: RpcPubkey,
+    pub(crate) data: &'a [u8],
+    pub(crate) location: NativeInstructionLocation,
+}
+
+pub(crate) fn finalized_instruction_evidence(
     client: &RpcClient,
     label: &str,
     signature: &solana_sdk::signature::Signature,
-    submitted: &VersionedTransaction,
-    expected_inner: Option<(RpcPubkey, &[u8])>,
+    submitted_bytes: &[u8],
+    expected_instruction: Option<NativeInstructionExpectation<'_>>,
+    expected_refusal: Option<u32>,
     wire_bytes: usize,
     poststate: &Value,
 ) -> Result<Value> {
@@ -387,7 +401,7 @@ fn finalized_instruction_evidence(
         .map_err(|error| Error::new(format!("{label} finalized packet base64: {error}")))?;
     let packet: VersionedTransaction = bincode::deserialize(&packet_bytes)
         .map_err(|error| Error::new(format!("{label} finalized packet decode: {error}")))?;
-    if bincode::serialize(&packet)? != bincode::serialize(submitted)? {
+    if packet_bytes != submitted_bytes {
         return Err(Error::new(format!(
             "{label} finalized packet differs from the packet that was signed and submitted"
         ))
@@ -400,38 +414,36 @@ fn finalized_instruction_evidence(
         .get("meta")
         .and_then(Value::as_object)
         .ok_or_else(|| Error::new(format!("{label} finalized transaction omitted metadata")))?;
-    if meta.get("err").is_none_or(|error| !error.is_null()) {
-        return Err(Error::new(format!("{label} finalized metadata reports a refusal")).into());
-    }
-
-    let loaded = meta
-        .get("loadedAddresses")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            Error::new(format!(
-                "{label} finalized metadata omitted lookup-table addresses"
-            ))
-        })?;
     let mut account_keys = packet
         .message
         .static_account_keys()
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    for class in ["writable", "readonly"] {
-        let values = loaded
-            .get(class)
-            .and_then(Value::as_array)
-            .ok_or_else(|| Error::new(format!("{label} loaded addresses omitted {class}")))?;
-        for address in values {
-            account_keys.push(
-                address
-                    .as_str()
-                    .ok_or_else(|| {
-                        Error::new(format!("{label} loaded {class} address was not a string"))
-                    })?
-                    .to_owned(),
-            );
+    if matches!(&packet.message, VersionedMessage::V0(_)) {
+        let loaded = meta
+            .get("loadedAddresses")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "{label} finalized metadata omitted lookup-table addresses"
+                ))
+            })?;
+        for class in ["writable", "readonly"] {
+            let values = loaded
+                .get(class)
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error::new(format!("{label} loaded addresses omitted {class}")))?;
+            for address in values {
+                account_keys.push(
+                    address
+                        .as_str()
+                        .ok_or_else(|| {
+                            Error::new(format!("{label} loaded {class} address was not a string"))
+                        })?
+                        .to_owned(),
+                );
+            }
         }
     }
 
@@ -443,18 +455,23 @@ fn finalized_instruction_evidence(
                 Error::new(format!("{label} instruction program index is out of range")).into()
             })
     };
-    let mut instructions = packet
-        .message
-        .instructions()
-        .iter()
-        .map(|instruction| {
-            Ok(json!({
-                "program_id": resolve(instruction.program_id_index)?,
-                "data_hex": hex_lower(&instruction.data),
-            }))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut matched_inner = 0_usize;
+    let mut matched_instruction = 0_usize;
+    let mut instructions = Vec::new();
+    for instruction in packet.message.instructions() {
+        let program_id = resolve(instruction.program_id_index)?;
+        if expected_instruction.is_some_and(|expected| {
+            matches!(expected.location, NativeInstructionLocation::TopLevel)
+                && program_id == expected.program.to_string()
+                && instruction.data == expected.data
+        }) {
+            matched_instruction += 1;
+        }
+        instructions.push(json!({
+            "program_id": program_id,
+            "data_hex": hex_lower(&instruction.data),
+            "location": "top-level",
+        }));
+    }
     if let Some(groups) = meta.get("innerInstructions").and_then(Value::as_array) {
         for group in groups {
             let inner = group
@@ -474,21 +491,24 @@ fn finalized_instruction_evidence(
                         || Error::new(format!("{label} finalized CPI omitted native data")),
                     )?)?;
                 let program_id = resolve(program_index)?;
-                if expected_inner.is_some_and(|(expected_program, expected_data)| {
-                    program_id == expected_program.to_string() && data == expected_data
+                if expected_instruction.is_some_and(|expected| {
+                    matches!(expected.location, NativeInstructionLocation::Inner)
+                        && program_id == expected.program.to_string()
+                        && data == expected.data
                 }) {
-                    matched_inner += 1;
+                    matched_instruction += 1;
                 }
                 instructions.push(json!({
                     "program_id": program_id,
                     "data_hex": hex_lower(&data),
+                    "location": "inner",
                 }));
             }
         }
     }
-    if expected_inner.is_some() && matched_inner != 1 {
+    if expected_instruction.is_some() && matched_instruction != 1 {
         return Err(Error::new(format!(
-            "{label} finalized metadata contains {matched_inner} exact Claims CPI instructions; expected one"
+            "{label} finalized metadata contains {matched_instruction} exact expected native instructions; expected one"
         ))
         .into());
     }
@@ -498,6 +518,33 @@ fn finalized_instruction_evidence(
         .ok_or_else(|| Error::new(format!("{label} finalized metadata omitted logs")))?;
     if !logs.iter().all(Value::is_string) {
         return Err(Error::new(format!("{label} finalized logs were malformed")).into());
+    }
+    let metadata_error = meta
+        .get("err")
+        .ok_or_else(|| Error::new(format!("{label} finalized metadata omitted its outcome")))?;
+    match expected_refusal {
+        None if !metadata_error.is_null() => {
+            return Err(Error::new(format!("{label} finalized metadata reports a refusal")).into());
+        }
+        Some(expected) => {
+            if metadata_error.is_null() {
+                return Err(
+                    Error::new(format!("{label} finalized without its expected refusal")).into(),
+                );
+            }
+            let reported = logs
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(refusal_code)
+                .last();
+            if reported != Some(expected) {
+                return Err(Error::new(format!(
+                    "{label} finalized with refusal {reported:?}; expected 0x{expected:04x}"
+                ))
+                .into());
+            }
+        }
+        None => {}
     }
     let fee_lamports = meta
         .get("fee")
@@ -511,7 +558,7 @@ fn finalized_instruction_evidence(
         "transaction_metadata_available": true,
         "fee_lamports": fee_lamports,
         "compute_units_consumed": compute_units_consumed,
-        "error": null,
+        "error": metadata_error,
         "logs": logs,
         "instructions": instructions,
         "wire_bytes": wire_bytes,
@@ -521,12 +568,26 @@ fn finalized_instruction_evidence(
 
 pub(crate) fn refusal_code(error: &str) -> Option<u32> {
     let marker = "custom program error: 0x";
+    if let Some(start) = error.find(marker).map(|index| index + marker.len()) {
+        let hex: String = error[start..]
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .collect();
+        let tail = error.get(start + hex.len()..)?;
+        return (!hex.is_empty() && !tail.starts_with(char::is_alphanumeric))
+            .then(|| u32::from_str_radix(&hex, 16).ok())
+            .flatten();
+    }
+    let marker = "Custom(";
     let start = error.find(marker)? + marker.len();
-    let hex: String = error[start..]
+    let decimal: String = error[start..]
         .chars()
-        .take_while(char::is_ascii_hexdigit)
+        .take_while(char::is_ascii_digit)
         .collect();
-    u32::from_str_radix(&hex, 16).ok()
+    let tail = error.get(start + decimal.len()..)?;
+    tail.starts_with(')')
+        .then(|| decimal.parse().ok())
+        .flatten()
 }
 
 /// Prepare, run every action to finalized, and journal the result.
@@ -669,26 +730,29 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
                 }
             };
             let state = poststate(&client, &staged)?;
-            let expected_inner = if action.program == stage::CALLER {
-                Some((
-                    rpc(stage::CLAIMS),
-                    action.data.get(1..).ok_or_else(|| {
+            let expected_instruction = if action.program == stage::CALLER {
+                Some(NativeInstructionExpectation {
+                    program: rpc(stage::CLAIMS),
+                    data: action.data.get(1..).ok_or_else(|| {
                         Error::new(format!(
                             "{} caller instruction omitted its action",
                             action.name
                         ))
                     })?,
-                ))
+                    location: NativeInstructionLocation::Inner,
+                })
             } else {
                 None
             };
+            let submitted_bytes = bincode::serialize(&transaction)?;
             let finalized = match &submitted {
                 Ok(signature) => Some(finalized_instruction_evidence(
                     &client,
                     action.name,
                     signature,
-                    &transaction,
-                    expected_inner,
+                    &submitted_bytes,
+                    expected_instruction,
+                    None,
                     wire,
                     &state,
                 )?),
@@ -824,7 +888,8 @@ pub fn write_preterminal_bridge(
 
 #[cfg(test)]
 mod tests {
-    use super::decode_base58;
+    use super::{decode_base58, refusal_code};
+    use dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckRedemptionSbfErrorV1;
 
     #[test]
     fn finalized_instruction_base58_preserves_leading_zeroes() {
@@ -836,5 +901,24 @@ mod tests {
             decode_base58("0").unwrap_err().to_string(),
             "finalized instruction data was not base58"
         );
+    }
+
+    #[test]
+    fn refusal_code_accepts_exact_rpc_and_transaction_error_spellings() {
+        let no_whole_claim = FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim as u32;
+        assert_eq!(
+            refusal_code("custom program error: 0x5665"),
+            Some(no_whole_claim)
+        );
+        assert_eq!(refusal_code("custom program error: 0x5665x"), None);
+        assert_eq!(
+            refusal_code("InstructionError(1, Custom(22117))"),
+            Some(no_whole_claim)
+        );
+        assert_eq!(
+            refusal_code("InstructionError(1, Custom(221170))"),
+            Some(221170)
+        );
+        assert_eq!(refusal_code("InstructionError(1, Custom(22117x))"), None);
     }
 }

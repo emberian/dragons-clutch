@@ -171,12 +171,11 @@ struct PendingConstant {
 /// Two phases, because a width is rarely a literal. The first takes every
 /// constant whose right-hand side IS one; the second folds the sums, to a
 /// fixpoint, so that a constant may be written over names declared later or in
-/// another crate. `RETIREMENT_INSTRUCTION_BYTES_V1` is
+/// another crate. `RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` is
 /// `REQUEST_BYTES + RETIREMENT_BUNDLE_BYTES_V1 +
-/// CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1 + CUSTODY_REQUEST_BYTES_V1 * 2` over
-/// four crates, and until it folded, the four `Action::Retire` routes the Core
-/// dispatch separates BY that width were indistinguishable to every reader
-/// downstream -- so `corroborate.py` credited none of them and said so.
+/// CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_BYTES_V1` across the Core and
+/// Claims crates. Until cross-crate widths folded, routes the Core dispatch
+/// separated by length were indistinguishable to every downstream reader.
 pub fn index_constants(sources: &Sources) -> ConstantIndex {
     let mut index = ConstantIndex::default();
     let mut pending: Vec<PendingConstant> = Vec::new();

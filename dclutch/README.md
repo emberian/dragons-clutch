@@ -64,8 +64,12 @@ bank at the real compute and memory limits; nothing here is mainnet evidence.
   prices. No extra machinery, nothing to liquidate.
 - The web app ([`apps/dclutch-web`](apps/dclutch-web)) reads markets,
   supplies and portfolios from the chain, and its trade page signs and
-  submits a Direct fill from a browser wallet. It publishes no authoritative
-  prices; there is no independent indexer.
+  submits a Direct fill from a browser wallet. Its Representation console can
+  authenticate and transfer an ordinary Token-2022 bearer claim on a compatible
+  local or custom chain, including separate transfer-authority and fee-payer
+  wallets, one saved send, and a finalized balance check. No current devnet
+  market supplies that selected representation route. The app publishes no
+  authoritative prices; there is no independent indexer.
 - A TypeScript SDK ([`packages/dclutch-sdk`](packages/dclutch-sdk)) and two
   command-line clients build and check the same flows
   ([two clients](docs/guides/two-clients.md)): `dclutch` reads and authors

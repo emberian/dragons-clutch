@@ -22,8 +22,10 @@ describe('Rational representation successor workbench', () => {
     expect(html).toContain('S is ordered nonzero support within representation K');
     expect(html).toContain('Wallet signing blocked by checked-release gate');
     expect(html).toContain('20 + 4S');
-    // Retirement submission exists but stays disabled until the exact V4
-    // route is authenticated; nothing else on the page submits.
+    expect(html).toContain('Sign with each required wallet, then submit once');
+    expect(html).toContain('Submit fully signed transfer');
+    expect(html).toContain('Discard unsigned saved plan');
+    expect(html).toContain('one saved send, finalized balance proof');
     expect(html).toContain('Submit fully signed retirement');
     expect(html).not.toContain('sample token balance');
     expect(html).not.toContain('Convert to atoms');

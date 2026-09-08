@@ -68,11 +68,12 @@ const STAGE_BANDS_V1: ReadonlyArray<StageBandV1> = Object.freeze([
 ]);
 
 /**
- * Two read-only tools that answer a question rather than perform an act.
+ * Tools outside the protocol-act catalogue.
  *
- * They are not capabilities and deliberately do not appear in the catalogue:
- * neither builds bytes, and calling them acts would put a readiness map beside
- * a redemption. They keep the same three lines so the page reads as one thing.
+ * The workbench only reads lifecycle state. Bearer transfer is a standard
+ * Token-2022 act selected by protocol state rather than a privileged dClutch
+ * instruction, so putting it in the protocol catalogue would invent a second
+ * semantic owner. Both keep the same three lines so the page reads as one thing.
  */
 const SUPPORT_CONSOLES_V1: ReadonlyArray<SupportConsoleV1> = Object.freeze([
   Object.freeze({
@@ -80,6 +81,12 @@ const SUPPORT_CONSOLES_V1: ReadonlyArray<SupportConsoleV1> = Object.freeze([
     outcome: 'Read the remaining lifecycle work for one market',
     venue: 'This browser · no key, no signature',
     guarantee: 'Finalized reads only. It produces a readiness map and no transaction.',
+  }),
+  Object.freeze({
+    href: '/representation',
+    outcome: 'Transfer a bearer claim between Token-2022 accounts',
+    venue: 'This browser · one or two wallets, one saved send',
+    guarantee: 'The selected behavior record, Mint, accounts, and ALT are reacquired; completion requires exact finalized balances.',
   }),
 ]);
 
@@ -190,7 +197,7 @@ export default function ConsoleDirectory() {
         </Card>;
       })}
       <Card className="trade-v3-card" key="verify">
-        <header><span>{String(STAGE_BANDS_V1.length + 1).padStart(2, '0')}</span><div><h2>Verify the record</h2><p>Compare durable evidence with finalized state.</p></div></header>
+        <header><span>{String(STAGE_BANDS_V1.length + 1).padStart(2, '0')}</span><div><h2>Additional tools</h2><p>Read lifecycle evidence or transfer a selected bearer token.</p></div></header>
         <CardContent className="console-index p-0">
           {SUPPORT_CONSOLES_V1.map((support) => <Anchor key={support.href} className="console-entry" href={support.href}>
             <strong>{support.outcome}</strong>

@@ -296,6 +296,36 @@ fn relay_v1_variant_selected(path: &str, data: &[u8]) -> bool {
                 .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0)))
 }
 
+/// Match the action-specific half of the shared native claim-check redemption
+/// magic. The source decoder requires this exact width/header/body before it
+/// enters `process_escrow_close`; a matching magic by itself would also admit
+/// the holder-signed redemption route.
+fn claim_check_v1_variant_selected(path: &str, data: &[u8]) -> bool {
+    const MAGIC: &[u8; 8] = b"DCLTCCR1";
+    const SCHEMA_VERSION: &[u8; 2] = &[1, 0];
+    const ACTION_OFFSET: usize = 10;
+    const CLOSE_ESCROW_ACTION: u8 = 4;
+    const HEADER_RESERVED: core::ops::Range<usize> = 11..16;
+    const AGGREGATE: core::ops::Range<usize> = 16..48;
+    const BODY_RESERVED: core::ops::Range<usize> = 48..64;
+    const CLOSE_ESCROW_BYTES: usize = 64;
+
+    path == "dclutch_claims::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow"
+        && data.len() == CLOSE_ESCROW_BYTES
+        && data.get(..MAGIC.len()) == Some(MAGIC)
+        && data.get(8..10) == Some(SCHEMA_VERSION)
+        && data.get(ACTION_OFFSET) == Some(&CLOSE_ESCROW_ACTION)
+        && data
+            .get(HEADER_RESERVED)
+            .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
+        && data
+            .get(AGGREGATE)
+            .is_some_and(|bytes| bytes.iter().any(|byte| *byte != 0))
+        && data
+            .get(BODY_RESERVED)
+            .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
+}
+
 /// Match a source-derived Fractional Exposure V2 action selector against the
 /// exact canonical request header that reaches Claims' inner action dispatch.
 ///
@@ -353,8 +383,8 @@ fn route_selected(route: &Route, program_address: &str, instruction: &CampaignIn
     // a source-derived byte selector in the same closed native family, they
     // are alternatives: one exact action byte selects the handler. Any mixed
     // or path-only vector still fails closed below.
-    if route.selectors.len() > 1 {
-        return route.selectors.iter().all(|selector| {
+    if route.selectors.len() > 1
+        && route.selectors.iter().all(|selector| {
             matches!(
                 selector,
                 Selector::Variant {
@@ -362,7 +392,9 @@ fn route_selected(route: &Route, program_address: &str, instruction: &CampaignIn
                     ..
                 }
             )
-        }) && route.selectors.iter().any(|selector| match selector {
+        })
+    {
+        return route.selectors.iter().any(|selector| match selector {
             Selector::Variant {
                 path,
                 native: Some(native),
@@ -388,7 +420,10 @@ fn route_selected(route: &Route, program_address: &str, instruction: &CampaignIn
             .and_then(|value| usize::try_from(value).ok())
             .is_some_and(|value| data.len() == value),
         Selector::Variant { path, native } => native.as_ref().map_or_else(
-            || relay_v1_variant_selected(path, &data),
+            || {
+                relay_v1_variant_selected(path, &data)
+                    || claim_check_v1_variant_selected(path, &data)
+            },
             |native| claims_fractional_v2_variant_selected(path, native, &data),
         ),
         // These selectors depend on deserializing the instruction payload or
@@ -1058,6 +1093,104 @@ mod tests {
             &reclaim,
             "ResolutionProgram1111",
             &instruction(&hex(&noncanonical))
+        ));
+    }
+
+    #[test]
+    fn claim_check_close_requires_shared_magic_action_and_canonical_packet() {
+        let route = Route {
+            id: "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow".into(),
+            kind: RouteKind::Action,
+            parent: Some("claims/process_non_fractional_instruction".into()),
+            handler: "claim_check_redemption_v1::process_escrow_close".into(),
+            provenance: "programs/dclutch-claims-sbf/src/lib.rs:1".into(),
+            cfg: Vec::new(),
+            selectors: vec![
+                Selector::Magic {
+                    constant: "dclutch_claims::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1".into(),
+                    bytes: Some("44434c5443435231".into()),
+                    ascii: Some("DCLTCCR1".into()),
+                    provenance: None,
+                },
+                Selector::Variant {
+                    path: "dclutch_claims::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow"
+                        .into(),
+                    native: None,
+                },
+            ],
+            admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
+        };
+        let instruction = |data: &[u8]| CampaignInstruction {
+            program_id: "ClaimsProgram1111".into(),
+            data_hex: hex(data),
+        };
+        let packet = || {
+            let mut data = vec![0_u8; 64];
+            data[..8].copy_from_slice(b"DCLTCCR1");
+            data[8..10].copy_from_slice(&1_u16.to_le_bytes());
+            data[10] = 4;
+            data[16] = 1;
+            data
+        };
+
+        let close = packet();
+        assert!(route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&close)
+        ));
+        let mut malformed = packet();
+        malformed[0] = b'X';
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        malformed = packet();
+        malformed[8] = 2;
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        malformed = packet();
+        malformed[10] = 3;
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        assert!(!route_selected(
+            &route,
+            "DifferentClaimsProgram1111",
+            &instruction(&close)
+        ));
+        malformed = packet();
+        malformed[11] = 1;
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        malformed = packet();
+        malformed[48] = 1;
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        malformed = packet();
+        malformed[16..48].fill(0);
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&malformed)
+        ));
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&close[..63])
         ));
     }
 

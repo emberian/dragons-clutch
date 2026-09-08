@@ -10,6 +10,7 @@
 
 use dclutch_market::{Action, CoreState, Phase, REQUEST_BYTES, Readiness, Request};
 use dclutch_product::ResultDomainV2;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_BYTES_V3,
@@ -21,7 +22,8 @@ use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
-    ContentId as SourceContentId, SourceMaterialV3, SourceResolutionPhaseV1,
+    ContentId as SourceContentId, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
+    RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SourceMaterialV3, SourceResolutionPhaseV1,
     SourceResolutionRouteV1, SourceResolutionStateV2, StatisticSpecV1,
 };
 use solana_program::{
@@ -200,6 +202,11 @@ pub struct ProviderExecuteFinalizedInputV3<'a> {
     /// cannot present a statistic naming a different scale than the one the
     /// executed program read.
     pub statistic: &'a ObservedAccount,
+    /// Finalized Source ProviderRelease record, whose content identity is the
+    /// certificate route; the request names its separate Pyth deployment.
+    pub source_provider_release: &'a ObservedAccount,
+    /// The immutable funded policy carried by the recovery frame, absent on primary.
+    pub recovery_policy: Option<&'a ObservedAccount>,
     /// Exact unchanged provider update read by Resolution.
     pub update: &'a ObservedAccount,
     /// Exact mutated prestates plus the read-only Market observation and all
@@ -491,7 +498,12 @@ pub fn project_finalized_provider_execute_v3(
     let instruction = input.instruction;
     require_frame(
         instruction,
-        PROVIDER_EXECUTE_ACCOUNT_COUNT_V3,
+        PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
+            + if input.recovery_policy.is_some() {
+                2
+            } else {
+                0
+            },
         11,
         &[1],
         &[2, 3, 37],
@@ -681,7 +693,6 @@ pub fn project_finalized_provider_execute_v3(
     if w.source_before.owner != resolution_program
         || w.source_before.executable
         || w.source_before.key != expected_source
-        || source.phase() != SourceResolutionPhaseV1::Primary
         || source.market() != request.market
         || source.generation() != request.generation
         || source.material_id().to_bytes() != request.source_material
@@ -689,24 +700,81 @@ pub fn project_finalized_provider_execute_v3(
     {
         return Err(ProviderFinalizedProjectionErrorV3::Prestate);
     }
-    let decision = source
-        .resolve_primary_from_authenticated_domain(
-            SourceContentId::new(request.source_material)
-                .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?,
-            material,
-            material.product_record_digest(),
-            domain,
-            SourceContentId::new(expected_evidence)
-                .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?,
-            receipt.result_numerator,
-            1,
-            statistic.source_scale_exponent(),
-            request.generation,
-            input.execution_unix_timestamp,
-            request.terminal_sequence,
-        )
+    let provider_id = authenticate_projection_record(
+        instruction,
+        input.source_provider_release,
+        21,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+    )?;
+    let provider = ProviderReleaseV1::decode(&input.source_provider_release.data)
         .map_err(ProviderFinalizedProjectionErrorV3::Source)?;
-    if decision.route() != SourceResolutionRouteV1::Primary
+    if provider.provider_deployment_release_id().to_bytes() != request.provider_release {
+        return Err(ProviderFinalizedProjectionErrorV3::Prestate);
+    }
+    let material_id = SourceContentId::new(request.source_material)
+        .map_err(ProviderFinalizedProjectionErrorV3::Source)?;
+    let evidence_id = SourceContentId::new(expected_evidence)
+        .map_err(ProviderFinalizedProjectionErrorV3::Source)?;
+    let (decision, expected_route) =
+        match (source.phase(), request.source_index, input.recovery_policy) {
+            (SourceResolutionPhaseV1::Primary, 0, None)
+                if request.source_spec == material.primary_source_spec().to_bytes() =>
+            {
+                (
+                    source.resolve_primary_from_authenticated_domain(
+                        material_id,
+                        material,
+                        material.product_record_digest(),
+                        domain,
+                        evidence_id,
+                        receipt.result_numerator,
+                        1,
+                        statistic.source_scale_exponent(),
+                        request.generation,
+                        input.execution_unix_timestamp,
+                        request.terminal_sequence,
+                    ),
+                    SourceResolutionRouteV1::Primary,
+                )
+            }
+            (SourceResolutionPhaseV1::Recovery, index, Some(policy_account))
+                if source.active_attempt().checked_add(1) == Some(index) =>
+            {
+                let policy_id = authenticate_projection_record(
+                    instruction,
+                    policy_account,
+                    PROVIDER_EXECUTE_ACCOUNT_COUNT_V3,
+                    RECOVERY_POLICY_SCHEMA_ID_V2,
+                )?;
+                let policy = RecoveryPolicyV2::decode(&policy_account.data)
+                    .map_err(ProviderFinalizedProjectionErrorV3::Source)?;
+                (
+                    source.resolve_recovery_from_authenticated_domain(
+                        material_id,
+                        material,
+                        material.window_spec(),
+                        material.product_record_digest(),
+                        policy_id,
+                        policy,
+                        SourceContentId::new(request.source_spec)
+                            .map_err(ProviderFinalizedProjectionErrorV3::Source)?,
+                        provider_id,
+                        domain,
+                        evidence_id,
+                        receipt.result_numerator,
+                        1,
+                        statistic.source_scale_exponent(),
+                        request.generation,
+                        input.execution_unix_timestamp,
+                        request.terminal_sequence,
+                    ),
+                    SourceResolutionRouteV1::Recovery,
+                )
+            }
+            _ => return Err(ProviderFinalizedProjectionErrorV3::Prestate),
+        };
+    let decision = decision.map_err(ProviderFinalizedProjectionErrorV3::Source)?;
+    if decision.route() != expected_route
         || decision.selector() != receipt.selector
         || decision.outcome_count() != receipt.outcome_count
     {
@@ -715,14 +783,14 @@ pub fn project_finalized_provider_execute_v3(
     let certificate = ResolutionCertificateV2 {
         kind: ResolutionCertificateKindV2::ResolutionSuccess,
         market: request.market,
-        route: request.provider_release,
+        route: provider_id.to_bytes(),
         source_material: request.source_material,
         product_record_digest: request.product_record,
         provider_evidence: expected_evidence,
         funding_allocation: [0; 32],
         receipt_account: request.certificate_account,
         generation: request.generation,
-        attempt_index: 0,
+        attempt_index: u32::from(request.source_index),
         schedule_index: 0,
         selector: receipt.selector,
         work_paid: 0,
@@ -1054,6 +1122,30 @@ pub fn project_finalized_provider_reclaim_v3(
         receipt,
         expected_writable_poststates: expected,
     })
+}
+
+/// Re-authenticate each additional immutable record against the frozen frame.
+fn authenticate_projection_record(
+    instruction: &Instruction,
+    account: &ObservedAccount,
+    raw_index: usize,
+    schema: [u8; 32],
+) -> Result<SourceContentId, ProviderFinalizedProjectionErrorV3> {
+    let registry = key_at(instruction, 7)?;
+    let digest = hash(&account.data).to_bytes();
+    let raw =
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0;
+    let staging =
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry).0;
+    if account.key != raw
+        || key_at(instruction, raw_index)? != raw
+        || key_at(instruction, raw_index + 1)? != staging
+        || account.owner != registry
+        || account.executable
+    {
+        return Err(ProviderFinalizedProjectionErrorV3::Prestate);
+    }
+    SourceContentId::new(digest).map_err(ProviderFinalizedProjectionErrorV3::Source)
 }
 
 fn require_frame(
@@ -1763,6 +1855,8 @@ mod tests {
         source_material: ObservedAccount,
         result_domain: ObservedAccount,
         statistic: ObservedAccount,
+        source_provider_release: ObservedAccount,
+        recovery_policy: Option<ObservedAccount>,
         update: ObservedAccount,
         source_before: ObservedAccount,
         certificate_before: ObservedAccount,
@@ -1788,6 +1882,8 @@ mod tests {
                 source_material: &self.source_material,
                 result_domain: &self.result_domain,
                 statistic: &self.statistic,
+                source_provider_release: &self.source_provider_release,
+                recovery_policy: self.recovery_policy.as_ref(),
                 update: &self.update,
                 writable: ProviderExecuteWritableAccountsV3 {
                     source_before: &self.source_before,
@@ -1812,6 +1908,10 @@ mod tests {
     }
 
     fn execute_case() -> ExecuteCase {
+        execute_case_on_route(false)
+    }
+
+    fn execute_case_on_route(recovery: bool) -> ExecuteCase {
         let core = key(130);
         let resolution = key(131);
         let registry = key(132);
@@ -1871,12 +1971,105 @@ mod tests {
         let statistic_bytes = statistic_value.to_bytes().to_vec();
         let statistic_spec =
             SourceContentId::new(hash(&statistic_bytes).to_bytes()).expect("statistic identity");
+        let provider_release = key(150).to_bytes();
+        let source_provider_bytes = ProviderReleaseV1::new(
+            source_id(170),
+            source_id(171),
+            source_id(150),
+            source_id(172),
+            source_id(173),
+        )
+        .to_bytes()
+        .to_vec();
+        let provider_id = hash(&source_provider_bytes).to_bytes();
+        let provider_raw = Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &PROVIDER_RELEASE_SCHEMA_ID_V1,
+                &provider_id,
+            ],
+            &registry,
+        )
+        .0;
+        let provider_staging = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                &PROVIDER_RELEASE_SCHEMA_ID_V1,
+                &provider_id,
+            ],
+            &registry,
+        )
+        .0;
+        let primary_spec = if recovery {
+            source_id(174)
+        } else {
+            source_spec
+        };
+        let window = dclutch_source::WindowSpecV1::new(
+            primary_spec,
+            dclutch_source::WindowKind::Terminal,
+            1_799_999_400,
+            1_800_000_000,
+            2,
+            1,
+            source_id(175),
+        )
+        .expect("window");
+        let window_id =
+            SourceContentId::new(hash(&window.to_bytes()).to_bytes()).expect("window ID");
+        let policy = RecoveryPolicyV2::new(
+            source_id(163),
+            [
+                Some(
+                    dclutch_source::RecoveryAttemptV2::new(
+                        source_id(176),
+                        SourceContentId::new(provider_id).expect("provider"),
+                        1_800_000_005,
+                        source_id(177),
+                    )
+                    .expect("first rung"),
+                ),
+                Some(
+                    dclutch_source::RecoveryAttemptV2::new(
+                        source_spec,
+                        SourceContentId::new(provider_id).expect("provider"),
+                        1_800_000_020,
+                        source_id(178),
+                    )
+                    .expect("second rung"),
+                ),
+                None,
+                None,
+            ],
+            2,
+        )
+        .expect("policy");
+        let policy_bytes = policy.to_bytes().to_vec();
+        let policy_id = SourceContentId::new(hash(&policy_bytes).to_bytes()).expect("policy ID");
+        let policy_raw = Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &RECOVERY_POLICY_SCHEMA_ID_V2,
+                policy_id.as_bytes(),
+            ],
+            &registry,
+        )
+        .0;
+        let policy_staging = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                &RECOVERY_POLICY_SCHEMA_ID_V2,
+                policy_id.as_bytes(),
+            ],
+            &registry,
+        )
+        .0;
         let material = SourceMaterialV3::explicitly_unbounded(
             product_record,
-            source_spec,
-            source_id(146),
+            primary_spec,
+            window_id,
             statistic_spec,
-            None,
+            recovery.then_some(policy_id),
             SourceContentId::new(SOURCE_FAILURE_POLICY_RELEASE_ID_V2).expect("failure policy"),
         );
         let material_bytes = material.to_bytes().to_vec();
@@ -1889,7 +2082,7 @@ mod tests {
             ],
             &resolution,
         );
-        let source = SourceResolutionStateV2::fresh(
+        let mut source = SourceResolutionStateV2::fresh(
             market_key.to_bytes(),
             generation,
             SourceContentId::new(material_id).expect("material ID"),
@@ -1900,8 +2093,25 @@ mod tests {
         )
         .expect("fresh Source")
         .state();
+        if recovery {
+            for at in [1_800_000_003, 1_800_000_006] {
+                source
+                    .crank_recovery_ladder(
+                        SourceContentId::new(material_id).expect("material"),
+                        material,
+                        window_id,
+                        window,
+                        policy_id,
+                        policy,
+                        generation,
+                        at,
+                        0,
+                    )
+                    .expect("advance rung");
+            }
+            assert_eq!(source.active_attempt(), 1);
+        }
         let release_set = key(149).to_bytes();
-        let provider_release = key(150).to_bytes();
         let registry_id = dclutch_market::Identity::new(registry.to_bytes()).expect("registry");
         let market_id = dclutch_market::Identity::new(market_key.to_bytes()).expect("market");
         let market = CoreState {
@@ -1961,7 +2171,7 @@ mod tests {
         let update_digest = hash(&update_data).to_bytes();
         let provider_request = ProviderExecutionRequestV3 {
             caller: ProviderCallerV3::Core,
-            source_index: 0,
+            source_index: if recovery { 2 } else { 0 },
             generation,
             terminal_sequence,
             market: market_key.to_bytes(),
@@ -2009,12 +2219,23 @@ mod tests {
             (7, registry),
             (15, resolution),
             (17, key(154)),
+            (21, provider_raw),
+            (22, provider_staging),
             (33, key(155)),
             (37, lifecycle_key),
             (38, update),
             (39, receiver),
         ] {
             accounts[index].pubkey = address;
+        }
+        if recovery {
+            accounts.push(solana_program::instruction::AccountMeta::new_readonly(
+                policy_raw, false,
+            ));
+            accounts.push(solana_program::instruction::AccountMeta::new_readonly(
+                policy_staging,
+                false,
+            ));
         }
         let mut instruction_data = core_bytes.to_vec();
         instruction_data.extend_from_slice(&provider_bytes);
@@ -2098,32 +2319,55 @@ mod tests {
             .consume(terminal_sequence, evidence, certificate_key.to_bytes())
             .expect("consume lifecycle");
         let mut source_after = source;
-        source_after
-            .resolve_primary_from_authenticated_domain(
-                SourceContentId::new(material_id).expect("material"),
-                material,
-                product_record,
-                domain,
-                SourceContentId::new(evidence).expect("evidence"),
-                numerator,
-                1,
-                statistic_value.source_scale_exponent(),
-                generation,
-                1_800_000_010,
-                terminal_sequence,
-            )
-            .expect("resolve Source");
+        if recovery {
+            source_after
+                .resolve_recovery_from_authenticated_domain(
+                    SourceContentId::new(material_id).expect("material"),
+                    material,
+                    window_id,
+                    product_record,
+                    policy_id,
+                    policy,
+                    source_spec,
+                    SourceContentId::new(provider_id).expect("provider"),
+                    domain,
+                    SourceContentId::new(evidence).expect("evidence"),
+                    numerator,
+                    1,
+                    statistic_value.source_scale_exponent(),
+                    generation,
+                    1_800_000_010,
+                    terminal_sequence,
+                )
+                .expect("resolve recovery Source");
+        } else {
+            source_after
+                .resolve_primary_from_authenticated_domain(
+                    SourceContentId::new(material_id).expect("material"),
+                    material,
+                    product_record,
+                    domain,
+                    SourceContentId::new(evidence).expect("evidence"),
+                    numerator,
+                    1,
+                    statistic_value.source_scale_exponent(),
+                    generation,
+                    1_800_000_010,
+                    terminal_sequence,
+                )
+                .expect("resolve Source");
+        }
         let certificate = ResolutionCertificateV2 {
             kind: ResolutionCertificateKindV2::ResolutionSuccess,
             market: market_key.to_bytes(),
-            route: provider_release,
+            route: provider_id,
             source_material: material_id,
             product_record_digest: product_record.to_bytes(),
             provider_evidence: evidence,
             funding_allocation: [0; 32],
             receipt_account: certificate_key.to_bytes(),
             generation,
-            attempt_index: 0,
+            attempt_index: u32::from(provider_request.source_index),
             schedule_index: 0,
             selector,
             work_paid: 0,
@@ -2138,6 +2382,22 @@ mod tests {
         let lifecycle_lamports = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
         let market_before_bytes = market.encode().expect("market").to_vec();
         ExecuteCase {
+            source_provider_release: account(
+                20,
+                provider_raw,
+                registry,
+                rent.minimum_balance(source_provider_bytes.len()),
+                source_provider_bytes,
+            ),
+            recovery_policy: recovery.then(|| {
+                account(
+                    20,
+                    policy_raw,
+                    registry,
+                    rent.minimum_balance(policy_bytes.len()),
+                    policy_bytes,
+                )
+            }),
             instruction: Instruction {
                 program_id: core,
                 accounts,
@@ -2206,6 +2466,88 @@ mod tests {
             ),
             rent,
         }
+    }
+
+    #[test]
+    fn execute_projection_accepts_second_rung_and_refuses_wrong_primary_or_policy() {
+        let exact = execute_case_on_route(true);
+        let result =
+            project_finalized_provider_execute_v3(exact.input()).expect("49-account second rung");
+        assert_eq!(result.request.source_index, 2);
+        let source = SourceResolutionStateV2::decode(&result.expected_writable_poststates[0].data)
+            .expect("Source");
+        assert_eq!(
+            source.terminal_projection().expect("terminal").route(),
+            SourceResolutionRouteV1::Recovery
+        );
+        let cert = ResolutionCertificateV2::decode(&result.expected_writable_poststates[1].data)
+            .expect("certificate");
+        assert_eq!(cert.attempt_index, 2);
+        assert_eq!(
+            cert.route,
+            hash(&exact.source_provider_release.data).to_bytes()
+        );
+
+        let mut wrong_primary = execute_case_on_route(true);
+        let live =
+            SourceResolutionStateV2::decode(&wrong_primary.source_before.data).expect("Source");
+        wrong_primary.source_before.data = SourceResolutionStateV2::fresh(
+            live.market(),
+            live.generation(),
+            live.material_id(),
+            live.rent_beneficiary(),
+            live.pda_seeds().bump(),
+            0,
+            0,
+        )
+        .expect("primary Source")
+        .state()
+        .to_bytes()
+        .to_vec();
+        assert_eq!(
+            project_finalized_provider_execute_v3(wrong_primary.input()),
+            Err(ProviderFinalizedProjectionErrorV3::Prestate)
+        );
+        let mut obsolete_route = execute_case_on_route(true);
+        let mut certificate =
+            ResolutionCertificateV2::decode(&obsolete_route.certificate_after.data)
+                .expect("certificate");
+        certificate.route = result.request.provider_release;
+        obsolete_route.certificate_after.data =
+            certificate.to_bytes().expect("certificate").to_vec();
+        assert_eq!(
+            project_finalized_provider_execute_v3(obsolete_route.input()),
+            Err(ProviderFinalizedProjectionErrorV3::Poststate)
+        );
+        let mut absent = execute_case_on_route(true);
+        absent.recovery_policy = None;
+        assert_eq!(
+            project_finalized_provider_execute_v3(absent.input()),
+            Err(ProviderFinalizedProjectionErrorV3::Instruction)
+        );
+        let mut wrong_policy = execute_case_on_route(true);
+        wrong_policy.recovery_policy.as_mut().expect("policy").owner = system_program::ID;
+        assert_eq!(
+            project_finalized_provider_execute_v3(wrong_policy.input()),
+            Err(ProviderFinalizedProjectionErrorV3::Prestate)
+        );
+        let mut wrong_provider = execute_case_on_route(true);
+        wrong_provider.source_provider_release.owner = system_program::ID;
+        assert_eq!(
+            project_finalized_provider_execute_v3(wrong_provider.input()),
+            Err(ProviderFinalizedProjectionErrorV3::Prestate)
+        );
+        let mut stale_certificate = execute_case_on_route(true);
+        let mut certificate =
+            ResolutionCertificateV2::decode(&stale_certificate.certificate_after.data)
+                .expect("certificate");
+        certificate.attempt_index = 0;
+        stale_certificate.certificate_after.data =
+            certificate.to_bytes().expect("certificate").to_vec();
+        assert_eq!(
+            project_finalized_provider_execute_v3(stale_certificate.input()),
+            Err(ProviderFinalizedProjectionErrorV3::Poststate)
+        );
     }
 
     #[test]

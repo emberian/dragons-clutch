@@ -99,6 +99,32 @@ export type BearerTransferPlanV2 = Readonly<{
   loadedAddresses: number;
   rawAmount: bigint;
   displayDecimals: number;
+  poststate: BearerTransferPoststateV2;
+}>;
+
+export type BearerTransferPoststateV2 = Readonly<{
+  market: string;
+  payer: string;
+  authority: string;
+  mint: string;
+  mintController: string;
+  mintMetadata: TokenBehaviorMintViewV2['metadata'];
+  source: string;
+  destination: string;
+  rawAmount: bigint;
+  displayDecimals: number;
+  mintSupply: bigint;
+  sourceOwner: string;
+  sourceBefore: bigint;
+  sourceAfter: bigint;
+  destinationOwner: string;
+  destinationBefore: bigint;
+  destinationAfter: bigint;
+}>;
+
+export type BearerTransferFinalizedV2 = Readonly<{
+  observedSlot: string;
+  poststate: BearerTransferPoststateV2;
 }>;
 
 type TransferInspectionClient = Pick<
@@ -356,6 +382,11 @@ export async function inspectBearerTransferV2(
 ): Promise<BearerTransferInspectionV2> {
   for (const [field, value] of Object.entries(input)) key(value, field);
   if (input.source === input.destination || input.mint === input.source || input.mint === input.destination) throw new Error('Mint, source, and destination roles alias');
+  for (const signer of [input.payer, input.authority]) {
+    if ([input.coreProgram, input.market, input.mint, input.source, input.destination, input.lookupTable].includes(signer)) {
+      throw new Error('Bearer transfer signer identity aliases a program or state account');
+    }
+  }
   const floor = await client.finalizedSlot();
   const marketObservation = await client.accountInfo(input.market, floor);
   if (BigInt(marketObservation.slot) < BigInt(floor)) throw new Error('Market observation regressed below the finalized floor');
@@ -366,7 +397,7 @@ export async function inspectBearerTransferV2(
   const selectionDigest = await sha256(selectionBytes);
   const selectionAddresses = deriveFinalizedRecordAddressesV1(market.registryProgram, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, selectionDigest);
   const observation = await client.multipleAccounts([
-    selectionAddresses.record, selectionAddresses.staging, input.mint, input.source, input.destination, input.lookupTable,
+    selectionAddresses.record, selectionAddresses.staging, input.payer, input.mint, input.source, input.destination, input.lookupTable,
   ], floor);
   if (BigInt(observation.slot) < BigInt(floor)) throw new Error('token route observation regressed below the finalized floor');
   const accounts = new Map(observation.accounts.map((entry) => [entry.address, entry.account]));
@@ -382,6 +413,10 @@ export async function inspectBearerTransferV2(
     throw new Error('TokenBehaviorSelectionV2 staging cursor is not vacant System-owned data');
   }
   const selection = decodeTokenBehaviorSelectionV2(record.data, market.realmId, market.releaseSet);
+  const payer = required(accounts.get(input.payer) ?? null, 'transaction payer');
+  if (payer.owner !== SYSTEM_PROGRAM_ID || payer.executable || payer.data.length !== 0 || BigInt(payer.lamports) === 0n) {
+    throw new Error('transaction payer is not one funded System-owned data-free wallet');
+  }
   const mint = decodeToken2022BehaviorMintV2(input.mint, required(accounts.get(input.mint) ?? null, 'claim Mint'));
   const source = decodeToken2022BehaviorAccountV2(input.source, required(accounts.get(input.source) ?? null, 'source Token Account'));
   const destination = decodeToken2022BehaviorAccountV2(input.destination, required(accounts.get(input.destination) ?? null, 'destination Token Account'));
@@ -402,6 +437,7 @@ export function buildUnsignedBearerTransferV2(
 ): BearerTransferPlanV2 {
   if (rawAmount <= 0n || rawAmount > MAX_U64) throw new Error('transfer raw quantity must be 1..u64::MAX atoms');
   if (rawAmount > inspection.source.rawAmount) throw new Error('source raw balance cannot fund the exact transfer');
+  if (inspection.destination.rawAmount > MAX_U64 - rawAmount) throw new Error('destination raw balance would overflow canonical u64');
   if (inspection.source.mint !== inspection.mint.mint || inspection.destination.mint !== inspection.mint.mint) {
     throw new Error('inspected token state no longer shares one Mint');
   }
@@ -437,7 +473,54 @@ export function buildUnsignedBearerTransferV2(
   return Object.freeze({
     transaction, instruction, instructionBytes, wireBytes, requiredSigners, loadedAddresses,
     rawAmount, displayDecimals: inspection.mint.displayDecimals,
+    poststate: Object.freeze({
+      market: inspection.market, payer: inspection.payer, authority: inspection.authority,
+      mint: inspection.mint.mint, mintController: inspection.mint.controller, mintMetadata: inspection.mint.metadata,
+      source: inspection.source.address, destination: inspection.destination.address,
+      rawAmount, displayDecimals: inspection.mint.displayDecimals, mintSupply: inspection.mint.rawSupply,
+      sourceOwner: inspection.source.owner, sourceBefore: inspection.source.rawAmount,
+      sourceAfter: inspection.source.rawAmount - rawAmount,
+      destinationOwner: inspection.destination.owner, destinationBefore: inspection.destination.rawAmount,
+      destinationAfter: inspection.destination.rawAmount + rawAmount,
+    }),
   });
+}
+
+/** Reacquire the exact three Token-2022 accounts after finalized execution. */
+export async function verifyBearerTransferFinalizedPoststateV2(
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  poststate: BearerTransferPoststateV2,
+  minimumSlot?: string,
+): Promise<BearerTransferFinalizedV2> {
+  for (const [field, value] of [
+    ['Market', poststate.market], ['payer', poststate.payer], ['authority', poststate.authority],
+    ['Mint', poststate.mint], ['Mint controller', poststate.mintController],
+    ['source Token Account', poststate.source], ['destination Token Account', poststate.destination],
+    ['source owner', poststate.sourceOwner], ['destination owner', poststate.destinationOwner],
+  ] as const) key(value, field);
+  if (poststate.rawAmount <= 0n || poststate.rawAmount > MAX_U64
+      || poststate.sourceBefore - poststate.rawAmount !== poststate.sourceAfter
+      || poststate.destinationBefore + poststate.rawAmount !== poststate.destinationAfter
+      || poststate.sourceAfter < 0n || poststate.destinationAfter > MAX_U64
+      || !Number.isInteger(poststate.displayDecimals) || poststate.displayDecimals < 0 || poststate.displayDecimals > 255) {
+    throw new Error('Bearer transfer expected poststate is not exact raw-u64 arithmetic');
+  }
+  const finalized = await client.finalizedSlot();
+  const floor = minimumSlot === undefined || BigInt(finalized) >= BigInt(minimumSlot) ? finalized : minimumSlot;
+  const observation = await client.multipleAccounts([poststate.mint, poststate.source, poststate.destination], floor);
+  if (BigInt(observation.slot) < BigInt(floor)) throw new Error('Bearer transfer poststate observation regressed below the finalized floor');
+  const accounts = new Map(observation.accounts.map((entry) => [entry.address, entry.account]));
+  const mint = decodeToken2022BehaviorMintV2(poststate.mint, required(accounts.get(poststate.mint) ?? null, 'claim Mint'));
+  const source = decodeToken2022BehaviorAccountV2(poststate.source, required(accounts.get(poststate.source) ?? null, 'source Token Account'));
+  const destination = decodeToken2022BehaviorAccountV2(poststate.destination, required(accounts.get(poststate.destination) ?? null, 'destination Token Account'));
+  if (mint.controller !== poststate.mintController || mint.metadata !== poststate.mintMetadata
+      || mint.rawSupply !== poststate.mintSupply || mint.displayDecimals !== poststate.displayDecimals
+      || source.mint !== poststate.mint || source.owner !== poststate.sourceOwner || source.rawAmount !== poststate.sourceAfter
+      || destination.mint !== poststate.mint || destination.owner !== poststate.destinationOwner
+      || destination.rawAmount !== poststate.destinationAfter) {
+    throw new Error('finalized Token-2022 balances or immutable identities differ from the exact transfer poststate');
+  }
+  return Object.freeze({ observedSlot: observation.slot, poststate });
 }
 
 export function tokenBehaviorSummaryV2(inspection: BearerTransferInspectionV2): Readonly<{

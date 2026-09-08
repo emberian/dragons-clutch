@@ -97,3 +97,22 @@ indexes. Logs: `/private/tmp/dclutch-cut-6c7a98858-20260908.log`,
 `/private/tmp/dclutch-pages-34258862103.log`. Historical execution and current
 implementation checkpoints still do not establish the fresh cohort or a
 completed current-source lifecycle.
+
+## Addendum — native founding and route payer checkpoint, 2026-09-08 18:18 UTC
+
+Cut `23fd1168193a66a1ec91b7e71d86144c9cf7b9e8` publishes source
+`fe02f0813036efa7c2345250dac5b6701c24fee7`, tree
+`582594bef25c79d744c0f0559fe6cdff389a2df8`. It carries native Series founding
+convergence, checkpoint retirement repairs, and the Direct route payer flow.
+The credential sweep found zero findings, the published tree matched exactly,
+and the committed reference check converged unchanged on its first pass.
+
+[Workflow 34262138884](https://github.com/emberian/dragons-clutch/actions/runs/34262138884)
+and deployment `6334144311` succeeded at `2026-09-08T18:18:14Z` in the existing
+Pages environment. The workflow rendered 42 app routes and assembled 450 files:
+197 documentation pages, 267 link-checked pages, six guides and 25 directory
+indexes. Logs: `/private/tmp/dclutch-cut-fe02f0813-20260908.log`,
+`/private/tmp/dclutch-reference-check-fe02f0813-20260908.log`, and
+`/private/tmp/dclutch-pages-34262138884.log`. This remains a source and site
+checkpoint; it does not establish a fresh devnet cohort or completed
+current-source execution.

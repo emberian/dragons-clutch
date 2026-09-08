@@ -8,6 +8,7 @@ import {
   inspectUnsignedTransactionV1,
   requestWalletMessageSignatureV1,
   requestWalletCosignTransactionV1,
+  requestWalletAddTransactionSignatureV1,
   requestWalletSubmitCosignTransactionV1,
   requestWalletTransactionSignatureV1,
   submitSignedTransactionV1,
@@ -267,6 +268,39 @@ describe('unsigned wallet handoff', () => {
         return candidate;
       },
     }, hostile, walletKey.publicKey.toBase58(), resolver.publicKey.toBase58())).rejects.toThrow(/another signature slot/);
+  });
+
+  it('collects distinct required wallet signatures without changing the first actor signature', async () => {
+    const payer = Keypair.generate();
+    const authority = Keypair.generate();
+    const transaction = cosignFixture(payer, authority);
+    const authorityWallet = {
+      publicKey: { toBase58: () => authority.publicKey.toBase58() }, connect: async () => undefined,
+      signTransaction: async (candidate: VersionedTransaction) => { candidate.sign([authority]); return candidate; },
+    };
+    const first = await requestWalletAddTransactionSignatureV1(
+      admittedClient(), authorityWallet, transaction, authority.publicKey.toBase58(),
+    );
+    expect(first.complete).toBe(false);
+    const authoritySignature = new Uint8Array(first.transaction.signatures[1]!);
+    const payerWallet = {
+      publicKey: { toBase58: () => payer.publicKey.toBase58() }, connect: async () => undefined,
+      signTransaction: async (candidate: VersionedTransaction) => { candidate.sign([payer]); return candidate; },
+    };
+    const complete = await requestWalletAddTransactionSignatureV1(
+      admittedClient(), payerWallet, first.transaction, payer.publicKey.toBase58(),
+    );
+    expect(complete.complete).toBe(true);
+    expect(complete.transaction.signatures[1]).toEqual(authoritySignature);
+
+    await expect(requestWalletAddTransactionSignatureV1(
+      admittedClient(), authorityWallet, complete.transaction, authority.publicKey.toBase58(),
+    )).rejects.toThrow(/already occupied/);
+    const hostile = cosignFixture(payer, authority);
+    hostile.signatures[1] = new Uint8Array(64).fill(7);
+    await expect(requestWalletAddTransactionSignatureV1(
+      admittedClient(), payerWallet, hostile, payer.publicKey.toBase58(),
+    )).rejects.toThrow(/invalid existing signature/);
   });
 
   it('distinguishes a fresh writable submit signer from a readonly resolver', async () => {
