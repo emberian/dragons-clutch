@@ -51,6 +51,8 @@ mod series_act_verbs_v1;
 mod series_consume_campaign;
 mod series_founder;
 mod series_found_prepare_campaign;
+mod series_found_prepare_driver;
+mod series_geometry;
 mod series_lifecycle_campaign;
 mod series_market;
 mod series_source;
@@ -293,6 +295,9 @@ fn run() -> Result<()> {
         }
         Some(command) if command == series_founder::SERIES_FOUNDER_INPUT_COMMAND_V1 => {
             series_founder::run(arguments.collect())
+        }
+        Some(command) if command == series_found_prepare_driver::SERIES_ROOT_ACTIVATE_COMMAND_V1 => {
+            series_found_prepare_driver::run_root_activate_v1(arguments.collect())
         }
         Some(command) if command == series_consume_campaign::SERIES_CONSUME_COMMAND_V1 => {
             series_consume_campaign::run(arguments.collect())

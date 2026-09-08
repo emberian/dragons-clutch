@@ -4,6 +4,7 @@ import PageShell from '@/components/PageShell';
 import { useEffect, useState } from 'react';
 
 import Anchor from '@/components/Anchor';
+import AquariumLiveChainPanel from '@/components/AquariumLiveChainPanel';
 import Nav from '@/components/Nav';
 import LawBand from '@/components/charts/LawBand';
 import NumberStrip, { type NumberStripStatV1 } from '@/components/charts/NumberStrip';
@@ -41,7 +42,6 @@ import {
 import {
   aquariumBeatV1,
   readAquariumStatusV1,
-  type AquariumBeatV1,
   type AquariumReadV1,
   type AquariumStatusV1,
 } from '@/lib/aquariumStatus';
@@ -106,10 +106,6 @@ function shortSignature(signature: string): string {
 
 function beatFor(read: SimulatorReadV1 | null): SimulatorBeatV1 | null {
   return read !== null && read.kind === 'loaded' ? simulatorBeatV1(read.status, Date.now()) : null;
-}
-
-function aquariumBeatFor(read: AquariumReadV1 | null): AquariumBeatV1 | null {
-  return read !== null && read.kind === 'loaded' ? aquariumBeatV1(read.status, Date.now()) : null;
 }
 
 function aquariumStats(status: AquariumStatusV1 | null): ReadonlyArray<NumberStripStatV1> {
@@ -463,6 +459,14 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
   const [state, setState] = useState<PulseSurfaceState>({ read: preloaded ?? null });
   const [series, setSeries] = useState<SimulatorSeriesReadV1 | null>(preloadedSeries ?? null);
   const [aquarium, setAquarium] = useState<AquariumSurfaceState>({ read: preloadedAquarium ?? null });
+  // The static snapshot does not refetch itself, but its deadline still has to
+  // age on screen. Otherwise a quiet writer can look alive forever.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const tick = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(tick);
+  }, []);
 
   useEffect(() => {
     if (preloadedAquarium !== undefined) return undefined;
@@ -503,7 +507,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
   const beat = beatFor(read);
   const aquariumRead = aquarium.read;
   const aquariumStatus = aquariumRead !== null && aquariumRead.kind === 'loaded' ? aquariumRead.status : null;
-  const aquariumBeat = aquariumBeatFor(aquariumRead);
+  const aquariumBeat = aquariumRead !== null && aquariumRead.kind === 'loaded' ? aquariumBeatV1(aquariumRead.status, nowMs) : null;
   // How many laws this record names. Derived, because the count moved: the
   // census gained L8 (compartment accounting) and this page said "seven" in
   // its own words, which would have been a wrong number the day the record
@@ -543,7 +547,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
       <div>
         <p className="eyebrow">Watch · bounded synthetic activity</p>
         <h1>What is happening?<br /><em>Read the observation.</em></h1>
-        <p>The aquarium is a supervised simulator. It runs against the protocol on a loop, but it does not make a market official or turn its actors into public counterparties. If a check fails, it stops. Use Markets to read a market&apos;s own accounts before you join or trade.</p>
+        <p>Watch real devnet participation from bounded synthetic visitors. The aquarium runs against the protocol on a loop. If a check fails, it stops. Their snapshot is a report, while the live read below asks devnet about one market. Open that market&apos;s detail to see whether joining is available.</p>
       </div>
       <aside>
         <span>Where this stands</span>
@@ -586,6 +590,8 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
       </>}
     </section>
 
+    <AquariumLiveChainPanel status={aquariumStatus} />
+
     <div className="local-status-strip">
       <i className={beat === null ? undefined : beat.state === 'running' ? 'online' : beat.state === 'halted' ? 'offline' : undefined} />
       <strong>
@@ -603,31 +609,31 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
     </div>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>The legacy simulator pulse</h2><p>From the simulator&apos;s last write, when this older artifact is published.</p></div></header>
+      <header><span>03</span><div><h2>The legacy simulator pulse</h2><p>From the simulator&apos;s last write, when this older artifact is published.</p></div></header>
       {/* FE-CHART mount: the pulse feeds the presentational NumberStrip; the
           reader in lib/simulatorStatus.ts decides what may appear here. */}
       <NumberStrip stats={status === null ? UNREAD_STATS : loadedStats(status)} provenance={provenance(read)} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The heartbeat</h2><p>How far the chain got between readings, and how long each reading took.</p></div></header>
+      <header><span>04</span><div><h2>The heartbeat</h2><p>How far the chain got between readings, and how long each reading took.</p></div></header>
       <Heartbeat read={series} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>{lawCount === null ? 'The checks, after every cycle' : `The ${lawCount} checks, after every boundary`}</h2><p>At every boundary the census re-checks the same named laws: that the collateral is all still somewhere we can name, that the positions add up to the claims issued, that the vault covers the worst outcome it could be asked to pay, and the rest. Each row is one check; each column is one boundary. How many there are is the record&apos;s own number, not this page&apos;s — cohort-13 is the first run whose census judges all of them, with none sitting out.</p></div></header>
+      <header><span>05</span><div><h2>{lawCount === null ? 'The checks, after every cycle' : `The ${lawCount} checks, after every boundary`}</h2><p>At every boundary the census re-checks the same named laws: that the collateral is all still somewhere we can name, that the positions add up to the claims issued, that the vault covers the worst outcome it could be asked to pay, and the rest. Each row is one check; each column is one boundary. How many there are is the record&apos;s own number, not this page&apos;s — cohort-13 is the first run whose census judges all of them, with none sitting out.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <ConservationLaws series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>05</span><div><h2>What the run looked like over time</h2><p>One point per recorded boundary, in the census&apos;s own order.</p></div></header>
+      <header><span>06</span><div><h2>What the run looked like over time</h2><p>One point per recorded boundary, in the census&apos;s own order.</p></div></header>
       <RecordedCycles read={series} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>06</span><div><h2>The last ledger check</h2><p>After trading, the simulator re-reads the chain and proves conservation: every lamport and every collateral atom accounted for. This is the check that halts it.</p></div></header>
+      <header><span>07</span><div><h2>The last ledger check</h2><p>After trading, the simulator re-reads the chain and proves conservation: every lamport and every collateral atom accounted for. This is the check that halts it.</p></div></header>
       {status === null || status.lastReconciliation === null
         ? <p className="market-empty">No check has been read.</p>
         : <p className="direct-status">
@@ -639,14 +645,14 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
     </section>
 
     <section className="trade-v3-card">
-      <header><span>07</span><div><h2>Who is in this market</h2><p>Every position on the market, and every account holding its collateral, as of the last recorded cycle.</p></div></header>
+      <header><span>08</span><div><h2>Who is in this market</h2><p>Every position on the market, and every account holding its collateral, as of the last recorded cycle.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <WhoIsHolding series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>08</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
+      <header><span>09</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
       {status === null
         ? <p className="market-empty">{NO_SIMULATOR_SENTENCE_V1}</p>
         : <>

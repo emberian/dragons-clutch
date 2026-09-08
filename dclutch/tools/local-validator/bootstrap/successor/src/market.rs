@@ -589,6 +589,58 @@ fn authenticate_current_founding_intent_v1(
     Ok(())
 }
 
+/// Named boundaries from planning through the only native send path. A loaded
+/// local validator can advance 150 block heights while a report is made
+/// crash-durable, so failed evidence needs phase timings as well as the final
+/// expiry height.
+struct FoundingPacketTimingV1 {
+    operation: FoundingSubmissionOperationV1,
+    started: Instant,
+}
+
+impl FoundingPacketTimingV1 {
+    fn start(operation: FoundingSubmissionOperationV1) -> Self {
+        Self {
+            operation,
+            started: Instant::now(),
+        }
+    }
+
+    fn observe(&self, boundary: &str, height: Option<u64>) {
+        let height = height
+            .map(|height| format!(" height={height}"))
+            .unwrap_or_default();
+        eprintln!(
+            "founding-packet-timing operation={} boundary={} elapsed_ms={}{}",
+            self.operation.label(),
+            boundary,
+            self.started.elapsed().as_millis(),
+            height,
+        );
+    }
+}
+
+fn latest_founding_blockhash_v1(rpc: &mut Rpc) -> Result<(Hash, u64)> {
+    let latest = rpc.call(
+        "getLatestBlockhash",
+        &serde_json::json!([{"commitment":"finalized"}]),
+    )?;
+    let value = latest
+        .get("value")
+        .ok_or_else(|| Error::new("founding getLatestBlockhash omitted value"))?;
+    let blockhash = value
+        .get("blockhash")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("founding getLatestBlockhash omitted blockhash"))?
+        .parse::<Hash>()
+        .map_err(|error| Error::new(format!("founding blockhash: {error}")))?;
+    let last_valid_block_height = value
+        .get("lastValidBlockHeight")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| Error::new("founding blockhash omitted last-valid height"))?;
+    Ok((blockhash, last_valid_block_height))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn send_durable_founding_v1(
     rpc: &mut Rpc,
@@ -606,6 +658,7 @@ fn send_durable_founding_v1(
     recorder: &mut FoundingSubmissionRecorderV1<'_>,
     authenticate_completion: &mut dyn FnMut(&mut Rpc) -> Result<()>,
 ) -> Result<TransactionEvidence> {
+    let timing = FoundingPacketTimingV1::start(operation);
     let payer = signers
         .first()
         .ok_or_else(|| Error::new("durable founding submission omitted payer"))?;
@@ -618,23 +671,8 @@ fn send_durable_founding_v1(
         founding_completion_contract_v1(operation, completion_addresses)?;
 
     if recorder.current(operation).is_none() {
-        let latest = rpc.call(
-            "getLatestBlockhash",
-            &serde_json::json!([{"commitment":"finalized"}]),
-        )?;
-        let value = latest
-            .get("value")
-            .ok_or_else(|| Error::new("founding getLatestBlockhash omitted value"))?;
-        let blockhash = value
-            .get("blockhash")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| Error::new("founding getLatestBlockhash omitted blockhash"))?
-            .parse::<Hash>()
-            .map_err(|error| Error::new(format!("founding blockhash: {error}")))?;
-        let last_valid_block_height = value
-            .get("lastValidBlockHeight")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| Error::new("founding blockhash omitted last-valid height"))?;
+        let (blockhash, last_valid_block_height) = latest_founding_blockhash_v1(rpc)?;
+        timing.observe("blockhash-acquired", None);
         let compiled = compile_current_founding_message_v1(
             label,
             payer.pubkey(),
@@ -661,6 +699,7 @@ fn send_durable_founding_v1(
             .get("value")
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| Error::new("founding getFeeForMessage omitted exact fee"))?;
+        timing.observe("fee-quoted", None);
         let journal = plan_founding_submission_v1(
             &recorder.binding,
             FoundingSubmissionPlanV1 {
@@ -680,6 +719,7 @@ fn send_durable_founding_v1(
         )?;
         // Key-free, self-authenticated Planned review is durable first.
         recorder.write(journal)?;
+        timing.observe("planned-fsynced", None);
     }
 
     let current = recorder
@@ -723,6 +763,7 @@ fn send_durable_founding_v1(
                     )?
                     .as_u64()
                     .ok_or_else(|| Error::new("founding block height was not u64"))?;
+                timing.observe("before-sign", Some(height));
                 authenticate_founding_packet_fresh_v1(&recorder.binding, &current, height)?;
                 let message = founding_submission_message_v1(&recorder.binding, &current)?;
                 let transaction =
@@ -736,6 +777,7 @@ fn send_durable_founding_v1(
                     prepare_founding_submission_v1(&recorder.binding, &current, &packet)?;
                 // Exact packet bytes and signature are fsynced before first send.
                 recorder.write(prepared)?;
+                timing.observe("prepared-fsynced", None);
             }
             FoundingSubmissionRecoveryV1::BeginDispatch => {
                 let height = rpc
@@ -745,6 +787,7 @@ fn send_durable_founding_v1(
                     )?
                     .as_u64()
                     .ok_or_else(|| Error::new("founding block height was not u64"))?;
+                timing.observe("before-dispatch", Some(height));
                 authenticate_founding_packet_fresh_v1(&recorder.binding, &current, height)?;
                 if current.prestate_sha256
                     != founding_account_set_digest_v1(rpc, prestate_addresses)?
@@ -758,6 +801,7 @@ fn send_durable_founding_v1(
                 // restart from it may use only the authenticated packet bytes.
                 let dispatching = dispatch_founding_submission_v1(&recorder.binding, &current)?;
                 recorder.write(dispatching)?;
+                timing.observe("dispatching-fsynced", None);
             }
             FoundingSubmissionRecoveryV1::ResendIdenticalPacket => {
                 let signature = current
@@ -784,6 +828,7 @@ fn send_durable_founding_v1(
                     )?
                     .as_u64()
                     .ok_or_else(|| Error::new("founding block height was not u64"))?;
+                timing.observe("before-send", Some(height));
                 authenticate_founding_packet_fresh_v1(&recorder.binding, &current, height)?;
                 if current.prestate_sha256
                     != founding_account_set_digest_v1(rpc, prestate_addresses)?

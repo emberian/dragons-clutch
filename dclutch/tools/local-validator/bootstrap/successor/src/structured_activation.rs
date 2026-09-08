@@ -87,6 +87,9 @@ pub(crate) struct ActivateReceiptHeaderObservationV1<'a> {
     /// `None` is the RPC spelling of a System-owned, zero-lamport PDA.
     pub(crate) receipt_mint_account: Option<&'a RpcAccount>,
     pub(crate) rent: &'a solana_program::rent::Rent,
+    /// The authenticated Product-terminal width N. It is distinct from the
+    /// descriptor's sparse representation width K.
+    pub(crate) exposure_product_width: u32,
     pub(crate) descriptor: RepresentationDescriptorV2<'a>,
 }
 
@@ -120,7 +123,7 @@ pub(crate) fn build_activate_receipt_header_v1(
         || aggregate.release_set != core.identity.selected_release_set.to_bytes()
         || aggregate.registry_program != core.identity.registry_program.to_bytes()
         || aggregate.generation != core.identity.generation
-        || aggregate.claim_count != observed.descriptor.outcome_count()
+        || aggregate.claim_count != observed.exposure_product_width
     {
         return Err(Error::new(
             "Structured receipt Claims aggregate differs from the Core/descriptor join",

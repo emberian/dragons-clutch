@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_claims::{
+    composition::{CompositionExposureBundleV3, RecordAdmissionV3},
     rational_kernel::RepresentationDescriptorV2,
     rational_lifecycle::{
         LIFECYCLE_HEADER_BYTES_V2, LifecycleRequestV2,
@@ -17,8 +18,9 @@ use dclutch_claims::{
     },
     structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
 };
+use dclutch_core_contract::ContentId;
 use dclutch_market::{
-    CoreState,
+    CoreState, Phase,
     capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     capability_program::hot_v3::{
         DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
@@ -33,6 +35,7 @@ use dclutch_market::{
         HOT_STRATEGY_RAW_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
     },
+    capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1},
     realm::REALM_SCHEMA_RELEASE_ID_V1,
 };
 use dclutch_operator::structured_activation_bundle_v1::{
@@ -47,7 +50,10 @@ use dclutch_operator::{
     },
 };
 use dclutch_product::PortfolioV2;
-use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::{
+    record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId},
+    release_set::CapabilityExecutionSelectionV1,
+};
 use serde_json::json;
 use sha2::Digest as _;
 use solana_sdk::{
@@ -128,25 +134,39 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         ExpectedClusterV1::OwnedLoopback,
     )?;
     let mut rpc = Rpc::connect(&arguments.rpc_url)?;
-    let activation = structured_activation::hydrate_activate_receipt_v1(
-        &mut rpc,
-        &market_input,
-        &campaign_report,
-        0,
-    )?;
+    let (activation_slot, activation_market) =
+        match structured_activation::hydrate_activate_receipt_v1(
+            &mut rpc,
+            &market_input,
+            &campaign_report,
+            0,
+        ) {
+            Ok(observed) => (observed.slot, observed.market),
+            Err(error)
+                if error.to_string()
+                    == "Structured activation finalized Market bytes differ from the sealed founding report" =>
+            {
+                // A selector-255 root changes Core's mutable Market bytes.  This
+                // narrow continuation is still bound to the sealed aggregate and
+                // later requires the exact derived active root before any receipt
+                // instruction can be constructed.
+                resume_after_structured_root_observation_v1(&mut rpc, &evidence, &plan, claims)?
+            }
+            Err(error) => return Err(error),
+        };
     let artifacts = structured_activation::hydrate_selected_activate_receipt_artifacts_v1(
         &mut rpc,
         registry,
         &market_input,
-        activation.slot,
+        activation_slot,
     )?;
     let provisional = hydrate_structured_publication_input_same_slot_v1(
         &mut rpc,
         registry,
         &market_input,
         &evidence,
-        activation.slot,
-        activation.market,
+        activation_slot,
+        activation_market,
         claims,
         Vec::new(),
         2,
@@ -159,7 +179,7 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
     // width; only the Structured child K is sparse and bounded by the selected
     // RequestProfile. No request flag may choose either coordinate or weight.
     let native = compile_native_basis_composition_v1(NativeBasisCompositionInputV1 {
-        market: activation.market.to_bytes(),
+        market: activation_market.to_bytes(),
         release_set: artifacts.token_behavior_selection.release_set(),
         product_record_bytes: &provisional.product_record_body,
         result_domain_bytes: &provisional.result_domain_body,
@@ -224,8 +244,8 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         registry,
         &market_input,
         &evidence,
-        activation.slot,
-        activation.market,
+        activation_slot,
+        activation_market,
         claims,
         coordinates.clone(),
         denominator,
@@ -251,7 +271,7 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
                 .as_ref()
                 .ok_or_else(|| Error::new("Structured campaign omitted payer"))?,
             &closure,
-            input_release_slot(&artifacts, activation.slot),
+            input_release_slot(&artifacts, activation_slot),
             &mut transactions,
         )?)
     } else {
@@ -291,14 +311,14 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             &plan,
             &market_input,
             &evidence,
-            activation.market,
+            activation_market,
             published.slot,
             &mut transactions,
         )?)
     } else {
         None
     };
-    let receipt_activation = if let (Some(_published), Some(root_activation), Some(payer)) =
+    let receipt_activation = if let (Some(published), Some(root_activation), Some(payer)) =
         (published.as_ref(), root_activation.as_ref(), payer.as_ref())
     {
         Some(activate_structured_receipt_v1(
@@ -308,7 +328,9 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             &market_input,
             &evidence,
             &artifacts,
-            activation.market,
+            &closure,
+            published,
+            activation_market,
             root_activation,
             &mut transactions,
         )?)
@@ -321,11 +343,11 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             "schema": "dclutch-owned-loopback-structured-publication-v1",
             "cluster": "owned-loopback",
             "executed": arguments.execute,
-            "market": activation.market.to_string(),
+            "market": activation_market.to_string(),
             "claims": claims.to_string(),
             "registry": registry.to_string(),
             "payer": payer.as_ref().map(|value| value.pubkey().to_string()),
-            "finalizedSlot": published.as_ref().map(|value| value.slot).unwrap_or(activation.slot),
+            "finalizedSlot": published.as_ref().map(|value| value.slot).unwrap_or(activation_slot),
             "productCoordinates": coordinates,
             "denominator": 2_u64,
             "coefficients": coefficients,
@@ -338,6 +360,52 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             "transactions": transactions,
         }),
     )
+}
+
+/// Reacquire the only mutable founding fact after selector-255 activation.
+/// The caller reaches this path only after the strict sealed-Market digest
+/// refusal.  The report-bound Claims aggregate remains byte-identical; the
+/// root verifier below must subsequently prove the exact expected active root.
+fn resume_after_structured_root_observation_v1(
+    rpc: &mut Rpc,
+    evidence: &crate::campaign::CampaignTerminalEvidenceV1,
+    plan: &SuccessorPlan,
+    claims: Pubkey,
+) -> Result<(u64, Pubkey)> {
+    let market = pubkey(
+        &evidence
+            .accounts
+            .get("founding_market")
+            .ok_or_else(|| Error::new("Structured resume report omitted founding Market"))?
+            .address,
+    )?;
+    let aggregate_row = evidence
+        .accounts
+        .get("claims_aggregate")
+        .ok_or_else(|| Error::new("Structured resume report omitted Claims aggregate"))?;
+    let aggregate = pubkey(&aggregate_row.address)?;
+    let (slot, accounts) = rpc.finalized_accounts(&[market, aggregate], 0)?;
+    let market_account = accounts
+        .first()
+        .and_then(Option::as_ref)
+        .ok_or_else(|| Error::new("Structured resume Market is absent"))?;
+    let aggregate_account = accounts
+        .get(1)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| Error::new("Structured resume Claims aggregate is absent"))?;
+    let state = CoreState::decode(&market_account.data)
+        .map_err(|error| Error::new(format!("Structured resume Core Market: {error:?}")))?;
+    if market_account.owner != pubkey(&plan.core.program_id)?
+        || state.phase != Phase::Open
+        || state.identity.market_id.to_bytes() != market.to_bytes()
+        || aggregate_account.owner != claims
+        || sha256_hex(&aggregate_account.data) != aggregate_row.data_sha256.to_ascii_lowercase()
+    {
+        return Err(Error::new(
+            "Structured resume mutable Market or sealed Claims aggregate differs",
+        ));
+    }
+    Ok((slot, market))
 }
 
 fn selected_pair_v1(
@@ -538,6 +606,61 @@ fn activate_structured_root_v1(
         ));
     }
     let context: [u8; 32] = sha2::Sha256::digest(b"dclutch/structured-root-activation/v1").into();
+    let expected_header = CapabilityRootHeaderV1::new(
+        ContentId::new(state.identity.selected_release_set.to_bytes())
+            .map_err(|_| Error::new("Structured root activation release-set identity"))?,
+        market.to_bytes(),
+        state.identity.generation,
+        CapabilityExecutionSelectionV1::new(
+            selected.selected_manifest_entry_index,
+            ContentId::new(manifest.content)
+                .map_err(|_| Error::new("Structured root activation manifest identity"))?,
+            ContentId::new(STRUCTURED_CAPABILITY_KIND_ID_V2)
+                .map_err(|_| Error::new("Structured root activation kind identity"))?,
+            ContentId::new(sha2::Sha256::digest(&program_set_body).into())
+                .map_err(|_| Error::new("Structured root activation ProgramSet identity"))?,
+            ContentId::new(sha2::Sha256::digest(&config_body).into())
+                .map_err(|_| Error::new("Structured root activation config identity"))?,
+        )
+        .map_err(|error| Error::new(format!("Structured root activation selection: {error:?}")))?
+        .with_capability_release_record_bumps(program_set.bumps[0], program_set.bumps[1]),
+        SelectedRecordBumpsV1::new(
+            manifest.bumps[0],
+            manifest.bumps[1],
+            config.bumps[0],
+            config.bumps[1],
+        ),
+    )
+    .map_err(|error| Error::new(format!("Structured root activation header: {error:?}")))?;
+    let expected_root =
+        Pubkey::find_program_address(&expected_header.seeds().as_slices(), &trading).0;
+    if let Some(existing_root) = rpc.account(expected_root)? {
+        let header = CapabilityRootHeaderV1::decode(
+            existing_root
+                .data
+                .get(..dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1)
+                .ok_or_else(|| Error::new("Structured resumed root is truncated"))?,
+        )
+        .map_err(|error| Error::new(format!("Structured resumed root header: {error:?}")))?;
+        let tail = existing_root
+            .data
+            .get(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1..)
+            .ok_or_else(|| Error::new("Structured resumed root omitted tail"))?;
+        if existing_root.owner != trading
+            || header != expected_header
+            || tail != STRUCTURED_CAPABILITY_ROOT_TAIL_V1
+        {
+            return Err(Error::new(
+                "Structured resumed root differs from canonical selector-255 activation",
+            ));
+        }
+        return Ok(json!({
+            "root": expected_root.to_string(),
+            "slot": facts_slot,
+            "activation": serde_json::Value::Null,
+            "resumed": true,
+        }));
+    }
     let activation_request = structured_activation_request_v1();
     let plan = build_selected_capability_activation_plan_v1(SelectedCapabilityActivationInputV1 {
         market,
@@ -592,6 +715,30 @@ fn activate_structured_root_v1(
     )
 }
 
+/// Authenticate that closure target 6 is precisely the derived representation
+/// descriptor before a Claims frame can use it.  The target position is only a
+/// closure-order assertion; schema, digest, and both Registry PDAs independently
+/// bind it to the semantic descriptor bytes.
+fn authenticate_receipt_descriptor_publication_v1(
+    registry: Pubkey,
+    descriptor_bytes: &[u8],
+    published: &crate::runtime::PublishedRecord,
+) -> Result<SelectedActivationRecordPairV1> {
+    let schema = dclutch_claims::rational_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3;
+    let expected = selected_pair_v1(registry, schema, descriptor_bytes)?;
+    if published.schema != schema || published.digest != expected.content {
+        return Err(Error::new(
+            "Structured receipt publication descriptor schema or digest differs",
+        ));
+    }
+    if published.raw != expected.raw || published.staging != expected.staging {
+        return Err(Error::new(
+            "Structured receipt publication descriptor PDA differs",
+        ));
+    }
+    Ok(expected)
+}
+
 /// Create the permissionless seal (when vacant) and execute the first real
 /// Structured lifecycle action in one routed, atomic transaction.  Every
 /// coordinate is recovered from finalized records or the root just accepted;
@@ -604,6 +751,8 @@ fn activate_structured_receipt_v1(
     market_input: &[u8],
     evidence: &crate::campaign::CampaignTerminalEvidenceV1,
     artifacts: &structured_activation::StructuredActivateReceiptArtifactsV1,
+    closure: &crate::structured_claims_producer::StructuredPublicationClosureV1,
+    published: &crate::structured_claims_producer::PublishedStructuredClosureV1,
     market: Pubkey,
     root_activation: &serde_json::Value,
     transactions: &mut Vec<crate::model::TransactionEvidence>,
@@ -640,11 +789,28 @@ fn activate_structured_receipt_v1(
         dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         &crate::runtime::decode_hex(&selected.program_set_hex)?,
     )?;
-    let receipt_descriptor = &artifacts.bundle_records[0];
+    let receipt_descriptor = &closure.representation_descriptor.preimage;
+    let published_descriptor = published.records.get(6).ok_or_else(|| {
+        Error::new("Structured receipt publication omitted representation descriptor")
+    })?;
+    let expected_descriptor = authenticate_receipt_descriptor_publication_v1(
+        registry,
+        receipt_descriptor,
+        published_descriptor,
+    )?;
+    let expected_descriptor_digest = expected_descriptor.content;
+    let observed_descriptor = rpc
+        .account(published_descriptor.raw)?
+        .ok_or_else(|| Error::new("Structured receipt publication descriptor vanished"))?;
+    if observed_descriptor.owner != registry || observed_descriptor.data != *receipt_descriptor {
+        return Err(Error::new(
+            "Structured receipt publication descriptor finalized bytes differ",
+        ));
+    }
     let descriptor = selected_pair_v1(
         registry,
-        receipt_descriptor.schema,
-        &receipt_descriptor.body,
+        dclutch_claims::rational_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+        receipt_descriptor,
     )?;
     let config = selected_pair_v1(registry, artifacts.config.schema, &artifacts.config.body)?;
     let pair = |index: usize| -> Result<SelectedActivationRecordPairV1> {
@@ -684,14 +850,14 @@ fn activate_structured_receipt_v1(
     // The selected descriptor is the content address and Claims authority
     // source.  Its authority is derived before observation, never accepted
     // from a report or CLI.
-    let descriptor_id: [u8; 32] = sha2::Sha256::digest(&receipt_descriptor.body).into();
+    let descriptor_id = expected_descriptor_digest;
     let representation_authority = Pubkey::find_program_address(
         &[RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, &descriptor_id],
         &claims,
     )
     .0;
     let descriptor_value = RepresentationDescriptorV2::decode(
-        &receipt_descriptor.body,
+        receipt_descriptor,
         DescriptorAdmissionV2 {
             selected_descriptor_id: descriptor_id,
             finalized_descriptor_id: descriptor_id,
@@ -703,6 +869,24 @@ fn activate_structured_receipt_v1(
         },
     )
     .map_err(|error| Error::new(format!("Structured receipt descriptor: {error:?}")))?;
+
+    let exposure_id: [u8; 32] = sha2::Sha256::digest(&closure.exposure).into();
+    let exposure = CompositionExposureBundleV3::decode(
+        &closure.exposure,
+        RecordAdmissionV3 {
+            selected_id: exposure_id,
+            finalized_id: exposure_id,
+            recomputed_digest: exposure_id,
+            finalized_digest: exposure_id,
+            record_authenticated: true,
+        },
+    )
+    .map_err(|error| Error::new(format!("Structured receipt exposure: {error:?}")))?;
+    descriptor_value
+        .authenticate_exposure(exposure)
+        .map_err(|error| {
+            Error::new(format!("Structured receipt descriptor/exposure: {error:?}"))
+        })?;
 
     let mut fixed = vec![Pubkey::default(); HOT_FIXED_ACCOUNT_COUNT_V3];
     let mut place = |index: usize, key: Pubkey| -> Result<()> {
@@ -813,6 +997,7 @@ fn activate_structured_receipt_v1(
             receipt_mint_account: accounts.get(3).and_then(Option::as_ref),
             rent: &rent,
             descriptor: descriptor_value,
+            exposure_product_width: exposure.product_width(),
         },
     )?;
     let mut lifecycle_bytes = vec![0; LIFECYCLE_HEADER_BYTES_V2];
@@ -1162,6 +1347,33 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Structured activation finalized snapshot predates its required publication slot"
+        );
+    }
+
+    #[test]
+    fn receipt_descriptor_publication_refuses_a_same_digest_wrong_schema() {
+        let registry = solana_sdk::pubkey::Pubkey::new_unique();
+        let bytes = b"canonical derived representation descriptor";
+        let expected = super::selected_pair_v1(
+            registry,
+            dclutch_claims::rational_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+            bytes,
+        )
+        .expect("canonical descriptor pair");
+        let observed = crate::runtime::PublishedRecord {
+            schema: [7; 32],
+            digest: expected.content,
+            raw: expected.raw,
+            staging: expected.staging,
+        };
+        let error =
+            super::authenticate_receipt_descriptor_publication_v1(registry, bytes, &observed)
+                .expect_err(
+                    "same digest under another schema must not become a receipt descriptor",
+                );
+        assert_eq!(
+            error.to_string(),
+            "Structured receipt publication descriptor schema or digest differs"
         );
     }
 }

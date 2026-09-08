@@ -19,4 +19,10 @@ describe('the published aquarium observation', () => {
     expect(html).toContain('/market?address=GtmpRvSL9y6RpqMth73VSdb9h1XRe7zqQZkhJkfgxKrA');
     expect(html).toContain('reported by the aquarium, not an exchange volume claim');
   });
+
+  it('keeps the live read unavailable while cohort-18 inventory is still a checked placeholder', () => {
+    expect(html).toContain('Live devnet market read');
+    expect(html).toContain('The checked cohort-18 inventory has not been published yet.');
+    expect(html).not.toContain('Recent finalized signatures');
+  });
 });
