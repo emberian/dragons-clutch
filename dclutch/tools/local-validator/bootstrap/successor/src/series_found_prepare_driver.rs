@@ -20,7 +20,13 @@ use dclutch_registry::{
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
-use std::{fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
+    io::Write as _,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use crate::{
     Error, Result,
@@ -44,6 +50,438 @@ use crate::{
 type SeriesPrepareFixedDataLengthsV1 = [u32;
     dclutch_trading_sbf::series::prepare_funding_artifacts_v5::SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5
         as usize];
+
+/// The one composite entrance for a local Series Found -> first Prepare run.
+/// Its selected accelerator build is always the checked-candidate script; an
+/// arbitrary executable or textual certificate identity is deliberately not
+/// an argument of this command.
+pub(crate) const SERIES_FOUND_PREPARE_COMMAND_V1: &str =
+    "local-private-validator-series-found-prepare-v1";
+
+#[derive(Debug)]
+struct SeriesFoundPrepareArgumentsV1 {
+    plan: PathBuf,
+    rpc_url: String,
+    payer_keypair: PathBuf,
+    direct_fee_basis_points: u16,
+    direct_fee_recipient: Pubkey,
+    compiler_manifest: PathBuf,
+    toolchain_manifest: PathBuf,
+    translation_validation: PathBuf,
+    shadow_stage_dir: PathBuf,
+    checked_candidate_work: PathBuf,
+    node: PathBuf,
+    node_archive: PathBuf,
+    predecessor_profile: Option<PathBuf>,
+    genesis_cohort: bool,
+    output: PathBuf,
+    execute: bool,
+}
+
+fn canonical_regular_v1(path: PathBuf, flag: &str) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Err(Error::new(format!("{flag} must be an absolute path")));
+    }
+    let metadata = fs::symlink_metadata(&path)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(Error::new(format!("{flag} must name a regular file")));
+    }
+    let canonical = fs::canonicalize(&path)?;
+    if canonical != path {
+        return Err(Error::new(format!("{flag} must be canonical")));
+    }
+    Ok(path)
+}
+
+fn absolute_new_v1(path: PathBuf, flag: &str) -> Result<PathBuf> {
+    if !path.is_absolute() || path.exists() || fs::symlink_metadata(&path).is_ok() {
+        return Err(Error::new(format!(
+            "{flag} must name an absolute path that does not exist"
+        )));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new(format!("{flag} omitted its parent")))?;
+    let metadata = fs::symlink_metadata(parent)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(Error::new(format!(
+            "{flag} parent must be a regular directory"
+        )));
+    }
+    Ok(fs::canonicalize(parent)?.join(
+        path.file_name()
+            .ok_or_else(|| Error::new(format!("{flag} omitted its filename")))?,
+    ))
+}
+
+fn parse_series_found_prepare_arguments_v1(
+    arguments: Vec<String>,
+) -> Result<SeriesFoundPrepareArgumentsV1> {
+    let mut values = BTreeMap::new();
+    let mut predecessor_profile = None;
+    let mut genesis_cohort = false;
+    let mut execute = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--execute" => {
+                if execute {
+                    return Err(Error::new("Series Found/Prepare repeats --execute"));
+                }
+                execute = true;
+                index += 1;
+            }
+            "--genesis-cohort" => {
+                if genesis_cohort {
+                    return Err(Error::new("Series Found/Prepare repeats --genesis-cohort"));
+                }
+                genesis_cohort = true;
+                index += 1;
+            }
+            "--predecessor-profile" => {
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    Error::new("Series Found/Prepare --predecessor-profile needs a value")
+                })?;
+                if predecessor_profile.replace(PathBuf::from(value)).is_some() {
+                    return Err(Error::new(
+                        "Series Found/Prepare repeats --predecessor-profile",
+                    ));
+                }
+                index += 2;
+            }
+            flag => {
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    Error::new(format!("Series Found/Prepare {flag} needs a value"))
+                })?;
+                if !matches!(
+                    flag,
+                    "--plan"
+                        | "--rpc-url"
+                        | "--payer-keypair"
+                        | "--direct-fee-basis-points"
+                        | "--direct-fee-recipient"
+                        | "--series-compiler-manifest"
+                        | "--series-toolchain-manifest"
+                        | "--series-translation-validation"
+                        | "--series-shadow-stage-dir"
+                        | "--checked-candidate-work"
+                        | "--node"
+                        | "--node-archive"
+                        | "--output"
+                ) || values.insert(flag.to_owned(), value.to_owned()).is_some()
+                {
+                    return Err(Error::new(format!(
+                        "Series Found/Prepare rejects argument {flag}"
+                    )));
+                }
+                index += 2;
+            }
+        }
+    }
+    if genesis_cohort == predecessor_profile.is_some() {
+        return Err(Error::new(
+            "Series Found/Prepare requires exactly one of --genesis-cohort or --predecessor-profile",
+        ));
+    }
+    let required = |flag: &str| {
+        values
+            .get(flag)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("Series Found/Prepare requires {flag}")))
+    };
+    let direct_fee_recipient: Pubkey = required("--direct-fee-recipient")?
+        .parse()
+        .map_err(|_| Error::new("--direct-fee-recipient must be a base58 Pubkey"))?;
+    if direct_fee_recipient == Pubkey::default() {
+        return Err(Error::new(
+            "--direct-fee-recipient must not be the default Pubkey",
+        ));
+    }
+    Ok(SeriesFoundPrepareArgumentsV1 {
+        plan: canonical_regular_v1(PathBuf::from(required("--plan")?), "--plan")?,
+        rpc_url: required("--rpc-url")?,
+        payer_keypair: canonical_regular_v1(
+            PathBuf::from(required("--payer-keypair")?),
+            "--payer-keypair",
+        )?,
+        direct_fee_basis_points: required("--direct-fee-basis-points")?
+            .parse()
+            .map_err(|_| Error::new("--direct-fee-basis-points must be a decimal u16"))?,
+        direct_fee_recipient,
+        compiler_manifest: canonical_regular_v1(
+            PathBuf::from(required("--series-compiler-manifest")?),
+            "--series-compiler-manifest",
+        )?,
+        toolchain_manifest: canonical_regular_v1(
+            PathBuf::from(required("--series-toolchain-manifest")?),
+            "--series-toolchain-manifest",
+        )?,
+        translation_validation: canonical_regular_v1(
+            PathBuf::from(required("--series-translation-validation")?),
+            "--series-translation-validation",
+        )?,
+        shadow_stage_dir: absolute_new_v1(
+            PathBuf::from(required("--series-shadow-stage-dir")?),
+            "--series-shadow-stage-dir",
+        )?,
+        checked_candidate_work: absolute_new_v1(
+            PathBuf::from(required("--checked-candidate-work")?),
+            "--checked-candidate-work",
+        )?,
+        node: canonical_regular_v1(PathBuf::from(required("--node")?), "--node")?,
+        node_archive: canonical_regular_v1(
+            PathBuf::from(required("--node-archive")?),
+            "--node-archive",
+        )?,
+        predecessor_profile: predecessor_profile
+            .map(|path| canonical_regular_v1(path, "--predecessor-profile"))
+            .transpose()?,
+        genesis_cohort,
+        output: absolute_new_v1(PathBuf::from(required("--output")?), "--output")?,
+        execute,
+    })
+}
+
+struct StagedSeriesShadowSourcesV1 {
+    directory: PathBuf,
+    source_manifest: PathBuf,
+    generated_include: PathBuf,
+    certificate: PathBuf,
+    compiler_manifest: PathBuf,
+    toolchain_manifest: PathBuf,
+}
+
+/// The normalization pass may replace only the compiler-context root.  The
+/// source-selected Certificate and its generated include are immutable
+/// publication inputs, so rebuilding with the final activated root must leave
+/// all generator bytes and every digest handoff exactly unchanged.
+fn require_series_shadow_preselection_invariance_v1(
+    provisional: &dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1,
+    finalized: &dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1,
+) -> Result<()> {
+    if provisional != finalized {
+        return Err(Error::new(
+            "Series final parent root changed preselection Certificate, manifest, include, or build inputs",
+        ));
+    }
+    let certificate: [u8; 32] = Sha256::digest(finalized.certificate).into();
+    if certificate != finalized.build_inputs.certificate.to_bytes() {
+        return Err(Error::new(
+            "Series final preselection Certificate bytes differ from its content identity",
+        ));
+    }
+    Ok(())
+}
+
+fn write_new_bytes_atomically_v1(path: &Path, bytes: &[u8], label: &str) -> Result<()> {
+    if path.exists() {
+        return Err(Error::new(format!(
+            "Series Found/Prepare refuses to replace existing {label} {}",
+            path.display()
+        )));
+    }
+    let temporary = path.with_extension(format!("new-{}", std::process::id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| Error::new(format!("create staged {label}: {error}")))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| Error::new(format!("write staged {label}: {error}")))?;
+    fs::rename(&temporary, path)
+        .map_err(|error| Error::new(format!("publish staged {label}: {error}")))
+}
+
+/// Persist the exact source witnesses once, after the typed generator and its
+/// evidence owner accepted them. The checked candidate archives these files,
+/// re-emits the include from the archived source manifest, then uses only the
+/// staged include for its accelerator links.
+fn stage_series_shadow_sources_v1(
+    stage: &Path,
+    evidence: &crate::series_checked_evidence::CheckedSeriesShadowEvidenceV1,
+    built: &dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1,
+) -> Result<StagedSeriesShadowSourcesV1> {
+    if stage.exists() || fs::symlink_metadata(stage).is_ok() {
+        return Err(Error::new(format!(
+            "Series Shadow stage directory already exists {}",
+            stage.display()
+        )));
+    }
+    fs::create_dir(stage)?;
+    let directory = fs::canonicalize(stage)?;
+    let source_manifest = directory.join("series_shadow_source_manifest.bin");
+    let generated_include = directory.join("series_shadow_generated.rs");
+    let certificate = directory.join("series_shadow_certificate.bin");
+    let compiler_manifest = directory.join("compiler_source_manifest.bin");
+    let toolchain_manifest = directory.join("toolchain_manifest.bin");
+    write_new_bytes_atomically_v1(&source_manifest, &built.manifest, "Shadow source manifest")?;
+    write_new_bytes_atomically_v1(
+        &generated_include,
+        &built.generated_include,
+        "Shadow generated include",
+    )?;
+    write_new_bytes_atomically_v1(&certificate, &built.certificate, "Shadow Certificate")?;
+    write_new_bytes_atomically_v1(
+        &compiler_manifest,
+        &evidence.compiler_manifest,
+        "Shadow compiler manifest",
+    )?;
+    write_new_bytes_atomically_v1(
+        &toolchain_manifest,
+        &evidence.toolchain,
+        "Shadow toolchain manifest",
+    )?;
+    crate::series_checked_evidence::authenticate_series_shadow_generated_v1(evidence, built)?;
+    Ok(StagedSeriesShadowSourcesV1 {
+        directory,
+        source_manifest,
+        generated_include,
+        certificate,
+        compiler_manifest,
+        toolchain_manifest,
+    })
+}
+
+fn workspace_root_v1() -> Result<PathBuf> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(4)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| Error::new("Series Found/Prepare could not locate workspace root"))
+}
+
+/// The selected Trading ledger carries exactly its manifest-selected row.
+/// Derive its width from that one owned mask instead of retaining a fixture
+/// count beside the Series activation compiler.
+fn selected_series_funding_ledger_slot_count_v1(selected_manifest_entry_index: u16) -> Result<u16> {
+    let mask = 1_u16
+        .checked_shl(u32::from(selected_manifest_entry_index))
+        .ok_or_else(|| Error::new("Series selected manifest entry exceeds the funding mask"))?;
+    dclutch_market::capability_manifest::funding_ledger_slot_count_v2(mask)
+        .map_err(|error| Error::new(format!("Series selected funding ledger: {error:?}")))
+}
+
+/// Derive the Series entry position before the selected descriptor and
+/// Certificate exist. The selected-capability owner validates the canonical
+/// Resolution base and shares its kind ordering with the later final merge.
+fn preselection_series_manifest_entry_index_v1(parent_base_manifest: &[u8]) -> Result<u16> {
+    let kind: [u8; 32] =
+        Sha256::digest(dclutch_trading::series::SERIES_SUCCESSOR_KIND_PREIMAGE_V3).into();
+    crate::selected_capability::preselection_manifest_entry_index_v1(parent_base_manifest, kind)
+}
+
+/// Run exactly the checked-candidate producer that authenticates and selects
+/// the staged Series include. It is intentionally hbox/swarm-build only; the
+/// candidate itself checks `SWARM_BUILD_INNER` before a heavy Linux link.
+fn build_selected_series_accelerator_v1(
+    arguments: &SeriesFoundPrepareArgumentsV1,
+    plan: &SuccessorPlan,
+    staged: &StagedSeriesShadowSourcesV1,
+) -> Result<(PathBuf, PathBuf)> {
+    if !arguments.execute {
+        return Err(Error::new(
+            "Series Found/Prepare refuses a dry run: selected build and validator poststates are one execution",
+        ));
+    }
+    if std::env::var_os("SWARM_BUILD_INNER").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return Err(Error::new(
+            "Series Found/Prepare selected accelerator build must run on hbox through swarm-build",
+        ));
+    }
+    let checked = plan
+        .checked_local_mutable_set
+        .as_ref()
+        .ok_or_else(|| Error::new("Series Found/Prepare requires a checked-local mutable plan"))?;
+    let root = workspace_root_v1()?;
+    let revision = Command::new("git")
+        .current_dir(&root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|error| Error::new(format!("Series Found/Prepare git revision: {error}")))?;
+    if !revision.status.success()
+        || std::str::from_utf8(&revision.stdout).ok().map(str::trim)
+            != Some(checked.source_revision.as_str())
+    {
+        return Err(Error::new(
+            "Series Found/Prepare HEAD differs from the baseline checked source revision",
+        ));
+    }
+    let script = root.join("tools/release/checked-release-candidate.sh");
+    let mut command = Command::new(&script);
+    command.current_dir(&root).args([
+        "--repo",
+        root.to_str()
+            .ok_or_else(|| Error::new("workspace path was not UTF-8"))?,
+        "--commit",
+        &checked.source_revision,
+        "--work",
+        arguments
+            .checked_candidate_work
+            .to_str()
+            .ok_or_else(|| Error::new("checked work path was not UTF-8"))?,
+        "--builder",
+        "hbox",
+        "--node",
+        arguments
+            .node
+            .to_str()
+            .ok_or_else(|| Error::new("node path was not UTF-8"))?,
+        "--node-archive",
+        arguments
+            .node_archive
+            .to_str()
+            .ok_or_else(|| Error::new("node archive path was not UTF-8"))?,
+        "--series-shadow-generated-include",
+        staged
+            .generated_include
+            .to_str()
+            .ok_or_else(|| Error::new("generated include path was not UTF-8"))?,
+        "--series-shadow-source-manifest",
+        staged
+            .source_manifest
+            .to_str()
+            .ok_or_else(|| Error::new("source manifest path was not UTF-8"))?,
+        "--series-shadow-compiler-source",
+        staged
+            .compiler_manifest
+            .to_str()
+            .ok_or_else(|| Error::new("compiler manifest path was not UTF-8"))?,
+        "--series-shadow-toolchain-manifest",
+        staged
+            .toolchain_manifest
+            .to_str()
+            .ok_or_else(|| Error::new("toolchain manifest path was not UTF-8"))?,
+    ]);
+    if arguments.genesis_cohort {
+        command.arg("--genesis-cohort");
+    } else {
+        command.args([
+            "--predecessor-profile",
+            arguments
+                .predecessor_profile
+                .as_ref()
+                .and_then(|path| path.to_str())
+                .ok_or_else(|| Error::new("predecessor profile path was not UTF-8"))?,
+        ]);
+    }
+    let status = command
+        .status()
+        .map_err(|error| Error::new(format!("run selected Series checked candidate: {error}")))?;
+    if !status.success() {
+        return Err(Error::new(format!(
+            "selected Series checked candidate exited {status}"
+        )));
+    }
+    let manifest = arguments
+        .checked_candidate_work
+        .join("evidence/accelerator/checked.bin");
+    let elf = arguments.checked_candidate_work.join("elf/accelerator.so");
+    Ok((
+        canonical_regular_v1(manifest, "selected accelerator checked manifest")?,
+        canonical_regular_v1(elf, "selected accelerator ELF")?,
+    ))
+}
 
 /// Finalized Registry coordinates for the immutable two-leaf Series founder
 /// material.  The Template is also M1's selected config; the occurrence and
@@ -1224,6 +1662,7 @@ pub(crate) struct SeriesPrepareFinalizedAccountV1 {
 /// It is the ordinary Core `ProjectFound36` order, with the Rent sysvar
 /// omitted by Core.  The M0 Market remains a vacant coordinate: Prepare never
 /// creates Core state, and Consume's later Found is its only creator.
+#[derive(Clone, Copy)]
 pub(crate) struct SeriesPrepareM0FrameV1<'a> {
     pub(crate) project_found: [Pubkey; dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
     pub(crate) records: &'a [SeriesPrepareFinalizedRecordV1<'a>],
@@ -1404,11 +1843,10 @@ pub(crate) fn observe_series_prepare_preprofile_geometry_v1(
 /// Compile the selected Series closure only after the Prepare profile has been
 /// replaced by a full finalized M0/M1 observation.
 ///
-/// The source owner still supplies the non-Prepare action geometry: those
-/// actions have different lifecycle poststates and this first-Prepare driver
-/// must not fabricate them.  In contrast, every one of Prepare's 111 widths
-/// and its Ticket rent target are available now, so retaining a supplied
-/// value for either would leave a second authority at the publication seam.
+/// Expire is likewise derived from its semantic child bank and the same
+/// finalized M0/M1 facts. Consume remains deliberately separate here: it has
+/// a 161-coordinate multi-program frame and must gain its own canonical
+/// mapper rather than inherit a guessed post-Prepare observation.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
     rpc: &mut Rpc,
@@ -1417,6 +1855,7 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
     m0: SeriesPrepareM0FrameV1<'_>,
     records: SeriesPrepareHydrationRecordsV1<'_>,
     parent_root_state: SeriesPrepareParentRootStateV1,
+    parent_root_fact: crate::series_found_prepare_input::SeriesParentRootFactV1,
     minimum_slot: u64,
 ) -> Result<crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1> {
     let mut geometry = selection.geometry.take().ok_or_else(|| {
@@ -1436,6 +1875,38 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
         .material
         .rent
         .minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3);
+    let preprofile =
+        crate::series_found_prepare_campaign::derive_series_found_prepare_preprofile_v1(
+            &mut selection,
+        )?;
+    let expected_root = match parent_root_fact {
+        crate::series_found_prepare_input::SeriesParentRootFactV1::Predicted(prediction) => (
+            prediction.root,
+            SeriesPrepareParentRootStateV1::PreActivationPredicted,
+        ),
+        crate::series_found_prepare_input::SeriesParentRootFactV1::Finalized { root, .. } => {
+            (root, SeriesPrepareParentRootStateV1::Finalized)
+        }
+    };
+    if selection.material.parent_root != expected_root.0 || parent_root_state != expected_root.1 {
+        return Err(Error::new(
+            "Series Prepare root state disagreed with its typed geometry fact",
+        ));
+    }
+    geometry.expire_fixed_data_lengths =
+        crate::series_expire_geometry::derive_series_expire_fixed_data_lengths_v1(
+            rpc,
+            crate::series_expire_geometry::SeriesExpireGeometryInputV1 {
+                preprofile: &preprofile,
+                m0,
+                records,
+                parent_root: parent_root_fact,
+                registry: Pubkey::new_from_array(selection.registry_program.to_bytes()),
+                trading: selection.material.trading,
+                custody: selection.material.custody,
+                minimum_slot,
+            },
+        )?;
     selection.geometry = Some(geometry);
     crate::series_found_prepare_campaign::compile_series_found_prepare_selection_v1(
         selection,
@@ -1490,14 +1961,24 @@ pub(crate) fn hydrate_series_prepare_role_layout_v1<'a>(
     }
 
     let root = parent_root_source_v1(input.parent_root, input.parent_root_state, input.trading)?;
+    let product = m0_record_by_schema_v1(
+        input,
+        dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
+        "Product",
+    )?;
+    let basis = m0_record_by_schema_v1(
+        input,
+        dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        "linked Basis",
+    )?;
     let outer = [
         root,
-        record_raw_v1("M0 Template", input.registry, input.template)?,
-        record_raw_v1("M0 occurrence", input.registry, input.occurrence)?,
+        record_raw_v1("Series Template", input.registry, input.template)?,
+        record_raw_v1("M0 Product", input.registry, product)?,
         record_raw_v1("M0 Portfolio", input.registry, input.portfolio)?,
-        record_raw_v1("M0 Ticket", input.registry, input.ticket)?,
+        record_raw_v1("M0 linked Basis", input.registry, basis)?,
         SeriesPrepareRoleSourceV1::PredictedVacancy {
-            role: "M0 Ticket replay",
+            role: "Series Ticket replay",
             address: ticket_state_address_v1(input)?,
             fixed_data_len: u32::try_from(
                 dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3,
@@ -1775,12 +2256,7 @@ fn projected_frame_v1<'a, const N: usize>(
                     fixed_data_len: 0,
                 },
                 m0_nonrecord_v1(input, Pubkey::new_from_array(request.mint))?,
-                finalized_v1(
-                    "Token program",
-                    Pubkey::new_from_array(request.token_program),
-                    native_loader::ID,
-                    None,
-                ),
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.token_program))?,
                 m0_nonrecord_v1(input, Pubkey::new_from_array(request.payer))?,
                 finalized_v1("Rent sysvar", sysvar::rent::ID, sysvar::ID, None),
                 finalized_v1(
@@ -1918,12 +2394,9 @@ fn custody_frame_v1<'a, const N: usize>(
                 .0,
                 fixed_data_len: 0,
             },
-            CustodyFrameRoleV1::TokenProgram => finalized_v1(
-                "Token program",
-                Pubkey::new_from_array(request.token_program),
-                native_loader::ID,
-                None,
-            ),
+            CustodyFrameRoleV1::TokenProgram => {
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.token_program))?
+            }
             CustodyFrameRoleV1::TransferSource => {
                 m0_nonrecord_v1(input, Pubkey::new_from_array(request.source))?
             }
@@ -2005,6 +2478,32 @@ fn m0_source_v1<'a>(
     m0_frame_source_v1(input.registry, &input.m0, address)
 }
 
+/// Select a unique source-owned M0 record by the schema the universal Hot
+/// prefix names.  The Prefix consumes Product and linked Basis bodies, never
+/// occurrence/Ticket records which belong to the Series child proof.
+fn m0_record_by_schema_v1<'a>(
+    input: &'a SeriesPrepareHydratorInputV1<'a>,
+    schema: [u8; 32],
+    label: &str,
+) -> Result<SeriesPrepareFinalizedRecordV1<'a>> {
+    let matches = input
+        .m0
+        .records
+        .iter()
+        .copied()
+        .filter(|record| record.schema == schema)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [record] => Ok(*record),
+        [] => Err(Error::new(format!(
+            "Series Prepare M0 frame omitted {label} record"
+        ))),
+        _ => Err(Error::new(format!(
+            "Series Prepare M0 frame duplicated {label} record"
+        ))),
+    }
+}
+
 fn m0_frame_source_v1<'a>(
     registry: Pubkey,
     m0: &'a SeriesPrepareM0FrameV1<'a>,
@@ -2075,6 +2574,48 @@ mod prepare_hydrator_tests {
         CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
         ProjectedCustodyRequestV1,
     };
+
+    #[test]
+    fn found_prepare_command_rejects_repeated_execution_before_paths() {
+        let error = parse_series_found_prepare_arguments_v1(vec![
+            "--execute".to_owned(),
+            "--execute".to_owned(),
+        ])
+        .expect_err("the command must not accept duplicate execution switches");
+        assert_eq!(error.to_string(), "Series Found/Prepare repeats --execute");
+    }
+
+    #[test]
+    fn found_prepare_command_rejects_unknown_flag_before_paths() {
+        let error = parse_series_found_prepare_arguments_v1(vec![
+            "--genesis-cohort".to_owned(),
+            "--certificate-id".to_owned(),
+            "00".to_owned(),
+        ])
+        .expect_err("certificate identity must be generated, never text input");
+        assert_eq!(
+            error.to_string(),
+            "Series Found/Prepare rejects argument --certificate-id"
+        );
+    }
+
+    #[test]
+    fn selected_series_ledger_width_follows_its_manifest_bit() {
+        assert_eq!(
+            selected_series_funding_ledger_slot_count_v1(0).expect("first selected manifest bit"),
+            1
+        );
+        assert_eq!(
+            selected_series_funding_ledger_slot_count_v1(15).expect("last selected manifest bit"),
+            1
+        );
+        assert_eq!(
+            selected_series_funding_ledger_slot_count_v1(16)
+                .expect_err("sixteenth index cannot fit the u16 funding mask")
+                .to_string(),
+            "Series selected manifest entry exceeds the funding mask"
+        );
+    }
 
     fn projected(root: Pubkey) -> ProjectedCustodyRequestV1 {
         ProjectedCustodyRequestV1 {
@@ -2191,6 +2732,27 @@ mod prepare_hydrator_tests {
     }
 
     #[test]
+    fn m0_token_program_keeps_its_authenticated_upgradeable_loader_owner() {
+        let token_program = Pubkey::new_unique();
+        let frame = SeriesPrepareM0FrameV1 {
+            project_found: [Pubkey::default(); dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
+            records: &[],
+            vacancies: &[],
+            finalized_accounts: &[SeriesPrepareFinalizedAccountV1 {
+                address: token_program,
+                expected_owner: bpf_loader_upgradeable::ID,
+            }],
+        };
+        assert!(matches!(
+            m0_frame_nonrecord_v1(&frame, token_program).expect("published Token-2022 program"),
+            SeriesPrepareRoleSourceV1::Finalized {
+                expected_owner,
+                ..
+            } if expected_owner == bpf_loader_upgradeable::ID
+        ));
+    }
+
+    #[test]
     fn m0_publisher_handoff_preserves_its_exact_pair_and_body() {
         let published = crate::runtime::PublishedRecord {
             schema: [7; 32],
@@ -2206,6 +2768,7 @@ mod prepare_hydrator_tests {
             manifest: published,
             rent_credit: Pubkey::new_unique(),
             project_found: [Pubkey::default(); dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
+            principal_cap_sets: 1,
             series_prepare_records: vec![crate::market::FutureMarketFinalizedRecordV1 {
                 published,
                 body: b"published M0 body".to_vec(),

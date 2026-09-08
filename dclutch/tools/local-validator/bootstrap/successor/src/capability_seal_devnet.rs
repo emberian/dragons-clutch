@@ -46,13 +46,16 @@ use crate::{
     Error, Result,
     campaign::read_keypair_file,
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
-    general_session::FRAME_REPORT_SCHEMA_V1,
+    general_session::{FRAME_REPORT_SCHEMA_V1, LOCAL_FRAME_REPORT_SCHEMA_V1},
     plan::pubkey,
     rpc::{Rpc, WritePolicyV1},
 };
 
 /// The devnet arm's command name.
 pub(crate) const COMMAND_DEVNET_V1: &str = "devnet-capability-seal-v1";
+/// The owned-loopback arm is the same canonical seal producer over an
+/// authenticated local General session report.
+pub(crate) const COMMAND_LOCAL_V1: &str = "local-private-validator-capability-seal-v1";
 
 fn refusal(code: &str, reason: impl AsRef<str>) -> Error {
     Error::new(format!("REFUSED: [{code}] {}", reason.as_ref()))
@@ -80,9 +83,21 @@ pub(crate) fn usage() -> String {
     )
 }
 
+fn local_usage() -> String {
+    format!(
+        "dclutch-local-successor-bootstrap {COMMAND_LOCAL_V1} \\
+         --rpc-url http://127.0.0.1:PORT \\
+         --frame-report ABSOLUTE_JSON --payer PUBKEY --evidence ABSOLUTE_NEW_JSON \\
+         [--payer-keypair ABSOLUTE_JSON --routing-table ADDRESS --execute]\n     \\
+         Composes the permissionless validated-artifact seal from one owned-loopback \\
+         General session report. It reuses the canonical seal builder, which derives the \\
+         seal PDA and refuses a frame naming another address."
+    )
+}
+
 struct ArgumentsV1 {
     rpc_url: String,
-    acknowledgment: String,
+    acknowledgment: Option<String>,
     frame_report: PathBuf,
     payer: Pubkey,
     payer_keypair: Option<PathBuf>,
@@ -96,7 +111,7 @@ struct ArgumentsV1 {
     execute: bool,
 }
 
-fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
+fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<ArgumentsV1> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut frame_report = None;
@@ -114,9 +129,12 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             execute = true;
             continue;
         }
-        let value = iterator
-            .next()
-            .ok_or_else(|| refusal("input/missing-value", format!("{flag}; usage: {}", usage())))?;
+        let value = iterator.next().ok_or_else(|| {
+            refusal(
+                "input/missing-value",
+                format!("{flag}; usage: {}", command_usage(expected)),
+            )
+        })?;
         let slot = match flag.as_str() {
             "--rpc-url" => &mut rpc_url,
             DEVNET_ACKNOWLEDGMENT_FLAG => &mut acknowledgment,
@@ -131,8 +149,14 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             return Err(refusal("input/repeated-flag", flag));
         }
     }
+    let command_usage = command_usage(expected);
     let required = |value: Option<String>, name: &str| {
-        value.ok_or_else(|| refusal("input/missing-flag", format!("{name}; usage: {}", usage())))
+        value.ok_or_else(|| {
+            refusal(
+                "input/missing-flag",
+                format!("{name}; usage: {command_usage}"),
+            )
+        })
     };
     if execute && payer_keypair.is_none() {
         return Err(refusal(
@@ -142,7 +166,12 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     }
     Ok(ArgumentsV1 {
         rpc_url: required(rpc_url, "--rpc-url")?,
-        acknowledgment: required(acknowledgment, DEVNET_ACKNOWLEDGMENT_FLAG)?,
+        acknowledgment: match expected {
+            ExpectedClusterV1::Devnet => {
+                Some(required(acknowledgment, DEVNET_ACKNOWLEDGMENT_FLAG)?)
+            }
+            ExpectedClusterV1::OwnedLoopback => acknowledgment,
+        },
         frame_report: PathBuf::from(required(frame_report, "--frame-report")?),
         payer: pubkey(&required(payer, "--payer")?)?,
         payer_keypair: payer_keypair.map(PathBuf::from),
@@ -150,6 +179,13 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
         evidence: PathBuf::from(required(evidence, "--evidence")?),
         execute,
     })
+}
+
+fn command_usage(expected: ExpectedClusterV1) -> String {
+    match expected {
+        ExpectedClusterV1::Devnet => usage(),
+        ExpectedClusterV1::OwnedLoopback => local_usage(),
+    }
 }
 
 /// The four seeds and the frame one seal instruction is composed from.
@@ -197,7 +233,7 @@ fn address_v1(value: &Value, field: &str) -> Result<Pubkey> {
 }
 
 /// Read exactly the frame and seeds one `devnet-general-session` report states.
-fn read_frame_report_v1(path: &Path) -> Result<SealFrameV1> {
+fn read_frame_report_v1(path: &Path, expected: ExpectedClusterV1) -> Result<SealFrameV1> {
     if !path.is_absolute() {
         return Err(refusal("input/relative", "--frame-report must be absolute"));
     }
@@ -205,18 +241,22 @@ fn read_frame_report_v1(path: &Path) -> Result<SealFrameV1> {
         .map_err(|error| refusal("input/unreadable", format!("frame report: {error}")))?;
     let report: Value = serde_json::from_slice(&bytes)
         .map_err(|error| refusal("report/json", error.to_string()))?;
-    if report.get("schema").and_then(Value::as_str) != Some(FRAME_REPORT_SCHEMA_V1) {
+    let expected_schema = match expected {
+        ExpectedClusterV1::Devnet => FRAME_REPORT_SCHEMA_V1,
+        ExpectedClusterV1::OwnedLoopback => LOCAL_FRAME_REPORT_SCHEMA_V1,
+    };
+    if report.get("schema").and_then(Value::as_str) != Some(expected_schema) {
         return Err(refusal(
             "report/schema",
-            format!("--frame-report is not one {FRAME_REPORT_SCHEMA_V1} document"),
+            format!("--frame-report is not one {expected_schema} document"),
         ));
     }
-    let seal = report
-        .get("capabilitySeal")
-        .ok_or_else(|| refusal(
+    let seal = report.get("capabilitySeal").ok_or_else(|| {
+        refusal(
             "report/no-seal",
             "this frame report predates the seal seeds; re-run devnet-general-session",
-        ))?;
+        )
+    })?;
     let accounts = report
         .get("accounts")
         .and_then(Value::as_array)
@@ -277,16 +317,25 @@ fn read_frame_report_v1(path: &Path) -> Result<SealFrameV1> {
 
 /// Run one devnet capability seal.
 pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_arguments(arguments)?;
+    run(arguments, ExpectedClusterV1::Devnet)
+}
+
+/// Materialize one General capability seal on the owned loopback validator.
+pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse_arguments(arguments, expected)?;
     if arguments.evidence.exists() {
         return Err(refusal(
             "output/exists",
             format!("refusing to overwrite {}", arguments.evidence.display()),
         ));
     }
-    let origin = ClusterOriginV1::parse(&arguments.rpc_url, Some(&arguments.acknowledgment))?;
-    ExpectedClusterV1::Devnet.authenticate(&origin)?;
-    let frame = read_frame_report_v1(&arguments.frame_report)?;
+    let origin = ClusterOriginV1::parse(&arguments.rpc_url, arguments.acknowledgment.as_deref())?;
+    expected.authenticate(&origin)?;
+    let frame = read_frame_report_v1(&arguments.frame_report, expected)?;
     let composed = capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
         trading_program: frame.trading_program,
         registry_program: frame.registry_program,
@@ -320,10 +369,16 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     println!("market               {}", frame.market);
     println!("descriptor digest    {}", hex(&frame.descriptor_digest));
     println!("action               {}", frame.action);
-    println!("trading semantic     {}", hex(&frame.trading_semantic_release));
+    println!(
+        "trading semantic     {}",
+        hex(&frame.trading_semantic_release)
+    );
     println!("seal (DERIVED)       {}", composed.seal);
     println!("bump                 {}", composed.bump);
-    println!("accounts             {}", composed.instruction.accounts.len());
+    println!(
+        "accounts             {}",
+        composed.instruction.accounts.len()
+    );
     println!(
         "seal before          {}",
         before.as_ref().map_or_else(
@@ -332,8 +387,11 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         )
     );
     let mut evidence = json!({
-        "schema": "dclutch-devnet-capability-seal-evidence-v1",
-        "cluster": "devnet",
+        "schema": match expected {
+            ExpectedClusterV1::Devnet => "dclutch-devnet-capability-seal-evidence-v1",
+            ExpectedClusterV1::OwnedLoopback => "dclutch-local-capability-seal-evidence-v1",
+        },
+        "cluster": expected.evidence_label(),
         "rpcUrl": origin.redacted_url(),
         "frameReport": arguments.frame_report.display().to_string(),
         "market": frame.market,
@@ -435,17 +493,15 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     // A send that landed and left coordinate 38 vacant is the one failure this
     // must not report as success, because every later reader of that
     // coordinate would find the same absence and blame something else.
-    let after = rpc
-        .account(composed.seal)?
-        .ok_or_else(|| {
-            refusal(
-                "seal/absent-after",
-                format!(
-                    "the seal transaction landed and {} is still absent",
-                    composed.seal
-                ),
-            )
-        })?;
+    let after = rpc.account(composed.seal)?.ok_or_else(|| {
+        refusal(
+            "seal/absent-after",
+            format!(
+                "the seal transaction landed and {} is still absent",
+                composed.seal
+            ),
+        )
+    })?;
     if after.owner != frame.trading_program || after.data.is_empty() {
         return Err(refusal(
             "seal/shape-after",
@@ -564,18 +620,52 @@ mod tests {
             .expect("accounts");
         accounts.remove(5);
         let path = write_report(&report);
-        let error = read_frame_report_v1(&path).expect_err("partial frame");
+        let error =
+            read_frame_report_v1(&path, ExpectedClusterV1::Devnet).expect_err("partial frame");
         let _ = std::fs::remove_file(&path);
-        assert!(error.to_string().contains("report/partial-frame"), "{error}");
+        assert!(
+            error.to_string().contains("report/partial-frame"),
+            "{error}"
+        );
     }
 
     /// A DOCUMENT THAT IS NOT A FRAME REPORT IS NOT ONE.
     #[test]
     fn a_document_of_another_schema_refuses_before_any_field_is_read() {
         let path = write_report(&json!({"schema": "something-else", "accounts": []}));
-        let error = read_frame_report_v1(&path).expect_err("wrong schema");
+        let error =
+            read_frame_report_v1(&path, ExpectedClusterV1::Devnet).expect_err("wrong schema");
         let _ = std::fs::remove_file(&path);
         assert!(error.to_string().contains("report/schema"), "{error}");
+    }
+
+    /// The owned loopback uses its own report schema and does not borrow the
+    /// devnet acknowledgment rail.
+    #[test]
+    fn owned_loopback_seal_accepts_its_session_schema_without_devnet_acknowledgment() {
+        let mut report = report_v1(Pubkey::new_from_array([99_u8; 32]));
+        report["schema"] = json!(LOCAL_FRAME_REPORT_SCHEMA_V1);
+        let path = write_report(&report);
+        read_frame_report_v1(&path, ExpectedClusterV1::OwnedLoopback)
+            .expect("owned-loopback frame schema");
+        let _ = std::fs::remove_file(&path);
+
+        let arguments = vec![
+            "--rpc-url".into(),
+            "http://127.0.0.1:8899".into(),
+            "--frame-report".into(),
+            "/tmp/general-frame.json".into(),
+            "--payer".into(),
+            Pubkey::new_from_array([88_u8; 32]).to_string(),
+            "--evidence".into(),
+            "/tmp/general-seal-evidence.json".into(),
+        ];
+        match parse_arguments(arguments, ExpectedClusterV1::OwnedLoopback) {
+            Ok(parsed) => assert_eq!(parsed.acknowledgment, None),
+            Err(error) => {
+                panic!("owned loopback must not require devnet acknowledgment: {error}")
+            }
+        }
     }
 
     /// THE BUILDER, NOT THIS COMMAND, DECIDES WHETHER THE FRAME NAMES THE SEAL.
@@ -588,7 +678,7 @@ mod tests {
     fn a_frame_naming_the_wrong_seal_refuses_at_the_builder() {
         let report = report_v1(Pubkey::new_from_array([99_u8; 32]));
         let path = write_report(&report);
-        let frame = read_frame_report_v1(&path).expect("read");
+        let frame = read_frame_report_v1(&path, ExpectedClusterV1::Devnet).expect("read");
         let _ = std::fs::remove_file(&path);
         let error = capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
             trading_program: frame.trading_program,

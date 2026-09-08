@@ -1,0 +1,14 @@
+{
+  "campaign": "live-structured-control",
+  "bindings": [
+    {
+      "label": "live Structured accepted generic founding route",
+      "routes": [
+        "claims/founding_v5::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Captured from finalized getTransaction on preserved Structured validator; Claims CPI carries the native DCLFDR05 selector."
+    }
+  ]
+}

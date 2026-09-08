@@ -1084,6 +1084,37 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         })
     }
 
+    /// Recover the lifecycle join proved by a seal over the complete funding
+    /// profile, retaining only its embedded V2 range for lifecycle planning.
+    ///
+    /// The seal writer validates funding authority separation and the selected
+    /// action before it records this pair. Authentication here must cover the
+    /// entire V3 wrapper, including its funding table: a token for the base or
+    /// another wrapper cannot authorize this join. No funding declarations are
+    /// inferred from the embedded profile.
+    pub fn sealed_account_profile_with_external_funding_join<'b>(
+        self,
+        profile: AccountProfileV3<'b>,
+        sealed: SealedProfileJoinV1<'b>,
+    ) -> Result<ValidatedProfileJoinV3<'b>>
+    where
+        'a: 'b,
+    {
+        let policy_bytes = self.0.bytes();
+        let profile_bytes = profile.bytes();
+        if !core::ptr::eq(sealed.policy().as_ptr(), policy_bytes.as_ptr())
+            || sealed.policy().len() != policy_bytes.len()
+            || !core::ptr::eq(sealed.profile().as_ptr(), profile_bytes.as_ptr())
+            || sealed.profile().len() != profile_bytes.len()
+        {
+            return Err(Error::InvalidCoordinate);
+        }
+        Ok(ValidatedProfileJoinV3 {
+            policy: policy_bytes,
+            profile: profile.base().bytes(),
+        })
+    }
+
     /// Validate this policy's join to one exact AccountProfile and record it.
     ///
     /// The returned evidence lets a batch of plans over the same two artifacts

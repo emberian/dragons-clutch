@@ -505,9 +505,10 @@ pub(super) fn authenticate_and_execute_hot_v3(
     // two tokens.
     let profile_join = if let Some(funding) = funding_profile {
         lifecycle
-            .validate_account_profile_with_external_funding_join_for_action(
+            .sealed_account_profile_with_external_funding_join(
                 funding,
-                selected_action,
+                seal.authenticate_profile_join(lifecycle_token, account_profile_token)
+                    .map_err(|_| TradingSbfError::Content)?,
             )
             .map_err(|cause| {
                 #[cfg(feature = "hot-cu-profile")]

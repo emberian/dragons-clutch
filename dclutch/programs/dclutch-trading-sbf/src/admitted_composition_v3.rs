@@ -721,9 +721,10 @@ fn admitted_cpi_accounts_v4<'a, 'info>(
 /// key to locate the caller account.  The duplicate comparison below is the
 /// extra conjunct this producer needs before it can make that runtime rule save
 /// heap: differing representations of one physical key are an invalid frame,
-/// never an instruction to choose one silently.  A compact reference table is
-/// sorted by `(key, original_index)`, so equal-key validation takes one pass
-/// and the retained backing order remains the original first-match order.
+/// never an instruction to choose one silently.  A compact source-reference
+/// table plus sorted `u16` source indices is ordered by `(key, original_index)`,
+/// so equal-key validation takes one pass and the retained backing order
+/// remains the original first-match order.
 fn deduplicated_admitted_cpi_infos_v4<'a, 'info, I>(
     accounts: I,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError>
@@ -731,69 +732,110 @@ where
     'info: 'a,
     I: Iterator<Item = &'a AccountInfo<'info>>,
 {
-    struct AccountIndexV4<'a, 'info> {
-        account: &'a AccountInfo<'info>,
-        original_index: u16,
-        retain: bool,
-    }
+    const RETAINED_SOURCE_INDEX_BIT_V4: u16 = 1 << 15;
+    const SOURCE_INDEX_MASK_V4: u16 = !RETAINED_SOURCE_INDEX_BIT_V4;
 
     let (lower_bound, upper_bound) = accounts.size_hint();
     let account_count = upper_bound
         .filter(|upper_bound| *upper_bound == lower_bound)
         .ok_or(TradingSbfError::AdmittedTransport)?;
-    let mut indexed = Vec::new();
-    indexed
+    // Keep one reference per source and sort compact source coordinates rather
+    // than moving a reference, index, and retain flag together for every row.
+    // BumpHeapV1 deliberately never reclaims a dropped Vec, so this reduction
+    // remains material after the table has been consumed.
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(account_count)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    let mut sorted_source_indices = Vec::new();
+    sorted_source_indices
         .try_reserve_exact(account_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
     for (original_index, account) in accounts.enumerate() {
-        indexed.push(AccountIndexV4 {
-            account,
-            original_index: u16::try_from(original_index)
-                .map_err(|_| TradingSbfError::AdmittedTransport)?,
-            retain: false,
-        });
+        let source_index =
+            u16::try_from(original_index).map_err(|_| TradingSbfError::AdmittedTransport)?;
+        if source_index & RETAINED_SOURCE_INDEX_BIT_V4 != 0 {
+            return Err(TradingSbfError::AdmittedTransport.into());
+        }
+        sources.push(account);
+        sorted_source_indices.push(source_index);
     }
-    if indexed.len() != account_count {
+    if sources.len() != account_count || sorted_source_indices.len() != account_count {
         return Err(TradingSbfError::AdmittedTransport.into());
     }
     hot_heap_mark!("admitted-cpi-index");
-    indexed.sort_unstable_by(|left, right| {
-        left.account
-            .key
-            .cmp(right.account.key)
-            .then(left.original_index.cmp(&right.original_index))
+    sorted_source_indices.sort_unstable_by(|left, right| {
+        let left_index = usize::from(*left & SOURCE_INDEX_MASK_V4);
+        let right_index = usize::from(*right & SOURCE_INDEX_MASK_V4);
+        match (sources.get(left_index), sources.get(right_index)) {
+            (Some(left_account), Some(right_account)) => admitted_cpi_key_prefix_v4(left_account)
+                .cmp(&admitted_cpi_key_prefix_v4(right_account))
+                .then_with(|| left_account.key.cmp(right_account.key))
+                .then(left_index.cmp(&right_index)),
+            // Every coordinate came from `sources` above.  Keep the sort total
+            // even if a future iterator violates that contract; the validation
+            // pass below turns the malformed table into AdmittedTransport.
+            _ => left_index.cmp(&right_index),
+        }
     });
 
-    let mut group_start = 0_usize;
     let mut unique_count = 0_usize;
-    for index in 0..indexed.len() {
-        let same_key_as_previous =
-            index > 0 && indexed[index - 1].account.key == indexed[index].account.key;
+    let mut group_start = 0_usize;
+    for index in 0..sorted_source_indices.len() {
+        let source_index = usize::from(sorted_source_indices[index] & SOURCE_INDEX_MASK_V4);
+        let account = *sources
+            .get(source_index)
+            .ok_or(TradingSbfError::AdmittedTransport)?;
+        let same_key_as_previous = if index == 0 {
+            false
+        } else {
+            let previous_source_index =
+                usize::from(sorted_source_indices[index - 1] & SOURCE_INDEX_MASK_V4);
+            let previous = *sources
+                .get(previous_source_index)
+                .ok_or(TradingSbfError::AdmittedTransport)?;
+            previous.key == account.key
+        };
         if !same_key_as_previous {
-            indexed[index].retain = true;
+            sorted_source_indices[index] |= RETAINED_SOURCE_INDEX_BIT_V4;
             group_start = index;
             unique_count = unique_count
                 .checked_add(1)
                 .ok_or(TradingSbfError::AdmittedTransport)?;
             continue;
         }
-        let (prior, current) = indexed.split_at_mut(index);
-        require_matching_account_representation_v4(prior[group_start].account, current[0].account)?;
+        let first_source_index =
+            usize::from(sorted_source_indices[group_start] & SOURCE_INDEX_MASK_V4);
+        let first = *sources
+            .get(first_source_index)
+            .ok_or(TradingSbfError::AdmittedTransport)?;
+        require_matching_account_representation_v4(first, account)?;
     }
 
     // Sorting back by source index preserves the first matching AccountInfo
     // the installed CPI translator selects for every ordered meta.
-    indexed.sort_unstable_by_key(|entry| entry.original_index);
+    sorted_source_indices.sort_unstable_by_key(|entry| *entry & SOURCE_INDEX_MASK_V4);
     let mut infos: Vec<AccountInfo<'info>> = Vec::new();
     infos
         .try_reserve_exact(unique_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
-    for entry in indexed {
-        if entry.retain {
-            infos.push(entry.account.clone());
+    for source_index in sorted_source_indices {
+        if source_index & RETAINED_SOURCE_INDEX_BIT_V4 != 0 {
+            let account = *sources
+                .get(usize::from(source_index & SOURCE_INDEX_MASK_V4))
+                .ok_or(TradingSbfError::AdmittedTransport)?;
+            infos.push(account.clone());
         }
     }
     Ok(infos)
+}
+
+/// The first eight canonical key bytes cheaply separate almost every account
+/// before the full `Pubkey` comparison establishes the deterministic order.
+#[inline]
+fn admitted_cpi_key_prefix_v4(account: &AccountInfo<'_>) -> u64 {
+    let [a, b, c, d, e, f, g, h, ..] = account.key.to_bytes();
+    u64::from_be_bytes([a, b, c, d, e, f, g, h])
 }
 
 /// Refuse different observations presented under one physical key before the

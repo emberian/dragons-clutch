@@ -300,3 +300,122 @@ fn fund_only_refinement_cannot_be_a_lifecycle_payer_or_rent_credit() {
         );
     }
 }
+
+/// Model the seal writer after its real authority-separation check. Artifact
+/// digests are supplied by the adapter; this kernel test exercises exact byte
+/// range binding, not the adapter's hashing or PDA authentication.
+fn seal_for_join(policy: &[u8], profile: &[u8]) -> Vec<u8> {
+    use dclutch_vm::capability_seal::{
+        CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, SealedDescriptorClosureV1,
+        SealedRecordRowV1, SealedRoleV1,
+    };
+    let key = CapabilitySealKeyV1::new([1; 32], [2; 32], 1, [3; 32], [4; 32]).expect("seal key");
+    let rows = SealedRoleV1::canonical_order().map(|role| {
+        let ordinal = u8::try_from(role.ordinal()).expect("bounded seal role");
+        let bytes = match role {
+            SealedRoleV1::LifecyclePolicy => policy.len(),
+            SealedRoleV1::AccountProfile => profile.len(),
+            _ => 64,
+        };
+        let (schema, digest) = if role == SealedRoleV1::Descriptor {
+            ([1; 32], [2; 32])
+        } else {
+            ([0x20 + ordinal; 32], [0x40 + ordinal; 32])
+        };
+        SealedRecordRowV1::new(
+            role,
+            u32::try_from(bytes).expect("fixture width"),
+            schema,
+            digest,
+            [0x60 + ordinal; 32],
+            [0x70 + ordinal; 32],
+        )
+        .expect("seal row")
+    });
+    let mut bytes = vec![0; CAPABILITY_SEAL_BYTES_V1];
+    SealedDescriptorClosureV1::encode(key, rows, 254, &mut bytes).expect("seal body");
+    bytes
+}
+
+#[test]
+fn sealed_funding_join_binds_the_whole_wrapper_and_projects_its_base() {
+    use dclutch_vm::{
+        account_profile::lifecycle_v3::LifecycleRentQuoteBuffersV5,
+        capability_seal::{SealedDescriptorClosureV1, SealedRoleV1},
+    };
+    let profile_bytes = funding_profile(
+        FundingActionMaskV3::CREATE_AND_CLOSE,
+        AccountPrestateV2::LifecycleBound,
+    );
+    let profile = AccountProfileV3::decode(&profile_bytes).expect("funding profile");
+    let policy_bytes = policy(&[1], 2, 3);
+    let policy = StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &policy_bytes)
+        .expect("policy");
+    policy
+        .validate_account_profile_with_external_funding_join_for_action(profile, 1)
+        .expect("seal writer proves funding authority separation for this action");
+    let seal_bytes = seal_for_join(&policy_bytes, &profile_bytes);
+    let seal = SealedDescriptorClosureV1::decode(&seal_bytes).expect("seal");
+    let token = |role, bytes| {
+        let row = seal.row(role).expect("row");
+        seal.authenticate_artifact(role, row.schema(), row.content_digest(), bytes)
+            .expect("adapter-authenticated exact artifact")
+    };
+    let sealed = seal
+        .authenticate_profile_join(
+            token(SealedRoleV1::LifecyclePolicy, &policy_bytes),
+            token(SealedRoleV1::AccountProfile, &profile_bytes),
+        )
+        .expect("same seal");
+    assert_eq!(
+        policy
+            .sealed_account_profile_join(profile.base(), sealed)
+            .err(),
+        Some(Error::InvalidCoordinate),
+        "the pre-existing V2 recovery cannot consume a whole-wrapper token",
+    );
+    let join = policy
+        .sealed_account_profile_with_external_funding_join(profile, sealed)
+        .expect("recover the proved funded join");
+    let mut scratch = [0; 5];
+    let mut output = [99; 5];
+    policy
+        .project_authenticated_current_rent_quotes_atomic(
+            profile.base(),
+            Some(join),
+            0,
+            1,
+            &[0; 5],
+            &[],
+            LifecycleRentQuoteBuffersV5 {
+                scalar_scratch: &mut scratch,
+                output_scalars: &mut output,
+            },
+        )
+        .expect("recovered evidence covers the embedded planner profile");
+    assert_eq!(output, [0; 5]);
+
+    let other_wrapper_bytes = funding_profile(
+        FundingActionMaskV3::CREATE,
+        AccountPrestateV2::LifecycleBound,
+    );
+    let other_wrapper = AccountProfileV3::decode(&other_wrapper_bytes).expect("other wrapper");
+    assert_eq!(profile.base().bytes(), other_wrapper.base().bytes());
+    assert_eq!(
+        policy
+            .sealed_account_profile_with_external_funding_join(other_wrapper, sealed)
+            .err(),
+        Some(Error::InvalidCoordinate),
+        "identical embedded profiles do not authorize different funding tables",
+    );
+    let policy_copy = policy_bytes.clone();
+    let other_policy = StateLifecyclePolicyV5::decode_selected(POLICY_ID, POLICY_ID, &policy_copy)
+        .expect("copied policy");
+    assert_eq!(
+        other_policy
+            .sealed_account_profile_with_external_funding_join(profile, sealed)
+            .err(),
+        Some(Error::InvalidCoordinate),
+        "even equal bytes at another address need their own authenticated token",
+    );
+}

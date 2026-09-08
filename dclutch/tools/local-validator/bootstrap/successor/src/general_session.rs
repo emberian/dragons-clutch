@@ -179,7 +179,8 @@ pub(crate) const LOCAL_GENERAL_SESSION_COMMAND_V1: &str =
 /// The frame report's schema, and the only document `devnet-capability-seal-v1`
 /// will read a frame out of.
 pub(crate) const FRAME_REPORT_SCHEMA_V1: &str = "dclutch-devnet-general-session-frame-report-v1";
-const LOCAL_FRAME_REPORT_SCHEMA_V1: &str = "dclutch-local-general-session-frame-report-v1";
+pub(crate) const LOCAL_FRAME_REPORT_SCHEMA_V1: &str =
+    "dclutch-local-general-session-frame-report-v1";
 
 /// The action this command frames. `OpenBatch` is the first act of the General
 /// batch lifecycle, so it is the one whose reachability decides the family's.
@@ -1567,7 +1568,11 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
                 root_state,
                 config,
                 entry.config_id().to_bytes(),
-                graph.product_record,
+                // Batch occurrence and state seeds carry the Product body's
+                // semantic identity. The record digest still authenticates the
+                // record coordinate above, but it is not the Product ID that
+                // AccountProfile projects into an OpenBatch candidate.
+                graph.product_id,
                 tail_count,
                 GeneralSubjectV1::default(),
             )

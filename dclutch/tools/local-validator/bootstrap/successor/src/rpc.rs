@@ -3242,6 +3242,109 @@ mod tests {
         assert_eq!(sends.load(Ordering::SeqCst), 0);
     }
 
+    #[test]
+    fn committed_live_v0_fixture_passes_the_finalized_decoder_and_resolves_claims_cpi() {
+        let response: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../../docs/evidence/census-route-binding-2026-09-08/\
+rpc-getTransaction-base64.json"
+        )))
+        .expect("committed live getTransaction response");
+        let transaction = response
+            .get("result")
+            .cloned()
+            .expect("live RPC response result");
+        assert_eq!(transaction.get("version").and_then(Value::as_u64), Some(0));
+        let signature = "2U3PJ1SLaQ7Q5jwk7gf5oYKX4VjEjyFt2nAcPmRUXeQGQSJEDvwdUoKBw12f7wxuukJMJ8fkKa9KEtmc6i82mUKR"
+            .parse::<Signature>()
+            .expect("captured finalized signature");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture RPC");
+        let address = listener.local_addr().expect("fixture RPC address");
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("fixture RPC request");
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 4 * 1024];
+                loop {
+                    let length = stream.read(&mut chunk).expect("read fixture RPC request");
+                    if length == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..length]);
+                    let Some(headers_end) =
+                        request.windows(4).position(|window| window == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&request[..headers_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then_some(value.trim())
+                        })
+                        .and_then(|length| length.parse::<usize>().ok())
+                        .expect("fixture RPC content length");
+                    if request.len() >= headers_end + 4 + content_length {
+                        break;
+                    }
+                }
+                let body = String::from_utf8_lossy(&request);
+                let request_json: Value = serde_json::from_str(
+                    body.split_once("\r\n\r\n")
+                        .map_or(body.as_ref(), |(_, body)| body),
+                )
+                .expect("fixture RPC request JSON");
+                let request_id = request_json.get("id").cloned().expect("fixture RPC id");
+                let result = if body.contains("getSignatureStatuses") {
+                    json!({
+                        "context": {"slot": 50_161},
+                        "value": [{
+                            "confirmationStatus": "finalized",
+                            "err": null,
+                            "slot": 9_789
+                        }]
+                    })
+                } else {
+                    assert!(body.contains("getTransaction"));
+                    transaction.clone()
+                };
+                let response = json!({"jsonrpc": "2.0", "id": request_id, "result": result})
+                    .to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                )
+                .expect("write fixture RPC response");
+            }
+        });
+        let url = Url::parse(&format!("http://{address}/")).expect("fixture RPC URL");
+        let pacing = PacingV1 {
+            minimum_call_interval: Duration::ZERO,
+            confirm_timeout: Duration::from_secs(2),
+            resubmit_interval: Duration::ZERO,
+        };
+        let mut rpc = Rpc::build(url, pacing, WritePolicyV1::ReadsOnly).expect("fixture RPC");
+        let finalized = rpc
+            .finalized_signed_packet("committed live Structured fixture", signature, false)
+            .expect("finalized fixture decoder")
+            .expect("fixture status is finalized");
+        server.join().expect("fixture RPC server");
+
+        assert_eq!(finalized.evidence.slot, 9_789);
+        assert!(finalized.evidence.instructions.iter().any(|instruction| {
+            instruction.program_id == "Bfq84eMEv2uYAA96bcqiwjQwzC16ynjRxbsBRwqpTQKj"
+                && instruction.data_hex.starts_with("44434c4644523035")
+        }));
+        assert!(finalized.evidence.instructions.iter().any(|instruction| {
+            instruction.program_id == "o2PjEqp3KqgYd1kFTGuC93DG5LHWRazFgP8HbeNSyhu"
+                && instruction.data_hex.starts_with("44434c54474d4633")
+        }));
+    }
+
     use std::{
         io::{Read as _, Write as _},
         net::TcpListener,

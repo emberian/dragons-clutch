@@ -32,6 +32,7 @@ use dclutch_claims::{
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2, AffineBatchReceiptV2},
     composition_v3::ClaimsCompositionV3,
     founding_v5::{
+        CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6,
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, CLAIMS_FOUNDING_REQUEST_MAGIC_V5,
         ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
     },
@@ -1745,9 +1746,13 @@ fn sparse_native_post_resource_digest(
 fn founding_post_resource_digests(
     child_accounts: &[AccountInfo<'_>],
 ) -> Result<FoundingPostResourceDigestsV5, ProgramError> {
-    // The exact FoundingV5 frame is 32 accounts; the CPI program account is
-    // appended once by this adapter for invoke_signed.
-    if child_accounts.len() != 33 {
+    // Founding V6 owns 33 child accounts, including the two appended escrow
+    // coordinates. The Claims program account is appended once by this
+    // adapter for `invoke_signed`; it has no post-resource bytes.
+    let frame_with_callee = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
+        .checked_add(1)
+        .ok_or(TradingSbfError::Content)?;
+    if child_accounts.len() != frame_with_callee {
         return Err(TradingSbfError::Content.into());
     }
     let aggregate_data = child_accounts
@@ -1765,6 +1770,22 @@ fn founding_post_resource_digests(
         .ok_or(TradingSbfError::Content)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
+    let escrow_position_coordinate = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
+        .checked_sub(CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6)
+        .ok_or(TradingSbfError::Content)?;
+    let escrow_admission_coordinate = escrow_position_coordinate
+        .checked_add(1)
+        .ok_or(TradingSbfError::Content)?;
+    let escrow_position_data = child_accounts
+        .get(escrow_position_coordinate)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let escrow_admission_data = child_accounts
+        .get(escrow_admission_coordinate)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
     Ok(FoundingPostResourceDigestsV5 {
         aggregate: hash(&aggregate_data).to_bytes(),
         position: hash(&position_data).to_bytes(),
@@ -1774,6 +1795,8 @@ fn founding_post_resource_digests(
             &aggregate_data,
             &position_data,
             &admission_data,
+            &escrow_position_data,
+            &escrow_admission_data,
         ])
         .to_bytes(),
     })
@@ -1781,7 +1804,7 @@ fn founding_post_resource_digests(
 
 #[cfg(test)]
 mod tests {
-    use alloc::boxed::Box;
+    use alloc::{boxed::Box, vec};
 
     use dclutch_claims::rational::{
         ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, RepresentationActionV2,
@@ -1817,10 +1840,14 @@ mod tests {
     }
 
     fn account_info(signer: bool, writable: bool) -> AccountInfo<'static> {
+        account_info_with_data(signer, writable, Vec::new())
+    }
+
+    fn account_info_with_data(signer: bool, writable: bool, data: Vec<u8>) -> AccountInfo<'static> {
         let key = Box::leak(Box::new(Pubkey::new_unique()));
         let owner = Box::leak(Box::new(Pubkey::new_unique()));
         let lamports = Box::leak(Box::new(0_u64));
-        let data = Box::leak(Vec::<u8>::new().into_boxed_slice());
+        let data = Box::leak(data.into_boxed_slice());
         AccountInfo::new(key, signer, writable, lamports, data, owner, false)
     }
 
@@ -3051,12 +3078,17 @@ mod tests {
     }
 
     #[test]
-    fn verifies_founding_authority_and_exact_post_resources() {
+    fn verifies_categorical_founding_authority_and_exact_post_resources() {
         let claims = id(20);
         let trading = id(21);
         let request = founding(claims, trading);
         let request_bytes = request.to_bytes();
-        let mut accounts: Vec<_> = (0..33).map(|_| account_info(false, false)).collect();
+        let child_and_callee = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
+            .checked_add(1)
+            .expect("Founding child and callee count");
+        let mut accounts: Vec<_> = (0..child_and_callee)
+            .map(|_| account_info(false, false))
+            .collect();
         for slot in 2..=4 {
             *accounts
                 .get_mut(slot)
@@ -3148,10 +3180,95 @@ mod tests {
             .is_err()
         );
         assert!(route_authority(&request_bytes, RouteKindV3::AffineOnce).is_err());
-        assert!(
-            founding_post_resource_digests(accounts.get(..32).expect("frame holds 33 accounts"))
-                .is_err()
+        assert_eq!(
+            founding_post_resource_digests(
+                accounts
+                    .get(..CLAIMS_FOUNDING_ACCOUNT_COUNT_V6)
+                    .expect("frame omits only Claims callee"),
+            ),
+            Err(ProgramError::Custom(TradingSbfError::Content as u32)),
         );
+    }
+
+    #[test]
+    fn founding_receipt_binds_nonempty_escrow_postresources() {
+        let claims = id(20);
+        let trading = id(21);
+        let request = founding(claims, trading);
+        let request_bytes = request.to_bytes();
+        let child_and_callee = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
+            .checked_add(1)
+            .expect("Founding child and callee count");
+        let escrow_position_coordinate = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
+            .checked_sub(CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6)
+            .expect("Founding escrow starts within child frame");
+        let escrow_admission_coordinate = escrow_position_coordinate
+            .checked_add(1)
+            .expect("Founding escrow admission follows Position");
+
+        let accounts = |escrow_position: Vec<u8>, escrow_admission: Vec<u8>| {
+            let mut accounts: Vec<_> = (0..child_and_callee)
+                .map(|_| account_info(false, false))
+                .collect();
+            for (coordinate, bytes) in [
+                (2, vec![2, 3]),
+                (3, vec![4, 5, 6]),
+                (4, vec![7, 8, 9, 10]),
+                (escrow_position_coordinate, escrow_position),
+                (escrow_admission_coordinate, escrow_admission),
+            ] {
+                *accounts
+                    .get_mut(coordinate)
+                    .expect("Founding post-resource coordinate") =
+                    account_info_with_data(false, true, bytes);
+            }
+            accounts
+        };
+
+        let accepted_accounts = accounts(vec![11, 12], vec![13, 14, 15]);
+        let accepted = founding_post_resource_digests(&accepted_accounts)
+            .expect("nonempty escrow postresources");
+        let receipt = ClaimsFoundingReceiptV5::new(
+            request,
+            hash(&request_bytes).to_bytes(),
+            accepted.aggregate,
+            accepted.position,
+            accepted.admission,
+            accepted.combined,
+        )
+        .expect("receipt binds all five postresources")
+        .to_bytes();
+        assert!(matches!(
+            verify_route_receipt(
+                ReceiptKindV3::Founding,
+                &request_bytes,
+                &receipt,
+                claims,
+                trading,
+                PostResourceEvidenceV3::Founding(accepted),
+            ),
+            Ok(ClaimsRouteReceiptV3::Founding(_))
+        ));
+
+        for (escrow_position, escrow_admission) in [
+            (vec![99, 12], vec![13, 14, 15]),
+            (vec![11, 12], vec![99, 14, 15]),
+        ] {
+            let hostile_accounts = accounts(escrow_position, escrow_admission);
+            let hostile = founding_post_resource_digests(&hostile_accounts)
+                .expect("hostile escrow bodies still form a transcript");
+            assert_eq!(
+                verify_route_receipt(
+                    ReceiptKindV3::Founding,
+                    &request_bytes,
+                    &receipt,
+                    claims,
+                    trading,
+                    PostResourceEvidenceV3::Founding(hostile),
+                ),
+                Err(ProgramError::Custom(TradingSbfError::Transition as u32)),
+            );
+        }
     }
 
     #[test]

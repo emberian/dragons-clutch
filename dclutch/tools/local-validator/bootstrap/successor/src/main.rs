@@ -51,6 +51,9 @@ mod release_lineage;
 mod series_act_verbs_v1;
 mod series_checked_evidence;
 mod series_consume_campaign;
+mod series_consume_core_geometry;
+mod series_consume_geometry;
+mod series_consume_projected_geometry;
 mod series_expire_geometry;
 mod series_found_prepare_campaign;
 mod series_found_prepare_driver;
@@ -375,6 +378,9 @@ fn run() -> Result<()> {
         }
         Some(command) if command == capability_seal_devnet::COMMAND_DEVNET_V1 => {
             capability_seal_devnet::run_devnet(arguments.collect())
+        }
+        Some(command) if command == capability_seal_devnet::COMMAND_LOCAL_V1 => {
+            capability_seal_devnet::run_owned_loopback(arguments.collect())
         }
         Some(command) if command == direct_close_maker::COMMAND_V1 => {
             direct_close_maker::run_owned_loopback_v1(arguments.collect())

@@ -1,0 +1,27 @@
+{
+  "schema": "dclutch-gauntlet-execution-ledger-v1",
+  "observations": [
+    {
+      "route": "claims/founding_v5::process",
+      "campaign": "live-structured-control",
+      "label": "live Structured accepted generic founding route",
+      "signature": "2U3PJ1SLaQ7Q5jwk7gf5oYKX4VjEjyFt2nAcPmRUXeQGQSJEDvwdUoKBw12f7wxuukJMJ8fkKa9KEtmc6i82mUKR",
+      "slot": 9789,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 871662,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "o2PjEqp3KqgYd1kFTGuC93DG5LHWRazFgP8HbeNSyhu",
+        "CAYbxNWuCWay57zaGRgBA6GB1uMZiWNJQzCpNkbkkHQe",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "2RXDG3hojY4LhX7vUcn79fdPnHmV72j9a5yVpVsFHJNw",
+        "11111111111111111111111111111111",
+        "Bfq84eMEv2uYAA96bcqiwjQwzC16ynjRxbsBRwqpTQKj"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "69c4b6f0483a4db29869c725ab65731e30198f5f3240e73e39f517e3c0c8a9de",
+      "evidence_path": "/tmp/actual-evidence.json"
+    }
+  ]
+}

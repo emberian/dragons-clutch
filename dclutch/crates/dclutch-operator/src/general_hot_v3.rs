@@ -603,6 +603,7 @@ pub fn build_general_successor_instruction_v5(
         action,
         product.outcome_count,
         product.product_record,
+        product.product_id,
     )?;
     let hot = build_general_hot_instruction_decoded_v3(
         state,
@@ -973,6 +974,7 @@ fn derive_general_request_v5(
     action: Action,
     outcome_count: u32,
     product_record: [u8; 32],
+    product_id: [u8; 32],
 ) -> Result<GeneralDecodedRequestV3, GeneralHotOperatorErrorV3> {
     if hash(artifacts.config).to_bytes() != selection.config {
         return Err(GeneralHotOperatorErrorV3::ContentIdentity);
@@ -989,7 +991,7 @@ fn derive_general_request_v5(
             outcome_count,
             selection.config,
             config,
-            product_record,
+            product_id,
         ),
         Action::SubmitCandidate => derive_submit_request_v5(
             state,
@@ -1049,17 +1051,17 @@ fn derive_open_request_v5(
     outcome_count: u32,
     config_id: [u8; 32],
     config: GeneralConfigV3,
-    product_record: [u8; 32],
+    product_id: [u8; 32],
 ) -> Result<GeneralDecodedRequestV3, GeneralHotOperatorErrorV3> {
     let root = authenticated_active_root_v5(state, artifacts, config_id)?;
-    derive_open_request_from_root_v5(outcome_count, config_id, config, product_record, root)
+    derive_open_request_from_root_v5(outcome_count, config_id, config, product_id, root)
 }
 
 fn derive_open_request_from_root_v5(
     outcome_count: u32,
     config_id: [u8; 32],
     config: GeneralConfigV3,
-    product_record: [u8; 32],
+    product_id: [u8; 32],
     root: GeneralRootV2,
 ) -> Result<GeneralDecodedRequestV3, GeneralHotOperatorErrorV3> {
     if config_id != root.config_id() || config.generation() != root.generation() {
@@ -1070,7 +1072,7 @@ fn derive_open_request_from_root_v5(
         sequence: root.next_batch_sequence(),
         generation: root.generation(),
         market: root.market(),
-        product_id: product_record,
+        product_id,
         config_id,
         price_scale: config.price_scale(),
         collection_close_slot: 0,
@@ -4039,6 +4041,10 @@ mod tests {
     fn open_request_derives_the_slot_independent_batch_occurrence() {
         let market = [0x41; 32];
         let config_id = [0x42; 32];
+        // The Product record digest authenticates the registry record; the
+        // semantic Product ID is the occurrence input. Keep them deliberately
+        // distinct so a record-coordinate substitution cannot pass this test.
+        let product_record = [0x94; 32];
         let product_id = [0x43; 32];
         let root = GeneralRootV2::active(market, config_id, 7).expect("active root");
         let config = front_config(7, 11, 19);
@@ -4062,6 +4068,25 @@ mod tests {
         assert_eq!(request.wire, GeneralRequestWireV3::V3);
         assert_eq!(request.action, Action::OpenBatch);
         assert_eq!(request.candidate_id, Some(expected));
+        assert_ne!(
+            request.candidate_id,
+            Some(
+                GeneralBatchOccurrenceTermsV1::new(GeneralBatchOpeningV1 {
+                    outcome_count: 258,
+                    sequence: root.next_batch_sequence(),
+                    generation: root.generation(),
+                    market,
+                    product_id: product_record,
+                    config_id,
+                    price_scale: 11,
+                    collection_close_slot: 900,
+                    settlement_close_slot: 1_200,
+                    max_orders: 19,
+                })
+                .expect("record-coordinate occurrence")
+                .occurrence_id()
+            )
+        );
         assert_eq!(request.expected_revision, root.revision());
         assert_eq!(
             decode_general_request_v3(&request.to_bytes().expect("V3 request"))

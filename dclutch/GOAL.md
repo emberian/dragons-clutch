@@ -59,7 +59,9 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-08 | existing Pages refresh publishes strict checkpoints and accepted General founding evidence | — | [checkpoint publication](docs/evidence/PAGES_CHECKPOINT_REFRESH_2026_09_08.md) |
 | 2026-09-08 | General loopback founding completes with the established campaign-payer fixture grant | — | [accepted founding addendum](docs/evidence/GENERAL_LOOPBACK_FOUNDING_ADDENDUM_2026_09_08.md) |
+| 2026-09-08 | General OpenBatch accepts on the preserved local-validator ledger after the host switches occurrence and Batch PDA derivation to semantic Product ID | — | [OpenBatch Product-ID evidence](docs/evidence/GENERAL_OPENBATCH_PRODUCT_ID_LOOPBACK_2026_09_08.md) |
 | 2026-09-08 | two exact-source all-eight diagnostic builds pass links, frames and artifact checks | — | [strict checkpoints](docs/evidence/STRICT_ALL_EIGHT_CHECKPOINTS_2026_09_08.md) |
 | 2026-09-07 | existing Pages explorer follow-up deployed: navigation races repaired and generated layouts expanded | — | [follow-up publication](docs/evidence/PAGES_EXPLORER_FOLLOWUP_2026_09_07.md) |
 | 2026-09-07 | General's checked compiler and loopback infrastructure execute; full founding sponsorship remains owed | — | [General source-split evidence](docs/evidence/GENERAL_LOOPBACK_SOURCE_SPLIT_2026_09_07.md) |
@@ -129,6 +131,8 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 | 2026-09-07 | preserved Direct journey reaches checkpointed retirement, exact refunds and finalized absence of Market, hoard, replay, credit and checkpoint | [diagnostic retirement evidence](docs/evidence/JOURNEY_RUNTIME567_DIAGNOSTIC_TAIL_2026_09_07.md) | runtime `56767e555`; fresh final-build repetition remains owed |
 
 | 2026-09-07 | Recovery exhaustion admits failure and drains the hoard through three ordinary founder payouts; artifact hashes and provenance limits are recorded | [exhaust evidence](docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md) | `71286f9bb` diagnostic host; `56767e555` runtime |
+| 2026-09-08 | Census route binding folds one accepted finalized Claims CPI from the preserved Structured validator; the ambiguous Trading outer route stays rejected and the live Rust decoder remains explicitly unrun | [route-binding evidence](docs/evidence/CENSUS_ROUTE_BINDING_LIVE_2026_09_08.md) | `b5628fe1f`; hbox `24783`, slot `9789` |
+| 2026-09-08 | The committed preserved-validator fixture now passes the focused Rust finalized decoder, including v0 loaded-address and Claims CPI selector extraction | [route-binding addendum](docs/evidence/CENSUS_ROUTE_BINDING_LIVE_2026_09_08_ADDENDUM.md) | `b5628fe1f` plus focused `rpc.rs` test; 1 passed |
 
 A new delta is one new row here and one entry in the store it names. The
 GOAL ledger file is closed; the entries main appended during the swarm are
