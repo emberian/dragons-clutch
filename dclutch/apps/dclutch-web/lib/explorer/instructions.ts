@@ -82,6 +82,10 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary: 'Evaluates the scoring Dealer’s fill witness inside the accelerator.',
   },
   {
+    routeId: 'accelerator/series::process',
+    summary: 'Evaluates a Series consume request in the read-only accelerator and publishes its acknowledgement for Trading.',
+  },
+  {
     routeId: 'custody/upkeep_vault_v1::process',
     summary: 'Founds an upkeep vault or records a permitted deposit or protocol credit, separate from Hoard principal.',
   },
@@ -145,6 +149,18 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
   {
     routeId: 'claims/terminal_settlement_v3::process',
     summary: 'Pays out a settled market: winning claims are redeemed against the vault.',
+  },
+  {
+    routeId: 'claims/fractional_claim_check_v1::process_fractional_compaction',
+    summary: 'Compacts a settled Fractional position into a claim-check that shard holders can redeem later.',
+  },
+  {
+    routeId: 'claims/series_founding_transport_v1::process',
+    summary: 'Carries a Series founding through Claims using the authenticated permit, so the final Claims request can be rebuilt after the market root is known.',
+  },
+  {
+    routeId: 'claims/claims_conservation_v1::process',
+    summary: 'Splits or merges one owner’s complete claim set while moving its collateral backing in the matching atomic act.',
   },
 
   // --------------------------------------------------------------------- core

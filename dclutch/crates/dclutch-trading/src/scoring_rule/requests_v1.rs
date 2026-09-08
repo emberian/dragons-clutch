@@ -386,7 +386,7 @@ impl DealerFillRequestV1 {
     pub fn new(self) -> Result<Self> {
         require_nonzero(&[self.market, self.dealer_id, self.taker])?;
         let width = usize::from(self.outcome_count);
-        if width < 2 || width > super::generated::MAX_OUTCOMES {
+        if !(2..=super::generated::MAX_OUTCOMES).contains(&width) {
             return Err(RecordErrorV1::Rule(super::ScoringRefusal::OutcomeCount));
         }
         for vector in [&self.prices, &self.receive, &self.deliver] {

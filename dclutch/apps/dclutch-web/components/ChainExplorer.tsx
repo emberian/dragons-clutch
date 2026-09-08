@@ -84,6 +84,22 @@ function parseSearch(search: string): Query {
   return Object.freeze({ view: isView(view) ? view : 'account', q: params.get('q') ?? '' });
 }
 
+function searchForQuery(next: Query): string {
+  const params = new URLSearchParams();
+  params.set('view', next.view);
+  if (next.q !== '') params.set('q', next.q);
+  return `?${params.toString()}`;
+}
+
+function deploymentReadKey(deployment: DeploymentV1): string {
+  return [
+    deployment.cluster,
+    deployment.endpoint,
+    deployment.genesisHash ?? '',
+    ...deployedProgramRolesV1(deployment).map((role) => `${role}:${deployment.programs[role]}`),
+  ].join('\0');
+}
+
 // ---------------------------------------------------------------- small parts
 
 /** A link into another view of this explorer. A real href, so it can be copied. */
@@ -767,11 +783,12 @@ export default function ChainExplorer() {
   const search = useSyncExternalStore(subscribeToLocation, readLocationSearch, readServerSearch);
   const fromUrl = useMemo(() => parseSearch(search), [search]);
 
-  // A field the reader has edited overrides the URL until the next navigation.
-  const [queryOverride, setQueryOverride] = useState<Query | null>(null);
-  const [inputOverride, setInputOverride] = useState<string | null>(null);
-  const query = queryOverride ?? fromUrl;
-  const input = inputOverride ?? fromUrl.q;
+  // The URL is the one query owner. An edited field is tagged with the search
+  // it was edited against, so a browser back/forward immediately follows the
+  // new location instead of retaining a stale local override.
+  const [inputOverride, setInputOverride] = useState<Readonly<{ search: string; value: string }> | null>(null);
+  const query = fromUrl;
+  const input = inputOverride?.search === search ? inputOverride.value : fromUrl.q;
 
   const [home, setHome] = useState<Async<ProtocolHomeV1>>(IDLE);
   const [account, setAccount] = useState<Async<ExplorerAccountResult>>(IDLE);
@@ -782,24 +799,35 @@ export default function ChainExplorer() {
   const [schemaReleaseId, setSchemaReleaseId] = useState('');
   const [contentDigest, setContentDigest] = useState('');
   const [searchProblem, setSearchProblem] = useState<string | null>(null);
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [recordResultIdentity, setRecordResultIdentity] = useState<string | null>(null);
+  const readEpochRef = useRef(0);
+  const recordIdentityRef = useRef<string | null>(null);
 
   const labels = useMemo(() => deploymentProgramLabelsV1(deployment), [deployment]);
+  const deploymentKey = useMemo(() => deploymentReadKey(deployment), [deployment]);
+  const recordReadIdentity = `${deploymentKey}\0${query.view}\0${query.q}\0${input.trim()}\0${schemaReleaseId}\0${contentDigest}`;
+  const visibleRecord = recordResultIdentity === recordReadIdentity ? record : IDLE;
 
   const syncUrl = useCallback((next: Query) => {
-    const params = new URLSearchParams();
-    params.set('view', next.view);
-    if (next.q !== '') params.set('q', next.q);
-    window.history.replaceState(null, '', `?${params.toString()}`);
+    const nextSearch = searchForQuery(next);
+    window.history.replaceState(null, '', nextSearch);
+    // replaceState does not notify useSyncExternalStore. The event keeps the
+    // URL as the sole query source while retaining client-side navigation.
+    window.dispatchEvent(new Event('popstate'));
   }, []);
 
   const run = useCallback(
     async (next: Query) => {
       if (next.q === '' || next.view === 'record') return;
+      const epoch = readEpochRef.current;
+      const current = () => readEpochRef.current === epoch;
       let client: SolanaRpcClient;
       try {
         client = new SolanaRpcClient(deployment.endpoint);
       } catch (error) {
         const message = errorMessage(error);
+        if (!current()) return;
         setAccount({ kind: 'error', message });
         setTransaction({ kind: 'error', message });
         setMarket({ kind: 'error', message });
@@ -807,49 +835,53 @@ export default function ChainExplorer() {
         return;
       }
       if (next.view === 'account') {
+        if (!current()) return;
         setAccount({ kind: 'loading', message: 'Acquiring the account at a finalized floor…' });
         try {
-          setAccount({ kind: 'ready', value: await inspectAccount(client, { address: next.q, programLabels: labels }) });
+          const value = await inspectAccount(client, { address: next.q, programLabels: labels });
+          if (current()) setAccount({ kind: 'ready', value });
         } catch (error) {
-          setAccount({ kind: 'error', message: errorMessage(error) });
+          if (current()) setAccount({ kind: 'error', message: errorMessage(error) });
         }
         return;
       }
       if (next.view === 'transaction') {
+        if (!current()) return;
         setTransaction({ kind: 'loading', message: 'Reading the finalized transaction, its logs and its CPI frames…' });
         try {
-          setTransaction({ kind: 'ready', value: await inspectTransaction(client, { signature: next.q, programLabels: labels }) });
+          const value = await inspectTransaction(client, { signature: next.q, programLabels: labels });
+          if (current()) setTransaction({ kind: 'ready', value });
         } catch (error) {
-          setTransaction({ kind: 'error', message: errorMessage(error) });
+          if (current()) setTransaction({ kind: 'error', message: errorMessage(error) });
         }
         return;
       }
       if (next.view === 'scan') {
+        if (!current()) return;
         setScan({ kind: 'loading', message: 'Probing RPC identity, then reading finalized program-account headers…' });
         try {
           const facts = await client.probe();
           const snapshot = await scanProgram(client, next.q);
-          setScan({ kind: 'ready', value: { facts, snapshot } });
+          if (current()) setScan({ kind: 'ready', value: { facts, snapshot } });
         } catch (error) {
-          setScan({ kind: 'error', message: errorMessage(error) });
+          if (current()) setScan({ kind: 'error', message: errorMessage(error) });
         }
         return;
       }
       if (next.view === 'market') {
+        if (!current()) return;
         setMarket({ kind: 'loading', message: 'Joining Core state, Realm, Claims aggregate, Hoard and capability manifest at one floor…' });
         try {
-          setMarket({
-            kind: 'ready',
-            value: await inspectMarketLens(client, {
-              coreProgramId: deployment.programs.core,
-              registryProgramId: deployment.programs.registry,
-              claimsProgramId: deployment.programs.claims,
-              custodyProgramId: deployment.programs.custody,
-              address: next.q,
-            }),
+          const value = await inspectMarketLens(client, {
+            coreProgramId: deployment.programs.core,
+            registryProgramId: deployment.programs.registry,
+            claimsProgramId: deployment.programs.claims,
+            custodyProgramId: deployment.programs.custody,
+            address: next.q,
           });
+          if (current()) setMarket({ kind: 'ready', value });
         } catch (error) {
-          setMarket({ kind: 'error', message: errorMessage(error) });
+          if (current()) setMarket({ kind: 'error', message: errorMessage(error) });
         }
       }
     },
@@ -881,12 +913,11 @@ export default function ChainExplorer() {
   const goto = useCallback(
     (view: View, q: string) => {
       const next: Query = Object.freeze({ view, q });
-      setQueryOverride(next);
-      setInputOverride(q);
+      setInputOverride({ search: searchForQuery(next), value: q });
+      setRefreshRevision((revision) => revision + 1);
       syncUrl(next);
-      void run(next);
     },
-    [run, syncUrl],
+    [syncUrl],
   );
 
   // One delegated handler for every in-page jump, so each link keeps a real,
@@ -906,21 +937,27 @@ export default function ChainExplorer() {
 
   // A link into this page carries its own query, so opening one resolves it
   // rather than showing an empty search. The read is started on a microtask so
-  // nothing is set during the effect's synchronous phase, and `startedRef`
-  // keeps a re-render from re-reading the same query.
-  const startedRef = useRef<string | null>(null);
+  // nothing is set during the effect's synchronous phase. The epoch invalidates
+  // every older read on navigation, deployment change, or unmount.
   useEffect(() => {
-    const key = `${query.view}\0${query.q}\0${deployment.endpoint}`;
-    if (query.q === '' || startedRef.current === key) return;
-    startedRef.current = key;
+    const epoch = ++readEpochRef.current;
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void run(query);
+      if (cancelled || readEpochRef.current !== epoch || query.q === '' || query.view === 'record') return;
+      void run(query);
     });
     return () => {
       cancelled = true;
+      readEpochRef.current += 1;
     };
-  }, [deployment.endpoint, query, run]);
+  }, [deploymentKey, query, refreshRevision, run]);
+
+  useEffect(() => {
+    if (recordIdentityRef.current === recordReadIdentity) return;
+    recordIdentityRef.current = recordReadIdentity;
+    setRecordResultIdentity(null);
+    setRecord((current) => current.kind === 'idle' ? current : IDLE);
+  }, [recordReadIdentity]);
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -941,20 +978,23 @@ export default function ChainExplorer() {
 
   function clearSearch() {
     setSearchProblem(null);
-    setInputOverride('');
-    const next: Query = Object.freeze({ view: 'account', q: '' });
-    setQueryOverride(next);
-    syncUrl(next);
+    goto('account', '');
   }
 
   async function runRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const identity = recordReadIdentity;
+    const epoch = ++readEpochRef.current;
+    const current = () => readEpochRef.current === epoch;
+    recordIdentityRef.current = identity;
+    setRecordResultIdentity(identity);
     setRecord({ kind: 'loading', message: 'Acquiring the record and its staging cursor at one finalized floor…' });
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
-      setRecord({ kind: 'ready', value: await inspectFinalizedRecord(client, input.trim(), schemaReleaseId, contentDigest) });
+      const value = await inspectFinalizedRecord(client, input.trim(), schemaReleaseId, contentDigest);
+      if (current() && recordIdentityRef.current === identity) setRecord({ kind: 'ready', value });
     } catch (error) {
-      setRecord({ kind: 'error', message: errorMessage(error) });
+      if (current() && recordIdentityRef.current === identity) setRecord({ kind: 'error', message: errorMessage(error) });
     }
   }
 
@@ -985,7 +1025,7 @@ export default function ChainExplorer() {
         <div className="xp-query">
           <input
             value={input}
-            onChange={(event) => setInputOverride(event.target.value)}
+            onChange={(event) => setInputOverride({ search, value: event.target.value })}
             placeholder={placeholder}
             spellCheck={false}
             aria-label="Search the chain"
@@ -1005,7 +1045,7 @@ export default function ChainExplorer() {
               role="tab"
               aria-selected={query.view === view.id}
               className={query.view === view.id ? 'active' : ''}
-              onClick={() => { const next = Object.freeze({ view: view.id, q: input.trim() }); setQueryOverride(next); syncUrl(next); }}
+              onClick={() => goto(view.id, input.trim())}
               title={view.hint}
             >
               {view.label}
@@ -1028,7 +1068,7 @@ export default function ChainExplorer() {
             {query.view === 'transaction' ? <TransactionView state={transaction} /> : null}
             {query.view === 'market' ? <MarketView state={market} /> : null}
             {query.view === 'scan' ? <ScanView state={scan} /> : null}
-            {query.view === 'record' ? <RecordView state={record} /> : null}
+            {query.view === 'record' ? <RecordView state={visibleRecord} /> : null}
           </>
         )}
       </section>

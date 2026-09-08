@@ -44,6 +44,11 @@ import {
   type StateMachineRecordV1,
   type StateMachineV1,
 } from '@dclutch/sdk/generated/stateMachinesV1';
+import * as AGGREGATE_RETIREMENT from '@dclutch/sdk/generated/aggregateRetirementV1';
+import * as RATIONAL_LIFECYCLE from '@dclutch/sdk/generated/rationalLifecycleRequestV2';
+import * as RATIONAL_DESCRIPTOR from '@dclutch/sdk/generated/rationalRepresentationDescriptorV3';
+import * as RATIONAL_REPLAY from '@dclutch/sdk/generated/rationalReplayV2';
+import * as RESOLUTION_CERTIFICATE from '@dclutch/sdk/generated/resolutionCertificateV2';
 
 import {
   CAPABILITY_ENTRY_BYTES_V1,
@@ -758,6 +763,17 @@ import {
 
 /** Width of the canonical eight-byte ASCII magic every dClutch record opens with. */
 export const RECORD_MAGIC_BYTES = ADMISSION_MAGIC_BYTES_V2;
+
+// Kept as direct bindings because the coverage ratchet joins each renderer's
+// `magic:` identifier back to the generated declaration that owns it. The
+// remaining coordinates stay namespaced at their generated module.
+const {
+  AGGREGATE_RETIREMENT_CHECKPOINT_MAGIC_V1,
+} = AGGREGATE_RETIREMENT;
+const { RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4 } = RATIONAL_LIFECYCLE;
+const { DESCRIPTOR_MAGIC_V3 } = RATIONAL_DESCRIPTOR;
+const { RATIONAL_REPLAY_MAGIC_V2 } = RATIONAL_REPLAY;
+const { RESOLUTION_CERTIFICATE_MAGIC_V2 } = RESOLUTION_CERTIFICATE;
 
 // ------------------------------------------------------------------ the shape
 
@@ -2391,6 +2407,157 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Exposure scale', GRAPH_SCALE_OFFSET, 'u64'),
     ],
     note: null,
+  },
+  {
+    magic: AGGREGATE_RETIREMENT_CHECKPOINT_MAGIC_V1,
+    name: 'Aggregate retirement checkpoint',
+    family: 'Market retirement',
+    summary: 'The durable three-phase handoff from an empty Claims aggregate through custody closure.',
+    width: { kind: 'fixed', bytes: AGGREGATE_RETIREMENT.AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1 },
+    fields: [
+      version(AGGREGATE_RETIREMENT.AGGREGATE_RETIREMENT_VERSION_OFFSET_V1),
+      field('Retirement phase', AGGREGATE_RETIREMENT.AGGREGATE_RETIREMENT_PHASE_OFFSET_V1, 'enum', {
+        tags: [
+          { tag: AGGREGATE_RETIREMENT.AGGREGATE_RETIREMENT_PHASE_CLAIMS_CLOSED_V1, name: 'Claims closed' },
+          { tag: AGGREGATE_RETIREMENT.AGGREGATE_RETIREMENT_PHASE_HOARD_VAULT_CLOSED_V1, name: 'Hoard vault closed' },
+          { tag: AGGREGATE_RETIREMENT.AGGREGATE_RETIREMENT_PHASE_CUSTODY_REPLAY_CLOSED_V1, name: 'Custody replay closed' },
+        ],
+      }),
+      field('Reserved', AGGREGATE_RETIREMENT.AGGREGATE_RETIREMENT_RESERVED_OFFSET_V1, 'reserved'),
+      field('Core prestate digest', AGGREGATE_RETIREMENT.CORE_PRESTATE_OFFSET, 'identity'),
+      field('Retirement bundle digest', AGGREGATE_RETIREMENT.BUNDLE_DIGEST_OFFSET, 'identity'),
+      field('Phase-join digest', AGGREGATE_RETIREMENT.CLAIMS_CONTEXT_OFFSET, 'identity'),
+      field('Claims handoff receipt digest', AGGREGATE_RETIREMENT.CLAIMS_RECEIPT_OFFSET, 'identity'),
+      field('Hoard vault-close receipt digest', AGGREGATE_RETIREMENT.VAULT_RECEIPT_OFFSET, 'identity'),
+      field('Custody replay-close receipt digest', AGGREGATE_RETIREMENT.REPLAY_RECEIPT_OFFSET, 'identity'),
+      field('Claims refund (lamports)', AGGREGATE_RETIREMENT.CLAIMS_REFUND_OFFSET, 'u64'),
+      field('Custody refund (lamports)', AGGREGATE_RETIREMENT.CUSTODY_REFUND_OFFSET, 'u64'),
+      field('Market generation', AGGREGATE_RETIREMENT.GENERATION_OFFSET, 'u64'),
+      field('Claims revision', AGGREGATE_RETIREMENT.CLAIMS_REVISION_OFFSET, 'u64'),
+      field('Custody revision', AGGREGATE_RETIREMENT.CUSTODY_REVISION_OFFSET, 'u64'),
+      field('Phase revision', AGGREGATE_RETIREMENT.PHASE_REVISION_OFFSET, 'u64'),
+    ],
+    note: null,
+  },
+  {
+    magic: RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4,
+    name: 'Rational lifecycle compact Hot request V4',
+    family: 'Claims',
+    summary: 'The fixed RetireReceipt family request whose digest becomes the specialized lifecycle child’s parent context.',
+    width: { kind: 'fixed', bytes: RATIONAL_LIFECYCLE.RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4 },
+    fields: [
+      version(RATIONAL_LIFECYCLE.LIFECYCLE_VERSION_OFFSET),
+      field('Action', RATIONAL_LIFECYCLE.LIFECYCLE_ACTION_OFFSET, 'enum', {
+        tags: [
+          { tag: RATIONAL_LIFECYCLE.LIFECYCLE_ACTION_ACTIVATE_RECEIPT_V2, name: 'Activate receipt' },
+          { tag: RATIONAL_LIFECYCLE.LIFECYCLE_ACTION_ACTIVATE_COORDINATE_V2, name: 'Activate coordinate' },
+          { tag: RATIONAL_LIFECYCLE.LIFECYCLE_ACTION_RETIRE_COORDINATE_V2, name: 'Retire coordinate' },
+          { tag: RATIONAL_LIFECYCLE.LIFECYCLE_ACTION_RETIRE_RECEIPT_V2, name: 'Retire receipt' },
+        ],
+      }),
+      field('Reserved', RATIONAL_LIFECYCLE.LIFECYCLE_HEADER_RESERVED_OFFSET, 'reserved'),
+      field('Release set', RATIONAL_LIFECYCLE.LIFECYCLE_RELEASE_SET_OFFSET, 'identity'),
+      field('Market', RATIONAL_LIFECYCLE.LIFECYCLE_MARKET_OFFSET, 'pubkey'),
+      field('Representation graph identity', RATIONAL_LIFECYCLE.LIFECYCLE_GRAPH_ID_OFFSET, 'identity'),
+      field('Descriptor identity', RATIONAL_LIFECYCLE.LIFECYCLE_DESCRIPTOR_ID_OFFSET, 'identity'),
+      field('Parent context (reserved zero)', RATIONAL_LIFECYCLE.LIFECYCLE_PARENT_CONTEXT_OFFSET, 'reserved'),
+      field('Representation authority', RATIONAL_LIFECYCLE.LIFECYCLE_REPRESENTATION_AUTHORITY_OFFSET, 'pubkey'),
+      field('Receipt mint', RATIONAL_LIFECYCLE.LIFECYCLE_RECEIPT_MINT_OFFSET, 'pubkey'),
+      field('Token program', RATIONAL_LIFECYCLE.LIFECYCLE_TOKEN_PROGRAM_OFFSET, 'pubkey'),
+      field('Rent credit', RATIONAL_LIFECYCLE.LIFECYCLE_RENT_CREDIT_OFFSET, 'pubkey'),
+      field('Rent program', RATIONAL_LIFECYCLE.LIFECYCLE_RENT_PROGRAM_OFFSET, 'pubkey'),
+      field('Market generation', RATIONAL_LIFECYCLE.LIFECYCLE_GENERATION_OFFSET, 'u64'),
+      field('Expected Claims Market revision', RATIONAL_LIFECYCLE.LIFECYCLE_EXPECTED_MARKET_REVISION_OFFSET, 'u64'),
+      field('Observed receipt-mint lamports', RATIONAL_LIFECYCLE.LIFECYCLE_OBSERVED_RECEIPT_LAMPORTS_OFFSET, 'u64'),
+      field('Receipt-mint rent principal', RATIONAL_LIFECYCLE.LIFECYCLE_RECEIPT_RENT_PRINCIPAL_OFFSET, 'u64'),
+      field('Expected receipt-mint supply', RATIONAL_LIFECYCLE.LIFECYCLE_EXPECTED_RECEIPT_SUPPLY_OFFSET, 'u64'),
+      field('Outcome count', RATIONAL_LIFECYCLE.LIFECYCLE_OUTCOME_COUNT_OFFSET, 'u32'),
+      field('Coordinate count (canonical zero)', RATIONAL_LIFECYCLE.LIFECYCLE_COORDINATE_COUNT_OFFSET, 'u32'),
+      field('Rent credit before (lamports)', RATIONAL_LIFECYCLE.LIFECYCLE_RENT_CREDIT_BEFORE_OFFSET, 'u64'),
+      field('Rent credit after (lamports)', RATIONAL_LIFECYCLE.LIFECYCLE_RENT_CREDIT_AFTER_OFFSET, 'u64'),
+    ],
+    note: 'The compact form is canonical only for Retire receipt with a zero parent-context run and zero coordinate count; this layout shows those stored facts without treating them as a general lifecycle header.',
+  },
+  {
+    magic: DESCRIPTOR_MAGIC_V3,
+    name: 'Rational representation descriptor V3',
+    family: 'Claims',
+    summary: 'The immutable recipe for one structured receipt: its finalized graph, execution identities, denominator, and one coefficient per outcome.',
+    width: {
+      kind: 'header-and-rows',
+      headerBytes: RATIONAL_DESCRIPTOR.DESCRIPTOR_HEADER_BYTES,
+      strideBytes: RATIONAL_DESCRIPTOR.DESCRIPTOR_COEFFICIENT_BYTES,
+      countOffset: RATIONAL_DESCRIPTOR.DESCRIPTOR_OUTCOME_COUNT_OFFSET,
+      countKind: 'u32',
+      rowLabel: 'outcome coefficient',
+    },
+    fields: [
+      version(RATIONAL_DESCRIPTOR.DESCRIPTOR_VERSION_OFFSET),
+      field('Reserved', RATIONAL_DESCRIPTOR.DESCRIPTOR_RESERVED_HEADER_OFFSET, 'reserved'),
+      field('Finalized graph identity', RATIONAL_DESCRIPTOR.DESCRIPTOR_GRAPH_ID_OFFSET, 'identity'),
+      field('Finalized graph digest', RATIONAL_DESCRIPTOR.DESCRIPTOR_GRAPH_DIGEST_OFFSET, 'identity'),
+      field('Representation root identity', RATIONAL_DESCRIPTOR.DESCRIPTOR_ROOT_ID_OFFSET, 'identity'),
+      field('Market', RATIONAL_DESCRIPTOR.DESCRIPTOR_MARKET_ID_OFFSET, 'pubkey'),
+      field('Release set', RATIONAL_DESCRIPTOR.DESCRIPTOR_RELEASE_SET_ID_OFFSET, 'identity'),
+      field('Receipt mint', RATIONAL_DESCRIPTOR.DESCRIPTOR_RECEIPT_MINT_OFFSET, 'pubkey'),
+      field('Token program', RATIONAL_DESCRIPTOR.DESCRIPTOR_TOKEN_PROGRAM_OFFSET, 'pubkey'),
+      field('Outcome count', RATIONAL_DESCRIPTOR.DESCRIPTOR_OUTCOME_COUNT_OFFSET, 'u32'),
+      field('Reserved', RATIONAL_DESCRIPTOR.DESCRIPTOR_RESERVED_OFFSET, 'reserved'),
+      field('Coefficient denominator', RATIONAL_DESCRIPTOR.DESCRIPTOR_DENOMINATOR_OFFSET, 'u64'),
+    ],
+    note: 'The rows are ordered u64 coefficients, one per declared outcome; the exact account width is derived from that count.',
+  },
+  {
+    magic: RATIONAL_REPLAY_MAGIC_V2,
+    name: 'Rational representation replay V2',
+    family: 'Claims',
+    summary: 'The actor-scoped revision cursor that prevents replay of one Rational representation transition.',
+    width: { kind: 'fixed', bytes: RATIONAL_REPLAY.RATIONAL_REPLAY_BYTES_V2 },
+    fields: [
+      version(RATIONAL_REPLAY.RATIONAL_REPLAY_VERSION_OFFSET),
+      field('Reserved', RATIONAL_REPLAY.RATIONAL_REPLAY_RESERVED_OFFSET, 'reserved'),
+      field('Descriptor identity', RATIONAL_REPLAY.RATIONAL_REPLAY_DESCRIPTOR_OFFSET, 'identity'),
+      field('Actor', RATIONAL_REPLAY.RATIONAL_REPLAY_ACTOR_OFFSET, 'pubkey'),
+      field('Revision', RATIONAL_REPLAY.RATIONAL_REPLAY_REVISION_OFFSET, 'u64'),
+    ],
+    note: null,
+  },
+  {
+    magic: RESOLUTION_CERTIFICATE_MAGIC_V2,
+    name: 'Resolution certificate V2',
+    family: 'Source',
+    summary: 'A resolution or recovery transition: the route and evidence used, funds spent and remaining, and the result when present.',
+    width: { kind: 'fixed', bytes: RESOLUTION_CERTIFICATE.RESOLUTION_CERTIFICATE_BYTES_V2 },
+    fields: [
+      version(RESOLUTION_CERTIFICATE.CERTIFICATE_V2_VERSION_OFFSET),
+      field('Certificate kind', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_KIND_OFFSET, 'enum', {
+        tags: [
+          { tag: RESOLUTION_CERTIFICATE.RESOLUTION_CERTIFICATE_SUCCESS_KIND_V2, name: 'Success' },
+          { tag: RESOLUTION_CERTIFICATE.RESOLUTION_CERTIFICATE_RECOVERY_ADVANCED_KIND_V2, name: 'Recovery advanced' },
+          { tag: RESOLUTION_CERTIFICATE.RESOLUTION_CERTIFICATE_EXHAUSTED_KIND_V2, name: 'Exhausted' },
+          { tag: RESOLUTION_CERTIFICATE.RESOLUTION_CERTIFICATE_FAILURE_KIND_V2, name: 'Failure' },
+        ],
+      }),
+      field('Reserved', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_RESERVED_HEADER_OFFSET, 'reserved'),
+      field('Market', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_MARKET_OFFSET, 'pubkey'),
+      field('Provider or recovery route', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_ROUTE_OFFSET, 'identity'),
+      field('Source material digest', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_SOURCE_MATERIAL_OFFSET, 'identity'),
+      field('Product record digest', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_PRODUCT_RECORD_OFFSET, 'identity'),
+      field('Provider evidence digest', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_PROVIDER_EVIDENCE_OFFSET, 'identity'),
+      field('Funding allocation identity', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_FUNDING_ALLOCATION_OFFSET, 'identity'),
+      field('Receipt account', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_RECEIPT_ACCOUNT_OFFSET, 'pubkey'),
+      field('Market generation', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_GENERATION_OFFSET, 'u64'),
+      field('Recovery attempt index', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_ATTEMPT_INDEX_OFFSET, 'u32'),
+      field('Source schedule index', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_SCHEDULE_INDEX_OFFSET, 'u32'),
+      field('Product selector', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_SELECTOR_OFFSET, 'u32'),
+      field('Reserved', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_RESERVED_BODY_OFFSET, 'reserved'),
+      field('Work paid', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_WORK_PAID_OFFSET, 'u64'),
+      field('Funding remaining', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_FUNDING_REMAINING_OFFSET, 'u64'),
+      field('Normalized result numerator', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_RESULT_NUMERATOR_OFFSET, 'i128'),
+      field('Result denominator', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_RESULT_DENOMINATOR_OFFSET, 'u64'),
+      field('Observed at (unix seconds)', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_OBSERVED_AT_OFFSET, 'u64'),
+    ],
+    note: 'Recovery advanced and Exhausted record recovery transitions; neither kind is accepted as a terminal Product certificate. This layout reading does not prove Core admission.',
   },
 
   // ---------------------------------------------------------------- Product V2

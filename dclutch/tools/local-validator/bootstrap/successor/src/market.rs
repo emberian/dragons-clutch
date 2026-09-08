@@ -2858,6 +2858,14 @@ struct MarketRecords {
     /// Direct's typed record set, or a family-neutral closure's record list.
     direct: BTreeMap<String, PublishedRecord>,
     principal_cap_sets: u64,
+    /// Exact finalized pairs whose raw/staging coordinates occur in ordinary
+    /// ProjectFound.  Retaining the publisher's bytes closes the Series
+    /// Prepare handoff without re-encoding any Market body downstream.
+    series_prepare_records: Vec<FutureMarketFinalizedRecordV1>,
+    /// Explicit vacant ProjectFound record coordinates, never materialized as
+    /// synthetic Registry state.  The optional manipulation-floor pair is
+    /// absent when categorical basis admission does not require a floor.
+    series_prepare_vacancies: Vec<Pubkey>,
 }
 
 struct FinalizedSnapshot {
@@ -4745,6 +4753,24 @@ pub(crate) struct FutureMarketImmutablePublicationV1 {
     /// M0's Core Market is founded.
     pub(crate) rent_credit: Pubkey,
     pub(crate) project_found: [Pubkey; dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
+    /// The finalized Registry pairs in the ordinary ProjectFound frame, with
+    /// the exact canonical body the publisher submitted.  Series Prepare
+    /// consumes this typed evidence rather than attempting to discover a
+    /// schema from a raw Registry account.
+    pub(crate) series_prepare_records: Vec<FutureMarketFinalizedRecordV1>,
+    /// ProjectFound coordinates deliberately absent before Core Found.  Today
+    /// this is the optional manipulation-floor pair when the M0 Direct
+    /// Market's canonical basis requires no floor.
+    pub(crate) series_prepare_vacancies: Vec<Pubkey>,
+}
+
+/// One canonical Registry record paired with the exact bytes the M0 publisher
+/// finalized.  This is owner evidence for a downstream Series Prepare frame,
+/// not a second Market compiler or a client-provided record description.
+#[derive(Clone, Debug)]
+pub(crate) struct FutureMarketFinalizedRecordV1 {
+    pub(crate) published: PublishedRecord,
+    pub(crate) body: Vec<u8>,
 }
 
 /// Publish the complete immutable Registry closure for a future Market without
@@ -4868,6 +4894,8 @@ pub(crate) fn publish_future_market_immutable_records_v1(
         manifest: records.manifest,
         rent_credit: credit,
         project_found,
+        series_prepare_records: records.series_prepare_records.clone(),
+        series_prepare_vacancies: records.series_prepare_vacancies.clone(),
     })
 }
 
@@ -4912,6 +4940,7 @@ fn publish_market_records(
     } = compile_market_bodies(registry, input, collateral_mint)?;
 
     let hostile_wallet = Some(crate::seed::fresh_probe_address());
+    let realm_body = realm.clone();
     let realm = publish_record(
         rpc,
         registry,
@@ -4934,6 +4963,7 @@ fn publish_market_records(
         &portfolio,
         transactions,
     )?;
+    let source_body = source.clone();
     let source = publish_record(
         rpc,
         registry,
@@ -5056,15 +5086,17 @@ fn publish_market_records(
     // checked that each identity the material names IS the SHA-256 of the body
     // published here, so `publish_record` cannot land a record at an address
     // the Market does not point at.
+    let source_spec_body = decode_hex(&input.source_spec_hex)?;
     let source_spec = publish_record(
         rpc,
         registry,
         payer,
         SOURCE_SPEC_SCHEMA_ID_V1,
-        &decode_hex(&input.source_spec_hex)?,
+        &source_spec_body,
         None,
         transactions,
     )?;
+    let source_capacity_profile_body = source_capacity_profile.clone();
     let source_capacity_profile = publish_record(
         rpc,
         registry,
@@ -5189,6 +5221,54 @@ fn publish_market_records(
         )?),
         None => None,
     };
+    let mut series_prepare_records = vec![
+        FutureMarketFinalizedRecordV1 {
+            published: realm,
+            body: realm_body,
+        },
+        FutureMarketFinalizedRecordV1 {
+            published: product,
+            body: product_body.to_vec(),
+        },
+        FutureMarketFinalizedRecordV1 {
+            published: domain,
+            body: domain_body,
+        },
+        FutureMarketFinalizedRecordV1 {
+            published: portfolio,
+            body: portfolio_body,
+        },
+        FutureMarketFinalizedRecordV1 {
+            published: basis,
+            body: basis_bytes,
+        },
+        FutureMarketFinalizedRecordV1 {
+            published: source,
+            body: source_body,
+        },
+        FutureMarketFinalizedRecordV1 {
+            published: source_spec,
+            body: source_spec_body,
+        },
+        FutureMarketFinalizedRecordV1 {
+            published: source_capacity_profile,
+            body: source_capacity_profile_body,
+        },
+        FutureMarketFinalizedRecordV1 {
+            published: manifest,
+            body: manifest_body.clone(),
+        },
+    ];
+    let series_prepare_vacancies = if let Some(floor) = manipulation_floor {
+        series_prepare_records.push(FutureMarketFinalizedRecordV1 {
+            published: floor,
+            body: manipulation_floor_bytes,
+        });
+        Vec::new()
+    } else {
+        let (raw, staging) = absent_manipulation_floor_pair(registry);
+        vec![raw, staging]
+    };
     Ok((
         MarketRecords {
             realm,
@@ -5214,6 +5294,8 @@ fn publish_market_records(
             sponsored_push_release,
             direct,
             principal_cap_sets,
+            series_prepare_records,
+            series_prepare_vacancies,
         },
         semantic_product_id,
     ))
@@ -6329,30 +6411,32 @@ fn projected_found_snapshot_keys_v2(
 
 fn manipulation_floor_pair(registry: Pubkey, records: &MarketRecords) -> (Pubkey, Pubkey) {
     records.manipulation_floor.map_or_else(
-        || {
-            let absent = [0_u8; 32];
-            (
-                Pubkey::find_program_address(
-                    &[
-                        RAW_RECORD_PDA_SEED_V1,
-                        &MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
-                        &absent,
-                    ],
-                    &registry,
-                )
-                .0,
-                Pubkey::find_program_address(
-                    &[
-                        STAGING_CURSOR_PDA_SEED_V1,
-                        &MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
-                        &absent,
-                    ],
-                    &registry,
-                )
-                .0,
-            )
-        },
+        || absent_manipulation_floor_pair(registry),
         |record| (record.raw, record.staging),
+    )
+}
+
+fn absent_manipulation_floor_pair(registry: Pubkey) -> (Pubkey, Pubkey) {
+    let absent = [0_u8; 32];
+    (
+        Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+                &absent,
+            ],
+            &registry,
+        )
+        .0,
+        Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                &MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+                &absent,
+            ],
+            &registry,
+        )
+        .0,
     )
 }
 
@@ -17888,6 +17972,8 @@ pub(crate) mod tests {
             sponsored_push_release: None,
             direct: BTreeMap::new(),
             principal_cap_sets: 1,
+            series_prepare_records: Vec::new(),
+            series_prepare_vacancies: Vec::new(),
         };
 
         let found = GenericFoundingRequestV1::new(

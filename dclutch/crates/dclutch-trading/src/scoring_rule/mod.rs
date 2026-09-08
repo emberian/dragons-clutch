@@ -152,13 +152,13 @@ pub fn exp2_neg(liquidity: u64, distance: u64) -> u128 {
     }
     let b = u128::from(liquidity);
     // `r < b ≤ 2^64`, so `r · 2^62 + b − 1 < 2^127`.
-    let fraction = (u128::from(r) * ONE_Q62 + b - 1) / b;
+    let fraction = (u128::from(r) * ONE_Q62).div_ceil(b);
     let mut product = ONE_Q62;
-    let mut j = 0_u32;
+    let mut j = 0_usize;
     while j < 62 {
         if (fraction >> (61 - j)) & 1 == 1 {
             // `product ≤ 2^62` and `T[k] < 2^62`, so the product is under `2^124`.
-            product = product * EXP2_NEG_TABLE_Q62[usize::from(j as u16) + 1] / ONE_Q62;
+            product = product * EXP2_NEG_TABLE_Q62[j + 1] / ONE_Q62;
         }
         j += 1;
     }

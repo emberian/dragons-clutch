@@ -51,17 +51,17 @@ pub const DIRECT_CLOSE_MAKER_REQUEST_SCHEMA_ID_V1: [u8; 32] = [
     0x42, 0xa3, 0x87, 0xd9, 0xac, 0x0a, 0xae, 0x61, 0x8f, 0x7a, 0x90, 0x71, 0x5c, 0xe7, 0x19, 0x36,
 ];
 
-/// The carve ceiling and share are NOT constants here.
-///
-/// RULED 2026-09-04 (C-11 D1 item 4) and built under decision 0024's
-/// amendment: the route reads `closer_carve_basis_points` and
-/// `closer_reward_cap_lamports` out of the governed record at its frame's
-/// coordinate 22 (`dclutch-market::protocol_parameters`) and pays the carve to
-/// the closer at coordinate 24, who signs only to own it. The genesis record's
-/// cap is zero, so a close under it pays no closer and houses the whole
-/// donation in the upkeep vault at coordinate 23; the one number that has to
-/// move to pay a closer is the record's cap, by proposal and delay, never a
-/// redeploy.
+// The carve ceiling and share are NOT constants here.
+//
+// RULED 2026-09-04 (C-11 D1 item 4) and built under decision 0024's
+// amendment: the route reads `closer_carve_basis_points` and
+// `closer_reward_cap_lamports` out of the governed record at its frame's
+// coordinate 22 (`dclutch-market::protocol_parameters`) and pays the carve to
+// the closer at coordinate 24, who signs only to own it. The genesis record's
+// cap is zero, so a close under it pays no closer and houses the whole
+// donation in the upkeep vault at coordinate 23; the one number that has to
+// move to pay a closer is the record's cap, by proposal and delay, never a
+// redeploy.
 
 /// Exact number of scalar registers in the authenticated close artifacts.
 pub const DIRECT_CLOSE_MAKER_SCALAR_COUNT_V1: u16 = 10;

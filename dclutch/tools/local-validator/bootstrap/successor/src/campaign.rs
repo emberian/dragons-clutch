@@ -4872,16 +4872,19 @@ fn founding_checkpoint_resume_v1(
 ///
 /// The V2 profile's reported rent debit and the validator's exact quote for
 /// this message are the only lamports this transaction can charge to its
-/// payer. The local faucet exists only on the loopback rail; every other origin
-/// keeps the payer externally funded and reaches the normal simulator refusal
-/// if it is not.
+/// payer. The payer itself remains a zero-data system account, so its current
+/// chain-derived rent floor remains after the debit. The local faucet exists
+/// only on the loopback rail; every other origin keeps the payer externally
+/// funded and reaches the normal simulator refusal if it is not.
 fn loopback_succession_payer_shortfall_v1(
     held_lamports: u64,
     profile_rent_debit_lamports: u64,
     exact_transaction_fee_lamports: u64,
+    payer_rent_floor_lamports: u64,
 ) -> Result<u64> {
     let required = profile_rent_debit_lamports
         .checked_add(exact_transaction_fee_lamports)
+        .and_then(|required| required.checked_add(payer_rent_floor_lamports))
         .ok_or_else(|| Error::new("succession payer funding requirement overflowed"))?;
     Ok(required.saturating_sub(held_lamports))
 }
@@ -5004,10 +5007,12 @@ fn execute_succession_stage_v1(
             report.observation,
             &[],
         )?;
+        let payer_rent_floor_lamports = rpc.minimum_balance(0)?;
         let shortfall = loopback_succession_payer_shortfall_v1(
             held,
             report.profile_rent_debit_lamports,
             exact_transaction_fee_lamports,
+            payer_rent_floor_lamports,
         )?;
         if shortfall != 0 {
             transactions.push(rpc.airdrop(
@@ -6960,18 +6965,19 @@ mod tests {
     #[test]
     fn loopback_succession_payer_funds_only_its_exact_profile_and_fee_shortfall() {
         assert_eq!(
-            loopback_succession_payer_shortfall_v1(0, 4_343_040, 10_000)
+            loopback_succession_payer_shortfall_v1(0, 4_343_040, 10_000, 890_880)
                 .expect("exact payer requirement"),
-            4_353_040
+            5_243_920
         );
         assert_eq!(
-            loopback_succession_payer_shortfall_v1(4_353_040, 4_343_040, 10_000)
+            loopback_succession_payer_shortfall_v1(5_243_920, 4_343_040, 10_000, 890_880)
                 .expect("already funded payer"),
             0
         );
         assert_eq!(
-            loopback_succession_payer_shortfall_v1(9_000, 0, 10_000).expect("fee-only payer"),
-            1_000
+            loopback_succession_payer_shortfall_v1(9_000, 0, 10_000, 890_880)
+                .expect("fee-only payer"),
+            891_880
         );
     }
 

@@ -52,7 +52,7 @@ pub const RUNTIME_VERIFIER_HEADER_BYTES_V2: usize = 288;
 /// Runtime-width tails after the fixed header: prices, the current order's
 /// receive and deliver vectors, aggregate claim inputs and outputs, and the
 /// price box's floor and ceiling.
-pub const RUNTIME_VERIFIER_TAIL_COUNT_V2: usize = 7;
+pub const RUNTIME_VERIFIER_TAIL_COUNT_V2: u32 = 7;
 
 const VERIFIER_MAGIC: [u8; 8] = *b"DCGVFY02";
 const VERSION: u16 = 2;
@@ -231,7 +231,7 @@ impl RuntimeVerifierLayoutV2 {
 
     /// Runtime-width tails after the fixed header.
     pub const fn tail_count() -> u32 {
-        RUNTIME_VERIFIER_TAIL_COUNT_V2 as u32
+        RUNTIME_VERIFIER_TAIL_COUNT_V2
     }
 }
 
@@ -758,7 +758,10 @@ pub fn runtime_verifier_len_v2(outcome_count: u32) -> RuntimeVerifyResultV2<usiz
     RUNTIME_VERIFIER_HEADER_BYTES_V2
         .checked_add(
             count
-                .checked_mul(8 * RUNTIME_VERIFIER_TAIL_COUNT_V2)
+                .checked_mul(
+                    8 * usize::try_from(RUNTIME_VERIFIER_TAIL_COUNT_V2)
+                        .expect("fixed runtime tail count"),
+                )
                 .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)?,
         )
         .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)

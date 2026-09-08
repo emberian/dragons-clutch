@@ -59,6 +59,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-07 | recorded devnet deployer located and verified; current rent quotes establish the funding gap | — | [redeploy inputs](docs/evidence/DEVNET_REDEPLOY_INPUTS_2026_09_07.md) |
 | 2026-09-07 | existing GitHub Pages app and guides published from the checked content cut | — | [publication evidence](docs/evidence/PAGES_RENOVATION_2026_09_07.md) |
 | 2026-09-07 | renovate the existing Pages app and guide hierarchy; correct selected-deployment provenance and fill explorer mappings | — | [development wave](docs/design/DEVELOPMENT_WAVE_2026_09_07.md#existing-public-site) |
 | 2026-09-07 | Recovery capture reaches terminal state without relaxing packet freshness | — | [founding and capture evidence](docs/evidence/FOUNDING_PACKET_FRESHNESS_RUNTIME_2026_09_07.md) |

@@ -24,7 +24,10 @@ use std::{fs, path::PathBuf};
 
 use crate::{
     Error, Result,
-    market::{derive_founding_targets, open_market_generation_v1, record_identity},
+    market::{
+        FutureMarketImmutablePublicationV1, derive_founding_targets, open_market_generation_v1,
+        record_identity,
+    },
     model::{MarketRunInput, SelectedCapabilityV1, SuccessorPlan},
     plan::{hex32, pubkey},
     rpc::{Rpc, RpcAccount},
@@ -1127,12 +1130,60 @@ pub(crate) struct SeriesPrepareFinalizedAccountV1 {
 pub(crate) struct SeriesPrepareM0FrameV1<'a> {
     pub(crate) project_found: [Pubkey; dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
     pub(crate) records: &'a [SeriesPrepareFinalizedRecordV1<'a>],
+    /// ProjectFound record coordinates that the M0 publisher proved vacant.
+    /// They stay zero-width vacancies through Prepare; this is distinct from
+    /// M0 Core and every future Custody state, which have their own owners.
+    pub(crate) vacancies: &'a [Pubkey],
     pub(crate) finalized_accounts: &'a [SeriesPrepareFinalizedAccountV1],
+}
+
+/// Borrow the exact M0 Registry records the canonical publisher finalized.
+/// This is the only bridge from Market's typed publication owner into Series
+/// Prepare: it copies no body and recomputes no record identity.
+pub(crate) fn series_prepare_records_from_m0_publication_v1<'a>(
+    publication: &'a FutureMarketImmutablePublicationV1,
+) -> Vec<SeriesPrepareFinalizedRecordV1<'a>> {
+    publication
+        .series_prepare_records
+        .iter()
+        .map(|record| SeriesPrepareFinalizedRecordV1 {
+            schema: record.published.schema,
+            body: &record.body,
+            raw: record.published.raw,
+            staging: record.published.staging,
+        })
+        .collect()
+}
+
+/// Assemble the M0 half of the hydrator input directly from the one canonical
+/// publisher result.  The caller supplies only the non-record accounts it
+/// observed at the same finality floor; no future Core or Custody account can
+/// enter this frame through that list.
+pub(crate) fn series_prepare_m0_frame_from_publication_v1<'a>(
+    publication: &'a FutureMarketImmutablePublicationV1,
+    records: &'a [SeriesPrepareFinalizedRecordV1<'a>],
+    finalized_accounts: &'a [SeriesPrepareFinalizedAccountV1],
+) -> SeriesPrepareM0FrameV1<'a> {
+    SeriesPrepareM0FrameV1 {
+        project_found: publication.project_found,
+        records,
+        vacancies: &publication.series_prepare_vacancies,
+        finalized_accounts,
+    }
 }
 
 /// Inputs that turn the semantic-owner child bank into the complete physical
 /// first-Prepare layout.  M1 is the active Series parent (`parent_root`),
 /// while the ProjectFound frame and Template leaves are M0 child facts.
+/// Whether M1's Series root is the pre-activation fixed-width projection or
+/// the finalized selector-255 account.  The compiler needs the first form to
+/// break the descriptor/root cycle; Prepare itself always uses `Finalized`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SeriesPrepareParentRootStateV1 {
+    PreActivationPredicted,
+    Finalized,
+}
+
 pub(crate) struct SeriesPrepareHydratorInputV1<'a> {
     pub(crate) registry: Pubkey,
     pub(crate) core: Pubkey,
@@ -1140,6 +1191,7 @@ pub(crate) struct SeriesPrepareHydratorInputV1<'a> {
     pub(crate) custody: Pubkey,
     pub(crate) rent_program: Pubkey,
     pub(crate) parent_root: Pubkey,
+    pub(crate) parent_root_state: SeriesPrepareParentRootStateV1,
     pub(crate) m0: SeriesPrepareM0FrameV1<'a>,
     pub(crate) template: SeriesPrepareFinalizedRecordV1<'a>,
     pub(crate) occurrence: SeriesPrepareFinalizedRecordV1<'a>,
@@ -1194,8 +1246,9 @@ pub(crate) fn hydrate_series_prepare_role_layout_v1<'a>(
         require_prepare_custody_request_v1(request, input)?;
     }
 
+    let root = parent_root_source_v1(input.parent_root, input.parent_root_state, input.trading)?;
     let outer = [
-        finalized_v1("M1 Series root", input.parent_root, input.trading, None),
+        root,
         record_raw_v1("M0 Template", input.registry, input.template)?,
         record_raw_v1("M0 occurrence", input.registry, input.occurrence)?,
         record_raw_v1("M0 Portfolio", input.registry, input.portfolio)?,
@@ -1224,6 +1277,31 @@ pub(crate) fn hydrate_series_prepare_role_layout_v1<'a>(
         escrow_open,
         escrow_lock,
     })
+}
+
+fn parent_root_source_v1<'a>(
+    parent_root: Pubkey,
+    state: SeriesPrepareParentRootStateV1,
+    trading: Pubkey,
+) -> Result<SeriesPrepareRoleSourceV1<'a>> {
+    match state {
+        SeriesPrepareParentRootStateV1::PreActivationPredicted => Ok(
+            SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "pre-activation M1 Series root",
+                address: parent_root,
+                fixed_data_len: u32::try_from(
+                    dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
+                )
+                .map_err(|_| Error::new("Series root width escaped u32"))?,
+            },
+        ),
+        SeriesPrepareParentRootStateV1::Finalized => Ok(finalized_v1(
+            "M1 Series root",
+            parent_root,
+            trading,
+            None,
+        )),
+    }
 }
 
 fn finalized_v1<'a>(
@@ -1696,6 +1774,13 @@ fn m0_frame_source_v1<'a>(
             fixed_data_len: 0,
         });
     }
+    if m0.vacancies.contains(&address) {
+        return Ok(SeriesPrepareRoleSourceV1::PredictedVacancy {
+            role: "M0 vacant ProjectFound record",
+            address,
+            fixed_data_len: 0,
+        });
+    }
     for record in m0.records {
         if address == record.raw {
             return record_raw_v1("M0 finalized record", registry, *record);
@@ -1812,13 +1897,34 @@ mod prepare_hydrator_tests {
     }
 
     #[test]
+    fn preactivation_root_is_only_the_fixed_width_projection() {
+        let root = Pubkey::new_unique();
+        assert!(matches!(
+            parent_root_source_v1(
+                root,
+                SeriesPrepareParentRootStateV1::PreActivationPredicted,
+                Pubkey::new_unique(),
+            )
+            .expect("projected root"),
+            SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "pre-activation M1 Series root",
+                address,
+                fixed_data_len,
+            } if address == root && fixed_data_len == dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5 as u32
+        ));
+    }
+
+    #[test]
     fn m0_core_coordinate_remains_a_vacancy_until_consume_found() {
         let market = Pubkey::new_unique();
+        let absent_floor = Pubkey::new_unique();
         let mut project_found = [Pubkey::default(); dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2];
         project_found[1] = market;
+        let vacancies = [absent_floor];
         let m0 = SeriesPrepareM0FrameV1 {
             project_found,
             records: &[],
+            vacancies: &vacancies,
             finalized_accounts: &[],
         };
         assert!(matches!(
@@ -1830,6 +1936,48 @@ mod prepare_hydrator_tests {
                 fixed_data_len: 0,
             } if address == market
         ));
+        assert!(matches!(
+            m0_frame_source_v1(Pubkey::new_unique(), &m0, absent_floor)
+                .expect("M0 absent floor coordinate"),
+            SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "M0 vacant ProjectFound record",
+                address,
+                fixed_data_len: 0,
+            } if address == absent_floor
+        ));
+    }
+
+    #[test]
+    fn m0_publisher_handoff_preserves_its_exact_pair_and_body() {
+        let published = crate::runtime::PublishedRecord {
+            schema: [7; 32],
+            digest: Sha256::digest(b"published M0 body").into(),
+            raw: Pubkey::new_unique(),
+            staging: Pubkey::new_unique(),
+        };
+        let publication = FutureMarketImmutablePublicationV1 {
+            realm: published,
+            product: published,
+            domain: published,
+            portfolio: published,
+            manifest: published,
+            rent_credit: Pubkey::new_unique(),
+            project_found: [Pubkey::default(); dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
+            series_prepare_records: vec![crate::market::FutureMarketFinalizedRecordV1 {
+                published,
+                body: b"published M0 body".to_vec(),
+            }],
+            series_prepare_vacancies: vec![Pubkey::new_unique()],
+        };
+        let records = series_prepare_records_from_m0_publication_v1(&publication);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].schema, published.schema);
+        assert_eq!(records[0].body, b"published M0 body");
+        assert_eq!(records[0].raw, published.raw);
+        assert_eq!(records[0].staging, published.staging);
+        let frame = series_prepare_m0_frame_from_publication_v1(&publication, &records, &[]);
+        assert_eq!(frame.records[0].raw, published.raw);
+        assert_eq!(frame.vacancies, publication.series_prepare_vacancies);
     }
 
     #[test]

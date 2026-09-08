@@ -567,12 +567,8 @@ impl GeneralFundingTableV5 {
 /// register fits, and one that did not would be a geometry defect rather than
 /// a runtime value, so the narrowing saturates to the unused coordinate and
 /// the encoder refuses it.
-const fn narrow_register(value: u32) -> u16 {
-    if value > u16::MAX as u32 {
-        u16::MAX
-    } else {
-        value as u16
-    }
+fn narrow_register(value: u32) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 /// Return the exact finalized V5-envelope EffectProgram width for one action.
