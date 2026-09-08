@@ -81,4 +81,27 @@ grep -F -- "Budget 25-31 minutes" "$SCRATCH/help.stdout" >/dev/null \
 grep -F -- "unavailable" "$SCRATCH/help.stdout" >/dev/null \
     && fail "--help still advertises full mode as unavailable"
 
+# The containment wrapper has returned zero without launching Cargo on hbox.
+# That outcome must not promote an old ELF or stamp a completed build stage.
+source "$ROOT/tools/gauntlet/build-command.sh"
+cat > "$SCRATCH/scope-noop" <<'SH'
+#!/usr/bin/env bash
+printf 'Unit run-u381.scope was already loaded or has a fragment file.\n'
+exit 0
+SH
+chmod +x "$SCRATCH/scope-noop"
+WRAP="$SCRATCH/scope-noop"
+status=0
+run_build touch "$SCRATCH/command-ran" > "$SCRATCH/build-noop.log" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "scope no-op was accepted as a build"
+[ ! -e "$SCRATCH/command-ran" ] || fail "no-op control unexpectedly ran the command"
+grep -F 'build command never ran' "$SCRATCH/build-noop.log" >/dev/null \
+    || fail "scope no-op omitted the missing execution verdict"
+WRAP=""
+run_build touch "$SCRATCH/command-ran" > "$SCRATCH/build-control.log" 2>&1
+[ -f "$SCRATCH/command-ran" ] || fail "ordinary build command never ran"
+status=0
+run_build bash -c 'exit 37' >> "$SCRATCH/build-control.log" 2>&1 || status=$?
+[ "$status" -eq 37 ] || fail "build failure lost its original exit status"
+
 printf 'test-run-cli: ok\n'

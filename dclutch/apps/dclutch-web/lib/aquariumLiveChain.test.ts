@@ -40,7 +40,7 @@ function rpc() {
 describe('aquarium live-chain observation', () => {
   it('keeps the unpublished cohort-18 placeholder off public RPC', () => {
     const selected = selectAquariumLiveMarketV1(parseAquariumStatusV1(example), [RELEASE]);
-    expect(selected).toEqual({ kind: 'unavailable', reason: 'The checked cohort-18 inventory has not been published yet.' });
+    expect(selected).toEqual({ kind: 'unavailable', reason: 'The checked cohort-18 manifest has not been published in the public bindings yet.' });
   });
 
   it('reads one checked market and asks the node for no more than eight finalized index rows', async () => {

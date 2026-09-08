@@ -2967,22 +2967,98 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<MarketExecutionEvidence> {
     validate_market_input(input)?;
+    let created_collateral =
+        create_real_collateral_for_market_v1(rpc, payer, forge, input, transactions)?;
+    execute_found_market_with_checkpoint_journal_and_collateral_v1(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        actors,
+        transactions,
+        checkpoint,
+        submission_recorder,
+        created_collateral,
+    )
+}
+
+/// Create the exact collateral partition that an otherwise ordinary local
+/// Market founding will consume.  A family whose selected manifest depends on
+/// the collateral Mint may call this before compiling that manifest, then
+/// hand the returned observation to [`execute_found_market_with_existing_collateral_v1`].
+/// The Mint and wallet still come from the same KeyForge and are verified by
+/// the existing real-collateral constructor; this is an ordering seam, not a
+/// second collateral authority.
+pub(crate) fn create_real_collateral_for_market_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    forge: &KeyForge,
+    input: &MarketRunInput,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<CreatedCollateralV1> {
+    create_real_collateral(
+        rpc,
+        payer,
+        forge,
+        Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
+        input.collateral_display_decimals,
+        input.initial_collateral_atoms,
+        input.local_participant_fixture_liquidity_atoms,
+        transactions,
+    )
+}
+
+/// Found a Market with the exact collateral observation produced before its
+/// input was compiled.  This is used by selected families whose immutable
+/// parent manifest binds the collateral Mint.  It follows the same Found37
+/// operator and poststate checks as the ordinary entry point.
+pub(crate) fn execute_found_market_with_existing_collateral_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    transactions: &mut Vec<TransactionEvidence>,
+    collateral: CreatedCollateralV1,
+) -> Result<MarketExecutionEvidence> {
+    let actors = FoundingActorsV1::new(
+        forge.keypair(role::FOUNDING_FOUNDER).pubkey(),
+        forge.keypair(role::SUBSTITUTED_FOUNDER).pubkey(),
+    )?;
+    execute_found_market_with_checkpoint_journal_and_collateral_v1(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        actors,
+        transactions,
+        &mut |_| Ok(()),
+        None,
+        collateral,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_found_market_with_checkpoint_journal_and_collateral_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    actors: FoundingActorsV1,
+    transactions: &mut Vec<TransactionEvidence>,
+    checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
+    mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
+    created_collateral: CreatedCollateralV1,
+) -> Result<MarketExecutionEvidence> {
+    validate_market_input(input)?;
     let authenticated_plan = authenticated_found_infrastructure_plan_v1(rpc, plan)?;
     let plan = &authenticated_plan;
     let registry = pubkey(&plan.registry.program_id)?;
     let core = pubkey(&plan.core.program_id)?;
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
-    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
-    let created_collateral = create_real_collateral(
-        rpc,
-        payer,
-        forge,
-        token_program,
-        input.collateral_display_decimals,
-        input.initial_collateral_atoms,
-        input.local_participant_fixture_liquidity_atoms,
-        transactions,
-    )?;
     let mint = created_collateral.mint;
     let collateral_wallet = created_collateral.wallet;
     let local_participant_fixture_liquidity =
@@ -5395,10 +5471,11 @@ fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {
     ))
 }
 
-struct CreatedCollateralV1 {
-    mint: Pubkey,
-    wallet: Pubkey,
-    local_participant_fixture_liquidity: Option<LocalParticipantFixtureLiquidityEvidenceV1>,
+pub(crate) struct CreatedCollateralV1 {
+    pub(crate) mint: Pubkey,
+    pub(crate) wallet: Pubkey,
+    pub(crate) local_participant_fixture_liquidity:
+        Option<LocalParticipantFixtureLiquidityEvidenceV1>,
 }
 
 fn authenticate_collateral_supply_partition_v1(

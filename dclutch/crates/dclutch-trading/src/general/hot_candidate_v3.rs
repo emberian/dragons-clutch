@@ -15,13 +15,31 @@ use crate::general_config::{
     v3::GeneralConfigV3,
 };
 use dclutch_claims::affine_batch_v2::DeltaDirectionV2;
-use dclutch_custody::{
-    OperationV1,
-    token_svm::{ExactTransferProfileV1, PRODUCTION_ADAPTER_RELEASES},
-};
+use dclutch_custody::OperationV1;
+#[cfg(feature = "svm")]
+use dclutch_custody::token_svm::{ExactTransferProfileV1, PRODUCTION_ADAPTER_RELEASES};
 use dclutch_market::execution_strategy::v2::{ExecutionCandidateV2, register_bank_bytes_v2};
+#[cfg(feature = "svm")]
 use dclutch_market::realm::RealmV1;
+#[cfg(feature = "svm")]
 use dclutch_sha256_adapter::digest;
+
+#[cfg(feature = "svm")]
+use dclutch_claims::{
+    liability_basis_state_v2::{
+        LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+    },
+    protocol_position_v2::ProtocolPositionSeedsV2,
+};
+#[cfg(feature = "svm")]
+use dclutch_market::{
+    CoreState, MarketCoreStateSeedsV2, STATE_BYTES, realm::REALM_SCHEMA_RELEASE_ID_V1,
+    rent::lifecycle_v2::LifecycleRentCreditV2,
+};
+#[cfg(feature = "svm")]
+use dclutch_registry::record::RAW_RECORD_PDA_SEED_V1;
+#[cfg(feature = "svm")]
+use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::general::{
     cancel_order_clause_v3::CancelOrderClauseV3,
@@ -545,6 +563,26 @@ pub fn seed_general_place_order_terms_from_signed_terms_v3(
                 .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
         )
         .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = terms.order_id();
+    // Slot one is the vacant order-escrow Position the lifecycle plan creates;
+    // unlike slot zero it has no prestate body to observe.  Its identity is
+    // therefore the authenticated signed order id, while the existing maker
+    // Position owner is installed later only from actual Claims bytes.
+    *identities
+        .get_mut(
+            usize::try_from(identity::POSITION_ONE_OWNER)
+                .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+        )
+        .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = terms.order_id();
+    // PlaceOrder admits the order-owned settlement Position before the affine
+    // leg.  This is the same signed order identity as the vacant escrow slot;
+    // no ambient account key can name a Position that has not yet been
+    // created.
+    *identities
+        .get_mut(
+            usize::try_from(identity::SETTLEMENT_POSITION_OWNER)
+                .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+        )
+        .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = terms.order_id();
     Ok(())
 }
 
@@ -554,17 +592,20 @@ pub fn seed_general_place_order_terms_from_signed_terms_v3(
 /// AccountProfile deliberately leaves Realm-selected token bodies opaque: the
 /// selected Realm release owns their admissible widths.  This adapter is the
 /// narrow exception that extracts the one outer semantic fact General owns,
-/// the source account's authority.  It binds the exact Custody frame keys to
-/// their projected identities, decodes the immutable Realm, selects its
-/// release-pinned transfer profile, and parses the actual source bytes before
-/// writing `CUSTODY_SOURCE_OWNER`.  The later Custody child remains the owner
-/// of transfer authorization and poststate, but it is not the proof for this
+/// the source account's authority.  The typed caller selects the exact
+/// `Custody(Transfer)` frame before reaching this adapter; the AccountProfile
+/// authenticates that frame's positional geometry and privileges, but does
+/// not project its opaque physical keys into General's identity bank.  This
+/// adapter therefore decodes the immutable Realm, selects its release-pinned
+/// transfer profile, and parses the actual source bytes before writing
+/// `CUSTODY_SOURCE_OWNER`.  The later Custody child remains the owner of
+/// transfer authorization and poststate, but it is not the proof for this
 /// General register.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralPlaceOrderTokenObservationErrorV1 {
     /// The General common identity bank was not complete.
     InvalidCapacity,
-    /// A supplied Custody physical key did not match its AccountProfile value.
+    /// A required Custody physical key was the zero address.
     FrameIdentity,
     /// The immutable Realm record was not one exact canonical Realm.
     Realm,
@@ -580,39 +621,123 @@ pub enum GeneralPlaceOrderTokenObservationErrorV1 {
     SourceToken,
     /// The actual source token account named a mint other than the Realm mint.
     SourceMint,
+    /// The observed Core state was not its owner- and PDA-authenticated Market.
+    CoreMarket,
+    /// The observed Realm was not the Core-selected finalized raw record.
+    RealmBinding,
+    /// The observed Claims aggregate was not the Core-selected canonical aggregate.
+    ClaimsAggregate,
+    /// The observed maker Position was not the canonical Claims Position joined to that aggregate.
+    ClaimsPosition,
+    /// The observed Claims RentCredit was not its canonical persisted credit.
+    ClaimsRentCredit,
 }
 
-/// Seed PlaceOrder's external Custody source owner from the actual selected
-/// token account, after AccountProfile has projected the route identities.
+/// Actual PlaceOrder accounts whose opaque bodies General must authenticate
+/// before it may seed its three outer semantic identities.
 ///
-/// This is deliberately separate from signed-term seeding.  The signed header
-/// supplies the maker assertion; this adapter supplies the token-account fact;
-/// `project_general_place_order_candidate_in_place_v3` joins the two through
-/// `EnvironmentCustodySourceOwner`.
-pub fn seed_general_place_order_custody_source_owner_v3(
-    realm_key: [u8; 32],
+/// The AccountProfile authenticates their frame geometry and privileges.  This
+/// SVM adapter additionally binds the raw Realm and existing maker Position to
+/// the Core Market selected by the Hot envelope.  It deliberately has no
+/// signed maker field: `POSITION_ZERO_OWNER` is an observed Position fact and
+/// the candidate's named clause performs the later signed-term join.  The
+/// program/non-executable-state requirements stay in AccountProfile: this
+/// adapter is reached only after that projection has accepted those same
+/// actual observations.
+#[cfg(feature = "svm")]
+#[derive(Clone, Copy)]
+#[allow(missing_docs)] // Field names are the authenticated frame-role vocabulary above.
+pub struct GeneralPlaceOrderActualFrameV2<'a> {
+    pub core_market_key: [u8; 32],
+    pub core_market_owner: [u8; 32],
+    pub core_market_data: &'a [u8],
+    pub core_program_key: [u8; 32],
+    pub registry_program_key: [u8; 32],
+    pub realm_key: [u8; 32],
+    pub realm_owner: [u8; 32],
+    pub realm_data: &'a [u8],
+    pub claims_program_key: [u8; 32],
+    pub claims_market_key: [u8; 32],
+    pub claims_market_owner: [u8; 32],
+    pub claims_market_data: &'a [u8],
+    pub maker_position_key: [u8; 32],
+    pub maker_position_owner: [u8; 32],
+    pub maker_position_data: &'a [u8],
+    pub rent_credit_key: [u8; 32],
+    pub rent_credit_owner: [u8; 32],
+    pub rent_credit_data: &'a [u8],
+    pub rent_program_key: [u8; 32],
+    pub mint_key: [u8; 32],
+    pub token_program_key: [u8; 32],
+    pub source_key: [u8; 32],
+    pub source_program: [u8; 32],
+    pub source_data: &'a [u8],
+}
+
+/// Authenticate PlaceOrder's physical Claims RentCredit and return the wallet
+/// that its persisted body designates for a refund.
+///
+/// `expected_*` come from the Core Market that the outer General profile and
+/// the preceding actual-frame checks have already authenticated; in particular
+/// `expected_credit` is the Core's persisted canonical credit key. The returned
+/// wallet is intentionally not compared to signed terms here: the candidate's
+/// `EnvironmentRentCredit` clause owns that maker join.  This keeps a valid
+/// credit whose refund wallet differs from a maker observable, then refuses it
+/// at the named semantic clause rather than by treating a request assertion as
+/// account observation.
+#[cfg(feature = "svm")]
+pub fn general_place_order_rent_credit_beneficiary_v2(
+    rent_credit_key: [u8; 32],
+    rent_credit_owner: [u8; 32],
+    rent_credit_data: &[u8],
+    rent_program_key: [u8; 32],
+    expected_credit: [u8; 32],
+    expected_market: [u8; 32],
+    expected_release_set: [u8; 32],
+    expected_generation: u64,
+) -> core::result::Result<[u8; 32], GeneralPlaceOrderTokenObservationErrorV1> {
+    let rent_credit = LifecycleRentCreditV2::decode(rent_credit_data)
+        .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::ClaimsRentCredit)?;
+    let credit_seeds = rent_credit.pda_seeds();
+    let credit_market = credit_seeds.market().to_bytes();
+    let credit_generation = credit_seeds.generation();
+    let credit_bump = [credit_seeds.bump()];
+    let expected_rent_credit = Pubkey::create_program_address(
+        &[
+            credit_seeds.domain(),
+            credit_market.as_slice(),
+            credit_generation.as_slice(),
+            &credit_bump,
+        ],
+        &Pubkey::new_from_array(rent_credit_owner),
+    )
+    .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::ClaimsRentCredit)?;
+    if rent_credit_owner != rent_program_key
+        || rent_credit_key != expected_credit
+        || Pubkey::new_from_array(rent_credit_key) != expected_rent_credit
+        || rent_credit.to_bytes().as_slice() != rent_credit_data
+        || rent_credit.market().to_bytes() != expected_market
+        || rent_credit.release_set().to_bytes() != expected_release_set
+        || rent_credit.generation() != expected_generation
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::ClaimsRentCredit);
+    }
+    Ok(rent_credit.refund_wallet().to_bytes())
+}
+
+/// Parse the selected PlaceOrder source account and return its observed owner.
+///
+/// Realm pins both the mint and the exact production adapter release. This is
+/// observation-only: callers write its result only after all actual-frame
+/// bindings have succeeded.
+#[cfg(feature = "svm")]
+pub fn general_place_order_source_token_owner_v2(
     realm_data: &[u8],
     mint_key: [u8; 32],
     token_program_key: [u8; 32],
-    source_key: [u8; 32],
     source_program: [u8; 32],
     source_data: &[u8],
-    identities: &mut [[u8; 32]],
-) -> core::result::Result<(), GeneralPlaceOrderTokenObservationErrorV1> {
-    let expected = |coordinate| identities.get(usize::try_from(coordinate).ok()?).copied();
-    if identities.len()
-        != usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
-            .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?
-    {
-        return Err(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity);
-    }
-    if expected(identity::REALM) != Some(realm_key)
-        || expected(identity::MINT) != Some(mint_key)
-        || expected(identity::TOKEN_PROGRAM) != Some(token_program_key)
-        || expected(identity::CUSTODY_SOURCE) != Some(source_key)
-    {
-        return Err(GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity);
-    }
+) -> core::result::Result<[u8; 32], GeneralPlaceOrderTokenObservationErrorV1> {
     let realm =
         RealmV1::decode(realm_data).map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::Realm)?;
     if realm.token_program() != &token_program_key {
@@ -640,12 +765,151 @@ pub fn seed_general_place_order_custody_source_owner_v3(
     if source.mint != mint_key {
         return Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint);
     }
+    Ok(source.owner)
+}
+
+/// Seed PlaceOrder's external Custody source owner from the actual selected
+/// token account, after AccountProfile has authenticated the route geometry.
+///
+/// This is deliberately separate from signed-term seeding.  The signed header
+/// supplies the maker assertion; this adapter supplies the token-account fact;
+/// `project_general_place_order_candidate_in_place_v3` joins the two through
+/// `EnvironmentCustodySourceOwner`.
+#[cfg(feature = "svm")]
+pub fn seed_general_place_order_actual_identities_v2(
+    frame: GeneralPlaceOrderActualFrameV2<'_>,
+    identities: &mut [[u8; 32]],
+) -> core::result::Result<(), GeneralPlaceOrderTokenObservationErrorV1> {
+    if identities.len()
+        != usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+            .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity);
+    }
+    if frame.realm_key == [0; 32]
+        || frame.source_key == [0; 32]
+        || frame.core_market_key == [0; 32]
+        || frame.claims_market_key == [0; 32]
+        || frame.maker_position_key == [0; 32]
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity);
+    }
+    if frame.core_market_data.len() != STATE_BYTES {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::CoreMarket);
+    }
+    let core = CoreState::decode(frame.core_market_data)
+        .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::CoreMarket)?;
+    let core_key = Pubkey::new_from_array(frame.core_market_key);
+    let core_program = Pubkey::new_from_array(frame.core_program_key);
+    let authenticated_market = *identities
+        .get(
+            usize::try_from(identity::MARKET)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?;
+    if frame.core_market_owner != frame.core_program_key
+        || frame.core_market_key != authenticated_market
+        || core.identity.market_id.to_bytes() != frame.core_market_key
+        || core.identity.registry_program.to_bytes() != frame.registry_program_key
+        || Pubkey::find_program_address(
+            &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
+            &core_program,
+        )
+        .0 != core_key
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::CoreMarket);
+    }
+    let realm_id = core.identity.realm_id.to_bytes();
+    let registry_program = Pubkey::new_from_array(frame.registry_program_key);
+    let expected_realm = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &realm_id,
+        ],
+        &registry_program,
+    )
+    .0;
+    if frame.realm_owner != frame.registry_program_key
+        || Pubkey::new_from_array(frame.realm_key) != expected_realm
+        || hash(frame.realm_data).to_bytes() != realm_id
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::RealmBinding);
+    }
+    let claims_program = Pubkey::new_from_array(frame.claims_program_key);
+    let expected_claims_market = Pubkey::find_program_address(
+        &LiabilityBasisMarketSeedsV2::new(frame.core_market_key)
+            .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::ClaimsAggregate)?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let claims_market = LiabilityBasisMarketViewV2::decode(frame.claims_market_data)
+        .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::ClaimsAggregate)?;
+    if frame.claims_market_owner != frame.claims_program_key
+        || Pubkey::new_from_array(frame.claims_market_key) != expected_claims_market
+        || claims_market.logical_market != frame.core_market_key
+        || claims_market.release_set != core.identity.selected_release_set.to_bytes()
+        || claims_market.registry_program != frame.registry_program_key
+        || claims_market.realm_id != realm_id
+        || claims_market.product_instance_id != core.identity.product_id.to_bytes()
+        || claims_market.generation != core.identity.generation
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::ClaimsAggregate);
+    }
+    let maker_position = LiabilityBasisPositionViewV2::decode(frame.maker_position_data)
+        .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::ClaimsPosition)?;
+    let expected_position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(frame.claims_market_key, maker_position.owner)
+            .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::ClaimsPosition)?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    if frame.maker_position_owner != frame.claims_program_key
+        || Pubkey::new_from_array(frame.maker_position_key) != expected_position
+        || maker_position.market_account != frame.claims_market_key
+        || maker_position.basis_id != claims_market.basis_id
+        || maker_position.claim_count != claims_market.claim_count
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::ClaimsPosition);
+    }
+    let rent_credit_beneficiary = general_place_order_rent_credit_beneficiary_v2(
+        frame.rent_credit_key,
+        frame.rent_credit_owner,
+        frame.rent_credit_data,
+        frame.rent_program_key,
+        core.rent_beneficiary.to_bytes(),
+        frame.core_market_key,
+        core.identity.selected_release_set.to_bytes(),
+        core.identity.generation,
+    )?;
+    let source_owner = general_place_order_source_token_owner_v2(
+        frame.realm_data,
+        frame.mint_key,
+        frame.token_program_key,
+        frame.source_program,
+        frame.source_data,
+    )?;
     *identities
         .get_mut(
             usize::try_from(identity::CUSTODY_SOURCE_OWNER)
                 .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
         )
-        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = source.owner;
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = source_owner;
+    *identities
+        .get_mut(
+            usize::try_from(identity::POSITION_ZERO_OWNER)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = maker_position.owner;
+    *identities
+        .get_mut(
+            usize::try_from(identity::RENT_CREDIT)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
+        rent_credit_beneficiary;
     Ok(())
 }
 
@@ -5332,202 +5596,195 @@ mod tests {
     };
     use crate::general_codec::successor_request_v3::{ControllerActionV3, ControllerRequestV3};
     use crate::general_config::v3::GeneralConfigV3Input;
-    use dclutch_custody::token_svm::state::TokenAccountLayoutV1;
-    use dclutch_custody::token_svm::{ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_SUFFIX};
-    use dclutch_market::realm::{
-        FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
+    #[cfg(feature = "svm")]
+    use dclutch_custody::token_svm::{
+        ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_SUFFIX, state::TokenAccountLayoutV1,
+    };
+    #[cfg(feature = "svm")]
+    use dclutch_market::realm::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
+    #[cfg(feature = "svm")]
+    use dclutch_market::rent::{
+        RefundAuthority,
+        lifecycle_v2::{LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2},
     };
     use dclutch_vm::v3::{ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic};
+    #[cfg(feature = "svm")]
+    use solana_program::pubkey::Pubkey;
 
     fn put_test(output: &mut [u8], offset: usize, value: &[u8]) {
         output[offset..offset + value.len()].copy_from_slice(value);
     }
 
-    fn place_order_token_observation_fixture(
-        release_index: usize,
-        immutable_owner_suffix: bool,
-    ) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32], Vec<u8>, Vec<u8>) {
-        let release = PRODUCTION_ADAPTER_RELEASES[release_index];
-        let realm_key = [0x41; 32];
-        let mint_key = [0x42; 32];
+    #[cfg(feature = "svm")]
+    #[test]
+    fn place_order_rent_credit_uses_observed_refund_and_refuses_foreign_market() {
+        let market = [0x41; 32];
+        let release_set = [0x42; 32];
+        let maker = [0x43; 32];
+        let refund_wallet = [0x44; 32];
+        let generation = 7_u64;
+        let rent_program = Pubkey::new_unique();
+        let (credit_key, bump) = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                &market,
+                &generation.to_le_bytes(),
+            ],
+            &rent_program,
+        );
+        let credit = LifecycleRentCreditV2::new(
+            RefundAuthority::new(refund_wallet).expect("nonzero refund wallet"),
+            LifecycleAccountIdV2::new(market).expect("nonzero Market"),
+            LifecycleAccountIdV2::new(release_set).expect("nonzero release set"),
+            generation,
+            bump,
+        )
+        .expect("canonical credit");
+        assert_eq!(
+            general_place_order_rent_credit_beneficiary_v2(
+                credit_key.to_bytes(),
+                rent_program.to_bytes(),
+                &credit.to_bytes(),
+                rent_program.to_bytes(),
+                credit_key.to_bytes(),
+                market,
+                release_set,
+                generation,
+            ),
+            Ok(refund_wallet),
+            "the persisted credit body, not the signed maker, owns this fact",
+        );
+        assert_ne!(
+            maker, refund_wallet,
+            "a valid credit need not name the maker"
+        );
+
+        let foreign_market = [0x45; 32];
+        let (foreign_key, foreign_bump) = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                &foreign_market,
+                &generation.to_le_bytes(),
+            ],
+            &rent_program,
+        );
+        let foreign_credit = LifecycleRentCreditV2::new(
+            RefundAuthority::new(refund_wallet).expect("nonzero refund wallet"),
+            LifecycleAccountIdV2::new(foreign_market).expect("nonzero foreign Market"),
+            LifecycleAccountIdV2::new(release_set).expect("nonzero release set"),
+            generation,
+            foreign_bump,
+        )
+        .expect("canonical foreign credit");
+        assert_eq!(
+            general_place_order_rent_credit_beneficiary_v2(
+                foreign_key.to_bytes(),
+                rent_program.to_bytes(),
+                &foreign_credit.to_bytes(),
+                rent_program.to_bytes(),
+                foreign_key.to_bytes(),
+                market,
+                release_set,
+                generation,
+            ),
+            Err(GeneralPlaceOrderTokenObservationErrorV1::ClaimsRentCredit),
+            "a correct foreign PDA and body cannot self-authenticate a different Market",
+        );
+    }
+
+    #[cfg(feature = "svm")]
+    #[test]
+    fn place_order_source_parser_pins_selected_165_and_170_profiles() {
+        for (release_index, immutable_owner_suffix) in [(1, false), (2, true)] {
+            let release = PRODUCTION_ADAPTER_RELEASES[release_index];
+            let mint = [0x51; 32];
+            let token_program = release.profile().program_id();
+            let source_owner = [0x52; 32];
+            let realm = RealmV1::new(RealmV1Input {
+                token_program,
+                collateral_mint: mint,
+                collateral_adapter_release_id: digest(&release.to_bytes()),
+                mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+                freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+            })
+            .expect("canonical selected Realm")
+            .to_bytes();
+            let mut source = vec![0_u8; ACCOUNT_BYTES];
+            source[TokenAccountLayoutV1::MINT..TokenAccountLayoutV1::MINT + 32]
+                .copy_from_slice(&mint);
+            source[TokenAccountLayoutV1::OWNER..TokenAccountLayoutV1::OWNER + 32]
+                .copy_from_slice(&source_owner);
+            source[TokenAccountLayoutV1::AMOUNT..TokenAccountLayoutV1::AMOUNT + 8]
+                .copy_from_slice(&1_u64.to_le_bytes());
+            source[TokenAccountLayoutV1::STATE] = 1;
+            if immutable_owner_suffix {
+                source.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
+            }
+            assert_eq!(
+                general_place_order_source_token_owner_v2(
+                    &realm,
+                    mint,
+                    token_program,
+                    token_program,
+                    &source,
+                ),
+                Ok(source_owner),
+                "release {release_index} owns its exact source width",
+            );
+        }
+
+        let release = PRODUCTION_ADAPTER_RELEASES[1];
+        let mint = [0x61; 32];
         let token_program = release.profile().program_id();
-        let source_key = [0x43; 32];
-        let source_owner = [0x44; 32];
         let realm = RealmV1::new(RealmV1Input {
             token_program,
-            collateral_mint: mint_key,
+            collateral_mint: mint,
             collateral_adapter_release_id: digest(&release.to_bytes()),
             mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
             freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
         })
-        .expect("canonical Realm");
+        .expect("canonical selected Realm")
+        .to_bytes();
         let mut source = vec![0_u8; ACCOUNT_BYTES];
-        source[TokenAccountLayoutV1::MINT..TokenAccountLayoutV1::MINT + 32]
-            .copy_from_slice(&mint_key);
+        source[TokenAccountLayoutV1::MINT..TokenAccountLayoutV1::MINT + 32].copy_from_slice(&mint);
         source[TokenAccountLayoutV1::OWNER..TokenAccountLayoutV1::OWNER + 32]
-            .copy_from_slice(&source_owner);
+            .copy_from_slice(&[0x62; 32]);
         source[TokenAccountLayoutV1::AMOUNT..TokenAccountLayoutV1::AMOUNT + 8]
             .copy_from_slice(&1_u64.to_le_bytes());
         source[TokenAccountLayoutV1::STATE] = 1;
-        if immutable_owner_suffix {
-            source.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
-        }
-        (
-            realm_key,
-            mint_key,
-            token_program,
-            source_key,
-            realm.to_bytes().to_vec(),
-            source,
-        )
-    }
-
-    fn place_order_token_identity_bank(
-        realm_key: [u8; 32],
-        mint_key: [u8; 32],
-        token_program: [u8; 32],
-        source_key: [u8; 32],
-    ) -> Vec<[u8; 32]> {
-        let mut identities = vec![
-            [0_u8; 32];
-            usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
-                .expect("identity width")
-        ];
-        identities[usize::try_from(identity::REALM).expect("realm")] = realm_key;
-        identities[usize::try_from(identity::MINT).expect("mint")] = mint_key;
-        identities[usize::try_from(identity::TOKEN_PROGRAM).expect("token program")] =
-            token_program;
-        identities[usize::try_from(identity::CUSTODY_SOURCE).expect("source")] = source_key;
-        identities
-    }
-
-    #[test]
-    fn place_order_token_adapter_observes_selected_source_owner_and_refuses_hostiles_atomically() {
-        // The zero-extension release admits the ordinary 165-byte account;
-        // the ImmutableOwner release admits its exact 170-byte ATA form.
-        for (release_index, immutable_owner_suffix) in [(1, false), (2, true)] {
-            let (realm_key, mint_key, token_program, source_key, realm, source) =
-                place_order_token_observation_fixture(release_index, immutable_owner_suffix);
-            let mut identities =
-                place_order_token_identity_bank(realm_key, mint_key, token_program, source_key);
-            seed_general_place_order_custody_source_owner_v3(
-                realm_key,
-                &realm,
-                mint_key,
-                token_program,
-                source_key,
-                token_program,
-                &source,
-                &mut identities,
-            )
-            .expect("selected exact token profile admits its source");
-            assert_eq!(
-                identities[usize::try_from(identity::CUSTODY_SOURCE_OWNER).expect("owner")],
-                [0x44; 32]
-            );
-        }
-
-        let (realm_key, mint_key, token_program, source_key, realm, source) =
-            place_order_token_observation_fixture(1, false);
-        let identities =
-            place_order_token_identity_bank(realm_key, mint_key, token_program, source_key);
-        let mut wrong_program = identities.clone();
-        let before = wrong_program.clone();
         assert_eq!(
-            seed_general_place_order_custody_source_owner_v3(
-                realm_key,
+            general_place_order_source_token_owner_v2(
                 &realm,
-                mint_key,
+                mint,
                 token_program,
-                source_key,
-                [0x99; 32],
+                [0x63; 32],
                 &source,
-                &mut wrong_program,
             ),
-            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceProgram)
+            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceProgram),
         );
-        assert_eq!(wrong_program, before);
-
         let mut wrong_mint = source.clone();
         wrong_mint[TokenAccountLayoutV1::MINT] ^= 1;
-        let mut mint_bank = identities.clone();
-        let before = mint_bank.clone();
         assert_eq!(
-            seed_general_place_order_custody_source_owner_v3(
-                realm_key,
+            general_place_order_source_token_owner_v2(
                 &realm,
-                mint_key,
+                mint,
                 token_program,
-                source_key,
                 token_program,
                 &wrong_mint,
-                &mut mint_bank,
             ),
-            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint)
+            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint),
         );
-        assert_eq!(mint_bank, before);
-
-        let mut extension = source.clone();
-        extension.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
-        let mut extension_bank = identities.clone();
-        let before = extension_bank.clone();
+        source.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
         assert_eq!(
-            seed_general_place_order_custody_source_owner_v3(
-                realm_key,
+            general_place_order_source_token_owner_v2(
                 &realm,
-                mint_key,
+                mint,
                 token_program,
-                source_key,
-                token_program,
-                &extension,
-                &mut extension_bank,
-            ),
-            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken)
-        );
-        assert_eq!(extension_bank, before);
-
-        let unknown_release_realm = RealmV1::new(RealmV1Input {
-            token_program,
-            collateral_mint: mint_key,
-            collateral_adapter_release_id: [0x77; 32],
-            mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
-            freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
-        })
-        .expect("syntactically canonical but unselected Realm release")
-        .to_bytes();
-        let mut release_bank = identities.clone();
-        let before = release_bank.clone();
-        assert_eq!(
-            seed_general_place_order_custody_source_owner_v3(
-                realm_key,
-                &unknown_release_realm,
-                mint_key,
-                token_program,
-                source_key,
                 token_program,
                 &source,
-                &mut release_bank,
             ),
-            Err(GeneralPlaceOrderTokenObservationErrorV1::AdapterRelease)
+            Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken),
         );
-        assert_eq!(release_bank, before);
-
-        let mut frame_bank = identities.clone();
-        let before = frame_bank.clone();
-        assert_eq!(
-            seed_general_place_order_custody_source_owner_v3(
-                realm_key,
-                &realm,
-                mint_key,
-                [0x8a; 32],
-                source_key,
-                [0x8a; 32],
-                &source,
-                &mut frame_bank,
-            ),
-            Err(GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity)
-        );
-        assert_eq!(frame_bank, before);
     }
 
     /// The whole `296 + 16N` batch account one projector hostile-decodes.
@@ -6210,6 +6467,18 @@ mod tests {
                     .expect("destination context coordinate")],
                 order.order_id(),
                 "{side:?} order-keyed destination context",
+            );
+            assert_eq!(
+                identities[usize::try_from(identity::POSITION_ONE_OWNER)
+                    .expect("escrow owner coordinate")],
+                order.order_id(),
+                "{side:?} order-keyed vacant escrow Position",
+            );
+            assert_eq!(
+                identities[usize::try_from(identity::SETTLEMENT_POSITION_OWNER)
+                    .expect("settlement owner coordinate")],
+                order.order_id(),
+                "{side:?} order-keyed settlement Position",
             );
             for item in 0..outcome_count {
                 let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;

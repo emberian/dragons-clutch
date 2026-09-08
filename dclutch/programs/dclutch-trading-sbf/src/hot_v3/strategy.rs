@@ -1151,17 +1151,76 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
         let mint = custody(CustodyFrameRoleV1::Mint)?;
         let token_program = custody(CustodyFrameRoleV1::TokenProgram)?;
         let source = custody(CustodyFrameRoleV1::TransferSource)?;
-        seed_general_place_order_custody_source_owner_v3(
-            realm.key(),
-            realm.data(),
-            mint.key(),
-            token_program.key(),
-            source.key(),
-            source.owner(),
-            source.data(),
+        let claims = |role| {
+            let coordinate = general_place_order_affine_claims_coordinate_v3(role)
+                .map_err(|_| TradingSbfError::Content)?;
+            observations
+                .get(usize::from(coordinate))
+                .copied()
+                .ok_or(TradingSbfError::Content)
+        };
+        let core_market = claims(ClaimsFrameRoleV1::CoreMarket)?;
+        let core_program = claims(ClaimsFrameRoleV1::CoreProgram)?;
+        let registry_program = claims(ClaimsFrameRoleV1::RegistryProgram)?;
+        let claims_program = claims(ClaimsFrameRoleV1::ClaimsProgram)?;
+        let claims_market = claims(ClaimsFrameRoleV1::ClaimsMarket)?;
+        let maker_position = claims(ClaimsFrameRoleV1::AffinePosition(0))?;
+        let rent_credit = claims(ClaimsFrameRoleV1::RentCredit)?;
+        let rent_program = claims(ClaimsFrameRoleV1::RentProgram)?;
+        // The AccountProfile has already authenticated each role's executable
+        // bit.  Preserve those exact role requirements in the semantic adapter
+        // rather than treating opaque bodies as a self-authenticating graph.
+        seed_general_place_order_actual_identities_v2(
+            GeneralPlaceOrderActualFrameV2 {
+                core_market_key: core_market.key(),
+                core_market_owner: core_market.owner(),
+                core_market_data: core_market.data(),
+                core_program_key: core_program.key(),
+                registry_program_key: registry_program.key(),
+                realm_key: realm.key(),
+                realm_owner: realm.owner(),
+                realm_data: realm.data(),
+                claims_program_key: claims_program.key(),
+                claims_market_key: claims_market.key(),
+                claims_market_owner: claims_market.owner(),
+                claims_market_data: claims_market.data(),
+                maker_position_key: maker_position.key(),
+                maker_position_owner: maker_position.owner(),
+                maker_position_data: maker_position.data(),
+                rent_credit_key: rent_credit.key(),
+                rent_credit_owner: rent_credit.owner(),
+                rent_credit_data: rent_credit.data(),
+                rent_program_key: rent_program.key(),
+                mint_key: mint.key(),
+                token_program_key: token_program.key(),
+                source_key: source.key(),
+                source_program: source.owner(),
+                source_data: source.data(),
+            },
             &mut current_identities,
         )
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|error| {
+            let cause = match error {
+                GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity => "capacity",
+                GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity => "frame-identity",
+                GeneralPlaceOrderTokenObservationErrorV1::Realm => "realm",
+                GeneralPlaceOrderTokenObservationErrorV1::RealmTokenProgram => {
+                    "realm-token-program"
+                }
+                GeneralPlaceOrderTokenObservationErrorV1::RealmMint => "realm-mint",
+                GeneralPlaceOrderTokenObservationErrorV1::AdapterRelease => "adapter-release",
+                GeneralPlaceOrderTokenObservationErrorV1::SourceProgram => "source-program",
+                GeneralPlaceOrderTokenObservationErrorV1::SourceToken => "source-token",
+                GeneralPlaceOrderTokenObservationErrorV1::SourceMint => "source-mint",
+                GeneralPlaceOrderTokenObservationErrorV1::CoreMarket => "core-market",
+                GeneralPlaceOrderTokenObservationErrorV1::RealmBinding => "realm-binding",
+                GeneralPlaceOrderTokenObservationErrorV1::ClaimsAggregate => "claims-aggregate",
+                GeneralPlaceOrderTokenObservationErrorV1::ClaimsPosition => "claims-position",
+                GeneralPlaceOrderTokenObservationErrorV1::ClaimsRentCredit => "claims-rent-credit",
+            };
+            solana_program::msg!("dclutch-general-place-order-frame:{}", cause);
+            TradingSbfError::Content
+        })?;
     }
     require_projected_tail_count_agreement_v3(
         account_profile,

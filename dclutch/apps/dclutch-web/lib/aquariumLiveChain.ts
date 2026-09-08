@@ -27,14 +27,19 @@ export type AquariumLiveMarketReaderV1 = (
 
 type AquariumLiveRpcV1 = Pick<SolanaRpcClient, 'probe' | 'signaturesForAddress' | 'finalizedSlot' | 'multipleAccounts'>;
 
-function aborted(signal: AbortSignal | undefined): void {
+/**
+ * SolanaRpcClient has no AbortSignal input. This only makes a late result
+ * unusable after a visibility change or unmount; it does not cancel transport.
+ */
+function discardIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new Error('live chain observation cancelled');
 }
 
 /**
- * Select one address from the bounded published inventory only after its
- * cohort manifest agrees with the checked public inventory. The active list
- * is parsed by aquariumStatus, which caps it at 32 before this sees it.
+ * Select one address reported by the bounded snapshot only after its cohort
+ * manifest agrees with the public binding metadata. The address remains the
+ * snapshot's claim until the Market detail read authenticates it. The active
+ * list is parsed by aquariumStatus, which caps it at 32 before this sees it.
  */
 export function selectAquariumLiveMarketV1(
   status: AquariumStatusV1 | null,
@@ -43,7 +48,7 @@ export function selectAquariumLiveMarketV1(
   if (status === null) return Object.freeze({ kind: 'unavailable', reason: 'Waiting for a published aquarium snapshot.' });
   const cohort = publicMarketBindingsCohortV1();
   if (cohort.manifestSha256 === null) {
-    return Object.freeze({ kind: 'unavailable', reason: `The checked cohort-${cohort.number} inventory has not been published yet.` });
+    return Object.freeze({ kind: 'unavailable', reason: `The checked cohort-${cohort.number} manifest has not been published in the public bindings yet.` });
   }
   if (cohort.number !== status.cohort.number || cohort.manifestSha256 !== status.cohort.manifestSha256) {
     return Object.freeze({ kind: 'unavailable', reason: 'The snapshot and checked cohort inventory do not describe the same deployment.' });
@@ -66,6 +71,7 @@ export async function observeAquariumLiveMarketV1(
   client: AquariumLiveRpcV1,
   selection: Extract<AquariumLiveSelectionV1, Readonly<{ kind: 'selected' }>>,
   options: Readonly<{
+    /** Discards a late result; SolanaRpcClient does not support transport cancellation. */
     signal?: AbortSignal;
     deployment?: DeploymentV1;
     now?: () => Date;
@@ -74,9 +80,9 @@ export async function observeAquariumLiveMarketV1(
 ): Promise<AquariumLiveObservationV1> {
   const deployment = options.deployment ?? DEVNET_DEPLOYMENT_V1;
   const readMarket = options.readMarket ?? inspectMarketDetailV1;
-  aborted(options.signal);
+  discardIfAborted(options.signal);
   const facts = await client.probe();
-  aborted(options.signal);
+  discardIfAborted(options.signal);
   if (facts.genesisHash !== SOLANA_DEVNET_GENESIS_HASH_V1 || facts.genesisHash !== deployment.genesisHash) {
     throw new Error('the configured public endpoint did not identify itself as Solana devnet');
   }
@@ -87,13 +93,13 @@ export async function observeAquariumLiveMarketV1(
     custodyProgramId: deployment.programs.custody,
     address: selection.address,
   });
-  aborted(options.signal);
+  discardIfAborted(options.signal);
   if (detail.card.status !== 'decoded') throw new Error(`the selected Market did not decode: ${detail.reason}`);
   if (!selection.checkedReleaseSetIds.includes(detail.card.identity.selectedReleaseSetId)) {
     throw new Error('the selected Market does not name a checked release set for this cohort');
   }
   const signatures = await client.signaturesForAddress(selection.address, AQUARIUM_LIVE_SIGNATURE_LIMIT_V1);
-  aborted(options.signal);
+  discardIfAborted(options.signal);
   return Object.freeze({
     address: selection.address,
     detail,

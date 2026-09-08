@@ -66,6 +66,31 @@ pub(crate) struct ValidatorGuardV1 {
     child: Child,
 }
 
+/// The shared local-validator profile's default.  The ladder and relayed
+/// campaigns launch Agave directly, so they must carry the same explicit
+/// diagnostic override as `dclutch-successor-validator` rather than silently
+/// pinning a different cadence in this second launcher.
+const DEFAULT_TICKS_PER_SLOT_V1: u16 = 16;
+
+fn parse_ticks_per_slot_v1(value: Option<&str>) -> Result<u16> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_TICKS_PER_SLOT_V1);
+    };
+    let ticks = value
+        .parse::<u16>()
+        .map_err(|_| Error::new("DCLUTCH_TICKS_PER_SLOT must be a positive u16 decimal"))?;
+    if ticks == 0 {
+        return Err(Error::new(
+            "DCLUTCH_TICKS_PER_SLOT must be a positive u16 decimal",
+        ));
+    }
+    Ok(ticks)
+}
+
+fn ticks_per_slot_v1() -> Result<u16> {
+    parse_ticks_per_slot_v1(std::env::var("DCLUTCH_TICKS_PER_SLOT").ok().as_deref())
+}
+
 impl Drop for ValidatorGuardV1 {
     fn drop(&mut self) {
         self.stop();
@@ -158,6 +183,7 @@ fn spawn_validator(
     warp_slot: Option<u64>,
     log_path: &Path,
 ) -> Result<Child> {
+    let ticks_per_slot = ticks_per_slot_v1()?;
     let log = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -170,7 +196,7 @@ fn spawn_validator(
         .arg("--ledger")
         .arg(ledger)
         .arg("--ticks-per-slot")
-        .arg("16")
+        .arg(ticks_per_slot.to_string())
         .arg("--limit-ledger-size")
         .arg(std::env::var("DCLUTCH_LIMIT_LEDGER_SIZE").unwrap_or_else(|_| "100000000".to_owned()))
         .arg("--bind-address")
@@ -287,6 +313,7 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
         "keypairs",
     )?)?;
     let ledger = request.work.join("ledger");
+    let ticks_per_slot = ticks_per_slot_v1()?;
     let log = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -303,7 +330,7 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
         .arg("--mint")
         .arg(mint.pubkey().to_string())
         .arg("--ticks-per-slot")
-        .arg("16")
+        .arg(ticks_per_slot.to_string())
         // A LONG RUN NEEDS ITS HISTORY, and this tier was running without it.
         //
         // `solana-test-validator` keeps `--limit-ledger-size` shreds in root
@@ -613,4 +640,23 @@ pub(crate) fn authority_keypair(substrate: &CheckedSubstrateV1) -> Result<Keypai
 /// A well-known Pubkey helper for report identities.
 pub(crate) fn report_pubkey(value: &str, label: &str) -> Result<Pubkey> {
     pubkey(value).map_err(|_| Error::new(format!("{label} is not a canonical address: {value}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_TICKS_PER_SLOT_V1, parse_ticks_per_slot_v1};
+
+    #[test]
+    fn validator_tick_profile_defaults_and_accepts_a_positive_override() {
+        assert_eq!(
+            parse_ticks_per_slot_v1(None).expect("default profile"),
+            DEFAULT_TICKS_PER_SLOT_V1
+        );
+        assert_eq!(
+            parse_ticks_per_slot_v1(Some("64")).expect("slow diagnostic profile"),
+            64
+        );
+        assert!(parse_ticks_per_slot_v1(Some("0")).is_err());
+        assert!(parse_ticks_per_slot_v1(Some("fast")).is_err());
+    }
 }

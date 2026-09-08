@@ -28,8 +28,9 @@ usage: tools/gauntlet/run.sh [options]
                              campaign (195 transactions) after 7m of archive,
                              build, tool and inventory with a warm --work; a cold
                              --work adds ~6m of SBF builds. Budget 25-31 minutes,
-                             and read TIERS.md before treating a run as evidence:
-                             the campaign does not currently complete.
+                             for that older 195-transaction prefix. The floor
+                             subsequently completed; see TIERS.md for its
+                             measured revisions. Family campaigns are separate.
   --from STAGE     force a restart at a stage: archive|elf|tool|campaign|census
                    (later stages always re-run)
   --keep-runs      keep every campaign run directory (default: newest three)
@@ -277,7 +278,7 @@ if command -v swarm-build >/dev/null 2>&1; then
 else
     WRAP=""
 fi
-run_build() { if [ -n "$WRAP" ]; then "$WRAP" "$@"; else "$@"; fi; }
+source "$GAUNTLET/build-command.sh"
 
 # A stage runs when it is at or after --from, when its stamp differs, or when
 # any earlier stage ran in this invocation.
@@ -381,6 +382,17 @@ if [ "$MODE" = "full" ]; then
         command -v cargo-build-sbf >/dev/null 2>&1 || die "cargo-build-sbf not found"
         mkdir -p "$ELF_DIR"
         : > "$WORK/build-diagnostics.txt"
+        native_packages=()
+        for entry in $ROLES; do
+            rest="${entry#*:}"
+            native_packages+=(-p "${rest%%:*}")
+        done
+        (
+            cd "$SOURCE"
+            CARGO_TARGET_DIR="$HOST_TARGET" run_build cargo check --locked \
+                "${native_packages[@]}" -p dclutch-local-successor-bootstrap
+        ) > "$LOGS/check-native.log" 2>&1 \
+            || { tail -n 40 "$LOGS/check-native.log" >&2; die "native check failed before SBF builds"; }
         for entry in $ROLES; do
             role="${entry%%:*}"; rest="${entry#*:}"
             package="${rest%%:*}"; stem="${rest#*:}"
@@ -451,8 +463,9 @@ say "stage tool"
     || die "the census refused (tools/gate census)"
 [ -x "$CENSUS_BIN" ] || die "census binary missing: $CENSUS_BIN"
 if stage_needed tool "$SOURCE_DIGEST"; then
-    ( cd "$SOURCE/tools/local-validator/bootstrap/successor" \
-        && CARGO_TARGET_DIR="$HOST_TARGET" run_build cargo build --release ) \
+    ( cd "$SOURCE" \
+        && CARGO_TARGET_DIR="$HOST_TARGET" run_build cargo build --locked --release \
+            -p dclutch-local-successor-bootstrap ) \
         > "$LOGS/build-bootstrap.log" 2>&1 \
         || { tail -n 40 "$LOGS/build-bootstrap.log" >&2; die "bootstrap build failed"; }
     stage_done tool "$SOURCE_DIGEST"

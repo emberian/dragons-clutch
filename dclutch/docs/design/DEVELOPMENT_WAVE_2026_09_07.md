@@ -44,10 +44,11 @@ operator whose continued presence is required for holders to get paid.
   trips and exact hostile rollback. The dated authority is
   `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md`; this does not substitute for
   local-validator founding or full protocol route coverage.
-- Checked eight-program builds now exist through `53004ae59`, including the
-  General token-owner adapter and Claims Core-credit anchor. Its two frame
-  captures match. Later Ensemble funding and Dealer beneficiary repairs still
-  require a fresh all-program build. Publication cuts carry development work; they do
+- Checked eight-program builds now exist through `df6fddba9`, including the
+  Claims Core-credit anchor and Dealer beneficiary repair. Earlier intermediate
+  revisions have matching frame pairs; no final-source frame pair is claimed.
+  The next General projection and Ensemble allocation changes require a new
+  all-program build. Publication cuts carry development work; they do
   not assert that a build has become a deployed cohort.
 - Direct's validator journey has executed founding/Open, admission, nonzero
   fills and fees, objective Pyth resolution, and wallet payouts. The retirement
@@ -74,12 +75,16 @@ operator whose continued presence is required for holders to get paid.
   are implemented. The connected compiler now executes a native accepted
   control producing 39 records, with root-normalization and bad-Ticket checks.
   That fixture does not prove actual parent-manifest or physical account geometry.
-  The real Found/Prepare driver is being connected; the complete two-occurrence
-  validator campaign has not run.
+  Prepare's 111 logical account coordinates now have typed finalized,
+  canonical-record and predicted-layout sources, with physical alias checks.
+  The real parent-Market Found/Prepare driver is being connected; the complete
+  two-occurrence validator campaign has not run.
 - General's accepted nonempty path is being run after repairing action-scoped
   lifecycle funding and the semantic outer frame / key-sorted Claims child
-  boundary. Its next repair reads the actual external token-account owner,
-  respecting the selected token profile's variable account width. Dealer's
+  boundary. Its next repair authenticates the actual Core, Realm, Claims
+  Position, canonical RentCredit and token-source observations before projecting
+  owners into the General bank. The local Market producer must also replace
+  invented accelerator identities with checked deployment evidence. Dealer's
   first RentCredit repair exposed a second false assumption: its sponsor need
   not be the immutable Market credit's refund beneficiary. Finalized account
   bytes located that exact mismatch; the repair retains the canonical credit
@@ -89,13 +94,18 @@ operator whose continued presence is required for holders to get paid.
   not stand in for capture evidence. The two-member compiler and first-member
   real transport CLI reached fixed-three assumptions in host and pre-market
   funding wires. Those consumers now derive the full selection, with accepted
-  two-member and exact missing/extra/foreign member-run controls; a new runtime
-  is required before replaying capture. Recovery exhaustion reached terminal
+  two-member and exact missing/extra/foreign member-run controls. Actual funding
+  then exposed a remaining three-row ledger allocation for four Resolution
+  rows; that runtime owner is being repaired before replaying capture.
+  Recovery exhaustion reached terminal
   admission and all three refund payouts, recorded in
   `docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md`. Capture's prior
   Pyth submit succeeded but execution correctly refused an elapsed deadline.
   A measured 900-second rung is committed. Its fresh run instead stopped at
-  an expired Core-funding packet before Pyth; packet timing is being localized.
+  an expired Core-funding packet before Pyth. Phase timings are instrumented,
+  and the shared validator launcher now honors an explicit tick profile. A
+  fresh 64-tick control is running; the previous 16-tick result cannot establish
+  its outcome or justify relaxing packet freshness.
 - Structured's Claims operations have executed against real ELFs. The V6 child bridge and per-Market publication producer are committed.
   Executing the entrance exposed a missing root-creation descriptor. The set
   now enumerates seven action descriptors plus one V1 root-activation
@@ -108,11 +118,17 @@ operator whose continued presence is required for holders to get paid.
   eight Market identities; restoring each defect reproduces its exact failure.
   The Portfolio payoff remains unchanged when receipt units are scaled.
   The preserved validator now accepts selector-255 root activation. Receipt
-  construction next exposed a wrong descriptor selection; actual receipt
-  poststates remain owed.
+  construction next exposed a wrong descriptor selection and an N/K join.
+  Correcting those reached the demo producer's invented release ID, incompatible
+  with the real Core-selected execution release. The producer now binds the
+  checked release; its immutable old Market must be replaced. A fresh actual
+  receipt poststate remains owed.
 - Browser joining now carries the linked-basis binding, requires finalized
   confirmation and authenticated poststate, and resumes its transaction journal.
   Generated reference/client mirrors and the capability graph have converged.
+  A bounded live aquarium panel reads finalized Market details and recent
+  signatures, discards late results, and preserves stale facts honestly. Its
+  snapshot status ages independently of network refreshes.
   Cohort 18 is still a placeholder, so no current-cohort participation claim is
   justified yet.
 - The aquarium has bounded epochs, role and release checks, spending limits,
@@ -121,7 +137,9 @@ operator whose continued presence is required for holders to get paid.
   actual markets and ticket-author provenance before instantiation and
   supervision on devnet.
 - The initial local-validator tier at `0a869a766` still has thirteen compute
-  budget regressions. Those budgets have not been widened. Complete protocol
+  budget regressions. A fresh floor at `88aec17e8` is running with native
+  workspace checks and explicit refusal of containment no-op builds. Those
+  budgets have not been widened. Complete protocol
   route coverage, final release gates, devnet redeployment and a running public
   aquarium remain open deliverables.
 

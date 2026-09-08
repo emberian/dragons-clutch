@@ -170,9 +170,8 @@ fn structured_selected_payload_v1(
 /// Derived facts come from the release compiler itself -- kind and capacity
 /// profile are the family's Lean-generated constants and are not parameters at
 /// all -- and the Realm from the collateral Mint this market will be founded
-/// over. LAB FACTS, labeled: the release set and root schema are
-/// domain-separated projections of the plan's own release-set identity, because
-/// no Structured adapter deployment exists locally to observe.
+/// over. The execution release set is authenticated from the checked plan;
+/// Token behavior records are bound to that same Core-owned authority.
 ///
 /// The per-coordinate item width is also a lab fact and the honest one to
 /// scrutinise. It is the width of the one non-opaque per-coordinate account the
@@ -198,20 +197,11 @@ pub(crate) fn demo_structured_market_input(
     let mut input =
         crate::market::demo_market_input_base_shaped(registry, resolution_release, shape)?;
 
-    let lab = |label: &str| -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"dclutch:lab:structured-selection:v1");
-        hasher.update([0]);
-        hasher.update(plan.release_set_id.as_bytes());
-        hasher.update([0]);
-        hasher.update(label.as_bytes());
-        hasher.finalize().into()
-    };
     let product_basis = crate::runtime::decode_hex(&input.linked_basis_hex)?;
 
     let closure = structured_selected_closure_v1(StructuredSelectedReleaseInputV1 {
         realm: market_realm_identity_v1(collateral_mint)?,
-        release_set: lab("release-set"),
+        release_set: crate::plan::hex32(&plan.release_set_id)?,
         root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
         root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
             .map_err(|_| Error::new("Structured capability root width overflow"))?,
@@ -411,5 +401,26 @@ mod tests {
                 "the driver appends {reserved} for every family; a closure emitting it collides"
             );
         }
+    }
+    #[test]
+    fn token_behavior_binds_the_authenticated_execution_release() {
+        let basis = basis();
+        let realm = [0x18; 32];
+        let release = [0x15; 32];
+        let closure = structured_selected_closure_v1(release_input(realm, &basis))
+            .expect("closure with authenticated release");
+        let selection = dclutch_custody::token_svm::TokenBehaviorSelectionV2::decode_for_authenticated_selection(
+            &closure.config,
+            realm,
+            release,
+        )
+        .expect("Token behavior binds release");
+        assert_eq!(selection.release_set(), release);
+        assert!(dclutch_custody::token_svm::TokenBehaviorSelectionV2::decode_for_authenticated_selection(
+            &closure.config,
+            realm,
+            [0x16; 32],
+        )
+        .is_err());
     }
 }

@@ -138,7 +138,7 @@ pub fn process_pre_market_funding_v2(
 
     let manifest_id =
         CapabilityContentId::new(request.manifest).map_err(|_| ResolutionError::Funding)?;
-    let width = funding_ledger_bytes_v2(3).map_err(|_| ResolutionError::Funding)?;
+    let width = funding_ledger_width(request.selected_mask)?;
     let mut ledger_bytes = vec![0_u8; width];
     // THE ONE PLACE THE RATE IS OBSERVED. Everything downstream -- activation,
     // admission, the terminal walk, the close -- reads the figure recorded here
@@ -399,6 +399,18 @@ fn resolution_funding_plan(
         return Err(ResolutionError::Funding.into());
     }
     Ok((mask, native_principal))
+}
+
+/// Derive the physical ledger width from the authenticated selected mask.
+///
+/// Ensemble member rows make the Resolution subset wider than the original
+/// three-row control, while its mask remains sparse because the selected
+/// Trading capability can occur between companion rows.
+fn funding_ledger_width(
+    selected_mask: u16,
+) -> Result<usize, solana_program::program_error::ProgramError> {
+    let slots = u16::try_from(selected_mask.count_ones()).map_err(|_| ResolutionError::Funding)?;
+    funding_ledger_bytes_v2(slots).map_err(|_| ResolutionError::Funding.into())
 }
 
 fn authenticate_release_and_caller(
@@ -734,5 +746,118 @@ mod tests {
             authenticate_vacant_ledger(&replay, occupied_key.to_bytes(), replay_digest),
             Err(ResolutionError::OutputState.into())
         );
+    }
+
+    #[test]
+    fn sparse_ensemble_resolution_mask_allocates_every_selected_row() {
+        use dclutch_market::capability_manifest::{
+            ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+            FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+            MAX_DEPENDENCIES_PER_CAPABILITY,
+        };
+
+        let capability = |byte| CapabilityContentId::new([byte; 32]).expect("nonzero content");
+        let quote = FundingQuoteV1::new(
+            FundingAmountsV1::new(
+                CompartmentFundingV1::native_lamports(1).expect("rent"),
+                CompartmentFundingV1::native_lamports(1).expect("creation"),
+                CompartmentFundingV1::default(),
+                CompartmentFundingV1::default(),
+                CompartmentFundingV1::native_lamports(1).expect("bounty"),
+                CompartmentFundingV1::default(),
+                CompartmentFundingV1::default(),
+            )
+            .expect("native quote"),
+            None,
+        )
+        .expect("unbound native quote");
+        let mut entries = [CapabilityEntryV1::new(
+            capability(1),
+            capability(2),
+            capability(3),
+            capability(4),
+            capability(5),
+            capability(6),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote,
+        )
+        .expect("entry"); 5];
+        for (index, entry) in entries.iter_mut().enumerate() {
+            let release = if index == 3 {
+                capability(0x91)
+            } else {
+                CapabilityContentId::new(RESOLUTION_CONTROLLER_RELEASE_ID_V7)
+                    .expect("Resolution release")
+            };
+            *entry = CapabilityEntryV1::new(
+                capability(u8::try_from(10 + index).expect("bounded index")),
+                release,
+                capability(u8::try_from(20 + index).expect("bounded index")),
+                capability(30),
+                capability(31),
+                capability(32),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                quote,
+            )
+            .expect("canonical entry");
+        }
+        let mut manifest_bytes = [0_u8; MANIFEST_HEADER_BYTES + 5 * CAPABILITY_ENTRY_BYTES];
+        let manifest = CapabilityManifestV1::encode_into(&entries, &mut manifest_bytes)
+            .expect("five-entry manifest");
+        let direct_entries = [entries[0], entries[1], entries[2], entries[3]];
+        let mut direct_manifest_bytes = [0_u8; MANIFEST_HEADER_BYTES + 4 * CAPABILITY_ENTRY_BYTES];
+        let direct_manifest =
+            CapabilityManifestV1::encode_into(&direct_entries, &mut direct_manifest_bytes)
+                .expect("four-entry Direct control manifest");
+        let manifest_id = capability(0x92);
+        let ensemble_resolution_mask = 0b1_0111;
+        let direct_resolution_mask = 0b0_0111;
+        assert_eq!(
+            resolution_funding_plan(manifest)
+                .expect("Ensemble funding plan")
+                .0,
+            ensemble_resolution_mask,
+            "the four Resolution companions bracket the selected Trading entry"
+        );
+        assert_eq!(
+            resolution_funding_plan(direct_manifest)
+                .expect("Direct control funding plan")
+                .0,
+            direct_resolution_mask,
+            "the three-row Direct control retains its original selection"
+        );
+        assert_eq!(
+            funding_ledger_width(ensemble_resolution_mask),
+            funding_ledger_bytes_v2(4).map_err(|_| ResolutionError::Funding.into()),
+            "the four Resolution companions bracket the selected Trading entry"
+        );
+        for (label, selected_mask, expected_slots, candidate_manifest) in [
+            ("Ensemble", ensemble_resolution_mask, 4, manifest),
+            ("Direct control", direct_resolution_mask, 3, direct_manifest),
+        ] {
+            let width = funding_ledger_width(selected_mask).expect("selected-mask width");
+            let mut ledger_bytes = vec![0_u8; width];
+            FundingLedgerV2::initialize(
+                &mut ledger_bytes,
+                manifest_id,
+                candidate_manifest,
+                selected_mask,
+                1,
+            )
+            .unwrap_or_else(|error| panic!("{label} ledger initialization: {error:?}"));
+            assert_eq!(
+                FundingLedgerV2::decode(&ledger_bytes)
+                    .expect("initialized ledger")
+                    .slot_count(),
+                expected_slots,
+                "{label} requires one physical row per selected manifest entry"
+            );
+        }
     }
 }

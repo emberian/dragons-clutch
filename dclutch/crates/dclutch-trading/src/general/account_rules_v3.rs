@@ -2545,6 +2545,52 @@ pub fn general_place_order_transfer_custody_coordinate_v3(
     Err(GeneralAccountRuleErrorV3::Geometry)
 }
 
+/// Return one physical account from PlaceOrder's two-position Claims affine frame.
+///
+/// This pins the semantic outer order (`maker`, then the newly admitted order
+/// escrow) before Claims performs its private canonical key sort immediately
+/// before CPI.  The typed PlaceOrder observation adapter uses the maker slot to
+/// establish an actual Position owner; it must not infer that fact from the
+/// signed request or from the child-local sort order.
+pub fn general_place_order_affine_claims_coordinate_v3(wanted: ClaimsFrameRoleV1) -> Result<u16> {
+    let action = Action::PlaceOrder;
+    let mut route = 0_u16;
+    while route < general_effect_route_count_v3(action) {
+        let selected = general_effect_route_frame_v3(action, route)
+            .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+        if selected.frame == (GeneralChildFrameV3::ClaimsAffine { position_count: 2 }) {
+            let spec =
+                ClaimsFrameSpecV1::affine(2).map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+            let mut relative = 0_u16;
+            while relative
+                < selected
+                    .frame
+                    .account_count()
+                    .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?
+            {
+                if spec
+                    .account(relative)
+                    .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?
+                    .role()
+                    == wanted
+                {
+                    return selected
+                        .account_start
+                        .checked_add(relative)
+                        .ok_or(GeneralAccountRuleErrorV3::Geometry);
+                }
+                relative = relative
+                    .checked_add(1)
+                    .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+            }
+        }
+        route = route
+            .checked_add(1)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    }
+    Err(GeneralAccountRuleErrorV3::Geometry)
+}
+
 const fn route_alias(representative: u16) -> AccountRuleWithPrestateInputV2 {
     AccountRuleWithPrestateInputV2 {
         rule: AccountRuleInputV2 {
@@ -4109,6 +4155,45 @@ mod tests {
                 "distinct Custody facts cannot share a coordinate"
             );
         }
+    }
+
+    #[test]
+    fn place_order_typed_claims_adapter_pins_maker_before_child_key_sort() {
+        let action = Action::PlaceOrder;
+        let mut coordinates = [0_u16; 6];
+        for (slot, role) in [
+            ClaimsFrameRoleV1::CoreMarket,
+            ClaimsFrameRoleV1::CoreProgram,
+            ClaimsFrameRoleV1::RegistryProgram,
+            ClaimsFrameRoleV1::ClaimsProgram,
+            ClaimsFrameRoleV1::ClaimsMarket,
+            ClaimsFrameRoleV1::AffinePosition(0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let coordinate =
+                general_place_order_affine_claims_coordinate_v3(role).expect("PlaceOrder role");
+            let (_frame, relative) = child_coordinate(action, coordinate).expect("child frame");
+            assert_eq!(
+                ClaimsFrameSpecV1::affine(2)
+                    .and_then(|spec| spec.account(relative))
+                    .map(|account| account.role()),
+                Ok(role)
+            );
+            coordinates[slot] = coordinate;
+        }
+        for (left, right) in coordinates.iter().zip(coordinates.iter().skip(1)) {
+            assert_ne!(
+                left, right,
+                "distinct Claims facts cannot share a coordinate"
+            );
+        }
+        let maker = coordinates[5];
+        let escrow =
+            general_place_order_affine_claims_coordinate_v3(ClaimsFrameRoleV1::AffinePosition(1))
+                .expect("escrow Position");
+        assert!(maker < escrow, "outer profile keeps maker before escrow");
     }
 
     #[test]

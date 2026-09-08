@@ -34,6 +34,101 @@ use crate::{
     },
 };
 
+/// Finalized Registry coordinates for the immutable two-leaf Series founder
+/// material.  The Template is also M1's selected config; the occurrence and
+/// Ticket records remain M0 child facts and must never be folded into the
+/// parent Market manifest.
+#[derive(Clone, Debug)]
+pub(crate) struct PublishedSeriesFounderRecordsV1 {
+    pub(crate) template: crate::runtime::PublishedRecord,
+    pub(crate) occurrences: [crate::runtime::PublishedRecord; 2],
+    pub(crate) tickets: [crate::runtime::PublishedRecord; 2],
+}
+
+/// Publish the immutable child facts before the first Prepare can acquire
+/// them.  `publish_record` is idempotent only after re-reading and checking
+/// the derived raw record, so accepting an already-published Template still
+/// proves that M1's config bytes equal the founder's M0 template bytes.
+pub(crate) fn publish_series_founder_records_v1(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    payer: &Keypair,
+    founder: &crate::series_founder::PreparedSeriesFounderV1,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<PublishedSeriesFounderRecordsV1> {
+    use dclutch_trading::series::{
+        SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+        SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+    };
+
+    let publish = |schema,
+                   bytes: &[u8],
+                   label: &str,
+                   rpc: &mut Rpc,
+                   transactions: &mut Vec<crate::model::TransactionEvidence>| {
+        let record = crate::runtime::publish_record(
+            rpc,
+            registry,
+            payer,
+            schema,
+            bytes,
+            None,
+            transactions,
+        )?;
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
+        if record.schema != schema || record.digest != digest {
+            return Err(Error::new(format!(
+                "Series founder {label} publication changed schema or content"
+            )));
+        }
+        Ok(record)
+    };
+    let template = publish(
+        SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+        founder.admitted.template(),
+        "Template",
+        rpc,
+        transactions,
+    )?;
+    let occurrences = [
+        publish(
+            SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+            &founder.admitted.occurrences()[0],
+            "first occurrence",
+            rpc,
+            transactions,
+        )?,
+        publish(
+            SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+            &founder.admitted.occurrences()[1],
+            "second occurrence",
+            rpc,
+            transactions,
+        )?,
+    ];
+    let tickets = [
+        publish(
+            SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+            &founder.admitted.tickets()[0],
+            "first Ticket",
+            rpc,
+            transactions,
+        )?,
+        publish(
+            SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+            &founder.admitted.tickets()[1],
+            "second Ticket",
+            rpc,
+            transactions,
+        )?,
+    ];
+    Ok(PublishedSeriesFounderRecordsV1 {
+        template,
+        occurrences,
+        tickets,
+    })
+}
+
 /// Activate the just-founded Series parent from its durable founding report.
 ///
 /// The command is deliberately separate from the generic founding executable:

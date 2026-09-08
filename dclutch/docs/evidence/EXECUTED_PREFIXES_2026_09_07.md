@@ -91,3 +91,31 @@ Raw family logs are under
 `general-open-batch.log`, `general-profile-located.log`, and
 `dealer-validator.log`. These verdicts remain failed or incomplete until a
 dated follow-up names the new artifacts and accepted poststates.
+
+## Dated addendum — 2026-09-07, later development wave
+
+The preceding verdicts describe their named revisions, not the latest queue.
+The Direct tail subsequently completed payouts and retirement on the preserved
+567 runtime; its artifact hashes, signatures, refunds and five absent terminal
+accounts are recorded in
+`JOURNEY_RUNTIME567_DIAGNOSTIC_TAIL_2026_09_07.md`. Recovery exhaustion also
+reached Core/Claims terminal admission and three ordinary-founder refunds; see
+`RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md`. Both are diagnostic execution
+with stated host-provenance limits, and neither substitutes for a complete
+fresh final-release campaign.
+
+Other prefixes advanced without completing their families. Structured reached
+root activation, then exposed a demo producer's invented execution-release ID
+in its immutable Token behavior configuration. The producer repair
+`a57a54fa3` requires a fresh Market. General has progressed beyond the old
+ProfileMismatch into authenticated external-account projections; a complete
+accepted nonempty lifecycle remains owed. Ensemble reached controller funding
+and exposed a three-row allocation for a four-row Resolution ledger. Dealer's
+canonical credit was correct, but the adapter incorrectly required its refund
+beneficiary to equal the sponsor; `df6fddba9` removes that false equality while
+retaining the Core-selected credit anchor. These are located defects and code
+repairs, not accepted terminal execution evidence.
+
+The current implementation queue lives in
+`../design/DEVELOPMENT_WAVE_2026_09_07.md`. Reading an earlier dated failure or
+`tools/gauntlet/blocked.json` alone cannot establish what has never run since.

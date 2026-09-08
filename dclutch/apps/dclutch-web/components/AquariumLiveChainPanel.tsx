@@ -17,9 +17,26 @@ import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
 /** Public-RPC work stays intentionally small: one Market and eight signatures every 20 seconds. */
 export const AQUARIUM_LIVE_REFRESH_MS_V1 = 20_000;
 
-type State =
+export type AquariumLivePanelStateV1 =
   | Readonly<{ kind: 'unavailable' | 'error'; reason: string; observation: AquariumLiveObservationV1 | null }>
   | Readonly<{ kind: 'loading' | 'ready' | 'stale'; reason: string | null; observation: AquariumLiveObservationV1 | null }>;
+
+/** A hidden tab and an in-flight read both suppress another public-RPC call. */
+export function aquariumLiveRefreshAllowedV1(visible: boolean, inFlight: boolean): boolean {
+  return visible && !inFlight;
+}
+
+/** Never show facts for address A while the snapshot has selected address B. */
+export function aquariumLiveShownStateV1(
+  selection: ReturnType<typeof selectAquariumLiveMarketV1>,
+  state: AquariumLivePanelStateV1,
+): AquariumLivePanelStateV1 {
+  if (selection.kind === 'unavailable') return Object.freeze({ kind: 'unavailable', reason: selection.reason, observation: null });
+  if (state.observation !== null && state.observation.address !== selection.address) {
+    return Object.freeze({ kind: 'loading', reason: null, observation: null });
+  }
+  return state;
+}
 
 function short(value: string): string {
   return `${value.slice(0, 10)}…${value.slice(-8)}`;
@@ -36,7 +53,7 @@ function errorMessage(error: unknown): string {
  */
 export default function AquariumLiveChainPanel({ status }: Readonly<{ status: AquariumStatusV1 | null }>) {
   const selection = useMemo(() => selectAquariumLiveMarketV1(status, checkedReleaseSetIdsV1()), [status]);
-  const [state, setState] = useState<State>(() => selection.kind === 'unavailable'
+  const [state, setState] = useState<AquariumLivePanelStateV1>(() => selection.kind === 'unavailable'
     ? Object.freeze({ kind: 'unavailable', reason: selection.reason, observation: null })
     : Object.freeze({ kind: 'loading', reason: null, observation: null }));
   const lastKnown = useRef<AquariumLiveObservationV1 | null>(null);
@@ -55,7 +72,7 @@ export default function AquariumLiveChainPanel({ status }: Readonly<{ status: Aq
     const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
 
     const refresh = async (): Promise<void> => {
-      if (disposed || inFlight || document.visibilityState !== 'visible') return;
+      if (disposed || !aquariumLiveRefreshAllowedV1(document.visibilityState === 'visible', inFlight)) return;
       inFlight = true;
       controller = new AbortController();
       const prior = lastKnown.current;
@@ -80,6 +97,8 @@ export default function AquariumLiveChainPanel({ status }: Readonly<{ status: Aq
     };
     const onVisibility = (): void => {
       if (document.visibilityState === 'visible') void refresh();
+      // The SDK transport has no signal hook; abort only prevents its late
+      // result from entering React state while this page is hidden.
       else controller?.abort();
     };
     void refresh();
@@ -95,18 +114,16 @@ export default function AquariumLiveChainPanel({ status }: Readonly<{ status: Aq
 
   // The cohort gate is derived from the incoming snapshot, so render it
   // directly instead of synchronously setting state from this effect.
-  const shownState: State = selection.kind === 'unavailable'
-    ? Object.freeze({ kind: 'unavailable', reason: selection.reason, observation: null })
-    : state;
+  const shownState = aquariumLiveShownStateV1(selection, state);
   const observation = shownState.observation;
   const decoded = observation?.detail.card.status === 'decoded' ? observation.detail.card : null;
   return <section className="trade-v3-card">
-    <header><span>02</span><div><h2>Live devnet market read</h2><p>One checked market from the snapshot, read at finalized commitment. Recent signatures are the node&apos;s index; they are not all trades, and this read cannot show whether the aquarium worker is running.</p></div></header>
+    <header><span>02</span><div><h2>Live devnet market read</h2><p>One snapshot-listed market, read at finalized commitment and checked against its release set. Recent signatures are the node&apos;s index; they are not all trades, and this read cannot show whether the aquarium worker is running.</p></div></header>
     {shownState.kind === 'unavailable' && <p className="market-empty">{shownState.reason}</p>}
     {shownState.kind === 'error' && <p className="market-refusal">Live read unavailable: {shownState.reason}</p>}
     {observation !== null && decoded !== null && <>
       <div className="trade-v3-evidence">
-        <article><span>Selected market</span><strong><Anchor href={marketDetailHrefV1(observation.address)}>{short(observation.address)}</Anchor></strong><small>open its account detail and check joining there</small></article>
+        <article><span>Snapshot-listed market</span><strong><Anchor href={marketDetailHrefV1(observation.address)}>{short(observation.address)}</Anchor></strong><small>open its account detail and check joining there</small></article>
         <article><span>Finalized observation</span><strong>slot {observation.detail.floorSlot}</strong><small>read {observation.observedAt}</small></article>
         <article><span>Market phase now</span><strong>{decoded.phase}</strong><small>{shownState.kind === 'loading' ? 'refreshing this bounded read' : shownState.kind === 'stale' ? 'last known chain facts' : 'current finalized read'}</small></article>
       </div>

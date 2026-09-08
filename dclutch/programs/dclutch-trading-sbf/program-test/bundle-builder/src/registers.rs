@@ -515,17 +515,98 @@ pub(crate) fn run_engine_with_admitted_candidate(
         let mint = custody(dclutch_custody::CustodyFrameRoleV1::Mint)?;
         let token_program = custody(dclutch_custody::CustodyFrameRoleV1::TokenProgram)?;
         let source = custody(dclutch_custody::CustodyFrameRoleV1::TransferSource)?;
-        dclutch_trading::general::hot_candidate_v3::seed_general_place_order_custody_source_owner_v3(
-            realm.key(),
-            realm.data(),
-            mint.key(),
-            token_program.key(),
-            source.key(),
-            source.owner(),
-            source.data(),
+        let claims = |role| {
+            let coordinate = dclutch_trading::general::account_rules_v3::general_place_order_affine_claims_coordinate_v3(role)
+                .map_err(|_| BuilderError::Projection("general-place-order-claims-frame"))?;
+            observations
+                .get(usize::from(coordinate))
+                .copied()
+                .ok_or(BuilderError::Projection("general-place-order-claims-frame"))
+        };
+        let core_market = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::CoreMarket)?;
+        let core_program = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::CoreProgram)?;
+        let registry_program =
+            claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RegistryProgram)?;
+        let claims_program =
+            claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ClaimsProgram)?;
+        let claims_market = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ClaimsMarket)?;
+        let maker_position =
+            claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::AffinePosition(0))?;
+        let rent_credit = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentCredit)?;
+        let rent_program = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentProgram)?;
+        dclutch_trading::general::hot_candidate_v3::seed_general_place_order_actual_identities_v2(
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderActualFrameV2 {
+                core_market_key: core_market.key(),
+                core_market_owner: core_market.owner(),
+                core_market_data: core_market.data(),
+                core_program_key: core_program.key(),
+                registry_program_key: registry_program.key(),
+                realm_key: realm.key(),
+                realm_owner: realm.owner(),
+                realm_data: realm.data(),
+                claims_program_key: claims_program.key(),
+                claims_market_key: claims_market.key(),
+                claims_market_owner: claims_market.owner(),
+                claims_market_data: claims_market.data(),
+                maker_position_key: maker_position.key(),
+                maker_position_owner: maker_position.owner(),
+                maker_position_data: maker_position.data(),
+                rent_credit_key: rent_credit.key(),
+                rent_credit_owner: rent_credit.owner(),
+                rent_credit_data: rent_credit.data(),
+                rent_program_key: rent_program.key(),
+                mint_key: mint.key(),
+                token_program_key: token_program.key(),
+                source_key: source.key(),
+                source_program: source.owner(),
+                source_data: source.data(),
+            },
             &mut current_identities,
         )
-        .map_err(|_| BuilderError::Projection("general-place-order-source-owner"))?;
+        .map_err(|error| match error {
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity => {
+                BuilderError::Projection("general-place-order-source-owner-capacity")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity => {
+                BuilderError::Projection("general-place-order-source-owner-frame-identity")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::Realm => {
+                BuilderError::Projection("general-place-order-source-owner-realm")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::RealmTokenProgram => {
+                BuilderError::Projection("general-place-order-source-owner-realm-token-program")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::RealmMint => {
+                BuilderError::Projection("general-place-order-source-owner-realm-mint")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::AdapterRelease => {
+                BuilderError::Projection("general-place-order-source-owner-adapter-release")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::SourceProgram => {
+                BuilderError::Projection("general-place-order-source-owner-token-program")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::SourceToken => {
+                BuilderError::Projection("general-place-order-source-owner-token")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::SourceMint => {
+                BuilderError::Projection("general-place-order-source-owner-mint")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::CoreMarket => {
+                BuilderError::Projection("general-place-order-source-owner-core-market")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::RealmBinding => {
+                BuilderError::Projection("general-place-order-source-owner-realm-binding")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::ClaimsAggregate => {
+                BuilderError::Projection("general-place-order-source-owner-claims-aggregate")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::ClaimsPosition => {
+                BuilderError::Projection("general-place-order-source-owner-claims-position")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::ClaimsRentCredit => {
+                BuilderError::Projection("general-place-order-source-owner-claims-rent-credit")
+            }
+        })?;
     }
 
     // Phase 3: current-Rent quote projection.

@@ -163,6 +163,7 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
     let provisional = hydrate_structured_publication_input_same_slot_v1(
         &mut rpc,
         registry,
+        pubkey(&plan.core.program_id)?,
         &market_input,
         &evidence,
         activation_slot,
@@ -242,6 +243,7 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
     let input = hydrate_structured_publication_input_same_slot_v1(
         &mut rpc,
         registry,
+        pubkey(&plan.core.program_id)?,
         &market_input,
         &evidence,
         activation_slot,

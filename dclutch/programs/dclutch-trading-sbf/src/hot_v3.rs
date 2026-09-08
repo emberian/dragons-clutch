@@ -130,9 +130,13 @@ use dclutch_trading::{
         DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
     },
     general::{
-        account_rules_v3::general_place_order_transfer_custody_coordinate_v3,
+        account_rules_v3::{
+            general_place_order_affine_claims_coordinate_v3,
+            general_place_order_transfer_custody_coordinate_v3,
+        },
         hot_candidate_v3::{
-            seed_general_place_order_custody_source_owner_v3,
+            GeneralPlaceOrderActualFrameV2, GeneralPlaceOrderTokenObservationErrorV1,
+            seed_general_place_order_actual_identities_v2,
             seed_general_place_order_terms_from_signed_terms_v3,
         },
         state_artifacts_v3::general_readonly_evidence_v3,

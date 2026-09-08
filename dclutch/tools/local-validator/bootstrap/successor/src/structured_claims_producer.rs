@@ -157,6 +157,7 @@ pub(crate) fn structured_publication_input_from_finalized_v1(
     market: Pubkey,
     claims_program: Pubkey,
     artifacts: &crate::structured_activation::StructuredActivateReceiptArtifactsV1,
+    execution_release_set: [u8; 32],
     founding: StructuredFoundingBodiesV1,
     product_coordinates: Vec<u32>,
     denominator: u64,
@@ -171,7 +172,9 @@ pub(crate) fn structured_publication_input_from_finalized_v1(
     }
     Ok(StructuredPublicationInputV1 {
         market,
-        release_set: artifacts.token_behavior_selection.release_set(),
+        // Core owns the Market execution release. The selected Token behavior
+        // is a distinct semantic record and cannot choose receipt PDA seeds.
+        release_set: execution_release_set,
         claims_program,
         product_record_body: founding.product,
         result_domain_body: founding.result_domain,
@@ -712,6 +715,7 @@ fn founding_bodies_from_snapshot_v1(
 pub(crate) fn hydrate_structured_publication_input_same_slot_v1(
     rpc: &mut Rpc,
     registry: Pubkey,
+    core: Pubkey,
     market_input_bytes: &[u8],
     evidence: &CampaignTerminalEvidenceV1,
     minimum_slot: u64,
@@ -745,6 +749,9 @@ pub(crate) fn hydrate_structured_publication_input_same_slot_v1(
             .iter()
             .flat_map(|record| [record.raw, record.staging]),
     );
+    // The release set is Core-owned Market state, so bind it into this same
+    // finalized observation rather than borrowing Token behavior's release.
+    addresses.push(market);
     let (observation, live) =
         rpc.finalized_observed_accounts_admitting_vacant(&addresses, minimum_slot)?;
     let selected_width = selected.len() * 2;
@@ -760,15 +767,39 @@ pub(crate) fn hydrate_structured_publication_input_same_slot_v1(
     let mut founding_bodies = founding_bodies_from_snapshot_v1(
         registry,
         &founding,
-        live.get(selected_width..).ok_or_else(|| {
-            Error::new("Structured publication snapshot omitted founding records")
-        })?,
+        live.get(
+            selected_width
+                ..addresses
+                    .len()
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::new("Structured publication snapshot Market index"))?,
+        )
+        .ok_or_else(|| Error::new("Structured publication snapshot omitted founding records"))?,
     )?;
     founding_bodies.slot = observation.slot;
+    let market_account = live
+        .get(
+            addresses
+                .len()
+                .checked_sub(1)
+                .ok_or_else(|| Error::new("Structured publication snapshot Market index"))?,
+        )
+        .ok_or_else(|| Error::new("Structured publication snapshot omitted Core Market"))?;
+    let state = dclutch_market::CoreState::decode(&market_account.data)
+        .map_err(|error| Error::new(format!("Structured publication Core Market: {error:?}")))?;
+    if market_account.owner != core
+        || state.phase != dclutch_market::Phase::Open
+        || state.identity.market_id.to_bytes() != market.to_bytes()
+    {
+        return Err(Error::new(
+            "Structured publication Core Market does not own its execution release",
+        ));
+    }
     structured_publication_input_from_finalized_v1(
         market,
         claims_program,
         &artifacts,
+        state.identity.selected_release_set.to_bytes(),
         founding_bodies,
         product_coordinates,
         denominator,
@@ -1049,8 +1080,8 @@ mod tests {
         )
         .expect("canonical founding bodies");
         let release_set = hex32(&plan.release_set_id).expect("release set");
-        let portfolio = dclutch_product::PortfolioV2::decode(&preview.portfolio)
-            .expect("canonical Portfolio");
+        let portfolio =
+            dclutch_product::PortfolioV2::decode(&preview.portfolio).expect("canonical Portfolio");
         assert_eq!(portfolio.coefficient_count(), 4);
         assert_eq!(portfolio.denominator(), 1);
         assert_eq!(
