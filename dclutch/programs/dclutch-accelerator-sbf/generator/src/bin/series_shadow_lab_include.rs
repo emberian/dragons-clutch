@@ -2,38 +2,36 @@
 
 //! Emit one **lab-scoped** Series Shadow generated include for measurement.
 //!
-//! This binary exists to answer a question by measuring it rather than
-//! arguing it: *does the embedded ShadowAot certificate identity actually
-//! reach the accelerator ELF's bytes?* If it does, the certificate cannot
-//! name the deployment that embeds it, because
-//! `ArtifactReleaseV1::elf_digest` is then a function of the certificate that
-//! is supposed to be a function of it.
+//! This binary exists to measure a generated include from a supplied semantic
+//! release identity. The generator authors the corresponding semantic-bound
+//! certificate; an ArtifactRelease can later bind the resulting ELF and its
+//! live deployment without becoming an input to that certificate.
 //!
 //! What this driver is NOT: an operator. It authenticates no finalized
 //! record, joins no chain observation, and selects no release.
 //! `build_series_shadow_source_v1` is the operator path. Every include this
-//! binary writes carries a lab certificate supplied on the command line and
-//! is explicitly not release evidence.
+//! binary writes is explicitly not release evidence.
 //!
 //! What it *is* honest about: the descriptor semantics, the LifecycleV5
 //! bytes, the account widths and the child requests are all taken from
-//! Trading's own canonical `series_consume_selected_release_v4` for the same
-//! certificate, so the generator compiles the bundle for the exact release
-//! Trading would publish. The driver then requires the generator's
+//! Trading's own canonical `series_consume_selected_release_v4` for the
+//! generated certificate, so the generator compiles the bundle for the exact
+//! release Trading would publish. The driver then requires the generator's
 //! independently rebuilt `CapabilityProgramV4` to equal Trading's descriptor
 //! byte for byte — the first time those two compilers have been joined.
 //!
-//! Usage: `series_shadow_lab_include <certificate-hex-32> <out-dir>`
+//! Usage: `series_shadow_lab_include <accelerator-semantic-release-hex-32> <out-dir>`
 
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
-use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_series_shadow_bundle_generator::{
     SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4, SeriesShadowBundleSourceV4,
     SeriesShadowDescriptorSemanticsV4, SeriesShadowReleaseSourcesV4,
-    compile_series_shadow_source_manifest_v1, emit_series_shadow_generated_include_v1,
+    compile_series_shadow_bundle_v4, compile_series_shadow_source_manifest_v1,
+    emit_series_shadow_generated_include_v1,
 };
 use dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3;
 use dclutch_trading_sbf::series::{
@@ -80,15 +78,18 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let arguments: Vec<String> = env::args().skip(1).collect();
-    let (certificate_hex, out_dir) = match arguments.as_slice() {
-        [certificate, directory] => (certificate.clone(), PathBuf::from(directory)),
+    let (semantic_release_hex, out_dir) = match arguments.as_slice() {
+        [semantic_release, directory] => (semantic_release.clone(), PathBuf::from(directory)),
         _ => {
-            return Err("usage: series_shadow_lab_include <certificate-hex-32> <out-dir>".into());
+            return Err(
+                "usage: series_shadow_lab_include <accelerator-semantic-release-hex-32> <out-dir>"
+                    .into(),
+            );
         }
     };
-    let certificate_bytes = decode_hex(&certificate_hex)?;
-    let certificate = ContentId::new(certificate_bytes)
-        .map_err(|_| "certificate identity is zero".to_string())?;
+    let semantic_release_bytes = decode_hex(&semantic_release_hex)?;
+    let accelerator_semantic_release = ContentId::new(semantic_release_bytes)
+        .map_err(|_| "accelerator semantic release identity is zero".to_string())?;
 
     // The toolchain manifest is a real measurement of this build host, not a
     // label. It is still lab-scoped: a release toolchain manifest is pinned
@@ -99,7 +100,10 @@ fn run() -> Result<(), String> {
         env::var("SERIES_SHADOW_LAB_TARGET").unwrap_or_else(|_| "unrecorded".into()),
     );
 
-    // Trading's own canonical release for this exact certificate.
+    // Compile the certificate's contract tuple with a provisional Trading
+    // release. Its strategy identity does not feed the certificate: only the
+    // descriptor semantic coordinates, Lifecycle, widths, and child requests
+    // do. The generated certificate then selects the final Trading release.
     //
     // Lock, Core and Realize stay opaque lab filler: the Consume emitter only
     // zeroes their root-dependent windows and copies the rest. The Claims
@@ -122,7 +126,7 @@ fn run() -> Result<(), String> {
     let release = series_consume_selected_release_v4(SeriesConsumeSelectedReleaseInputV4 {
         template,
         template_occurrence_count: LAB_OCCURRENCE_COUNT,
-        shadow_certificate_program: certificate,
+        shadow_certificate_program: accelerator_semantic_release,
         child_requests,
         observed_data_lengths: &observed,
     })
@@ -158,12 +162,24 @@ fn run() -> Result<(), String> {
             semantic_source: SEMANTIC_SOURCE,
             compiler_source: COMPILER_SOURCE,
             toolchain_manifest: toolchain_manifest.as_bytes(),
-            certificate,
+            accelerator_semantic_release,
+            translation_validation: content_id(toolchain_manifest.as_bytes())?,
         },
         lifecycle: &release.lifecycle,
         fixed_data_lengths: &lengths,
         child_requests,
     };
+
+    let compiled = compile_series_shadow_bundle_v4(source)
+        .map_err(|error| format!("generator refused: {error:?}"))?;
+    let release = series_consume_selected_release_v4(SeriesConsumeSelectedReleaseInputV4 {
+        template,
+        template_occurrence_count: LAB_OCCURRENCE_COUNT,
+        shadow_certificate_program: compiled.certificate_program,
+        child_requests,
+        observed_data_lengths: &observed,
+    })
+    .map_err(|error| format!("Trading selected generated release refused: {error:?}"))?;
 
     let manifest = compile_series_shadow_source_manifest_v1(source)
         .map_err(|error| format!("generator refused: {error:?}"))?;
@@ -188,7 +204,11 @@ fn run() -> Result<(), String> {
     fs::write(&include_path, &include).map_err(|error| format!("write include: {error}"))?;
     fs::write(&manifest_path, &manifest).map_err(|error| format!("write manifest: {error}"))?;
 
-    println!("certificate_id       {certificate_hex}");
+    println!("semantic_release_id  {semantic_release_hex}");
+    println!(
+        "certificate_id       {}",
+        hex(&compiled.certificate_program.to_bytes())
+    );
     println!("descriptor_join      OK (generator == Trading, byte for byte)");
     println!(
         "trading_descriptor   {}",
@@ -217,7 +237,7 @@ fn decode_hex(value: &str) -> Result<[u8; 32], String> {
     let trimmed = value.trim();
     if trimmed.len() != 64 {
         return Err(format!(
-            "certificate must be 64 hex characters, got {}",
+            "semantic release must be 64 hex characters, got {}",
             trimmed.len()
         ));
     }
@@ -236,6 +256,10 @@ fn decode_hex(value: &str) -> Result<[u8; 32], String> {
             .map_err(|error| format!("bad hex at byte {index}: {error}"))?;
     }
     Ok(output)
+}
+
+fn content_id(bytes: &[u8]) -> Result<ContentId, String> {
+    ContentId::new(Sha256::digest(bytes).into()).map_err(|_| "content identity is zero".to_string())
 }
 
 fn hex(bytes: &[u8]) -> String {

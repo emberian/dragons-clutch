@@ -14,6 +14,12 @@ use std::{env, fs, path::PathBuf};
 #[allow(dead_code)]
 mod pyth_provider;
 
+use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_custody::{
+    CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
+    CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+};
 use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
@@ -24,17 +30,8 @@ use dclutch_market::capability_manifest::{
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
-use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_custody::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
-    CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
-};
-use dclutch_trading::{
-    execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
-    successor::{
-        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
-        DirectExecutionConfigV1, DirectRootStateV1,
-    },
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
 use dclutch_market::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
@@ -43,14 +40,14 @@ use dclutch_market::{
 use dclutch_market_open_v1_operator::{
     RegistryOpenMarketContinuationStateV1, build_registry_open_market_continuation_v1,
 };
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, ResultDomainV2,
     compile_portfolio_v2, compile_result_domain_v2, portfolio_record_bytes,
     result_domain_record_bytes,
-};
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_provider_transport_v3_operator::{
@@ -61,36 +58,18 @@ use dclutch_provider_transport_v3_operator::{
     build_provider_ensemble_member_execute_v3, build_provider_execute_v3,
     build_provider_reclaim_v3, build_provider_submit_v3,
 };
-use dclutch_source::pyth::{
-    FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
-};
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
-};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    activate_execution_role_into_v1, initialize_activation_cache_v1,
-};
-use dclutch_source::relay::instruction::{
-    AdvanceRecoveryInstructionV1, CommitDeadlineFailureInstructionV1,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
     ProtocolInfrastructureProfileV2,
 };
-use dclutch_source::resolution::{
-    EnsembleFragmentSeatSeedsV1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
-    PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
-    ResolutionCertificateKindV2, ResolutionCertificateV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 use dclutch_resolution_core_v3_operator::{
     Finality, Observation, ObservedAccount, ResolutionActivateFundSnapshotV1,
@@ -103,6 +82,21 @@ use dclutch_resolution_core_v3_operator::{
     validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_resolution_proof_sbf::ResolutionError;
+use dclutch_source::pyth::{
+    FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
+};
+use dclutch_source::relay::instruction::{
+    AdvanceRecoveryInstructionV1, CommitDeadlineFailureInstructionV1,
+};
+use dclutch_source::resolution::{
+    EnsembleFragmentSeatSeedsV1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+    FundingActivationReceiptV1, PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    ResolutionCertificateKindV2, ResolutionCertificateV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
+    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+};
 use dclutch_source::{
     CapacityEnvelope, ContentId as SourceContentId, EnsembleSpecV1, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
@@ -114,7 +108,13 @@ use dclutch_source::{
     SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
 };
-use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_trading::{
+    execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
+    successor::{
+        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
+        DirectExecutionConfigV1, DirectRootStateV1,
+    },
+};
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table, freeze_lookup_table,
@@ -513,18 +513,21 @@ fn add_active_funding(
     market: Pubkey,
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
-    entries: [u16; 3],
+    selected_mask: u16,
 ) -> Pubkey {
-    let selected_mask = entries
-        .into_iter()
-        .fold(0_u16, |mask, entry| mask | (1_u16 << entry));
-    let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let width = funding_ledger_bytes_v2(
+        u16::try_from(selected_mask.count_ones()).expect("selected mask fits u16"),
+    )
+    .expect("selected FundingLedgerV2 width");
     let rent = Rent::default().minimum_balance(width);
     let mut state = vec![0_u8; width];
     let rate = funded_rent_rate(width);
     FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask, rate)
         .expect("pending FundingLedgerV2");
-    for entry_index in entries {
+    for entry_index in 0_u16..16 {
+        if selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         FundingLedgerV2::activate_in_place(&mut state, manifest_id, manifest, entry_index, 1)
             .expect("active FundingLedgerV2 row");
     }
@@ -553,12 +556,12 @@ fn add_pending_funding(
     market: Pubkey,
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
-    entries: [u16; 3],
+    selected_mask: u16,
 ) -> Pubkey {
-    let selected_mask = entries
-        .into_iter()
-        .fold(0_u16, |mask, entry| mask | (1_u16 << entry));
-    let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let width = funding_ledger_bytes_v2(
+        u16::try_from(selected_mask.count_ones()).expect("selected mask fits u16"),
+    )
+    .expect("selected FundingLedgerV2 width");
     let rent = Rent::default().minimum_balance(width);
     let mut state = vec![0_u8; width];
     let rate = funded_rent_rate(width);
@@ -590,7 +593,10 @@ fn funding_key(
     manifest: CapabilityManifestV1<'_>,
     selected_mask: u16,
 ) -> Pubkey {
-    let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let width = funding_ledger_bytes_v2(
+        u16::try_from(selected_mask.count_ones()).expect("selected mask fits u16"),
+    )
+    .expect("selected FundingLedgerV2 width");
     let mut state = vec![0_u8; width];
     let rate = funded_rent_rate(width);
     FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask, rate)
@@ -656,8 +662,7 @@ fn custody_request(
         expected_revision: 0,
         resulting_revision: 1,
         amount: 0,
-        rent_lamports: Rent::default()
-            .minimum_balance(dclutch_custody::CUSTODY_REPLAY_BYTES_V1),
+        rent_lamports: Rent::default().minimum_balance(dclutch_custody::CUSTODY_REPLAY_BYTES_V1),
     };
     if operation == OperationV1::OpenVault {
         request.operation = operation;
@@ -667,7 +672,8 @@ fn custody_request(
         request.token_program = LEGACY_TOKEN_PROGRAM_ID;
         request.expected_revision = 1;
         request.resulting_revision = 2;
-        request.rent_lamports = Rent::default().minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES);
+        request.rent_lamports =
+            Rent::default().minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES);
         request.destination = Pubkey::find_program_address(
             &CustodyVaultSeedsV1::from_request(request, false).as_slices(),
             &CUSTODY_PROGRAM_ID,
@@ -738,13 +744,15 @@ enum MarketPrestateV1 {
     /// Source has not become a terminal, and the member fragment is the only
     /// output the producer may write.
     ///
-    /// The fixture intentionally seeds this Source instead of pretending the
-    /// current three-row controller-funding frame can found a two-member
-    /// policy: members need two allocation rows plus policy and material,
-    /// while that frame names three rows. The direct capture itself neither
-    /// reads nor mutates funding; the real-ELF case below measures that route
-    /// separately from the funded fold/reclaim campaign.
+    /// The fixture intentionally seeds this Source: direct capture neither
+    /// reads nor mutates funding, so this real-ELF case stays focused on the
+    /// provider boundary.
     EnsembleMember,
+    /// A founding Ensemble has two recovery allocations plus policy and
+    /// material compartments: four Resolution rows and one Direct row. This
+    /// is the smallest canonical five-row shape that exercises activation's
+    /// complete selected mask.
+    EnsembleFunding,
 }
 
 impl MarketPrestateV1 {
@@ -792,7 +800,10 @@ impl MarketPrestateV1 {
     /// policy -- and naming it is what turns a market with one terminal into a
     /// market with a ladder.
     const fn recovery_terms(self) -> bool {
-        matches!(self, Self::WalkableRecovery | Self::EnsembleMember)
+        matches!(
+            self,
+            Self::WalkableRecovery | Self::EnsembleMember | Self::EnsembleFunding
+        )
     }
 
     /// Whether this material has declared member slots before any recovery
@@ -800,7 +811,7 @@ impl MarketPrestateV1 {
     /// accepted member capture is sufficient evidence for the producer without
     /// claiming a quorum fold from one fragment.
     const fn ensemble_terms(self) -> bool {
-        matches!(self, Self::EnsembleMember)
+        matches!(self, Self::EnsembleMember | Self::EnsembleFunding)
     }
 
     /// Whether the fixture starts with a Resolution-owned Source account.
@@ -1215,35 +1226,39 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     )
     .expect("funding quote");
     let entries = if ensemble_terms {
-        [
+        vec![
             (0xa1, recovery_allocation.to_bytes()),
             (0xa2, ensemble_second_allocation.to_bytes()),
-            (0xa3, material_id),
+            (0xa3, recovery_policy_id),
+            (0xa4, material_id),
         ]
     } else {
-        [
+        vec![
             (0xa1, recovery_allocation.to_bytes()),
             (0xa2, recovery_policy_id),
             (0xa3, material_id),
         ]
-    }
-    .map(|(seed, config)| {
-        CapabilityEntryV1::new(
-            id([seed; 32]),
-            id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
-            id(config),
-            id([0xa4; 32]),
-            id([0xa5; 32]),
-            id([0xa6; 32]),
-            ActivationPolicy::RequiredAtFounding,
-            0,
-            0,
-            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
-            quote,
-        )
-        .expect("Resolution funding entry")
-    });
-    // The Direct capability, and the reason this manifest has four rows.
+    };
+    let entries = entries
+        .into_iter()
+        .map(|(seed, config)| {
+            CapabilityEntryV1::new(
+                id([seed; 32]),
+                id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
+                id(config),
+                id([0xa4; 32]),
+                id([0xa5; 32]),
+                id([0xa6; 32]),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                quote,
+            )
+            .expect("Resolution funding entry")
+        })
+        .collect::<Vec<_>>();
+    // The Direct capability is the one manifest row Resolution does not fund.
     //
     // Until 2026-09-02 this campaign resolved a market whose manifest was three
     // Resolution rows and nothing else -- a shape no Direct market has. A market
@@ -1316,7 +1331,8 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     // (`tools/local-validator/bootstrap/successor/src/selected_capability.rs`),
     // which is the reason a fourth non-Resolution row is a shape the funding
     // walk already has to survive.
-    let mut entries = vec![entries[0], entries[1], entries[2], direct_entry];
+    let mut entries = entries;
+    entries.push(direct_entry);
     entries.sort_by(|left, right| left.kind_id().to_bytes().cmp(&right.kind_id().to_bytes()));
     let direct_capability_entry_index = u16::try_from(
         entries
@@ -1325,14 +1341,30 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
             .expect("the Direct row is in the manifest"),
     )
     .expect("manifest row index");
-    let resolution_entry_indices: [u16; 3] = core::array::from_fn(|slot| {
-        let mut rows = (0..4_u16).filter(|row| *row != direct_capability_entry_index);
-        rows.nth(slot).expect("three Resolution rows")
-    });
-    let resolution_selected_mask = resolution_entry_indices
-        .into_iter()
-        .fold(0_u16, |mask, entry| mask | (1_u16 << entry));
-    let mut manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + 4 * CAPABILITY_ENTRY_BYTES];
+    let resolution_entry_indices = [
+        entries
+            .iter()
+            .position(|entry| entry.config_id().to_bytes() == recovery_allocation.to_bytes())
+            .expect("recovery allocation row"),
+        entries
+            .iter()
+            .position(|entry| entry.config_id().to_bytes() == recovery_policy_id)
+            .expect("recovery policy row"),
+        entries
+            .iter()
+            .position(|entry| entry.config_id().to_bytes() == material_id)
+            .expect("material row"),
+    ]
+    .map(|index| u16::try_from(index).expect("bounded manifest row"));
+    let resolution_selected_mask = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7)
+        .fold(0_u16, |mask, (index, _)| {
+            mask | (1_u16 << u16::try_from(index).expect("bounded manifest row"))
+        });
+    let mut manifest_bytes =
+        vec![0; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&entries, &mut manifest_bytes).expect("capability manifest");
     let manifest_id_bytes = hash(&manifest_bytes).to_bytes();
     let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest view");
@@ -1558,7 +1590,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
             market,
             manifest_id,
             manifest,
-            resolution_entry_indices,
+            resolution_selected_mask,
         )
     } else {
         add_pending_funding(
@@ -1566,7 +1598,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
             market,
             manifest_id,
             manifest,
-            resolution_entry_indices,
+            resolution_selected_mask,
         )
     };
     let activation_receipt = Pubkey::find_program_address(
@@ -1929,13 +1961,20 @@ async fn assert_funding_ledger_status(
         ledger.ledger().selected_mask(),
         fixture.resolution_selected_mask
     );
-    assert_eq!(ledger.ledger().slot_count(), 3);
+    assert_eq!(
+        ledger.ledger().slot_count(),
+        u16::try_from(fixture.resolution_selected_mask.count_ones())
+            .expect("selected mask fits u16")
+    );
     assert_eq!(
         ledger.ledger().selected_mask() & (1 << fixture.direct_capability_entry_index),
         0,
         "the Resolution subset must not select the Direct capability's row"
     );
-    for entry_index in fixture.resolution_entry_indices {
+    for entry_index in 0_u16..16 {
+        if fixture.resolution_selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         assert_eq!(
             ledger.slot(entry_index).expect("selected row").status(),
             expected
@@ -2965,6 +3004,90 @@ async fn open_rollback_snapshot(
         vault: observed(context, fixture.vault).await,
         rent_credit: observed(context, fixture.rent_credit).await,
     }
+}
+
+#[tokio::test]
+async fn ensemble_five_row_funding_activates_every_resolution_compartment() {
+    let mut fixture = fixture(MarketPrestateV1::EnsembleFunding);
+    assert_eq!(fixture.resolution_selected_mask.count_ones(), 4);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.slot = clock.slot.max(1);
+    clock.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&clock);
+    let payer = context.payer.pubkey();
+
+    let create = build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await)
+        .expect("five-row Ensemble CreateFund derives its complete funding mask");
+    assert_eq!(
+        create.funding_entry_indices,
+        fixture.resolution_entry_indices
+    );
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &fixture.source, create.source_top_up_lamports),
+            create.instruction,
+        ],
+    )
+    .await
+    .expect("five-row Ensemble CreateFund accepts");
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Pending).await;
+
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("five-row Ensemble activation derives from the Pending ledger");
+    let mut instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        instructions.push(transfer(
+            &payer,
+            &fixture.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
+    }
+    instructions.push(activation.instruction);
+    submit(&mut context, &instructions)
+        .await
+        .expect("five-row Ensemble activation accepts every selected Resolution row");
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
+    let ledger_account = observed(&mut context, fixture.funding)
+        .await
+        .expect("active four-row FundingLedgerV2");
+    let manifest_account = observed(&mut context, fixture.capability_manifest.raw)
+        .await
+        .expect("canonical five-row capability manifest");
+    let manifest = CapabilityManifestV1::decode(&manifest_account.data)
+        .expect("canonical five-row manifest view");
+    let manifest_id = CapabilityContentId::new(hash(&manifest_account.data).to_bytes())
+        .expect("canonical five-row manifest identity");
+    let ledger = FundingLedgerV2::decode(&ledger_account.data)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .expect("authenticated active four-row FundingLedgerV2");
+    let receipt = FundingActivationReceiptV1::decode(
+        &observed(&mut context, fixture.activation_receipt)
+            .await
+            .expect("immutable activation receipt")
+            .data,
+    )
+    .expect("five-row activation receipt");
+    assert_eq!(
+        receipt.ledger_rent_lamports,
+        ledger
+            .funded_rent_minimum(ledger_account.data.len())
+            .expect("recorded four-row rent"),
+        "the receipt commits the authenticated ledger width rather than the obsolete three-row width"
+    );
 }
 
 #[tokio::test]
@@ -4350,12 +4473,7 @@ async fn a_real_pyth_member_capture_writes_a_fragment_and_keeps_primary() {
     );
     let resolver = Keypair::new();
     let fragment = Pubkey::find_program_address(
-        &EnsembleFragmentSeatSeedsV1::new(
-            fixture.source.to_bytes(),
-            1,
-            TERMINAL_SEQUENCE,
-        )
-        .seeds(),
+        &EnsembleFragmentSeatSeedsV1::new(fixture.source.to_bytes(), 1, TERMINAL_SEQUENCE).seeds(),
         &RESOLUTION_PROGRAM_ID,
     )
     .0;
@@ -4395,13 +4513,10 @@ async fn a_real_pyth_member_capture_writes_a_fragment_and_keeps_primary() {
         member_capture.instruction.program_id, RESOLUTION_PROGRAM_ID,
         "member capture enters Resolution directly; Core only receives a later ensemble fold"
     );
-    let capture_units = submit_measuring_units(
-        &mut context,
-        &[member_capture.instruction],
-        &[&resolver],
-    )
-    .await
-    .expect("the current Resolution ELF accepts the checked Pyth member capture");
+    let capture_units =
+        submit_measuring_units(&mut context, &[member_capture.instruction], &[&resolver])
+            .await
+            .expect("the current Resolution ELF accepts the checked Pyth member capture");
 
     assert_eq!(
         observed(&mut context, fixture.source)

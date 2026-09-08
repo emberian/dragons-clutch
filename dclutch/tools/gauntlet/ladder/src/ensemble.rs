@@ -10,11 +10,21 @@ use dclutch_provider_transport_v3_operator::{
     build_provider_ensemble_member_execute_v3,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_source::{PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RecoveryPolicyV2, SourceMaterialV3};
+use dclutch_source::{
+    EnsembleFoldReceiptV1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RecoveryPolicyV2, SourceMaterialV3,
+    SourceResolutionPhaseV1, SourceResolutionStateV2,
+    relay::instruction::{EnsembleFoldInstructionV1, ReclaimMemberSeatInstructionV1},
+    resolution::{
+        EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1,
+        RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2,
+    },
+};
 use solana_sdk::{
+    instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::{Keypair, Signer},
 };
+use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
     Error, Result,
@@ -538,6 +548,141 @@ fn live_registry_artifact_pair_v1(
     Ok((raw, staging))
 }
 
+/// Build the exact fold frame from the Market's finalized graph and the two
+/// resolver keys which actually authored fragments. Empty members still occupy
+/// their contract-mandated captor position, but cannot receive a payment.
+fn ensemble_fold_instruction_v1(
+    rpc: &mut Rpc,
+    payer: Pubkey,
+    addresses: &ResolutionAddressesV1,
+    captors: &[Option<Pubkey>],
+    terminal_sequence: u64,
+) -> Result<(Instruction, Pubkey, Vec<Pubkey>)> {
+    let material_account =
+        rpc.required_account(addresses.source_material.raw, "Ensemble material for fold")?;
+    let material = SourceMaterialV3::decode(&material_account.data)
+        .map_err(|error| Error::new(format!("Ensemble fold SourceMaterialV3: {error:?}")))?;
+    let members = material.ensemble().members();
+    if captors.len() != usize::from(members) {
+        return Err(Error::new(
+            "Ensemble fold captor list does not cover every declared member",
+        ));
+    }
+    let receipt = Pubkey::find_program_address(
+        &EnsembleFoldReceiptSeatSeedsV1::new(addresses.source_state.to_bytes(), terminal_sequence)
+            .seeds(),
+        &addresses.resolution_program,
+    )
+    .0;
+    let certificate = Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+            addresses.source_state.as_ref(),
+            &[ResolutionCertificateKindV2::ResolutionSuccess.kind_seed()],
+            &terminal_sequence.to_le_bytes(),
+        ],
+        &addresses.resolution_program,
+    )
+    .0;
+    let mut accounts = vec![
+        AccountMeta::new(payer, true),
+        AccountMeta::new_readonly(addresses.market, false),
+        AccountMeta::new_readonly(addresses.core_program, false),
+        AccountMeta::new_readonly(addresses.activation_cache, false),
+        AccountMeta::new(addresses.source_state, false),
+        AccountMeta::new(certificate, false),
+        AccountMeta::new(receipt, false),
+        AccountMeta::new_readonly(addresses.source_material.raw, false),
+        AccountMeta::new_readonly(addresses.source_material.staging, false),
+        AccountMeta::new_readonly(addresses.source_spec.raw, false),
+        AccountMeta::new_readonly(addresses.source_spec.staging, false),
+        AccountMeta::new_readonly(addresses.window_spec.raw, false),
+        AccountMeta::new_readonly(addresses.window_spec.staging, false),
+        AccountMeta::new_readonly(addresses.statistic_spec.raw, false),
+        AccountMeta::new_readonly(addresses.statistic_spec.staging, false),
+        AccountMeta::new_readonly(addresses.recovery_policy.raw, false),
+        AccountMeta::new_readonly(addresses.recovery_policy.staging, false),
+        AccountMeta::new_readonly(addresses.product.raw, false),
+        AccountMeta::new_readonly(addresses.product.staging, false),
+        AccountMeta::new_readonly(addresses.result_domain.raw, false),
+        AccountMeta::new_readonly(addresses.result_domain.staging, false),
+        AccountMeta::new_readonly(addresses.portfolio.raw, false),
+        AccountMeta::new_readonly(addresses.portfolio.staging, false),
+        AccountMeta::new_readonly(addresses.capability_manifest.raw, false),
+        AccountMeta::new_readonly(addresses.capability_manifest.staging, false),
+        AccountMeta::new(addresses.funding, false),
+        AccountMeta::new_readonly(sysvar::clock::ID, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    let mut seats = Vec::with_capacity(usize::from(members));
+    for member in 0..members {
+        let seat = Pubkey::find_program_address(
+            &EnsembleFragmentSeatSeedsV1::new(
+                addresses.source_state.to_bytes(),
+                member,
+                terminal_sequence,
+            )
+            .seeds(),
+            &addresses.resolution_program,
+        )
+        .0;
+        seats.push(seat);
+        accounts.push(AccountMeta::new_readonly(seat, false));
+    }
+    for captor in captors {
+        // A vacant member has no named captor. Its writable tail coordinate is
+        // still required by the frame but is never credited by the fold.
+        accounts.push(AccountMeta::new(
+            captor.unwrap_or_else(Pubkey::new_unique),
+            false,
+        ));
+    }
+    Ok((
+        Instruction {
+            program_id: addresses.resolution_program,
+            accounts,
+            data: EnsembleFoldInstructionV1::new(addresses.generation, terminal_sequence)
+                .map_err(|error| Error::new(format!("Ensemble fold request: {error:?}")))?
+                .to_bytes()
+                .map_err(|error| Error::new(format!("Ensemble fold bytes: {error:?}")))?
+                .to_vec(),
+        },
+        receipt,
+        seats,
+    ))
+}
+
+/// Reclaim only the still-System-owned member seat after a successful fold.
+fn reclaim_member_seat_instruction_v1(
+    payer: Pubkey,
+    addresses: &ResolutionAddressesV1,
+    seat: Pubkey,
+    member: u8,
+    terminal_sequence: u64,
+) -> Result<Instruction> {
+    Ok(Instruction {
+        program_id: addresses.resolution_program,
+        accounts: vec![
+            AccountMeta::new(payer, true),
+            AccountMeta::new_readonly(addresses.market, false),
+            AccountMeta::new_readonly(addresses.core_program, false),
+            AccountMeta::new_readonly(addresses.activation_cache, false),
+            AccountMeta::new_readonly(addresses.source_state, false),
+            AccountMeta::new_readonly(addresses.source_material.raw, false),
+            AccountMeta::new_readonly(addresses.source_material.staging, false),
+            AccountMeta::new(seat, false),
+            AccountMeta::new(addresses.rent_beneficiary, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data: ReclaimMemberSeatInstructionV1::new(addresses.generation, terminal_sequence, member)
+            .map_err(|error| Error::new(format!("Ensemble reclaim request: {error:?}")))?
+            .to_bytes()
+            .map_err(|error| Error::new(format!("Ensemble reclaim bytes: {error:?}")))?
+            .to_vec(),
+    })
+}
+
 fn send_wide_v1(
     rpc: &mut Rpc,
     payer: &Keypair,
@@ -564,7 +709,7 @@ fn send_wide_v1(
     Ok(())
 }
 
-/// Arguments for the local-only first-member capture campaign.
+/// Arguments for the local-only two-capture Ensemble campaign.
 pub(crate) struct EnsembleRequestV1 {
     pub(crate) transcript: std::path::PathBuf,
     pub(crate) work: std::path::PathBuf,
@@ -576,10 +721,11 @@ pub(crate) struct EnsembleRequestV1 {
     pub(crate) seed: String,
 }
 
-/// Found a canonical two-member Ensemble market and execute its first direct
-/// capture against the checked local validator. The transcript is only written
-/// after the member fragment exists, so it cannot claim a transport that never
-/// crossed the real router/receiver boundary.
+/// Found a canonical three-member, quorum-two Ensemble market and carry two
+/// authenticated Pyth members through the terminal fold, then reclaim the
+/// remaining prepaid vacancy. The transcript is only written after all three
+/// state transitions exist, so it cannot claim a transport that never crossed
+/// the real router/receiver boundary.
 pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
     std::fs::create_dir_all(&request.work)?;
     let substrate_dir = request.work.join("substrate");
@@ -610,7 +756,7 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
     let shape = crate::market::LocalMarketShapeV1 {
         ensemble: Some(crate::model::EnsembleMarketInputV1 {
             members: 3,
-            quorum: 1,
+            quorum: 2,
             rungs: 0,
         }),
         price_update_image: Some(publication.projected_price_update.clone()),
@@ -636,53 +782,193 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
     let addresses =
         crate::resolution::derive(&mut rpc, &checked.plan, &market_addresses, &accounts)?;
     let payer = crate::substrate::campaign_payer_keypair(&checked)?;
-    let provider = ProviderPlanV1::derive(&mut rpc, &checked.plan)?;
+    let first_provider = ProviderPlanV1::derive(&mut rpc, &checked.plan)?;
     let mut transactions = founding.transactions;
-    let report = post_submit_and_capture_member_v1(
+    let first_report = post_submit_and_capture_member_v1(
         &mut rpc,
         &payer,
         &checked.plan,
         &addresses,
-        &provider,
+        &first_provider,
         &publication,
         0,
         1,
         &mut transactions,
     )?;
-    let source = dclutch_source::SourceResolutionStateV2::decode(
+    let first_source = SourceResolutionStateV2::decode(
         &rpc.required_account(
             addresses.source_state,
-            "Ensemble Source after member capture",
+            "Ensemble Source after first member capture",
         )?
         .data,
     )
-    .map_err(|error| Error::new(format!("Ensemble Source poststate: {error:?}")))?;
-    if source.phase() != dclutch_source::SourceResolutionPhaseV1::Primary {
+    .map_err(|error| Error::new(format!("Ensemble first Source poststate: {error:?}")))?;
+    if first_source.phase() != SourceResolutionPhaseV1::Primary {
         return Err(Error::new(
-            "direct member capture changed Source before an Ensemble quorum fold",
+            "first direct member capture changed Source before an Ensemble quorum fold",
         ));
     }
-    let fragment = report
+    let first_fragment = first_report
         .instruction
         .accounts
         .get(3)
-        .ok_or_else(|| Error::new("direct member report omitted fragment seat"))?
+        .ok_or_else(|| Error::new("first direct member report omitted fragment seat"))?
         .pubkey;
-    let fragment_account = rpc.required_account(fragment, "captured Ensemble member fragment")?;
-    if fragment_account.owner != addresses.resolution_program {
+    let first_fragment_account =
+        rpc.required_account(first_fragment, "captured first Ensemble member fragment")?;
+    if first_fragment_account.owner != addresses.resolution_program {
         return Err(Error::new(
-            "direct member capture did not create a Resolution-owned fragment",
+            "first direct member capture did not create a Resolution-owned fragment",
+        ));
+    }
+    let second_slot = rpc.finalized_slot()?;
+    let second_publication = crate::pyth_lab_publication::mint_lab_publication_v1(
+        crate::pyth_lab_publication::LabPublicationRequestV1::at(rpc.block_time(second_slot)?, 2),
+        [0; 32],
+    )?;
+    let second_provider = ProviderPlanV1::derive(&mut rpc, &checked.plan)?;
+    let second_report = post_submit_and_capture_member_v1(
+        &mut rpc,
+        &payer,
+        &checked.plan,
+        &addresses,
+        &second_provider,
+        &second_publication,
+        1,
+        1,
+        &mut transactions,
+    )?;
+    let second_source = SourceResolutionStateV2::decode(
+        &rpc.required_account(
+            addresses.source_state,
+            "Ensemble Source after second member capture",
+        )?
+        .data,
+    )
+    .map_err(|error| Error::new(format!("Ensemble second Source poststate: {error:?}")))?;
+    if second_source.phase() != SourceResolutionPhaseV1::Primary {
+        return Err(Error::new(
+            "second direct member capture changed Source before the Ensemble fold",
+        ));
+    }
+    let second_fragment = second_report
+        .instruction
+        .accounts
+        .get(3)
+        .ok_or_else(|| Error::new("second direct member report omitted fragment seat"))?
+        .pubkey;
+    let second_fragment_account =
+        rpc.required_account(second_fragment, "captured second Ensemble member fragment")?;
+    if second_fragment_account.owner != addresses.resolution_program {
+        return Err(Error::new(
+            "second direct member capture did not create a Resolution-owned fragment",
+        ));
+    }
+    let (fold, receipt, seats) = ensemble_fold_instruction_v1(
+        &mut rpc,
+        payer.pubkey(),
+        &addresses,
+        &[
+            Some(first_provider.resolver.pubkey()),
+            Some(second_provider.resolver.pubkey()),
+            None,
+        ],
+        1,
+    )?;
+    send_wide_v1(
+        &mut rpc,
+        &payer,
+        "ensemble: fold the captured member quorum to one terminal",
+        &fold,
+        &[],
+        &mut transactions,
+    )?;
+    let folded_source = SourceResolutionStateV2::decode(
+        &rpc.required_account(addresses.source_state, "Ensemble Source after fold")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("Ensemble folded Source poststate: {error:?}")))?;
+    if folded_source.phase() != SourceResolutionPhaseV1::Resolved {
+        return Err(Error::new(
+            "Ensemble fold did not write the resolved Source terminal",
+        ));
+    }
+    let receipt_value = EnsembleFoldReceiptV1::decode(
+        &rpc.required_account(receipt, "Ensemble fold receipt")?.data,
+    )
+    .map_err(|error| Error::new(format!("Ensemble fold receipt: {error:?}")))?;
+    if receipt_value.consumed_count != 2
+        || !receipt_value.consumed(0)
+        || !receipt_value.consumed(1)
+        || receipt_value.consumed(2)
+    {
+        return Err(Error::new(
+            "Ensemble fold receipt did not consume exactly the two captured members",
+        ));
+    }
+    let vacant_member = 2_u8;
+    let vacant_seat = *seats
+        .get(usize::from(vacant_member))
+        .ok_or_else(|| Error::new("Ensemble fold omitted the vacant member seat"))?;
+    let vacant_before = rpc
+        .required_account(vacant_seat, "prepaid vacant Ensemble member seat")?
+        .lamports;
+    let beneficiary_before = rpc
+        .required_account(addresses.rent_beneficiary, "Ensemble rent beneficiary")?
+        .lamports;
+    let reclaim = reclaim_member_seat_instruction_v1(
+        payer.pubkey(),
+        &addresses,
+        vacant_seat,
+        vacant_member,
+        1,
+    )?;
+    send_wide_v1(
+        &mut rpc,
+        &payer,
+        "ensemble: reclaim the vacant terminal member seat",
+        &reclaim,
+        &[],
+        &mut transactions,
+    )?;
+    if rpc
+        .account(vacant_seat)?
+        .is_some_and(|account| account.lamports != 0)
+    {
+        return Err(Error::new(
+            "Ensemble reclaim left lamports in the vacant member seat",
+        ));
+    }
+    let beneficiary_after = rpc
+        .required_account(
+            addresses.rent_beneficiary,
+            "Ensemble rent beneficiary after reclaim",
+        )?
+        .lamports;
+    if beneficiary_after.checked_sub(beneficiary_before) != Some(vacant_before) {
+        return Err(Error::new(
+            "Ensemble reclaim did not credit exactly the vacant member seat's rent",
         ));
     }
     let transcript = serde_json::json!({
-        "campaign": "ensemble-first-member-capture-v1",
+        "campaign": "ensemble-two-member-capture-fold-reclaim-v1",
         "evidence_level": "local-validator / real router+receiver ELFs / fresh checked cohort",
         "checked_release_gate_sha256": request.expected_gate_sha256,
         "expected_source_revision": request.expected_source_revision,
-        "publication": {"publish_time": minted_at, "sequence": publication.request.sequence, "signed_vaa_bytes": publication.signed_vaa.len()},
-        "member": 0,
-        "source_phase_after_capture": "Primary",
-        "fragment_seat": fragment.to_string(),
+        "publications": [
+            {"publish_time": minted_at, "sequence": publication.request.sequence, "signed_vaa_bytes": publication.signed_vaa.len()},
+            {"publish_time": second_publication.request.publish_time, "sequence": second_publication.request.sequence, "signed_vaa_bytes": second_publication.signed_vaa.len()}
+        ],
+        "captured_members": [
+            {"member": 0, "fragment_seat": first_fragment.to_string()},
+            {"member": 1, "fragment_seat": second_fragment.to_string()}
+        ],
+        "source_phase_after_each_capture": "Primary",
+        "source_phase_after_fold": "Resolved",
+        "fold_receipt": receipt.to_string(),
+        "fold_consumed_bitmap": receipt_value.consumed_bitmap,
+        "reclaimed_member": vacant_member,
+        "reclaimed_seat": vacant_seat.to_string(),
         "transactions": transactions,
     });
     if request.transcript.exists() {

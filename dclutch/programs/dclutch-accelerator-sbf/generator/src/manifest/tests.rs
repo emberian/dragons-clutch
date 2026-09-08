@@ -1,6 +1,4 @@
-use dclutch_vm::account_profile::lifecycle_v3::{
-    HEADER_BYTES as LIFECYCLE_HEADER_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
-};
+use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
 use dclutch_core_contract::ContentId;
 use dclutch_trading_sbf::series::{
     artifacts_v3::{
@@ -8,6 +6,9 @@ use dclutch_trading_sbf::series::{
         SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
     },
     consume_artifacts_v4::SeriesConsumeChildRequestsV4,
+};
+use dclutch_vm::account_profile::lifecycle_v3::{
+    HEADER_BYTES as LIFECYCLE_HEADER_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
 };
 
 use super::*;
@@ -48,15 +49,61 @@ impl Fixture {
             lock: [0x11; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
             core: [0x22; SERIES_CONSUME_CORE_REQUEST_BYTES_V3],
             realize: [0x33; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-            claims: [0x44; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3],
+            claims: ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+                release_set: [1; 32],
+                market: [2; 32],
+                product_record_digest: [3; 32],
+                product_instance_id: [4; 32],
+                linked_basis_record_digest: [5; 32],
+                semantic_basis_id: [6; 32],
+                founder: [7; 32],
+                founding_intent_digest: [8; 32],
+                aggregate: [9; 32],
+                position: [10; 32],
+                admission: [11; 32],
+                funding_source: [12; 32],
+                hoard: [13; 32],
+                custody_replay: [14; 32],
+                rent_credit: [15; 32],
+                rent_program: [16; 32],
+                claims_program: [17; 32],
+                trading_program: [18; 32],
+                custody_request_digest: [19; 32],
+                custody_receipt_digest: [20; 32],
+                generation: 1,
+                claim_count: 1,
+                quantity: 3,
+                basis_scale: 3,
+                pre_source_amount: 9,
+                post_source_amount: 0,
+                pre_hoard_amount: 0,
+                post_hoard_amount: 9,
+                pre_custody_revision: 0,
+                post_custody_revision: 1,
+                aggregate_rent_principal: 1,
+                position_rent_principal: 1,
+                admission_rent_principal: 1,
+                observed_aggregate_lamports: 1,
+                observed_position_lamports: 1,
+                observed_admission_lamports: 1,
+                pre_aggregate_revision: 0,
+                post_aggregate_revision: 1,
+                pre_position_revision: 0,
+                post_position_revision: 1,
+            })
+            .expect("test Claims request")
+            .to_bytes(),
         }
     }
 
     fn source(&self) -> SeriesShadowBundleSourceV4<'_> {
-        self.source_with_certificate(identity(7))
+        self.source_with_semantic_release(identity(7))
     }
 
-    fn source_with_certificate(&self, certificate: ContentId) -> SeriesShadowBundleSourceV4<'_> {
+    fn source_with_semantic_release(
+        &self,
+        accelerator_semantic_release: ContentId,
+    ) -> SeriesShadowBundleSourceV4<'_> {
         SeriesShadowBundleSourceV4 {
             occurrence_count: 1,
             descriptor: SeriesShadowDescriptorSemanticsV4 {
@@ -72,7 +119,8 @@ impl Fixture {
                 semantic_source: SEMANTIC_SOURCE,
                 compiler_source: EPHEMERAL_COMPILER_SOURCE_MANIFEST,
                 toolchain_manifest: EPHEMERAL_TOOLCHAIN_MANIFEST,
-                certificate,
+                accelerator_semantic_release,
+                translation_validation: identity(9),
             },
             lifecycle: &self.lifecycle,
             fixed_data_lengths: &self.lengths,
@@ -205,59 +253,78 @@ fn input_bundle_and_framing_substitution_refuse() {
     );
 }
 
-/// The ShadowAot certificate reaches every downstream artifact.
+/// The semantic release derives a certificate before strategy or descriptor.
 ///
-/// This is the software half of a fact whose other half was measured on
-/// real SBF ELFs: two accelerator builds whose generated includes differed
-/// only in `SERIES_SHADOW_CERTIFICATE_ID_V1` produced different `elf_digest`
-/// values, with the 32 certificate bytes appearing verbatim twice in each
-/// ELF and the rebuild of either one byte-identical.
-///
-/// That matters because `ExecutionStrategyCertificateV2::artifact_release`
-/// must name an `ArtifactReleaseV1`, and that record carries `elf_digest`.
-/// So the certificate's identity determines the ELF, and the ELF determines
-/// what the certificate must contain — a SHA-256 fixed point. No certificate
-/// can truthfully name the deployment that embeds it.
-///
-/// What this test pins is the DEPENDENCY, not the impossibility. If any
-/// assertion here starts failing, the certificate has stopped reaching the
-/// bundle, and the conclusion above has to be re-derived rather than assumed.
+/// The semantic release is an independently checked source fact. Changing it
+/// changes the generated certificate and every artifact that names that
+/// certificate, while the account/request/transition/effect tuple itself
+/// stays fixed. This is the acyclic edge that permits an ArtifactRelease to
+/// bind the later ELF without weakening its exact-release checks.
 #[test]
-fn the_certificate_reaches_every_downstream_artifact() {
+fn semantic_release_reaches_certificate_and_selected_include_reproducibly() {
     let fixture = Fixture::new();
-    let first = crate::compile_series_shadow_bundle_v4(fixture.source_with_certificate(identity(7)))
-        .expect("bundle compiles for the first certificate");
+    let first =
+        crate::compile_series_shadow_bundle_v4(fixture.source_with_semantic_release(identity(7)))
+            .expect("bundle compiles for the first semantic release");
     let second =
-        crate::compile_series_shadow_bundle_v4(fixture.source_with_certificate(identity(8)))
-            .expect("bundle compiles for the second certificate");
+        crate::compile_series_shadow_bundle_v4(fixture.source_with_semantic_release(identity(8)))
+            .expect("bundle compiles for the second semantic release");
 
-    assert_eq!(first.certificate, identity(7));
-    assert_eq!(second.certificate, identity(8));
+    assert_ne!(first.certificate_program, second.certificate_program);
+    assert_ne!(first.certificate, second.certificate);
 
-    // The certificate is inside the strategy, the strategy is named by the
+    // The certificate is named by the strategy, the strategy is named by the
     // descriptor, and both are inside the complete-bundle digest.
     assert_ne!(first.strategy, second.strategy);
     assert_ne!(first.capability_program, second.capability_program);
     assert_ne!(first.bundle_digest, second.bundle_digest);
 
-    // Everything the certificate does NOT reach stays fixed, so the
-    // divergence above is the certificate alone and not a noisy fixture.
+    // The certificate tuple excludes strategy and descriptor identity, so the
+    // independently emitted contract artifacts stay fixed.
     assert_eq!(first.account_profile, second.account_profile);
     assert_eq!(first.request_profile, second.request_profile);
     assert_eq!(first.transition, second.transition);
     assert_eq!(first.effect, second.effect);
     assert_eq!(first.lifecycle, second.lifecycle);
 
-    // And it survives all the way into the bytes the accelerator ELF
-    // compiles in, which is the edge that closes the loop.
-    let emit = |certificate| {
-        let manifest =
-            compile_series_shadow_source_manifest_v1(fixture.source_with_certificate(certificate))
-                .expect("manifest compiles");
+    // The selected include is deterministic for one source tuple and changes
+    // when the independently checked semantic release changes.
+    let emit = |semantic_release| {
+        let manifest = compile_series_shadow_source_manifest_v1(
+            fixture.source_with_semantic_release(semantic_release),
+        )
+        .expect("manifest compiles");
         crate::emit_series_shadow_generated_include_v1(&manifest).expect("include emits")
     };
     assert_ne!(emit(identity(7)), emit(identity(8)));
     assert_eq!(emit(identity(7)), emit(identity(7)));
+}
+
+#[test]
+fn wrong_semantic_release_or_contract_artifact_tuple_refuses() {
+    let fixture = Fixture::new();
+    let manifest = compile_series_shadow_source_manifest_v1(fixture.source())
+        .expect("test-only source manifest compiles");
+
+    let mut wrong_semantic_release = manifest.clone();
+    flip(
+        &mut wrong_semantic_release,
+        IDENTITIES_OFFSET + ACCELERATOR_SEMANTIC_RELEASE_IDENTITY * 32,
+    );
+    assert_eq!(
+        SeriesShadowSourceManifestV1::decode(&wrong_semantic_release),
+        Err(SeriesShadowBundleCompileErrorV4::Manifest)
+    );
+
+    let mut wrong_account_profile = manifest;
+    let account_profile_offset = SECTIONS_OFFSET
+        + fixture.lifecycle.len()
+        + dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_BYTES;
+    flip(&mut wrong_account_profile, account_profile_offset);
+    assert_eq!(
+        SeriesShadowSourceManifestV1::decode(&wrong_account_profile),
+        Err(SeriesShadowBundleCompileErrorV4::Manifest)
+    );
 }
 
 fn identity(tag: u8) -> ContentId {

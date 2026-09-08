@@ -755,13 +755,15 @@ pub fn runtime_verifier_len_v2(outcome_count: u32) -> RuntimeVerifyResultV2<usiz
     }
     let count =
         usize::try_from(outcome_count).map_err(|_| RuntimeVerifyErrorV2::ArithmeticOverflow)?;
+    let tail_count = usize::try_from(RUNTIME_VERIFIER_TAIL_COUNT_V2)
+        .map_err(|_| RuntimeVerifyErrorV2::ArithmeticOverflow)?;
+    let tail_bytes = 8_usize
+        .checked_mul(tail_count)
+        .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)?;
     RUNTIME_VERIFIER_HEADER_BYTES_V2
         .checked_add(
             count
-                .checked_mul(
-                    8 * usize::try_from(RUNTIME_VERIFIER_TAIL_COUNT_V2)
-                        .expect("fixed runtime tail count"),
-                )
+                .checked_mul(tail_bytes)
                 .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)?,
         )
         .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)

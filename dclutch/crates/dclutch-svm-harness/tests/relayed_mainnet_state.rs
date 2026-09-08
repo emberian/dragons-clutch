@@ -550,7 +550,7 @@ fn funding_ledger_key(
     Pubkey::find_program_address(&derivation.seed_components(), &PROGRAM_ID).0
 }
 
-/// Install the one V6 Resolution subset ledger with all three rows Active.
+/// Install the one Resolution subset ledger with every selected row Active.
 fn add_active_funding_ledger(
     test: &mut ProgramTest,
     market: Pubkey,
@@ -564,11 +564,6 @@ fn add_active_funding_ledger(
     let entry_count = u16::try_from(entry_indices.len()).expect("selected entry count fits u16");
     let width =
         funding_ledger_bytes_v2(entry_count).expect("one FundingLedgerV2 row per selected entry");
-    assert_eq!(
-        funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width"),
-        264,
-        "the live single-source Resolution ledger width is exact"
-    );
     let mut state = vec![0_u8; width];
     let rate = funded_rent_rate(width);
     FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask, rate)
@@ -1194,10 +1189,10 @@ fn source_graph(
                     .expect("the canonical member stagger"),
                 // The ensemble borrows the founded controller compartments in
                 // policy order: member one is the recovery row and member two
-                // the exhaustion row. Those are the two paid alternates the
-                // fixed three-row Resolution ledger already has; the primary
-                // has no member bounty and the failure row remains this
-                // material's own fallback.
+                // the exhaustion row. The ensemble also precommits its
+                // second recovery allocation as a selected Resolution row;
+                // the primary has no member bounty and the failure row
+                // remains this material's own fallback.
                 source_id(if member == 1 { [0xa1; 32] } else { [0xa2; 32] }),
             )
             .expect("canonical member attempt");
@@ -1580,7 +1575,8 @@ fn fixture_full(
     );
 
     // The capability manifest, and the reason the deadline walk has a bounty at
-    // all. Three `RESOLUTION_CONTROLLER_RELEASE_ID_V7` entries in the order
+    // all. The direct control has three `RESOLUTION_CONTROLLER_RELEASE_ID_V7`
+    // entries in the order
     // `core_effect`'s `authenticate_funding_entries` fixes them -- recovery
     // allocation, recovery policy, then THIS MARKET'S OWN Source material -- so
     // the explicit-failure compartment is identified by what its manifest entry
@@ -1593,6 +1589,12 @@ fn fixture_full(
         funding_entry([0xa2; 32]),
         funding_entry(graph.material_id),
     ];
+    if graph.ensemble.is_some() {
+        // A second recovery allocation is not the terminal's failure row, but
+        // it is a Resolution-owned precommitted compartment. The fold must
+        // preserve it while releasing the answered member's own bounty.
+        entries.push(funding_entry([0xa3; 32]));
+    }
     // A manifest is strictly ordered by capability-kind identity, so the entry
     // *index* of the explicit-failure compartment is whatever the sort makes it
     // rather than a number a fixture may choose. Both indices below are
@@ -1671,17 +1673,20 @@ fn fixture_full(
     );
 
     // Resolution owns exactly one manifest-keyed subset ledger. Its sparse mask
-    // selects all three controller-homogeneous entries and each row is Active.
+    // selects the controller-homogeneous entries and each row is Active.
     // The failure walk derives the row configuring this Market's Source
     // material; ensemble members one and two select the already-funded
-    // recovery and exhaustion rows respectively. The fixed three-row ledger is
-    // the founding authority, so a fixture cannot widen it to manufacture a
-    // separate row for each member.
-    let selected_entries = [
+    // recovery and exhaustion rows respectively. The manifest's selected
+    // Resolution rows are the founding authority; the ensemble includes its
+    // second allocation explicitly rather than constructing a post-founding row.
+    let mut selected_entries = vec![
         recovery_entry_index,
         exhaustion_entry_index,
         failure_entry_index,
     ];
+    if graph.ensemble.is_some() {
+        selected_entries.push(entry_index_of([0xa3; 32]));
+    }
     let (funding_ledger, substituted_funding_ledger) =
         add_active_funding_ledger(&mut test, market, manifest, &selected_entries);
     assert_ne!(funding_ledger, substituted_funding_ledger);
@@ -4647,6 +4652,15 @@ async fn captured_ensemble_fragments_fold_then_reclaim_the_vacant_member_seat() 
         hash(&fragment_one.to_bytes().expect("member one bytes")).to_bytes()
     );
     assert_eq!(receipt.fragment_digests[2], [0; 32]);
+
+    let manifest_bytes = record_bytes(&mut context, fixture.capability_manifest.raw).await;
+    let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("four-row manifest");
+    let folded_ledger_bytes = record_bytes(&mut context, fixture.funding_ledger).await;
+    let folded_ledger = FundingLedgerV2::decode(&folded_ledger_bytes)
+        .and_then(|ledger| ledger.authenticate(manifest_identity(manifest), manifest))
+        .expect("four-row folded FundingLedgerV2");
+    assert_eq!(folded_ledger.ledger().slot_count(), 4);
+    assert_eq!(folded_ledger.ledger().selected_mask().count_ones(), 4);
 
     assert_eq!(
         lamports_of(&mut context, captor_zero).await,

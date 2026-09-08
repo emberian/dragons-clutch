@@ -90,8 +90,9 @@ use dclutch_core_contract::ContentId;
 use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
     CustodyFrameRoleV1, CustodyFrameSpecV1, CustodyReplaySeedsV1, CustodyReplayV1,
-    CustodyRequestV1, CustodyVaultSeedsV1, INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
-    OPEN_VAULT_ACCOUNT_COUNT_V1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
+    CustodyRequestV1, CustodyVaultSeedsV1, DelegatedCustodyRequestV2,
+    INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OPEN_VAULT_ACCOUNT_COUNT_V1, OperationV1,
+    TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_market::{CoreState, Phase};
@@ -832,9 +833,26 @@ fn custody_transfer_leg_v1(
     let authority = if amount == 0 {
         None
     } else {
-        let bytes = request
-            .to_bytes()
-            .map_err(|error| Error::new(format!("Custody transfer request: {error:?}")))?;
+        let bytes = if source_compartment == CompartmentV1::External {
+            DelegatedCustodyRequestV2 {
+                custody: request,
+                starts_atomic_debit: true,
+                terminal: true,
+                delegate_before: coordinates.custody_authority.to_bytes(),
+                delegate_after: [0; 32],
+                total_debit: amount,
+                allowance_before: amount,
+                allowance_after: 0,
+            }
+            .encode()
+            .map_err(|error| Error::new(format!("delegated Custody transfer request: {error:?}")))?
+            .to_vec()
+        } else {
+            request
+                .to_bytes()
+                .map_err(|error| Error::new(format!("Custody transfer request: {error:?}")))?
+                .to_vec()
+        };
         Some(coordinates.authority(context, hash(&bytes).to_bytes())?)
     };
     Ok(CustodyLegPlanV1 {
@@ -1899,12 +1917,28 @@ fn plan_signed_delta_window_v1(
         expected_market_revision: coordinates.aggregate_revision,
         claim_count: coordinates.claim_count,
     };
-    let positions = [
-        SignedDeltaPositionV3::new(fund_key.to_bytes(), dealer_revision)
-            .map_err(|error| Error::new(format!("the Dealer's delta position: {error:?}")))?,
-        SignedDeltaPositionV3::new(taker.to_bytes(), taker_revision)
-            .map_err(|error| Error::new(format!("the taker's delta position: {error:?}")))?,
-    ];
+    let dealer_position_entry = SignedDeltaPositionV3::new(fund_key.to_bytes(), dealer_revision)
+        .map_err(|error| Error::new(format!("the Dealer's delta position: {error:?}")))?;
+    let taker_position_entry = SignedDeltaPositionV3::new(taker.to_bytes(), taker_revision)
+        .map_err(|error| Error::new(format!("the taker's delta position: {error:?}")))?;
+    let (positions, dealer_index, taker_index, first_position, second_position) =
+        if dealer_position_entry.owner() < taker_position_entry.owner() {
+            (
+                [dealer_position_entry, taker_position_entry],
+                0_u32,
+                1_u32,
+                dealer_position,
+                taker_position,
+            )
+        } else {
+            (
+                [taker_position_entry, dealer_position_entry],
+                1_u32,
+                0_u32,
+                taker_position,
+                dealer_position,
+            )
+        };
     let width = usize::from(fund.outcome_count);
     let mut aggregate_deltas = Vec::with_capacity(coordinates.claim_count as usize);
     for outcome in 0..coordinates.claim_count as usize {
@@ -1918,8 +1952,8 @@ fn plan_signed_delta_window_v1(
     for outcome in 0..width {
         let index = u32::try_from(outcome).map_err(|_| Error::new("outcome index overflow"))?;
         for (position_index, value) in [
-            (0_u32, request.dealer_delta(outcome)),
-            (1_u32, request.taker_delta(outcome)),
+            (dealer_index, request.dealer_delta(outcome)),
+            (taker_index, request.taker_delta(outcome)),
         ] {
             if value != 0 {
                 rows.push(
@@ -1967,8 +2001,8 @@ fn plan_signed_delta_window_v1(
             .map_err(|error| Error::new(format!("signed-delta coordinate {index}: {error:?}")))?;
         let key = match account.role() {
             ClaimsFrameRoleV1::CallerAuthority => authority,
-            ClaimsFrameRoleV1::SignedDeltaPosition(0) => dealer_position,
-            ClaimsFrameRoleV1::SignedDeltaPosition(1) => taker_position,
+            ClaimsFrameRoleV1::SignedDeltaPosition(0) => first_position,
+            ClaimsFrameRoleV1::SignedDeltaPosition(1) => second_position,
             other => coordinates.common_claims_key(other)?,
         };
         metas.push(if account.privileges().writable() {

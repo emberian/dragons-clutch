@@ -36,8 +36,14 @@ use crate::{
         SelectedActivationRecordPairV1, SelectedCapabilityActivationInputV1,
         build_selected_capability_activation_plan_v1, execute_selected_capability_activation_v1,
     },
-    series_geometry::{SeriesPrepareRoleLayoutV1, SeriesPrepareRoleSourceV1},
+    series_geometry::{
+        SeriesPrepareRoleLayoutV1, SeriesPrepareRoleSourceV1, observe_series_prepare_geometry_v1,
+    },
 };
+
+type SeriesPrepareFixedDataLengthsV1 = [u32;
+    dclutch_trading_sbf::series::prepare_funding_artifacts_v5::SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5
+        as usize];
 
 /// Finalized Registry coordinates for the immutable two-leaf Series founder
 /// material.  The Template is also M1's selected config; the occurrence and
@@ -1101,11 +1107,86 @@ pub(crate) fn prepare_local_series_founder_from_market_v1(
     Ok((prepared, observation))
 }
 
+/// Build the first Consume Shadow certificate before the selected parent has
+/// published its ProgramSet and descriptor records.
+///
+/// The full observed source operator intentionally needs those finalized M1
+/// records and therefore runs after Found as a cross-check.  First selection
+/// instead derives the descriptor's semantic coordinates from the same
+/// canonical Series owners used by `encode_series_action_descriptor_v5`, then
+/// hands the opaque Consume child bank and live Profile13 widths to the
+/// preselection producer.  The caller has already authenticated the checked
+/// accelerator release and evidence bytes used to form `release_sources`;
+/// this boundary accepts no text-form certificate identity.
+pub(crate) fn build_series_shadow_preselection_v1(
+    template_bytes: &[u8],
+    lifecycle_bytes: &[u8],
+    fixed_data_lengths: &[u32;
+        dclutch_series_shadow_bundle_generator::SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
+    children: &dclutch_operator::series_child_bank_v1::SeriesChildBankV1,
+    release_sources: dclutch_series_shadow_bundle_generator::SeriesShadowReleaseSourcesV4<'_>,
+) -> Result<dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1> {
+    use dclutch_series_shadow_bundle_generator::{
+        SeriesShadowBundleSourceV4, SeriesShadowDescriptorSemanticsV4,
+        build_series_shadow_preselection_v1 as build,
+    };
+    use dclutch_trading::series::{
+        SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
+        SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+        SERIES_TICKET_DERIVATION_PREIMAGE_V3, TemplateV3, replay::SERIES_STATE_BYTES_V3,
+    };
+
+    let template = TemplateV3::decode(template_bytes)
+        .map_err(|error| Error::new(format!("Series Shadow Template decode: {error:?}")))?;
+    let identity = |bytes: [u8; 32], label: &str| {
+        ContentId::new(bytes).map_err(|_| Error::new(format!("Series Shadow {label} identity")))
+    };
+    let descriptor = SeriesShadowDescriptorSemanticsV4 {
+        kind: identity(
+            Sha256::digest(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).into(),
+            "kind",
+        )?,
+        config_schema: identity(SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, "Template schema")?,
+        request_schema: identity(
+            Sha256::digest(SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3).into(),
+            "request schema",
+        )?,
+        root_schema: identity(
+            Sha256::digest(SERIES_ROOT_SCHEMA_PREIMAGE_V3).into(),
+            "root schema",
+        )?,
+        derivation_policy: identity(
+            Sha256::digest(SERIES_TICKET_DERIVATION_PREIMAGE_V3).into(),
+            "Ticket derivation",
+        )?,
+        capacity_profile: dclutch_trading::series::template_content_id(template_bytes)
+            .map_err(|_| Error::new("Series Shadow Template content identity"))?,
+        root_state_bytes: u32::try_from(SERIES_STATE_BYTES_V3)
+            .map_err(|_| Error::new("Series Shadow root state width escaped u32"))?,
+    };
+    let built = build(SeriesShadowBundleSourceV4 {
+        descriptor,
+        release_sources,
+        lifecycle: lifecycle_bytes,
+        fixed_data_lengths,
+        child_requests: children.consume_requests(),
+        occurrence_count: template.occurrence_count(),
+    })
+    .map_err(|error| Error::new(format!("Series Shadow preselection refused: {error:?}")))?;
+    let certificate: [u8; 32] = Sha256::digest(built.certificate).into();
+    if certificate != built.build_inputs.certificate.to_bytes() {
+        return Err(Error::new(
+            "Series Shadow preselection certificate hash changed before Registry finalization",
+        ));
+    }
+    Ok(built)
+}
+
 /// One Registry raw/staging pair that has already reached finality.  The
 /// hydrator retains the canonical body so geometry can prove both the raw
 /// address and its width, rather than treating a record as an arbitrary
 /// Registry-owned account.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SeriesPrepareFinalizedRecordV1<'a> {
     pub(crate) schema: [u8; 32],
     pub(crate) body: &'a [u8],
@@ -1155,6 +1236,55 @@ pub(crate) fn series_prepare_records_from_m0_publication_v1<'a>(
         .collect()
 }
 
+/// Select one M0 record from the publisher's exact finalized closure.
+///
+/// The source compiler already owns the expected schema and body.  This
+/// lookup refuses an absent, duplicated, or byte-substituted record instead
+/// of deriving a fresh pair from a parallel Market preview.
+pub(crate) fn series_prepare_record_from_m0_publication_v1<'a>(
+    records: &'a [SeriesPrepareFinalizedRecordV1<'a>],
+    schema: [u8; 32],
+    body: &[u8],
+    label: &str,
+) -> Result<SeriesPrepareFinalizedRecordV1<'a>> {
+    let matches = records
+        .iter()
+        .copied()
+        .filter(|record| record.schema == schema && record.body == body)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [record] => Ok(*record),
+        [] => Err(Error::new(format!(
+            "Series Prepare M0 publisher omitted canonical {label} record"
+        ))),
+        _ => Err(Error::new(format!(
+            "Series Prepare M0 publisher duplicated canonical {label} record"
+        ))),
+    }
+}
+
+/// Convert a finalized Series founder publication to the hydratable pair,
+/// retaining the exact source-owner body for the later Registry readback.
+pub(crate) fn series_prepare_founder_record_v1<'a>(
+    published: crate::runtime::PublishedRecord,
+    schema: [u8; 32],
+    body: &'a [u8],
+    label: &str,
+) -> Result<SeriesPrepareFinalizedRecordV1<'a>> {
+    let digest: [u8; 32] = Sha256::digest(body).into();
+    if published.schema != schema || published.digest != digest {
+        return Err(Error::new(format!(
+            "Series Prepare founder publication changed canonical {label} schema or body"
+        )));
+    }
+    Ok(SeriesPrepareFinalizedRecordV1 {
+        schema,
+        body,
+        raw: published.raw,
+        staging: published.staging,
+    })
+}
+
 /// Assemble the M0 half of the hydrator input directly from the one canonical
 /// publisher result.  The caller supplies only the non-record accounts it
 /// observed at the same finality floor; no future Core or Custody account can
@@ -1198,6 +1328,99 @@ pub(crate) struct SeriesPrepareHydratorInputV1<'a> {
     pub(crate) ticket: SeriesPrepareFinalizedRecordV1<'a>,
     pub(crate) portfolio: SeriesPrepareFinalizedRecordV1<'a>,
     pub(crate) children: &'a dclutch_operator::series_child_bank_v1::SeriesChildBankV1,
+}
+
+/// The four immutable records whose roles are outside M0's ordinary
+/// `ProjectFound` subframe.  They are still carried as canonical Registry
+/// pairs: Template, occurrence and Ticket are founder facts, while Portfolio
+/// is the Product graph record which the M0 publisher finalized.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SeriesPrepareHydrationRecordsV1<'a> {
+    pub(crate) template: SeriesPrepareFinalizedRecordV1<'a>,
+    pub(crate) occurrence: SeriesPrepareFinalizedRecordV1<'a>,
+    pub(crate) ticket: SeriesPrepareFinalizedRecordV1<'a>,
+    pub(crate) portfolio: SeriesPrepareFinalizedRecordV1<'a>,
+}
+
+/// Materialize the current source compiler's opaque Prepare child bank into
+/// the full 111-role geometry at one finalized slot.
+///
+/// This is the production connection between the semantic owners and the
+/// hydrator.  The caller first invokes it with the release-owned predicted
+/// M1 root, then activates that same parent and invokes it again with
+/// [`SeriesPrepareParentRootStateV1::Finalized`].  The caller owns the
+/// invariance comparison because it is the only layer that sees both
+/// observations; this helper owns neither an alternate request bank nor a
+/// second geometry representation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn observe_series_prepare_preprofile_geometry_v1(
+    rpc: &mut Rpc,
+    selection: &mut crate::series_found_prepare_campaign::SeriesFoundPrepareSelectionInputV1<'_>,
+    m0: SeriesPrepareM0FrameV1<'_>,
+    records: SeriesPrepareHydrationRecordsV1<'_>,
+    parent_root_state: SeriesPrepareParentRootStateV1,
+    minimum_slot: u64,
+) -> Result<SeriesPrepareFixedDataLengthsV1> {
+    // The preprofile is the only producer of Prepare children.  Do not admit
+    // a caller-authored child byte bank merely to obtain geometry.
+    selection.geometry = None;
+    let preprofile =
+        crate::series_found_prepare_campaign::derive_series_found_prepare_preprofile_v1(selection)?;
+    let hydrator = SeriesPrepareHydratorInputV1 {
+        registry: Pubkey::new_from_array(selection.registry_program.to_bytes()),
+        core: selection.material.core,
+        trading: selection.material.trading,
+        custody: selection.material.custody,
+        rent_program: selection.material.rent_program,
+        parent_root: selection.material.parent_root,
+        parent_root_state,
+        m0,
+        template: records.template,
+        occurrence: records.occurrence,
+        ticket: records.ticket,
+        portfolio: records.portfolio,
+        children: &preprofile.prepare_children,
+    };
+    let layout = hydrate_series_prepare_role_layout_v1(&hydrator)?;
+    observe_series_prepare_geometry_v1(rpc, &layout, minimum_slot)
+}
+
+/// Compile the selected Series closure only after the Prepare profile has been
+/// replaced by a full finalized M0/M1 observation.
+///
+/// The source owner still supplies the non-Prepare action geometry: those
+/// actions have different lifecycle poststates and this first-Prepare driver
+/// must not fabricate them.  In contrast, every one of Prepare's 111 widths
+/// and its Ticket rent target are available now, so retaining a supplied
+/// value for either would leave a second authority at the publication seam.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
+    rpc: &mut Rpc,
+    mut selection: crate::series_found_prepare_campaign::SeriesFoundPrepareSelectionInputV1<'_>,
+    m0: SeriesPrepareM0FrameV1<'_>,
+    records: SeriesPrepareHydrationRecordsV1<'_>,
+    parent_root_state: SeriesPrepareParentRootStateV1,
+    minimum_slot: u64,
+) -> Result<crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1> {
+    let mut geometry = selection.geometry.take().ok_or_else(|| {
+        Error::new(
+            "Series selected compilation omitted the source-owned non-Prepare action geometry",
+        )
+    })?;
+    geometry.prepare_fixed_data_lengths = observe_series_prepare_preprofile_geometry_v1(
+        rpc,
+        &mut selection,
+        m0,
+        records,
+        parent_root_state,
+        minimum_slot,
+    )?;
+    geometry.prepare_ticket_rent_lamports = selection
+        .material
+        .rent
+        .minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3);
+    selection.geometry = Some(geometry);
+    crate::series_found_prepare_campaign::compile_series_found_prepare_selection_v1(selection)
 }
 
 /// Hydrate all 111 Series Prepare roles from the decoded semantic-owner child
@@ -1975,6 +2198,37 @@ mod prepare_hydrator_tests {
         assert_eq!(records[0].body, b"published M0 body");
         assert_eq!(records[0].raw, published.raw);
         assert_eq!(records[0].staging, published.staging);
+        assert_eq!(
+            series_prepare_record_from_m0_publication_v1(
+                &records,
+                published.schema,
+                b"published M0 body",
+                "published M0"
+            )
+            .expect("publisher body lookup"),
+            records[0]
+        );
+        let error = series_prepare_record_from_m0_publication_v1(
+            &records,
+            published.schema,
+            b"substituted M0 body",
+            "published M0",
+        )
+        .expect_err("substituted publisher body must refuse");
+        assert_eq!(
+            error.to_string(),
+            "Series Prepare M0 publisher omitted canonical published M0 record"
+        );
+        assert_eq!(
+            series_prepare_founder_record_v1(
+                published,
+                published.schema,
+                b"published M0 body",
+                "founder"
+            )
+            .expect("founder pair"),
+            records[0]
+        );
         let frame = series_prepare_m0_frame_from_publication_v1(&publication, &records, &[]);
         assert_eq!(frame.records[0].raw, published.raw);
         assert_eq!(frame.vacancies, publication.series_prepare_vacancies);

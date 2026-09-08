@@ -40,7 +40,7 @@ use dclutch_resolution_core_v3_operator::{
     Observation, ObservedAccount, ResolutionAdmitTerminalSnapshotV3, ResolutionCoreOperatorErrorV3,
     ResolutionCreateFundSnapshotV3, ResolutionFundingCauseV3, ResolutionVerifyFundReadySnapshotV3,
     build_resolution_admit_terminal_v3, build_resolution_create_fund_v3,
-    build_resolution_verify_fund_ready_v3, select_resolution_funding_entries_v3,
+    build_resolution_verify_fund_ready_v3, select_resolution_funding_mask_v3,
     validate_resolution_admit_terminal_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source::resolution::{
@@ -112,9 +112,12 @@ pub(crate) struct ResolutionAddressesV1 {
     /// and a System-owned vacancy before it, so the builder's own refusal is
     /// what says which side of activation this campaign is on.
     pub(crate) activation_receipt: Pubkey,
-    /// Resolution-owned subset ledger containing recovery, exhaustion, and failure rows.
+    /// Resolution-owned subset ledger containing every policy-selected controller row.
     pub(crate) funding: Pubkey,
-    pub(crate) funding_entry_indices: [u16; 3],
+    /// Exact authenticated controller selection which determines the ledger's
+    /// physical width. The semantic role anchors are a strict subset for an
+    /// Ensemble, whose later member allocations are contiguous policy rows.
+    pub(crate) funding_mask: u16,
     pub(crate) rent_beneficiary: Pubkey,
     /// The terminal certificate this Market's first terminal sequence would
     /// occupy on the HONEST walk: the `ResolutionSuccess` seat. Watched from
@@ -263,25 +266,27 @@ pub(crate) fn derive(
     // the tier's copy said one thing and `build_resolution_create_fund_v3`
     // refused with a code that named nothing. The builder's own selector is
     // public now and this is its only other caller.
-    let funding_entry_indices =
-        select_resolution_funding_entries_v3(material, Some(policy), manifest).map_err(
-            |error| {
-                Error::new(format!(
-                    "this Market's founding did not buy three Resolution funding compartments this \
-                 campaign can name: {error:?}"
-                ))
-            },
-        )?;
+    let funding_mask = select_resolution_funding_mask_v3(material, Some(policy), manifest)
+        .map_err(|error| {
+            Error::new(format!(
+                "this Market's founding did not buy the policy-selected Resolution funding \
+                 compartments this campaign must authenticate: {error:?}"
+            ))
+        })?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|error| Error::new(format!("Market capability manifest identity: {error:?}")))?;
-    let selected_mask = funding_entry_indices
-        .into_iter()
-        .fold(0_u16, |mask, entry_index| mask | (1_u16 << entry_index));
+    let selected_count = u16::try_from(funding_mask.count_ones())
+        .map_err(|_| Error::new("Resolution funding selection exceeds u16"))?;
+    if selected_count == 0 {
+        return Err(Error::new(
+            "Resolution funding selection cannot derive an empty subset ledger",
+        ));
+    }
     let mut ledger_bytes = vec![
         0_u8;
-        funding_ledger_bytes_v2(3).map_err(|error| Error::new(format!(
-            "FundingLedgerV2 width: {error:?}"
-        )))?
+        funding_ledger_bytes_v2(selected_count).map_err(|error| {
+            Error::new(format!("FundingLedgerV2 width: {error:?}"))
+        })?
     ];
     let funded_rent_rate = derive_funded_rent_rate_v2(
         rpc.minimum_balance(0)?,
@@ -293,7 +298,7 @@ pub(crate) fn derive(
         &mut ledger_bytes,
         manifest_id,
         manifest,
-        selected_mask,
+        funding_mask,
         funded_rent_rate,
     )
     .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
@@ -376,7 +381,7 @@ pub(crate) fn derive(
         source_state,
         activation_receipt,
         funding,
-        funding_entry_indices,
+        funding_mask,
         rent_beneficiary: Pubkey::new_from_array(market.rent_beneficiary.to_bytes()),
         certificate,
         failure_certificate,
@@ -419,7 +424,7 @@ pub(crate) fn watch(ledger: &mut ConservationLedgerV1, addresses: &ResolutionAdd
 /// named two acts this tier's founding always performs before the stage runs.
 /// The label names the FACT the stage is about; `outcome` names who reached it
 /// -- `executed` when this campaign drove `VerifyFundReady`, `not-driven` when
-/// the atomic founding had already left all three rows Active -- and the note
+/// the atomic founding had already left every selected row Active -- and the note
 /// says which and how it knows. One author per fact; the stage does not claim
 /// another campaign's act by being named after it.
 pub(crate) const FUNDING_LADDER_STAGE_V1: &str =
@@ -565,20 +570,23 @@ pub(crate) fn resolve(
                 note: format!(
                     "THE FOUNDING HAD ALREADY DONE ALL OF IT. The Source resolution state at {} \
                      exists in its primary phase bound to this Market at generation {}, the \
-                     activation receipt at {} is present at its exact width, and all three \
-                     selected funding rows {:?} are already Active. A second CreateFund refuses \
+                     activation receipt at {} is present at its exact width, and every \
+                     selected funding row {:?} is already Active. A second CreateFund refuses \
                      to be built at all, by name. This campaign sent nothing here and says so.",
                     addresses.source_state,
                     addresses.generation,
                     addresses.activation_receipt,
-                    before.map(|(entry_index, _)| entry_index)
+                    before
+                        .iter()
+                        .map(|(entry_index, _)| entry_index)
+                        .collect::<Vec<_>>()
                 ),
             },
             crate::ledger::LamportClaimV1::fees(0),
         ));
     }
-    for (entry_index, status) in before {
-        if status != FundingLedgerStatusV2::Pending {
+    for (entry_index, status) in &before {
+        if *status != FundingLedgerStatusV2::Pending {
             return Err(Error::new(format!(
                 "Resolution funding row {entry_index} is {status:?} after the founding, and this \
                  campaign can continue only from a uniformly Pending or a uniformly Active \
@@ -669,13 +677,14 @@ pub(crate) fn resolve(
                  CAMPAIGN DROVE THE CORE ACCEPTANCE. `VerifyFundReady` landed on a real validator \
                  with a fee payer and no other signer -- the funding ladder's whole frame is \
                  non-signing, which is why it is reachable at all while every Claims mutation is \
-                 not -- and it moved the ledger's three selected rows from Pending to Active. A \
+                 not -- and it moved every policy-selected ledger row from Pending to Active. A \
                  second CreateFund at the same generation was proved to refuse BEFORE any frame \
                  existed, by name: the builder answered SourceDestinationNotVacant against the \
-                 founding's own Source state. Manifest entries {:?} carry the recovery, \
-                 exhaustion and failure compartments. The Market stayed Open + Consumed, and its \
+                 founding's own Source state. The authenticated selected-row mask is {:#06x}; \
+                 it includes every Ensemble member allocation as well as the recovery-policy and \
+                 failure compartments. The Market stayed Open + Consumed, and its \
                  rent beneficiary gained exactly the {} lamports the activation declared.",
-                addresses.funding_entry_indices, verify.expected_beneficiary_credit_lamports
+                addresses.funding_mask, verify.expected_beneficiary_credit_lamports
             ),
         },
         crate::ledger::LamportClaimV1::fees(fees).with_unwatched(
@@ -954,7 +963,7 @@ fn admit_terminal_snapshot(
 fn funding_statuses(
     rpc: &mut Rpc,
     addresses: &ResolutionAddressesV1,
-) -> Result<[(u16, FundingLedgerStatusV2); 3]> {
+) -> Result<Vec<(u16, FundingLedgerStatusV2)>> {
     let market = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
         .map_err(|error| Error::new(format!("Market: {error:?}")))?;
     let manifest_account = rpc.required_account(
@@ -969,17 +978,24 @@ fn funding_statuses(
     let funding = FundingLedgerV2::decode(&funding_account.data)
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
         .map_err(|error| Error::new(format!("Resolution subset ledger: {error:?}")))?;
-    let mut statuses = [(0_u16, FundingLedgerStatusV2::Pending); 3];
-    for (status, entry_index) in statuses.iter_mut().zip(addresses.funding_entry_indices) {
-        *status = (
-            entry_index,
-            funding
-                .slot(entry_index)
-                .map_err(|error| {
-                    Error::new(format!("Resolution funding row {entry_index}: {error:?}"))
-                })?
-                .status(),
-        );
+    let mut statuses = Vec::with_capacity(
+        usize::try_from(addresses.funding_mask.count_ones())
+            .map_err(|_| Error::new("Resolution funding mask count exceeds usize"))?,
+    );
+    let mut entry_index = 0_u16;
+    while entry_index < 16 {
+        if addresses.funding_mask & (1_u16 << entry_index) != 0 {
+            statuses.push((
+                entry_index,
+                funding
+                    .slot(entry_index)
+                    .map_err(|error| {
+                        Error::new(format!("Resolution funding row {entry_index}: {error:?}"))
+                    })?
+                    .status(),
+            ));
+        }
+        entry_index = entry_index.saturating_add(1);
     }
     Ok(statuses)
 }

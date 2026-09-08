@@ -60,6 +60,7 @@ use alloc::{boxed::Box, vec::Vec};
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId as CapabilityContentId, FundingLedgerStatusV2, FundingLedgerV2,
+    funding_ledger_bytes_v2,
 };
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_product::svm_reader::{
@@ -146,7 +147,7 @@ use crate::{
     funded::{
         AuthenticatedFailureFundingV2, AuthenticatedRecoveryPolicyV1, AuthenticatedWalkSourceV1,
         DeadlineFailureRequestV1, FundedWalkErrorV1, MemberBountyReleaseV1,
-        RESOLUTION_FUNDING_LEDGER_BYTES_V2, plan_deadline_failure_v1, process_funded_transition,
+        plan_deadline_failure_v1, process_funded_transition,
     },
     provider_instruction_v3::authenticate_record,
     relay_v1::{
@@ -1296,7 +1297,7 @@ fn process_advance_recovery(
 /// 5. each member seat at its own derived address, as this Program's decoded
 ///    certificate or as a System-owned vacancy and nothing else;
 /// 6. the Product Runtime V2 graph, the `CapabilityManifestV1` and the
-///    three-row funding ledger.
+///    selected-row funding ledger.
 ///
 /// The frame is validated after the material rather than before it, and that
 /// ordering is forced rather than chosen: the frame's width is `25 + 2k` and
@@ -1398,7 +1399,7 @@ fn process_ensemble_fold(
     // The fold spends no compartment of its own, and the row named here is the
     // ledger's explicit-failure row for the same reason the failure walk names
     // it: to authenticate the ledger's derivation, its native custody and its
-    // three-row shape. Which row each member's bounty leaves is decided inside
+    // selected-row shape. Which row each member's bounty leaves is decided inside
     // the plan, by that member's own attempt configuration and never by a
     // position.
     let escrow = Box::new(authenticate_failure_funding(
@@ -1659,7 +1660,7 @@ struct EncodedEnsembleFoldV1 {
     /// The fold's durable receipt, already schema-validated.
     receipt: [u8; ENSEMBLE_FOLD_RECEIPT_V1_BYTES],
     /// The complete `FundingLedgerV2` after every member's bounty release.
-    funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    funding: Box<[u8]>,
     /// Digest of the full ledger prestate the plan authenticated.
     funding_prestate_digest: [u8; 32],
     /// Exact funding-account lamports after every release.
@@ -1673,7 +1674,7 @@ struct EncodedEnsembleFoldV1 {
 /// Plan the fold and encode every byte it writes, one stage per frame.
 ///
 /// The same reason the failure walk and the crank do it here: the plan carries
-/// a Source state, a certificate, a receipt and a complete three-row ledger
+/// a Source state, a certificate, a receipt and a complete selected-row ledger
 /// poststate by value, and encoding them produces another full wire image
 /// beside them, which does not fit in the caller's four-kilobyte frame
 /// alongside the authenticated Market, Source graph, seats and escrow.
@@ -1748,7 +1749,7 @@ fn encode_ensemble_fold_v1(
         source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
         certificate: [0; RESOLUTION_CERTIFICATE_BYTES_V2],
         receipt: [0; ENSEMBLE_FOLD_RECEIPT_V1_BYTES],
-        funding: [0; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+        funding: plan.next_funding.clone(),
         funding_prestate_digest,
         funding_lamports_after: plan.funding_lamports_after,
         bounties: plan.bounties,
@@ -1763,7 +1764,6 @@ fn encode_ensemble_fold_v1(
         .receipt
         .to_bytes()
         .map_err(|_| ResolutionError::Transition)?;
-    encoded.funding = plan.next_funding;
     Ok(encoded)
 }
 
@@ -1848,7 +1848,7 @@ fn commit_ensemble_fold(
     if state_output.len() != SOURCE_RESOLUTION_STATE_BYTES_V2
         || certificate_output.len() != RESOLUTION_CERTIFICATE_BYTES_V2
         || receipt_output.len() != ENSEMBLE_FOLD_RECEIPT_V1_BYTES
-        || funding_output.len() != RESOLUTION_FUNDING_LEDGER_BYTES_V2
+        || funding_output.len() != encoded.funding.len()
         || certificate_output.iter().any(|byte| *byte != 0)
         || receipt_output.iter().any(|byte| *byte != 0)
         || hash(&funding_output).to_bytes() != encoded.funding_prestate_digest
@@ -1859,7 +1859,7 @@ fn commit_ensemble_fold(
     certificate_output.copy_from_slice(&encoded.certificate);
     receipt_output.copy_from_slice(&encoded.receipt);
     funding_output.copy_from_slice(&encoded.funding);
-    if funding_output.as_ref() != encoded.funding {
+    if funding_output.as_ref() != encoded.funding.as_ref() {
         return Err(ResolutionError::OutputState.into());
     }
     drop(state_output);
@@ -2082,7 +2082,7 @@ struct EncodedFundedTransitionV1 {
 ///
 /// The same reason the failure walk does it here: an authenticated
 /// `RecoveryPolicyV2` is roughly half a kilobyte, the plan carries a Source
-/// state, a certificate and a complete three-row ledger poststate by value, and
+/// state, a certificate and a complete selected-row ledger poststate by value, and
 /// encoding them produces another full wire image beside them. The SBF frame is
 /// four kilobytes and the caller already holds the authenticated Market, Source
 /// graph, ladder and escrow.
@@ -2115,7 +2115,7 @@ fn plan_and_encode_funded_transition(
         encoded: EncodedDeadlineFailureV1 {
             source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
             certificate: [0; RESOLUTION_CERTIFICATE_BYTES_V2],
-            funding: [0; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+            funding: plan.next_funding.clone(),
             funding_prestate_digest: hash(&escrow.ledger_bytes).to_bytes(),
             work_paid: plan.work_paid,
             funding_lamports_after: plan.funding_lamports_after,
@@ -2315,7 +2315,7 @@ pub(crate) fn process_deadline_failure_coordinates(
 ///
 /// This exists to keep [`DeadlineFailurePlanV1`] out of the dispatch arm's own
 /// stack frame. The plan carries a `SourceResolutionStateV2`, a
-/// `ResolutionCertificateV2` and a complete three-row `FundingLedgerV2`
+/// `ResolutionCertificateV2` and a complete selected-row `FundingLedgerV2`
 /// poststate by value, and encoding them produces another full wire image
 /// beside them. The SBF frame is four kilobytes and the arm already holds the
 /// authenticated Market, Source graph and escrow, so the two together
@@ -2330,7 +2330,7 @@ struct EncodedDeadlineFailureV1 {
     /// The terminal `ResolutionFailure` certificate, already schema-validated.
     certificate: [u8; RESOLUTION_CERTIFICATE_BYTES_V2],
     /// The complete `FundingLedgerV2` after the Failure-row bounty debit.
-    funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    funding: Box<[u8]>,
     /// Digest of the full ledger prestate authenticated by the plan.
     funding_prestate_digest: [u8; 32],
     /// Exact lamports the walker is owed.
@@ -2370,7 +2370,7 @@ fn plan_and_encode_deadline_failure(
     let mut encoded = Box::new(EncodedDeadlineFailureV1 {
         source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
         certificate: [0; RESOLUTION_CERTIFICATE_BYTES_V2],
-        funding: [0; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+        funding: plan.next_funding.clone(),
         funding_prestate_digest: hash(&escrow.ledger_bytes).to_bytes(),
         work_paid: plan.work_paid,
         funding_lamports_after: plan.funding_lamports_after,
@@ -2454,7 +2454,7 @@ fn deadline_walk_source(
 /// Authenticate the subset ledger and select its explicit-failure row.
 ///
 /// The ledger PDA binds this controller, Market, generation, manifest and exact
-/// three-row mask. The Failure row is then selected by its V6 release and this
+/// selected-row mask. The Failure row is then selected by its V7 release and this
 /// Market's Source-material configuration; it is never a caller-supplied index.
 #[inline(never)]
 fn authenticate_failure_funding<'a>(
@@ -2466,22 +2466,21 @@ fn authenticate_failure_funding<'a>(
     generation: u64,
     selecting_config: [u8; 32],
 ) -> Result<AuthenticatedFailureFundingV2<'a>, ProgramError> {
-    if account_info.owner != program_id
-        || account_info.executable
-        || account_info.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES_V2
-    {
+    if account_info.owner != program_id || account_info.executable {
         return Err(ResolutionError::Funding.into());
     }
     let data = account_info
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
     let ledger = FundingLedgerV2::decode(&data).map_err(|_| ResolutionError::Funding)?;
+    let expected_ledger_bytes =
+        funding_ledger_bytes_v2(ledger.slot_count()).map_err(|_| ResolutionError::Funding)?;
+    if data.len() != expected_ledger_bytes {
+        return Err(ResolutionError::Funding.into());
+    }
     let authenticated = ledger
         .authenticate(manifest_id, manifest)
         .map_err(|_| ResolutionError::Funding)?;
-    if ledger.slot_count() != 3 {
-        return Err(ResolutionError::Funding.into());
-    }
     let mut failure_entry_index = None;
     let mut entry_index = 0_u16;
     while entry_index < manifest.entry_count() {
@@ -2513,7 +2512,7 @@ fn authenticate_failure_funding<'a>(
     // (decision 0030). This figure is the custody conjunct and the refund the
     // relay plans, and the ledger was funded when the market was founded.
     let exact_ledger_rent_lamports = authenticated
-        .funded_rent_minimum(RESOLUTION_FUNDING_LEDGER_BYTES_V2)
+        .funded_rent_minimum(data.len())
         .map_err(crate::funded_rent_refusal)?;
     authenticated
         .validate_native_custody(account_info.lamports(), exact_ledger_rent_lamports, false)
@@ -2531,10 +2530,9 @@ fn authenticate_failure_funding<'a>(
     {
         return Err(ResolutionError::Funding.into());
     }
-    let ledger_bytes: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2] = data
-        .as_ref()
-        .try_into()
-        .map_err(|_| ResolutionError::Funding)?;
+    // The exact decoded width bounds this copy by the manifest-owned selected
+    // slot count before any allocation occurs.
+    let ledger_bytes = data.to_vec().into_boxed_slice();
     drop(data);
     Ok(AuthenticatedFailureFundingV2 {
         manifest_id,
@@ -2594,7 +2592,7 @@ fn commit_deadline_failure(
         .map_err(|_| ResolutionError::OutputState)?;
     if state_output.len() != SOURCE_RESOLUTION_STATE_BYTES_V2
         || certificate_output.len() != RESOLUTION_CERTIFICATE_BYTES_V2
-        || funding_output.len() != RESOLUTION_FUNDING_LEDGER_BYTES_V2
+        || funding_output.len() != encoded.funding.len()
         || certificate_output.iter().any(|byte| *byte != 0)
         || hash(&funding_output).to_bytes() != encoded.funding_prestate_digest
     {
@@ -2603,7 +2601,7 @@ fn commit_deadline_failure(
     state_output.copy_from_slice(&encoded.source);
     certificate_output.copy_from_slice(&encoded.certificate);
     funding_output.copy_from_slice(&encoded.funding);
-    if funding_output.as_ref() != encoded.funding {
+    if funding_output.as_ref() != encoded.funding.as_ref() {
         return Err(ResolutionError::OutputState.into());
     }
 

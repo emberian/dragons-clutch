@@ -39,8 +39,11 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
     claims_child: &Instruction,
     selection: RationalLifecycleSelectedSelectionV6<'_>,
 ) -> Result<RationalLifecycleHotInstructionV3> {
-    let checked = state.hot_outer.ok_or(Error::Operator)?;
-    validate_fixed_frame(state, checked)?;
+    let checked = state.hot_outer.ok_or(Error::FixedFrame)?;
+    validate_fixed_frame(state, checked).map_err(|error| match error {
+        Error::Operator => Error::FixedFrame,
+        other => other,
+    })?;
     validate_rational_lifecycle_selected_bundle_v6(selection.bundle)?;
     let descriptor = selection.representation_descriptor;
     let behavior = selection.authenticated_token_behavior;
@@ -55,9 +58,9 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
         || checked.checked_manifest_digest == [0; 32]
         || claims_child.program_id == solana_program::pubkey::Pubkey::default()
     {
-        return Err(Error::Operator);
+        return Err(Error::Selection);
     }
-    let child = LifecycleRequestV2::decode(&claims_child.data).map_err(|_| Error::Operator)?;
+    let child = LifecycleRequestV2::decode(&claims_child.data).map_err(Error::LifecycleDecode)?;
     let header = child.header();
     let coordinate_count = match header.action {
         LifecycleActionV2::ActivateReceipt => 0,
@@ -81,9 +84,9 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
                 coordinate_count,
             )?)
     {
-        return Err(Error::Operator);
+        return Err(Error::ChildHeader);
     }
-    validate_child_frame(claims_child, header.action)?;
+    validate_selected_child_frame_v6(claims_child, header.action)?;
 
     let mut family_bytes = vec![0_u8; claims_child.data.len()];
     let family = RationalLifecycleHotRequestV6::from_child_into(child, &mut family_bytes)
@@ -94,39 +97,49 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
         .specialize_child_into(family_digest, &mut exact_child)
         .map_err(Error::Lifecycle)?;
     if exact_child != claims_child.data {
-        return Err(Error::Operator);
+        return Err(Error::ChildSpecialization);
     }
     let envelope = HotExecutionEnvelopeV3::new(
-        u32::try_from(family_bytes.len()).map_err(|_| Error::Operator)?,
+        u32::try_from(family_bytes.len()).map_err(|_| Error::Packet)?,
         state.release_set,
         state.market.to_bytes(),
         state.generation,
         hash(state.root_data).to_bytes(),
     )
-    .map_err(|_| Error::Operator)?
-    .with_bump_hints(lifecycle_hot_bump_hints_v3(state, checked)?);
+    .map_err(|_| Error::Packet)?
+    .with_bump_hints(
+        lifecycle_hot_bump_hints_v3(state, checked).map_err(|error| match error {
+            Error::Operator => Error::Packet,
+            other => other,
+        })?,
+    );
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(family_bytes.len())
-            .ok_or(Error::Operator)?,
+            .ok_or(Error::Packet)?,
     );
     data.extend_from_slice(&envelope.to_bytes());
     data.extend_from_slice(&family_bytes);
     if data.len() > MAX_SOLANA_PACKET_BYTES {
-        return Err(Error::Operator);
+        return Err(Error::Packet);
     }
 
     let profile = AccountProfileV2::decode(&selection.bundle.account_profile)
         .map_err(Error::AccountProfile)?;
     let physical_child =
-        compact_profile13_claims_accounts_v5(state, &claims_child.accounts, profile)?;
+        compact_profile13_claims_accounts_v5(state, &claims_child.accounts, profile).map_err(
+            |error| match error {
+                Error::Operator => Error::AccountCompaction,
+                other => other,
+            },
+        )?;
     let mut accounts = Vec::with_capacity(
         state
             .fixed_accounts
             .len()
             .checked_add(state.strategy_accounts.len())
             .and_then(|count| count.checked_add(physical_child.len()))
-            .ok_or(Error::Operator)?,
+            .ok_or(Error::Packet)?,
     );
     accounts.extend_from_slice(state.fixed_accounts);
     accounts.extend_from_slice(state.strategy_accounts);
@@ -143,4 +156,48 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
         finalized_slot: state.finalized_slot,
         requires_v0_address_lookup: true,
     })
+}
+
+fn validate_selected_child_frame_v6(
+    claims_child: &Instruction,
+    action: LifecycleActionV2,
+) -> Result<()> {
+    validate_child_frame(claims_child, action).map_err(|error| match error {
+        Error::Operator => Error::ChildFrame,
+        other => other,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dclutch_claims::rational_lifecycle::LIFECYCLE_COMMON_ACCOUNT_COUNT_V2;
+    use solana_program::{instruction::AccountMeta, pubkey::Pubkey};
+
+    #[test]
+    fn child_cpi_signer_is_a_native_entrance_fact() {
+        let claims = Pubkey::new_from_array([7; 32]);
+        let mut accounts = (0..LIFECYCLE_COMMON_ACCOUNT_COUNT_V2)
+            .map(|index| {
+                AccountMeta::new_readonly(Pubkey::new_from_array([index as u8 + 20; 32]), false)
+            })
+            .collect::<Vec<_>>();
+        accounts[1].pubkey = Pubkey::new_from_array([8; 32]);
+        accounts[3].pubkey = claims;
+        accounts[12].is_writable = true;
+        let mut child = Instruction {
+            program_id: claims,
+            accounts,
+            data: Vec::new(),
+        };
+        assert_eq!(
+            validate_selected_child_frame_v6(&child, LifecycleActionV2::ActivateReceipt),
+            Err(Error::ChildFrame)
+        );
+        child.accounts[0].is_signer = true;
+        assert_eq!(
+            validate_selected_child_frame_v6(&child, LifecycleActionV2::ActivateReceipt),
+            Ok(())
+        );
+    }
 }

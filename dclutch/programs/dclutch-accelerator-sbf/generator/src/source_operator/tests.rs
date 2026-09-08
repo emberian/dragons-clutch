@@ -1,6 +1,7 @@
-use dclutch_vm::account_profile::lifecycle_v3::{
-    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, HEADER_BYTES as LIFECYCLE_BYTES_V5,
-    encode::encode_lifecycle_policy_v5_atomic,
+use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::{
+    CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1, ProjectedCustodyRequestV1,
 };
 use dclutch_market::capability_program::{
     set_v2::{
@@ -10,18 +11,13 @@ use dclutch_market::capability_program::{
     },
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
 };
-use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
-use dclutch_core_contract::ContentId;
-use dclutch_custody::{
-    CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1, ProjectedCustodyRequestV1,
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_product::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
-};
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_registry::record::{
     AccountId, AddressDerivationObligationV1, ContentDigest, PageEnvelopeV1,
@@ -41,6 +37,10 @@ use dclutch_trading::series::{
     series_core_consume_request, template_content_id, ticket_content_id,
 };
 use dclutch_trading_sbf::series::consume_artifacts_v4::SeriesConsumeChildRequestsV4;
+use dclutch_vm::account_profile::lifecycle_v3::{
+    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, HEADER_BYTES as LIFECYCLE_BYTES_V5,
+    encode::encode_lifecycle_policy_v5_atomic,
+};
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -331,7 +331,8 @@ impl Fixture {
             capacity_profile: identity(65),
             root_state_bytes: 64,
         };
-        let certificate = identity(66);
+        let accelerator_semantic_release = identity(66);
+        let translation_validation = identity(67);
         // The occurrence count the operator will read back off the admitted
         // Template. `SERIES_EXAMPLE_TEMPLATE_V3` names three occurrences and
         // this fixture's family request carries the two siblings
@@ -347,7 +348,8 @@ impl Fixture {
                 semantic_source: SEMANTIC_SOURCE,
                 compiler_source: EPHEMERAL_COMPILER_SOURCE,
                 toolchain_manifest: EPHEMERAL_TOOLCHAIN,
-                certificate,
+                accelerator_semantic_release,
+                translation_validation,
             },
             lifecycle: &lifecycle,
             fixed_data_lengths: &widths,
@@ -382,7 +384,8 @@ impl Fixture {
             semantic_source: digest(SEMANTIC_SOURCE),
             compiler_source: digest(EPHEMERAL_COMPILER_SOURCE),
             toolchain: digest(EPHEMERAL_TOOLCHAIN),
-            certificate,
+            accelerator_semantic_release,
+            translation_validation,
         };
         Self {
             observation,
@@ -482,15 +485,64 @@ impl Fixture {
             toolchain_manifest: EPHEMERAL_TOOLCHAIN,
         }
     }
+
+    fn preselection_source(&self) -> SeriesShadowBundleSourceV4<'_> {
+        let descriptor =
+            dclutch_market::capability_program::v4::CapabilityProgramV4::decode(&self.descriptor)
+                .expect("selected descriptor decodes");
+        SeriesShadowBundleSourceV4 {
+            occurrence_count: TemplateV3::decode(&self.template)
+                .expect("Template decodes")
+                .occurrence_count(),
+            descriptor: SeriesShadowDescriptorSemanticsV4 {
+                kind: descriptor.kind(),
+                config_schema: descriptor.config_schema(),
+                request_schema: descriptor.request_schema(),
+                root_schema: descriptor.root_schema(),
+                derivation_policy: descriptor.derivation_policy(),
+                capacity_profile: descriptor.capacity_profile(),
+                root_state_bytes: descriptor.root_state_bytes(),
+            },
+            release_sources: SeriesShadowReleaseSourcesV4 {
+                semantic_source: SEMANTIC_SOURCE,
+                compiler_source: EPHEMERAL_COMPILER_SOURCE,
+                toolchain_manifest: EPHEMERAL_TOOLCHAIN,
+                accelerator_semantic_release: self.checked_release.accelerator_semantic_release,
+                translation_validation: self.checked_release.translation_validation,
+            },
+            lifecycle: &self.lifecycle,
+            fixed_data_lengths: &self.widths,
+            child_requests: SeriesConsumeChildRequestsV4 {
+                lock: &self.lock,
+                core: &self.core,
+                realize: &self.realize,
+                claims: &self.claims,
+            },
+        }
+    }
 }
 
 #[test]
 fn chain_derived_source_is_byte_identical_and_emits_exact_build_inputs() {
     let fixture = Fixture::new();
+    let preselected =
+        build_series_shadow_preselection_v1(fixture.preselection_source()).expect("preselection");
     let first = build_series_shadow_source_v1(fixture.input()).expect("first source build");
     let second = build_series_shadow_source_v1(fixture.input()).expect("second source build");
     assert_eq!(first, second);
     assert_eq!(first.build_inputs.source_manifest, digest(&first.manifest));
+    assert_eq!(first.build_inputs.certificate, digest(&first.certificate));
+    assert_eq!(preselected.certificate, first.certificate);
+    assert_eq!(preselected.build_inputs, first.build_inputs);
+    assert_eq!(preselected.manifest, first.manifest);
+    assert_eq!(preselected.generated_include, first.generated_include);
+    assert_eq!(
+        SeriesShadowSourceManifestV1::decode(&first.manifest)
+            .expect("generated manifest decodes")
+            .generated_bundle()
+            .certificate_program,
+        first.build_inputs.certificate
+    );
     assert_eq!(
         first.build_inputs.generated_include,
         digest(&first.generated_include)

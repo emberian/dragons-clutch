@@ -2466,6 +2466,7 @@ dependencies = [
  "dclutch-registry",
  "dclutch-release-tool",
  "dclutch-resolution-core-v3-operator",
+ "dclutch-series-shadow-bundle-generator",
  "dclutch-source",
  "dclutch-trading",
  "dclutch-trading-sbf",

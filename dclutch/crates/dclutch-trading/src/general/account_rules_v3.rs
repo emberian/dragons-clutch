@@ -1556,7 +1556,7 @@ pub fn general_funding_bounds_v3(action: Action) -> GeneralFundingBoundsV3 {
             bounds: [FundingBoundV3::new(
                 GENERAL_PRIMARY_STATE_ACCOUNT_V3,
                 FundingActionMaskV3::FUND,
-                candidate_state_bytes_v3(),
+                GENERAL_CANDIDATE_STATE_BYTES_V3,
             )],
             bound_count: 1,
         },
@@ -1565,10 +1565,13 @@ pub fn general_funding_bounds_v3(action: Action) -> GeneralFundingBoundsV3 {
 }
 
 /// The exact width of a Candidate state account: envelope plus record.
-fn candidate_state_bytes_v3() -> u32 {
-    u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_CANDIDATE_BYTES_V1)
-        .expect("fixed candidate width")
-}
+const GENERAL_CANDIDATE_STATE_BYTES_V3: u32 = 288;
+
+const _: () = assert!(
+    GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + GENERAL_CANDIDATE_BYTES_V1
+        == GENERAL_CANDIDATE_STATE_BYTES_V3 as usize,
+    "candidate state width must stay the envelope plus record width",
+);
 
 /// A bounded funding-bound table: at most one coordinate today.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

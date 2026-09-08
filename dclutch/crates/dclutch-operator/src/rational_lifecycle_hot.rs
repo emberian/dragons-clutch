@@ -128,6 +128,22 @@ pub enum Error {
     ArtifactGeometry,
     /// Exact family/Claims child specialization or receipt contract refused.
     Lifecycle(dclutch_claims::rational_lifecycle::Error),
+    /// Claims child lifecycle bytes could not be decoded at the native entrance.
+    LifecycleDecode(dclutch_claims::rational_lifecycle::Error),
+    /// The checked Hot fixed frame was absent or did not match its owner.
+    FixedFrame,
+    /// The selected descriptor, Token behavior, or bundle identity disagreed.
+    Selection,
+    /// The selected Claims child header disagreed with the authenticated state.
+    ChildHeader,
+    /// The selected Claims child account frame disagreed with lifecycle geometry.
+    ChildFrame,
+    /// The selected family bytes did not specialize back to the submitted child.
+    ChildSpecialization,
+    /// The selected Hot packet could not be represented in the bounded wire.
+    Packet,
+    /// The selected AccountProfile could not compact the Claims child frame.
+    AccountCompaction,
     /// Checked release, physical account frame, or unsigned instruction refused.
     Operator,
 }

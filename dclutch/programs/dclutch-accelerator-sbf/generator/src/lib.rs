@@ -9,24 +9,19 @@
 //! module. It does not choose release identities, synthesize child requests,
 //! sign, submit, or publish an ArtifactRelease.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::{CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5},
-    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4};
 use dclutch_market::execution_strategy::{
     shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3},
     v2::{
-        EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
-        EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+        EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2,
+        EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
+        EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyCertificateV2,
         ExecutionStrategyProgramV2, StrategyDispositionV2,
     },
 };
-use dclutch_vm::request_profile::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
 use dclutch_trading_sbf::series::{
     account_profile_v4::{
         SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
@@ -36,13 +31,17 @@ use dclutch_trading_sbf::series::{
         SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4,
         SERIES_CONSUME_TRANSITION_BYTES_V4, SeriesConsumeChildRequestsV4,
         encode_series_consume_effect_v4_from_requests_atomic,
-        encode_series_consume_request_profile_v4_atomic, series_consume_effect_bytes_v4,
-        encode_series_consume_transition_v4_atomic,
+        encode_series_consume_request_profile_v4_atomic,
+        encode_series_consume_transition_v4_atomic, series_consume_effect_bytes_v4,
     },
 };
-use dclutch_vm::v3::{
-    ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID,
+use dclutch_vm::account_profile::{
+    lifecycle_v3::{CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5},
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
 };
+use dclutch_vm::effect::v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4};
+use dclutch_vm::request_profile::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
+use dclutch_vm::v3::{ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID};
 use sha2::{Digest, Sha256};
 
 mod manifest;
@@ -88,8 +87,15 @@ pub struct SeriesShadowReleaseSourcesV4<'a> {
     pub compiler_source: &'a [u8],
     /// Exact pinned compiler/toolchain manifest bytes.
     pub toolchain_manifest: &'a [u8],
-    /// Translation-validation certificate content identity.
-    pub certificate: ContentId,
+    /// Source-derived semantic release identity of the checked accelerator.
+    ///
+    /// This is deliberately distinct from the generated Certificate record's
+    /// content identity. The Certificate can be authored before the ELF because
+    /// it names this source fact, while ArtifactRelease separately binds the ELF
+    /// and live deployment.
+    pub accelerator_semantic_release: ContentId,
+    /// Exact translation-validation corpus identity.
+    pub translation_validation: ContentId,
 }
 
 /// One exact occurrence-specific source manifest.
@@ -131,8 +137,10 @@ pub struct CompiledSeriesShadowBundleV4 {
     pub effect: Vec<u8>,
     /// Exact Shadow-AOT ExecutionStrategy bytes.
     pub strategy: [u8; EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
-    /// Translation-validation certificate identity selected by the strategy.
-    pub certificate: ContentId,
+    /// Exact semantic-bound translation Certificate record bytes.
+    pub certificate: [u8; EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2],
+    /// Content identity of [`Self::certificate`], selected by the strategy.
+    pub certificate_program: ContentId,
     /// Reviewed semantic source identity.
     pub semantic_source: ContentId,
     /// Compiler source identity.
@@ -232,12 +240,33 @@ pub fn compile_series_shadow_bundle_v4(
     let request_id = content(&request_profile)?;
     let transition_id = content(&transition)?;
     let effect_id = content(&effect)?;
+    // This Certificate intentionally depends only on source facts and the
+    // independently emitted interpreter tuple. In particular it excludes the
+    // Strategy and descriptor identities that will name its content hash below;
+    // including either would reintroduce the certificate -> ELF ->
+    // ArtifactRelease -> certificate fixed point.
+    let compiler_source = content(source.release_sources.compiler_source)?;
+    let toolchain = content(source.release_sources.toolchain_manifest)?;
+    let certificate = ExecutionStrategyCertificateV2::new_semantic(
+        account_id,
+        id(REQUEST_SCHEMA_ID)?,
+        request_id,
+        id(TRANSITION_SCHEMA_ID)?,
+        transition_id,
+        effect_id,
+        source.release_sources.accelerator_semantic_release,
+        compiler_source,
+        toolchain,
+        source.release_sources.translation_validation,
+    )
+    .to_bytes();
+    let certificate_program = content(&certificate)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::ShadowAot,
         id(TRANSITION_SCHEMA_ID)?,
         transition_id,
         id(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
-        Some(source.release_sources.certificate),
+        Some(certificate_program),
         id(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2)?,
         None,
         id(SHADOW_REQUEST_SCHEMA_ID_V3)?,
@@ -272,8 +301,6 @@ pub fn compile_series_shadow_bundle_v4(
         .map_err(|_| SeriesShadowBundleCompileErrorV4::CapabilityProgram)?;
 
     let semantic_source = content(source.release_sources.semantic_source)?;
-    let compiler_source = content(source.release_sources.compiler_source)?;
-    let toolchain = content(source.release_sources.toolchain_manifest)?;
     let bundle_digest = bundle_digest(
         &capability_program,
         &account_profile,
@@ -286,7 +313,7 @@ pub fn compile_series_shadow_bundle_v4(
             semantic_source,
             compiler_source,
             toolchain,
-            source.release_sources.certificate,
+            certificate_program,
         ],
     )?;
     Ok(CompiledSeriesShadowBundleV4 {
@@ -297,7 +324,8 @@ pub fn compile_series_shadow_bundle_v4(
         transition,
         effect,
         strategy,
-        certificate: source.release_sources.certificate,
+        certificate,
+        certificate_program,
         semantic_source,
         compiler_source,
         toolchain,

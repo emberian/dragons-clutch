@@ -198,10 +198,19 @@ pub fn process_dealer_fill_v1(
     // ONE account each. Without this the route could price the fill against one
     // Position and hand Claims another, and Claims -- authenticating its own
     // frame, correctly -- would have no way to know the difference.
+    let (dealer_index, _) = signed_delta_position_indexes_v1(
+        dealer_position.key.to_bytes(),
+        taker_position.key.to_bytes(),
+    );
+    let (dealer_window_account, taker_window_account) = if dealer_index == 0 {
+        (DELTA_DEALER_POSITION_ACCOUNT, DELTA_TAKER_POSITION_ACCOUNT)
+    } else {
+        (DELTA_TAKER_POSITION_ACCOUNT, DELTA_DEALER_POSITION_ACCOUNT)
+    };
     for (prefix_account, window_account) in [
         (aggregate, DELTA_AGGREGATE_ACCOUNT),
-        (dealer_position, DELTA_DEALER_POSITION_ACCOUNT),
-        (taker_position, DELTA_TAKER_POSITION_ACCOUNT),
+        (dealer_position, dealer_window_account),
+        (taker_position, taker_window_account),
     ] {
         if prefix_account.key != get(claims_window, window_account)?.key {
             return Err(ScoringDealerErrorV1::Frame.into());
@@ -642,12 +651,18 @@ fn invoke_claims_fill_delta_v1<'info>(
         expected_market_revision: admission.aggregate_revision,
         claim_count: admission.aggregate_claim_count,
     };
-    let positions = [
+    let dealer_position =
         SignedDeltaPositionV3::new(fund_key.to_bytes(), admission.dealer_revision)
-            .map_err(|_| ScoringDealerErrorV1::Claims)?,
-        SignedDeltaPositionV3::new(request.taker, taker_revision)
-            .map_err(|_| ScoringDealerErrorV1::Claims)?,
-    ];
+            .map_err(|_| ScoringDealerErrorV1::Claims)?;
+    let taker_position = SignedDeltaPositionV3::new(request.taker, taker_revision)
+        .map_err(|_| ScoringDealerErrorV1::Claims)?;
+    let (dealer_index, taker_index) =
+        signed_delta_position_indexes_v1(dealer_position.owner(), taker_position.owner());
+    let positions = if dealer_index == 0 {
+        [dealer_position, taker_position]
+    } else {
+        [taker_position, dealer_position]
+    };
     let width = usize::from(fund.outcome_count);
     let claim_count = admission.aggregate_claim_count;
     let mut aggregate_deltas = alloc::vec::Vec::with_capacity(claim_count as usize);
@@ -662,8 +677,8 @@ fn invoke_claims_fill_delta_v1<'info>(
     for outcome in 0..width {
         let outcome_index = u32::try_from(outcome).map_err(|_| ScoringDealerErrorV1::Overflow)?;
         for (position_index, value) in [
-            (0_u32, request.dealer_delta(outcome)),
-            (1_u32, request.taker_delta(outcome)),
+            (dealer_index, request.dealer_delta(outcome)),
+            (taker_index, request.taker_delta(outcome)),
         ] {
             if value != 0 {
                 rows.push(
@@ -744,9 +759,24 @@ fn invoke_claims_fill_delta_v1<'info>(
     Ok(())
 }
 
+/// Map Dealer and taker semantics onto Claims' required ascending-owner table.
+fn signed_delta_position_indexes_v1(dealer_owner: [u8; 32], taker_owner: [u8; 32]) -> (u32, u32) {
+    if dealer_owner < taker_owner {
+        (0, 1)
+    } else {
+        (1, 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_delta_positions_are_canonical_in_both_semantic_orders() {
+        assert_eq!(signed_delta_position_indexes_v1([1; 32], [2; 32]), (0, 1));
+        assert_eq!(signed_delta_position_indexes_v1([2; 32], [1; 32]), (1, 0));
+    }
 
     #[test]
     fn the_cash_legs_are_the_leans() {

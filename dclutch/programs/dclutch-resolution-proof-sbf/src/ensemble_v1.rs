@@ -27,9 +27,11 @@ use dclutch_source::{
 };
 use solana_program::hash::hashv;
 
+use alloc::boxed::Box;
+
 use crate::funded::{
     AuthenticatedFailureFundingV2, FundedWalkErrorV1, MemberBountyPlanV1,
-    RESOLUTION_FUNDING_LEDGER_BYTES_V2, plan_member_bounty_releases_v1,
+    plan_member_bounty_releases_v1,
 };
 
 /// The greatest `k`, as a frame width.
@@ -112,7 +114,7 @@ pub struct EnsembleFoldPlanV1 {
     /// The fold's receipt.
     pub receipt: EnsembleFoldReceiptV1,
     /// The ledger after every consumed member's bounty was released.
-    pub next_funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    pub next_funding: Box<[u8]>,
     /// Exact ledger lamports after the releases.
     pub funding_lamports_after: u64,
     /// Which member is paid what, in member order; `None` for a member not

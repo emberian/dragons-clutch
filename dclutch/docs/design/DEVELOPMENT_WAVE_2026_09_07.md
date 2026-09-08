@@ -79,18 +79,35 @@ operator whose continued presence is required for holders to get paid.
   That fixture does not prove actual parent-manifest or physical account geometry.
   Prepare's 111 logical account coordinates now have typed finalized,
   canonical-record and predicted-layout sources, with physical alias checks.
-  The real parent-Market Found/Prepare driver is being connected; the complete
-  two-occurrence validator campaign has not run.
+  Its compiler consumes the observed geometry and checks exact publication
+  bodies. The missing certificate producer now authors the existing semantic
+  certificate wire before strategy/descriptor compilation; the stale claim
+  that this needs a new certificate binding has been removed. A preselection
+  producer now resolves the first-use ordering cycle. Checked accelerator
+  evidence, the selected include and runnable parent-Market Found/Prepare
+  command are being connected. The complete
+  two-occurrence validator campaign has not run; the unselected accelerator
+  build does not establish that path.
 - General's accepted nonempty path is being run after repairing action-scoped
   lifecycle funding and the semantic outer frame / key-sorted Claims child
   boundary. Its next repair authenticates the actual Core, Realm, Claims
   Position, canonical RentCredit and token-source observations before projecting
-  owners into the General bank. The local Market producer must also replace
-  invented accelerator identities with checked deployment evidence. Dealer's
+  owners into the General bank. The local Market compiler now accepts checked
+  accelerator deployment evidence. Fresh loopback infrastructure publication,
+  succession and all five activation stages execute; subsequent collateral
+  creation executes, but Market record publication exposes an incomplete
+  sponsor projection. Its publication-debit projection is now implemented and
+  awaits execution. The dated authority for the reached stages is
+  `docs/evidence/GENERAL_LOOPBACK_SOURCE_SPLIT_2026_09_07.md`.
+  General's nonempty accepted trade remains owed. Dealer's
   first RentCredit repair exposed a second false assumption: its sponsor need
   not be the immutable Market credit's refund beneficiary. Finalized account
   bytes located that exact mismatch; the repair retains the canonical credit
-  and Core anchor. A nonzero Dealer fill is still unexecuted.
+  and Core anchor. Correcting the external Custody authority's V2 request
+  digest now reaches accepted Dealer Found and Quote. Fill next exposed a
+  signed-delta position table emitted in semantic rather than canonical owner
+  order; its host/runtime repair awaits the next checked runtime and execution.
+  A nonzero Dealer fill is still unexecuted.
 - Ensemble fold/reclaim has accepted real-ELF poststates. Its direct Pyth member
   producer is being executed separately so pre-captured fragment fixtures do
   not stand in for capture evidence. The two-member compiler and first-member
@@ -98,8 +115,13 @@ operator whose continued presence is required for holders to get paid.
   funding wires. Those consumers now derive the full selection, with accepted
   two-member and exact missing/extra/foreign member-run controls. Actual funding
   then exposed a remaining three-row ledger allocation and Core's fixed-four
-  funding partition. Both repairs are in the sealed build; fresh capture is
-  running against it.
+  funding partition. Both repairs are in the sealed build. Actual activation
+  then exposed a receipt rent quote for three rows instead of the authenticated
+  ledger width. The receipt and relay consumers now carry that exact width;
+  focused mixed-ELF ProgramTests cover multi-row fold/reclaim and the direct
+  three-row control. The Journey producer now derives the full mask and wires
+  two fresh Pyth captures, quorum fold and the unused third member's reclaim.
+  Full local-validator capture/fold/reclaim remains owed.
   Recovery exhaustion reached terminal
   admission and all three refund payouts, recorded in
   `docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md`. Capture's prior
@@ -130,7 +152,11 @@ operator whose continued presence is required for holders to get paid.
   join incorrectly equated component count N with outcome count K. A controlled
   real-ELF red/green run repairs that join while preserving exact hostile
   rollback; see `docs/evidence/CLAIMS_RATIONAL_LIFECYCLE_COMPONENT_MIX_2026_09_07.md`.
-  That is component evidence. A fresh actual receipt poststate remains owed.
+  That is component evidence. The fresh validator accepts root activation;
+  its receipt constructor next refused a missing child-authority signer flag.
+  The producer now preserves that child fact while outer transaction compaction
+  retains its own signer rules. The native control is red before this repair
+  and green after it. A fresh actual receipt poststate remains owed.
 - Browser joining now carries the linked-basis binding, requires finalized
   confirmation and authenticated poststate, and resumes its transaction journal.
   Generated reference/client mirrors and the capability graph have converged.
@@ -172,10 +198,11 @@ cohort 16; the evidence now follows the actual configured program set and
 identifies historical observations separately from fresh reads. Reader, trader
 and operator explanations remain in the existing guide hierarchy.
 
-The first renovation is published through the existing static export, renderer,
-cut and Pages workflow; `docs/evidence/PAGES_RENOVATION_2026_09_07.md` records the
-checked source, publication SHA, workflow result and validation limits. Explorer
-navigation races and further generated mappings are the next frontend work.
+The renovation and explorer follow-up are published through the existing static
+export, renderer, cut and Pages workflow. The first publication is recorded in
+`docs/evidence/PAGES_RENOVATION_2026_09_07.md`; the subsequent navigation and
+layout fixes are recorded in `docs/evidence/PAGES_EXPLORER_FOLLOWUP_2026_09_07.md`.
+Both name exact source, publication SHA, workflow result and validation limits.
 Runtime execution and the new devnet cohort remain outstanding.
 
 ## Execution order and completion evidence

@@ -1009,7 +1009,7 @@ fn activate_structured_receipt_v1(
         .map_err(|error| Error::new(format!("Structured receipt lifecycle header: {error:?}")))?
         .encode_into(&mut lifecycle_bytes)
         .map_err(|error| Error::new(format!("Structured receipt lifecycle encode: {error:?}")))?;
-    let claims_child = activate_receipt_claims_instruction_v1(
+    let mut claims_child = activate_receipt_claims_instruction_v1(
         ActivateReceiptPhysicalInputsV1 {
             trading,
             trading_programdata: pubkey(&plan.trading.programdata_id)?,
@@ -1030,6 +1030,11 @@ fn activate_structured_receipt_v1(
         },
         &lifecycle_bytes,
     )?;
+    // The child frame records the caller-authority PDA as a signer for the
+    // Claims CPI. Hot's selected operator removes that signer bit from the
+    // outer transaction account, so the producer must preserve the child
+    // semantic fact here rather than emitting a transaction-shaped child.
+    mark_claims_child_caller_signer_v1(&mut claims_child)?;
     let local = plan.checked_local_mutable_set.as_ref().ok_or_else(|| {
         Error::new("Structured receipt requires checked local execution evidence")
     })?;
@@ -1230,6 +1235,23 @@ fn derive_selected_lifecycle_parent_v6(mut header: LifecycleHeaderV2) -> Result<
     Ok(header)
 }
 
+/// Preserve the Claims child caller-authority signer fact for Hot's CPI.
+///
+/// The physical child builder emits transaction-shaped metadata because the
+/// PDA is not a wallet signer. The selected Hot operator consumes the child
+/// frame's CPI semantics first and strips this bit while packing the outer
+/// transaction account list.
+fn mark_claims_child_caller_signer_v1(
+    claims_child: &mut solana_sdk::instruction::Instruction,
+) -> Result<()> {
+    claims_child
+        .accounts
+        .first_mut()
+        .ok_or_else(|| Error::new("Structured receipt Claims child omitted caller authority"))?
+        .is_signer = true;
+    Ok(())
+}
+
 fn activation_snapshot_slot_v1(observed: u64, minimum: u64) -> Result<u64> {
     if observed == 0 || observed < minimum {
         return Err(Error::new(
@@ -1417,6 +1439,23 @@ mod tests {
             error.to_string(),
             "Structured activation finalized snapshot predates its required publication slot"
         );
+    }
+
+    #[test]
+    fn receipt_child_marks_the_cpi_caller_authority_as_signer() {
+        use solana_sdk::{
+            instruction::{AccountMeta, Instruction},
+            pubkey::Pubkey,
+        };
+
+        let caller = Pubkey::new_unique();
+        let mut child = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![AccountMeta::new_readonly(caller, false)],
+            data: Vec::new(),
+        };
+        super::mark_claims_child_caller_signer_v1(&mut child).expect("caller authority coordinate");
+        assert!(child.accounts[0].is_signer);
     }
 
     #[test]

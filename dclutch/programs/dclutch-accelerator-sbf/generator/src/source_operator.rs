@@ -8,22 +8,19 @@
 
 use core::fmt::Write as _;
 
-use dclutch_vm::account_profile::lifecycle_v3::{
-    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5,
-};
-use dclutch_market::capability_program::{
-    set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
-    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4},
-};
 use dclutch_claims::founding_v5::ClaimsFoundingRequestV5;
 use dclutch_core_contract::ContentId;
 use dclutch_custody::{ProjectedCustodyOperationV1, ProjectedCustodyRequestV1};
 use dclutch_market::SeriesCoreRequestV1;
-use dclutch_product::{PortfolioV2, ResultDomainV2, join_product_v2};
+use dclutch_market::capability_program::{
+    set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
+    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4},
+};
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_product::{PortfolioV2, ResultDomainV2, join_product_v2};
 use dclutch_registry::record::AuthenticatedRawRecordV1;
 use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2,
@@ -35,6 +32,9 @@ use dclutch_trading::series::{
     series_core_consume_request,
 };
 use dclutch_trading_sbf::series::consume_artifacts_v4::SeriesConsumeChildRequestsV4;
+use dclutch_vm::account_profile::lifecycle_v3::{
+    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5,
+};
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -95,8 +95,10 @@ pub struct CheckedSeriesShadowReleaseV1 {
     pub compiler_source: ContentId,
     /// Pinned toolchain/build-manifest identity.
     pub toolchain: ContentId,
-    /// Translation-validation certificate selected for this AOT specialization.
-    pub certificate: ContentId,
+    /// Source-derived semantic release of the checked accelerator ArtifactRelease.
+    pub accelerator_semantic_release: ContentId,
+    /// Exact translation-validation corpus identity.
+    pub translation_validation: ContentId,
 }
 
 /// Mutable chain facts that occurrence-specific Core request bytes must derive from.
@@ -158,7 +160,7 @@ pub struct SeriesShadowBuildInputsV1 {
     pub compiler_source: ContentId,
     /// Pinned toolchain/build-manifest identity.
     pub toolchain: ContentId,
-    /// Translation certificate identity.
+    /// Generated translation Certificate record identity.
     pub certificate: ContentId,
 }
 
@@ -169,8 +171,64 @@ pub struct BuiltSeriesShadowSourceV1 {
     pub manifest: Vec<u8>,
     /// Generated Rust include payload containing only checked bundle constants.
     pub generated_include: Vec<u8>,
+    /// Exact generated semantic-bound translation Certificate record bytes.
+    pub certificate:
+        [u8; dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2],
     /// Exact immutable build inputs for a later reproducible ELF build.
     pub build_inputs: SeriesShadowBuildInputsV1,
+}
+
+/// Deterministically generated first-selection material before Registry holds
+/// the derived ProgramSet or descriptor records.
+///
+/// The caller supplies only canonical Series semantic inputs in
+/// [`SeriesShadowBundleSourceV4`]: descriptor semantics, Lifecycle, observed
+/// widths, child bank, and checked release evidence. This is deliberately
+/// earlier than [`build_series_shadow_source_v1`], which additionally proves
+/// already-finalized ProgramSet and descriptor records against the same
+/// generated bundle. A first selected Series release cannot satisfy that
+/// post-publication check until this producer's Certificate has been finalized
+/// and passed to the release compiler.
+///
+/// The input's accelerator semantic release and translation-validation
+/// identities must already have been authenticated by the caller from the
+/// checked ArtifactRelease and exact evidence files. This function accepts no
+/// textual identity, makes no release selection, and performs no Registry or
+/// chain mutation.
+pub fn build_series_shadow_preselection_v1(
+    source: SeriesShadowBundleSourceV4<'_>,
+) -> SourceOperatorResult<BuiltSeriesShadowSourceV1> {
+    let compiled = crate::compile_series_shadow_bundle_v4(source)?;
+    let manifest = compile_series_shadow_source_manifest_v1(source)?;
+    require_deterministic_series_shadow_rebuild_v1(
+        &manifest,
+        SeriesShadowRebuildSourcesV1 {
+            semantic_source: source.release_sources.semantic_source,
+            compiler_source: source.release_sources.compiler_source,
+            toolchain_manifest: source.release_sources.toolchain_manifest,
+        },
+    )?;
+    let decoded = SeriesShadowSourceManifestV1::decode(&manifest)?;
+    if decoded.generated_bundle().certificate_program != compiled.certificate_program {
+        return Err(SeriesShadowSourceOperatorErrorV1::Compile(
+            SeriesShadowBundleCompileErrorV4::Manifest,
+        ));
+    }
+    let generated_include = emit_generated_include(decoded)?;
+    Ok(BuiltSeriesShadowSourceV1 {
+        certificate: compiled.certificate,
+        build_inputs: SeriesShadowBuildInputsV1 {
+            source_manifest: digest(&manifest)?,
+            bundle: decoded.bundle_digest(),
+            generated_include: digest(&generated_include)?,
+            semantic_source: decoded.semantic_source(),
+            compiler_source: decoded.compiler_source(),
+            toolchain: decoded.toolchain(),
+            certificate: compiled.certificate_program,
+        },
+        manifest,
+        generated_include,
+    })
 }
 
 /// Stable refusal from chain-observation and source construction.
@@ -190,7 +248,7 @@ pub enum SeriesShadowSourceOperatorErrorV1 {
     Lifecycle,
     /// A child request was noncanonical or did not join the selected occurrence.
     ChildRequest,
-    /// Reviewed source, compiler, toolchain, or certificate selection differed.
+    /// Reviewed source, compiler, toolchain, or release provenance differed.
     Source,
     /// Canonical manifest generation or deterministic rebuilding refused.
     Compile(SeriesShadowBundleCompileErrorV4),
@@ -280,47 +338,21 @@ pub fn build_series_shadow_source_v1(
             semantic_source: input.semantic_source,
             compiler_source: input.compiler_source_manifest,
             toolchain_manifest: input.toolchain_manifest,
-            certificate: input.checked_release.certificate,
+            accelerator_semantic_release: input.checked_release.accelerator_semantic_release,
+            translation_validation: input.checked_release.translation_validation,
         },
         lifecycle: input.records.lifecycle.record.exact_content(),
         fixed_data_lengths: input.account_widths.fixed_data_lengths,
         child_requests: input.child_requests,
     };
-    let manifest = compile_series_shadow_source_manifest_v1(source)?;
-    require_deterministic_series_shadow_rebuild_v1(
-        &manifest,
-        SeriesShadowRebuildSourcesV1 {
-            semantic_source: input.semantic_source,
-            compiler_source: input.compiler_source_manifest,
-            toolchain_manifest: input.toolchain_manifest,
-        },
-    )?;
-    let decoded = SeriesShadowSourceManifestV1::decode(&manifest)?;
+    let built = build_series_shadow_preselection_v1(source)?;
+    let decoded = SeriesShadowSourceManifestV1::decode(&built.manifest)?;
     if decoded.generated_bundle().capability_program
         != input.records.descriptor.record.exact_content()
     {
         return Err(SeriesShadowSourceOperatorErrorV1::Descriptor);
     }
-    let generated_include = emit_generated_include(decoded)?;
-    let source_manifest = digest(&manifest)?;
-    let generated_include_digest = digest(&generated_include)?;
-    let bundle = decoded.bundle_digest();
-    let semantic_source = decoded.semantic_source();
-    let compiler_source = decoded.compiler_source();
-    let toolchain = decoded.toolchain();
-    Ok(BuiltSeriesShadowSourceV1 {
-        manifest,
-        generated_include,
-        build_inputs: SeriesShadowBuildInputsV1 {
-            source_manifest,
-            bundle,
-            generated_include: generated_include_digest,
-            semantic_source,
-            compiler_source,
-            toolchain,
-            certificate: input.checked_release.certificate,
-        },
-    })
+    Ok(built)
 }
 
 /// Emit the Rust include payload for one already-compiled source manifest.
@@ -567,7 +599,7 @@ fn emit_generated_include(
     emit_array(
         &mut output,
         "SERIES_SHADOW_CERTIFICATE_ID_V1",
-        &bundle.certificate.to_bytes(),
+        &bundle.certificate_program.to_bytes(),
     )?;
     emit_slice(
         &mut output,

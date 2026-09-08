@@ -2,30 +2,31 @@
 
 use core::convert::TryInto;
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::StateLifecyclePolicyV5,
-    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
-};
-use dclutch_market::capability_program::v4::{CapabilityArtifactsV4, CapabilityProgramV4};
 use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4};
+use dclutch_market::capability_program::v4::{CapabilityArtifactsV4, CapabilityProgramV4};
 use dclutch_market::execution_strategy::{
     shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3},
     v2::{
-        EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+        EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyCertificateV2,
+        ExecutionStrategyProgramV2, StrategyDispositionV2,
     },
 };
-use dclutch_vm::request_profile::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
 use dclutch_trading_sbf::series::{
     artifacts_v3::{
         SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
         SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
     },
     consume_artifacts_v4::{
-        SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4, series_consume_effect_bytes_v4,
-        SERIES_CONSUME_TRANSITION_BYTES_V4, SeriesConsumeChildRequestsV4,
+        SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4, SERIES_CONSUME_TRANSITION_BYTES_V4,
+        SeriesConsumeChildRequestsV4, series_consume_effect_bytes_v4,
     },
 };
+use dclutch_vm::account_profile::{
+    lifecycle_v3::StateLifecyclePolicyV5,
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
+};
+use dclutch_vm::effect::v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4};
+use dclutch_vm::request_profile::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
 
 use super::{
     CompiledSeriesShadowBundleV4, Result, SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4,
@@ -33,9 +34,7 @@ use super::{
     SeriesShadowDescriptorSemanticsV4, SeriesShadowReleaseSourcesV4, bundle_digest,
     compile_series_shadow_bundle_v4, content, id, reference,
 };
-use dclutch_vm::v3::{
-    ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID,
-};
+use dclutch_vm::v3::{ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID};
 
 /// Exact source-manifest magic.
 pub const SERIES_SHADOW_SOURCE_MANIFEST_MAGIC_V1: [u8; 8] = *b"DCLTSSM1";
@@ -44,7 +43,7 @@ pub const SERIES_SHADOW_SOURCE_MANIFEST_VERSION_V1: u16 = 1;
 /// Exact occurrence-specific Consume artifact profile.
 pub const SERIES_SHADOW_SOURCE_MANIFEST_PROFILE_V1: u16 = 1;
 /// Fixed bytes before the exact fixed-width rules and child requests.
-pub const SERIES_SHADOW_SOURCE_MANIFEST_HEADER_BYTES_V1: usize = 416;
+pub const SERIES_SHADOW_SOURCE_MANIFEST_HEADER_BYTES_V1: usize = 480;
 /// Exact fixed-width rules committed as little-endian `u32` values.
 pub const SERIES_SHADOW_SOURCE_FIXED_RULE_BYTES_V1: usize =
     SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4 * 4;
@@ -83,7 +82,7 @@ const OCCURRENCE_COUNT_OFFSET: usize = 56;
 const TAIL_RESERVED_OFFSET: usize = 60;
 const TAIL_RESERVED_BYTES: usize = 4;
 const IDENTITIES_OFFSET: usize = 64;
-const IDENTITY_COUNT: usize = 11;
+const IDENTITY_COUNT: usize = 13;
 const FIXED_RULES_OFFSET: usize = SERIES_SHADOW_SOURCE_MANIFEST_HEADER_BYTES_V1;
 const CHILD_REQUESTS_OFFSET: usize = FIXED_RULES_OFFSET + SERIES_SHADOW_SOURCE_FIXED_RULE_BYTES_V1;
 const SECTIONS_OFFSET: usize = CHILD_REQUESTS_OFFSET + SERIES_SHADOW_SOURCE_CHILD_REQUEST_BYTES_V1;
@@ -99,6 +98,8 @@ const REQUEST_SCHEMA_IDENTITY: usize = 7;
 const ROOT_SCHEMA_IDENTITY: usize = 8;
 const DERIVATION_POLICY_IDENTITY: usize = 9;
 const CAPACITY_PROFILE_IDENTITY: usize = 10;
+const ACCELERATOR_SEMANTIC_RELEASE_IDENTITY: usize = 11;
+const TRANSLATION_VALIDATION_IDENTITY: usize = 12;
 
 /// Exact source bytes supplied again during deterministic rebuilding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,7 +127,9 @@ pub struct SeriesShadowSourceManifestV1<'a> {
     semantic_source: ContentId,
     compiler_source: ContentId,
     toolchain: ContentId,
-    certificate: ContentId,
+    certificate_program: ContentId,
+    accelerator_semantic_release: ContentId,
+    translation_validation: ContentId,
     bundle_digest: ContentId,
     kind: ContentId,
     config_schema: ContentId,
@@ -155,8 +158,8 @@ pub struct SeriesShadowGeneratedBundleV1<'a> {
     pub effect: &'a [u8],
     /// Exact Shadow-AOT strategy bytes.
     pub strategy: &'a [u8],
-    /// Exact translation-certificate content identity.
-    pub certificate: ContentId,
+    /// Exact generated translation-certificate record identity.
+    pub certificate_program: ContentId,
 }
 
 impl<'a> SeriesShadowSourceManifestV1<'a> {
@@ -245,7 +248,7 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
         let semantic_source = decoded_identity(&identities, SEMANTIC_SOURCE_IDENTITY)?;
         let compiler_source = decoded_identity(&identities, COMPILER_SOURCE_IDENTITY)?;
         let toolchain = decoded_identity(&identities, TOOLCHAIN_IDENTITY)?;
-        let certificate = decoded_identity(&identities, CERTIFICATE_IDENTITY)?;
+        let certificate_program = decoded_identity(&identities, CERTIFICATE_IDENTITY)?;
         let expected_bundle_digest = decoded_identity(&identities, BUNDLE_IDENTITY)?;
         let kind = decoded_identity(&identities, KIND_IDENTITY)?;
         let config_schema = decoded_identity(&identities, CONFIG_SCHEMA_IDENTITY)?;
@@ -253,6 +256,10 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
         let root_schema = decoded_identity(&identities, ROOT_SCHEMA_IDENTITY)?;
         let derivation_policy = decoded_identity(&identities, DERIVATION_POLICY_IDENTITY)?;
         let capacity_profile = decoded_identity(&identities, CAPACITY_PROFILE_IDENTITY)?;
+        let accelerator_semantic_release =
+            decoded_identity(&identities, ACCELERATOR_SEMANTIC_RELEASE_IDENTITY)?;
+        let translation_validation =
+            decoded_identity(&identities, TRANSLATION_VALIDATION_IDENTITY)?;
         let root_state_bytes = read_u32(bytes, ROOT_STATE_BYTES_OFFSET)?;
         authenticate_generated_sections(
             GeneratedSectionsV1 {
@@ -273,7 +280,11 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
                 capacity_profile,
                 root_state_bytes,
             },
-            certificate,
+            certificate_program,
+            accelerator_semantic_release,
+            compiler_source,
+            toolchain,
+            translation_validation,
         )?;
         if bundle_digest(
             capability_program,
@@ -283,7 +294,12 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
             transition,
             effect,
             strategy,
-            [semantic_source, compiler_source, toolchain, certificate],
+            [
+                semantic_source,
+                compiler_source,
+                toolchain,
+                certificate_program,
+            ],
         )? != expected_bundle_digest
         {
             return Err(SeriesShadowBundleCompileErrorV4::Manifest);
@@ -301,7 +317,9 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
             semantic_source,
             compiler_source,
             toolchain,
-            certificate,
+            certificate_program,
+            accelerator_semantic_release,
+            translation_validation,
             bundle_digest: expected_bundle_digest,
             kind,
             config_schema,
@@ -354,7 +372,7 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
             transition: self.transition,
             effect: self.effect,
             strategy: self.strategy,
-            certificate: self.certificate,
+            certificate_program: self.certificate_program,
         }
     }
 }
@@ -405,7 +423,8 @@ pub fn require_deterministic_series_shadow_rebuild_v1(
             semantic_source: sources.semantic_source,
             compiler_source: sources.compiler_source,
             toolchain_manifest: sources.toolchain_manifest,
-            certificate: manifest.certificate,
+            accelerator_semantic_release: manifest.accelerator_semantic_release,
+            translation_validation: manifest.translation_validation,
         },
         lifecycle: manifest.source_lifecycle,
         fixed_data_lengths: &fixed_data_lengths,
@@ -445,7 +464,11 @@ fn encode_manifest(
     }
     let mut output = vec![0_u8; total];
     put(&mut output, 0, &SERIES_SHADOW_SOURCE_MANIFEST_MAGIC_V1)?;
-    put_u32(&mut output, OCCURRENCE_COUNT_OFFSET, source.occurrence_count)?;
+    put_u32(
+        &mut output,
+        OCCURRENCE_COUNT_OFFSET,
+        source.occurrence_count,
+    )?;
     put_u16(
         &mut output,
         VERSION_OFFSET,
@@ -495,7 +518,7 @@ fn encode_manifest(
         compiled.semantic_source,
         compiled.compiler_source,
         compiled.toolchain,
-        compiled.certificate,
+        compiled.certificate_program,
         compiled.bundle_digest,
         source.descriptor.kind,
         source.descriptor.config_schema,
@@ -503,6 +526,8 @@ fn encode_manifest(
         source.descriptor.root_schema,
         source.descriptor.derivation_policy,
         source.descriptor.capacity_profile,
+        source.release_sources.accelerator_semantic_release,
+        source.release_sources.translation_validation,
     ];
     for (index, identity) in identities.iter().enumerate() {
         put(
@@ -608,7 +633,11 @@ struct GeneratedSectionsV1<'a> {
 fn authenticate_generated_sections(
     sections: GeneratedSectionsV1<'_>,
     semantics: SeriesShadowDescriptorSemanticsV4,
-    certificate: ContentId,
+    certificate_program: ContentId,
+    accelerator_semantic_release: ContentId,
+    compiler_source: ContentId,
+    toolchain: ContentId,
+    translation_validation: ContentId,
 ) -> Result<()> {
     let descriptor = CapabilityProgramV4::decode(sections.capability_program)
         .map_err(|_| SeriesShadowBundleCompileErrorV4::Manifest)?;
@@ -639,7 +668,7 @@ fn authenticate_generated_sections(
         || descriptor.capacity_profile() != semantics.capacity_profile
         || descriptor.root_state_bytes() != semantics.root_state_bytes
         || strategy.disposition() != StrategyDispositionV2::ShadowAot
-        || strategy.certificate_program() != Some(certificate)
+        || strategy.certificate_program() != Some(certificate_program)
         || strategy.request_schema() != id(SHADOW_REQUEST_SCHEMA_ID_V3)?
         || strategy.ack_schema() != id(SHADOW_ACK_SCHEMA_ID_V3)?
     {
@@ -663,7 +692,23 @@ fn authenticate_generated_sections(
             transition: reference(TRANSITION_SCHEMA_ID, content(sections.transition)?)?,
             effect: reference(SCHEMA_RELEASE_ID_V4, content(sections.effect)?)?,
         })
-        .map_err(|_| SeriesShadowBundleCompileErrorV4::Manifest)
+        .map_err(|_| SeriesShadowBundleCompileErrorV4::Manifest)?;
+    let certificate = ExecutionStrategyCertificateV2::new_semantic(
+        content(sections.account_profile)?,
+        id(REQUEST_SCHEMA_ID)?,
+        content(sections.request_profile)?,
+        id(TRANSITION_SCHEMA_ID)?,
+        content(sections.transition)?,
+        content(sections.effect)?,
+        accelerator_semantic_release,
+        compiler_source,
+        toolchain,
+        translation_validation,
+    );
+    if content(&certificate.to_bytes())? != certificate_program {
+        return Err(SeriesShadowBundleCompileErrorV4::Manifest);
+    }
+    Ok(())
 }
 
 fn decoded_identity(identities: &[[u8; 32]; IDENTITY_COUNT], index: usize) -> Result<ContentId> {

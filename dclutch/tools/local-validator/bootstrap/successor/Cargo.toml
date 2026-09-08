@@ -43,6 +43,10 @@ dclutch-registry = { path = "../../../../crates/dclutch-registry", features = ["
 dclutch-release-tool = { path = "../../../../crates/dclutch-release-tool" }
 dclutch-resolution-core-v3-operator = { path = "../../../../crates/dclutch-resolution-core-v3-operator" }
 dclutch-trading-sbf = { path = "../../../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family"] }
+# The Series Found→Prepare exterior publishes the semantic-bound Shadow
+# certificate before compiling the selected five-action closure.  This is the
+# host-only canonical source operator; it never reaches an SBF link.
+dclutch-series-shadow-bundle-generator = { path = "../../../../programs/dclutch-accelerator-sbf/generator" }
 dclutch-versioned-message-operator = { path = "../../../../crates/dclutch-versioned-message-operator" }
 # The lab guardian set's secp256k1 signer: `pyth_lab_publication.rs` mints a
 # signed VAA over the nineteen derivable dummy guardians so a loopback market

@@ -60,15 +60,14 @@
 //! [`crate::relay_v1`]. This module takes values the outer authenticated and
 //! returns a plan.
 
+use alloc::boxed::Box;
+
 use dclutch_market::capability_manifest::{
     CapabilityManifestV1, ContentId as CapabilityContentId,
     FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_HEADER_BYTES_V2,
-    FUNDING_LEDGER_SLOT_BYTES_V2, FundingAssetClassV1, FundingCompartment, FundingLedgerV2,
+    FundingAssetClassV1, FundingCompartment, FundingLedgerV2,
 };
 
-/// Exact width of the three-row Resolution controller subset ledger.
-pub(crate) const RESOLUTION_FUNDING_LEDGER_BYTES_V2: usize =
-    FUNDING_LEDGER_HEADER_BYTES_V2 + 3 * FUNDING_LEDGER_SLOT_BYTES_V2;
 use dclutch_product::ResultDomainV2;
 use dclutch_product::svm_reader::AuthenticatedProductRuntimeV2;
 use dclutch_source::resolution::{
@@ -125,7 +124,7 @@ pub struct MemberBountyReleaseV1 {
 /// What the fold pays, over the whole ledger.
 pub struct MemberBountyPlanV1 {
     /// The complete ledger after every consumed member's row was released.
-    pub next_funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    pub next_funding: Box<[u8]>,
     /// One release per consumed member with an attempt row, in member order.
     pub releases: [Option<MemberBountyReleaseV1>; 5],
     /// Exact lamports the ledger holds after every release.
@@ -147,7 +146,7 @@ pub fn plan_member_bounty_releases_v1(
     ensemble: dclutch_source::EnsembleSpecV1,
     consumed_bitmap: u8,
 ) -> Result<MemberBountyPlanV1, FundedWalkErrorV1> {
-    let mut next_funding = escrow.ledger_bytes;
+    let mut next_funding = escrow.ledger_bytes.clone();
     let mut releases = [None; 5];
     let mut lamports_after = escrow.ledger_account_lamports;
     let mut member = 1_u8;
@@ -249,7 +248,6 @@ pub struct DeadlineFailureRequestV1 {
 /// The ledger and its physical custody are carried together so the debit below
 /// authenticates aggregate native custody before and after changing only the
 /// selected Failure row.
-#[derive(Clone, Copy)]
 pub struct AuthenticatedFailureFundingV2<'manifest> {
     /// Capability-manifest content identity, from the authenticated Market.
     pub manifest_id: CapabilityContentId,
@@ -258,7 +256,7 @@ pub struct AuthenticatedFailureFundingV2<'manifest> {
     /// The manifest entry this compartment was created against.
     pub entry_index: u16,
     /// Exact hostile-decoded persisted subset-ledger bytes.
-    pub ledger_bytes: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    pub ledger_bytes: Box<[u8]>,
     /// Exact Rent reserve for the full ledger width.
     pub exact_ledger_rent_lamports: u64,
     /// Physical lamports held by the aggregate ledger account.
@@ -279,14 +277,14 @@ pub struct AuthenticatedWalkSourceV1 {
 }
 
 /// Failure-atomic plan returned to the physical SBF outer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct DeadlineFailurePlanV1 {
     /// The Source state after `Primary → Exhausted → FailureCommitted`.
     pub next_source: SourceResolutionStateV2,
     /// The terminal `ResolutionFailure` certificate.
     pub certificate: ResolutionCertificateV2,
     /// The complete subset ledger after the Failure-row bounty debit.
-    pub next_funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    pub next_funding: Box<[u8]>,
     /// Exact lamports credited to whoever walked it.
     pub work_paid: u64,
     /// Bounty principal still escrowed after this debit.
@@ -309,7 +307,7 @@ pub struct DeadlineFailurePlanV1 {
 fn plan_funding_release(
     escrow: &AuthenticatedFailureFundingV2<'_>,
     selecting_config: [u8; 32],
-) -> Result<([u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2], u64, u64, u64), FundedWalkErrorV1> {
+) -> Result<(Box<[u8]>, u64, u64, u64), FundedWalkErrorV1> {
     let entry = escrow
         .manifest
         .entry(escrow.entry_index)
@@ -344,7 +342,7 @@ fn plan_funding_release(
     if quote.asset_class() != FundingAssetClassV1::NativeLamports || quote.amount() == 0 {
         return Err(FundedWalkErrorV1::Funding);
     }
-    let mut next_funding = escrow.ledger_bytes;
+    let mut next_funding = escrow.ledger_bytes.clone();
     let released = FundingLedgerV2::release_in_place(
         &mut next_funding,
         escrow.manifest_id,
@@ -403,14 +401,16 @@ fn plan_funding_release(
     )
     .map_err(|_| FundedWalkErrorV1::Funding)?;
 
+    let funding_remaining = post
+        .slot(escrow.entry_index)
+        .map_err(|_| FundedWalkErrorV1::Funding)?
+        .remaining()
+        .bounty()
+        .amount();
     Ok((
         next_funding,
         work_paid,
-        post.slot(escrow.entry_index)
-            .map_err(|_| FundedWalkErrorV1::Funding)?
-            .remaining()
-            .bounty()
-            .amount(),
+        funding_remaining,
         funding_lamports_after,
     ))
 }
@@ -431,14 +431,14 @@ pub struct AuthenticatedRecoveryPolicyV1 {
 }
 
 /// Failure-atomic plan for one crank of the funded ordered-recovery ladder.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct FundedTransitionPlanV1 {
     /// The Source state after exactly one rung.
     pub next_source: SourceResolutionStateV2,
     /// The receipt this crank writes.
     pub certificate: ResolutionCertificateV2,
     /// The complete subset ledger after this crank's bounty debit.
-    pub next_funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    pub next_funding: Box<[u8]>,
     /// Exact lamports credited to whoever cranked it.
     pub work_paid: u64,
     /// Bounty principal still escrowed in this compartment after the debit.

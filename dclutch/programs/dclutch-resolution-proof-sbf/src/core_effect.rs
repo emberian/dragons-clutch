@@ -5,9 +5,9 @@ use core::convert::TryFrom;
 
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
-    CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
-    FUNDING_LEDGER_SLOT_BYTES_V2, FundingLedgerCloseCustodyV2, FundingLedgerStatusV2,
-    FundingLedgerV2, funding::funded_rent_persists_v1, funding_ledger_bytes_v2,
+    CapabilityManifestV1, ContentId as CapabilityContentId, FundingLedgerCloseCustodyV2,
+    FundingLedgerStatusV2, FundingLedgerV2, funding::funded_rent_persists_v1,
+    funding_ledger_bytes_v2,
 };
 use dclutch_market::{
     CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_DIGEST_DOMAIN_V1,
@@ -80,9 +80,6 @@ pub(crate) const CLOSE_FUND_ACCOUNT_COUNT: usize = 22;
 pub(crate) const DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1: usize = 20;
 /// Direct close: fixed nineteen accounts and optional finalized RecoveryPolicy pair.
 pub(crate) const DIRECT_FUNDING_CLOSE_ACCOUNT_COUNT_V1: usize = 21;
-
-const RESOLUTION_FUNDING_LEDGER_BYTES: usize =
-    FUNDING_LEDGER_HEADER_BYTES_V2 + 3 * FUNDING_LEDGER_SLOT_BYTES_V2;
 
 #[derive(Clone, Copy)]
 struct CommonAccounts<'a, 'info> {
@@ -187,15 +184,40 @@ pub(crate) fn process_direct_funding_activation_v1(
         FundingActivationRequestV1::decode(instruction_data)
             .map_err(|_| ResolutionError::Instruction)?,
     );
-    let direct = parse_direct_funding_accounts(program_id, accounts, request.as_ref())?;
-    let rent = authenticate_rent(direct.rent)?;
-    let clock = authenticate_clock(direct.clock)?;
+    let direct =
+        parse_direct_funding_accounts(program_id, accounts, request.as_ref()).map_err(|error| {
+            solana_program::msg!("funding activation refused: account frame {:?}", error);
+            error
+        })?;
+    let rent = authenticate_rent(direct.rent).map_err(|error| {
+        solana_program::msg!("funding activation refused: rent sysvar {:?}", error);
+        error
+    })?;
+    let clock = authenticate_clock(direct.clock).map_err(|error| {
+        solana_program::msg!("funding activation refused: clock sysvar {:?}", error);
+        error
+    })?;
     if clock.slot == 0 {
         return Err(ResolutionError::Sysvar.into());
     }
-    let state = authenticate_direct_market(direct, request.as_ref())?;
-    authenticate_direct_activation(program_id, direct, request.as_ref())?;
-    authenticate_direct_source_records(direct, request.as_ref())?;
+    let state = authenticate_direct_market(direct, request.as_ref()).map_err(|error| {
+        solana_program::msg!(
+            "funding activation refused: market authentication {:?}",
+            error
+        );
+        error
+    })?;
+    authenticate_direct_activation(program_id, direct, request.as_ref()).map_err(|error| {
+        solana_program::msg!(
+            "funding activation refused: activation authentication {:?}",
+            error
+        );
+        error
+    })?;
+    authenticate_direct_source_records(direct, request.as_ref()).map_err(|error| {
+        solana_program::msg!("funding activation refused: source records {:?}", error);
+        error
+    })?;
     let manifest_data = direct
         .capability_manifest
         .try_borrow_data()
@@ -203,8 +225,21 @@ pub(crate) fn process_direct_funding_activation_v1(
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
     let expected_mask =
-        authenticate_direct_material_and_funding(direct, accounts, request.as_ref(), manifest)?;
-    authenticate_direct_source(program_id, direct, request.as_ref(), state)?;
+        authenticate_direct_material_and_funding(direct, accounts, request.as_ref(), manifest)
+            .map_err(|error| {
+                solana_program::msg!(
+                    "funding activation refused: material and funding {:?}",
+                    error
+                );
+                error
+            })?;
+    authenticate_direct_source(program_id, direct, request.as_ref(), state).map_err(|error| {
+        solana_program::msg!(
+            "funding activation refused: source authentication {:?}",
+            error
+        );
+        error
+    })?;
     let manifest_id = CapabilityContentId::new(request.role.capability_manifest)
         .map_err(|_| ResolutionError::Funding)?;
     let request_digest = request.digest().map_err(|_| ResolutionError::Instruction)?;
@@ -221,6 +256,10 @@ pub(crate) fn process_direct_funding_activation_v1(
         &rent,
         expected_mask,
     )
+    .map_err(|error| {
+        solana_program::msg!("funding activation refused: activation commit {:?}", error);
+        error
+    })
 }
 
 /// The Source material, its optional recovery policy, and the funding entries
@@ -297,10 +336,19 @@ fn commit_direct_activation(
         );
     }
 
-    require_prepaid_output(
-        direct.receipt,
-        rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1),
-    )?;
+    let receipt_minimum_lamports = rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1);
+    if let Err(error) = require_prepaid_output(direct.receipt, receipt_minimum_lamports) {
+        solana_program::msg!(
+            "funding activation refused: receipt prepay owner={} bytes={} executable={} writable={} lamports={} minimum={}",
+            direct.receipt.owner,
+            direct.receipt.data_len(),
+            direct.receipt.executable,
+            direct.receipt.is_writable,
+            direct.receipt.lamports(),
+            receipt_minimum_lamports,
+        );
+        return Err(error);
+    }
     let mut ledger_bytes = copy_ledger_bytes(direct.funding_ledger)?;
     let pending_digest = funding_lifecycle_account_digest_v1(
         direct.funding_ledger.owner.to_bytes(),
@@ -374,7 +422,7 @@ fn commit_direct_activation(
     // The receipt records the rent the ledger was FUNDED at, which is the
     // figure every later reader of this receipt must agree with.
     let ledger_rent_lamports = active
-        .funded_rent_minimum(RESOLUTION_FUNDING_LEDGER_BYTES)
+        .funded_rent_minimum(ledger_bytes.len())
         .map_err(|_| ResolutionError::FundedRent)?;
     let remaining_native_principal_lamports = active
         .remaining_native_lamports_total()
@@ -403,14 +451,30 @@ fn commit_direct_activation(
         post_ledger_lamports,
         producer: program_id.to_bytes(),
     };
-    let receipt_bytes = Box::new(receipt.encode().map_err(|_| ResolutionError::OutputState)?);
+    let receipt_bytes = Box::new(receipt.encode().map_err(|error| {
+        solana_program::msg!("funding activation refused: receipt encode {:?}", error);
+        ResolutionError::OutputState
+    })?);
     commit_activated_ledger(
         direct.funding_ledger,
         ledger_bytes.as_ref(),
         post_ledger_lamports,
         direct.beneficiary,
         beneficiary_lamports,
-    )?;
+    )
+    .map_err(|error| {
+        solana_program::msg!(
+            "funding activation refused: ledger commit ledger_bytes={} expected_bytes={} ledger_lamports={} post_ledger_lamports={} beneficiary_lamports={} post_beneficiary_lamports={} error={:?}",
+            direct.funding_ledger.data_len(),
+            ledger_bytes.len(),
+            direct.funding_ledger.lamports(),
+            post_ledger_lamports,
+            direct.beneficiary.lamports(),
+            beneficiary_lamports,
+            error,
+        );
+        error
+    })?;
     initialize_activation_receipt(
         program_id,
         direct.market,
@@ -419,7 +483,16 @@ fn commit_direct_activation(
         direct.system,
         &rent,
     )?;
-    write_state(direct.receipt, receipt_bytes.as_ref())?;
+    write_state(direct.receipt, receipt_bytes.as_ref()).map_err(|error| {
+        solana_program::msg!(
+            "funding activation refused: receipt write owner={} bytes={} encoded_bytes={} error={:?}",
+            direct.receipt.owner,
+            direct.receipt.data_len(),
+            receipt_bytes.len(),
+            error,
+        );
+        error
+    })?;
     set_return_data(receipt_bytes.as_ref());
     Ok(())
 }
@@ -1389,12 +1462,22 @@ fn initialize_activation_receipt<'info>(
         program_id,
     );
     if output.key != &expected {
+        solana_program::msg!("funding activation receipt refused: derived address");
         return Err(ResolutionError::OutputState.into());
     }
-    require_prepaid_output(
-        output,
-        rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1),
-    )?;
+    let minimum_lamports = rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1);
+    if let Err(error) = require_prepaid_output(output, minimum_lamports) {
+        solana_program::msg!(
+            "funding activation receipt refused: prepay owner={} bytes={} executable={} writable={} lamports={} minimum={}",
+            output.owner,
+            output.data_len(),
+            output.executable,
+            output.is_writable,
+            output.lamports(),
+            minimum_lamports,
+        );
+        return Err(error);
+    }
     let bump_seed = [bump];
     let signer: [&[u8]; 4] = [
         FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
@@ -1409,17 +1492,31 @@ fn initialize_activation_receipt<'info>(
         &[output.clone(), system.clone()],
         &[&signer],
     )
-    .map_err(|_| ResolutionError::OutputState)?;
+    .map_err(|error| {
+        solana_program::msg!("funding activation receipt refused: allocate {:?}", error);
+        ResolutionError::OutputState
+    })?;
     invoke_signed(
         &assign(output.key, program_id),
         &[output.clone(), system.clone()],
         &[&signer],
     )
-    .map_err(|_| ResolutionError::OutputState)?;
+    .map_err(|error| {
+        solana_program::msg!("funding activation receipt refused: assign {:?}", error);
+        ResolutionError::OutputState
+    })?;
     if output.owner != program_id
         || output.data_len() != FUNDING_ACTIVATION_RECEIPT_BYTES_V1
-        || output.lamports() < rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1)
+        || output.lamports() < minimum_lamports
     {
+        solana_program::msg!(
+            "funding activation receipt refused: post-create owner={} bytes={} executable={} lamports={} minimum={}",
+            output.owner,
+            output.data_len(),
+            output.executable,
+            output.lamports(),
+            minimum_lamports,
+        );
         return Err(ResolutionError::OutputState.into());
     }
     Ok(())
@@ -3353,8 +3450,11 @@ fn commit_refund(
     let mut beneficiary_lamports = beneficiary
         .try_borrow_mut_lamports()
         .map_err(|_| ResolutionError::OutputState)?;
+    let expected_ledger_bytes = FundingLedgerV2::decode(&ledger_data)
+        .and_then(|ledger| funding_ledger_bytes_v2(ledger.slot_count()))
+        .map_err(|_| ResolutionError::Funding)?;
     if source_data.len() != SOURCE_RESOLUTION_STATE_BYTES_V2
-        || ledger_data.len() != RESOLUTION_FUNDING_LEDGER_BYTES
+        || ledger_data.len() != expected_ledger_bytes
     {
         return Err(ResolutionError::OutputState.into());
     }

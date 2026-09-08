@@ -4228,6 +4228,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                 &forge,
                 args.origin.may_airdrop(),
                 wallet.shortfall(),
+                0,
                 None,
                 None,
                 None,
@@ -4579,6 +4580,12 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         _ => None,
     };
     let wallet = wallet_arithmetic(&mut rpc, &plan, payer.pubkey())?;
+    let initial_collateral_account_rent_lamports =
+        crate::market::initial_collateral_account_rent_v1(&mut rpc, market_input)?;
+    let initial_market_publication_sponsor_debit_lamports = crate::market::initial_market_publication_sponsor_debit_v1(
+        &mut rpc, pubkey(&plan.registry.program_id)?, payer.pubkey(), market_input,
+        forge.peek_pubkey(role::COLLATERAL_MINT)?,
+    )?;
     report["pre_key_checkpoint"]["keypair_files_read"] = json!(true);
     report["payer"] = json!(payer.pubkey().to_string());
     report["keypair_derivation"] = json!(forge.derivation_label());
@@ -4609,6 +4616,9 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "this driver never airdrops: fund the payer before --execute so a shortfall refuses before the ladder"
         },
     });
+    report["initial_collateral_account_rent_lamports"] =
+        json!(initial_collateral_account_rent_lamports);
+    report["initial_market_publication_sponsor_debit_lamports"] = json!(initial_market_publication_sponsor_debit_lamports);
     report["founding_targets"] = founding_targets.as_ref().map_or_else(
         || carried_founding_targets.clone(),
         |targets| {
@@ -4684,6 +4694,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             &forge,
             args.origin.may_airdrop(),
             wallet.shortfall(),
+            initial_collateral_account_rent_lamports.checked_add(initial_market_publication_sponsor_debit_lamports).ok_or_else(|| Error::new("loopback founding sponsorship overflow"))?,
             Some(actors),
             market.as_ref(),
             founding_keys,
@@ -5080,6 +5091,7 @@ fn execute_stages(
     forge: &KeyForge,
     may_airdrop: bool,
     loopback_wallet_shortfall_lamports: u64,
+    loopback_founding_collateral_rent_lamports: u64,
     founding_actors: Option<crate::market::FoundingActorsV1>,
     market: Option<&crate::model::MarketRunInput>,
     founding_keys: Option<(Pubkey, Pubkey)>,
@@ -5119,6 +5131,13 @@ fn execute_stages(
             "fund loopback campaign payer",
             authority.pubkey(),
             loopback_wallet_shortfall_lamports,
+        )?);
+    }
+    if may_airdrop && loopback_founding_collateral_rent_lamports != 0 {
+        transactions.push(rpc.airdrop(
+            "fund loopback founding collateral account rents",
+            authority.pubkey(),
+            loopback_founding_collateral_rent_lamports,
         )?);
     }
     let mut market_evidence = None;
