@@ -20,7 +20,7 @@ export interface RoutePhaseGateV1 {
 }
 
 /** Routes enumerated by the census, gated or not. */
-export const ROUTE_COUNT_V1 = 164 as const;
+export const ROUTE_COUNT_V1 = 162 as const;
 
 export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/affine_batch_v2::process", phases: ["Open"], prestates: [] },
@@ -29,7 +29,6 @@ export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/claims_conservation_v1::process", phases: ["Open"], prestates: [] },
   { route: "claims/founding_v5::process", phases: ["Founding"], prestates: [] },
   { route: "claims/fractional_claim_check_v1::process_fractional_compaction", phases: ["Terminal", "Retiring"], prestates: [] },
-  { route: "claims/market_closure_v1::process", phases: ["Retiring"], prestates: [] },
   { route: "claims/market_closure_v1::process_checkpoint_handoff", phases: ["Retiring"], prestates: [] },
   { route: "claims/process_begin#Begin", phases: ["Terminal", "Retiring"], prestates: [] },
   { route: "claims/process_open#WholeUnwrap", phases: ["Open"], prestates: [] },
@@ -48,7 +47,6 @@ export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "core/resolution::process#AdmitTerminal", phases: ["Open", "Terminal"], prestates: [["Open", "Consumed"], ["Terminal", "Consumed"]] },
   { route: "core/resolution::process#CreateFund", phases: ["Founding", "Open"], prestates: [["Founding", "Prepaid"], ["Open", "Consumed"]] },
   { route: "core/resolution::process#VerifyFundReady", phases: ["Founding", "Open"], prestates: [["Founding", "Prepaid"], ["Founding", "Ready"], ["Open", "Consumed"]] },
-  { route: "core/retire_v1::process#Retire", phases: ["Retiring"], prestates: [] },
   { route: "core/retire_v1::process_checkpoint_prepare#Retire", phases: ["Retiring"], prestates: [] },
   { route: "core/retire_v1::process_checkpoint_suffix", phases: ["Retiring"], prestates: [] },
   { route: "core/retirement_replay_handoff_v1::process", phases: ["Retiring"], prestates: [] },

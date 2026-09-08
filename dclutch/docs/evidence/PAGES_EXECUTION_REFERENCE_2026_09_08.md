@@ -58,3 +58,23 @@ six guides and 25 directory indexes. Logs are retained at
 `/private/tmp/dclutch-reference-check-68c4b7cb8-20260908.log`, and
 `/private/tmp/dclutch-pages-34254594473.log`. The runtime and validation limits
 stated above remain in force.
+
+## Addendum — selector and runtime checkpoint, 2026-09-08 17:29 UTC
+
+Publication cut `813caaf1566efc4bff0450916ac071884d856ebf` carries source
+`f173bb8b9ae6230342ee48232899d584e077b88d`, including source-derived Claims
+selectors, authenticated Series runtime wiring, and sealed artifact validation
+reuse. Source and published tree are
+`44ff73ca7d8f4eae936cb38939ee5281b5254d20`. The cut found zero credential
+findings and checked exact tree equality. The committed reference check
+converged without changes.
+
+[Workflow 34257345585](https://github.com/emberian/dragons-clutch/actions/runs/34257345585)
+and deployment `6333274546` succeeded; the latter records
+`2026-09-08T17:29:47Z` and the existing `https://clutch.dregg.pro/` environment.
+The workflow rendered 42 app routes and assembled 449 files: 196 documentation
+pages, 266 link-checked pages, six guides and 25 directory indexes. Logs:
+`/private/tmp/dclutch-cut-f173bb8b9-20260908.log`,
+`/private/tmp/dclutch-reference-check-f173bb8b9-20260908.log`, and
+`/private/tmp/dclutch-pages-34257345585.log`. The runtime and validation limits
+above still apply.

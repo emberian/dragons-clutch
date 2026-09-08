@@ -12,6 +12,9 @@ use crate::SourceMaterialV3;
 pub enum EnsembleTerminalCapitalErrorV1 {
     /// A single-source material has no Ensemble terminal-capital row.
     SingleSource,
+    /// The authenticated recovery policy did not contain exactly the member
+    /// attempts followed by the material's declared recovery rungs.
+    RecoveryPolicyMismatch,
     /// A required positive chain rent quote was zero.
     ZeroRentQuote,
     /// Exact native-lamport arithmetic overflowed.
@@ -35,6 +38,7 @@ pub struct EnsembleTerminalCapitalPlanV1 {
     maximum_failure_certificate_count: u8,
     member_seat_rent_lamports: u64,
     source_creation_reserve_lamports: u64,
+    activation_debit_lamports: u64,
 }
 
 impl EnsembleTerminalCapitalPlanV1 {
@@ -42,6 +46,7 @@ impl EnsembleTerminalCapitalPlanV1 {
     /// chain's current rent minima for the three fixed account widths.
     pub fn for_material(
         material: SourceMaterialV3,
+        authenticated_recovery_attempt_count: u8,
         member_seat_rent_lamports: u64,
         terminal_certificate_rent_lamports: u64,
         fold_receipt_rent_lamports: u64,
@@ -49,6 +54,13 @@ impl EnsembleTerminalCapitalPlanV1 {
         let ensemble = material.ensemble();
         if ensemble.is_single() {
             return Err(EnsembleTerminalCapitalErrorV1::SingleSource);
+        }
+        let expected_attempt_count = ensemble
+            .first_rung_index()
+            .checked_add(material.ensemble_rungs())
+            .ok_or(EnsembleTerminalCapitalErrorV1::ArithmeticOverflow)?;
+        if authenticated_recovery_attempt_count != expected_attempt_count {
+            return Err(EnsembleTerminalCapitalErrorV1::RecoveryPolicyMismatch);
         }
         if member_seat_rent_lamports == 0
             || terminal_certificate_rent_lamports == 0
@@ -75,15 +87,18 @@ impl EnsembleTerminalCapitalPlanV1 {
         let fold_path_lamports = terminal_certificate_rent_lamports
             .checked_add(fold_receipt_rent_lamports)
             .ok_or(EnsembleTerminalCapitalErrorV1::ArithmeticOverflow)?;
+        let source_creation_reserve_lamports =
+            core::cmp::max(failure_path_lamports, fold_path_lamports);
+        let activation_debit_lamports = member_seat_rent_lamports
+            .checked_add(source_creation_reserve_lamports)
+            .ok_or(EnsembleTerminalCapitalErrorV1::ArithmeticOverflow)?;
 
         Ok(Self {
             member_seat_count,
             maximum_failure_certificate_count,
             member_seat_rent_lamports,
-            source_creation_reserve_lamports: core::cmp::max(
-                failure_path_lamports,
-                fold_path_lamports,
-            ),
+            source_creation_reserve_lamports,
+            activation_debit_lamports,
         })
     }
 
@@ -108,10 +123,8 @@ impl EnsembleTerminalCapitalPlanV1 {
     }
 
     /// Exact native debit from the source-material funding row at activation.
-    pub fn activation_debit_lamports(self) -> Result<u64, EnsembleTerminalCapitalErrorV1> {
-        self.member_seat_rent_lamports
-            .checked_add(self.source_creation_reserve_lamports)
-            .ok_or(EnsembleTerminalCapitalErrorV1::ArithmeticOverflow)
+    pub const fn activation_debit_lamports(self) -> u64 {
+        self.activation_debit_lamports
     }
 
     /// Authenticate the two native compartments authored in the manifest.
@@ -135,7 +148,7 @@ impl EnsembleTerminalCapitalPlanV1 {
     /// shortfall cannot partially prepay seats or the Source reserve.
     pub fn debit_funded_row(self, row_before: u64) -> Result<u64, EnsembleTerminalCapitalErrorV1> {
         row_before
-            .checked_sub(self.activation_debit_lamports()?)
+            .checked_sub(self.activation_debit_lamports)
             .ok_or(EnsembleTerminalCapitalErrorV1::Underfunded)
     }
 }
@@ -162,6 +175,7 @@ mod tests {
     fn four_member_no_rung_budget_is_exact_and_conserved() {
         let plan = EnsembleTerminalCapitalPlanV1::for_material(
             material(4, 3, 0),
+            3,
             3_062_400,
             3_062_400,
             2_839_680,
@@ -171,7 +185,7 @@ mod tests {
         assert_eq!(plan.maximum_failure_certificate_count(), 1);
         assert_eq!(plan.member_seat_rent_lamports(), 12_249_600);
         assert_eq!(plan.source_creation_reserve_lamports(), 5_902_080);
-        assert_eq!(plan.activation_debit_lamports(), Ok(18_151_680));
+        assert_eq!(plan.activation_debit_lamports(), 18_151_680);
         assert_eq!(plan.debit_funded_row(18_151_687), Ok(7));
         assert_eq!(
             7_u64
@@ -183,17 +197,17 @@ mod tests {
 
     #[test]
     fn bounded_ladder_reserves_the_larger_exclusive_path() {
-        let plan = EnsembleTerminalCapitalPlanV1::for_material(material(3, 3, 2), 10, 10, 11)
+        let plan = EnsembleTerminalCapitalPlanV1::for_material(material(3, 3, 2), 4, 10, 10, 11)
             .expect("plan");
         assert_eq!(plan.maximum_failure_certificate_count(), 4);
         assert_eq!(plan.member_seat_rent_lamports(), 30);
         assert_eq!(plan.source_creation_reserve_lamports(), 40);
-        assert_eq!(plan.activation_debit_lamports(), Ok(70));
+        assert_eq!(plan.activation_debit_lamports(), 70);
     }
 
     #[test]
     fn quote_mismatch_and_one_lamport_shortfall_refuse() {
-        let plan = EnsembleTerminalCapitalPlanV1::for_material(material(4, 3, 0), 10, 10, 11)
+        let plan = EnsembleTerminalCapitalPlanV1::for_material(material(4, 3, 0), 3, 10, 10, 11)
             .expect("plan");
         assert_eq!(plan.authenticate_quote(40, 21), Ok(()));
         assert_eq!(
@@ -212,16 +226,35 @@ mod tests {
         let single =
             SourceMaterialV3::explicitly_unbounded(id(1), id(2), id(3), id(4), None, id(6));
         assert_eq!(
-            EnsembleTerminalCapitalPlanV1::for_material(single, 1, 1, 1),
+            EnsembleTerminalCapitalPlanV1::for_material(single, 0, 1, 1, 1),
             Err(EnsembleTerminalCapitalErrorV1::SingleSource),
         );
         assert_eq!(
-            EnsembleTerminalCapitalPlanV1::for_material(material(4, 3, 0), 0, 1, 1),
+            EnsembleTerminalCapitalPlanV1::for_material(material(4, 3, 0), 3, 0, 1, 1),
             Err(EnsembleTerminalCapitalErrorV1::ZeroRentQuote),
         );
         assert_eq!(
-            EnsembleTerminalCapitalPlanV1::for_material(material(4, 3, 0), u64::MAX, 1, 1,),
+            EnsembleTerminalCapitalPlanV1::for_material(material(4, 3, 0), 3, u64::MAX, 1, 1,),
             Err(EnsembleTerminalCapitalErrorV1::ArithmeticOverflow),
+        );
+        assert_eq!(
+            EnsembleTerminalCapitalPlanV1::for_material(material(2, 1, 0), 1, u64::MAX / 2, 1, 1,),
+            Err(EnsembleTerminalCapitalErrorV1::ArithmeticOverflow),
+            "the admitted plan itself refuses when Rent plus Creation overflows",
+        );
+        assert_eq!(
+            EnsembleTerminalCapitalPlanV1::for_material(material(2, 1, 1), 2, 1, u64::MAX / 2, 1,),
+            Err(EnsembleTerminalCapitalErrorV1::ArithmeticOverflow),
+            "the failure-ladder multiplication is checked",
+        );
+        assert_eq!(
+            EnsembleTerminalCapitalPlanV1::for_material(material(4, 3, 0), 3, 1, u64::MAX, 1,),
+            Err(EnsembleTerminalCapitalErrorV1::ArithmeticOverflow),
+            "the success certificate plus fold receipt is checked",
+        );
+        assert_eq!(
+            EnsembleTerminalCapitalPlanV1::for_material(material(4, 3, 0), 4, 1, 1, 1),
+            Err(EnsembleTerminalCapitalErrorV1::RecoveryPolicyMismatch),
         );
     }
 }

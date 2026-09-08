@@ -106,7 +106,8 @@ use dclutch_source::resolution::{
     pre_market_funding_ledger_account_digest_v1, pre_market_funding_prestate_digest_v1,
 };
 use dclutch_source::{
-    ContentId as SourceContentId, EnsembleSpecV1, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+    ContentId as SourceContentId, ENSEMBLE_FOLD_RECEIPT_V1_BYTES,
+    EnsembleSpecV1, EnsembleTerminalCapitalPlanV1, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
     ManipulationFloorV1, PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
     ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2,
     RecoveryPolicyV2, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -6758,7 +6759,9 @@ const DEVNET_ACCOUNT_LOCK_LIMIT_V1: usize = 64;
 
 const CONTROLLER_FUNDING_PREPARE_MAGIC_V1: [u8; 8] = *b"DCLTCFQ1";
 const CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1: usize = 48;
+const CONTROLLER_FUNDING_PREPARE_RECOVERY_ACCOUNTS_V1: usize = 50;
 const CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1: usize = 49;
+const CONTROLLER_FUNDING_PREPARE_RECOVERY_COMPLETE_KEYS_V1: usize = 51;
 const CONTROLLER_FUNDING_PREPARE_FUNDING_SOURCE_V1: usize = 11;
 const CONTROLLER_FUNDING_PREPARE_FOUND_START_V1: usize = 12;
 const CONTROLLER_FUNDING_PREPARE_FOUND_RENT_CREDIT_V1: usize =
@@ -7640,6 +7643,10 @@ fn build_controller_funding_prepare_v1(
             _ => AccountMeta::new_readonly(key, false),
         });
     }
+    if let Some(recovery) = records.recovery {
+        accounts.push(AccountMeta::new_readonly(recovery.raw, false));
+        accounts.push(AccountMeta::new_readonly(recovery.staging, false));
+    }
     authenticate_controller_funding_prepare_frame_v1(
         &accounts,
         funding_source,
@@ -7666,7 +7673,11 @@ fn authenticate_controller_funding_prepare_frame_v1(
     let rent_credit = accounts
         .get(CONTROLLER_FUNDING_PREPARE_FOUND_RENT_CREDIT_V1)
         .ok_or_else(|| Error::new("DCLTCFQ1 omitted its ProjectFound RentCredit"))?;
-    if accounts.len() != CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1
+    if !matches!(
+        accounts.len(),
+        CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1
+            | CONTROLLER_FUNDING_PREPARE_RECOVERY_ACCOUNTS_V1
+    )
         || source.pubkey != funding_source
         || !source.is_signer
         || !source.is_writable
@@ -7678,7 +7689,7 @@ fn authenticate_controller_funding_prepare_frame_v1(
         || !rent_credit.is_writable
     {
         return Err(Error::new(
-            "assembled DCLTCFQ1 frame changed its source, ProjectFound payer, RentCredit, or 48-account geometry",
+            "assembled DCLTCFQ1 frame changed its source, ProjectFound payer, RentCredit, or canonical geometry",
         ));
     }
     Ok(())
@@ -8577,25 +8588,38 @@ fn execute_projected_custody_bootstrap(
     )?;
     let controller_funding_prepare_geometry =
         projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &controller_funding_prepare)?;
+    let expected_prepare_keys = if records.recovery.is_some() {
+        CONTROLLER_FUNDING_PREPARE_RECOVERY_COMPLETE_KEYS_V1
+    } else {
+        CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1
+    };
+    let admitted_padding = DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        .checked_sub(expected_prepare_keys)
+        .ok_or_else(|| Error::new("DCLTCFQ1 base exceeds the account-lock limit"))?;
     let controller_funding_prepare_admitted = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&controller_funding_prepare, 15),
+        &append_distinct_census_accounts_v1(&controller_funding_prepare, admitted_padding),
     )?;
     let controller_funding_prepare_refused = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&controller_funding_prepare, 16),
+        &append_distinct_census_accounts_v1(
+            &controller_funding_prepare,
+            admitted_padding.saturating_add(1),
+        ),
     )?;
     if controller_funding_prepare_geometry.complete_keys
-        != CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1
+        != expected_prepare_keys
         || controller_funding_prepare_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
         || controller_funding_prepare_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
     {
         return Err(Error::new(format!(
-            "DCLTCFQ1 census refused: base {} keys, +15 {} keys, +16 {} keys; expected exactly {}, {}, {}",
+            "DCLTCFQ1 census refused: base {} keys, +{} {} keys, +{} {} keys; expected exactly {}, {}, {}",
             controller_funding_prepare_geometry.complete_keys,
+            admitted_padding,
             controller_funding_prepare_admitted.complete_keys,
+            admitted_padding.saturating_add(1),
             controller_funding_prepare_refused.complete_keys,
-            CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1,
+            expected_prepare_keys,
             DEVNET_ACCOUNT_LOCK_LIMIT_V1,
             DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1,
         )));
@@ -16019,10 +16043,30 @@ fn pyth_market_input_base(
     let native = CompartmentFundingV1::native_lamports(1)
         .map_err(|error| Error::new(format!("demo funding: {error:?}")))?;
     let none = CompartmentFundingV1::not_applicable();
-    let amounts = FundingAmountsV1::new(native, native, none, none, native, none, none)
-        .map_err(|error| Error::new(format!("demo funding amounts: {error:?}")))?;
-    let quote = FundingQuoteV1::new(amounts, None)
-        .map_err(|error| Error::new(format!("demo funding quote: {error:?}")))?;
+    let ensemble_terminal_capital = if material.ensemble().is_single() {
+        None
+    } else {
+        let policy = RecoveryPolicyV2::decode(
+            &decode_hex(
+                &ladder
+                    .as_ref()
+                    .ok_or_else(|| Error::new("Ensemble omitted its recovery policy"))?
+                    .policy_hex,
+            )?,
+        )
+        .map_err(|error| Error::new(format!("Ensemble recovery policy: {error:?}")))?;
+        let rent = solana_program::rent::Rent::default();
+        Some(
+            EnsembleTerminalCapitalPlanV1::for_material(
+                material,
+                policy.attempt_count(),
+                rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+                rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+                rent.minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+            )
+            .map_err(|error| Error::new(format!("Ensemble terminal capital: {error:?}")))?,
+        )
+    };
     // The companion release is projected from the exact authenticated plan
     // that produced the Direct compiler. A stale hard-coded V4 here once let
     // the read-only market compiler succeed and then made real founding refuse
@@ -16064,6 +16108,26 @@ fn pyth_market_input_base(
     for (index, (kind, config)) in entries_input.into_iter().enumerate() {
         let entry_index =
             u16::try_from(index).map_err(|_| Error::new("demo capability index overflow"))?;
+        let amounts = match ensemble_terminal_capital {
+            Some(capital) if config == material_digest => FundingAmountsV1::new(
+                CompartmentFundingV1::native_lamports(capital.member_seat_rent_lamports())
+                    .map_err(|error| Error::new(format!("Ensemble seat rent: {error:?}")))?,
+                CompartmentFundingV1::native_lamports(
+                    capital.source_creation_reserve_lamports(),
+                )
+                .map_err(|error| Error::new(format!("Ensemble source reserve: {error:?}")))?,
+                none,
+                none,
+                native,
+                none,
+                none,
+            ),
+            Some(_) => FundingAmountsV1::new(none, none, none, none, native, none, none),
+            None => FundingAmountsV1::new(native, native, none, none, native, none, none),
+        }
+        .map_err(|error| Error::new(format!("demo funding amounts: {error:?}")))?;
+        let quote = FundingQuoteV1::new(amounts, None)
+            .map_err(|error| Error::new(format!("demo funding quote: {error:?}")))?;
         entries.push(
             CapabilityEntryV1::new(
                 CapabilityContentId::new(kind)

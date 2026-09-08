@@ -111,10 +111,6 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary: 'Sets up a market’s claim supply and the vault that backs it, in one step.',
   },
   {
-    routeId: 'claims/market_closure_v1::process',
-    summary: 'Closes a retired market’s claim state and releases what it held.',
-  },
-  {
     routeId: 'resolution/core_effect::process_core_effect',
     summary: 'Applies a change the Core program asked for to claim balances.',
   },

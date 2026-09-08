@@ -1798,7 +1798,7 @@ pub(crate) struct SeriesPrepareHydrationRecordsV1<'a> {
 }
 
 /// Materialize the current source compiler's opaque Prepare child bank into
-/// the full 115-role geometry at one finalized slot.
+/// the full 116-role geometry at one finalized slot.
 ///
 /// This is the production connection between the semantic owners and the
 /// hydrator.  The caller first invokes it with the release-owned predicted
@@ -1938,7 +1938,7 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
     )
 }
 
-/// Hydrate all 115 Series Prepare roles from the decoded semantic-owner child
+/// Hydrate all 116 Series Prepare roles from the decoded semantic-owner child
 /// requests.  This is intentionally a layout constructor, not an RPC reader:
 /// `observe_series_prepare_geometry_v1` performs the one finalized snapshot
 /// after this function has made every address, owner, canonical record body,
@@ -2038,6 +2038,12 @@ pub(crate) fn hydrate_series_prepare_role_layout_v1<'a>(
                 fixed_data_len: 0,
             },
         ],
+        custody_program: finalized_v1(
+            "Custody callee",
+            input.custody,
+            bpf_loader_upgradeable::ID,
+            None,
+        ),
     })
 }
 

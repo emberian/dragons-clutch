@@ -123,7 +123,7 @@ pub const SERIES_PREPARE_ROUTE_STARTS_V5: [u16; 5] = [6, 53, 68, 81, 97];
 pub const SERIES_PREPARE_ROUTE_COUNTS_V5: [u16; 5] = [47, 15, 13, 16, 14];
 /// Complete logical account width before exact route-alias compaction.
 pub const SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5: u16 =
-    SERIES_PREPARE_TICKET_STAGING_COORDINATE_V5 + 1;
+    SERIES_PREPARE_CUSTODY_PROGRAM_COORDINATE_V5 + 1;
 /// First appended immutable occurrence record, after the complete child-route bank.
 pub const SERIES_PREPARE_OCCURRENCE_RAW_COORDINATE_V5: u16 =
     SERIES_PREPARE_ROUTE_STARTS_V5[4] + SERIES_PREPARE_ROUTE_COUNTS_V5[4];
@@ -136,6 +136,9 @@ pub const SERIES_PREPARE_TICKET_RAW_COORDINATE_V5: u16 =
 /// Finalization cursor for the appended Ticket record.
 pub const SERIES_PREPARE_TICKET_STAGING_COORDINATE_V5: u16 =
     SERIES_PREPARE_TICKET_RAW_COORDINATE_V5 + 1;
+/// Selected Custody executable carried outside its five native child frames.
+pub const SERIES_PREPARE_CUSTODY_PROGRAM_COORDINATE_V5: u16 =
+    SERIES_PREPARE_TICKET_STAGING_COORDINATE_V5 + 1;
 /// Complete physical account width after exact route-alias compaction.
 pub const SERIES_PREPARE_PHYSICAL_ACCOUNT_COUNT_V5: u16 =
     SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - ROUTE_ALIASES.len() as u16;
@@ -231,7 +234,7 @@ pub const SERIES_PREPARE_EFFECT_BYTES_V5: usize = EFFECT_HEADER_BYTES_V5
 const _: () = assert!(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 == 5);
 const _: () = assert!(SERIES_PREPARE_ROUTE_STARTS_V5[4] + SERIES_PREPARE_ROUTE_COUNTS_V5[4] == 111);
 const _: () = assert!(ROUTE_ALIASES.len() == 56);
-const _: () = assert!(SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - ROUTE_ALIASES.len() as u16 == 59);
+const _: () = assert!(SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - ROUTE_ALIASES.len() as u16 == 60);
 
 #[derive(Clone, Copy, Debug)]
 /// Exact observed widths used by the physical Prepare profile.
@@ -801,7 +804,20 @@ const fn write_data() -> AccountEffectPermissionsV2 {
 }
 
 const WRITABLE_REPRESENTATIVES: &[u16] = &[0, 5, 7, 12, 14, 60, 76, 80, 91, 107];
-const EXECUTABLE_REPRESENTATIVES: &[u16] = &[9, 10, 13, 16, 20, 42, 43, 44, 49, 52, 63];
+const EXECUTABLE_REPRESENTATIVES: &[u16] = &[
+    9,
+    10,
+    13,
+    16,
+    20,
+    42,
+    43,
+    44,
+    49,
+    52,
+    63,
+    SERIES_PREPARE_CUSTODY_PROGRAM_COORDINATE_V5,
+];
 
 const ROUTE_ALIASES: &[(u16, u16)] = &[
     (17, 14),

@@ -850,6 +850,7 @@ mod tests {
         finalized_accounts.extend(
             [
                 selection.material.mint,
+                selection.material.founder_source,
                 selection.material.token_program,
                 selection.material.refund_owner,
                 selection.material.rent_credit,
@@ -905,6 +906,38 @@ mod tests {
             root: parent_root,
             data_len: dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
         });
+        // Drive the canonical Prepare role constructor too: native child
+        // frames omit their own callee, so outer execution needs one carrier.
+        let prepare_input = crate::series_found_prepare_driver::SeriesPrepareHydratorInputV1 {
+            registry, core: selection.material.core, trading: selection.material.trading,
+            custody: selection.material.custody, rent_program: selection.material.rent_program,
+            parent_root,
+            parent_root_state: crate::series_found_prepare_driver::SeriesPrepareParentRootStateV1::PreActivationPredicted,
+            m0, template: records.template, occurrence: records.occurrence,
+            ticket: records.ticket, portfolio: records.portfolio,
+            children: &preprofile.prepare_children,
+        };
+        let prepare_layout =
+            crate::series_found_prepare_driver::hydrate_series_prepare_role_layout_v1(
+                &prepare_input,
+            )
+            .expect("canonical Prepare role constructor");
+        let prepare_sources = crate::series_geometry::prepare_sources_v1(&prepare_layout);
+        let custody_carriers: Vec<_> = prepare_sources
+            .iter()
+            .filter(|source| match source {
+                crate::series_geometry::SeriesPrepareRoleSourceV1::Finalized {
+                    address, ..
+                } => *address == selection.material.custody,
+                _ => false,
+            })
+            .collect();
+        assert_eq!(
+            custody_carriers.len(),
+            1,
+            "Prepare must carry the native Custody executable"
+        );
+
         let input = SeriesExpireGeometryInputV1 {
             preprofile: &preprofile,
             m0,

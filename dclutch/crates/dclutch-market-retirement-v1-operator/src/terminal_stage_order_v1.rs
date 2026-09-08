@@ -73,6 +73,18 @@ pub enum TerminalStageV1 {
 }
 
 impl TerminalStageV1 {
+    /// The five single-packet mutations owned by the terminal-sequence driver.
+    ///
+    /// Aggregate retirement remains the sixth semantic stage, but its sole
+    /// native producer is the four-packet checkpoint campaign.
+    pub const PRECHECKPOINT: [Self; 5] = [
+        Self::CoreBeginRetiring,
+        Self::DirectBeginRetiring,
+        Self::DirectCloseCapability,
+        Self::ResolutionCloseFund,
+        Self::RetirementReplayHandoff,
+    ];
+
     /// The six mutations in their sole admissible order.
     pub const ORDERED: [Self; 6] = [
         Self::CoreBeginRetiring,

@@ -16,39 +16,39 @@ remains a separate substrate.
 
 | partition | routes | authority |
 | --- | ---: | --- |
-| **historical accepted Agave** | **53** | checked native local-validator ledgers and successful devnet records; not final-source coverage |
+| **historical accepted Agave** | **54** | checked native local-validator ledgers and successful devnet records; not final-source coverage |
 | **checked ProgramTest accepted** | 0 | checked native ProgramTest ledgers; no validator claim |
 | **successful binding only** | 72 | authored `executed` bindings without a checked native row |
 | **checked refused-only** | 1 | finalized native refusal and no native acceptance |
 | **refusal binding only** | 0 | authored `refused` binding without a checked native row |
-| **blocked** | 35 | no evidence or binding; a blocker records why and who owns it |
+| **blocked** | 32 | no evidence or binding; a blocker records why and who owns it |
 | **unrecorded** | 3 | no evidence, binding or reason |
 
-- **historical accepted Agave union: 53 of 164** -- an
+- **historical accepted Agave union: 54 of 162** -- an
   `executed` finalized native observation in a checked census ledger or an
   `executed` corroborated devnet record. A binding cannot enter this set, and
   this count is not final-source acceptance.
-- **historical local-validator accepted: 8 of 164** --
+- **historical local-validator accepted: 9 of 162** --
   checked successful local-validator ledger rows.
-- **historical devnet accepted: 46 of 164** --
+- **historical devnet accepted: 46 of 162** --
   checked successful devnet records. The local and devnet sets can overlap, so
   their counts do not add to the union.
-- **successful-binding-only: 72 of 164** -- at
+- **successful-binding-only: 72 of 162** -- at
   least one campaign binding says `executed`, but no checked native observation
   in the repository does. Its declared substrate is useful provenance, not an
   acceptance result.
-- **checked refused-only: 1 of 164** -- a
+- **checked refused-only: 1 of 162** -- a
   finalized native refusal with no accepted native evidence. It proves a
   boundary was reached; it never proves the accepted poststate.
-- **refusal-binding-only: 0 of 164** -- an
+- **refusal-binding-only: 0 of 162** -- an
   authored refusal binding with no checked native row. It is a claim, not an
   observed refusal.
-- **no historical successful claim: 38 of 164** --
+- **no historical successful claim: 35 of 162** --
   no accepted native observation and no `executed` binding. This includes exact
   refusals, refusal claims, blocked rows and wholly unrecorded rows.
 
-`tools/gauntlet/blocked.json` has 44 entries and classifies
-35 otherwise unclaimed routes. Writing a blocker can move a route
+`tools/gauntlet/blocked.json` has 41 entries and classifies
+32 otherwise unclaimed routes. Writing a blocker can move a route
 between blocked and unrecorded; it cannot change any acceptance count.
 
 ## Checked native evidence sources
@@ -61,7 +61,7 @@ totals are never edited by hand.
 | --- | --- | --- | --- | --- | --- |
 | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` | local-validator | historical-source-split | 5 | 0 | `f5f1d29961ccf7f4` |
 | `docs/evidence/ensemble-execution-coverage-2026-09-08/ledger.json` | local-validator | historical-source-split | 2 | 0 | `c9683a66e493fe4d` |
-| `docs/evidence/claims-fractional-validator-2026-09-08/ledger.json` | local-validator | historical-source-split | 1 | 0 | `34d071ee22fc9059` |
+| `docs/evidence/claims-fractional-selector-corroboration-2026-09-08/ledger.json` | local-validator | historical-source-split | 2 | 0 | `b63a9b0336a12416` |
 
 Existing devnet witness files are also exact native evidence, split by their
 recorded outcome:
@@ -124,7 +124,6 @@ not decide which.
 
 | route | evidence class | blocking rule | reason, first sentence |
 | --- | --- | --- | --- |
-| `claims/fractional_atomic_v3::process` | local-validator accepted (historical) | `claims/fractional_atomic_v3::process` | Driven today, and invisible to the census for a wiring reason rather than a protocol one. |
 | `custody/apply#Apply` | local-validator success claim | `custody/apply#Apply` | GovernanceActV1 -- the governed protocol-parameters record's own act, arrived with build/economics and reached through custody's `protocol_parameters_v1::selects` dispatch. |
 | `custody/credit_route#(UpkeepOperationV1::Credit,Some(credit))` | local-validator success claim | `custody/credit_route#(UpkeepOperationV1::Credit,Some(credit))` | UpkeepOperationV1 -- the upkeep vault's own act, arrived with build/economics, and the one thing nothing has ever executed: the Direct close-maker CPIs into the credit arm with the donation remainder. |
 | `custody/found#(UpkeepOperationV1::Found,None)` | local-validator success claim | `custody/found#(UpkeepOperationV1::Found,None)` | UpkeepOperationV1 -- the upkeep vault's own act, arrived with build/economics, and the one thing nothing has ever executed: the Direct close-maker CPIs into the credit arm with the donation remainder. |
@@ -155,17 +154,16 @@ not decide which.
 | `claims/claims_conservation_v1::process` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/custody_replay_v1::process` | devnet accepted (historical) | devnet `cohort-13` slot 492,151,322 `5JKdUXJurc4j...`; devnet `cohort-14` slot 492,550,558 `4aXbeYtXiVkA...`; devnet `cohort-16` slot 493,826,534 `4LfQK3ReWZKP...`; devnet `cohort-17` slot 494,151,055 `5BKhaEC86PK5...`; binding register: `claims-claim-check-programtest` (executed), `claims-fractional-atomic-programtest` (executed), `claims-rational-representation-v2-programtest` (executed), `claims-rational-representation-v2-programtest` (refused) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `claims/founding_v5::process` | devnet accepted (historical) | devnet `cohort-13` slot 491,963,072 `5Ji1babqGgui...`; local-validator `live-structured-control` slot 9,789 `2U3PJ1SLaQ7Q...`; binding register: `claims-fractional-atomic-programtest` (executed), `claims-fractional-atomic-programtest` (refused), `tier1` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
-| `claims/fractional_atomic_v3::process` | local-validator accepted (historical) | local-validator `claims-fractional-local-validator-v1` slot 132 `3RtSzWNB3oRf...`; local-validator `claims-fractional-local-validator-v1` slot 197 `59KbAa5rSzew...` | `docs/evidence/claims-fractional-validator-2026-09-08/ledger.json` |
+| `claims/fractional_atomic_v3::process` | local-validator accepted (historical) | local-validator `claims-fractional-local-validator-v1-selector-corroboration` slot 132 `3RtSzWNB3oRf...`; local-validator `claims-fractional-local-validator-v1-selector-corroboration` slot 197 `59KbAa5rSzew...` | `docs/evidence/claims-fractional-selector-corroboration-2026-09-08/ledger.json` |
 | `claims/fractional_claim_check_v1::process_fractional_compaction` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/fractional_claim_check_v1::process_fractional_redemption` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/fractional_retirement_v3::process` | program-test success claim | `claims-family-programtest` (executed); no checked native ledger row; binding register: `claims-family-programtest` (refused) | `tools/gauntlet/claims-custody/claims-bindings.json` |
-| `claims/market_closure_v1::process` | blocked | blocked by rule `claims/market_closure_v1::process` | `tools/gauntlet/blocked.json` |
 | `claims/market_closure_v1::process_checkpoint_handoff` | program-test success claim | `retirement-checkpoint-programtest` (executed); no checked native ledger row; binding register: `retirement-checkpoint-programtest` (refused) | `tools/gauntlet/retirement-checkpoint/bindings.json` |
 | `claims/process_begin#Begin` | program-test success claim | `claims-family-programtest` (executed); no checked native ledger row | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/process_coordinate#RetireCoordinate` | program-test success claim | `claims-family-programtest` (executed); no checked native ledger row; binding register: `claims-family-programtest` (refused) | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/process_finish#Finish` | program-test success claim | `claims-family-programtest` (executed); no checked native ledger row | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/process_instruction` | devnet accepted (historical) | devnet `cohort-13` slot 491,963,072 `5Ji1babqGgui...`; devnet `cohort-13` slot 492,089,325 `3crBKWVQszbx...`; devnet `cohort-13` slot 492,089,485 `2hZtmJwpdyCM...`; devnet `cohort-13` slot 492,092,896 `3FpQ2fSEph8W...`; devnet `cohort-13` slot 492,151,322 `5JKdUXJurc4j...`; devnet `cohort-13` slot 492,154,205 `etUrsvhwZkue...`; devnet `cohort-14` slot 492,249,302 `56KTyPF913E7...`; devnet `cohort-14` slot 492,315,744 `2y4w3esS39SD...`; devnet `cohort-14` slot 492,415,150 `5aPHBEoaLHVE...`; devnet `cohort-14` slot 492,437,260 `4Pr3tdp9yTPk...`; devnet `cohort-14` slot 492,550,558 `4aXbeYtXiVkA...`; devnet `cohort-14` slot 492,551,404 `fqcRNCVt3bEt...`; devnet `cohort-15` slot 492,767,048 `2wqT3rjHAvUx...`; devnet `cohort-15` slot 492,767,229 `2yRSDsSs3oRC...`; devnet `cohort-15` slot 492,861,027 `ntcneGaAtepb...`; devnet `cohort-15` slot 492,863,447 `2CabHYSLTdKe...`; devnet `cohort-15` slot 492,865,197 `3eKAiD9T13wg...`; devnet `cohort-15` slot 492,895,097 `2R3e5YoZa44H...`; devnet `cohort-15` slot 492,896,353 `5ktVXiodjkHt...`; devnet `cohort-15` slot 492,897,408 `3LLhLeiuPRX3...`; devnet `cohort-15` slot 492,897,766 `MNFkHGPeXoij...`; devnet `cohort-16` slot 493,681,311 `2yMFjuXDF3yX...`; devnet `cohort-16` slot 493,760,908 `2LMcTPTGihJP...`; devnet `cohort-16` slot 493,809,152 `5dzKEFZDnxEP...`; devnet `cohort-16` slot 493,826,534 `4LfQK3ReWZKP...`; devnet `cohort-16` slot 493,827,300 `5hkFEF7ZjMcs...`; devnet `cohort-17` slot 493,995,625 `4cevxQwCHnTd...`; devnet `cohort-17` slot 494,043,824 `5GLKEVCi5pgi...`; devnet `cohort-17` slot 494,046,276 `3sSyg43R28Lo...`; devnet `cohort-17` slot 494,046,626 `3arxHzuieW4c...`; devnet `cohort-17` slot 494,046,986 `5uCLdfjrWNAF...`; devnet `cohort-17` slot 494,088,846 `21tePvWMywdh...`; devnet `cohort-17` slot 494,088,993 `62y8KDzGPXW2...`; devnet `cohort-17` slot 494,092,572 `1KkuAiBYEiLp...`; devnet `cohort-17` slot 494,151,055 `5BKhaEC86PK5...`; devnet `cohort-17` slot 494,151,571 `64KrrWoPouaa...`; devnet `cohort-17` slot 494,152,679 `24XTzDiJCccC...`; devnet `cohort-17` slot 494,153,035 `5LszQzdeN8bX...`; devnet `cohort-17` slot 494,153,397 `64M1L5BxhdTV...`; devnet `cohort-17` slot 494,212,407 `3w2F2n5EGoCw...`; binding register: `claims-affine-batch-programtest` (executed), `claims-affine-batch-programtest` (refused), `claims-claim-check-programtest` (executed), `claims-claim-check-programtest` (refused), `claims-family-programtest` (executed), `claims-family-programtest` (refused), `claims-fractional-atomic-programtest` (executed), `claims-fractional-atomic-programtest` (refused), `claims-fractional-signed-delta-programtest` (executed), `claims-fractional-signed-delta-programtest` (refused), `claims-rational-lifecycle-programtest` (executed), `claims-rational-lifecycle-programtest` (refused), `claims-rational-representation-v2-programtest` (executed), `claims-rational-representation-v2-programtest` (refused), `structured-v2-programtest` (refused), `tier1` (executed) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-16-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
-| `claims/process_open#WholeUnwrap` | blocked | blocked by rule `claims/process_open#WholeUnwrap` | `tools/gauntlet/blocked.json` |
+| `claims/process_open#WholeUnwrap` | local-validator accepted (historical) | local-validator `claims-fractional-local-validator-v1-selector-corroboration` slot 197 `59KbAa5rSzew...` | `docs/evidence/claims-fractional-selector-corroboration-2026-09-08/ledger.json` |
 | `claims/process_terminal#TerminalZeroBurn` | blocked | blocked by rule `claims/process_terminal#TerminalZeroBurn` | `tools/gauntlet/blocked.json` |
 | `claims/protocol_position_v2::process` | program-test success claim | `claims-family-programtest` (executed); no checked native ledger row; binding register: `claims-family-programtest` (refused) | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/rational_lifecycle_v2::process` | program-test success claim | `claims-rational-lifecycle-programtest` (executed); no checked native ledger row; binding register: `claims-rational-lifecycle-programtest` (refused) | `tools/gauntlet/claims-rational-lifecycle/bindings.json` |
@@ -201,7 +199,6 @@ not decide which.
 | `core/resolution::process#CreateFund` | local-validator success claim | `journey` (executed), `resolution-core-v3-programtest` (executed), `tier1` (executed); no checked native ledger row; binding register: `journey` (refused) | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/resolution-core-v3/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
 | `core/resolution::process#Retire` | devnet accepted (historical) | devnet `cohort-13` slot 491,963,194 `4ECUUXmKGe3g...`; devnet `cohort-13` slot 491,963,396 `4gaisSBgnbcc...`; devnet `cohort-13` slot 492,149,710 `29oFp7aru4qW...`; devnet `cohort-14` slot 492,550,245 `zrdFbSPFuq8J...`; devnet `cohort-15` slot 492,829,917 `64jEDVT6ZbdU...`; devnet `cohort-15` slot 492,861,140 `5GKoNZdZkdZA...`; devnet `cohort-15` slot 492,861,287 `2nyCbT8heNU7...`; devnet `cohort-16` slot 493,681,425 `5wGKewfXkdE5...`; devnet `cohort-16` slot 493,681,577 `66bEApPRariw...`; devnet `cohort-16` slot 493,761,018 `3oAkPubAFbLz...`; devnet `cohort-16` slot 493,761,166 `4oWaQLyWDacf...`; devnet `cohort-16` slot 493,809,274 `24mwPxqD8DJg...`; devnet `cohort-16` slot 493,809,440 `3tHKxtLFhZiJ...`; devnet `cohort-16` slot 493,826,348 `5LCBtiezNduD...`; devnet `cohort-17` slot 494,151,126 `2q1ZnpJAYJvn...`; binding register: `resolution-core-v3-programtest` (executed) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-16-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `core/resolution::process#VerifyFundReady` | local-validator success claim | `journey` (executed), `tier1` (executed); no checked native ledger row | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
-| `core/retire_v1::process#Retire` | blocked | blocked by rule `core/retire_v1::process#Retire` | `tools/gauntlet/blocked.json` |
 | `core/retire_v1::process_checkpoint_prepare#Retire` | devnet accepted (historical) | devnet `cohort-17` slot 494,212,407 `3w2F2n5EGoCw...`; binding register: `retirement-checkpoint-programtest` (executed), `retirement-checkpoint-programtest` (refused) | `docs/evidence/witnesses/cohort-17-discovered.json` |
 | `core/retire_v1::process_checkpoint_suffix` | program-test success claim | `retirement-checkpoint-programtest` (executed); no checked native ledger row; binding register: `retirement-checkpoint-programtest` (refused) | `tools/gauntlet/retirement-checkpoint/bindings.json` |
 | `core/retirement_replay_handoff_v1::process` | devnet accepted (historical) | devnet `cohort-17` slot 494,191,265 `oxjzfjwH1Tsv...`; binding register: `retirement-replay-handoff-programtest` (executed), `retirement-replay-handoff-programtest` (refused) | `docs/evidence/witnesses/cohort-17-discovered.json` |

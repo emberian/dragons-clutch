@@ -78,8 +78,8 @@ starting a validator.
 
 ## Exact claim-check life
 
-The canonical post-compaction input is 70 shard atoms with denominator 10,
-backed by 28 collateral atoms at 4 collateral atoms per whole claim. There is
+The canonical post-compaction input is 40 shard atoms with denominator 10,
+backed by 16 collateral atoms at 4 collateral atoms per whole claim. There is
 one rounding boundary:
 
 ```text
@@ -90,12 +90,12 @@ consumed_shards = whole_claims * denominator
 The submitted action order is fixed:
 
 1. Dust (`9`) refuses with `0x5665`.
-2. Overdraw (`71`) refuses with `0x5663`.
+2. Overdraw (`41`) refuses with `0x5663`.
 3. A payout account owned by another actor refuses with `0x5661`.
 4. A substituted holder signer refuses with `0x5661`.
 5. Partial redemption burns `20` shards and pays `8` collateral atoms.
 6. Premature escrow close refuses with `0x5625`.
-7. Settlement burns `50` shards, pays `20` atoms, closes the record, and
+7. Settlement burns `20` shards, pays `8` atoms, closes the record, and
    returns every live record lamport to the holder.
 8. An unrelated actor closes the zero-balance vault and settled escrow and
    receives their complete live rent balances, less only the transaction fee.

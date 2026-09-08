@@ -1,23 +1,15 @@
-//! Joined Retiring-to-Retired physical waist.
+//! Packet-bounded Retiring-to-Retired physical waist.
 //!
-//! The instruction carries the fixed Core request, one retirement bundle, the
-//! Claims aggregate-close request, and the ordered normal-Custody CloseVault
-//! and CloseReplay requests. The adapter authenticates the already-persisted
-//! Resolution closure, invokes Claims then both Custody closes, verifies every
-//! immediate typed receipt and physical poststate, runs the generated
-//! [`dclutch_market::retire`] transition on a local candidate, and
-//! closes the Core Market to RentCredit last.
+//! Four ordered instructions authenticate the already-persisted Resolution
+//! closure, hand the Claims aggregate to Core as a checkpoint, close the Hoard
+//! vault and Custody replay, then run the generated [`dclutch_market::retire`]
+//! transition and close the checkpoint, Core Market, and RentCredit.
 
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_claims::market_closure_v1::{
-    CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
-    CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1, CLAIMS_MARKET_CLOSURE_RECEIPT_BYTES_V1,
-    CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1, ClaimsMarketClosureReceiptV1,
-    ClaimsMarketClosureRequestV1,
-};
+use dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1;
 use dclutch_claims::{
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     retirement_checkpoint_handoff_v1::{
@@ -27,7 +19,6 @@ use dclutch_claims::{
         ClaimsRetirementCheckpointHandoffReceiptV1, ClaimsRetirementCheckpointHandoffRequestV1,
     },
 };
-use dclutch_core_contract::ContentId;
 use dclutch_custody::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1,
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyReplayV1,
@@ -51,7 +42,6 @@ use dclutch_market::{
     RetirementReceiptInputV1, RetirementReceiptV1, Role, STATE_BYTES, retire,
 };
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_registry::svm::continuation_v1::RegistryContinuationRequestV1;
 use dclutch_source::resolution::{
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
@@ -67,7 +57,7 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
     CoreSbfError, infrastructure,
-    release::{RoleDeploymentAccounts, authenticate_continuation_roles, authenticate_roles},
+    release::{RoleDeploymentAccounts, authenticate_roles},
 };
 
 /// Market phases in which the joined retirement is admissible.
@@ -83,12 +73,6 @@ pub const RETIRE_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
 pub const RETIRE_CHECKPOINT_SUFFIX_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
     MarketAdmissionV1::phases(&[Phase::Retiring]);
 
-/// Exact joined retirement instruction width.
-pub const RETIREMENT_INSTRUCTION_BYTES_V1: usize = REQUEST_BYTES
-    + RETIREMENT_BUNDLE_BYTES_V1
-    + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1
-    + CUSTODY_REQUEST_BYTES_V1
-    + CUSTODY_REQUEST_BYTES_V1;
 /// Exact first packet of checkpointed aggregate retirement.
 pub const RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1: usize = REQUEST_BYTES
     + RETIREMENT_BUNDLE_BYTES_V1
@@ -100,17 +84,14 @@ pub const RETIREMENT_CHECKPOINT_CUSTODY_SUFFIX_BYTES_V1: usize =
 pub const RETIREMENT_CHECKPOINT_FINISH_BYTES_V1: usize =
     AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1 + REQUEST_BYTES + RETIREMENT_BUNDLE_BYTES_V1;
 
-// The retirement frame's order is carried by the irrefutable slice patterns in
-// `RetirementAccounts::parse` and `parse_direct`, which bind all thirty-six
-// positions by name and are checked for arity by the compiler. The parallel
-// vocabulary of thirty-six `*_ACCOUNT_V1` index constants that used to sit here
+// The retirement frame's order is carried by the irrefutable slice pattern in
+// `RetirementAccounts::parse_direct`, which binds all thirty-five positions by
+// name and is checked for arity by the compiler. The parallel vocabulary of
+// positional `*_ACCOUNT_V1` index constants that used to sit here
 // was what the patterns replaced: none of them was named anywhere in the tree
 // except at its own definition, and eight of them collided by name with
 // unrelated constants of DIFFERENT value in `claims/market_closure_v1`, so a
 // reader who grepped one got two answers and neither was used by anything.
-
-/// Exact joined retirement account count.
-pub const RETIREMENT_ACCOUNT_COUNT_V1: usize = 36;
 
 /// Accounts a refunding Market's checkpointed retirement adds after the frame.
 ///
@@ -129,7 +110,7 @@ pub const RETIREMENT_ACCOUNT_COUNT_V1: usize = 36;
 /// packets that never look at them.
 pub const RETIREMENT_ESCROW_ACCOUNT_COUNT_V1: usize = 3;
 /// Exact direct checkpointed retirement account count.
-pub const RETIREMENT_DIRECT_ACCOUNT_COUNT_V1: usize = RETIREMENT_ACCOUNT_COUNT_V1.saturating_sub(1);
+pub const RETIREMENT_DIRECT_ACCOUNT_COUNT_V1: usize = 35;
 /// Exact direct checkpointed retirement account count with the closure burn.
 pub const RETIREMENT_DIRECT_BURN_ACCOUNT_COUNT_V1: usize =
     RETIREMENT_DIRECT_ACCOUNT_COUNT_V1 + RETIREMENT_ESCROW_ACCOUNT_COUNT_V1;
@@ -171,7 +152,6 @@ pub(crate) struct RetirementAccounts<'accounts, 'info> {
     rent: &'accounts AccountInfo<'info>,
     refund_wallet: &'accounts AccountInfo<'info>,
     rent_close_authority: &'accounts AccountInfo<'info>,
-    pub(crate) registry_admission: Option<&'accounts AccountInfo<'info>>,
     escrow: Option<RetirementEscrowV1<'accounts, 'info>>,
 }
 
@@ -191,89 +171,6 @@ struct RetirementEscrowV1<'accounts, 'info> {
 }
 
 impl<'accounts, 'info> RetirementAccounts<'accounts, 'info> {
-    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
-        let [
-            market,
-            rent_credit,
-            cache,
-            registry,
-            core_program,
-            core_programdata,
-            claims_program,
-            claims_programdata,
-            resolution_program,
-            resolution_programdata,
-            custody_program,
-            custody_programdata,
-            rent_program,
-            source_receipt,
-            claims_aggregate,
-            custody_replay,
-            hoard_vault,
-            custody_authority,
-            collateral_mint,
-            token_program,
-            realm_raw,
-            realm_staging,
-            claims_authority,
-            close_vault_authority,
-            close_replay_authority,
-            infrastructure_profile,
-            registry_artifact_raw,
-            registry_artifact_staging,
-            registry_programdata,
-            rent_artifact_raw,
-            rent_artifact_staging,
-            rent_programdata,
-            rent,
-            refund_wallet,
-            rent_close_authority,
-            registry_admission,
-        ] = accounts
-        else {
-            return Err(CoreSbfError::AccountFrame);
-        };
-        Ok(Self {
-            market,
-            rent_credit,
-            cache,
-            registry,
-            core_program,
-            core_programdata,
-            claims_program,
-            claims_programdata,
-            resolution_program,
-            resolution_programdata,
-            custody_program,
-            custody_programdata,
-            rent_program,
-            source_receipt,
-            claims_aggregate,
-            custody_replay,
-            hoard_vault,
-            custody_authority,
-            collateral_mint,
-            token_program,
-            realm_raw,
-            realm_staging,
-            claims_authority,
-            close_vault_authority,
-            close_replay_authority,
-            infrastructure_profile,
-            registry_artifact_raw,
-            registry_artifact_staging,
-            registry_programdata,
-            rent_artifact_raw,
-            rent_artifact_staging,
-            rent_programdata,
-            rent,
-            refund_wallet,
-            rent_close_authority,
-            registry_admission: Some(registry_admission),
-            escrow: None,
-        })
-    }
-
     pub(crate) fn parse_direct(
         accounts: &'accounts [AccountInfo<'info>],
     ) -> Result<Self, CoreSbfError> {
@@ -368,27 +265,9 @@ impl<'accounts, 'info> RetirementAccounts<'accounts, 'info> {
             rent,
             refund_wallet,
             rent_close_authority,
-            registry_admission: None,
             escrow,
         })
     }
-}
-
-fn continuation_admission<'accounts, 'info>(
-    frame: RetirementAccounts<'accounts, 'info>,
-) -> Result<&'accounts AccountInfo<'info>, CoreSbfError> {
-    frame.registry_admission.ok_or(CoreSbfError::AccountFrame)
-}
-
-struct RetirementEvidence {
-    source: SourceClosureEvidenceV3,
-    claims_digest: [u8; 32],
-    close_vault_digest: [u8; 32],
-    close_replay_digest: [u8; 32],
-    claims_revision: u64,
-    custody_revision: u64,
-    claims_refund: u64,
-    custody_refund: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -432,21 +311,7 @@ struct CustodyRequestJoin {
     execution_index: u32,
 }
 
-#[derive(Clone, Copy)]
-struct CustodyCloseEvidence {
-    digest: [u8; 32],
-    refund: u64,
-    join: CustodyRequestJoin,
-}
-
-#[derive(Clone, Copy)]
-struct CustodyTerminalEvidence {
-    digest: [u8; 32],
-    revision: u64,
-    refund: u64,
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Clone, Copy)]
 struct RetiredTransitionPlan {
     core_refund: u64,
     candidate_digest: [u8; 32],
@@ -1578,163 +1443,6 @@ fn close_lifecycle_credit_direct(
     Ok(())
 }
 
-/// Execute the one canonical joined Market retirement.
-#[allow(clippy::too_many_arguments)]
-#[inline(never)]
-pub fn process(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    request: Request,
-    request_bytes: &[u8],
-    bundle_bytes: &[u8],
-    claims_request_bytes: &[u8],
-    close_vault_request_bytes: &[u8],
-    close_replay_request_bytes: &[u8],
-) -> ProgramResult {
-    let frame = RetirementAccounts::parse(accounts)?;
-    authenticate_privileges(program_id, frame)?;
-    infrastructure::authenticate_profile(
-        program_id,
-        frame.infrastructure_profile,
-        frame.registry_artifact_raw,
-        frame.registry_artifact_staging,
-        frame.registry,
-        frame.registry_programdata,
-        frame.rent_artifact_raw,
-        frame.rent_artifact_staging,
-        frame.rent_program,
-        frame.rent_programdata,
-    )?;
-    process_authenticated(
-        program_id,
-        frame,
-        request,
-        request_bytes,
-        bundle_bytes,
-        claims_request_bytes,
-        close_vault_request_bytes,
-        close_replay_request_bytes,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline(never)]
-fn process_authenticated(
-    program_id: &Pubkey,
-    frame: RetirementAccounts<'_, '_>,
-    request: Request,
-    request_bytes: &[u8],
-    bundle_bytes: &[u8],
-    claims_request_bytes: &[u8],
-    close_vault_request_bytes: &[u8],
-    close_replay_request_bytes: &[u8],
-) -> ProgramResult {
-    let bundle = decode_retirement_bundle(bundle_bytes)?;
-    let bundle_input = bundle.input_ref();
-    let state = authenticate_market(program_id, frame, request, bundle_input)?;
-    let continuation_digest = ContentId::new(
-        hashv(&[
-            request_bytes,
-            bundle_bytes,
-            claims_request_bytes,
-            close_vault_request_bytes,
-            close_replay_request_bytes,
-        ])
-        .to_bytes(),
-    )
-    .map_err(|_| CoreSbfError::Release)?;
-    let continuation_len =
-        u32::try_from(RETIREMENT_INSTRUCTION_BYTES_V1).map_err(|_| CoreSbfError::Arithmetic)?;
-    let (admissions, continuation) = authenticate_continuation_roles(
-        frame.cache,
-        frame.registry,
-        continuation_admission(frame)?,
-        state.identity.registry_program,
-        bundle_input.release_set,
-        &[
-            RoleDeploymentAccounts::new(Role::Core, frame.core_program, frame.core_programdata),
-            RoleDeploymentAccounts::new(
-                Role::Claims,
-                frame.claims_program,
-                frame.claims_programdata,
-            ),
-            RoleDeploymentAccounts::new(
-                Role::Resolution,
-                frame.resolution_program,
-                frame.resolution_programdata,
-            ),
-            RoleDeploymentAccounts::new(
-                Role::Custody,
-                frame.custody_program,
-                frame.custody_programdata,
-            ),
-        ],
-        continuation_digest,
-        continuation_len,
-    )
-    .map_err(|_| CoreSbfError::Instruction)?;
-    authenticate_rent_credit(frame, state, bundle_input.rent_credit)?;
-    let transition = plan_retired_transition(
-        request,
-        state,
-        admissions,
-        bundle_input.expected_core_lamports,
-    )?;
-    let parent_digest = hash(request_bytes).to_bytes();
-    let source = authenticate_source_receipt(frame, state, bundle_input)?;
-    let rent_before = frame.rent_credit.lamports();
-    let claims = execute_claims(
-        program_id,
-        frame,
-        bundle_input,
-        claims_request_bytes,
-        parent_digest,
-        continuation,
-    )?;
-    let close_vault = execute_close_vault(
-        program_id,
-        frame,
-        state,
-        bundle_input,
-        close_vault_request_bytes,
-        parent_digest,
-        continuation,
-    )?;
-    let close_replay = execute_close_replay(
-        program_id,
-        frame,
-        state,
-        bundle_input,
-        close_replay_request_bytes,
-        parent_digest,
-        close_vault.join,
-        continuation,
-    )?;
-    let evidence = Box::new(RetirementEvidence {
-        source,
-        claims_digest: claims.digest,
-        close_vault_digest: close_vault.digest,
-        close_replay_digest: close_replay.digest,
-        claims_revision: claims.revision,
-        custody_revision: close_replay.revision,
-        claims_refund: claims.refund,
-        custody_refund: close_vault
-            .refund
-            .checked_add(close_replay.refund)
-            .ok_or(CoreSbfError::Arithmetic)?,
-    });
-    commit_retired(
-        program_id,
-        frame,
-        &bundle,
-        bundle_bytes,
-        &evidence,
-        rent_before,
-        transition,
-        continuation,
-    )
-}
-
 #[inline(never)]
 fn decode_retirement_bundle(bundle_bytes: &[u8]) -> Result<Box<RetirementBundleV1>, CoreSbfError> {
     RetirementBundleV1::decode(bundle_bytes)
@@ -1828,57 +1536,6 @@ fn authenticate_rent_credit(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn require_custody_request(
-    program_id: &Pubkey,
-    frame: RetirementAccounts<'_, '_>,
-    state: CoreState,
-    bundle: &dclutch_market::RetirementBundleInputV1,
-    request: CustodyRequestV1,
-    request_bytes: &[u8],
-    operation: OperationV1,
-    source_compartment: CompartmentV1,
-    expected_revision: u64,
-    resulting_revision: u64,
-    expected_digest: [u8; 32],
-    parent_digest: [u8; 32],
-    transfer_index: u16,
-) -> ProgramResult {
-    let close_vault = operation == OperationV1::CloseVault;
-    if request.operation != operation
-        || request.caller_role != CallerRoleV1::Core
-        || request.caller_program != program_id.to_bytes()
-        || request.release_set != bundle.release_set
-        || request.market != bundle.market
-        || request.realm != state.identity.realm_id.to_bytes()
-        || request.source_compartment != source_compartment
-        || request.destination_compartment != CompartmentV1::None
-        || request.semantic.parent_request_digest != parent_digest
-        || request.semantic.generation != bundle.generation
-        || request.semantic.transfer_index != transfer_index
-        || request.expected_revision != expected_revision
-        || request.resulting_revision != resulting_revision
-        || request.amount != 0
-        || request.rent_refund != bundle.rent_credit
-        || hash(request_bytes).to_bytes() != expected_digest
-        || (close_vault
-            && (request.source != bundle.hoard_vault
-                || request.source_vault_context != request.context
-                || request.mint != frame.collateral_mint.key.to_bytes()
-                || request.token_program != frame.token_program.key.to_bytes()
-                || request.rent_lamports != frame.hoard_vault.lamports()))
-        || (!close_vault
-            && (request.source != [0; 32]
-                || request.source_vault_context != [0; 32]
-                || request.mint != [0; 32]
-                || request.token_program != [0; 32]
-                || request.rent_lamports != frame.custody_replay.lamports()))
-    {
-        return Err(CoreSbfError::Instruction.into());
-    }
-    Ok(())
-}
-
 #[inline(never)]
 fn authenticate_source_receipt(
     frame: RetirementAccounts<'_, '_>,
@@ -1941,323 +1598,6 @@ fn authenticate_source_receipt(
     Ok(evidence)
 }
 
-#[inline(never)]
-fn execute_claims(
-    program_id: &Pubkey,
-    frame: RetirementAccounts<'_, '_>,
-    bundle: &dclutch_market::RetirementBundleInputV1,
-    request_bytes: &[u8],
-    parent_digest: [u8; 32],
-    continuation: RegistryContinuationRequestV1,
-) -> Result<ClaimsCloseEvidence, CoreSbfError> {
-    let request = ClaimsMarketClosureRequestV1::decode(request_bytes)
-        .map_err(|_| CoreSbfError::Instruction)?;
-    let request_input = request.input();
-    if request_input.release_set != bundle.release_set
-        || request_input.market != bundle.market
-        || request_input.aggregate != bundle.claims_aggregate
-        || request_input.rent_credit != bundle.rent_credit
-        || request_input.parent_request_digest != parent_digest
-        || request_input.core_program != program_id.to_bytes()
-        || request_input.generation != bundle.generation
-        || request_input.expected_revision != bundle.claims_pre_revision
-        || request_input.resulting_revision != bundle.claims_post_revision
-        || hash(request_bytes).to_bytes() != bundle.claims_request_digest
-        || frame.claims_aggregate.key.to_bytes() != bundle.claims_aggregate
-    {
-        return Err(CoreSbfError::Instruction);
-    }
-    let pre_bytes = frame
-        .claims_aggregate
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let pre_digest = hashv(&[
-        CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1.as_slice(),
-        frame.claims_aggregate.key.as_ref(),
-        pre_bytes.as_ref(),
-    ])
-    .to_bytes();
-    drop(pre_bytes);
-    let refund = frame.claims_aggregate.lamports();
-    let credit_after = frame
-        .rent_credit
-        .lamports()
-        .checked_add(refund)
-        .ok_or(CoreSbfError::Arithmetic)?;
-    invoke_child(
-        program_id,
-        frame.claims_program,
-        frame.claims_authority,
-        request_input.release_set,
-        request_input.market,
-        request_input.parent_request_digest,
-        request_bytes,
-        continuation,
-        &[
-            (frame.claims_authority, false, true),
-            (frame.claims_aggregate, true, false),
-            (frame.rent_credit, true, false),
-            (frame.cache, false, false),
-            (frame.registry, false, false),
-            (frame.claims_program, false, false),
-            (frame.claims_programdata, false, false),
-            (frame.core_program, false, false),
-            (frame.core_programdata, false, false),
-            (frame.market, false, false),
-            (frame.rent_program, false, false),
-            (continuation_admission(frame)?, false, true),
-        ],
-    )
-    .map_err(|_| CoreSbfError::ChildCpi)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(CoreSbfError::ChildAck)?;
-    if producer != *frame.claims_program.key
-        || receipt_bytes.len() != CLAIMS_MARKET_CLOSURE_RECEIPT_BYTES_V1
-        || frame.claims_aggregate.owner != &system_program::ID
-        || !frame.claims_aggregate.data_is_empty()
-        || frame.claims_aggregate.lamports() != 0
-        || frame.rent_credit.lamports() != credit_after
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    let post_digest = hashv(&[
-        CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1.as_slice(),
-        frame.claims_aggregate.key.as_ref(),
-        frame.rent_credit.key.as_ref(),
-        request_input.resulting_revision.to_le_bytes().as_slice(),
-        refund.to_le_bytes().as_slice(),
-        credit_after.to_le_bytes().as_slice(),
-    ])
-    .to_bytes();
-    let receipt =
-        ClaimsMarketClosureReceiptV1::decode(&receipt_bytes).map_err(|_| CoreSbfError::ChildAck)?;
-    let request_digest = hash(request_bytes).to_bytes();
-    receipt
-        .verify_for(request, request_digest, pre_digest, post_digest)
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    if receipt.input().producer != frame.claims_program.key.to_bytes()
-        || receipt.input().liability_units != 0
-        || receipt.input().refund_lamports != refund
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    Ok(ClaimsCloseEvidence {
-        digest: hash(&receipt_bytes).to_bytes(),
-        revision: receipt.input().post_revision,
-        refund: receipt.input().refund_lamports,
-    })
-}
-
-#[inline(never)]
-fn execute_close_vault(
-    program_id: &Pubkey,
-    frame: RetirementAccounts<'_, '_>,
-    state: CoreState,
-    bundle: &dclutch_market::RetirementBundleInputV1,
-    request_bytes: &[u8],
-    parent_digest: [u8; 32],
-    continuation: RegistryContinuationRequestV1,
-) -> Result<CustodyCloseEvidence, CoreSbfError> {
-    let request = CustodyRequestV1::decode(request_bytes).map_err(|_| CoreSbfError::Instruction)?;
-    require_custody_request(
-        program_id,
-        frame,
-        state,
-        bundle,
-        request,
-        request_bytes,
-        OperationV1::CloseVault,
-        CompartmentV1::HoardPrincipal,
-        bundle.custody_pre_revision,
-        bundle.custody_middle_revision,
-        bundle.custody_close_vault_request_digest,
-        parent_digest,
-        0,
-    )
-    .map_err(|_| CoreSbfError::Instruction)?;
-    let credit_after = frame
-        .rent_credit
-        .lamports()
-        .checked_add(request.rent_lamports)
-        .ok_or(CoreSbfError::Arithmetic)?;
-    invoke_child(
-        program_id,
-        frame.custody_program,
-        frame.close_vault_authority,
-        request.release_set,
-        request.market,
-        request.context,
-        request_bytes,
-        continuation,
-        &[
-            (frame.close_vault_authority, false, true),
-            (frame.market, false, false),
-            (frame.cache, false, false),
-            (frame.registry, false, false),
-            (frame.core_program, false, false),
-            (frame.core_programdata, false, false),
-            (frame.realm_raw, false, false),
-            (frame.realm_staging, false, false),
-            (frame.custody_replay, true, false),
-            (frame.collateral_mint, false, false),
-            (frame.hoard_vault, true, false),
-            (frame.custody_authority, false, false),
-            (frame.token_program, false, false),
-            (frame.rent_credit, true, false),
-            (continuation_admission(frame)?, false, true),
-        ],
-    )
-    .map_err(|_| CoreSbfError::ChildCpi)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(CoreSbfError::ChildAck)?;
-    if producer != *frame.custody_program.key
-        || receipt_bytes.len() != CUSTODY_RECEIPT_BYTES_V1
-        || frame.hoard_vault.lamports() != 0
-        || frame.rent_credit.lamports() != credit_after
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    let replay_bytes = frame
-        .custody_replay
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    if replay_bytes.len() != CUSTODY_REPLAY_BYTES_V1 {
-        return Err(CoreSbfError::ChildAck);
-    }
-    let replay_digest = hash(&replay_bytes).to_bytes();
-    let replay = CustodyReplayV1::decode(&replay_bytes).map_err(|_| CoreSbfError::ChildAck)?;
-    drop(replay_bytes);
-    let receipt = CustodyReceiptV1::decode(&receipt_bytes).map_err(|_| CoreSbfError::ChildAck)?;
-    let request_digest = hash(request_bytes).to_bytes();
-    receipt
-        .verify_for(request, request_digest, replay_digest)
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let expected_poststate = custody_poststate(
-        request_digest,
-        frame.hoard_vault.key.to_bytes(),
-        frame.rent_credit.key.to_bytes(),
-        request.rent_lamports,
-    );
-    if replay.open_vault_count != 0
-        || replay.next_revision != request.resulting_revision
-        || replay.last_request_digest != request_digest
-        || replay.last_poststate_commitment != expected_poststate
-        || receipt.evidence.poststate_commitment != expected_poststate
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    Ok(CustodyCloseEvidence {
-        digest: hash(&receipt_bytes).to_bytes(),
-        refund: receipt.rent_lamports,
-        join: CustodyRequestJoin {
-            context: request.context,
-            realm: request.realm,
-            candidate: request.semantic.candidate,
-            order: request.semantic.order,
-            order_nonce: request.semantic.order_nonce,
-            page_index: request.semantic.page_index,
-            execution_index: request.semantic.execution_index,
-        },
-    })
-}
-
-#[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn execute_close_replay(
-    program_id: &Pubkey,
-    frame: RetirementAccounts<'_, '_>,
-    state: CoreState,
-    bundle: &dclutch_market::RetirementBundleInputV1,
-    request_bytes: &[u8],
-    parent_digest: [u8; 32],
-    expected_join: CustodyRequestJoin,
-    continuation: RegistryContinuationRequestV1,
-) -> Result<CustodyTerminalEvidence, CoreSbfError> {
-    let request = CustodyRequestV1::decode(request_bytes).map_err(|_| CoreSbfError::Instruction)?;
-    require_custody_request(
-        program_id,
-        frame,
-        state,
-        bundle,
-        request,
-        request_bytes,
-        OperationV1::CloseReplay,
-        CompartmentV1::None,
-        bundle.custody_middle_revision,
-        bundle.custody_post_revision,
-        bundle.custody_close_replay_request_digest,
-        parent_digest,
-        1,
-    )
-    .map_err(|_| CoreSbfError::Instruction)?;
-    if request.context != expected_join.context
-        || request.realm != expected_join.realm
-        || request.semantic.candidate != expected_join.candidate
-        || request.semantic.order != expected_join.order
-        || request.semantic.order_nonce != expected_join.order_nonce
-        || request.semantic.page_index != expected_join.page_index
-        || request.semantic.execution_index != expected_join.execution_index
-    {
-        return Err(CoreSbfError::Instruction);
-    }
-    let credit_after = frame
-        .rent_credit
-        .lamports()
-        .checked_add(request.rent_lamports)
-        .ok_or(CoreSbfError::Arithmetic)?;
-    invoke_child(
-        program_id,
-        frame.custody_program,
-        frame.close_replay_authority,
-        request.release_set,
-        request.market,
-        request.context,
-        request_bytes,
-        continuation,
-        &[
-            (frame.close_replay_authority, false, true),
-            (frame.market, false, false),
-            (frame.cache, false, false),
-            (frame.registry, false, false),
-            (frame.core_program, false, false),
-            (frame.core_programdata, false, false),
-            (frame.realm_raw, false, false),
-            (frame.realm_staging, false, false),
-            (frame.custody_replay, true, false),
-            (frame.rent_credit, true, false),
-            (continuation_admission(frame)?, false, true),
-        ],
-    )
-    .map_err(|_| CoreSbfError::ChildCpi)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(CoreSbfError::ChildAck)?;
-    if producer != *frame.custody_program.key
-        || receipt_bytes.len() != CUSTODY_RECEIPT_BYTES_V1
-        || frame.custody_replay.owner != &system_program::ID
-        || !frame.custody_replay.data_is_empty()
-        || frame.custody_replay.lamports() != 0
-        || frame.rent_credit.lamports() != credit_after
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    let receipt = CustodyReceiptV1::decode(&receipt_bytes).map_err(|_| CoreSbfError::ChildAck)?;
-    let request_digest = hash(request_bytes).to_bytes();
-    receipt
-        .verify_for(request, request_digest, hash(&[]).to_bytes())
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let expected_poststate = custody_poststate(
-        request_digest,
-        frame.custody_replay.key.to_bytes(),
-        frame.rent_credit.key.to_bytes(),
-        request.rent_lamports,
-    );
-    if receipt.evidence.poststate_commitment != expected_poststate {
-        return Err(CoreSbfError::ChildAck);
-    }
-    Ok(CustodyTerminalEvidence {
-        digest: hash(&receipt_bytes).to_bytes(),
-        revision: receipt.resulting_revision,
-        refund: receipt.rent_lamports,
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn plan_retired_transition(
@@ -2297,88 +1637,6 @@ fn plan_retired_transition(
 }
 
 #[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn commit_retired(
-    program_id: &Pubkey,
-    frame: RetirementAccounts<'_, '_>,
-    bundle: &RetirementBundleV1,
-    bundle_bytes: &[u8],
-    evidence: &RetirementEvidence,
-    rent_before: u64,
-    transition: RetiredTransitionPlan,
-    continuation: RegistryContinuationRequestV1,
-) -> ProgramResult {
-    let bundle_input = bundle.input_ref();
-    evidence.source.authenticate_refund()?;
-    if evidence.source.digest != bundle_input.source_receipt_digest
-        || evidence.source.closure_revision != bundle_input.source_closure_revision
-        || evidence.claims_revision != bundle_input.claims_post_revision
-        || evidence.custody_revision != bundle_input.custody_post_revision
-    {
-        return Err(CoreSbfError::ChildAck.into());
-    }
-    let final_credit = rent_before
-        .checked_add(evidence.claims_refund)
-        .and_then(|value| value.checked_add(evidence.custody_refund))
-        .and_then(|value| value.checked_add(transition.core_refund))
-        .ok_or(CoreSbfError::Arithmetic)?;
-    let post_resource_digest = hashv(&[
-        RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1.as_slice(),
-        &[RETIREMENT_ROLE_COUNT_V1],
-        &[RETIREMENT_CUSTODY_RECEIPT_COUNT_V1],
-        frame.rent_credit.key.as_ref(),
-        evidence.source.digest.as_slice(),
-        evidence.claims_digest.as_slice(),
-        evidence.close_vault_digest.as_slice(),
-        evidence.close_replay_digest.as_slice(),
-        transition.core_refund.to_le_bytes().as_slice(),
-        evidence.claims_refund.to_le_bytes().as_slice(),
-        evidence.custody_refund.to_le_bytes().as_slice(),
-        final_credit.to_le_bytes().as_slice(),
-    ])
-    .to_bytes();
-    let receipt = RetirementReceiptV1::new(RetirementReceiptInputV1 {
-        core_program: program_id.to_bytes(),
-        market: bundle_input.market,
-        release_set: bundle_input.release_set,
-        rent_credit: bundle_input.rent_credit,
-        bundle_digest: hash(bundle_bytes).to_bytes(),
-        source_receipt_digest: evidence.source.digest,
-        claims_receipt_digest: evidence.claims_digest,
-        custody_close_vault_receipt_digest: evidence.close_vault_digest,
-        custody_close_replay_receipt_digest: evidence.close_replay_digest,
-        pre_state_digest: bundle_input.core_prestate_digest,
-        retired_candidate_digest: transition.candidate_digest,
-        post_resource_digest,
-        generation: bundle_input.generation,
-        source_closure_revision: evidence.source.closure_revision,
-        claims_post_revision: evidence.claims_revision,
-        custody_post_revision: evidence.custody_revision,
-        core_refund_lamports: transition.core_refund,
-        claims_refund_lamports: evidence.claims_refund,
-        custody_refund_lamports: evidence.custody_refund,
-    })
-    .map_err(|_| CoreSbfError::Commit)?;
-    receipt
-        .verify_for(
-            *bundle,
-            hash(bundle_bytes).to_bytes(),
-            evidence.claims_digest,
-            evidence.close_vault_digest,
-            evidence.close_replay_digest,
-        )
-        .map_err(|_| CoreSbfError::Commit)?;
-    let receipt_bytes = receipt.to_bytes();
-    if receipt_bytes.len() != RETIREMENT_RECEIPT_BYTES_V1 {
-        return Err(CoreSbfError::Commit.into());
-    }
-    close_market(frame, final_credit)?;
-    close_lifecycle_credit(program_id, frame, receipt, final_credit, continuation)?;
-    set_return_data(&receipt_bytes);
-    Ok(())
-}
-
-#[inline(never)]
 fn close_market(frame: RetirementAccounts<'_, '_>, final_credit: u64) -> ProgramResult {
     {
         let mut data = frame
@@ -2411,177 +1669,6 @@ fn close_market(frame: RetirementAccounts<'_, '_>, final_credit: u64) -> Program
     Ok(())
 }
 
-#[inline(never)]
-fn close_lifecycle_credit(
-    program_id: &Pubkey,
-    frame: RetirementAccounts<'_, '_>,
-    receipt: RetirementReceiptV1,
-    final_credit: u64,
-    continuation: RegistryContinuationRequestV1,
-) -> ProgramResult {
-    let receipt_input = receipt.input();
-    let credit_id = LifecycleAccountIdV2::new(frame.rent_credit.key.to_bytes())
-        .map_err(|_| CoreSbfError::RentCredit)?;
-    let seeds =
-        LifecycleRentCoreCloseAuthoritySeedsV2::new(credit_id, receipt_input.post_resource_digest)
-            .map_err(|_| CoreSbfError::RentCredit)?;
-    let credit = seeds.credit().to_bytes();
-    let post_resource_digest = seeds.post_resource_digest();
-    let (expected_authority, bump) = Pubkey::find_program_address(
-        &[
-            seeds.domain(),
-            credit.as_slice(),
-            post_resource_digest.as_slice(),
-        ],
-        program_id,
-    );
-    if expected_authority != *frame.rent_close_authority.key {
-        return Err(CoreSbfError::CallerAuthority.into());
-    }
-    let wallet_before = frame.refund_wallet.lamports();
-    let wallet_after = wallet_before
-        .checked_add(final_credit)
-        .ok_or(CoreSbfError::Arithmetic)?;
-    let request_bytes = CloseLifecycleRentCreditV2::new(receipt).to_bytes();
-    let continuation_bytes = continuation.to_bytes();
-    let mut instruction_data = Vec::with_capacity(request_bytes.len() + continuation_bytes.len());
-    instruction_data.extend_from_slice(&request_bytes);
-    instruction_data.extend_from_slice(&continuation_bytes);
-    let instruction = Instruction {
-        program_id: *frame.rent_program.key,
-        accounts: Vec::from([
-            AccountMeta::new(*frame.rent_credit.key, false),
-            AccountMeta::new(*frame.refund_wallet.key, false),
-            AccountMeta::new_readonly(*frame.cache.key, false),
-            AccountMeta::new_readonly(*frame.registry.key, false),
-            AccountMeta::new_readonly(*frame.core_program.key, false),
-            AccountMeta::new_readonly(*frame.core_programdata.key, false),
-            AccountMeta::new_readonly(*frame.rent_close_authority.key, true),
-            AccountMeta::new_readonly(*frame.market.key, false),
-            AccountMeta::new_readonly(*continuation_admission(frame)?.key, true),
-        ]),
-        data: instruction_data,
-    };
-    let bump_seed = [bump];
-    invoke_signed(
-        &instruction,
-        &[
-            frame.rent_credit.clone(),
-            frame.refund_wallet.clone(),
-            frame.cache.clone(),
-            frame.registry.clone(),
-            frame.core_program.clone(),
-            frame.core_programdata.clone(),
-            frame.rent_close_authority.clone(),
-            frame.market.clone(),
-            continuation_admission(frame)?.clone(),
-            frame.rent_program.clone(),
-        ],
-        &[&[
-            seeds.domain(),
-            credit.as_slice(),
-            post_resource_digest.as_slice(),
-            &bump_seed,
-        ]],
-    )
-    .map_err(|_| CoreSbfError::ChildCpi)?;
-    let (producer, return_bytes) = get_return_data().ok_or(CoreSbfError::ChildAck)?;
-    if producer != *frame.rent_program.key
-        || return_bytes.len() != LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2
-        || frame.rent_credit.owner != &system_program::ID
-        || !frame.rent_credit.data_is_empty()
-        || frame.rent_credit.lamports() != 0
-        || frame.refund_wallet.lamports() != wallet_after
-    {
-        return Err(CoreSbfError::ChildAck.into());
-    }
-    let rent_receipt =
-        LifecycleRentCloseReceiptV2::decode(&return_bytes).map_err(|_| CoreSbfError::ChildAck)?;
-    let rent_input = rent_receipt.input();
-    if rent_input.credit.to_bytes() != receipt_input.rent_credit
-        || rent_input.refund_wallet.to_bytes() != frame.refund_wallet.key.to_bytes()
-        || rent_input.market.to_bytes() != receipt_input.market
-        || rent_input.release_set.to_bytes() != receipt_input.release_set
-        || rent_input.post_resource_digest != receipt_input.post_resource_digest
-        || rent_input.generation != receipt_input.generation
-        || rent_input.closed_lamports != final_credit
-    {
-        return Err(CoreSbfError::ChildAck.into());
-    }
-    Ok(())
-}
-
-#[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn invoke_child<'info>(
-    program_id: &Pubkey,
-    child_program: &AccountInfo<'info>,
-    authority: &AccountInfo<'info>,
-    release_set: [u8; 32],
-    market: [u8; 32],
-    context: [u8; 32],
-    request_bytes: &[u8],
-    continuation: RegistryContinuationRequestV1,
-    account_projection: &[(&AccountInfo<'info>, bool, bool)],
-) -> ProgramResult {
-    let digest = hash(request_bytes).to_bytes();
-    let seeds = CallerAuthoritySeedsV1::from_bytes(
-        release_set,
-        market,
-        ExecutionRoleV1::Core,
-        context,
-        digest,
-    )
-    .map_err(|_| CoreSbfError::CallerAuthority)?;
-    let (expected, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
-    if expected != *authority.key {
-        return Err(CoreSbfError::CallerAuthority.into());
-    }
-    let mut metas = Vec::with_capacity(account_projection.len());
-    let mut infos = Vec::with_capacity(account_projection.len().saturating_add(1));
-    for (account, writable, signer) in account_projection.iter().copied() {
-        metas.push(if writable {
-            AccountMeta::new(*account.key, signer)
-        } else {
-            AccountMeta::new_readonly(*account.key, signer)
-        });
-        infos.push(account.clone());
-    }
-    infos.push(child_program.clone());
-    let continuation_bytes = continuation.to_bytes();
-    let mut instruction_data = Vec::with_capacity(request_bytes.len() + continuation_bytes.len());
-    instruction_data.extend_from_slice(request_bytes);
-    instruction_data.extend_from_slice(&continuation_bytes);
-    let instruction = Instruction {
-        program_id: *child_program.key,
-        accounts: metas,
-        data: instruction_data,
-    };
-    let bump_seed = [bump];
-    let [
-        domain,
-        release,
-        market_seed,
-        role,
-        context_seed,
-        request_digest,
-    ] = seeds.as_slices();
-    invoke_signed(
-        &instruction,
-        &infos,
-        &[&[
-            domain,
-            release,
-            market_seed,
-            role,
-            context_seed,
-            request_digest,
-            &bump_seed,
-        ]],
-    )
-    .map_err(|_| CoreSbfError::ChildCpi.into())
-}
-
 fn custody_poststate(
     request_digest: [u8; 32],
     source: [u8; 32],
@@ -2607,94 +1694,5 @@ const fn complete_child() -> ChildEffectObservation {
         exact_request_authenticated: true,
         exact_receipt_authenticated: true,
         post_resource_authenticated: true,
-    }
-}
-
-#[inline(never)]
-fn authenticate_privileges(
-    program_id: &Pubkey,
-    frame: RetirementAccounts<'_, '_>,
-) -> ProgramResult {
-    let registry_admission = continuation_admission(frame)?;
-    if frame.market.key == frame.rent_credit.key
-        || frame.market.key == frame.claims_aggregate.key
-        || frame.market.key == frame.custody_replay.key
-        || frame.market.key == frame.hoard_vault.key
-        || frame.rent_credit.key == frame.claims_aggregate.key
-        || frame.rent_credit.key == frame.custody_replay.key
-        || frame.rent_credit.key == frame.hoard_vault.key
-        || frame.claims_aggregate.key == frame.custody_replay.key
-        || frame.claims_aggregate.key == frame.hoard_vault.key
-        || frame.custody_replay.key == frame.hoard_vault.key
-        || !frame.market.is_writable
-        || frame.market.is_signer
-        || !frame.rent_credit.is_writable
-        || frame.rent_credit.is_signer
-        || !frame.claims_aggregate.is_writable
-        || frame.claims_aggregate.is_signer
-        || !frame.custody_replay.is_writable
-        || frame.custody_replay.is_signer
-        || !frame.hoard_vault.is_writable
-        || frame.hoard_vault.is_signer
-        || !frame.refund_wallet.is_writable
-        || frame.refund_wallet.is_signer
-        || frame.refund_wallet.executable
-        || frame.core_program.key != program_id
-        || !frame.core_program.executable
-        || !frame.claims_program.executable
-        || !frame.resolution_program.executable
-        || !frame.custody_program.executable
-        || !frame.registry.executable
-        || !frame.rent_program.executable
-        || !frame.token_program.executable
-        || frame.rent.key != &sysvar::rent::ID
-        || frame.rent.is_writable
-        || frame.rent.is_signer
-        || frame.rent.executable
-        || !registry_admission.is_signer
-        || registry_admission.is_writable
-        || registry_admission.executable
-    {
-        return Err(CoreSbfError::AccountFrame.into());
-    }
-    for account in [
-        frame.cache,
-        frame.core_programdata,
-        frame.claims_programdata,
-        frame.resolution_programdata,
-        frame.custody_programdata,
-        frame.source_receipt,
-        frame.custody_authority,
-        frame.collateral_mint,
-        frame.realm_raw,
-        frame.realm_staging,
-        frame.claims_authority,
-        frame.close_vault_authority,
-        frame.close_replay_authority,
-        frame.infrastructure_profile,
-        frame.registry_artifact_raw,
-        frame.registry_artifact_staging,
-        frame.registry_programdata,
-        frame.rent_artifact_raw,
-        frame.rent_artifact_staging,
-        frame.rent_programdata,
-        frame.rent_close_authority,
-    ] {
-        if account.is_writable || account.is_signer || account.executable {
-            return Err(CoreSbfError::AccountFrame.into());
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retirement_frame_and_instruction_width_are_exact() {
-        assert_eq!(RETIREMENT_ACCOUNT_COUNT_V1, 36);
-        assert_eq!(RETIREMENT_INSTRUCTION_BYTES_V1, 2_152);
-        assert!(RetirementAccounts::parse(&[]).is_err());
     }
 }

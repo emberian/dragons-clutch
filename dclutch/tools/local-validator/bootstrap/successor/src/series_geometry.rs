@@ -1,6 +1,6 @@
 //! Typed geometry assembly for the first Series Prepare frame.
 //!
-//! A Prepare Profile has 115 logical coordinates, while only 59 carry a
+//! A Prepare Profile has 116 logical coordinates, while only 60 carry a
 //! physical account after the release-owned alias compression.  This module
 //! makes that distinction explicit: live accounts are observations, immutable
 //! Registry records are canonical bodies, and accounts the first Prepare will
@@ -40,7 +40,7 @@ const ESCROW_LOCK: usize = 14;
 
 const _: () = assert!(
     PREPARE_PREFIX
-        + 4
+        + 5
         + PROJECTED_INITIALIZE
         + PROJECTED_OPEN
         + REPLAY_INITIALIZE
@@ -146,7 +146,7 @@ pub(crate) struct SeriesPrepareOuterWidthsV1 {
 /// Each array uses the selected child's own account-frame cardinality.  The
 /// source constructor supplies finalized account widths for existing accounts
 /// and [`SeriesPrepareWidthV1::Predicted`] only for fixed layouts created by
-/// this first Prepare.  No raw `[u32; 115]` crosses this boundary.
+/// this first Prepare.  No raw `[u32; 116]` crosses this boundary.
 #[derive(Clone, Debug)]
 pub(crate) struct SeriesPrepareGeometryInputV1 {
     pub(crate) outer: SeriesPrepareOuterWidthsV1,
@@ -156,6 +156,7 @@ pub(crate) struct SeriesPrepareGeometryInputV1 {
     pub(crate) escrow_open: [SeriesPrepareWidthV1; ESCROW_OPEN],
     pub(crate) escrow_lock: [SeriesPrepareWidthV1; ESCROW_LOCK],
     pub(crate) occurrence_evidence: [SeriesPrepareWidthV1; 4],
+    pub(crate) custody_program: SeriesPrepareWidthV1,
 }
 
 /// One account role in the pre-Prepare frame, before logical aliases are
@@ -187,10 +188,11 @@ pub(crate) struct SeriesPrepareRoleLayoutV1<'a> {
     pub(crate) escrow_open: [SeriesPrepareRoleSourceV1<'a>; ESCROW_OPEN],
     pub(crate) escrow_lock: [SeriesPrepareRoleSourceV1<'a>; ESCROW_LOCK],
     pub(crate) occurrence_evidence: [SeriesPrepareRoleSourceV1<'a>; 4],
+    pub(crate) custody_program: SeriesPrepareRoleSourceV1<'a>,
 }
 
 /// Read the complete current Prepare frame at one finalized slot and derive
-/// its 115 profile widths.  Alias coordinates must name the same physical
+/// its 116 profile widths.  Alias coordinates must name the same physical
 /// address as their representative; this keeps the final account snapshot
 /// below the RPC's 100-key ceiling and turns an accidental alias split into a
 /// source error before an artifact can be emitted.
@@ -274,6 +276,7 @@ pub(crate) fn observe_series_prepare_geometry_v1(
     let escrow_open = take_array_v1::<ESCROW_OPEN>(&mut widths, "escrow open")?;
     let escrow_lock = take_array_v1::<ESCROW_LOCK>(&mut widths, "escrow lock")?;
     let occurrence_evidence = take_array_v1::<4>(&mut widths, "occurrence evidence")?;
+    let [custody_program] = take_array_v1::<1>(&mut widths, "Custody callee")?;
     let [
         root,
         template,
@@ -297,6 +300,7 @@ pub(crate) fn observe_series_prepare_geometry_v1(
         escrow_open,
         escrow_lock,
         occurrence_evidence,
+        custody_program,
     })
 }
 
@@ -326,7 +330,7 @@ impl SeriesPrepareRoleSourceV1<'_> {
     }
 }
 
-fn prepare_sources_v1<'a>(
+pub(crate) fn prepare_sources_v1<'a>(
     layout: &'a SeriesPrepareRoleLayoutV1<'a>,
 ) -> Vec<SeriesPrepareRoleSourceV1<'a>> {
     layout
@@ -338,6 +342,7 @@ fn prepare_sources_v1<'a>(
         .chain(&layout.escrow_open)
         .chain(&layout.escrow_lock)
         .chain(&layout.occurrence_evidence)
+        .chain(core::iter::once(&layout.custody_program))
         .cloned()
         .collect()
 }
@@ -436,7 +441,7 @@ fn require_role_alias_addresses_v1(sources: &[SeriesPrepareRoleSourceV1<'_>]) ->
     Ok(())
 }
 
-/// Produce exactly the 115 logical widths consumed by the V5 Prepare profile.
+/// Produce exactly the 116 logical widths consumed by the V5 Prepare profile.
 pub(crate) fn build_series_prepare_geometry_v1(
     input: &SeriesPrepareGeometryInputV1,
 ) -> Result<[u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize]> {
@@ -475,6 +480,7 @@ pub(crate) fn build_series_prepare_geometry_v1(
         input.escrow_open.as_slice(),
         input.escrow_lock.as_slice(),
         input.occurrence_evidence.as_slice(),
+        core::slice::from_ref(&input.custody_program),
     ] {
         for source in route {
             widths[next] = source.width(next)?;
@@ -483,7 +489,7 @@ pub(crate) fn build_series_prepare_geometry_v1(
     }
     if next != widths.len() {
         return Err(Error::new(
-            "Series Prepare route geometry did not cover 115 coordinates",
+            "Series Prepare route geometry did not cover 116 coordinates",
         ));
     }
     require_release_aliases_v1(&widths)?;
@@ -617,6 +623,7 @@ mod tests {
                 ),
                 observed("ticket-staging", 0),
             ],
+            custody_program: observed("Custody executable", 36),
         };
         input.projected_initialize[1] = predicted(
             "projected-state",
@@ -644,7 +651,7 @@ mod tests {
             assert_eq!(widths[coordinate as usize], 0, "initial child-owned vacancy");
         }
 
-        assert_eq!(widths.len(), 115);
+        assert_eq!(widths.len(), 116);
         let artifacts = emit_series_prepare_funding_artifacts_v5(
             SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &widths,
@@ -721,6 +728,7 @@ mod tests {
             escrow_open: std::array::from_fn(|_| observed("live", 1)),
             escrow_lock: std::array::from_fn(|_| observed("live", 1)),
             occurrence_evidence: std::array::from_fn(|_| observed("evidence", 1)),
+            custody_program: observed("Custody executable", 36),
         };
         let error = build_series_prepare_geometry_v1(&input).unwrap_err();
         assert!(

@@ -539,6 +539,9 @@ fn run() -> Result<()> {
         Some(command) if command == structured_campaign::COMMAND_V1 => {
             structured_campaign::run_owned_loopback_v1(arguments.collect())
         }
+        Some(command) if command == structured_campaign::PROFILE_REPLAY_COMMAND_V1 => {
+            structured_campaign::run_profile_capture_replay_v1(arguments.collect())
+        }
         Some(command) if command == spline_product::COMMAND_V1 => {
             spline_product::run(arguments.collect())
         }

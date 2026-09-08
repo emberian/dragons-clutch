@@ -121,6 +121,9 @@ const PREPARE_FOUND_ACCOUNT_COUNT: usize = PROJECT_FOUND_ACCOUNT_COUNT_V2;
 /// Exact separate controller-funding preparation frame.
 pub const CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1: usize =
     PREPARE_FOUND_START + PREPARE_FOUND_ACCOUNT_COUNT;
+/// Ensemble preparation appends its finalized RecoveryPolicy raw/staging pair.
+pub const CONTROLLER_FUNDING_PREPARE_ENSEMBLE_ACCOUNT_COUNT_V1: usize =
+    CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1 + 2;
 
 /// Index of the instructions sysvar this route presents to its own entrypoint.
 ///
@@ -280,7 +283,8 @@ pub fn process_controller_funding_prepare_v1(
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
     if !is_controller_funding_prepare_v1(instruction_data)
-        || accounts.len() != CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1
+        || (accounts.len() != CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1
+            && accounts.len() != CONTROLLER_FUNDING_PREPARE_ENSEMBLE_ACCOUNT_COUNT_V1)
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
@@ -296,6 +300,20 @@ pub fn process_controller_funding_prepare_v1(
     let found_request = decode_found_request(&found_raw)?;
     let lock = decode_projected_request(&lock_raw)?;
     let found = subslice(accounts, PREPARE_FOUND_START, PREPARE_FOUND_ACCOUNT_COUNT)?;
+    let recovery_policy = accounts
+        .get(CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1..)
+        .ok_or(TradingSbfError::Content)?;
+    if recovery_policy.iter().any(|account| {
+        account.is_signer
+            || account.is_writable
+            || account.executable
+            || accounts
+                .iter()
+                .take(CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1)
+                .any(|other| other.key == account.key)
+    }) {
+        return Err(TradingSbfError::Content.into());
+    }
     let funding_source = account(accounts, PREPARE_FUNDING_SOURCE)?;
     if !funding_source.is_signer
         || !funding_source.is_writable
@@ -355,6 +373,7 @@ pub fn process_controller_funding_prepare_v1(
         program_id,
         accounts,
         found,
+        recovery_policy,
         funding_source,
         &facts,
         project_found,
@@ -2556,6 +2575,7 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'info>],
     found: &[AccountInfo<'info>],
+    recovery_policy: &[AccountInfo<'info>],
     funding_source: &AccountInfo<'info>,
     facts: &FoundingFundingFactsV1,
     project_found: ProjectFoundRequestV2,
@@ -2625,7 +2645,7 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
     if expected_authority != *authority.key {
         return Err(TradingSbfError::Release.into());
     }
-    let mut metas = Vec::with_capacity(43);
+    let mut metas = Vec::with_capacity(43 + recovery_policy.len());
     metas.extend([
         AccountMeta::new_readonly(*authority.key, true),
         AccountMeta::new_readonly(*caller_program.key, false),
@@ -2642,12 +2662,17 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
             AccountMeta::new_readonly(*value.key, false)
         }
     }));
+    metas.extend(
+        recovery_policy
+            .iter()
+            .map(|value| AccountMeta::new_readonly(*value.key, false)),
+    );
     let instruction = Instruction {
         program_id: *resolution_program.key,
         accounts: metas,
         data: request_bytes.to_vec(),
     };
-    let mut infos = Vec::with_capacity(43);
+    let mut infos = Vec::with_capacity(43 + recovery_policy.len());
     infos.extend([
         authority.clone(),
         caller_program.clone(),
@@ -2658,6 +2683,7 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
         target.clone(),
     ]);
     infos.extend_from_slice(found);
+    infos.extend_from_slice(recovery_policy);
     let bump_seed = [bump];
     let [domain, release_set, market, role, context, request_digest] = authority_seeds.as_slices();
     invoke_signed(

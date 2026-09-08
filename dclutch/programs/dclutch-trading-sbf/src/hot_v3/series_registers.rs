@@ -81,6 +81,45 @@ pub(super) fn seed_authenticated_series_derived_scalars_v1(
     observations: &[AccountObservationV1<'_>],
     scalars: &mut [u64],
 ) -> Result<bool> {
+    let now_slot = if selected_kind == hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes()
+        && action <= SeriesActionV3::Expire as u32
+    {
+        Clock::get()?.slot
+    } else {
+        0
+    };
+    seed_authenticated_series_derived_scalars_at_slot_v1(
+        selected_kind,
+        action,
+        family_request,
+        program_id,
+        frame,
+        product,
+        rent,
+        child_programs,
+        observations,
+        scalars,
+        now_slot,
+    )
+}
+
+// The runtime wrapper supplies Clock; child tests exercise this same body at a
+// deterministic slot without exposing a caller-controlled runtime clock input.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn seed_authenticated_series_derived_scalars_at_slot_v1(
+    selected_kind: [u8; 32],
+    action: u32,
+    family_request: &[u8],
+    program_id: &Pubkey,
+    frame: &HotFrameV3<'_, '_>,
+    product: &AuthenticatedProductRuntimeV3<'_, '_>,
+    rent: &Rent,
+    child_programs: Option<AuthenticatedChildProgramsV3>,
+    observations: &[AccountObservationV1<'_>],
+    scalars: &mut [u64],
+    now_slot: u64,
+) -> Result<bool> {
     if selected_kind != hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes() {
         return Ok(false);
     }
@@ -175,7 +214,7 @@ pub(super) fn seed_authenticated_series_derived_scalars_v1(
         siblings: &siblings,
         series,
         ticket_state,
-        now_slot: Clock::get()?.slot,
+        now_slot,
     };
     let projection = AuthenticatedProductProjectionV2::new(
         dclutch_core_contract::ContentId::new(
@@ -260,6 +299,14 @@ fn seed_prepare(
     scalars: &mut [u64],
 ) -> Result<()> {
     require(scalars.len() == prepare::SERIES_PREPARE_COMMON_SCALAR_COUNT_V5 as usize)?;
+    require(
+        observed(
+            observations,
+            prepare::SERIES_PREPARE_CUSTODY_PROGRAM_COORDINATE_V5 as usize,
+        )?
+        .key()
+            == programs.custody,
+    )?;
     let (realm_digest, realm_bytes) = record(
         frame.registry.key,
         observations,

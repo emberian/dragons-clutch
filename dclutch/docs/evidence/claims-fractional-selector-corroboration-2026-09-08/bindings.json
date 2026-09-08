@@ -1,0 +1,32 @@
+{
+  "campaign": "claims-fractional-local-validator-v1-selector-corroboration",
+  "note": "Re-fold the retained accepted Claims fractional lifecycle after the census learned the source-derived FractionalExposureActionV2 wire offset and discriminants. The WholeUnwrap child route is claimed only for the finalized instruction whose canonical request has action byte 2 at offset 10.",
+  "bindings": [
+    {
+      "label": "wrap",
+      "routes": [
+        "claims/fractional_atomic_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Accepted DCFREQ02 Wrap CPI. This addendum preserves the parent-route observation but makes no new child-route claim for this label."
+    },
+    {
+      "label": "whole-unwrap-actor-remainder",
+      "routes": [
+        "claims/fractional_atomic_v3::process",
+        "claims/process_open#WholeUnwrap"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Accepted DCFREQ02 WholeUnwrap CPI. The exact finalized Claims instruction is 416 bytes with action 2 at source-derived byte offset 10, canonical magic/version, and zero reserved bytes."
+    },
+    {
+      "label": "token-2022-transfer-to-sleeper",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Accepted Token-2022 TransferChecked retained for the liability poststate. It claims no first-party protocol route."
+    }
+  ]
+}

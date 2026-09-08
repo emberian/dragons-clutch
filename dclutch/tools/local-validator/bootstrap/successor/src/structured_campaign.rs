@@ -56,6 +56,11 @@ use dclutch_market::{
 use dclutch_operator::structured_activation_bundle_v1::{
     STRUCTURED_CAPABILITY_ROOT_TAIL_V1, structured_activation_request_v1,
 };
+use dclutch_operator::structured_selected_release_v1::{
+    STRUCTURED_SELECTED_PUBLICATION_BYTES_V1, STRUCTURED_SELECTED_PUBLICATION_MAGIC_V1,
+    STRUCTURED_SELECTED_PUBLICATION_VERSION_V1, StructuredSelectedReleaseInputV1,
+    structured_selected_release_v1,
+};
 use dclutch_operator::{
     capability_seal_v1::{CapabilitySealInstructionInputV1, capability_seal_instruction_v1},
     observation::decode_rent,
@@ -117,6 +122,7 @@ use crate::{
 
 /// Public owned-loopback command for the Structured publication predecessor.
 pub(crate) const COMMAND_V1: &str = "local-private-validator-structured-claims-v1";
+pub(crate) const PROFILE_REPLAY_COMMAND_V1: &str = "structured-profile-capture-replay-v1";
 
 #[derive(Debug)]
 struct ArgumentsV1 {
@@ -127,6 +133,154 @@ struct ArgumentsV1 {
     payer_keypair: PathBuf,
     output: PathBuf,
     execute: bool,
+}
+
+/// Replay both the captured immutable receipt profile and the current source
+/// candidate against one saved finalized logical frame. This command is
+/// deliberately key-free and read-only.
+pub(crate) fn run_profile_capture_replay_v1(arguments: Vec<String>) -> Result<()> {
+    let mut capture = None;
+    let mut market_input = None;
+    let mut output = None;
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        let destination = match argument.as_str() {
+            "--capture" => &mut capture,
+            "--market-input" => &mut market_input,
+            "--output" => &mut output,
+            _ => return Err(Error::new(format!("unknown argument: {argument}"))),
+        };
+        if destination.replace(PathBuf::from(value)).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let capture = capture.ok_or_else(|| Error::new("--capture is required"))?;
+    let market_input = market_input.ok_or_else(|| Error::new("--market-input is required"))?;
+    let output = output.ok_or_else(|| Error::new("--output is required"))?;
+    if output.exists() {
+        return Err(Error::new(format!(
+            "Structured profile replay refuses to overwrite {}",
+            output.display()
+        )));
+    }
+    let capture_bytes = std::fs::read(&capture)?;
+    let captured: serde_json::Value = serde_json::from_slice(&capture_bytes)?;
+    let instructions = captured
+        .get("instructions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| Error::new("Structured profile capture omitted instructions"))?;
+    let hot = instructions
+        .last()
+        .ok_or_else(|| Error::new("Structured profile capture omitted Hot instruction"))?;
+    let profile_address = hot
+        .get("accounts")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|accounts| accounts.get(HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("Structured profile capture omitted profile address"))?;
+    let original_profile = captured
+        .get("state")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|state| state.get(profile_address))
+        .and_then(|account| account.get("dataBase64"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("Structured profile capture omitted original profile bytes"))?;
+    let original_profile = BASE64.decode(original_profile).map_err(|error| {
+        Error::new(format!(
+            "Structured profile capture original profile base64: {error}"
+        ))
+    })?;
+    let market_input_bytes = std::fs::read(&market_input)?;
+    let candidate_profile = current_source_receipt_profile_v1(&market_input_bytes)?;
+    let original = project_saved_structured_receipt_snapshot_v1(&captured, &original_profile)?;
+    let candidate = project_saved_structured_receipt_snapshot_v1(&captured, &candidate_profile)?;
+    let evidence = json!({
+        "schema": "dclutch-structured-profile-capture-replay-v1",
+        "capture": capture.display().to_string(),
+        "captureSha256": sha256_hex(&capture_bytes),
+        "marketInput": market_input.display().to_string(),
+        "marketInputSha256": sha256_hex(&market_input_bytes),
+        "original": original,
+        "candidate": candidate,
+    });
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&output, serde_json::to_vec_pretty(&evidence)?)?;
+    println!("{}", serde_json::to_string(&evidence)?);
+    Ok(())
+}
+
+fn current_source_receipt_profile_v1(market_input_bytes: &[u8]) -> Result<Vec<u8>> {
+    let input: crate::model::MarketRunInput = serde_json::from_value(
+        crate::rpc::parse_json_without_duplicate_keys_v1(market_input_bytes)
+            .map_err(|error| Error::new(format!("Structured market input {error}")))?,
+    )
+    .map_err(|error| Error::new(format!("Structured market input shape: {error}")))?;
+    crate::market::validate_market_input(&input)?;
+    let selected = input
+        .selected_capability
+        .as_ref()
+        .ok_or_else(|| Error::new("Structured market input omitted selected capability"))?;
+    if selected.family != "structured" {
+        return Err(Error::new(
+            "Structured profile replay input selected another family",
+        ));
+    }
+    let config_bytes = crate::runtime::decode_hex(&selected.config_hex)?;
+    let config = dclutch_custody::token_svm::TokenBehaviorSelectionV2::decode(&config_bytes)
+        .map_err(|error| Error::new(format!("Structured profile replay config: {error:?}")))?;
+    let descriptor_bytes = crate::runtime::decode_hex(&selected.selected_descriptor_hex)?;
+    let descriptor =
+        dclutch_market::capability_program::v4::CapabilityProgramV4::decode(&descriptor_bytes)
+            .map_err(|error| {
+                Error::new(format!("Structured profile replay descriptor: {error:?}"))
+            })?;
+    let publication = crate::runtime::decode_hex(&selected.publication_hex)?;
+    if publication.len() != STRUCTURED_SELECTED_PUBLICATION_BYTES_V1
+        || publication.get(..8) != Some(STRUCTURED_SELECTED_PUBLICATION_MAGIC_V1.as_slice())
+        || publication.get(8..10)
+            != Some(
+                STRUCTURED_SELECTED_PUBLICATION_VERSION_V1
+                    .to_le_bytes()
+                    .as_slice(),
+            )
+    {
+        return Err(Error::new(
+            "Structured profile replay publication header or width differs",
+        ));
+    }
+    // The final 20-byte scalar block is public canonical wire: root width,
+    // representation K, Product N, selector offset, action count and roles.
+    let scalar = publication
+        .len()
+        .checked_sub(20)
+        .ok_or_else(|| Error::new("Structured profile replay publication is truncated"))?;
+    let outcome_count = u32::from_le_bytes(
+        publication
+            .get(scalar + 4..scalar + 8)
+            .ok_or_else(|| Error::new("Structured profile replay outcome count is truncated"))?
+            .try_into()
+            .map_err(|_| Error::new("Structured profile replay outcome count width differs"))?,
+    );
+    let product_basis = crate::runtime::decode_hex(&input.linked_basis_hex)?;
+    let release = structured_selected_release_v1(StructuredSelectedReleaseInputV1 {
+        realm: config.realm(),
+        release_set: config.release_set(),
+        root_schema: descriptor.root_schema().to_bytes(),
+        root_state_bytes: descriptor.root_state_bytes(),
+        representation_outcome_count: outcome_count,
+        // This is the selected demo producer's measured per-coordinate row
+        // width. It does not enter either lifecycle AccountProfile, but the
+        // complete compiler validates the representation closure alongside it.
+        item_state_bytes: 64,
+        product_basis: &product_basis,
+    })
+    .map_err(|error| Error::new(format!("Structured current-source release: {error:?}")))?;
+    Ok(release.activation.activate_receipt.account_profile)
 }
 
 /// Run the authenticated Structured publication predecessor on an owned
@@ -1239,6 +1393,245 @@ fn structured_receipt_profile_projection_v1(
         serde_json::to_string(&result)?
     );
     Ok(result)
+}
+
+fn project_saved_structured_receipt_snapshot_v1(
+    capture: &serde_json::Value,
+    profile_bytes: &[u8],
+) -> Result<serde_json::Value> {
+    const TAIL_COUNT: u32 = 0;
+    let profile = AccountProfileV2::decode(profile_bytes)
+        .map_err(|error| Error::new(format!("Structured saved profile: {error:?}")))?;
+    let logical_count = profile
+        .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
+        .map_err(|error| Error::new(format!("Structured saved profile geometry: {error:?}")))?;
+    let captured_projection = capture
+        .get("profileProjection")
+        .ok_or_else(|| Error::new("Structured profile capture omitted its projection"))?;
+    let captured_rows = captured_projection
+        .get("coordinates")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| Error::new("Structured profile capture omitted coordinate rows"))?;
+    if captured_rows.len() != logical_count {
+        return Err(Error::new(
+            "Structured saved profile logical width differs from captured frame",
+        ));
+    }
+    let state = capture
+        .get("state")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| Error::new("Structured profile capture omitted state"))?;
+    let slot = captured_projection
+        .get("finalizedSlot")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| Error::new("Structured profile capture omitted finalized slot"))?;
+    let executing_program = capture
+        .get("instructions")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|instructions| instructions.last())
+        .and_then(|instruction| instruction.get("programId"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("Structured profile capture omitted Hot program"))?;
+    let executing_program = pubkey(executing_program)?;
+
+    let mut physical_keys = Vec::with_capacity(logical_count);
+    let mut owners = Vec::with_capacity(logical_count);
+    let mut data = Vec::with_capacity(logical_count);
+    let mut lamports = Vec::with_capacity(logical_count);
+    let mut executable = Vec::with_capacity(logical_count);
+    let mut flags = Vec::with_capacity(logical_count);
+    for (coordinate, row) in captured_rows.iter().enumerate() {
+        if row
+            .get("logicalCoordinate")
+            .and_then(serde_json::Value::as_u64)
+            != Some(
+                u64::try_from(coordinate)
+                    .map_err(|_| Error::new("Structured profile capture coordinate overflows"))?,
+            )
+        {
+            return Err(Error::new(
+                "Structured profile capture coordinates are not canonical",
+            ));
+        }
+        let key_text = row
+            .get("key")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| Error::new("Structured profile capture row omitted key"))?;
+        let key = pubkey(key_text)?;
+        physical_keys.push(key.to_bytes());
+        flags.push(
+            u8::try_from(
+                row.get("observedFlags")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| Error::new("Structured profile capture row omitted flags"))?,
+            )
+            .map_err(|_| Error::new("Structured profile capture flags overflow"))?,
+        );
+        if let Some(account) = state.get(key_text) {
+            owners.push(
+                pubkey(
+                    account
+                        .get("owner")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(|| {
+                            Error::new("Structured profile capture account omitted owner")
+                        })?,
+                )?
+                .to_bytes(),
+            );
+            data.push(
+                BASE64
+                    .decode(
+                        account
+                            .get("dataBase64")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| {
+                                Error::new("Structured profile capture account omitted data")
+                            })?,
+                    )
+                    .map_err(|error| {
+                        Error::new(format!(
+                            "Structured profile capture account base64: {error}"
+                        ))
+                    })?,
+            );
+            lamports.push(
+                account
+                    .get("lamports")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| {
+                        Error::new("Structured profile capture account omitted lamports")
+                    })?,
+            );
+            executable.push(
+                account
+                    .get("executable")
+                    .and_then(serde_json::Value::as_bool)
+                    .ok_or_else(|| {
+                        Error::new("Structured profile capture account omitted executable")
+                    })?,
+            );
+        } else {
+            owners.push(solana_sdk_ids::system_program::ID.to_bytes());
+            data.push(Vec::new());
+            lamports.push(0);
+            executable.push(false);
+        }
+    }
+    let mut keys = physical_keys.clone();
+    for coordinate in 1..=4 {
+        keys[coordinate] = hash(&data[coordinate]).to_bytes();
+    }
+    let product_digest = hash(&data[2]).to_bytes();
+    let mut observations = Vec::with_capacity(logical_count);
+    for coordinate in 0..logical_count {
+        let rule = profile
+            .rule(
+                false,
+                u16::try_from(coordinate)
+                    .map_err(|_| Error::new("Structured saved rule coordinate overflows"))?,
+            )
+            .map_err(|error| Error::new(format!("Structured saved rule: {error:?}")))?;
+        let signer = flags[coordinate] & 1 != 0;
+        let writable = flags[coordinate] & 2 != 0;
+        let observation = if matches!(
+            rule.prestate(),
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+        ) {
+            AccountObservationV1::new_adapter_authenticated_variable_data(
+                &keys[coordinate],
+                &owners[coordinate],
+                lamports[coordinate],
+                &data[coordinate],
+                signer,
+                writable,
+                executable[coordinate],
+            )
+        } else {
+            let observation = AccountObservationV1::new(
+                &keys[coordinate],
+                &owners[coordinate],
+                lamports[coordinate],
+                &data[coordinate],
+                signer,
+                writable,
+                executable[coordinate],
+            );
+            if coordinate == 2 {
+                observation.with_adapter_data_digest(&product_digest)
+            } else {
+                observation
+            }
+        };
+        observations.push(observation);
+    }
+    let scalar_count = usize::from(profile.common_scalar_count());
+    let identity_count = usize::from(profile.common_identity_count());
+    let mut input_scalars = vec![0_u64; scalar_count];
+    let mut input_identities = vec![[0_u8; 32]; identity_count];
+    if let Some(destination) = profile.trusted_current_slot_scalar() {
+        input_scalars[usize::from(destination)] = slot;
+    }
+    if let Some(destination) = profile.trusted_current_executing_program_identity() {
+        input_identities[usize::from(destination)] = executing_program.to_bytes();
+    }
+    if let Some(destination) = profile.trusted_system_program_identity() {
+        input_identities[usize::from(destination)] = solana_sdk_ids::system_program::ID.to_bytes();
+    }
+    let mut scratch_scalars = vec![0_u64; scalar_count];
+    let mut scratch_identities = vec![[0_u8; 32]; identity_count];
+    let mut output_scalars = vec![0_u64; scalar_count];
+    let mut output_identities = vec![[0_u8; 32]; identity_count];
+    let projection = project_dynamic_fixed_spans_atomic(
+        profile,
+        TAIL_COUNT,
+        &[],
+        &observations,
+        ProjectionRegistersV2 {
+            input_scalars: &input_scalars,
+            input_identities: &input_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut output_scalars,
+            output_identities: &mut output_identities,
+        },
+        None,
+    );
+    let mut mismatches = Vec::new();
+    for coordinate in 0..logical_count {
+        let rule = profile
+            .rule(
+                false,
+                u16::try_from(coordinate)
+                    .map_err(|_| Error::new("Structured saved mismatch coordinate overflows"))?,
+            )
+            .map_err(|error| Error::new(format!("Structured saved mismatch rule: {error:?}")))?;
+        let expected = u64::from(rule.data_length())
+            .checked_add(u64::from(rule.data_item_stride()) * u64::from(TAIL_COUNT))
+            .ok_or_else(|| Error::new("Structured saved expected width overflows"))?;
+        let observed = u64::try_from(data[coordinate].len())
+            .map_err(|_| Error::new("Structured saved observed width overflows"))?;
+        if (matches!(rule.prestate(), AccountPrestateV2::Exact) && observed != expected)
+            || (matches!(rule.prestate(), AccountPrestateV2::LifecycleBound)
+                && observed != 0
+                && observed != expected)
+        {
+            mismatches.push(json!({
+                "logicalCoordinate": coordinate,
+                "key": Pubkey::new_from_array(physical_keys[coordinate]).to_string(),
+                "observedOwner": Pubkey::new_from_array(owners[coordinate]).to_string(),
+                "observedDataLength": observed,
+                "expectedDataLength": expected,
+                "prestate": format!("{:?}", rule.prestate()),
+            }));
+        }
+    }
+    Ok(json!({
+        "profileSha256": sha256_hex(profile_bytes),
+        "finalizedSlot": slot,
+        "nativeProjectionResult": format!("{projection:?}"),
+        "mismatches": mismatches,
+    }))
 }
 
 /// Create the permissionless seal (when vacant) and execute the first real

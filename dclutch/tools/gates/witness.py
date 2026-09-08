@@ -74,11 +74,11 @@ which made the program the protocol drives most the one program invisible to
 its own devnet witness channel.
 
 THE WIDTH IS THE CENSUS'S TO FOLD, and this tool reads it rather than
-recomputing it. `Action::Retire`'s four arms are guarded on
-`RESOLUTION_CORE_INSTRUCTION_BYTES_V1` (592), `RETIREMENT_INSTRUCTION_BYTES_V1`
-(2,152) and `RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` (808, named by
-two of them), and not one of those is a literal: each is a sum reaching four
-crates, so this reader used to credit NONE of the four and say why. The census
+recomputing it. `Action::Retire`'s current arms are guarded on
+`RESOLUTION_CORE_INSTRUCTION_BYTES_V1` (592) and
+`RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` (808, named by two of
+them), and neither is a literal: each is a sum reaching several crates, so this
+reader used to credit NONE of the arms and say why. The census
 now folds such an expression to a fixpoint, scoped by the declaring file's own
 imports because `REQUEST_BYTES` is declared five times in four crates with four
 different values, and writes the number beside the constant. 592 is also the
@@ -585,8 +585,7 @@ def narrow_by_discriminant(hits, selectors, data, tables):
     if len(kept) > 1:
         # The dispatch separates same-variant arms by an EXACT instruction
         # length (`Action::Retire if instruction_data.len() == ..`), and the
-        # width is never a literal: `RETIREMENT_INSTRUCTION_BYTES_V1` is a sum
-        # over four crates. The census folds it -- scoped by the declaring
+        # width is not necessarily a literal. The census folds it -- scoped by the declaring
         # file's own imports, because `REQUEST_BYTES` is declared five times
         # with four values -- and writes the folded number beside the constant
         # it came from. Reading THAT is reading the census; re-deriving it here

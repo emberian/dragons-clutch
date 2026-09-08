@@ -591,9 +591,13 @@ The four packets themselves are drivable: they are
 808, 864, 864 and 744 bytes against a 1,232-byte packet, and the DEPLOYED Core
 routes all four (`Action::Retire` at
 `RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` for the prepare, and the
-three suffix magics at `dclutch-core-sbf/src/lib.rs:392`). The 2,152-byte
-`RETIREMENT_INSTRUCTION_BYTES_V1` aggregate route is the legacy builder's and
-nothing in this row submits it.
+three suffix magics at `dclutch-core-sbf/src/lib.rs:392`).
+
+**DATED ADDENDUM, 2026-09-08.** The 2,152-byte one-shot retirement was removed.
+It could never fit a Solana packet, and checkpoint `Finish` preserves its final
+refund semantics by closing the Core-owned aggregate checkpoint to RentCredit
+before Core closes the Market and RentCredit. The four packet-bounded route is
+the sole aggregate-retirement authority.
 
 **THE QUESTION ABOVE IS ANSWERED, AND THE STAGES ARE RENUMBERED** (lane
 PROGRAMS-18A, 2026-09-06). Which stage owns those lamports: **Resolution does,

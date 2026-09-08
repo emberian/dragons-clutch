@@ -28,15 +28,13 @@ use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
 };
 use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_market::rent::lifecycle_v2::{
-    LifecycleAccountIdV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
-};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_market::{
     Action, Admission, Binding, CoreState, Identity, Phase, Readiness, ReleaseReceipt, ReleaseSet,
     Request, Role, begin_retiring,
 };
 use dclutch_market_retirement_v1_operator::{
-    MarketRetirementSnapshotV1, build_market_retirement_v1,
+    MarketRetirementSnapshotV1,
     terminal_stage_order_v1::{
         TerminalStageOrderErrorV1, TerminalStageV1, authenticate_terminal_stage_prefix_v1,
     },
@@ -61,16 +59,10 @@ use dclutch_operator::{
     },
 };
 use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_registry::svm::continuation_v1::{
-    RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1,
-};
 use dclutch_registry::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1,
     record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1},
-    release_set::{
-        CallerAuthoritySeedsV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-        ProtocolInfrastructureProfileV2,
-    },
+    release_set::{ExecutionRoleBindingV1, ExecutionRoleV1, ProtocolInfrastructureProfileV2},
 };
 use dclutch_resolution_core_v3_operator::funded_rent_recovery_v1::{
     FundedRentReadingV2, recover_funded_rent_rate_v2,
@@ -533,7 +525,7 @@ fn session_stage_compute_unit_limit_v1(
 
 /// The declared table, in stage order, as the session records it.
 fn declared_terminal_compute_budgets_v1() -> Vec<TerminalStageComputeBudgetV1> {
-    TerminalStageV1::ORDERED
+    TerminalStageV1::PRECHECKPOINT
         .into_iter()
         .filter_map(|stage| {
             terminal_stage_compute_unit_limit_v1(stage).map(|compute_unit_limit| {
@@ -903,222 +895,6 @@ fn resolution_close_meta_classes_v2(has_recovery_policy: bool) -> Vec<TerminalAd
         ]);
     }
     classes
-}
-
-/// Immutable account identities and typed request commitments for the final
-/// Registry-wrapped aggregate-retirement frame. No projected account bytes or
-/// balances are accepted here.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AggregateRetirementMetaCoordinatesV1 {
-    pub(crate) release_set: [u8; 32],
-    pub(crate) parent_request_digest: [u8; 32],
-    pub(crate) claims_request_body: Vec<u8>,
-    pub(crate) custody_context: [u8; 32],
-    pub(crate) close_vault_request_body: Vec<u8>,
-    pub(crate) close_replay_request_body: Vec<u8>,
-    pub(crate) rent_post_resource_digest: [u8; 32],
-    pub(crate) continuation: RegistryContinuationRequestV1,
-    pub(crate) market: Pubkey,
-    pub(crate) rent_credit: Pubkey,
-    pub(crate) activation_cache: Pubkey,
-    pub(crate) registry_program: Pubkey,
-    pub(crate) core_program: Pubkey,
-    pub(crate) core_programdata: Pubkey,
-    pub(crate) claims_program: Pubkey,
-    pub(crate) claims_programdata: Pubkey,
-    pub(crate) resolution_program: Pubkey,
-    pub(crate) resolution_programdata: Pubkey,
-    pub(crate) custody_program: Pubkey,
-    pub(crate) custody_programdata: Pubkey,
-    pub(crate) rent_program: Pubkey,
-    pub(crate) source_receipt: Pubkey,
-    pub(crate) claims_aggregate: Pubkey,
-    pub(crate) custody_replay: Pubkey,
-    pub(crate) hoard_vault: Pubkey,
-    pub(crate) custody_authority: Pubkey,
-    pub(crate) collateral_mint: Pubkey,
-    pub(crate) collateral_token_program: Pubkey,
-    pub(crate) realm_raw: Pubkey,
-    pub(crate) realm_staging: Pubkey,
-    pub(crate) infrastructure_profile: Pubkey,
-    pub(crate) registry_artifact_raw: Pubkey,
-    pub(crate) registry_artifact_staging: Pubkey,
-    pub(crate) registry_programdata: Pubkey,
-    pub(crate) rent_artifact_raw: Pubkey,
-    pub(crate) rent_artifact_staging: Pubkey,
-    pub(crate) rent_programdata: Pubkey,
-    pub(crate) rent_sysvar: Pubkey,
-    pub(crate) refund_wallet: Pubkey,
-}
-
-/// Exact 46-meta aggregate-retirement coordinate closure. The four request-
-/// bound Core PDAs and invocation-scoped Registry admission are derived from
-/// typed commitments rather than accepted as caller-selected table entries.
-pub(crate) fn aggregate_retirement_meta_closure_v1(
-    coordinates: &AggregateRetirementMetaCoordinatesV1,
-) -> Result<TerminalMetaClosureV1> {
-    let claims_authority = aggregate_caller_authority(
-        coordinates.release_set,
-        coordinates.market,
-        coordinates.parent_request_digest,
-        &coordinates.claims_request_body,
-        coordinates.core_program,
-    )?;
-    let close_vault_authority = aggregate_caller_authority(
-        coordinates.release_set,
-        coordinates.market,
-        coordinates.custody_context,
-        &coordinates.close_vault_request_body,
-        coordinates.core_program,
-    )?;
-    let close_replay_authority = aggregate_caller_authority(
-        coordinates.release_set,
-        coordinates.market,
-        coordinates.custody_context,
-        &coordinates.close_replay_request_body,
-        coordinates.core_program,
-    )?;
-    let rent_seeds = LifecycleRentCoreCloseAuthoritySeedsV2::new(
-        LifecycleAccountIdV2::new(coordinates.rent_credit.to_bytes())
-            .map_err(|error| Error::new(format!("RentCredit identity: {error:?}")))?,
-        coordinates.rent_post_resource_digest,
-    )
-    .map_err(|error| Error::new(format!("rent close authority seeds: {error:?}")))?;
-    let credit = rent_seeds.credit().to_bytes();
-    let post = rent_seeds.post_resource_digest();
-    let rent_close_authority = Pubkey::find_program_address(
-        &[rent_seeds.domain(), &credit, &post],
-        &coordinates.core_program,
-    )
-    .0;
-    let role_batch = coordinates
-        .continuation
-        .role_batch_request()
-        .map_err(|error| Error::new(format!("retirement role batch: {error:?}")))?;
-    let role_batch_digest = ContentId::new(hash(&role_batch.to_bytes()).to_bytes())
-        .map_err(|error| Error::new(format!("retirement role-batch digest: {error:?}")))?;
-    let admission_seeds = RegistryContinuationAdmissionSeedsV1::new(
-        coordinates.continuation,
-        coordinates.activation_cache.to_bytes(),
-        role_batch_digest,
-    )
-    .map_err(|error| Error::new(format!("retirement continuation seeds: {error:?}")))?;
-    let release = admission_seeds.release_set();
-    let cache = admission_seeds.activation_cache();
-    let role_batch = admission_seeds.batch_request_digest();
-    let role_mask = admission_seeds.role_mask();
-    let role = admission_seeds.continuation_role();
-    let continuation_digest = admission_seeds.continuation_digest();
-    let admission = Pubkey::find_program_address(
-        &[
-            admission_seeds.domain(),
-            release.as_slice(),
-            cache.as_slice(),
-            role_batch.as_slice(),
-            role_mask.as_slice(),
-            role.as_slice(),
-            continuation_digest.as_slice(),
-        ],
-        &coordinates.registry_program,
-    )
-    .0;
-    let core = vec![
-        AccountMeta::new(coordinates.market, false),
-        AccountMeta::new(coordinates.rent_credit, false),
-        AccountMeta::new_readonly(coordinates.activation_cache, false),
-        AccountMeta::new_readonly(coordinates.registry_program, false),
-        AccountMeta::new_readonly(coordinates.core_program, false),
-        AccountMeta::new_readonly(coordinates.core_programdata, false),
-        AccountMeta::new_readonly(coordinates.claims_program, false),
-        AccountMeta::new_readonly(coordinates.claims_programdata, false),
-        AccountMeta::new_readonly(coordinates.resolution_program, false),
-        AccountMeta::new_readonly(coordinates.resolution_programdata, false),
-        AccountMeta::new_readonly(coordinates.custody_program, false),
-        AccountMeta::new_readonly(coordinates.custody_programdata, false),
-        AccountMeta::new_readonly(coordinates.rent_program, false),
-        AccountMeta::new_readonly(coordinates.source_receipt, false),
-        AccountMeta::new(coordinates.claims_aggregate, false),
-        AccountMeta::new(coordinates.custody_replay, false),
-        AccountMeta::new(coordinates.hoard_vault, false),
-        AccountMeta::new_readonly(coordinates.custody_authority, false),
-        AccountMeta::new_readonly(coordinates.collateral_mint, false),
-        AccountMeta::new_readonly(coordinates.collateral_token_program, false),
-        AccountMeta::new_readonly(coordinates.realm_raw, false),
-        AccountMeta::new_readonly(coordinates.realm_staging, false),
-        AccountMeta::new_readonly(claims_authority, false),
-        AccountMeta::new_readonly(close_vault_authority, false),
-        AccountMeta::new_readonly(close_replay_authority, false),
-        AccountMeta::new_readonly(coordinates.infrastructure_profile, false),
-        AccountMeta::new_readonly(coordinates.registry_artifact_raw, false),
-        AccountMeta::new_readonly(coordinates.registry_artifact_staging, false),
-        AccountMeta::new_readonly(coordinates.registry_programdata, false),
-        AccountMeta::new_readonly(coordinates.rent_artifact_raw, false),
-        AccountMeta::new_readonly(coordinates.rent_artifact_staging, false),
-        AccountMeta::new_readonly(coordinates.rent_programdata, false),
-        AccountMeta::new_readonly(coordinates.rent_sysvar, false),
-        AccountMeta::new(coordinates.refund_wallet, false),
-        AccountMeta::new_readonly(rent_close_authority, false),
-    ];
-    if core.iter().any(|meta| meta.pubkey == admission) {
-        return Err(refusal(
-            "aggregate Registry admission aliased a Core retirement role",
-        ));
-    }
-    let mut accounts = vec![
-        AccountMeta::new_readonly(coordinates.activation_cache, false),
-        AccountMeta::new_readonly(coordinates.core_program, false),
-        AccountMeta::new_readonly(coordinates.core_programdata, false),
-        AccountMeta::new_readonly(coordinates.claims_program, false),
-        AccountMeta::new_readonly(coordinates.claims_programdata, false),
-        AccountMeta::new_readonly(coordinates.resolution_program, false),
-        AccountMeta::new_readonly(coordinates.resolution_programdata, false),
-        AccountMeta::new_readonly(coordinates.custody_program, false),
-        AccountMeta::new_readonly(coordinates.custody_programdata, false),
-        AccountMeta::new_readonly(admission, false),
-    ];
-    accounts.extend(core);
-    accounts.push(AccountMeta::new_readonly(admission, false));
-    if accounts.len() != 46 {
-        return Err(refusal(
-            "aggregate retirement coordinate closure has another width than 46",
-        ));
-    }
-    Ok(TerminalMetaClosureV1 {
-        stage: TerminalStageV1::AggregateRetirement,
-        program_id: coordinates.registry_program,
-        program_class: TerminalAddressClassV1::InlineProgram,
-        classes: aggregate_retirement_meta_classes_v1(),
-        accounts,
-    })
-}
-
-fn aggregate_retirement_meta_classes_v1() -> Vec<TerminalAddressClassV1> {
-    let mut classes = vec![TerminalAddressClassV1::LookupStable; 46];
-    for index in [1_usize, 3, 5, 7, 13, 14, 16, 18, 20, 22, 29] {
-        classes[index] = TerminalAddressClassV1::InlineProgram;
-    }
-    for index in [9_usize, 32, 33, 34, 44, 45] {
-        classes[index] = TerminalAddressClassV1::InlineRequestBound;
-    }
-    classes
-}
-
-fn aggregate_caller_authority(
-    release_set: [u8; 32],
-    market: Pubkey,
-    context: [u8; 32],
-    request_body: &[u8],
-    core_program: Pubkey,
-) -> Result<Pubkey> {
-    let seeds = CallerAuthoritySeedsV1::from_bytes(
-        release_set,
-        market.to_bytes(),
-        ExecutionRoleV1::Core,
-        context,
-        hash(request_body).to_bytes(),
-    )
-    .map_err(|error| Error::new(format!("aggregate caller seeds: {error:?}")))?;
-    Ok(Pubkey::find_program_address(&seeds.as_slices(), &core_program).0)
 }
 
 /// Exact return data that a finalized transaction must carry.  Absence means
@@ -3283,7 +3059,7 @@ fn find_terminal_journal_by_signature_v1(
 ) -> Result<(PathBuf, DurableTerminalJournalV1)> {
     let mut candidates = vec![journal_dir.join("12-resolution-receipt-prepay.json")];
     candidates.extend(
-        TerminalStageV1::ORDERED
+        TerminalStageV1::PRECHECKPOINT
             .into_iter()
             .map(|stage| journal_dir.join(stage_journal_name_v1(stage))),
     );
@@ -6942,122 +6718,6 @@ fn retirement_replay_handoff_snapshot_keys_v1(
     keys
 }
 
-/// Consume the existing aggregate-retirement semantic owner and project the
-/// complete physical closure/refund poststate. The persisted initial closure
-/// must still equal the fresh Registry-wrapped 46-meta report exactly.
-pub(crate) fn plan_aggregate_retirement_caller_v1(
-    snapshot: &MarketRetirementSnapshotV1,
-    persisted_closure: &TerminalMetaClosureV1,
-) -> Result<TerminalSemanticMutationV1> {
-    let report = build_market_retirement_v1(snapshot)
-        .map_err(|error| Error::new(format!("aggregate Market retirement: {error:?}")))?;
-    let fresh_closure = TerminalMetaClosureV1 {
-        stage: TerminalStageV1::AggregateRetirement,
-        program_id: report.instruction.program_id,
-        program_class: TerminalAddressClassV1::InlineProgram,
-        accounts: report.instruction.accounts.clone(),
-        classes: aggregate_retirement_meta_classes_v1(),
-    };
-    persisted_closure.authenticate_fresh_closure(&fresh_closure)?;
-    fresh_closure.authenticate_instruction(&report.instruction)?;
-    let expected_refund_wallet_lamports = snapshot
-        .refund_wallet
-        .lamports
-        .checked_add(report.expected_refund_delta)
-        .ok_or_else(|| refusal("aggregate retirement refund wallet overflowed"))?;
-    let closed = |account: &ObservedAccount| {
-        ExpectedAccountPoststateV1::exact(
-            account.key,
-            solana_sdk_ids::system_program::ID,
-            0,
-            false,
-            Vec::new(),
-        )
-    };
-    Ok(TerminalSemanticMutationV1 {
-        stage: TerminalStageV1::AggregateRetirement,
-        observation: report.observation,
-        instruction: report.instruction,
-        expected_return_data: None,
-        expected_accounts: vec![
-            closed(&snapshot.market),
-            closed(&snapshot.rent_credit),
-            closed(&snapshot.claims_aggregate),
-            closed(&snapshot.custody_replay),
-            closed(&snapshot.hoard_vault),
-            ExpectedAccountPoststateV1::exact(
-                snapshot.refund_wallet.key,
-                snapshot.refund_wallet.owner,
-                expected_refund_wallet_lamports,
-                snapshot.refund_wallet.executable,
-                snapshot.refund_wallet.data.clone(),
-            ),
-        ],
-        protocol_lamport_deltas: BTreeMap::from([
-            (snapshot.market.key, -i128::from(snapshot.market.lamports)),
-            (
-                snapshot.rent_credit.key,
-                -i128::from(snapshot.rent_credit.lamports),
-            ),
-            (
-                snapshot.claims_aggregate.key,
-                -i128::from(snapshot.claims_aggregate.lamports),
-            ),
-            (
-                snapshot.custody_replay.key,
-                -i128::from(snapshot.custody_replay.lamports),
-            ),
-            (
-                snapshot.hoard_vault.key,
-                -i128::from(snapshot.hoard_vault.lamports),
-            ),
-            (
-                snapshot.refund_wallet.key,
-                i128::from(report.expected_refund_delta),
-            ),
-        ]),
-        payer_fee_commitment: None,
-    })
-}
-
-/// Derive this Market's failure escrow off the Claims aggregate itself.
-///
-/// Every input is the aggregate account's own: the Claims program is its owner,
-/// the logical Market and the runtime width are its header fields. So a
-/// substituted document cannot point this at another Market's escrow, and the
-/// derivation has the one author every other host consumer uses
-/// (`dclutch_operator::failure_escrow_v1`, re-exporting
-/// `dclutch_claims::protocol_position_v2::failure_escrow_v1`).
-///
-/// `None` means there is no escrow to look for at all -- the account is not the
-/// Claims aggregate this snapshot expects, or its width seats no failure
-/// coordinate. It is never an assertion that the escrow is empty: that is a
-/// question about the account at the derived address, which the caller reads.
-fn derived_failure_escrow_v1(
-    preliminary: &FinalizedSnapshotV1,
-    aggregate: Pubkey,
-    claims: Pubkey,
-) -> Result<Option<dclutch_operator::failure_escrow_v1::FailureEscrowV1>> {
-    let account = preliminary
-        .account(aggregate)
-        .map_err(|error| Error::new(format!("Claims aggregate: {error}")))?;
-    if account.owner != claims || account.lamports == 0 {
-        return Ok(None);
-    }
-    let Ok(view) =
-        dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2::decode(&account.data)
-    else {
-        return Ok(None);
-    };
-    Ok(dclutch_operator::failure_escrow_v1::failure_escrow_v1(
-        claims,
-        view.logical_market,
-        aggregate,
-        view.claim_count,
-    )
-    .ok())
-}
-
 pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
@@ -7647,70 +7307,6 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
             token_program,
             custody_authority,
         })?;
-    let credit = LifecycleRentCreditV2::decode(&initial.account(rent_credit)?.data)
-        .map_err(|error| Error::new(format!("terminal ALT RentCredit: {error:?}")))?;
-    let refund_wallet = Pubkey::new_from_array(credit.refund_wallet().to_bytes());
-    let registry_artifact = plan_record_pair_v1(plan, "registry_artifact_release")?;
-    let rent_artifact = plan_record_pair_v1(plan, "rent_artifact_release")?;
-    let continuation = RegistryContinuationRequestV1::new(
-        ContentId::new(release_set)
-            .map_err(|error| Error::new(format!("terminal ALT release identity: {error:?}")))?,
-        ContentId::new([6; 32])
-            .map_err(|error| Error::new(format!("terminal ALT cache digest: {error:?}")))?,
-        ContentId::new([7; 32])
-            .map_err(|error| Error::new(format!("terminal ALT instruction digest: {error:?}")))?,
-        1,
-        ExecutionRoleV1::Core,
-        &[
-            ExecutionRoleV1::Core,
-            ExecutionRoleV1::Claims,
-            ExecutionRoleV1::Resolution,
-            ExecutionRoleV1::Custody,
-        ],
-    )
-    .map_err(|error| Error::new(format!("terminal ALT continuation: {error:?}")))?;
-    let aggregate = aggregate_retirement_meta_closure_v1(&AggregateRetirementMetaCoordinatesV1 {
-        release_set,
-        parent_request_digest: [8; 32],
-        claims_request_body: vec![1],
-        custody_context: context,
-        close_vault_request_body: vec![2],
-        close_replay_request_body: vec![3],
-        rent_post_resource_digest: [9; 32],
-        continuation,
-        market,
-        rent_credit,
-        activation_cache: activation,
-        registry_program: registry,
-        core_program: core,
-        core_programdata: pubkey(&plan.core.programdata_id)?,
-        claims_program: claims,
-        claims_programdata: pubkey(&plan.claims.programdata_id)?,
-        resolution_program: resolution,
-        resolution_programdata: pubkey(&plan.resolution.programdata_id)?,
-        custody_program: custody,
-        custody_programdata: pubkey(&plan.custody.programdata_id)?,
-        rent_program,
-        source_receipt,
-        claims_aggregate: evidence_pubkey(evidence, "claims_aggregate")?,
-        custody_replay: core_replay,
-        hoard_vault: hoard,
-        custody_authority,
-        collateral_mint,
-        collateral_token_program: token_program,
-        realm_raw: realm.raw,
-        realm_staging: realm.staging,
-        // The V2 domain, for the same reason as the aggregate graph above.
-        infrastructure_profile: pubkey(&plan.genesis_infrastructure_profile.address)?,
-        registry_artifact_raw: registry_artifact.0,
-        registry_artifact_staging: registry_artifact.1,
-        registry_programdata: pubkey(&plan.registry.programdata_id)?,
-        rent_artifact_raw: rent_artifact.0,
-        rent_artifact_staging: rent_artifact.1,
-        rent_programdata: pubkey(&plan.rent_credit.programdata_id)?,
-        rent_sysvar: sysvar::rent::ID,
-        refund_wallet,
-    })?;
     let resolution_close = resolution_close_meta_closure_v2(&ResolutionCloseMetaCoordinatesV2 {
         market,
         activation_cache: activation,
@@ -7763,7 +7359,6 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
             close,
             resolution_close,
             handoff,
-            aggregate,
         ],
         source_receipt,
     ))
@@ -8078,42 +7673,9 @@ fn fresh_protocol_stage_from_chain_v1(
                 compute_unit_limit,
             )
         }
-        TerminalStageV1::AggregateRetirement => {
-            let (snapshot, prestate) = aggregate_retirement_snapshot_from_chain_v1(
-                rpc,
-                plan,
-                evidence,
-                market,
-                source_receipt,
-                &extra,
-            )?;
-            let report = build_market_retirement_v1(&snapshot)
-                .map_err(|error| Error::new(format!("aggregate retirement: {error:?}")))?;
-            // The one-shot route's Core frame is fixed at thirty-five accounts,
-            // so it carries no escrow tail and its Claims closure reaches the
-            // supply loop with the failure column still standing. Now that this
-            // path threads the tail it can say so before a submission rather
-            // than after one: the checkpointed route is where a refunding
-            // Market retires.
-            if report.failure_escrow_seated {
-                return Err(Error::new(
-                    "this Market's failure column is seated in its derived escrow, and the                      one-shot AggregateRetirement frame is fixed at thirty-five accounts, so its                      Claims closure would refuse the retirement by name (0x5503). Retire it                      through the checkpointed route, whose four packets carry the escrow pair and                      the linked basis record and whose prepare burns the column (decision 0025,                      shape A)",
-                ));
-            }
-            let closure = TerminalMetaClosureV1 {
-                stage,
-                program_id: report.instruction.program_id,
-                program_class: TerminalAddressClassV1::InlineProgram,
-                accounts: report.instruction.accounts.clone(),
-                classes: aggregate_retirement_meta_classes_v1(),
-            };
-            let mutation = plan_aggregate_retirement_caller_v1(&snapshot, &closure)?;
-            Ok(ChainDerivedTerminalMutationV1 {
-                mutation,
-                closure,
-                prestate,
-            })
-        }
+        TerminalStageV1::AggregateRetirement => Err(refusal(
+            "aggregate retirement is owned by the four-packet checkpoint campaign",
+        )),
     }
 }
 
@@ -8937,10 +8499,10 @@ pub(crate) fn terminal_lookup_union_from_closures_v1(
     payer: Pubkey,
     closures: &[TerminalMetaClosureV1],
 ) -> Result<Vec<Pubkey>> {
-    if closures.len() != TerminalStageV1::ORDERED.len()
+    if closures.len() != TerminalStageV1::PRECHECKPOINT.len()
         || closures
             .iter()
-            .zip(TerminalStageV1::ORDERED)
+            .zip(TerminalStageV1::PRECHECKPOINT)
             .any(|(closure, expected)| closure.stage != expected)
     {
         return Err(refusal(
@@ -9590,7 +9152,7 @@ fn run_terminal_sequence_with_expected_cluster_v1(
         "journalDirectory": arguments.journal_dir.display().to_string(),
         "completion": arguments.completion.display().to_string(),
         "completionSha256": sha256_hex(&fs::read(&arguments.completion)?),
-        "message": "Every exact terminal journal reverified at finalized and the aggregate Market account is closed."
+        "message": "Every exact pre-checkpoint terminal journal reverified at finalized; the four-packet aggregate-retirement campaign owns closure."
     }))
 }
 
@@ -9699,7 +9261,7 @@ fn terminal_completion_expected_journals_v1(
             DurableTerminalMutationV1::ResolutionReceiptPrepay,
         ));
     }
-    expected.extend(TerminalStageV1::ORDERED.into_iter().map(|stage| {
+    expected.extend(TerminalStageV1::PRECHECKPOINT.into_iter().map(|stage| {
         (
             arguments.journal_dir.join(stage_journal_name_v1(stage)),
             DurableTerminalMutationV1::Protocol { stage },
@@ -9750,7 +9312,7 @@ fn build_terminal_sequence_completion_v1(
         .collect::<std::io::Result<BTreeSet<_>>>()?;
     if observed_paths != expected_paths {
         return Err(refusal(
-            "terminal completion journal directory was not the exact canonical mutating set",
+            "terminal completion journal directory was not the exact canonical pre-checkpoint mutating set",
         ));
     }
 
@@ -10155,7 +9717,7 @@ fn authenticate_terminal_completion_v1(completion: &TerminalSequenceCompletionV1
     // copy of the stage order living four thousand lines from the first, and a
     // reorder that moved only the first would have made every honest completion
     // document unverifiable while reading like a tampering refusal.
-    let protocol_order = TerminalStageV1::ORDERED
+    let protocol_order = TerminalStageV1::PRECHECKPOINT
         .map(|stage| completion_mutation_v1(&DurableTerminalMutationV1::Protocol { stage }));
     if completion.journals.len() != index + protocol_order.len()
         || completion.journals[index..]
@@ -10654,9 +10216,9 @@ fn authenticate_terminal_session_semantics_v1(
         })
         .transpose()?;
 
-    let mut finalized_closures = Vec::with_capacity(TerminalStageV1::ORDERED.len());
+    let mut finalized_closures = Vec::with_capacity(TerminalStageV1::PRECHECKPOINT.len());
     let mut all_finalized = true;
-    for stage in TerminalStageV1::ORDERED {
+    for stage in TerminalStageV1::PRECHECKPOINT {
         let path = arguments.journal_dir.join(stage_journal_name_v1(stage));
         if !path.exists() {
             all_finalized = false;
@@ -10817,8 +10379,7 @@ fn superseded_terminal_stage_journal_v1(
     let journal = read_terminal_journal_v1(&path)?;
     Ok(journal.phase == StageJournalPhaseV1::Superseded
         && journal.authorized_mutation
-        && journal.intent.mutation
-            == (DurableTerminalMutationV1::Protocol { stage }))
+        && journal.intent.mutation == (DurableTerminalMutationV1::Protocol { stage }))
 }
 
 /// Amend a live session that predates a stage's MEASURED ComputeBudget row.
@@ -11251,7 +10812,7 @@ fn operate_terminal_protocol_journals_v1(
             "terminal session began with an exactly funded receipt beside a prepay journal that              never finalized, so nothing accounts for the lamports on the seat",
         ));
     }
-    for stage in TerminalStageV1::ORDERED {
+    for stage in TerminalStageV1::PRECHECKPOINT {
         if stage == TerminalStageV1::ResolutionCloseFund
             && prepay_required
             && !operate_resolution_prepay_journal_v1(
@@ -11326,7 +10887,7 @@ fn operate_terminal_protocol_journals_v1(
             }))?;
             return Ok(false);
         }
-        let later = TerminalStageV1::ORDERED
+        let later = TerminalStageV1::PRECHECKPOINT
             .iter()
             .copied()
             .filter(|candidate| candidate.ordinal() > stage.ordinal())
@@ -11397,17 +10958,11 @@ fn operate_terminal_protocol_journals_v1(
         }))?;
         return Ok(false);
     }
-    let market = finalized_snapshot(rpc, &[arguments.market])?;
-    let account = market.account(arguments.market)?;
-    if account.owner != system_program::ID
-        || account.lamports != 0
-        || account.executable
-        || !account.data.is_empty()
-    {
-        return Err(refusal(
-            "all six journals finalized but the aggregate Market account was not exactly closed",
-        ));
-    }
+    // The fifth journal ends at the exact handoff boundary consumed by
+    // `local-private-validator-aggregate-retirement-v1`. That campaign owns
+    // the four checkpoint packets and independently reauthenticates every
+    // live account before prepare; this driver must not retain a second
+    // one-shot construction of the same retirement.
     Ok(true)
 }
 
@@ -11421,7 +10976,7 @@ fn authenticate_terminal_journal_prefix_v1(
     // Resolution dependency funding ledger the Direct close decodes and
     // preserves, and market `9e8fTH75...` can never close its capability again.
     // The declaration owns that accusation so every reader gets one page.
-    let present: Vec<TerminalStageV1> = TerminalStageV1::ORDERED
+    let present: Vec<TerminalStageV1> = TerminalStageV1::PRECHECKPOINT
         .into_iter()
         .filter(|stage| journal_dir.join(stage_journal_name_v1(*stage)).exists())
         .collect();
@@ -11431,7 +10986,7 @@ fn authenticate_terminal_journal_prefix_v1(
         return Err(refusal(error.message()));
     }
     let mut ordered = Vec::with_capacity(7);
-    for stage in TerminalStageV1::ORDERED {
+    for stage in TerminalStageV1::PRECHECKPOINT {
         if stage == TerminalStageV1::ResolutionCloseFund && prepay_required {
             ordered.push(journal_dir.join("12-resolution-receipt-prepay.json"));
         }
@@ -13498,7 +13053,7 @@ mod tests {
     fn test_terminal_completion() -> TerminalSequenceCompletionV1 {
         // The fixture's six rows come from the ONE declaration too: a hand-typed
         // ladder here would go on agreeing with whatever this file used to say.
-        let mutations = TerminalStageV1::ORDERED
+        let mutations = TerminalStageV1::PRECHECKPOINT
             .map(|stage| completion_mutation_v1(&DurableTerminalMutationV1::Protocol { stage }));
         let journals = mutations
             .into_iter()
@@ -14014,7 +13569,7 @@ mod tests {
     #[test]
     fn terminal_alt_union_uses_only_semantic_owner_lookup_stable_classes() {
         let payer = key(1);
-        let mut closures = TerminalStageV1::ORDERED
+        let mut closures = TerminalStageV1::PRECHECKPOINT
             .into_iter()
             .enumerate()
             .map(|(index, stage)| meta_closure(stage, u8::try_from(index + 10).unwrap()))
@@ -14055,7 +13610,7 @@ mod tests {
     #[test]
     fn terminal_alt_union_requires_all_six_typed_closures_in_order() {
         let payer = key(1);
-        let closures = TerminalStageV1::ORDERED
+        let closures = TerminalStageV1::PRECHECKPOINT
             .into_iter()
             .enumerate()
             .map(|(index, stage)| meta_closure(stage, u8::try_from(index + 10).unwrap()))
@@ -14103,7 +13658,7 @@ mod tests {
     #[test]
     fn replay_handoff_request_replan_changes_inline_pda_but_not_frozen_alt() {
         let payer = key(1);
-        let mut before = TerminalStageV1::ORDERED
+        let mut before = TerminalStageV1::PRECHECKPOINT
             .into_iter()
             .enumerate()
             .map(|(index, stage)| meta_closure(stage, u8::try_from(index + 10).unwrap()))
@@ -14148,7 +13703,7 @@ mod tests {
     fn terminal_v0_places_stable_keys_in_frozen_alt_and_every_other_class_inline() {
         let payer = key(1);
         let rent = Rent::default();
-        let mut closures = TerminalStageV1::ORDERED
+        let mut closures = TerminalStageV1::PRECHECKPOINT
             .into_iter()
             .enumerate()
             .map(|(index, stage)| meta_closure(stage, u8::try_from(index + 10).unwrap()))

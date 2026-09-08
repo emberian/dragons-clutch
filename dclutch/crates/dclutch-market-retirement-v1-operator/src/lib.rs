@@ -12,15 +12,13 @@ use dclutch_claims::{
         LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2, read_claim_v2,
     },
     market_closure_v1::{
-        CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
-        CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1,
-        CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1, ClaimsMarketClosureReceiptInputV1,
-        ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestInputV1,
-        ClaimsMarketClosureRequestV1,
+        CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1, ClaimsMarketClosureReceiptInputV1,
+        ClaimsMarketClosureRequestInputV1, ClaimsMarketClosureRequestV1,
     },
     protocol_position_v2::{ProtocolPositionAdmissionV2, failure_escrow_v1},
     retirement_checkpoint_handoff_v1::{
         CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
+        CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_BYTES_V1,
         ClaimsRetirementCheckpointHandoffReceiptV1, ClaimsRetirementCheckpointHandoffRequestV1,
     },
 };
@@ -50,13 +48,7 @@ use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
-use dclutch_registry::svm::{
-    ProgramDataV3View, ProgramV3View,
-    continuation_v1::{
-        REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
-        RegistryContinuationRequestV1,
-    },
-};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
     ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
@@ -75,9 +67,7 @@ use solana_program_pack::Pack;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use spl_token_interface::state::{Account as SplTokenAccount, AccountState};
 
-/// Exact top-level Registry prefix before the nested Core retirement frame.
-pub const REGISTRY_RETIREMENT_CONTINUATION_PREFIX_ACCOUNTS_V1: usize = 10;
-/// Exact Core retirement frame before the invocation-scoped Registry admission.
+/// Exact Core retirement frame for checkpointed retirement.
 pub const CORE_RETIREMENT_ACCOUNT_COUNT_V1: usize = 35;
 /// Decision 0025's escrow tail: the Position, its admission and the basis record.
 pub const CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1: usize = 3;
@@ -90,17 +80,10 @@ pub const CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1: usize = 3;
 /// the shapes apart asks these rather than spelling 35 and 38 again.
 pub const CORE_REFUNDING_RETIREMENT_ACCOUNT_COUNT_V1: usize =
     CORE_RETIREMENT_ACCOUNT_COUNT_V1 + CORE_RETIREMENT_ESCROW_TAIL_ACCOUNTS_V1;
-/// Exact nested Core retirement data width.
-pub const MARKET_RETIREMENT_CORE_INSTRUCTION_BYTES_V1: usize = REQUEST_BYTES
-    + RETIREMENT_BUNDLE_BYTES_V1
-    + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1
-    + 2 * CUSTODY_REQUEST_BYTES_V1;
-/// Exact top-level Registry account count for one aggregate retirement.
-pub const MARKET_RETIREMENT_ACCOUNT_COUNT_V1: usize =
-    REGISTRY_RETIREMENT_CONTINUATION_PREFIX_ACCOUNTS_V1 + CORE_RETIREMENT_ACCOUNT_COUNT_V1 + 1;
 /// Exact Core prepare width for checkpointed retirement.
-pub const CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1: usize =
-    REQUEST_BYTES + RETIREMENT_BUNDLE_BYTES_V1 + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
+pub const CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1: usize = REQUEST_BYTES
+    + RETIREMENT_BUNDLE_BYTES_V1
+    + CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_BYTES_V1;
 /// Exact direct Custody suffix width.
 pub const CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1: usize =
     AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1 + CUSTODY_REQUEST_BYTES_V1;
@@ -223,43 +206,14 @@ enum FailureEscrowStateV1 {
     },
 }
 
-/// Exact unsigned retirement transaction constructed solely from finalized state.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MarketRetirementReportV1 {
-    /// Top-level Registry continuation instruction.
-    pub instruction: Instruction,
-    /// Nested Core instruction before the Registry admission is appended.
-    pub direct_instruction: Instruction,
-    /// Shared finalized observation.
-    pub observation: Observation,
-    /// Invocation-scoped Registry continuation admission.
-    pub registry_admission: Pubkey,
-    /// Core-derived Claims close authority.
-    pub claims_authority: Pubkey,
-    /// Core-derived Custody CloseVault authority.
-    pub close_vault_authority: Pubkey,
-    /// Core-derived Custody CloseReplay authority.
-    pub close_replay_authority: Pubkey,
-    /// Core-derived RentV2 close authority.
-    pub rent_close_authority: Pubkey,
-    /// Exact Resolution-owned Source and subset-ledger closure facts.
-    pub resolution_facts: ResolutionRetirementReceiptFactsV3,
-    /// Exact post-Resolution lamports credited through Claims, Custody, Core, and RentV2.
-    pub expected_refund_delta: u64,
-    /// Runtime Claims width; never assumed equal to a compile-time `N`.
-    pub claim_count: u32,
-    /// Whether this Market's failure column sits in its derived escrow.
-    ///
-    /// TRUE means this instruction cannot be submitted. The one-shot route's
-    /// Core frame is fixed at thirty-five accounts, so it carries no escrow
-    /// tail and the Claims closure inside it reaches the supply loop with the
-    /// column still standing -- `ClaimsMarketClosureSbfErrorV1::Liability`,
-    /// `0x5503`. Decision 0025's shape A discharges the column in the
-    /// checkpointed route, and `build_checkpoint_market_retirement_v1` is where
-    /// a refunding Market retires.
-    pub failure_escrow_seated: bool,
-    /// Exact Registry continuation header.
-    pub continuation: RegistryContinuationRequestV1,
+#[derive(Clone, Copy)]
+struct RetirementComponentsV1 {
+    authenticated: AuthenticatedRetirementV1,
+    core_bytes: [u8; REQUEST_BYTES],
+    bundle: RetirementBundleV1,
+    claims_request: ClaimsMarketClosureRequestV1,
+    close_vault: CustodyRequestV1,
+    close_replay: CustodyRequestV1,
 }
 
 /// Four packet-bounded instructions for one crash-resumable retirement.
@@ -401,12 +355,11 @@ struct AuthenticatedRetirementV1 {
     escrow: FailureEscrowStateV1,
 }
 
-/// Construct the sole canonical aggregate-retirement transaction from one
-/// finalized chain snapshot. The caller contributes no release, revision,
-/// width, custody, refund, or child-receipt truth.
-pub fn build_market_retirement_v1(
+/// Derive the packet-bounded retirement's authenticated requests from one
+/// finalized chain snapshot.
+fn retirement_components_v1(
     snapshot: &MarketRetirementSnapshotV1,
-) -> Result<MarketRetirementReportV1, MarketRetirementOperatorErrorV1> {
+) -> Result<RetirementComponentsV1, MarketRetirementOperatorErrorV1> {
     let authenticated = authenticate_snapshot(snapshot)?;
     let market = authenticated.market;
     let release_set = market.identity.selected_release_set.to_bytes();
@@ -416,7 +369,7 @@ pub fn build_market_retirement_v1(
         market.identity.generation,
         market.identity.market_id,
     );
-    let core_bytes = core_request
+    let core_bytes: [u8; REQUEST_BYTES] = core_request
         .encode()
         .map_err(MarketRetirementOperatorErrorV1::MarketCore)?;
     let parent_digest = hash(&core_bytes).to_bytes();
@@ -487,63 +440,7 @@ pub fn build_market_retirement_v1(
         .map_err(MarketRetirementOperatorErrorV1::CustodyContract)?;
 
     let claims_request_digest = hash(&claims_bytes).to_bytes();
-    let claims_receipt = projected_claims_receipt(snapshot, authenticated, claims_request_digest)?;
-    let claims_receipt_digest = hash(&claims_receipt.to_bytes()).to_bytes();
-    let (close_vault_receipt_digest, close_replay_receipt_digest) = projected_custody_receipts(
-        snapshot,
-        authenticated,
-        close_vault,
-        &close_vault_bytes,
-        close_replay,
-        &close_replay_bytes,
-    )?;
-
     let source_digest = hash(&snapshot.source_receipt.data).to_bytes();
-    let custody_refund = snapshot
-        .hoard_vault
-        .lamports
-        .checked_add(snapshot.custody_replay.lamports)
-        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
-    let expected_refund_delta = snapshot
-        .rent_credit
-        .lamports
-        .checked_add(snapshot.claims_aggregate.lamports)
-        .and_then(|value| value.checked_add(custody_refund))
-        .and_then(|value| value.checked_add(snapshot.market.lamports))
-        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
-    let post_resource_digest = hashv(&[
-        &RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1,
-        &[RETIREMENT_ROLE_COUNT_V1],
-        &[RETIREMENT_CUSTODY_RECEIPT_COUNT_V1],
-        snapshot.rent_credit.key.as_ref(),
-        &source_digest,
-        &claims_receipt_digest,
-        &close_vault_receipt_digest,
-        &close_replay_receipt_digest,
-        &snapshot.market.lamports.to_le_bytes(),
-        &snapshot.claims_aggregate.lamports.to_le_bytes(),
-        &custody_refund.to_le_bytes(),
-        &expected_refund_delta.to_le_bytes(),
-    ])
-    .to_bytes();
-    let rent_close_seeds = LifecycleRentCoreCloseAuthoritySeedsV2::new(
-        LifecycleAccountIdV2::new(snapshot.rent_credit.key.to_bytes())
-            .map_err(MarketRetirementOperatorErrorV1::LifecycleRent)?,
-        post_resource_digest,
-    )
-    .map_err(MarketRetirementOperatorErrorV1::LifecycleRent)?;
-    let rent_credit_seed = rent_close_seeds.credit().to_bytes();
-    let rent_close_digest = rent_close_seeds.post_resource_digest();
-    let rent_close_authority = Pubkey::find_program_address(
-        &[
-            rent_close_seeds.domain(),
-            &rent_credit_seed,
-            &rent_close_digest,
-        ],
-        &snapshot.core_program.key,
-    )
-    .0;
-
     let bundle = RetirementBundleV1::new(RetirementBundleInputV1 {
         market: market_key.to_bytes(),
         release_set,
@@ -584,121 +481,37 @@ pub fn build_market_retirement_v1(
     })
     .map_err(MarketRetirementOperatorErrorV1::Retirement)?;
 
-    let claims_authority = caller_authority(
-        release_set,
-        market_key,
-        parent_digest,
-        &claims_bytes,
-        snapshot.core_program.key,
-    )?;
-    let close_vault_authority = caller_authority(
-        release_set,
-        market_key,
-        authenticated.replay.context,
-        &close_vault_bytes,
-        snapshot.core_program.key,
-    )?;
-    let close_replay_authority = caller_authority(
-        release_set,
-        market_key,
-        authenticated.replay.context,
-        &close_replay_bytes,
-        snapshot.core_program.key,
-    )?;
-
-    let mut data = Vec::with_capacity(MARKET_RETIREMENT_CORE_INSTRUCTION_BYTES_V1);
-    data.extend_from_slice(&core_bytes);
-    data.extend_from_slice(&bundle.to_bytes());
-    data.extend_from_slice(&claims_bytes);
-    data.extend_from_slice(&close_vault_bytes);
-    data.extend_from_slice(&close_replay_bytes);
-    if data.len() != MARKET_RETIREMENT_CORE_INSTRUCTION_BYTES_V1 {
-        return Err(MarketRetirementOperatorErrorV1::Encoding);
-    }
-    let direct_instruction = Instruction {
-        program_id: snapshot.core_program.key,
-        accounts: core_accounts(
-            snapshot,
-            claims_authority,
-            close_vault_authority,
-            close_replay_authority,
-            rent_close_authority,
-            // The one-shot route's frame is fixed at thirty-five in Core's own
-            // `parse`, so it carries no escrow tail and cannot discharge a
-            // seated failure column. `failure_escrow_seated` on the report is
-            // how a caller is told that before submitting.
-            FailureEscrowStateV1::Vacant,
-        ),
-        data,
-    };
-    if direct_instruction.accounts.len() != CORE_RETIREMENT_ACCOUNT_COUNT_V1 {
-        return Err(MarketRetirementOperatorErrorV1::Frame);
-    }
-    let (instruction, registry_admission, continuation) =
-        wrap_registry_continuation(snapshot, &direct_instruction)?;
-    Ok(MarketRetirementReportV1 {
-        instruction,
-        direct_instruction,
-        observation: authenticated.observation,
-        registry_admission,
-        claims_authority,
-        close_vault_authority,
-        close_replay_authority,
-        rent_close_authority,
-        resolution_facts: authenticated.source,
-        expected_refund_delta,
-        claim_count: authenticated.claims.claim_count,
-        failure_escrow_seated: authenticated.escrow.seated(),
-        continuation,
+    Ok(RetirementComponentsV1 {
+        authenticated,
+        core_bytes,
+        bundle,
+        claims_request,
+        close_vault,
+        close_replay,
     })
 }
 
-/// Construct the four packet-bounded retirement instructions from the same
-/// finalized snapshot used by the legacy aggregate builder.
+/// Construct the four packet-bounded retirement instructions from one
+/// finalized snapshot.
 pub fn build_checkpoint_market_retirement_v1(
     snapshot: &MarketRetirementSnapshotV1,
 ) -> Result<CheckpointMarketRetirementReportV1, MarketRetirementOperatorErrorV1> {
-    let legacy = build_market_retirement_v1(snapshot)?;
-    let authenticated = authenticate_snapshot(snapshot)?;
-    let core_bytes: [u8; REQUEST_BYTES] = legacy
-        .direct_instruction
-        .data
-        .get(..REQUEST_BYTES)
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or(MarketRetirementOperatorErrorV1::Encoding)?;
-    let bundle_start = REQUEST_BYTES;
-    let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
-    let vault_start = claims_start + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
-    let replay_start = vault_start + CUSTODY_REQUEST_BYTES_V1;
-    let old_bundle = RetirementBundleV1::decode(
-        legacy
-            .direct_instruction
-            .data
-            .get(bundle_start..claims_start)
-            .ok_or(MarketRetirementOperatorErrorV1::Encoding)?,
-    )
-    .map_err(MarketRetirementOperatorErrorV1::Retirement)?;
-    let old_claims = ClaimsMarketClosureRequestV1::decode(
-        legacy
-            .direct_instruction
-            .data
-            .get(claims_start..vault_start)
-            .ok_or(MarketRetirementOperatorErrorV1::Encoding)?,
-    )
-    .map_err(MarketRetirementOperatorErrorV1::ClaimsMarketClosure)?;
+    let components = retirement_components_v1(snapshot)?;
+    let authenticated = components.authenticated;
+    let core_bytes = components.core_bytes;
+    let old_bundle = components.bundle;
+    let old_claims = components.claims_request;
     let handoff = ClaimsRetirementCheckpointHandoffRequestV1::new(old_claims.input())
         .map_err(MarketRetirementOperatorErrorV1::ClaimsMarketClosure)?;
     let handoff_bytes = handoff.to_bytes();
-    let close_vault_bytes = legacy
-        .direct_instruction
-        .data
-        .get(vault_start..replay_start)
-        .ok_or(MarketRetirementOperatorErrorV1::Encoding)?;
-    let close_replay_bytes = legacy
-        .direct_instruction
-        .data
-        .get(replay_start..)
-        .ok_or(MarketRetirementOperatorErrorV1::Encoding)?;
+    let close_vault_bytes = components
+        .close_vault
+        .to_bytes()
+        .map_err(MarketRetirementOperatorErrorV1::CustodyContract)?;
+    let close_replay_bytes = components
+        .close_replay
+        .to_bytes()
+        .map_err(MarketRetirementOperatorErrorV1::CustodyContract)?;
     let old = old_bundle.input();
     let bundle = RetirementBundleV1::new(RetirementBundleInputV1 {
         market: old.market,
@@ -729,17 +542,17 @@ pub fn build_checkpoint_market_retirement_v1(
     let handoff_receipt =
         projected_claims_handoff_receipt(snapshot, authenticated, hash(&handoff_bytes).to_bytes())?;
     let handoff_receipt_digest = hash(&handoff_receipt.to_bytes()).to_bytes();
-    let close_vault = CustodyRequestV1::decode(close_vault_bytes)
+    let close_vault = CustodyRequestV1::decode(&close_vault_bytes)
         .map_err(MarketRetirementOperatorErrorV1::CustodyContract)?;
-    let close_replay = CustodyRequestV1::decode(close_replay_bytes)
+    let close_replay = CustodyRequestV1::decode(&close_replay_bytes)
         .map_err(MarketRetirementOperatorErrorV1::CustodyContract)?;
     let (vault_receipt_digest, replay_receipt_digest) = projected_custody_receipts(
         snapshot,
         authenticated,
         close_vault,
-        close_vault_bytes,
+        &close_vault_bytes,
         close_replay,
-        close_replay_bytes,
+        &close_replay_bytes,
     )?;
     let custody_refund = snapshot
         .hoard_vault
@@ -801,14 +614,14 @@ pub fn build_checkpoint_market_retirement_v1(
         old.release_set,
         snapshot.market.key,
         authenticated.replay.context,
-        close_vault_bytes,
+        &close_vault_bytes,
         snapshot.core_program.key,
     )?;
     let close_replay_authority = caller_authority(
         old.release_set,
         snapshot.market.key,
         authenticated.replay.context,
-        close_replay_bytes,
+        &close_replay_bytes,
         snapshot.core_program.key,
     )?;
     let accounts = core_accounts(
@@ -840,7 +653,7 @@ pub fn build_checkpoint_market_retirement_v1(
     let vault_suffix = AggregateRetirementSuffixRequestV1::new(
         AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
         binding,
-        hash(close_vault_bytes).to_bytes(),
+        hash(&close_vault_bytes).to_bytes(),
         1,
         old.custody_pre_revision,
     )
@@ -848,7 +661,7 @@ pub fn build_checkpoint_market_retirement_v1(
     let replay_suffix = AggregateRetirementSuffixRequestV1::new(
         AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1,
         binding,
-        hash(close_replay_bytes).to_bytes(),
+        hash(&close_replay_bytes).to_bytes(),
         2,
         old.custody_middle_revision,
     )
@@ -868,10 +681,10 @@ pub fn build_checkpoint_market_retirement_v1(
     };
     let mut vault_data = Vec::with_capacity(CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1);
     vault_data.extend_from_slice(&vault_suffix.to_bytes());
-    vault_data.extend_from_slice(close_vault_bytes);
+    vault_data.extend_from_slice(&close_vault_bytes);
     let mut replay_data = Vec::with_capacity(CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1);
     replay_data.extend_from_slice(&replay_suffix.to_bytes());
-    replay_data.extend_from_slice(close_replay_bytes);
+    replay_data.extend_from_slice(&close_replay_bytes);
     let mut finish_data = Vec::with_capacity(CHECKPOINT_RETIREMENT_FINISH_BYTES_V1);
     finish_data.extend_from_slice(&finish_suffix.to_bytes());
     finish_data.extend_from_slice(&core_bytes);
@@ -1794,59 +1607,6 @@ fn authenticate_custody_authority(
     Ok(())
 }
 
-fn projected_claims_receipt(
-    snapshot: &MarketRetirementSnapshotV1,
-    authenticated: AuthenticatedRetirementV1,
-    request_digest: [u8; 32],
-) -> Result<ClaimsMarketClosureReceiptV1, MarketRetirementOperatorErrorV1> {
-    let post_revision = authenticated
-        .claims
-        .revision
-        .checked_add(1)
-        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
-    let credit_after = snapshot
-        .rent_credit
-        .lamports
-        .checked_add(snapshot.claims_aggregate.lamports)
-        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
-    let pre_resource_digest = hashv(&[
-        &CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1,
-        snapshot.claims_aggregate.key.as_ref(),
-        &snapshot.claims_aggregate.data,
-    ])
-    .to_bytes();
-    let post_resource_digest = hashv(&[
-        &CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
-        snapshot.claims_aggregate.key.as_ref(),
-        snapshot.rent_credit.key.as_ref(),
-        &post_revision.to_le_bytes(),
-        &snapshot.claims_aggregate.lamports.to_le_bytes(),
-        &credit_after.to_le_bytes(),
-    ])
-    .to_bytes();
-    ClaimsMarketClosureReceiptV1::new(ClaimsMarketClosureReceiptInputV1 {
-        producer: snapshot.claims_program.key.to_bytes(),
-        release_set: authenticated
-            .market
-            .identity
-            .selected_release_set
-            .to_bytes(),
-        market: snapshot.market.key.to_bytes(),
-        aggregate: snapshot.claims_aggregate.key.to_bytes(),
-        rent_credit: snapshot.rent_credit.key.to_bytes(),
-        request_digest,
-        pre_resource_digest,
-        post_resource_digest,
-        generation: authenticated.market.identity.generation,
-        pre_revision: authenticated.claims.revision,
-        post_revision,
-        liability_units: 0,
-        refund_lamports: snapshot.claims_aggregate.lamports,
-        claim_count: authenticated.claims.claim_count,
-    })
-    .map_err(MarketRetirementOperatorErrorV1::ClaimsMarketClosure)
-}
-
 fn projected_claims_handoff_receipt(
     snapshot: &MarketRetirementSnapshotV1,
     authenticated: AuthenticatedRetirementV1,
@@ -2086,106 +1846,4 @@ fn core_accounts(
         accounts.extend_from_slice(&tail);
     }
     accounts
-}
-
-fn wrap_registry_continuation(
-    snapshot: &MarketRetirementSnapshotV1,
-    direct: &Instruction,
-) -> Result<(Instruction, Pubkey, RegistryContinuationRequestV1), MarketRetirementOperatorErrorV1> {
-    let release_set = ContentId::new(
-        CoreState::decode(&snapshot.market.data)
-            .map_err(|_| MarketRetirementOperatorErrorV1::Market)?
-            .identity
-            .selected_release_set
-            .to_bytes(),
-    )
-    .map_err(MarketRetirementOperatorErrorV1::Core)?;
-    let activation_digest = ContentId::new(hash(&snapshot.activation_cache.data).to_bytes())
-        .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
-    let instruction_digest = ContentId::new(hash(&direct.data).to_bytes())
-        .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
-    let instruction_len =
-        u32::try_from(direct.data.len()).map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
-    let roles = [
-        ExecutionRoleV1::Core,
-        ExecutionRoleV1::Claims,
-        ExecutionRoleV1::Resolution,
-        ExecutionRoleV1::Custody,
-    ];
-    let continuation = RegistryContinuationRequestV1::new(
-        release_set,
-        activation_digest,
-        instruction_digest,
-        instruction_len,
-        ExecutionRoleV1::Core,
-        &roles,
-    )
-    .map_err(MarketRetirementOperatorErrorV1::Batch)?;
-    let batch = continuation
-        .role_batch_request()
-        .map_err(MarketRetirementOperatorErrorV1::Batch)?;
-    let batch_digest = ContentId::new(hash(&batch.to_bytes()).to_bytes())
-        .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
-    let seeds = RegistryContinuationAdmissionSeedsV1::new(
-        continuation,
-        snapshot.activation_cache.key.to_bytes(),
-        batch_digest,
-    )
-    .map_err(MarketRetirementOperatorErrorV1::Batch)?;
-    let release = seeds.release_set();
-    let cache = seeds.activation_cache();
-    let role_batch = seeds.batch_request_digest();
-    let role_mask = seeds.role_mask();
-    let role = seeds.continuation_role();
-    let continuation_digest = seeds.continuation_digest();
-    let admission = Pubkey::find_program_address(
-        &[
-            seeds.domain(),
-            release.as_slice(),
-            cache.as_slice(),
-            role_batch.as_slice(),
-            role_mask.as_slice(),
-            role.as_slice(),
-            continuation_digest.as_slice(),
-        ],
-        &snapshot.registry_program.key,
-    )
-    .0;
-    if direct.accounts.iter().any(|meta| meta.pubkey == admission) {
-        return Err(MarketRetirementOperatorErrorV1::Frame);
-    }
-
-    let mut child_accounts = direct.accounts.clone();
-    child_accounts.push(AccountMeta::new_readonly(admission, false));
-    let mut accounts = Vec::with_capacity(MARKET_RETIREMENT_ACCOUNT_COUNT_V1);
-    accounts.extend([
-        AccountMeta::new_readonly(snapshot.activation_cache.key, false),
-        AccountMeta::new_readonly(snapshot.core_program.key, false),
-        AccountMeta::new_readonly(snapshot.core_programdata.key, false),
-        AccountMeta::new_readonly(snapshot.claims_program.key, false),
-        AccountMeta::new_readonly(snapshot.claims_programdata.key, false),
-        AccountMeta::new_readonly(snapshot.resolution_program.key, false),
-        AccountMeta::new_readonly(snapshot.resolution_programdata.key, false),
-        AccountMeta::new_readonly(snapshot.custody_program.key, false),
-        AccountMeta::new_readonly(snapshot.custody_programdata.key, false),
-        AccountMeta::new_readonly(admission, false),
-    ]);
-    accounts.extend(child_accounts);
-    if accounts.len() != MARKET_RETIREMENT_ACCOUNT_COUNT_V1 {
-        return Err(MarketRetirementOperatorErrorV1::Frame);
-    }
-    let mut data = Vec::with_capacity(
-        REGISTRY_CONTINUATION_REQUEST_BYTES_V1 + MARKET_RETIREMENT_CORE_INSTRUCTION_BYTES_V1,
-    );
-    data.extend_from_slice(&continuation.to_bytes());
-    data.extend_from_slice(&direct.data);
-    Ok((
-        Instruction {
-            program_id: snapshot.registry_program.key,
-            accounts,
-            data,
-        },
-        admission,
-        continuation,
-    ))
 }

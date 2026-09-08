@@ -478,14 +478,6 @@ pub fn process_non_fractional_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    if instruction_data
-        .get(..dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.len())
-        == Some(
-            dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.as_slice(),
-        )
-    {
-        return market_closure_v1::process(program_id, accounts, instruction_data);
-    }
     if instruction_data.get(..dclutch_claims::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.len())
         == Some(dclutch_claims::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
     {

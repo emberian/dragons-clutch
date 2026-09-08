@@ -14,7 +14,6 @@ extern crate alloc;
 use dclutch_claims::founding_v5::{
     CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_RECEIPT_MAGIC_V5,
 };
-use dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
 use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1,
     PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
@@ -75,7 +74,6 @@ pub use generic_founding_v1::{
     GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
     GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
 };
-pub use retire_v1::{RETIREMENT_ACCOUNT_COUNT_V1, RETIREMENT_INSTRUCTION_BYTES_V1};
 pub use series_consume::{
     SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2,
 };
@@ -594,36 +592,6 @@ pub fn process_instruction(
                     .get(REQUEST_BYTES..)
                     .ok_or(CoreSbfError::Instruction)?;
                 open_market::process(program_id, accounts, request, request_bytes, custody_bytes)
-            }
-            Action::Retire
-                if instruction_data.len() == retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1 =>
-            {
-                let bundle_start = REQUEST_BYTES;
-                let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
-                let close_vault_start = claims_start + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
-                let close_replay_start = close_vault_start + CUSTODY_REQUEST_BYTES_V1;
-                let bundle_bytes = instruction_data
-                    .get(bundle_start..claims_start)
-                    .ok_or(CoreSbfError::Instruction)?;
-                let claims_request_bytes = instruction_data
-                    .get(claims_start..close_vault_start)
-                    .ok_or(CoreSbfError::Instruction)?;
-                let close_vault_request_bytes = instruction_data
-                    .get(close_vault_start..close_replay_start)
-                    .ok_or(CoreSbfError::Instruction)?;
-                let close_replay_request_bytes = instruction_data
-                    .get(close_replay_start..)
-                    .ok_or(CoreSbfError::Instruction)?;
-                retire_v1::process(
-                    program_id,
-                    accounts,
-                    request,
-                    request_bytes,
-                    bundle_bytes,
-                    claims_request_bytes,
-                    close_vault_request_bytes,
-                    close_replay_request_bytes,
-                )
             }
             Action::Retire
                 if instruction_data.len()

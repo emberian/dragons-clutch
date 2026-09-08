@@ -673,7 +673,7 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
         //
         // Do not silently treat same-key representations as interchangeable.
         // A duplicated top-level account normally reuses the same Rc cells;
-        // when it does not, `deduplicated_admitted_cpi_infos_v4` compares the
+        // when it does not, `deduplicated_admitted_cpi_infos_v5` compares the
         // complete observable account representation before retaining the
         // first one.  That keeps a malformed frame from turning a different
         // owner, body, or privilege into an invisible heap optimization.
@@ -705,19 +705,18 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
 /// extra conjunct this producer needs before it can make that runtime rule save
 /// heap: differing representations of one physical key are an invalid frame,
 /// never an instruction to choose one silently.  Its source coordinate is
-/// resolved directly against the fixed frame, optional page, and runtime tail.
-/// The bounded sort bank caches each key once before sorting by
-/// `(key-prefix, key, original-index)`: repeatedly resolving those coordinates
-/// inside the comparator consumed 181,343 CU on the measured nonempty General
-/// `PlaceOrder` path. The cache contains no account representation and does not
-/// choose a duplicate; validation still rereads and compares every equal-key
-/// representation before the retained backing order returns to original first
-/// occurrence.
+/// resolved once from the fixed frame, optional page, and runtime tail.
+/// The sort bank carries borrowed account references and cached key prefixes,
+/// ordered by `(key-prefix, key, original-index)`. It never sorts or clones an
+/// account representation. Every equal-key representation still passes the
+/// complete equality guard, then the retained bitmap selects the first source
+/// from the untouched canonical order. The CPI metas themselves remain complete
+/// and ordered, including every alias.
 #[derive(Clone, Copy)]
-struct AdmittedCpiSortKeyV1 {
+struct AdmittedCpiSortKeyV1<'a, 'info> {
     source_index: usize,
     key_prefix: u64,
-    key: Pubkey,
+    account: &'a AccountInfo<'info>,
 }
 
 fn deduplicated_admitted_cpi_infos_v5<'a, 'info>(
@@ -729,7 +728,22 @@ where
     'info: 'a,
 {
     let account_count = admitted_cpi_account_count_v5(frame, runtime_accounts.len())?;
-    let mut sorted_source_keys: Vec<AdmittedCpiSortKeyV1> = Vec::new();
+    // Resolve the canonical source sequence once. Borrowed references avoid
+    // cloning AccountInfo cells, and retain original order without a second
+    // sort or repeatedly copying the complete frame into a coordinate resolver.
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(account_count)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    sources.extend(
+        fixed_cpi_accounts(frame, authority)
+            .chain(frame.output_page)
+            .chain(runtime_accounts.iter().copied()),
+    );
+    if sources.len() != account_count {
+        return Err(TradingSbfError::AdmittedTransport.into());
+    }
+    let mut sorted_source_keys: Vec<AdmittedCpiSortKeyV1<'a, 'info>> = Vec::new();
     sorted_source_keys
         .try_reserve_exact(account_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
@@ -738,13 +752,11 @@ where
         .try_reserve_exact(account_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
     retained.resize(account_count, false);
-    for source_index in 0..account_count {
-        let account = admitted_cpi_account_at_v5(frame, authority, runtime_accounts, source_index)
-            .ok_or(TradingSbfError::AdmittedTransport)?;
+    for (source_index, account) in sources.iter().copied().enumerate() {
         sorted_source_keys.push(AdmittedCpiSortKeyV1 {
             source_index,
             key_prefix: admitted_cpi_key_prefix_v4(account),
-            key: *account.key,
+            account,
         });
     }
     hot_heap_mark!("admitted-cpi-index");
@@ -752,7 +764,7 @@ where
     sorted_source_keys.sort_unstable_by(|left, right| {
         left.key_prefix
             .cmp(&right.key_prefix)
-            .then_with(|| left.key.cmp(&right.key))
+            .then_with(|| left.account.key.cmp(right.account.key))
             .then(left.source_index.cmp(&right.source_index))
     });
     hot_cu_checkpoint!("cx-cpi-sort-keys");
@@ -761,12 +773,11 @@ where
     let mut group_start = 0_usize;
     for index in 0..sorted_source_keys.len() {
         let source_index = sorted_source_keys[index].source_index;
-        let account = admitted_cpi_account_at_v5(frame, authority, runtime_accounts, source_index)
-            .ok_or(TradingSbfError::AdmittedTransport)?;
+        let account = sorted_source_keys[index].account;
         let same_key_as_previous = if index == 0 {
             false
         } else {
-            sorted_source_keys[index - 1].key == sorted_source_keys[index].key
+            sorted_source_keys[index - 1].account.key == account.key
         };
         if !same_key_as_previous {
             *retained
@@ -778,34 +789,25 @@ where
                 .ok_or(TradingSbfError::AdmittedTransport)?;
             continue;
         }
-        let first_source_index = sorted_source_keys[group_start].source_index;
-        let first =
-            admitted_cpi_account_at_v5(frame, authority, runtime_accounts, first_source_index)
-                .ok_or(TradingSbfError::AdmittedTransport)?;
+        let first = sorted_source_keys[group_start].account;
         require_matching_account_representation_v4(first, account)?;
     }
     hot_cu_checkpoint!("cx-cpi-duplicate-checks");
 
-    // Sorting back by source index preserves the first matching AccountInfo
-    // the installed CPI translator selects for every ordered meta.
-    sorted_source_keys.sort_unstable_by_key(|entry| entry.source_index);
+    // The retained bitmap is indexed by the untouched canonical source order.
+    // No sorting back is needed to preserve the first matching representation.
+    // Keep the checkpoint label so old/new phase tables remain comparable.
     hot_cu_checkpoint!("cx-cpi-sort-back");
     let mut infos: Vec<AccountInfo<'info>> = Vec::new();
     infos
         .try_reserve_exact(unique_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
-    for source_index in sorted_source_keys
-        .into_iter()
-        .map(|entry| entry.source_index)
-    {
+    for (source_index, account) in sources.into_iter().enumerate() {
         if retained
             .get(source_index)
             .copied()
             .ok_or(TradingSbfError::AdmittedTransport)?
         {
-            let account =
-                admitted_cpi_account_at_v5(frame, authority, runtime_accounts, source_index)
-                    .ok_or(TradingSbfError::AdmittedTransport)?;
             infos.push(account.clone());
         }
     }
@@ -823,45 +825,6 @@ fn admitted_cpi_account_count_v5(
         .and_then(|count| count.checked_add(usize::from(frame.output_page.is_some())))
         .and_then(|count| count.checked_add(runtime_account_count))
         .ok_or(TradingSbfError::AdmittedTransport.into())
-}
-
-/// Resolve one logical admitted CPI source with no heap-backed source table.
-fn admitted_cpi_account_at_v5<'a, 'info>(
-    frame: AdmittedCpiFrameV3<'a, 'info>,
-    authority: &'a AccountInfo<'info>,
-    runtime_accounts: &'a [&'a AccountInfo<'info>],
-    index: usize,
-) -> Option<&'a AccountInfo<'info>> {
-    if index == 0 {
-        return Some(authority);
-    }
-    let hot_start = 1_usize;
-    let hot_end = hot_start.checked_add(frame.hot_fixed_accounts.len())?;
-    if index < hot_end {
-        return frame.hot_fixed_accounts.get(index.checked_sub(hot_start)?);
-    }
-    let fixed_tail = [
-        frame.certificate_raw,
-        frame.certificate_staging,
-        frame.admission_raw,
-        frame.admission_staging,
-        frame.artifact_raw,
-        frame.artifact_staging,
-        frame.accelerator_program,
-        frame.accelerator_programdata,
-    ];
-    let fixed_tail_end = hot_end.checked_add(fixed_tail.len())?;
-    if index < fixed_tail_end {
-        return fixed_tail.get(index.checked_sub(hot_end)?).copied();
-    }
-    let after_fixed = index.checked_sub(fixed_tail_end)?;
-    if let Some(page) = frame.output_page {
-        if after_fixed == 0 {
-            return Some(page);
-        }
-        return runtime_accounts.get(after_fixed.checked_sub(1)?).copied();
-    }
-    runtime_accounts.get(after_fixed).copied()
 }
 
 /// The first eight canonical key bytes cheaply separate almost every account
@@ -1529,20 +1492,7 @@ mod tests {
             expected.len(),
             admitted_cpi_account_count_v5(frame, runtime_accounts.len())
                 .expect("canonical CPI source count"),
-            "the direct coordinate resolver and the canonical fixed-frame iterator agree"
-        );
-        for (index, expected_key) in expected.iter().enumerate() {
-            assert_eq!(
-                admitted_cpi_account_at_v5(frame, authority, runtime_accounts, index)
-                    .map(|account| *account.key),
-                Some(*expected_key),
-                "source coordinate {index}"
-            );
-        }
-        assert!(
-            admitted_cpi_account_at_v5(frame, authority, runtime_accounts, expected.len())
-                .is_none(),
-            "the direct resolver has no trailing source"
+            "the canonical fixed-frame iterator matches the contract-derived source count"
         );
         let mut expected_first_keys = Vec::new();
         for key in expected {
@@ -1560,6 +1510,15 @@ mod tests {
             expected_first_keys,
             "the backing account order retains each canonical source's first occurrence"
         );
+        for retained in &actual {
+            let first = fixed_cpi_accounts(frame, authority)
+                .chain(frame.output_page)
+                .chain(runtime_accounts.iter().copied())
+                .find(|source| source.key == retained.key)
+                .expect("retained account came from the canonical source frame");
+            assert!(Rc::ptr_eq(&first.data, &retained.data));
+            assert!(Rc::ptr_eq(&first.lamports, &retained.lamports));
+        }
     }
 
     #[test]
@@ -1617,6 +1576,28 @@ mod tests {
             ..frame_with_page
         };
         assert_production_cpi_source_order_v5(frame_without_page, &first, &[]);
+
+        // Distinct keys sharing the entire cached prefix must remain distinct;
+        // reverse source order and repeated aliases must retain the first cells.
+        let colliding: Vec<_> = (1_u8..=32)
+            .map(|last| {
+                let mut key = [0x6b; 32];
+                key[31] = last;
+                readonly_info(
+                    Pubkey::new_from_array(key),
+                    owner,
+                    u64::from(last),
+                    vec![last],
+                )
+            })
+            .collect();
+        let colliding_runtime: Vec<_> = colliding
+            .iter()
+            .rev()
+            .chain(colliding.iter())
+            .chain(core::iter::once(&first))
+            .collect();
+        assert_production_cpi_source_order_v5(frame_with_page, &first, &colliding_runtime);
 
         let foreign_owner = readonly_info(repeated_key, Pubkey::new_unique(), 7, vec![1, 2, 3]);
         assert!(

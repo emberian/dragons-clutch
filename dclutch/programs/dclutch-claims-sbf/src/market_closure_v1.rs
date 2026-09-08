@@ -1,10 +1,9 @@
-//! Core-authorized market-wide aggregate-empty closure.
+//! Core-authorized market-wide aggregate-empty retirement handoff.
 //!
-//! This adapter is the sole physical producer of
-//! [`ClaimsMarketClosureReceiptV1`]. It authenticates the selected Core caller,
-//! proves every runtime-width aggregate supply is zero, credits all aggregate
-//! lamports to the immutable RentCredit, and emits the receipt only after the
-//! aggregate is closed.
+//! The packet-bounded retirement route authenticates the selected Core caller,
+//! proves every runtime-width aggregate supply is zero, and hands the aggregate
+//! and its exact refund lamports to Core as a durable checkpoint. Core closes
+//! that checkpoint to the immutable RentCredit in the final retirement packet.
 
 use dclutch_claims::{
     liability_basis_state_v2::{
@@ -12,9 +11,7 @@ use dclutch_claims::{
         LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
     },
     market_closure_v1::{
-        CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
         CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1, ClaimsMarketClosureReceiptInputV1,
-        ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestV1,
     },
     retirement_checkpoint_handoff_v1::{
         CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
@@ -319,64 +316,6 @@ fn split_continuation(
     let continuation = RegistryContinuationRequestV1::decode(continuation)
         .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?;
     Ok((request, Some(continuation)))
-}
-
-/// Close one exact empty Claims aggregate and return its typed receipt.
-#[inline(never)]
-pub fn process(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    instruction_data: &[u8],
-) -> ProgramResult {
-    let (request_bytes, continuation) = split_continuation(instruction_data)?;
-    let request = ClaimsMarketClosureRequestV1::decode(request_bytes)
-        .map_err(|_| ClaimsSbfError::Instruction)?;
-    let request_input = request.input();
-    let request_digest = hash(request_bytes).to_bytes();
-    let accounts = ClosureAccounts::parse(accounts, continuation.is_some())?;
-    authenticate_privileges(program_id, accounts)?;
-    authenticate_authority(accounts, request_input, request_digest)?;
-    authenticate_releases(accounts, request_input.release_set, continuation)?;
-    let core = authenticate_core(accounts, request_input)?;
-    authenticate_rent_credit(accounts, core)?;
-    let (pre_digest, market) = authenticate_aggregate_identity(accounts, request_input)?;
-    burn_failure_escrow_column_v1(program_id, accounts, market, core)?;
-    require_empty_aggregate(accounts, market)?;
-    let refund_lamports = aggregate_refund_lamports(accounts)?;
-    let rent_after = accounts
-        .rent_credit
-        .lamports()
-        .checked_add(refund_lamports)
-        .ok_or(ClaimsMarketClosureSbfErrorV1::Commit)?;
-    close_aggregate(accounts, rent_after)?;
-    let post_digest = hashv(&[
-        CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1.as_slice(),
-        accounts.aggregate.key.as_ref(),
-        accounts.rent_credit.key.as_ref(),
-        request_input.resulting_revision.to_le_bytes().as_slice(),
-        refund_lamports.to_le_bytes().as_slice(),
-        rent_after.to_le_bytes().as_slice(),
-    ])
-    .to_bytes();
-    let receipt = ClaimsMarketClosureReceiptV1::new(ClaimsMarketClosureReceiptInputV1 {
-        producer: program_id.to_bytes(),
-        release_set: request_input.release_set,
-        market: request_input.market,
-        aggregate: request_input.aggregate,
-        rent_credit: request_input.rent_credit,
-        request_digest,
-        pre_resource_digest: pre_digest,
-        post_resource_digest: post_digest,
-        generation: request_input.generation,
-        pre_revision: request_input.expected_revision,
-        post_revision: request_input.resulting_revision,
-        liability_units: 0,
-        refund_lamports,
-        claim_count: request_input.claim_count,
-    })
-    .map_err(|_| ClaimsMarketClosureSbfErrorV1::Receipt)?;
-    set_return_data(&receipt.to_bytes());
-    Ok(())
 }
 
 /// Prove zero liabilities, retain every aggregate lamport, and hand the exact
@@ -841,11 +780,9 @@ fn require_empty_aggregate(
 /// Everything the closure refunds, read after the escrow pair has surrendered
 /// its rent to the aggregate.
 ///
-/// One number, and deliberately so: whichever disposition follows -- credit to
-/// the RentCredit ([`close_aggregate`]) or carry into Core's checkpoint
-/// ([`handoff_aggregate_to_core`]) -- moves the escrow's rent along the exact
-/// path the aggregate's own rent already took, and decision 0021's refund
-/// source is reached without this route learning a second one.
+/// One number, and deliberately so: the handoff carries the escrow's rent along
+/// the exact path the aggregate's own rent already took, and decision 0021's
+/// refund source is reached without this route learning a second one.
 fn aggregate_refund_lamports(accounts: ClosureAccounts<'_, '_>) -> Result<u64, ProgramError> {
     let refund_lamports = accounts.aggregate.lamports();
     if refund_lamports == 0 {
@@ -1120,10 +1057,9 @@ fn admit_founder_bond_disposition_v1(
 /// Close the emptied escrow pair and hand its rent to the aggregate.
 ///
 /// The aggregate is the ONE account this route already disposes of, and both
-/// dispositions carry the escrow's rent to decision 0021's refund source
-/// without a fourth account in the frame: `close_aggregate` credits it to the
-/// immutable RentCredit, and `handoff_aggregate_to_core` carries it into the
-/// retirement checkpoint that pays the refund wallet at `Finish`. On a Market
+/// retirement carries the escrow's rent to decision 0021's refund source
+/// without a fourth account in the frame: `handoff_aggregate_to_core` carries
+/// it into the checkpoint that pays the refund wallet at `Finish`. On a Market
 /// that posted a founder bond the balance is rent PLUS the bond's disposition
 /// -- returned on the honest exit, surplus on the exhausted one -- and the arm
 /// above has already said which.
@@ -1180,42 +1116,6 @@ fn close_escrow_pair_into_aggregate_v1(
         }
     }
     if accounts.aggregate.lamports() != aggregate_after {
-        return Err(ClaimsMarketClosureSbfErrorV1::Commit.into());
-    }
-    Ok(())
-}
-
-#[inline(never)]
-fn close_aggregate(accounts: ClosureAccounts<'_, '_>, rent_after: u64) -> ProgramResult {
-    {
-        let mut data = accounts
-            .aggregate
-            .try_borrow_mut_data()
-            .map_err(|_| ClaimsMarketClosureSbfErrorV1::Commit)?;
-        data.fill(0);
-    }
-    {
-        let mut aggregate_lamports = accounts
-            .aggregate
-            .try_borrow_mut_lamports()
-            .map_err(|_| ClaimsMarketClosureSbfErrorV1::Commit)?;
-        let mut credit_lamports = accounts
-            .rent_credit
-            .try_borrow_mut_lamports()
-            .map_err(|_| ClaimsMarketClosureSbfErrorV1::Commit)?;
-        **aggregate_lamports = 0;
-        **credit_lamports = rent_after;
-    }
-    accounts
-        .aggregate
-        .resize(0)
-        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Commit)?;
-    accounts.aggregate.assign(&system_program::ID);
-    if accounts.aggregate.owner != &system_program::ID
-        || !accounts.aggregate.data_is_empty()
-        || accounts.aggregate.lamports() != 0
-        || accounts.rent_credit.lamports() != rent_after
-    {
         return Err(ClaimsMarketClosureSbfErrorV1::Commit.into());
     }
     Ok(())

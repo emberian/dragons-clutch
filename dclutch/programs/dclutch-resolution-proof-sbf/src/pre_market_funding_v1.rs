@@ -4,7 +4,7 @@ use alloc::{vec, vec::Vec};
 
 use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingLedgerV2, funding_ledger_bytes_v2,
+    FundingAssetClassV1, FundingLedgerV2, funding_ledger_bytes_v2,
 };
 use dclutch_market::{
     PROJECT_FOUND_ACCOUNT_COUNT_V2, PROJECT_FOUND_RECEIPT_BYTES_V2, ProjectFoundReceiptV2,
@@ -13,8 +13,12 @@ use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source::resolution::{
     PRE_MARKET_FUNDING_REQUEST_BYTES_V2, PRE_MARKET_FUNDING_REQUEST_MAGIC_V2,
-    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
-    pre_market_funding_prestate_digest_v1,
+    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, pre_market_funding_prestate_digest_v1,
+};
+use dclutch_source::{
+    ENSEMBLE_FOLD_RECEIPT_V1_BYTES, EnsembleTerminalCapitalPlanV1, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SourceMaterialV3,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -38,6 +42,9 @@ pub const PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1: usize = 7;
 /// Exact total account count for pre-Market subset-ledger initialization.
 pub const PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1: usize =
     PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1 + PROJECT_FOUND_ACCOUNT_COUNT_V2;
+/// Ensemble funding additionally carries its finalized RecoveryPolicy pair.
+pub const PRE_MARKET_ENSEMBLE_FUNDING_ACCOUNT_COUNT_V1: usize =
+    PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1 + 2;
 
 const CALLER_AUTHORITY: usize = 0;
 const CALLER_PROGRAM: usize = 1;
@@ -49,6 +56,8 @@ const LEDGER: usize = 6;
 const FOUND_START: usize = PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1;
 const FOUND_RENT_PROGRAM: usize = 3;
 const FOUND_RENT_CREDIT: usize = 2;
+const FOUND_SOURCE_MATERIAL_RAW: usize = 14;
+const FOUND_SOURCE_MATERIAL_STAGING: usize = 15;
 const FOUND_MANIFEST_RAW: usize = 22;
 const FOUND_MANIFEST_STAGING: usize = 23;
 const FOUND_ACTIVATION_CACHE: usize = 24;
@@ -73,7 +82,7 @@ pub fn process_pre_market_funding_v2(
         .map_err(|_| ResolutionError::Instruction)?;
     authenticate_frame(program_id, accounts, request)?;
     let found = accounts
-        .get(FOUND_START..)
+        .get(FOUND_START..FOUND_START + PROJECT_FOUND_ACCOUNT_COUNT_V2)
         .ok_or(ResolutionError::AccountFrame)?;
     let core_program = found
         .get(FOUND_CORE_PROGRAM)
@@ -127,6 +136,7 @@ pub fn process_pre_market_funding_v2(
     if canonical_mask != request.selected_mask {
         return Err(ResolutionError::Funding.into());
     }
+    authenticate_ensemble_terminal_capital(accounts, found, receipt, manifest, &rent)?;
     authenticate_release_and_caller(
         program_id,
         accounts,
@@ -233,7 +243,9 @@ fn authenticate_frame(
     accounts: &[AccountInfo<'_>],
     request: PreMarketFundingRequestV2,
 ) -> ProgramResult {
-    if accounts.len() != PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1 {
+    if accounts.len() != PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1
+        && accounts.len() != PRE_MARKET_ENSEMBLE_FUNDING_ACCOUNT_COUNT_V1
+    {
         return Err(ResolutionError::AccountFrame.into());
     }
     let authority = accounts
@@ -300,7 +312,7 @@ fn authenticate_frame(
         }
     }
     let found = accounts
-        .get(FOUND_START..)
+        .get(FOUND_START..FOUND_START + PROJECT_FOUND_ACCOUNT_COUNT_V2)
         .ok_or(ResolutionError::AccountFrame)?;
     for (index, account) in found.iter().enumerate() {
         if !found_outer_flags_are_canonical(index, account) {
@@ -321,6 +333,18 @@ fn authenticate_frame(
             return Err(ResolutionError::AccountFrame.into());
         }
     }
+    for account in accounts.iter().skip(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1) {
+        if account.is_signer || account.is_writable || account.executable {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+        if accounts
+            .iter()
+            .take(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1)
+            .any(|other| other.key == account.key)
+        {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+    }
     if accounts
         .get(FOUND_START + FOUND_CORE_PROGRAM)
         .ok_or(ResolutionError::AccountFrame)?
@@ -335,6 +359,107 @@ fn authenticate_frame(
         return Err(ResolutionError::AccountFrame.into());
     }
     Ok(())
+}
+
+/// Authenticate the immutable material/policy join and its one terminal-capital row.
+///
+/// This runs before the Pending ledger is created. Core's later generic Found
+/// therefore sees custody for a quote Resolution has already proved against
+/// the Source graph, instead of accepting a perfectly funded but underquoted
+/// immutable manifest before Claims creates liabilities.
+fn authenticate_ensemble_terminal_capital(
+    accounts: &[AccountInfo<'_>],
+    found: &[AccountInfo<'_>],
+    receipt: ProjectFoundReceiptV2,
+    manifest: CapabilityManifestV1<'_>,
+    rent: &Rent,
+) -> ProgramResult {
+    let material_raw = found
+        .get(FOUND_SOURCE_MATERIAL_RAW)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let material_staging = found
+        .get(FOUND_SOURCE_MATERIAL_STAGING)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let material_data = material_raw
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_finalized_record(
+        *found
+            .get(FOUND_REGISTRY_PROGRAM)
+            .ok_or(ResolutionError::AccountFrame)?
+            .key,
+        material_raw,
+        material_staging,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        receipt.source.to_bytes(),
+        &material_data,
+        RecordKind::SourceMaterialV3,
+    )?;
+    let material =
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    if material.ensemble().is_single() {
+        return Ok(());
+    }
+    if accounts.len() != PRE_MARKET_ENSEMBLE_FUNDING_ACCOUNT_COUNT_V1 {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    let recovery_id = material
+        .recovery_policy()
+        .ok_or(ResolutionError::SourceMaterial)?;
+    let recovery_raw = accounts
+        .get(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let recovery_staging = accounts
+        .get(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1 + 1)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let recovery_data = recovery_raw
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_finalized_record(
+        *found
+            .get(FOUND_REGISTRY_PROGRAM)
+            .ok_or(ResolutionError::AccountFrame)?
+            .key,
+        recovery_raw,
+        recovery_staging,
+        RECOVERY_POLICY_SCHEMA_ID_V2,
+        recovery_id.to_bytes(),
+        &recovery_data,
+        RecordKind::RecoveryPolicyV2,
+    )?;
+    let recovery =
+        RecoveryPolicyV2::decode(&recovery_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    let plan = EnsembleTerminalCapitalPlanV1::for_material(
+        material,
+        recovery.attempt_count(),
+        rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+        rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+        rent.minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+    )
+    .map_err(|_| ResolutionError::Funding)?;
+    let material_id = receipt.source.to_bytes();
+    let mut matching = None;
+    for entry_index in 0_u16..manifest.entry_count() {
+        let entry = manifest
+            .entry(entry_index)
+            .map_err(|_| ResolutionError::Funding)?;
+        if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7
+            && entry.config_id().to_bytes() == material_id
+        {
+            if matching.is_some() {
+                return Err(ResolutionError::Funding.into());
+            }
+            matching = Some(entry.funding_quote().amounts());
+        }
+    }
+    let amounts = matching.ok_or(ResolutionError::Funding)?;
+    if amounts.rent().asset_class() != FundingAssetClassV1::NativeLamports
+        || amounts.creation().asset_class() != FundingAssetClassV1::NativeLamports
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    plan.authenticate_quote(amounts.rent().amount(), amounts.creation().amount())
+        .map_err(|_| ResolutionError::Funding.into())
 }
 
 fn found_outer_flags_are_canonical(index: usize, account: &AccountInfo<'_>) -> bool {
