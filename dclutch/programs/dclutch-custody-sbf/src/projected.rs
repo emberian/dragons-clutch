@@ -16,7 +16,7 @@ use dclutch_custody::{
     ProjectedCustodyCallerSeedsV1, ProjectedCustodyError, ProjectedCustodyLockReceiptV1,
     ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
     ProjectedCustodySourceReplaySeedsV1, ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
-    normal_replay_from_realization_v1,
+    ProjectedCustodyTerminalFrameV1, normal_replay_from_realization_v1,
 };
 use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_market::{
@@ -86,11 +86,11 @@ const REFUND_TOKEN_PROGRAM: usize = 12;
 const REFUND_MARKET: usize = 13;
 
 const REALIZE_ACCOUNTS: usize = PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1;
-const REALIZE_VAULT: usize = 7;
-const REALIZE_MARKET: usize = 8;
-const REALIZE_AUTHORITY: usize = 9;
-const REALIZE_MINT: usize = 10;
-const REALIZE_TOKEN_PROGRAM: usize = 11;
+const REALIZE_VAULT: usize = ProjectedCustodyTerminalFrameV1::REALIZE_VAULT;
+const REALIZE_MARKET: usize = ProjectedCustodyTerminalFrameV1::REALIZE_MARKET;
+const REALIZE_AUTHORITY: usize = ProjectedCustodyTerminalFrameV1::REALIZE_AUTHORITY;
+const REALIZE_MINT: usize = ProjectedCustodyTerminalFrameV1::REALIZE_MINT;
+const REALIZE_TOKEN_PROGRAM: usize = ProjectedCustodyTerminalFrameV1::REALIZE_TOKEN_PROGRAM;
 
 use dclutch_custody::ProjectedCustodyAbortFrameV1 as AbortFrame;
 const ABORT_ACCOUNTS: usize = AbortFrame::ACCOUNT_COUNT;
@@ -129,13 +129,13 @@ const ABORT_SOURCE_TOKEN_PROGRAM: usize = 14;
 const ABORT_SOURCE_MARKET: usize = 15;
 
 const LOCK_CLOSE_ACCOUNTS: usize = PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1;
-const LOCK_CLOSE_HOARD: usize = 7;
-const LOCK_CLOSE_SOURCE: usize = 8;
-const LOCK_CLOSE_AUTHORITY: usize = 9;
-const LOCK_CLOSE_MINT: usize = 10;
-const LOCK_CLOSE_TOKEN_PROGRAM: usize = 11;
-const LOCK_CLOSE_SOURCE_REPLAY: usize = 12;
-const LOCK_CLOSE_MARKET: usize = 13;
+const LOCK_CLOSE_HOARD: usize = ProjectedCustodyTerminalFrameV1::LOCK_HOARD;
+const LOCK_CLOSE_SOURCE: usize = ProjectedCustodyTerminalFrameV1::LOCK_SOURCE;
+const LOCK_CLOSE_AUTHORITY: usize = ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_AUTHORITY;
+const LOCK_CLOSE_MINT: usize = ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_MINT;
+const LOCK_CLOSE_TOKEN_PROGRAM: usize = ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_TOKEN_PROGRAM;
+const LOCK_CLOSE_SOURCE_REPLAY: usize = ProjectedCustodyTerminalFrameV1::LOCK_SOURCE_REPLAY;
+const LOCK_CLOSE_MARKET: usize = ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_MARKET;
 
 /// Execute one exact projected custody action.
 #[inline(never)]
@@ -146,6 +146,9 @@ pub(crate) fn process(
     request_bytes: &[u8],
 ) -> Result<(), ProgramError> {
     require_count(accounts, request.operation)?;
+    if let Ok(frame) = ProjectedCustodyTerminalFrameV1::new(request.operation) {
+        authenticate_terminal_frame_privileges_v1(accounts, frame)?;
+    }
     let request_digest = hash(request_bytes).to_bytes();
     authenticate_common(program_id, accounts, request, request_digest)?;
     match request.operation {
@@ -177,6 +180,31 @@ pub(crate) fn process(
             abort_source_and_close(program_id, accounts, request, request_digest)
         }
     }
+}
+
+/// Consume Custody's source-owned terminal privilege truth before parsing the
+/// operation-specific accounts. Trading lowers a representative parent union
+/// to this same tuple, while this parser refuses any direct CPI that lies
+/// about it.
+fn authenticate_terminal_frame_privileges_v1(
+    accounts: &[AccountInfo<'_>],
+    frame: ProjectedCustodyTerminalFrameV1,
+) -> Result<(), ProgramError> {
+    if accounts.len() != frame.account_count() {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    for (coordinate, account) in accounts.iter().enumerate() {
+        let expected = frame
+            .privileges(coordinate)
+            .map_err(|_| CustodySbfError::AccountFrame)?;
+        if account.is_signer != expected.signer()
+            || account.is_writable != expected.writable()
+            || account.executable != expected.executable()
+        {
+            return Err(CustodySbfError::AccountFrame.into());
+        }
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -1776,6 +1804,7 @@ fn authenticate_token_frame(
     request: ProjectedCustodyRequestV1,
     vacant: bool,
 ) -> Result<(), ProgramError> {
+    authenticate_token_frame_privileges(authority, token_program)?;
     let vault_seeds = CustodyVaultSeedsV1::new(
         request.market,
         request.release_set,
@@ -1794,13 +1823,9 @@ fn authenticate_token_frame(
     if Pubkey::find_program_address(&vault_seeds.as_slices(), program_id).0 != *vault.key
         || vault.key.to_bytes() != request.hoard_vault
         || authority.key != &authority_expected
-        || authority.is_signer
-        || authority.is_writable
-        || authority.executable
         || mint.key.to_bytes() != request.mint
         || mint.owner != token_program.key
         || token_program.key.to_bytes() != request.token_program
-        || !token_program.executable
         || collateral_profile(request)?.program_id() != request.token_program
     {
         return Err(CustodySbfError::TokenState.into());
@@ -1810,6 +1835,23 @@ fn authenticate_token_frame(
             return Err(CustodySbfError::TokenState.into());
         }
     } else if vault.owner != token_program.key || vault.data_len() != ACCOUNT_BYTES {
+        return Err(CustodySbfError::TokenState.into());
+    }
+    Ok(())
+}
+
+/// Privilege portion of the shared token frame. The terminal-frame parser
+/// makes the whole tuple exact; this remains explicit because ordinary
+/// projected routes call the same native token authenticator.
+fn authenticate_token_frame_privileges(
+    authority: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Result<(), ProgramError> {
+    if authority.is_signer
+        || authority.is_writable
+        || authority.executable
+        || !token_program.executable
+    {
         return Err(CustodySbfError::TokenState.into());
     }
     Ok(())
@@ -2169,7 +2211,17 @@ fn account<'a, 'info>(
 
 #[cfg(test)]
 mod tests {
+    use alloc::{boxed::Box, vec::Vec};
+
     use super::*;
+
+    fn terminal_account() -> AccountInfo<'static> {
+        let key = Box::leak(Box::new(Pubkey::new_unique()));
+        let owner = Box::leak(Box::new(Pubkey::new_unique()));
+        let lamports = Box::leak(Box::new(0_u64));
+        let data = Box::leak(Vec::new().into_boxed_slice());
+        AccountInfo::new(key, false, false, lamports, data, owner, false)
+    }
 
     #[test]
     fn every_projected_operation_has_one_exact_frame_width() {
@@ -2196,5 +2248,45 @@ mod tests {
         for other in [REFUND_ACCOUNTS, ABORT_ACCOUNTS, LOCK_CLOSE_ACCOUNTS] {
             assert_ne!(ABORT_SOURCE_ACCOUNTS, other);
         }
+    }
+
+    #[test]
+    fn native_terminal_parser_refuses_executable_lock_authority() {
+        let frame = ProjectedCustodyTerminalFrameV1::new(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+        )
+        .expect("Lock-and-source-close has a terminal frame");
+        let mut accounts: Vec<_> = (0..frame.account_count())
+            .map(|_| terminal_account())
+            .collect();
+        for (coordinate, account) in accounts.iter_mut().enumerate() {
+            let expected = frame.privileges(coordinate).expect("frame coordinate");
+            account.is_signer = expected.signer();
+            account.is_writable = expected.writable();
+            account.executable = expected.executable();
+        }
+        assert_eq!(
+            authenticate_terminal_frame_privileges_v1(&accounts, frame),
+            Ok(())
+        );
+        assert_eq!(
+            authenticate_token_frame_privileges(
+                &accounts[ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_AUTHORITY],
+                &accounts[ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_TOKEN_PROGRAM],
+            ),
+            Ok(())
+        );
+        accounts[ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_AUTHORITY].executable = true;
+        assert_eq!(
+            authenticate_terminal_frame_privileges_v1(&accounts, frame),
+            Err(CustodySbfError::AccountFrame.into())
+        );
+        assert_eq!(
+            authenticate_token_frame_privileges(
+                &accounts[ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_AUTHORITY],
+                &accounts[ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_TOKEN_PROGRAM],
+            ),
+            Err(CustodySbfError::TokenState.into())
+        );
     }
 }

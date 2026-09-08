@@ -71,6 +71,175 @@ impl ProjectedCustodyAbortFrameV1 {
     /// Vacant future Market.
     pub const MARKET: usize = 10;
 }
+
+/// Stable refusal from a terminal projected-Custody frame lookup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectedCustodyTerminalFrameErrorV1 {
+    /// The operation has another physical frame or the coordinate is outside it.
+    InvalidCoordinate,
+}
+
+/// Exact SVM privileges at one terminal projected-Custody coordinate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectedCustodyFramePrivilegesV1 {
+    signer: bool,
+    writable: bool,
+    executable: bool,
+}
+
+impl ProjectedCustodyFramePrivilegesV1 {
+    /// Exact signer bit.
+    #[must_use]
+    pub const fn signer(self) -> bool {
+        self.signer
+    }
+
+    /// Exact writable bit.
+    #[must_use]
+    pub const fn writable(self) -> bool {
+        self.writable
+    }
+
+    /// Exact executable bit.
+    #[must_use]
+    pub const fn executable(self) -> bool {
+        self.executable
+    }
+}
+
+/// Source-owned fixed privileges for projected terminal routes.
+///
+/// Lock and Realize share their first seven accounts, but differ over the
+/// RentCredit and the terminal resource tail. A physical Effect frame may
+/// carry a wider representative union from prior children; the Custody child
+/// must receive only this operation's exact tuple.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectedCustodyTerminalFrameV1 {
+    operation: ProjectedCustodyOperationV1,
+}
+
+impl ProjectedCustodyTerminalFrameV1 {
+    /// Typed caller coordinate shared by all terminal frames.
+    pub const CALLER: usize = 0;
+    /// Projection replay coordinate shared by all terminal frames.
+    pub const STATE: usize = 1;
+    /// Activated release-cache coordinate shared by all terminal frames.
+    pub const CACHE: usize = 2;
+    /// Registry program coordinate shared by all terminal frames.
+    pub const REGISTRY: usize = 3;
+    /// Typed Trading capability program coordinate shared by all terminal frames.
+    pub const CALLER_PROGRAM: usize = 4;
+    /// Trading ProgramData coordinate shared by all terminal frames.
+    pub const CALLER_PROGRAMDATA: usize = 5;
+    /// Lifecycle rent-credit coordinate shared by all terminal frames.
+    pub const RENT_CREDIT: usize = 6;
+    /// Lock-and-source-close's projected Hoard coordinate.
+    pub const LOCK_HOARD: usize = 7;
+    /// Lock-and-source-close's normal source Vault coordinate.
+    pub const LOCK_SOURCE: usize = 8;
+    /// Lock-and-source-close's Custody transfer-authority coordinate.
+    pub const LOCK_CLOSE_AUTHORITY: usize = 9;
+    /// Lock-and-source-close's collateral mint coordinate.
+    pub const LOCK_CLOSE_MINT: usize = 10;
+    /// Lock-and-source-close's token program coordinate.
+    pub const LOCK_CLOSE_TOKEN_PROGRAM: usize = 11;
+    /// Lock-and-source-close's normal source replay coordinate.
+    pub const LOCK_SOURCE_REPLAY: usize = 12;
+    /// Lock-and-source-close's vacant Market coordinate.
+    pub const LOCK_CLOSE_MARKET: usize = 13;
+    /// Realize's normal Hoard Vault coordinate.
+    pub const REALIZE_VAULT: usize = 7;
+    /// Realize's founded Market coordinate.
+    pub const REALIZE_MARKET: usize = 8;
+    /// Realize's Custody transfer-authority coordinate.
+    pub const REALIZE_AUTHORITY: usize = 9;
+    /// Realize's collateral mint coordinate.
+    pub const REALIZE_MINT: usize = 10;
+    /// Realize's token program coordinate.
+    pub const REALIZE_TOKEN_PROGRAM: usize = 11;
+    /// Select one terminal projected-Custody operation.
+    pub const fn new(
+        operation: ProjectedCustodyOperationV1,
+    ) -> core::result::Result<Self, ProjectedCustodyTerminalFrameErrorV1> {
+        match operation {
+            ProjectedCustodyOperationV1::AbortOpenAndClose
+            | ProjectedCustodyOperationV1::LockHoardAndCloseSource
+            | ProjectedCustodyOperationV1::RealizeAndClose => Ok(Self { operation }),
+            _ => Err(ProjectedCustodyTerminalFrameErrorV1::InvalidCoordinate),
+        }
+    }
+
+    /// Exact child account count.
+    #[must_use]
+    pub const fn account_count(self) -> usize {
+        match self.operation {
+            ProjectedCustodyOperationV1::AbortOpenAndClose => {
+                ProjectedCustodyAbortFrameV1::ACCOUNT_COUNT
+            }
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource => {
+                PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1
+            }
+            ProjectedCustodyOperationV1::RealizeAndClose => {
+                PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1
+            }
+            // `new` constructs only terminal operations. Keep this total for
+            // callers of a value decoded or otherwise reconstructed outside
+            // that constructor; `privileges` returns the typed refusal.
+            _ => 0,
+        }
+    }
+
+    /// Exact child privileges at one coordinate.
+    pub fn privileges(
+        self,
+        coordinate: usize,
+    ) -> core::result::Result<ProjectedCustodyFramePrivilegesV1, ProjectedCustodyTerminalFrameErrorV1>
+    {
+        if coordinate >= self.account_count() {
+            return Err(ProjectedCustodyTerminalFrameErrorV1::InvalidCoordinate);
+        }
+        let privileges = match coordinate {
+            0 => projected_privileges(true, false, false),
+            1 => projected_privileges(false, true, false),
+            3 | 4 => projected_privileges(false, false, true),
+            6 if self.operation != ProjectedCustodyOperationV1::RealizeAndClose => {
+                projected_privileges(false, true, false)
+            }
+            7 | 8 if self.operation == ProjectedCustodyOperationV1::LockHoardAndCloseSource => {
+                projected_privileges(false, true, false)
+            }
+            7 if self.operation == ProjectedCustodyOperationV1::AbortOpenAndClose => {
+                projected_privileges(false, true, false)
+            }
+            11 if self.operation == ProjectedCustodyOperationV1::LockHoardAndCloseSource => {
+                projected_privileges(false, false, true)
+            }
+            9 if self.operation == ProjectedCustodyOperationV1::AbortOpenAndClose => {
+                projected_privileges(false, false, true)
+            }
+            11 if self.operation == ProjectedCustodyOperationV1::RealizeAndClose => {
+                projected_privileges(false, false, true)
+            }
+            12 if self.operation == ProjectedCustodyOperationV1::LockHoardAndCloseSource => {
+                projected_privileges(false, true, false)
+            }
+            _ => projected_privileges(false, false, false),
+        };
+        Ok(privileges)
+    }
+}
+
+const fn projected_privileges(
+    signer: bool,
+    writable: bool,
+    executable: bool,
+) -> ProjectedCustodyFramePrivilegesV1 {
+    ProjectedCustodyFramePrivilegesV1 {
+        signer,
+        writable,
+        executable,
+    }
+}
 /// Public fixed-layout coordinates for one projected-Custody request.
 ///
 /// Parent Effect emitters consume these semantic-owner coordinates when an
@@ -3159,6 +3328,75 @@ mod tests {
                     true
                 )
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn terminal_frames_pin_lock_and_realize_privileges() {
+        let lock = ProjectedCustodyTerminalFrameV1::new(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+        )
+        .expect("Lock is terminal");
+        assert_eq!(
+            lock.account_count(),
+            PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1
+        );
+        assert!(
+            lock.privileges(ProjectedCustodyTerminalFrameV1::LOCK_HOARD)
+                .expect("Lock Hoard")
+                .writable()
+        );
+        assert!(
+            lock.privileges(ProjectedCustodyTerminalFrameV1::LOCK_SOURCE)
+                .expect("Lock source")
+                .writable()
+        );
+        assert!(
+            !lock
+                .privileges(ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_AUTHORITY)
+                .expect("Lock authority")
+                .writable()
+        );
+        assert!(
+            !lock
+                .privileges(ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_AUTHORITY)
+                .expect("Lock authority")
+                .executable()
+        );
+        assert!(
+            lock.privileges(ProjectedCustodyTerminalFrameV1::LOCK_CLOSE_TOKEN_PROGRAM)
+                .expect("Lock token program")
+                .executable()
+        );
+
+        let realize =
+            ProjectedCustodyTerminalFrameV1::new(ProjectedCustodyOperationV1::RealizeAndClose)
+                .expect("Realize is terminal");
+        assert_eq!(
+            realize.account_count(),
+            PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1
+        );
+        assert!(
+            !realize
+                .privileges(ProjectedCustodyTerminalFrameV1::RENT_CREDIT)
+                .expect("Realize RentCredit")
+                .writable()
+        );
+        assert!(
+            !realize
+                .privileges(ProjectedCustodyTerminalFrameV1::REALIZE_VAULT)
+                .expect("Realize Hoard")
+                .writable()
+        );
+        assert!(
+            realize
+                .privileges(ProjectedCustodyTerminalFrameV1::REALIZE_TOKEN_PROGRAM)
+                .expect("Realize token program")
+                .executable()
+        );
+        assert_eq!(
+            ProjectedCustodyTerminalFrameV1::new(ProjectedCustodyOperationV1::OpenHoard),
+            Err(ProjectedCustodyTerminalFrameErrorV1::InvalidCoordinate)
         );
     }
 }

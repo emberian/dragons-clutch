@@ -11,6 +11,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_market::{
     FOUND_ACCOUNT_COUNT_V3, Identity, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
     SERIES_CONSUME_FOUND_SUFFIX_START_V1, SERIES_CORE_REQUEST_MAGIC_V1,
@@ -28,7 +29,14 @@ use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading::series::request::{
     SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
 };
-use dclutch_trading::series::{AccountKeyV3, funding_list_id, ticket_content_id};
+use dclutch_trading::series::{
+    AccountKeyV3, TemplateV3, funding_list_id,
+    replay::{
+        SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, SeriesStateV3, TicketPhaseV3,
+        TicketStateV3,
+    },
+    ticket_content_id,
+};
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3},
@@ -603,7 +611,7 @@ fn prepare<'info>(
         return Err(TradingSbfError::Content.into());
     };
     project_series_core_child_privileges_v1(frame)?;
-    let ticket = ticket_content_id_from_found_frame_v1(frame)?;
+    let ticket = ticket_content_id_from_core_frame_v2(frame)?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(parent.release_set).map_err(|_| TradingSbfError::Content)?,
         parent.market,
@@ -659,11 +667,16 @@ fn project_series_core_child_privileges_v1(
 /// The request's `ticket` coordinate is the mutable replay PDA.  Core's
 /// `SeriesConsumeAccounts::authenticate_trading_caller` instead derives the
 /// same context from the distinct finalized Ticket raw record at local 45.
-fn ticket_content_id_from_found_frame_v1(
+fn ticket_content_id_from_core_frame_v2(
     frame: &[AccountInfo<'_>],
 ) -> Result<[u8; 32], ProgramError> {
+    let ticket_raw_local = if frame.len() == SERIES_OPEN_ACCOUNT_COUNT_V1 {
+        21
+    } else {
+        FOUND_ACCOUNT_COUNT_V3 + 8
+    };
     let ticket_raw = frame
-        .get(FOUND_ACCOUNT_COUNT_V3 + 8)
+        .get(ticket_raw_local)
         .ok_or(TradingSbfError::Content)?;
     let bytes = ticket_raw
         .try_borrow_data()
@@ -702,28 +715,19 @@ fn validate_series_core_receipt_v2(
     if width == SERIES_OPEN_ACCOUNT_COUNT_V1 {
         let claims_receipt = prior_receipt.ok_or(TradingSbfError::ChildReceipt)?;
         let market = accounts.get(1).ok_or(TradingSbfError::ChildReceipt)?;
-        let root = accounts.get(15).ok_or(TradingSbfError::ChildReceipt)?;
-        let ticket = accounts.get(16).ok_or(TradingSbfError::ChildReceipt)?;
+        let (root_candidate, ticket_candidate) = predicted_open_replay_bytes_v1(accounts, request)?;
         let market_bytes = market
-            .try_borrow_data()
-            .map_err(|_| TradingSbfError::ChildReceipt)?;
-        let root_bytes = root
-            .try_borrow_data()
-            .map_err(|_| TradingSbfError::ChildReceipt)?;
-        let ticket_bytes = ticket
             .try_borrow_data()
             .map_err(|_| TradingSbfError::ChildReceipt)?;
         let post = hashv(&[
             SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1,
             &market_bytes,
             claims_receipt,
-            &root_bytes,
-            &ticket_bytes,
+            &root_candidate,
+            &ticket_candidate,
         ])
         .to_bytes();
         drop(market_bytes);
-        drop(root_bytes);
-        drop(ticket_bytes);
         let receipt =
             SeriesCoreAckV1::decode(returned).map_err(|_| TradingSbfError::ChildReceipt)?;
         receipt
@@ -796,6 +800,58 @@ fn validate_series_core_receipt_v2(
         )
         .map_err(|_| TradingSbfError::ChildReceipt)?;
     Ok(())
+}
+
+fn predicted_open_replay_bytes_v1(
+    accounts: &[AccountInfo<'_>],
+    request: SeriesCoreRequestV1,
+) -> Result<
+    (
+        [u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3],
+        [u8; SERIES_TICKET_STATE_BYTES_V3],
+    ),
+    ProgramError,
+> {
+    let root = accounts.get(15).ok_or(TradingSbfError::ChildReceipt)?;
+    let ticket_state = accounts.get(16).ok_or(TradingSbfError::ChildReceipt)?;
+    let template_raw = accounts.get(17).ok_or(TradingSbfError::ChildReceipt)?;
+    let template_bytes = template_raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
+    let occurrence_count = TemplateV3::decode(&template_bytes)
+        .map_err(|_| TradingSbfError::ChildReceipt)?
+        .occurrence_count();
+    drop(template_bytes);
+    let root_bytes = root
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
+    let current_root = SeriesStateV3::decode(
+        root_bytes
+            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+            .ok_or(TradingSbfError::ChildReceipt)?,
+        occurrence_count,
+    )
+    .map_err(|_| TradingSbfError::ChildReceipt)?;
+    let next_root = current_root
+        .settle_current(request.expected_series_revision(), occurrence_count)
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
+    let mut root_candidate = [0; CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3];
+    root_candidate.copy_from_slice(&root_bytes);
+    root_candidate[CAPABILITY_ROOT_HEADER_BYTES_V1..].copy_from_slice(
+        &next_root
+            .encode(occurrence_count)
+            .map_err(|_| TradingSbfError::ChildReceipt)?,
+    );
+    drop(root_bytes);
+    let ticket_bytes = ticket_state
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
+    let current_ticket =
+        TicketStateV3::decode(&ticket_bytes).map_err(|_| TradingSbfError::ChildReceipt)?;
+    let next_ticket = current_ticket
+        .settle(request.expected_ticket_revision(), TicketPhaseV3::Consumed)
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
+    Ok((root_candidate, next_ticket.encode()))
 }
 
 fn authenticate_precommit_caller_v1(
@@ -967,6 +1023,203 @@ mod tests {
         Identity::new([value; 32]).expect("nonzero identity")
     }
 
+    fn receipt_account(data: impl Into<Vec<u8>>) -> AccountInfo<'static> {
+        receipt_account_at(Pubkey::new_unique(), data)
+    }
+
+    fn receipt_account_at(key: Pubkey, data: impl Into<Vec<u8>>) -> AccountInfo<'static> {
+        let key = Box::leak(Box::new(key));
+        let owner = Box::leak(Box::new(Pubkey::new_unique()));
+        let lamports = Box::leak(Box::new(0_u64));
+        let data = Box::leak(data.into().into_boxed_slice());
+        AccountInfo::new(key, false, false, lamports, data, owner, false)
+    }
+
+    fn consume_request(ticket_replay: Pubkey) -> SeriesCoreRequestV1 {
+        SeriesCoreRequestV1::occurrence(
+            SeriesCoreActionV1::Consume,
+            id(1),
+            id(2),
+            Identity::new(ticket_replay.to_bytes()).expect("replay PDA"),
+            id(4),
+            id(5),
+            id(6),
+            id(7),
+            id(8),
+            9,
+            1,
+            0,
+            10,
+            11,
+            12,
+            13,
+        )
+        .expect("Series Consume request")
+    }
+
+    fn child_receipt() -> ProgramError {
+        TradingSbfError::ChildReceipt.into()
+    }
+
+    fn found_frame(funding_count: usize) -> Vec<AccountInfo<'static>> {
+        let width = SERIES_CONSUME_FOUND_SUFFIX_START_V1
+            + SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1
+            + funding_count;
+        let mut frame = (0..width)
+            .map(|local| receipt_account(vec![local as u8, 0xA5]))
+            .collect::<Vec<_>>();
+        let ticket_raw = FOUND_ACCOUNT_COUNT_V3 + 8;
+        frame[ticket_raw] =
+            receipt_account(dclutch_trading::series::generated::SERIES_EXAMPLE_TICKET_V3.to_vec());
+        frame.push(receipt_account(Vec::new()));
+        frame
+    }
+
+    fn found_return(
+        request: SeriesCoreRequestV1,
+        request_digest: [u8; 32],
+        core_program: Pubkey,
+        frame: &[AccountInfo<'_>],
+    ) -> Vec<u8> {
+        let accounts = frame
+            .get(..frame.len() - 1)
+            .expect("callee appended to Found frame");
+        let funding_count = accounts.len()
+            - SERIES_CONSUME_FOUND_SUFFIX_START_V1
+            - SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1;
+        let permit = &accounts[SERIES_CONSUME_FOUND_SUFFIX_START_V1 + funding_count];
+        let funding_keys = accounts[SERIES_CONSUME_FOUND_SUFFIX_START_V1
+            ..SERIES_CONSUME_FOUND_SUFFIX_START_V1 + funding_count]
+            .iter()
+            .map(|account| AccountKeyV3::new(account.key.to_bytes()).expect("funding key"))
+            .collect::<Vec<_>>();
+        let funding_list = funding_list_id(&funding_keys).expect("canonical funding list");
+        let market = &accounts[1];
+        let market_data = market.try_borrow_data().expect("market data");
+        let permit_data = permit.try_borrow_data().expect("permit data");
+        let post = hashv(&[
+            SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1,
+            &market_data,
+            &permit_data,
+        ])
+        .to_bytes();
+        SeriesCoreFoundAckV2::new(
+            request,
+            Identity::new(core_program.to_bytes()).expect("Core program"),
+            Identity::new(permit.key.to_bytes()).expect("permit"),
+            Identity::new(request_digest).expect("request digest"),
+            u8::try_from(funding_count).expect("bounded funding count"),
+            Identity::new(funding_list.to_bytes()).expect("funding list"),
+            Identity::new(post).expect("post digest"),
+        )
+        .expect("Found V2 receipt")
+        .encode()
+        .expect("Found V2 bytes")
+        .to_vec()
+    }
+
+    fn open_frame(ticket_record: &[u8], ticket_replay: Pubkey) -> Vec<AccountInfo<'static>> {
+        let mut frame = (0..SERIES_OPEN_ACCOUNT_COUNT_V1)
+            .map(|local| receipt_account(vec![0xC0, local as u8]))
+            .collect::<Vec<_>>();
+        let template = dclutch_trading::series::generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let template_value = TemplateV3::decode(&template).expect("canonical Template");
+        let ticket_id = ticket_content_id(ticket_record).expect("canonical Ticket record");
+        let current_root = SeriesStateV3::new(0)
+            .prepare_ticket(0)
+            .expect("canonical prepared SeriesState");
+        let mut root = vec![0_u8; CAPABILITY_ROOT_HEADER_BYTES_V1];
+        root.extend_from_slice(
+            &current_root
+                .encode(template_value.occurrence_count())
+                .expect("canonical SeriesState bytes"),
+        );
+        frame[15] = receipt_account(root);
+        frame[17] = receipt_account(template.to_vec());
+        frame[21] = receipt_account(ticket_record.to_vec());
+        frame[16] = receipt_account_at(
+            ticket_replay,
+            TicketStateV3::prepared(ticket_id).encode().to_vec(),
+        );
+        frame.push(receipt_account(Vec::new()));
+        frame
+    }
+
+    /// Build an Open receipt from the native replay kernels rather than the
+    /// Trading-side verifier's candidate helper.  This keeps the test capable
+    /// of detecting a self-consistent but wrong verifier prediction.
+    fn native_open_replay_candidates(
+        accounts: &[AccountInfo<'_>],
+        request: SeriesCoreRequestV1,
+    ) -> (
+        [u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3],
+        [u8; SERIES_TICKET_STATE_BYTES_V3],
+    ) {
+        let occurrence_count = TemplateV3::decode(
+            &accounts[17]
+                .try_borrow_data()
+                .expect("canonical Template bytes"),
+        )
+        .expect("canonical Template")
+        .occurrence_count();
+        let root_data = accounts[15].try_borrow_data().expect("root data");
+        let current_root = SeriesStateV3::decode(
+            &root_data[CAPABILITY_ROOT_HEADER_BYTES_V1..],
+            occurrence_count,
+        )
+        .expect("canonical SeriesState");
+        let next_root = current_root
+            .settle_current(request.expected_series_revision(), occurrence_count)
+            .expect("next SeriesState");
+        let mut root_candidate = [0; CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3];
+        root_candidate.copy_from_slice(&root_data);
+        root_candidate[CAPABILITY_ROOT_HEADER_BYTES_V1..].copy_from_slice(
+            &next_root
+                .encode(occurrence_count)
+                .expect("next SeriesState bytes"),
+        );
+        drop(root_data);
+        let current_ticket =
+            TicketStateV3::decode(&accounts[16].try_borrow_data().expect("ticket replay data"))
+                .expect("canonical TicketState");
+        let next_ticket = current_ticket
+            .settle(request.expected_ticket_revision(), TicketPhaseV3::Consumed)
+            .expect("next TicketState");
+        (root_candidate, next_ticket.encode())
+    }
+
+    fn open_return_from_native_poststate(
+        request: SeriesCoreRequestV1,
+        request_digest: [u8; 32],
+        core_program: Pubkey,
+        frame: &[AccountInfo<'_>],
+        claims_receipt: &[u8],
+        root_candidate: &[u8],
+        ticket_candidate: &[u8],
+    ) -> Vec<u8> {
+        let accounts = frame
+            .get(..frame.len() - 1)
+            .expect("callee appended to Open frame");
+        let market = accounts[1].try_borrow_data().expect("market data");
+        let post = hashv(&[
+            SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1,
+            &market,
+            claims_receipt,
+            root_candidate,
+            ticket_candidate,
+        ])
+        .to_bytes();
+        SeriesCoreAckV1::new(
+            request,
+            Identity::new(core_program.to_bytes()).expect("Core program"),
+            Identity::new(request_digest).expect("request digest"),
+            Identity::new(post).expect("post digest"),
+        )
+        .encode()
+        .expect("Open V1 bytes")
+        .to_vec()
+    }
+
     fn expiry_request() -> SeriesPermitExpiryRequestV1 {
         let intent = dclutch_market::FoundingIntentV5::new(
             255,
@@ -1041,6 +1294,279 @@ mod tests {
             CORE_RECEIPTLESS_EXPIRY_DIGEST_DOMAIN_V3,
             CORE_EXECUTION_DIGEST_DOMAIN_V3
         );
+    }
+
+    #[test]
+    fn series_found_v2_receipts_bind_one_and_sixteen_canonical_funding_states() {
+        let core_program = Pubkey::new_unique();
+        for funding_count in [
+            dclutch_market::SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1,
+            dclutch_market::SERIES_CONSUME_FOUND_MAXIMUM_FUNDING_COUNT_V1,
+        ] {
+            let ticket_replay = Pubkey::new_unique();
+            let request = consume_request(ticket_replay);
+            let request_digest = hash(&request.encode().expect("request bytes")).to_bytes();
+            let frame = found_frame(funding_count);
+            let returned = found_return(request, request_digest, core_program, &frame);
+            assert_eq!(
+                validate_series_core_receipt_v2(
+                    request,
+                    request_digest,
+                    &core_program,
+                    &frame,
+                    &returned,
+                    None,
+                ),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn series_found_v2_receipt_refuses_substituted_market_permit_list_count_and_request() {
+        let core_program = Pubkey::new_unique();
+        let request = consume_request(Pubkey::new_unique());
+        let request_digest = hash(&request.encode().expect("request bytes")).to_bytes();
+
+        let frame = found_frame(2);
+        let returned = found_return(request, request_digest, core_program, &frame);
+        let mut market = frame[1].try_borrow_mut_data().expect("market data");
+        market[0] ^= 0xEE;
+        drop(market);
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                &core_program,
+                &frame,
+                &returned,
+                None,
+            ),
+            Err(child_receipt())
+        );
+
+        let frame = found_frame(2);
+        let returned = found_return(request, request_digest, core_program, &frame);
+        let permit = SERIES_CONSUME_FOUND_SUFFIX_START_V1 + 2;
+        let mut permit_data = frame[permit].try_borrow_mut_data().expect("permit data");
+        permit_data[0] ^= 0xEF;
+        drop(permit_data);
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                &core_program,
+                &frame,
+                &returned,
+                None,
+            ),
+            Err(child_receipt())
+        );
+
+        let mut frame = found_frame(2);
+        let returned = found_return(request, request_digest, core_program, &frame);
+        frame.swap(
+            SERIES_CONSUME_FOUND_SUFFIX_START_V1,
+            SERIES_CONSUME_FOUND_SUFFIX_START_V1 + 1,
+        );
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                &core_program,
+                &frame,
+                &returned,
+                None,
+            ),
+            Err(child_receipt())
+        );
+
+        let frame = found_frame(1);
+        let mut count_substitution = found_return(request, request_digest, core_program, &frame);
+        let count_offset = dclutch_market::SERIES_CORE_FOUND_ACK_FUNDING_COUNT_OFFSET_V2;
+        assert_eq!(count_substitution[count_offset], 1);
+        count_substitution[count_offset] = 2;
+        assert_eq!(
+            SeriesCoreFoundAckV2::decode(&count_substitution)
+                .expect("count-only substituted Found V2")
+                .funding_count(),
+            2
+        );
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                &core_program,
+                &frame,
+                &count_substitution,
+                None,
+            ),
+            Err(child_receipt())
+        );
+
+        let frame = found_frame(1);
+        let returned = found_return(request, request_digest, core_program, &frame);
+        let changed_request = SeriesCoreRequestV1::occurrence(
+            SeriesCoreActionV1::Consume,
+            id(1),
+            id(2),
+            request.ticket().expect("ticket"),
+            id(4),
+            id(5),
+            id(6),
+            id(7),
+            id(8),
+            9,
+            3,
+            0,
+            10,
+            11,
+            12,
+            13,
+        )
+        .expect("substituted request");
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                changed_request,
+                request_digest,
+                &core_program,
+                &frame,
+                &returned,
+                None,
+            ),
+            Err(child_receipt())
+        );
+    }
+
+    #[test]
+    fn series_found_v1_receipt_cannot_cross_the_v2_found_boundary() {
+        let core_program = Pubkey::new_unique();
+        let request = consume_request(Pubkey::new_unique());
+        let request_digest = hash(&request.encode().expect("request bytes")).to_bytes();
+        let frame = found_frame(1);
+        let obsolete = SeriesCoreAckV1::new(
+            request,
+            Identity::new(core_program.to_bytes()).expect("Core program"),
+            Identity::new(request_digest).expect("request digest"),
+            id(9),
+        )
+        .encode()
+        .expect("legacy V1 bytes");
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                &core_program,
+                &frame,
+                &obsolete,
+                None,
+            ),
+            Err(child_receipt())
+        );
+    }
+
+    #[test]
+    fn series_open_v1_receipt_binds_claims_and_predicted_future_replay() {
+        let ticket_record = dclutch_trading::series::generated::SERIES_EXAMPLE_TICKET_V3;
+        let ticket_replay = Pubkey::new_unique();
+        let request = consume_request(ticket_replay);
+        let request_digest = hash(&request.encode().expect("request bytes")).to_bytes();
+        let core_program = Pubkey::new_unique();
+        let claims_receipt = [0x51, 0x52, 0x53];
+        let frame = open_frame(&ticket_record, ticket_replay);
+        let accounts = frame.get(..frame.len() - 1).expect("Open accounts");
+        let (root_future, ticket_future) = native_open_replay_candidates(accounts, request);
+        let current_root = accounts[15].try_borrow_data().expect("root data").to_vec();
+        let current_ticket = accounts[16]
+            .try_borrow_data()
+            .expect("ticket replay data")
+            .to_vec();
+        assert_ne!(current_root.as_slice(), root_future.as_slice());
+        assert_ne!(current_ticket.as_slice(), ticket_future.as_slice());
+        let returned = open_return_from_native_poststate(
+            request,
+            request_digest,
+            core_program,
+            &frame,
+            &claims_receipt,
+            &root_future,
+            &ticket_future,
+        );
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                &core_program,
+                &frame,
+                &returned,
+                Some(&claims_receipt),
+            ),
+            Ok(())
+        );
+        let current_return = open_return_from_native_poststate(
+            request,
+            request_digest,
+            core_program,
+            &frame,
+            &claims_receipt,
+            &current_root,
+            &current_ticket,
+        );
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                &core_program,
+                &frame,
+                &current_return,
+                Some(&claims_receipt),
+            ),
+            Err(child_receipt())
+        );
+        assert_eq!(
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                &core_program,
+                &frame,
+                &returned,
+                Some(&[0x51, 0x52, 0x54]),
+            ),
+            Err(child_receipt())
+        );
+    }
+
+    #[test]
+    fn ticket_context_comes_from_ticket_record_not_replay_pda_at_native_offsets() {
+        let ticket_record = dclutch_trading::series::generated::SERIES_EXAMPLE_TICKET_V3;
+        let expected = ticket_content_id(&ticket_record)
+            .expect("canonical Ticket record")
+            .to_bytes();
+        for (mut frame, replay_local) in [
+            (found_frame(1), FOUND_ACCOUNT_COUNT_V3 + 3),
+            (open_frame(&ticket_record, Pubkey::new_unique()), 16),
+        ] {
+            let replay = Pubkey::new_unique();
+            let replay_data = frame[replay_local]
+                .try_borrow_data()
+                .expect("replay data")
+                .to_vec();
+            frame[replay_local] = receipt_account_at(replay, replay_data);
+            assert_ne!(replay.to_bytes(), expected);
+            assert_eq!(
+                consume_request(replay)
+                    .ticket()
+                    .expect("replay PDA")
+                    .to_bytes(),
+                replay.to_bytes()
+            );
+            assert_eq!(
+                ticket_content_id_from_core_frame_v2(
+                    frame.get(..frame.len() - 1).expect("callee appended"),
+                ),
+                Ok(expected)
+            );
+        }
     }
 
     #[test]

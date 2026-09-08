@@ -6,9 +6,11 @@ admin keys, you cannot change its rules, and you are not the referee:
 everything that happens next is either open to everyone or refused for
 everyone. This guide walks through the decisions that are yours.
 
-Seven protocol programs are deployed on Solana devnet as a cohort (fresh ids
-each redeploy; the addresses are not permanent), and markets have been
-founded, traded, resolved and paid on them. You rehearse market creation
+The recorded cohort 17 deployment contains eight protocol programs (fresh ids
+each redeploy; the addresses are not permanent). Its markets have been
+founded, traded, resolved and paid; the
+[cohort evidence](../evidence/COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md)
+records the exact programs and outcomes. You rehearse market creation
 against a local test chain first ([the walkthrough](../operators/found-a-market.md))
 and use the public app to inspect the live cohort. Exact costs, routes, and
 codes live in the [reference](../reference/README.md).
@@ -54,11 +56,20 @@ ordered stages:
    market can only open on the terms the first stage committed, and the escrow
    carries a refund path so nothing strands between the two transactions.
 
-Both routes have opened markets on devnet. The composed founding, `DCLTGMF3`,
-measured 1,069,561 compute units on a local validator — 76% of Solana's
-1,400,000 per-transaction maximum, with no headroom to buy — which is why the
-split route exists. The current measurements and their evidence level are in
-[the budgets reference](../reference/budgets.md).
+Both routes have opened markets on devnet. A transaction must finish within
+Solana's 1,400,000 compute-unit maximum; its requested compute limit cannot buy
+execution beyond that ceiling. The composed route's cost depends on the
+selected market and program versions. Use the
+[budgets reference](../reference/budgets.md) and its dated evidence when
+choosing a route.
+
+The test reports also compare transaction costs with historical performance
+baselines. Exceeding one of those baselines means a regression comparison is
+red; it does not by itself mean the transaction failed on chain. For example,
+the [September 7 infrastructure campaign](../evidence/INFRASTRUCTURE_FLOOR_88AEC17E8_2026_09_07.md)
+completed all 209 transactions while eight baseline comparisons failed. A
+runtime compute exhaustion is different: the transaction fails and its state
+changes roll back. Read the transaction result alongside the budget result.
 
 ## Funding named obligations
 

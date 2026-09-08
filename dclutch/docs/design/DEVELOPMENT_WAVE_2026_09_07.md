@@ -93,12 +93,26 @@ operator whose continued presence is required for holders to get paid.
   created during Consume; the last category starts with zero data width.
   Full constructor controls are exposing producer defects, including a Claims
   count hardcoded to one instead of the M0 Portfolio's coefficient count.
-  Core's child CPI now narrows the physical account union to native permissions.
-  Claims needs the same projection, and the projected Custody dispatcher still
-  needs executable Lock/Realize receipt contracts beyond its existing cleanup
-  operation. These are implementation gaps, not tests to waive. Complete
-  constructor execution, pre/post-Prepare certificate/include invariance, a
-  selected accelerator build, and two validator occurrences remain owed.
+  Core and Claims child CPIs now narrow the physical account union to native
+  permissions, and projected Custody has executable Lock/Realize receipt
+  contracts. Native Core receipt controls bind the Found V2 funding list and
+  predict Open's future replay state independently of the verifier.
+
+  A source review on September 8 identified a larger recurrence defect:
+  the selected five-action ProgramSet dispatches by action only, while Prepare
+  and Consume embed occurrence-zero child requests. Normalizing the parent
+  root does not normalize the Market, generation, economics or replay revision.
+  The test named for two occurrences compiles the first occurrence twice with
+  different roots; it does not execute the second. The repair must parameterize
+  child requests from authenticated Occurrence, Ticket, root and native adapter
+  facts under the same immutable selection. Existing VM projection and request
+  write operations provide that mechanism. Astra owns this coupled change;
+  a Sol lane is separately bringing the evaluator's obsolete 5/1 input bank
+  into agreement with the canonical 7/9 bank. The first required proof retains
+  the same compiled artifacts while real replay state advances into occurrence
+  one. Selected SBF builds wait for that proof. Full constructor execution,
+  pre/post-Prepare certificate/include invariance, and two validator occurrences
+  remain owed; further compile-only fixtures do not close them.
 - General's accepted nonempty path is being run after repairing action-scoped
   lifecycle funding and the semantic outer frame / key-sorted Claims child
   boundary. Its next repair authenticates the actual Core, Realm, Claims
@@ -124,14 +138,23 @@ operator whose continued presence is required for holders to get paid.
   authenticated funded seal's immutable profile join, with same-wrapper and
   same-policy controls, instead of validating that join a second time.
   Subsequent runs reach the next allocation boundary within the compute limit.
-  The larger-heap diagnostic reaches the accelerator, whose inherited guard
-  accepts only the exact 64 KiB request. The canonical General heap profile,
-  allocator ceiling, guard, and host request must agree before that comparison
-  can measure the rest of PlaceOrder. This is a measured project profile,
-  separate from Solana's heap maximum and the historical CU regression table.
-  The existing session now transports its admitted output page; its complete
-  PlaceOrder child-authority projection and a nonempty accepted trade remain
-  owed. Dealer's
+  The canonical General heap profile, allocator and request now agree at
+  128 KiB. Serial execution then reaches the actual 1.4 million CU ceiling:
+  the compiler still selects chunked output, and each chunk recomputes the
+  whole candidate. Caching admitted CPI sort keys saves 22,234 CU in the
+  controlled diagnostic but does not make PlaceOrder finish. This is distinct
+  from the inherited historical performance comparisons.
+
+  One Sol owner now owns the complete General compiler, host and executable
+  campaign integration with the existing OutputPage transport. It computes one
+  candidate per invocation. Source review also found that the fixture's hashed
+  output-page address had no real creation signer. The producer is being
+  replaced with actual caller-funded System creation and a supplied, observed
+  accelerator-owned page; native controls check ownership, width and rent.
+  The account is reusable scratch, and the accelerator currently has no close
+  route, so rent recovery remains an explicit resource-lifecycle obligation.
+  Accepted nonempty ProgramTest and local-validator poststates remain owed.
+  Dealer's
   first RentCredit repair exposed a second false assumption: its sponsor need
   not be the immutable Market credit's refund beneficiary. Finalized account
   bytes located that exact mismatch; the repair retains the canonical credit

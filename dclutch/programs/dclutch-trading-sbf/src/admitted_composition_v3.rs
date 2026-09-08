@@ -703,11 +703,21 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
 /// extra conjunct this producer needs before it can make that runtime rule save
 /// heap: differing representations of one physical key are an invalid frame,
 /// never an instruction to choose one silently.  Its source coordinate is
-/// resolved directly against the fixed frame, optional page, and runtime tail;
-/// no source-reference `Vec` is retained in the bump heap. Sorted `usize`
-/// source indices are ordered by `(key, original_index)`, so equal-key
-/// validation takes one pass and the retained backing order remains the
-/// original first-match order.
+/// resolved directly against the fixed frame, optional page, and runtime tail.
+/// The bounded sort bank caches each key once before sorting by
+/// `(key-prefix, key, original-index)`: repeatedly resolving those coordinates
+/// inside the comparator consumed 181,343 CU on the measured nonempty General
+/// `PlaceOrder` path. The cache contains no account representation and does not
+/// choose a duplicate; validation still rereads and compares every equal-key
+/// representation before the retained backing order returns to original first
+/// occurrence.
+#[derive(Clone, Copy)]
+struct AdmittedCpiSortKeyV1 {
+    source_index: usize,
+    key_prefix: u64,
+    key: Pubkey,
+}
+
 fn deduplicated_admitted_cpi_infos_v5<'a, 'info>(
     frame: AdmittedCpiFrameV3<'a, 'info>,
     authority: &'a AccountInfo<'info>,
@@ -717,8 +727,8 @@ where
     'info: 'a,
 {
     let account_count = admitted_cpi_account_count_v5(frame, runtime_accounts.len())?;
-    let mut sorted_source_indices: Vec<usize> = Vec::new();
-    sorted_source_indices
+    let mut sorted_source_keys: Vec<AdmittedCpiSortKeyV1> = Vec::new();
+    sorted_source_keys
         .try_reserve_exact(account_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
     let mut retained = Vec::new();
@@ -726,49 +736,33 @@ where
         .try_reserve_exact(account_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
     retained.resize(account_count, false);
-    for original_index in 0..account_count {
-        sorted_source_indices.push(original_index);
-    }
-    if sorted_source_indices.len() != account_count {
-        return Err(TradingSbfError::AdmittedTransport.into());
+    for source_index in 0..account_count {
+        let account = admitted_cpi_account_at_v5(frame, authority, runtime_accounts, source_index)
+            .ok_or(TradingSbfError::AdmittedTransport)?;
+        sorted_source_keys.push(AdmittedCpiSortKeyV1 {
+            source_index,
+            key_prefix: admitted_cpi_key_prefix_v4(account),
+            key: *account.key,
+        });
     }
     hot_heap_mark!("admitted-cpi-index");
-    sorted_source_indices.sort_unstable_by(|left, right| {
-        let left_index = *left;
-        let right_index = *right;
-        match (
-            admitted_cpi_account_at_v5(frame, authority, runtime_accounts, left_index),
-            admitted_cpi_account_at_v5(frame, authority, runtime_accounts, right_index),
-        ) {
-            (Some(left_account), Some(right_account)) => admitted_cpi_key_prefix_v4(left_account)
-                .cmp(&admitted_cpi_key_prefix_v4(right_account))
-                .then_with(|| left_account.key.cmp(right_account.key))
-                .then(left_index.cmp(&right_index)),
-            // Every coordinate is below the checked source count above. Keep the sort total
-            // even if a future iterator violates that contract; the validation
-            // pass below turns the malformed table into AdmittedTransport.
-            _ => left_index.cmp(&right_index),
-        }
+    sorted_source_keys.sort_unstable_by(|left, right| {
+        left.key_prefix
+            .cmp(&right.key_prefix)
+            .then_with(|| left.key.cmp(&right.key))
+            .then(left.source_index.cmp(&right.source_index))
     });
 
     let mut unique_count = 0_usize;
     let mut group_start = 0_usize;
-    for index in 0..sorted_source_indices.len() {
-        let source_index = sorted_source_indices[index];
+    for index in 0..sorted_source_keys.len() {
+        let source_index = sorted_source_keys[index].source_index;
         let account = admitted_cpi_account_at_v5(frame, authority, runtime_accounts, source_index)
             .ok_or(TradingSbfError::AdmittedTransport)?;
         let same_key_as_previous = if index == 0 {
             false
         } else {
-            let previous_source_index = sorted_source_indices[index - 1];
-            let previous = admitted_cpi_account_at_v5(
-                frame,
-                authority,
-                runtime_accounts,
-                previous_source_index,
-            )
-            .ok_or(TradingSbfError::AdmittedTransport)?;
-            previous.key == account.key
+            sorted_source_keys[index - 1].key == sorted_source_keys[index].key
         };
         if !same_key_as_previous {
             *retained
@@ -780,7 +774,7 @@ where
                 .ok_or(TradingSbfError::AdmittedTransport)?;
             continue;
         }
-        let first_source_index = sorted_source_indices[group_start];
+        let first_source_index = sorted_source_keys[group_start].source_index;
         let first =
             admitted_cpi_account_at_v5(frame, authority, runtime_accounts, first_source_index)
                 .ok_or(TradingSbfError::AdmittedTransport)?;
@@ -789,12 +783,15 @@ where
 
     // Sorting back by source index preserves the first matching AccountInfo
     // the installed CPI translator selects for every ordered meta.
-    sorted_source_indices.sort_unstable();
+    sorted_source_keys.sort_unstable_by_key(|entry| entry.source_index);
     let mut infos: Vec<AccountInfo<'info>> = Vec::new();
     infos
         .try_reserve_exact(unique_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
-    for source_index in sorted_source_indices {
+    for source_index in sorted_source_keys
+        .into_iter()
+        .map(|entry| entry.source_index)
+    {
         if retained
             .get(source_index)
             .copied()

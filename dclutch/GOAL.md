@@ -59,6 +59,10 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-08 | existing Pages publishes source 551ffc1b9 through its established app and docs workflow | — | [runtime checkpoint publication](docs/evidence/PAGES_RUNTIME_CHECKPOINT_2026_09_08.md) |
+| 2026-09-08 | all eight programs at 551ffc1b9 pass the checked build; integration verifies 52 referenced artifacts | — | [strict runtime checkpoint](docs/evidence/STRICT_ALL_EIGHT_551_CHECKPOINT_2026_09_08.md) |
+| 2026-09-08 | full Series Consume and Expire constructors execute and expose M0 identity and physical-alias joins; both remain red | — | [constructor execution](docs/evidence/SERIES_CONSTRUCTOR_EXECUTION_2026_09_08.md) |
+| 2026-09-08 | General's controlled heap diagnostic separates an inherited 64 KiB profile guard from runtime allocation and compute limits | — | [General heap evidence](docs/evidence/GENERAL_PLACE_ORDER_HEAP_PROFILE_2026_09_08.md) |
 | 2026-09-08 | existing Pages refresh publishes strict checkpoints and accepted General founding evidence | — | [checkpoint publication](docs/evidence/PAGES_CHECKPOINT_REFRESH_2026_09_08.md) |
 | 2026-09-08 | General loopback founding completes with the established campaign-payer fixture grant | — | [accepted founding addendum](docs/evidence/GENERAL_LOOPBACK_FOUNDING_ADDENDUM_2026_09_08.md) |
 | 2026-09-08 | General OpenBatch accepts on the preserved local-validator ledger after the host switches occurrence and Batch PDA derivation to semantic Product ID | — | [OpenBatch Product-ID evidence](docs/evidence/GENERAL_OPENBATCH_PRODUCT_ID_LOOPBACK_2026_09_08.md) |

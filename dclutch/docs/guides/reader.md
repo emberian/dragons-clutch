@@ -108,7 +108,7 @@ whether the question, terms, source, and available price are worth accepting.
 
 ## What works today
 
-Seven protocol programs are deployed on Solana devnet as a cohort — a full
+The recorded cohort 17 deployment contains eight protocol programs — a full
 redeploy with fresh ids each time, so the addresses are not permanent — and the
 live cohort's markets are read off the chain by the public app, which labels
 anything it cannot authenticate instead of filling in missing facts. Every

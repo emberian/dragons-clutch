@@ -4742,6 +4742,101 @@ pub(crate) fn native_composition_bodies_for_test(
 /// first Prepare forwards through projected Custody.  The addresses come from
 /// the same publisher ordinary Found uses, which makes it impossible for a
 /// Series caller to restate this exact frame from a different manifest.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MarketProjectFoundClosureV1 {
+    pub(crate) realm: PublishedRecord,
+    pub(crate) product: PublishedRecord,
+    pub(crate) domain: PublishedRecord,
+    pub(crate) portfolio: PublishedRecord,
+    pub(crate) basis: PublishedRecord,
+    pub(crate) source: PublishedRecord,
+    pub(crate) source_spec: PublishedRecord,
+    pub(crate) source_capacity_profile: PublishedRecord,
+    pub(crate) manipulation_floor: (Pubkey, Pubkey),
+    pub(crate) manifest: PublishedRecord,
+    pub(crate) activation: Pubkey,
+    pub(crate) core: Pubkey,
+    pub(crate) core_programdata: Pubkey,
+    pub(crate) registry: Pubkey,
+    pub(crate) infrastructure: Pubkey,
+    pub(crate) registry_artifact: (Pubkey, Pubkey),
+    pub(crate) registry_programdata: Pubkey,
+    pub(crate) rent_artifact: (Pubkey, Pubkey),
+    pub(crate) rent_programdata: Pubkey,
+    pub(crate) price_gate: Option<(Pubkey, Pubkey)>,
+}
+
+/// The typed facts required to project ordinary Found's ProjectFound frame.
+/// This pure owner is shared by the publisher and offline campaign fixtures;
+/// callers provide finalized record coordinates and runtime identities, never
+/// a preassembled account array.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MarketProjectFoundProjectionV1 {
+    pub(crate) payer: Pubkey,
+    pub(crate) market: Pubkey,
+    pub(crate) rent_credit: Pubkey,
+    pub(crate) rent_program: Pubkey,
+    pub(crate) closure: MarketProjectFoundClosureV1,
+}
+
+pub(crate) fn project_found_snapshot_from_closure_v2(
+    input: MarketProjectFoundProjectionV1,
+) -> Result<Vec<Pubkey>> {
+    let closure = input.closure;
+    let mut keys = vec![
+        input.payer,
+        input.market,
+        input.rent_credit,
+        input.rent_program,
+        closure.realm.raw,
+        closure.realm.staging,
+        closure.product.raw,
+        closure.product.staging,
+        closure.domain.raw,
+        closure.domain.staging,
+        closure.portfolio.raw,
+        closure.portfolio.staging,
+        closure.basis.raw,
+        closure.basis.staging,
+        closure.source.raw,
+        closure.source.staging,
+        closure.source_spec.raw,
+        closure.source_spec.staging,
+        closure.source_capacity_profile.raw,
+        closure.source_capacity_profile.staging,
+        closure.manipulation_floor.0,
+        closure.manipulation_floor.1,
+        closure.manifest.raw,
+        closure.manifest.staging,
+        closure.activation,
+        closure.core,
+        closure.core_programdata,
+        closure.registry,
+        system_program::ID,
+        closure.infrastructure,
+        closure.registry_artifact.0,
+        closure.registry_artifact.1,
+        closure.registry_programdata,
+        closure.rent_artifact.0,
+        closure.rent_artifact.1,
+        closure.rent_programdata,
+    ];
+    if let Some((raw, staging)) = closure.price_gate {
+        keys.extend([raw, staging]);
+    }
+    let expected = if closure.price_gate.is_some() {
+        PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2
+    } else {
+        PROJECT_FOUND_ACCOUNT_COUNT_V2
+    };
+    if keys.len() != expected || keys.get(22) != Some(&closure.manifest.raw) {
+        return Err(Error::new(
+            "ordinary ProjectFound closure changed its exact cardinality",
+        ));
+    }
+    Ok(keys)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FutureMarketImmutablePublicationV1 {
     pub(crate) realm: PublishedRecord,
@@ -6261,52 +6356,41 @@ fn found_snapshot_keys(
     credit: Pubkey,
     records: &MarketRecords,
 ) -> Result<Vec<Pubkey>> {
+    let registry = pubkey(&plan.registry.program_id)?;
     let registry_artifact = record(plan, "registry_artifact_release")?;
     let rent_artifact = record(plan, "rent_artifact_release")?;
-    let floor = manipulation_floor_pair(pubkey(&plan.registry.program_id)?, records);
-    let mut keys = vec![
+    let floor = manipulation_floor_pair(registry, records);
+    let mut keys = project_found_snapshot_from_closure_v2(MarketProjectFoundProjectionV1 {
         payer,
         market,
-        credit,
-        pubkey(&plan.rent_credit.program_id)?,
-        records.realm.raw,
-        records.realm.staging,
-        records.product.raw,
-        records.product.staging,
-        records.domain.raw,
-        records.domain.staging,
-        records.portfolio.raw,
-        records.portfolio.staging,
-        records.basis.raw,
-        records.basis.staging,
-        records.source.raw,
-        records.source.staging,
-        records.source_spec.raw,
-        records.source_spec.staging,
-        records.source_capacity_profile.raw,
-        records.source_capacity_profile.staging,
-        floor.0,
-        floor.1,
-        records.manifest.raw,
-        records.manifest.staging,
-        pubkey(&plan.activation)?,
-        pubkey(&plan.core.program_id)?,
-        pubkey(&plan.core.programdata_id)?,
-        pubkey(&plan.registry.program_id)?,
-        sysvar::rent::ID,
-        system_program::ID,
-        pubkey(&plan.infrastructure_profile.address)?,
-        registry_artifact.0,
-        registry_artifact.1,
-        pubkey(&plan.registry.programdata_id)?,
-        rent_artifact.0,
-        rent_artifact.1,
-        pubkey(&plan.rent_credit.programdata_id)?,
-    ];
-    if let Some(price_gate) = records.price_gate {
-        keys.push(price_gate.raw);
-        keys.push(price_gate.staging);
-    }
+        rent_credit: credit,
+        rent_program: pubkey(&plan.rent_credit.program_id)?,
+        closure: MarketProjectFoundClosureV1 {
+            realm: records.realm,
+            product: records.product,
+            domain: records.domain,
+            portfolio: records.portfolio,
+            basis: records.basis,
+            source: records.source,
+            source_spec: records.source_spec,
+            source_capacity_profile: records.source_capacity_profile,
+            manipulation_floor: floor,
+            manifest: records.manifest,
+            activation: pubkey(&plan.activation)?,
+            core: pubkey(&plan.core.program_id)?,
+            core_programdata: pubkey(&plan.core.programdata_id)?,
+            registry,
+            infrastructure: pubkey(&plan.infrastructure_profile.address)?,
+            registry_artifact: (registry_artifact.0, registry_artifact.1),
+            registry_programdata: pubkey(&plan.registry.programdata_id)?,
+            rent_artifact: (rent_artifact.0, rent_artifact.1),
+            rent_programdata: pubkey(&plan.rent_credit.programdata_id)?,
+            price_gate: records
+                .price_gate
+                .map(|record| (record.raw, record.staging)),
+        },
+    })?;
+    keys.insert(FOUND_RENT_SYSVAR_INDEX_V3, sysvar::rent::ID);
     authenticate_found_snapshot_coordinates_v3(
         &keys,
         records.manifest.raw,

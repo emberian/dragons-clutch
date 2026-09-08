@@ -1859,23 +1859,11 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
     consume_prestate: crate::series_consume_geometry::SeriesConsumePrestateV1,
     minimum_slot: u64,
 ) -> Result<crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1> {
-    let mut geometry = selection.geometry.take().ok_or_else(|| {
-        Error::new(
-            "Series selected compilation omitted the source-owned non-Prepare action geometry",
-        )
-    })?;
-    geometry.prepare_fixed_data_lengths = observe_series_prepare_preprofile_geometry_v1(
-        rpc,
-        &mut selection,
-        m0,
-        records,
-        parent_root_state,
-        minimum_slot,
-    )?;
-    geometry.prepare_ticket_rent_lamports = selection
-        .material
-        .rent
-        .minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3);
+    if selection.geometry.is_some() {
+        return Err(Error::new(
+            "Series selected compilation refuses caller-supplied action geometry",
+        ));
+    }
     let preprofile =
         crate::series_found_prepare_campaign::derive_series_found_prepare_preprofile_v1(
             &mut selection,
@@ -1894,7 +1882,7 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
             "Series Prepare root state disagreed with its typed geometry fact",
         ));
     }
-    geometry.consume_fixed_data_lengths =
+    let consume_fixed_data_lengths =
         crate::series_consume_geometry::derive_series_consume_fixed_data_lengths_v1(
             rpc,
             crate::series_consume_geometry::SeriesConsumeGeometryInputV1 {
@@ -1912,7 +1900,7 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
                 minimum_slot,
             },
         )?;
-    geometry.expire_fixed_data_lengths =
+    let expire_fixed_data_lengths =
         crate::series_expire_geometry::derive_series_expire_fixed_data_lengths_v1(
             rpc,
             crate::series_expire_geometry::SeriesExpireGeometryInputV1 {
@@ -1926,6 +1914,23 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
                 minimum_slot,
             },
         )?;
+    let geometry = crate::series_source::SeriesObservedGeometryV1 {
+        prepare_fixed_data_lengths: observe_series_prepare_preprofile_geometry_v1(
+            rpc,
+            &mut selection,
+            m0,
+            records,
+            parent_root_state,
+            minimum_slot,
+        )?,
+        prepare_ticket_rent_lamports: selection
+            .material
+            .rent
+            .minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3),
+        consume_fixed_data_lengths,
+        consume_funding_count: u32::from(selection.funding_ledger_slot_count),
+        expire_fixed_data_lengths,
+    };
     selection.geometry = Some(geometry);
     crate::series_found_prepare_campaign::compile_series_found_prepare_selection_v1(
         selection,

@@ -25,7 +25,7 @@ use dclutch_source::{
     EnsembleFoldReceiptV1, RecoveryPolicyV2, SourceMaterialV3, SourceResolutionStateV2,
     WindowSpecV1,
 };
-use solana_program::hash::hashv;
+use solana_program::{hash::hashv, msg};
 
 use alloc::boxed::Box;
 
@@ -285,7 +285,14 @@ pub fn plan_ensemble_fold_v1(
         )
         .map_err(|error| match error {
             dclutch_source::Error::EnsembleQuorumNotMet => EnsembleFoldErrorV1::Quorum,
-            _ => EnsembleFoldErrorV1::Transition,
+            other => {
+                // `Transition` is chain-visible and intentionally coalesces
+                // Source's terminal transition failures. Keep its native
+                // cause in the program log so an accepted capture set does
+                // not turn the next fold refusal into a blind search.
+                msg!("ensemble fold source transition: {:?}", other);
+                EnsembleFoldErrorV1::Transition
+            }
         })?;
     if fold.decision.selector() >= result_domain.failure_selector()
         || fold.decision.outcome_count() != outcome_count

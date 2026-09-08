@@ -733,9 +733,11 @@ pub(crate) mod tests {
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
     use dclutch_market::{
         SeriesFoundingPermitSeedsV1,
+        capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         capability_program::{
             CapabilityRootHeaderV1, SelectedRecordBumpsV1, v4::CapabilityProgramV4,
         },
+        realm::REALM_SCHEMA_RELEASE_ID_V1,
     };
     use dclutch_operator::series_lifecycle_v3::{
         SeriesCurrentOccurrenceV3, SeriesLifecycleSnapshotV3,
@@ -744,7 +746,12 @@ pub(crate) mod tests {
         PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
     };
     use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+    use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
     use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+    use dclutch_source::{
+        PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1,
+    };
     use dclutch_trading::series::replay::SeriesStateV3;
     use dclutch_trading::series::{
         AuthenticatedProductProjectionV2, TemplateV3, admit_occurrence, admit_ticket,
@@ -756,10 +763,12 @@ pub(crate) mod tests {
         prepare_funding_artifacts_v5::SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5,
     };
     use sha2::Sha256;
+    use solana_program::hash::hash;
 
     use crate::{
         core_bump_projection::CoreProductGraphProjectionV1,
         market::{CoreProductGraphWalkV1, record_identity},
+        market::{FutureMarketFinalizedRecordV1, FutureMarketImmutablePublicationV1},
         plan::{hex32, pubkey},
         runtime::decode_hex,
         series_founder::{
@@ -1032,6 +1041,157 @@ pub(crate) mod tests {
         .0
     }
 
+    pub(crate) fn published_record(
+        registry: Pubkey,
+        schema: [u8; 32],
+        body: &[u8],
+    ) -> crate::runtime::PublishedRecord {
+        let digest = hash(body).to_bytes();
+        crate::runtime::PublishedRecord {
+            schema,
+            digest,
+            raw: Pubkey::find_program_address(
+                &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+                &registry,
+            )
+            .0,
+            staging: Pubkey::find_program_address(
+                &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+                &registry,
+            )
+            .0,
+        }
+    }
+
+    pub(crate) fn canonical_m0_publication(
+        prepared: &crate::series_founder::PreparedSeriesFounderV1,
+        registry: Pubkey,
+        market: Pubkey,
+        payer: Pubkey,
+        rent_credit: Pubkey,
+        rent_program: Pubkey,
+        core: Pubkey,
+        activation: Pubkey,
+        source_spec_body: &[u8],
+        source_capacity_body: &[u8],
+    ) -> FutureMarketImmutablePublicationV1 {
+        let realm = published_record(
+            registry,
+            REALM_SCHEMA_RELEASE_ID_V1,
+            &prepared.publication.realm,
+        );
+        let product = published_record(
+            registry,
+            PRODUCT_RECORD_SCHEMA_ID_V2,
+            &prepared.publication.product,
+        );
+        let domain = published_record(
+            registry,
+            RESULT_DOMAIN_SCHEMA_ID_V2,
+            &prepared.publication.domain,
+        );
+        let portfolio = published_record(
+            registry,
+            PORTFOLIO_SCHEMA_ID_V2,
+            &prepared.publication.portfolio,
+        );
+        let basis = published_record(
+            registry,
+            GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+            &prepared.publication.basis,
+        );
+        let source = published_record(
+            registry,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+            &prepared.publication.source,
+        );
+        let source_spec = published_record(registry, SOURCE_SPEC_SCHEMA_ID_V1, source_spec_body);
+        let source_capacity = published_record(
+            registry,
+            SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+            source_capacity_body,
+        );
+        let manifest = published_record(
+            registry,
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            &prepared.publication.manifest,
+        );
+        let key = |byte| Pubkey::new_from_array([byte; 32]);
+        let core_programdata = crate::upgrade::target_programdata(core);
+        let infrastructure = key(7);
+        let registry_programdata = key(8);
+        let rent_artifact =
+            published_record(registry, PROVIDER_RELEASE_SCHEMA_ID_V1, b"rent artifact");
+        let registry_artifact = published_record(
+            registry,
+            PROVIDER_RELEASE_SCHEMA_ID_V1,
+            b"registry artifact",
+        );
+        let rent_programdata = key(9);
+        let project_found: [Pubkey; dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2] =
+            crate::market::project_found_snapshot_from_closure_v2(
+                crate::market::MarketProjectFoundProjectionV1 {
+                    payer,
+                    market,
+                    rent_credit,
+                    rent_program,
+                    closure: crate::market::MarketProjectFoundClosureV1 {
+                        realm,
+                        product,
+                        domain,
+                        portfolio,
+                        basis,
+                        source,
+                        source_spec,
+                        source_capacity_profile: source_capacity,
+                        manipulation_floor: (key(11), key(12)),
+                        manifest,
+                        activation,
+                        core,
+                        core_programdata,
+                        registry,
+                        infrastructure,
+                        registry_artifact: (registry_artifact.raw, registry_artifact.staging),
+                        registry_programdata,
+                        rent_artifact: (rent_artifact.raw, rent_artifact.staging),
+                        rent_programdata,
+                        price_gate: None,
+                    },
+                },
+            )
+            .expect("canonical ProjectFound frame")
+            .try_into()
+            .expect("canonical ProjectFound width");
+        let series_prepare_records = [
+            (realm, prepared.publication.realm.as_slice()),
+            (product, prepared.publication.product.as_slice()),
+            (domain, prepared.publication.domain.as_slice()),
+            (portfolio, prepared.publication.portfolio.as_slice()),
+            (basis, prepared.publication.basis.as_slice()),
+            (source, prepared.publication.source.as_slice()),
+            (source_spec, source_spec_body),
+            (source_capacity, source_capacity_body),
+            (manifest, prepared.publication.manifest.as_slice()),
+        ]
+        .into_iter()
+        .map(|(published, body)| FutureMarketFinalizedRecordV1 {
+            published,
+            body: body.to_vec(),
+        })
+        .collect();
+        FutureMarketImmutablePublicationV1 {
+            realm,
+            product,
+            domain,
+            portfolio,
+            manifest,
+            rent_credit,
+            project_found,
+            principal_cap_sets: 1,
+            series_prepare_records,
+            series_prepare_vacancies: vec![key(11), key(12)],
+        }
+    }
     #[test]
     fn preprofile_derives_child_bank_without_geometry_placeholder() {
         let prepared = prepared_founder();

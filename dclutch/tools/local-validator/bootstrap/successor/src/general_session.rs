@@ -74,7 +74,21 @@
 
 use std::path::PathBuf;
 
-use dclutch_chain_bundle_builder::admitted::admitted_output_page_address_v1;
+use dclutch_chain_bundle_builder::{
+    WaistFactsV1,
+    admitted::{AdmittedAotInputV1, admitted_output_page_address_v1},
+    artifacts::{ArtifactSetV1, derive_record},
+    bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1},
+    frame::{BuiltAccountV1, vacant},
+    general::{
+        GeneralActionPrestateV1, GeneralRequestEvidenceV1, GeneralRequestInputV1,
+        build_general_action_bundle_v1, derive_general_request_v1,
+    },
+};
+use dclutch_claims::{
+    liability_basis_state_v2::LiabilityBasisMarketSeedsV2,
+    protocol_position_v2::ProtocolPositionSeedsV2,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
@@ -114,11 +128,12 @@ use dclutch_market::execution_strategy::{
         ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
     },
 };
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use dclutch_market::{CoreState, Phase as CorePhase};
 use dclutch_operator::general_session_v1::{
-    GeneralFrameInputsV1, GeneralSubjectStatesV1, GeneralSubjectV1, general_runtime_suffix_v1,
-    general_subject_states_v1,
+    GeneralChildChainV1, GeneralEscrowChildrenV1, GeneralEscrowPartyV1, GeneralEvidenceAddressV1,
+    GeneralFrameInputsV1, GeneralSubjectV1, general_runtime_suffix_v1, general_subject_states_v1,
 };
 use dclutch_operator::general_successor::{self as successor, ROUTE_FORMAT_V1};
 use dclutch_operator::resolution_core_v3::product_graph_observation_v3::{
@@ -141,11 +156,15 @@ use dclutch_trading::general::{
         general_account_profile_funding_bytes_v3,
     },
     artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3,
+    collection_v1::{GeneralBatchV2, GeneralSignedOrderTermsV2},
+    effect_artifacts_v3::general_effect_route_count_v3,
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
         general_hot_scalar_count_v3,
     },
+    local_state_v3::GeneralLocalStateV3,
     release_v3::authenticate_general_program_set_v3,
+    state_artifacts_v3::GeneralReadonlyEvidenceKindV3,
     state_artifacts_v3::{
         GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, general_system_program_account_v3,
@@ -158,7 +177,8 @@ use dclutch_trading::general_config::{
 use dclutch_vm::capability_seal::CapabilitySealKeyV1;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
-use solana_program::pubkey::Pubkey;
+use solana_account::Account;
+use solana_program::{pubkey::Pubkey, rent::Rent};
 use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
@@ -166,7 +186,7 @@ use crate::{
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::pubkey,
-    rpc::{Rpc, WritePolicyV1, observed_or_vacant_v1},
+    rpc::{Rpc, RpcAccount, WritePolicyV1, observed_or_vacant_v1},
 };
 
 pub(crate) const DEVNET_GENERAL_SESSION_COMMAND_V1: &str = "devnet-general-session";
@@ -210,7 +230,7 @@ const DEFAULT_SESSION_ACTION_V1: Action = Action::OpenBatch;
 ///
 /// Admitting `CloseBatch` is therefore a one-line change plus a devnet run,
 /// and must not be made without the run.
-const COMPOSABLE_ACTIONS_V1: &[Action] = &[Action::OpenBatch];
+const COMPOSABLE_ACTIONS_V1: &[Action] = &[Action::OpenBatch, Action::PlaceOrder];
 
 fn action_v1(value: &str) -> Result<Action> {
     let action = match value {
@@ -289,7 +309,8 @@ pub(crate) fn usage() -> &'static str {
      --result-domain-record ADDRESS --portfolio-record ADDRESS \
      --linked-basis-record ADDRESS \
      --payer PUBKEY --output ABSOLUTE_NEW_JSON \
-     [--action ACTION] [--parent-request-digest HEX64] [--rent-credit ADDRESS] \
+     [--action ACTION] [--order-terms-record ADDRESS --maker-token-account ADDRESS] \
+     [--parent-request-digest HEX64] [--rent-credit ADDRESS] \
      [--emit-route ABSOLUTE_NEW_JSON --lookup-table ADDRESS \
      --checked-release ABSOLUTE_BIN]\n     \
      Read-only. Derives the complete General hot frame for --action (default \
@@ -318,7 +339,8 @@ pub(crate) fn local_usage() -> &'static str {
      --plan ABSOLUTE_JSON --market GENERAL_OPEN_MARKET \
      --result-domain-record ADDRESS --portfolio-record ADDRESS \
      --linked-basis-record ADDRESS --payer PUBKEY --output ABSOLUTE_NEW_JSON \
-     [--action ACTION] [--parent-request-digest HEX64] [--rent-credit ADDRESS] \
+     [--action ACTION] [--order-terms-record ADDRESS --maker-token-account ADDRESS] \
+     [--parent-request-digest HEX64] [--rent-credit ADDRESS] \
      [--emit-route ABSOLUTE_NEW_JSON --lookup-table ADDRESS \
      --checked-release ABSOLUTE_BIN]\n     \
      Read-only owned-loopback counterpart of devnet-general-session. It derives \
@@ -335,6 +357,10 @@ struct ArgumentsV1 {
     result_domain_record: Pubkey,
     portfolio_record: Pubkey,
     linked_basis_record: Pubkey,
+    /// Finalized Registry record holding canonical signed PlaceOrder terms.
+    order_terms_record: Option<Pubkey>,
+    /// Finalized token account owned by the signed order maker.
+    maker_token_account: Option<Pubkey>,
     payer: Pubkey,
     output: PathBuf,
     /// The digest of the signed `DCLTHOT3` family request the caller intends,
@@ -378,6 +404,8 @@ fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Resul
     let mut result_domain_record = None;
     let mut portfolio_record = None;
     let mut linked_basis_record = None;
+    let mut order_terms_record = None;
+    let mut maker_token_account = None;
     let mut payer = None;
     let mut output = None;
     let mut parent_request_digest = None;
@@ -399,6 +427,8 @@ fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Resul
             "--result-domain-record" => &mut result_domain_record,
             "--portfolio-record" => &mut portfolio_record,
             "--linked-basis-record" => &mut linked_basis_record,
+            "--order-terms-record" => &mut order_terms_record,
+            "--maker-token-account" => &mut maker_token_account,
             "--payer" => &mut payer,
             "--output" => &mut output,
             "--parent-request-digest" => &mut parent_request_digest,
@@ -450,6 +480,26 @@ fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Resul
             ),
         ));
     }
+    let action = action
+        .as_deref()
+        .map_or(Ok(DEFAULT_SESSION_ACTION_V1), action_v1)?;
+    let order_terms_record = order_terms_record.as_deref().map(pubkey).transpose()?;
+    let maker_token_account = maker_token_account.as_deref().map(pubkey).transpose()?;
+    if action == Action::PlaceOrder
+        && let Some(missing) = [
+            ("--order-terms-record", order_terms_record.is_some()),
+            ("--maker-token-account", maker_token_account.is_some()),
+        ]
+        .iter()
+        .find_map(|(name, present)| (!present).then_some(*name))
+    {
+        return Err(refusal(
+            "input/place-order-corpus",
+            format!(
+                "{missing}; PlaceOrder needs its finalized signed terms and maker collateral account"
+            ),
+        ));
+    }
     Ok(ArgumentsV1 {
         rpc_url: required(rpc_url, "--rpc-url")?,
         acknowledgment: match expected {
@@ -463,6 +513,8 @@ fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Resul
         result_domain_record: pubkey(&required(result_domain_record, "--result-domain-record")?)?,
         portfolio_record: pubkey(&required(portfolio_record, "--portfolio-record")?)?,
         linked_basis_record: pubkey(&required(linked_basis_record, "--linked-basis-record")?)?,
+        order_terms_record,
+        maker_token_account,
         payer: pubkey(&required(payer, "--payer")?)?,
         output: PathBuf::from(required(output, "--output")?),
         parent_request_digest: parent_request_digest
@@ -471,9 +523,7 @@ fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Resul
         emit_route: emit_route.map(PathBuf::from),
         lookup_table: lookup_table.as_deref().map(pubkey).transpose()?,
         rent_credit: rent_credit.as_deref().map(pubkey).transpose()?,
-        action: action
-            .as_deref()
-            .map_or(Ok(DEFAULT_SESSION_ACTION_V1), action_v1)?,
+        action,
         checked_release: checked_release.map(PathBuf::from),
     })
 }
@@ -1102,6 +1152,13 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
     )?;
     let certificate = ExecutionStrategyCertificateV2::decode(&certificate_body)
         .map_err(|error| Error::new(format!("General OpenBatch certificate: {error:?}")))?;
+    let admission_body = read_record(
+        &mut rpc,
+        &registry,
+        admission_record,
+        admission_id.to_bytes(),
+        "General admission",
+    )?;
     let artifact_release = certificate
         .artifact_release()
         .map_err(|error| Error::new(format!("accelerator ArtifactRelease: {error:?}")))?;
@@ -1607,41 +1664,292 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
                 })?;
             let root_state = GeneralRootV2::decode(composite.state())
                 .map_err(|error| refusal("route/root", format!("General root state: {error:?}")))?;
-            // The states this action names, from the family's own seed
-            // recipes: one author for every General state address, and the
-            // subject an action needs and the caller did not state is refused
-            // by name rather than derived from a default.
-            let states = general_subject_states_v1(
-                session_action,
-                trading,
-                root,
-                root_state,
-                config,
-                entry.config_id().to_bytes(),
-                // Batch occurrence and state seeds carry the Product body's
-                // semantic identity. The record digest still authenticates the
-                // record coordinate above, but it is not the Product ID that
-                // AccountProfile projects into an OpenBatch candidate.
-                graph.product_id,
-                tail_count,
-                GeneralSubjectV1::default(),
-            )
-            .map_err(|error| {
-                refusal(
-                    "route/subject",
-                    format!("the states {session_action:?} names did not derive: {error:?}"),
+            // PlaceOrder reads the opened Batch and the maker-signed terms;
+            // OpenBatch remains the no-child frame.  Both paths return the
+            // same semantic input object, so the suffix below has one owner.
+            let inputs = if session_action == Action::PlaceOrder {
+                place_order_inputs_v1(
+                    &mut rpc,
+                    &arguments,
+                    &plan,
+                    registry,
+                    trading,
+                    core,
+                    core_programdata,
+                    trading_programdata,
+                    activation_cache,
+                    &market_state,
+                    root,
+                    root_state,
+                    config,
+                    entry.config_id().to_bytes(),
+                    graph.product_id,
+                    tail_count,
+                    &fixed,
+                    release_set.to_bytes(),
+                )?
+            } else {
+                let states = general_subject_states_v1(
+                    session_action,
+                    trading,
+                    root,
+                    root_state,
+                    config,
+                    entry.config_id().to_bytes(),
+                    graph.product_id,
+                    tail_count,
+                    GeneralSubjectV1::default(),
                 )
-            })?;
-            let state = states.primary.0;
-            let runtime_suffix = runtime_suffix_accounts_v1(
-                &published_profile,
-                session_action,
-                &fixed,
-                states,
-                arguments.payer,
-                rent_credit,
-                release_set.to_bytes(),
-            )?;
+                .map_err(|error| {
+                    refusal("route/subject", format!("{session_action:?}: {error:?}"))
+                })?;
+                let at = |index: usize| -> Result<Pubkey> {
+                    fixed
+                        .get(index)
+                        .copied()
+                        .ok_or_else(|| refusal("route/fixed-frame", format!("coordinate {index}")))
+                };
+                let pair =
+                    |index: usize| -> Result<(Pubkey, Pubkey)> { Ok((at(index)?, at(index + 1)?)) };
+                GeneralFrameInputsV1 {
+                    trading_program: trading,
+                    trading_programdata,
+                    core_program: core,
+                    core_programdata,
+                    registry_program: registry,
+                    activation_cache,
+                    market: arguments.market,
+                    rent_credit: Pubkey::new_from_array(market_state.rent_beneficiary.to_bytes()),
+                    release_set: release_set.to_bytes(),
+                    product_record: pair(HOT_PRODUCT_RAW_ACCOUNT_V3)?,
+                    result_domain_record: pair(HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?,
+                    portfolio_record: pair(HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
+                    linked_basis_record: pair(HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?,
+                    child_chain: None,
+                    payer: arguments.payer,
+                    states,
+                    party: None,
+                    order_children: None,
+                    settlement_children: None,
+                    position_owner_identity: None,
+                    surplus_beneficiary: None,
+                    solver: None,
+                    evidence: Vec::new(),
+                    child_callers: Vec::new(),
+                }
+            };
+            let mut inputs = inputs;
+            if session_action == Action::PlaceOrder {
+                let request_profile_body = read_record(
+                    &mut rpc,
+                    &registry,
+                    request_profile_record,
+                    descriptor.request_profile().program().to_bytes(),
+                    "General PlaceOrder RequestProfile",
+                )?;
+                let transition_body = read_record(
+                    &mut rpc,
+                    &registry,
+                    transition_record,
+                    descriptor.transition().program().to_bytes(),
+                    "General PlaceOrder Transition",
+                )?;
+                let effect_body = read_record(
+                    &mut rpc,
+                    &registry,
+                    effect_record,
+                    descriptor.effect().program().to_bytes(),
+                    "General PlaceOrder Effect",
+                )?;
+                let lifecycle_body = read_record(
+                    &mut rpc,
+                    &registry,
+                    lifecycle_record,
+                    descriptor.lifecycle().program().to_bytes(),
+                    "General PlaceOrder Lifecycle",
+                )?;
+                let artifact_release_body = read_record(
+                    &mut rpc,
+                    &registry,
+                    artifact_record_pair,
+                    artifact_release.to_bytes(),
+                    "General PlaceOrder ArtifactRelease",
+                )?;
+                let product_body = by_key(&first_pass, product_record.raw)?.data;
+                let result_domain_body = by_key(&first_pass, result_domain_record.raw)?.data;
+                let portfolio_body = by_key(&first_pass, portfolio_record.raw)?.data;
+                let linked_basis_account =
+                    rpc.required_account(linked_basis_record.raw, "linked liability basis")?;
+                let linked_basis_body = read_record(
+                    &mut rpc,
+                    &registry,
+                    linked_basis_record,
+                    sha256(&linked_basis_account.data),
+                    "linked liability basis",
+                )?;
+                let terms_key = arguments
+                    .order_terms_record
+                    .expect("PlaceOrder arguments checked");
+                let terms_account = rpc.required_account(terms_key, "signed PlaceOrder terms")?;
+                let primary =
+                    rpc.required_account(inputs.states.primary.0, "open General Batch")?;
+                let request = derive_general_request_v1(GeneralRequestInputV1 {
+                    action: Action::PlaceOrder,
+                    root: root_state,
+                    root_address: root,
+                    config: &config_body,
+                    outcome_count: tail_count,
+                    product_id: graph.product_id,
+                    trading_program: trading,
+                    primary_state_account: Some(&primary.data),
+                    evidence: GeneralRequestEvidenceV1 {
+                        signed_order_terms: Some(&terms_account.data),
+                        ..GeneralRequestEvidenceV1::default()
+                    },
+                })
+                .map_err(|error| refusal("route/place-order-request", format!("{error:?}")))?;
+                let provisional =
+                    general_runtime_suffix_v1(&published_profile, Action::PlaceOrder, &inputs)
+                        .map_err(|error| {
+                            refusal("route/place-order-frame", format!("{error:?}"))
+                        })?;
+                let addresses: Vec<_> = provisional
+                    .iter()
+                    .filter_map(|account| {
+                        (account.address != Pubkey::default()).then_some(account.address)
+                    })
+                    .collect();
+                let floor = rpc.finalized_slot()?;
+                let (_, observed) = rpc.finalized_accounts(&addresses, floor)?;
+                let bindings: Vec<_> = provisional
+                    .into_iter()
+                    .zip(observed)
+                    .filter_map(|(account, observed)| {
+                        (account.address != Pubkey::default()).then_some((
+                            usize::from(account.coordinate),
+                            built_account_v1(account.address, observed),
+                        ))
+                    })
+                    .collect();
+                let rent_account = rpc.required_account(sysvar::rent::ID, "Rent sysvar")?;
+                let rent: Rent = bincode::deserialize(&rent_account.data)
+                    .map_err(|error| refusal("route/place-order-rent", format!("{error}")))?;
+                let set = ArtifactSetV1 {
+                    descriptor: &descriptor_body,
+                    account_profile: &published_profile,
+                    request_profile: &request_profile_body,
+                    transition: &transition_body,
+                    effect: &effect_body,
+                    lifecycle: &lifecycle_body,
+                    strategy: &strategy_body,
+                    program_set: &program_set_body,
+                    manifest: &manifest_body,
+                    config: &config_body,
+                };
+                let waist = WaistFactsV1 {
+                    registry_program: registry,
+                    trading_program: trading,
+                    core_program: core,
+                    claims_program: inputs
+                        .child_chain
+                        .expect("PlaceOrder child chain")
+                        .claims_program,
+                    custody_program: inputs
+                        .child_chain
+                        .expect("PlaceOrder child chain")
+                        .custody_program,
+                    release_set: release_set.to_bytes(),
+                    activation_cache,
+                    trading_semantic_release,
+                };
+                let extra = [inputs
+                    .child_chain
+                    .expect("PlaceOrder child chain")
+                    .token_program];
+                let market_account =
+                    built_account_v1(arguments.market, Some(market_account.clone()));
+                let root_account =
+                    built_account_v1(root, Some(rpc.required_account(root, "General root")?));
+                let bundle_input = BundleInputV1 {
+                    set,
+                    waist,
+                    scenario: ScenarioV1 {
+                        family_request: &request.request,
+                        tail_count,
+                        clock_slot: observed_slot,
+                        generation,
+                        ed25519_evidence: None,
+                        native_message_instruction_index: 2,
+                        externally_installed_extra: &extra,
+                        payer: arguments.payer,
+                    },
+                    fixed: FixedCorpusV1 {
+                        market: market_account,
+                        root: root_account,
+                        product: derive_record(
+                            registry,
+                            PRODUCT_RECORD_SCHEMA_ID_V2,
+                            &product_body,
+                        ),
+                        result_domain: derive_record(
+                            registry,
+                            RESULT_DOMAIN_SCHEMA_ID_V2,
+                            &result_domain_body,
+                        ),
+                        portfolio: derive_record(registry, PORTFOLIO_SCHEMA_ID_V2, &portfolio_body),
+                        linked_basis: derive_record(
+                            registry,
+                            GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+                            &linked_basis_body,
+                        ),
+                        core_programdata,
+                        trading_programdata,
+                    },
+                    bindings: &bindings,
+                    rent: &rent,
+                };
+                let accelerator_program = built_account_v1(
+                    accelerator,
+                    Some(rpc.required_account(accelerator, "General accelerator program")?),
+                );
+                let accelerator_data = built_account_v1(
+                    accelerator_programdata,
+                    Some(rpc.required_account(
+                        accelerator_programdata,
+                        "General accelerator ProgramData",
+                    )?),
+                );
+                inputs.child_callers = projected_place_order_callers_v1(
+                    &bundle_input,
+                    AdmittedAotInputV1 {
+                        certificate: Some(&certificate_body),
+                        admission: Some(&admission_body),
+                        artifact_release: Some(&artifact_release_body),
+                        accelerator_program: Some(&accelerator_program),
+                        accelerator_programdata: Some(&accelerator_data),
+                    },
+                    GeneralActionPrestateV1 {
+                        primary_state_account: Some(&primary.data),
+                        evidence: GeneralRequestEvidenceV1 {
+                            signed_order_terms: Some(&terms_account.data),
+                            ..GeneralRequestEvidenceV1::default()
+                        },
+                    },
+                )?;
+                let declared = usize::from(general_effect_route_count_v3(Action::PlaceOrder));
+                if inputs.child_callers.len() != declared {
+                    return Err(refusal(
+                        "route/place-order-projection",
+                        format!(
+                            "the effect declares {declared} caller authorities; builder derived {}",
+                            inputs.child_callers.len()
+                        ),
+                    ));
+                }
+            }
+            let state = inputs.states.primary.0;
+            let runtime_suffix =
+                runtime_suffix_accounts_v1(&published_profile, session_action, &inputs)?;
             if runtime_suffix.len() != runtime_suffix_count {
                 return Err(refusal(
                     "route/runtime-width",
@@ -2208,48 +2516,9 @@ fn route_document_v1(input: &RouteInputV1) -> Result<Value> {
 fn runtime_suffix_accounts_v1(
     published_profile: &[u8],
     action: Action,
-    fixed: &[Pubkey],
-    states: GeneralSubjectStatesV1,
-    payer: Pubkey,
-    rent_credit: Pubkey,
-    release_set: [u8; 32],
+    inputs: &GeneralFrameInputsV1,
 ) -> Result<Vec<RouteRuntimeAccountV1>> {
-    let at = |index: usize| -> Result<Pubkey> {
-        fixed.get(index).copied().ok_or_else(|| {
-            refusal(
-                "route/fixed-frame",
-                format!("the fixed frame has no coordinate {index}"),
-            )
-        })
-    };
-    let pair = |index: usize| -> Result<(Pubkey, Pubkey)> { Ok((at(index)?, at(index + 1)?)) };
-    let inputs = GeneralFrameInputsV1 {
-        trading_program: at(HOT_TRADING_PROGRAM_ACCOUNT_V3)?,
-        trading_programdata: at(HOT_TRADING_PROGRAMDATA_ACCOUNT_V3)?,
-        core_program: at(HOT_CORE_PROGRAM_ACCOUNT_V3)?,
-        core_programdata: at(HOT_CORE_PROGRAMDATA_ACCOUNT_V3)?,
-        registry_program: at(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?,
-        activation_cache: at(HOT_ACTIVATION_CACHE_ACCOUNT_V3)?,
-        market: at(HOT_MARKET_ACCOUNT_V3)?,
-        rent_credit,
-        release_set,
-        product_record: pair(HOT_PRODUCT_RAW_ACCOUNT_V3)?,
-        result_domain_record: pair(HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?,
-        portfolio_record: pair(HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
-        linked_basis_record: pair(HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?,
-        child_chain: None,
-        payer,
-        states,
-        party: None,
-        order_children: None,
-        settlement_children: None,
-        position_owner_identity: None,
-        surplus_beneficiary: None,
-        solver: None,
-        evidence: Vec::new(),
-        child_callers: Vec::new(),
-    };
-    let suffix = general_runtime_suffix_v1(published_profile, action, &inputs).map_err(|error| {
+    let suffix = general_runtime_suffix_v1(published_profile, action, inputs).map_err(|error| {
         refusal(
             "route/runtime-frame",
             format!(
@@ -2266,6 +2535,234 @@ fn runtime_suffix_accounts_v1(
             is_writable: account.is_writable,
         })
         .collect())
+}
+
+/// Read the PlaceOrder facts whose authors are outside the Market's fixed
+/// frame.  The signed terms choose the existing Batch and all escrow PDAs;
+/// none of those facts is accepted as a caller-authored address.
+#[allow(clippy::too_many_arguments)]
+fn place_order_inputs_v1(
+    rpc: &mut Rpc,
+    arguments: &ArgumentsV1,
+    plan: &SuccessorPlan,
+    registry: Pubkey,
+    trading: Pubkey,
+    core: Pubkey,
+    core_programdata: Pubkey,
+    trading_programdata: Pubkey,
+    activation_cache: Pubkey,
+    market: &CoreState,
+    root: Pubkey,
+    root_state: GeneralRootV2,
+    config: GeneralConfigV3,
+    config_id: [u8; 32],
+    product_id: [u8; 32],
+    outcome_count: u32,
+    fixed: &[Pubkey],
+    release_set: [u8; 32],
+) -> Result<GeneralFrameInputsV1> {
+    let terms_key = arguments
+        .order_terms_record
+        .ok_or_else(|| refusal("input/place-order-corpus", "--order-terms-record"))?;
+    let terms_account = rpc.required_account(terms_key, "signed PlaceOrder terms")?;
+    if terms_account.owner != registry
+        || terms_account.executable
+        || sha256(&terms_account.data) != terms_key.to_bytes()
+    {
+        return Err(refusal(
+            "session/order-terms-record",
+            format!("{terms_key} must be a nonexecutable Registry-owned SHA-256 record"),
+        ));
+    }
+    let terms = GeneralSignedOrderTermsV2::decode(&terms_account.data)
+        .map_err(|error| refusal("session/order-terms", format!("{error:?}")))?;
+    let header = terms.header();
+    if header.owner_id != arguments.payer.to_bytes()
+        || header.market != arguments.market.to_bytes()
+        || header.generation != market.identity.generation
+        || header.outcome_count != outcome_count
+    {
+        return Err(refusal(
+            "session/order-terms-binding",
+            "the signed terms must bind this payer, Market, generation, and Product outcome count",
+        ));
+    }
+    let states = general_subject_states_v1(
+        Action::PlaceOrder,
+        trading,
+        root,
+        root_state,
+        config,
+        config_id,
+        product_id,
+        outcome_count,
+        GeneralSubjectV1 {
+            batch_id: Some(header.batch_id),
+            order_id: Some(terms.order_id()),
+            candidate_id: None,
+            settlement_revision: None,
+        },
+    )
+    .map_err(|error| refusal("route/subject", format!("PlaceOrder: {error:?}")))?;
+    let batch_account = rpc.required_account(states.primary.0, "open General Batch")?;
+    let envelope = GeneralLocalStateV3::decode(&batch_account.data)
+        .map_err(|error| refusal("session/open-batch", format!("{error:?}")))?;
+    let batch = GeneralBatchV2::decode(envelope.body())
+        .map_err(|error| refusal("session/open-batch", format!("{error:?}")))?;
+    if batch.batch_id() != header.batch_id {
+        return Err(refusal(
+            "session/order-batch",
+            "the signed terms name a Batch other than the finalized lifecycle state",
+        ));
+    }
+
+    let realm_record = record_coordinate(
+        &registry,
+        REALM_SCHEMA_RELEASE_ID_V1,
+        market.identity.realm_id.to_bytes(),
+    )?;
+    let realm_bytes = read_record(
+        rpc,
+        &registry,
+        realm_record,
+        market.identity.realm_id.to_bytes(),
+        "collateral Realm",
+    )?;
+    let realm = RealmV1::decode(&realm_bytes)
+        .map_err(|error| refusal("session/realm", format!("{error:?}")))?;
+    let claims_program = pubkey(&plan.claims.program_id)?;
+    let claims_programdata = pubkey(&plan.claims.programdata_id)?;
+    let custody_program = pubkey(&plan.custody.program_id)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+    let aggregate = Pubkey::find_program_address(
+        &LiabilityBasisMarketSeedsV2::new(arguments.market.to_bytes())
+            .map_err(|_| refusal("session/claims-aggregate", "market seed"))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    // Both must already be protocol facts: a PlaceOrder does not found either
+    // the Market aggregate or the maker's own collateral Position.
+    rpc.required_account(aggregate, "Claims Market aggregate")?;
+    let maker_position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), arguments.payer.to_bytes())
+            .map_err(|_| refusal("session/maker-position", "position seeds"))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    rpc.required_account(maker_position, "maker Claims Position")?;
+    let maker_token = arguments
+        .maker_token_account
+        .ok_or_else(|| refusal("input/place-order-corpus", "--maker-token-account"))?;
+    rpc.required_account(maker_token, "maker collateral token account")?;
+    let children = GeneralEscrowChildrenV1::derive(
+        claims_program,
+        custody_program,
+        aggregate,
+        arguments.market.to_bytes(),
+        release_set,
+        terms.order_id(),
+    )
+    .map_err(|error| refusal("session/order-children", format!("{error:?}")))?;
+    let rent_credit = Pubkey::new_from_array(market.rent_beneficiary.to_bytes());
+    let child_chain = GeneralChildChainV1 {
+        claims_program,
+        claims_programdata,
+        custody_program,
+        token_program: Pubkey::new_from_array(*realm.token_program()),
+        rent_program,
+        aggregate,
+        mint: Pubkey::new_from_array(*realm.collateral_mint()),
+        realm_record: (realm_record.raw, realm_record.staging),
+    };
+    let at = |index: usize| -> Result<Pubkey> {
+        fixed
+            .get(index)
+            .copied()
+            .ok_or_else(|| refusal("route/fixed-frame", format!("coordinate {index}")))
+    };
+    let pair = |index: usize| -> Result<(Pubkey, Pubkey)> { Ok((at(index)?, at(index + 1)?)) };
+    Ok(GeneralFrameInputsV1 {
+        trading_program: trading,
+        trading_programdata,
+        core_program: core,
+        core_programdata,
+        registry_program: registry,
+        activation_cache,
+        market: arguments.market,
+        rent_credit,
+        release_set,
+        product_record: pair(HOT_PRODUCT_RAW_ACCOUNT_V3)?,
+        result_domain_record: pair(HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?,
+        portfolio_record: pair(HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
+        linked_basis_record: pair(HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?,
+        child_chain: Some(child_chain),
+        payer: arguments.payer,
+        states,
+        party: Some(GeneralEscrowPartyV1 {
+            owner: arguments.payer,
+            position: maker_position,
+            token_account: maker_token,
+        }),
+        order_children: Some(children),
+        settlement_children: None,
+        position_owner_identity: Some(terms_key),
+        surplus_beneficiary: None,
+        solver: None,
+        evidence: vec![GeneralEvidenceAddressV1 {
+            kind: GeneralReadonlyEvidenceKindV3::OrderTerms,
+            address: terms_key,
+        }],
+        // Each declared General effect route begins with exactly one caller
+        // authority.  The effect table is the width author; the bundle builder
+        // replaces these temporary coordinates with request-derived PDAs.
+        child_callers: vec![
+            Pubkey::default();
+            usize::from(general_effect_route_count_v3(Action::PlaceOrder))
+        ],
+    })
+}
+
+fn built_account_v1(key: Pubkey, account: Option<RpcAccount>) -> BuiltAccountV1 {
+    match account {
+        Some(account) => BuiltAccountV1 {
+            key,
+            account: Account {
+                lamports: account.lamports,
+                data: account.data,
+                owner: account.owner,
+                executable: account.executable,
+                rent_epoch: account.rent_epoch,
+            },
+            observed: None,
+        },
+        None => vacant(key),
+    }
+}
+
+/// Ask the one canonical General builder to project PlaceOrder child requests,
+/// then retain only its derived caller-authority span for the route.
+fn projected_place_order_callers_v1(
+    input: &BundleInputV1<'_>,
+    admitted: AdmittedAotInputV1<'_>,
+    prestate: GeneralActionPrestateV1<'_>,
+) -> Result<Vec<Pubkey>> {
+    let built = build_general_action_bundle_v1(input, admitted, prestate)
+        .map_err(|error| refusal("route/place-order-projection", format!("{error:?}")))?;
+    let callers: Vec<_> = built
+        .bundle
+        .authorities
+        .iter()
+        .map(|authority| authority.authority)
+        .collect();
+    if callers.is_empty() || callers.iter().any(|address| *address == Pubkey::default()) {
+        return Err(refusal(
+            "route/place-order-projection",
+            "the canonical builder returned no complete child caller span",
+        ));
+    }
+    Ok(callers)
 }
 
 /// Write one route document to a path that must not already exist.
@@ -2454,6 +2951,35 @@ mod tests {
             Ok(_) => panic!("devnet retains the explicit acknowledgment rail"),
             Err(error) => assert!(error.to_string().contains(DEVNET_ACKNOWLEDGMENT_FLAG)),
         }
+    }
+
+    #[test]
+    fn place_order_requires_both_chain_observed_child_inputs() {
+        let mut missing_terms = loopback_session_arguments_v1();
+        missing_terms.extend(["--action".into(), "place-order".into()]);
+        let error = match parse_arguments(missing_terms, ExpectedClusterV1::OwnedLoopback) {
+            Ok(_) => panic!("PlaceOrder needs a terms record and maker token account"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("--order-terms-record"),
+            "{error}"
+        );
+
+        let mut complete = loopback_session_arguments_v1();
+        complete.extend([
+            "--action".into(),
+            "place-order".into(),
+            "--order-terms-record".into(),
+            "11111111111111111111111111111111".into(),
+            "--maker-token-account".into(),
+            "11111111111111111111111111111111".into(),
+        ]);
+        let parsed = parse_arguments(complete, ExpectedClusterV1::OwnedLoopback)
+            .expect("the two child inputs make PlaceOrder a composable session action");
+        assert_eq!(parsed.action, Action::PlaceOrder);
+        assert!(parsed.order_terms_record.is_some());
+        assert!(parsed.maker_token_account.is_some());
     }
 
     /// One synthetic frame whose only job is to be a well-formed route.
