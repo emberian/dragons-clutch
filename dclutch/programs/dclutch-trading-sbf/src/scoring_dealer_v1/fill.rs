@@ -198,15 +198,10 @@ pub fn process_dealer_fill_v1(
     // ONE account each. Without this the route could price the fill against one
     // Position and hand Claims another, and Claims -- authenticating its own
     // frame, correctly -- would have no way to know the difference.
-    let (dealer_index, _) = signed_delta_position_indexes_v1(
-        dealer_position.key.to_bytes(),
-        taker_position.key.to_bytes(),
-    );
-    let (dealer_window_account, taker_window_account) = if dealer_index == 0 {
-        (DELTA_DEALER_POSITION_ACCOUNT, DELTA_TAKER_POSITION_ACCOUNT)
-    } else {
-        (DELTA_TAKER_POSITION_ACCOUNT, DELTA_DEALER_POSITION_ACCOUNT)
-    };
+    let (dealer_index, _) =
+        signed_delta_position_indexes_v1(fund_account.key.to_bytes(), request.taker);
+    let (dealer_window_account, taker_window_account) =
+        signed_delta_window_accounts_v1(dealer_index);
     for (prefix_account, window_account) in [
         (aggregate, DELTA_AGGREGATE_ACCOUNT),
         (dealer_position, dealer_window_account),
@@ -768,6 +763,15 @@ fn signed_delta_position_indexes_v1(dealer_owner: [u8; 32], taker_owner: [u8; 32
     }
 }
 
+/// Claims window slots follow semantic-owner order, never Position PDA order.
+const fn signed_delta_window_accounts_v1(dealer_index: u32) -> (usize, usize) {
+    if dealer_index == 0 {
+        (DELTA_DEALER_POSITION_ACCOUNT, DELTA_TAKER_POSITION_ACCOUNT)
+    } else {
+        (DELTA_TAKER_POSITION_ACCOUNT, DELTA_DEALER_POSITION_ACCOUNT)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,6 +780,18 @@ mod tests {
     fn signed_delta_positions_are_canonical_in_both_semantic_orders() {
         assert_eq!(signed_delta_position_indexes_v1([1; 32], [2; 32]), (0, 1));
         assert_eq!(signed_delta_position_indexes_v1([2; 32], [1; 32]), (1, 0));
+    }
+
+    #[test]
+    fn delta_window_follows_owners_when_position_pdas_sort_oppositely() {
+        let (dealer_index, _) = signed_delta_position_indexes_v1([1; 32], [2; 32]);
+        let dealer_position_pda = [9; 32];
+        let taker_position_pda = [3; 32];
+        assert!(dealer_position_pda > taker_position_pda);
+        assert_eq!(
+            signed_delta_window_accounts_v1(dealer_index),
+            (DELTA_DEALER_POSITION_ACCOUNT, DELTA_TAKER_POSITION_ACCOUNT)
+        );
     }
 
     #[test]

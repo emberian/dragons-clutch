@@ -96,8 +96,10 @@ operator whose continued presence is required for holders to get paid.
   accelerator deployment evidence. Fresh loopback infrastructure publication,
   succession and all five activation stages execute; subsequent collateral
   creation executes, but Market record publication exposes an incomplete
-  sponsor projection. Its publication-debit projection is now implemented and
-  awaits execution. The dated authority for the reached stages is
+  sponsor projection. The incomplete new publication-cost mirror is removed;
+  the local test resumes with the existing validator launcher's explicit fixture
+  payer funding. That grant is test setup, not a protocol cost estimate or a
+  devnet funding policy. The dated authority for the reached stages is
   `docs/evidence/GENERAL_LOOPBACK_SOURCE_SPLIT_2026_09_07.md`.
   General's nonempty accepted trade remains owed. Dealer's
   first RentCredit repair exposed a second false assumption: its sponsor need

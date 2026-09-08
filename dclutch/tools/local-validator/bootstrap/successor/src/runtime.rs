@@ -1400,31 +1400,6 @@ pub(crate) fn remaining_record_publication_rent(
     remaining_record_publication_rent_from_state(registry, publication, state, label)
 }
 
-/// Price one Market-owned record through the Registry publication planner.
-/// This is the same sponsor debit `publish_record` will consume.
-pub(crate) fn publication_sponsor_debit_v1(
-    rpc: &mut Rpc,
-    registry: Pubkey,
-    sponsor: Pubkey,
-    schema: [u8; 32],
-    body: &[u8],
-    label: &str,
-) -> Result<u64> {
-    let publication = RecordPublicationContentV1 { schema_release_id: schema, content: body };
-    let (raw, staging, _) = derive_record_addresses_v1(registry, publication)
-        .map_err(|error| Error::new(format!("derive {label}: {error:?}")))?;
-    let keys = [sponsor, raw, staging, system_program::ID, sysvar::rent::ID, sysvar::clock::ID];
-    let (slot, values) = rpc.finalized_accounts(&keys, 0)?;
-    let mut observations = publication_observations(slot, &keys, &values)?;
-    observations[0].lamports = u64::MAX;
-    remaining_record_publication_rent_from_state(
-        registry,
-        publication,
-        RecordPublicationStateV1 { sponsor: observations[0], raw_record: observations[1], staging_cursor: observations[2], system_program: observations[3], rent: observations[4], clock: observations[5] },
-        label,
-    )
-}
-
 fn remaining_record_publication_rent_from_state(
     registry: Pubkey,
     publication: RecordPublicationContentV1<'_>,

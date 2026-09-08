@@ -4279,35 +4279,6 @@ pub(crate) fn compile_market_publication_preview_v1(
     })
 }
 
-/// Canonical Registry sponsor debit for the Market records that are known
-/// before founding. Each row is priced by the Registry publication planner.
-pub(crate) fn initial_market_publication_sponsor_debit_v1(
-    rpc: &mut Rpc,
-    registry: Pubkey,
-    sponsor: Pubkey,
-    input: &MarketRunInput,
-    collateral_mint: Pubkey,
-) -> Result<u64> {
-    let preview = compile_market_publication_preview_v1(registry, input, collateral_mint)?;
-    let mut rows = vec![
-        (REALM_SCHEMA_RELEASE_ID_V1, preview.realm),
-        (PRODUCT_RECORD_SCHEMA_ID_V2, preview.product),
-        (RESULT_DOMAIN_SCHEMA_ID_V2, preview.domain),
-        (PORTFOLIO_SCHEMA_ID_V2, preview.portfolio),
-        (GRADED_BASIS_RECORD_SCHEMA_ID_V3, preview.basis),
-        (SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, preview.source),
-        (CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, preview.manifest),
-    ];
-    if let Some(price_gate) = preview.price_gate { rows.push((PRICE_GATE_RECORD_SCHEMA_ID_V1, price_gate)); }
-    if let Some(selected) = &input.selected_capability {
-        for record in &selected.records { rows.push((hex32(&record.schema_hex)?, decode_hex(&record.body_hex)?)); }
-    }
-    rows.into_iter().try_fold(0_u64, |total, (schema, body)| {
-        total.checked_add(crate::runtime::publication_sponsor_debit_v1(rpc, registry, sponsor, schema, &body, "market publication")?)
-            .ok_or_else(|| Error::new("market publication sponsor debit overflow"))
-    })
-}
-
 struct AuthenticatedMarketBasisV1 {
     body: Vec<u8>,
     price_gate: Option<Vec<u8>>,

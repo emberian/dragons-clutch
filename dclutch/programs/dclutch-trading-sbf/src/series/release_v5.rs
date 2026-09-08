@@ -689,7 +689,7 @@ fn emit_current_consume_v5(
     Ok(SeriesOwnedActionArtifactsV5 {
         account_profile,
         request_profile: emitted.request_profile.to_vec(),
-        lifecycle: empty_lifecycle()?,
+        lifecycle: series_consume_lifecycle_v5()?,
         transition: emitted.transition.to_vec(),
         effect,
         dynamic_fixed_span_counts: vec![funding_count],
@@ -697,7 +697,13 @@ fn emit_current_consume_v5(
     })
 }
 
-fn empty_lifecycle() -> Result<Vec<u8>> {
+/// Emit the one canonical empty LifecycleV5 used by Consume.
+///
+/// This has no certificate, descriptor, ProgramSet, or deployment input. It
+/// is therefore available to the first Series Shadow preselection producer,
+/// which must name the exact eventual Consume lifecycle before the selected
+/// release can name that producer's certificate.
+pub fn series_consume_lifecycle_v5() -> Result<Vec<u8>> {
     let mut scratch = vec![0_u8; SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5];
     let mut output = vec![0_u8; SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5];
     encode_series_empty_state_lifecycle_v5_atomic(&mut scratch, &mut output)
@@ -706,6 +712,10 @@ fn empty_lifecycle() -> Result<Vec<u8>> {
     StateLifecyclePolicyV5::decode_selected(id, id, &output)
         .map_err(|_| SeriesReleaseErrorV5::Artifact)?;
     Ok(output)
+}
+
+fn empty_lifecycle() -> Result<Vec<u8>> {
+    series_consume_lifecycle_v5()
 }
 
 fn encode_interpreted_strategy(
@@ -1343,6 +1353,18 @@ mod tests {
 
     fn current_source() -> SeriesOwnedReleaseSourceV5 {
         current_source_with_root(7)
+    }
+
+    #[test]
+    fn preselection_consume_lifecycle_is_the_eventual_release_lifecycle() {
+        let preselection = series_consume_lifecycle_v5().expect("preselection lifecycle");
+        let source = current_source();
+        assert_eq!(
+            preselection,
+            source.action_artifacts(SeriesActionV3::Consume).lifecycle()
+        );
+        let identity = hash(&preselection).to_bytes();
+        assert!(StateLifecyclePolicyV5::decode_selected(identity, identity, &preselection).is_ok());
     }
 
     fn family_request(action: SeriesActionV3) -> Vec<u8> {

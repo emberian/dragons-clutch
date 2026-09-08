@@ -4582,10 +4582,6 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     let wallet = wallet_arithmetic(&mut rpc, &plan, payer.pubkey())?;
     let initial_collateral_account_rent_lamports =
         crate::market::initial_collateral_account_rent_v1(&mut rpc, market_input)?;
-    let initial_market_publication_sponsor_debit_lamports = crate::market::initial_market_publication_sponsor_debit_v1(
-        &mut rpc, pubkey(&plan.registry.program_id)?, payer.pubkey(), market_input,
-        forge.peek_pubkey(role::COLLATERAL_MINT)?,
-    )?;
     report["pre_key_checkpoint"]["keypair_files_read"] = json!(true);
     report["payer"] = json!(payer.pubkey().to_string());
     report["keypair_derivation"] = json!(forge.derivation_label());
@@ -4618,7 +4614,6 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     });
     report["initial_collateral_account_rent_lamports"] =
         json!(initial_collateral_account_rent_lamports);
-    report["initial_market_publication_sponsor_debit_lamports"] = json!(initial_market_publication_sponsor_debit_lamports);
     report["founding_targets"] = founding_targets.as_ref().map_or_else(
         || carried_founding_targets.clone(),
         |targets| {
@@ -4694,7 +4689,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             &forge,
             args.origin.may_airdrop(),
             wallet.shortfall(),
-            initial_collateral_account_rent_lamports.checked_add(initial_market_publication_sponsor_debit_lamports).ok_or_else(|| Error::new("loopback founding sponsorship overflow"))?,
+            initial_collateral_account_rent_lamports,
             Some(actors),
             market.as_ref(),
             founding_keys,

@@ -49,6 +49,7 @@ mod infrastructure_succession;
 mod local_mutable;
 mod release_lineage;
 mod series_act_verbs_v1;
+mod series_checked_evidence;
 mod series_consume_campaign;
 mod series_founder;
 mod series_found_prepare_campaign;
