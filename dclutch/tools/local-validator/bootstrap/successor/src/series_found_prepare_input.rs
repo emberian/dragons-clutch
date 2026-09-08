@@ -424,6 +424,13 @@ pub(crate) fn build_series_found_prepare_selection_input_v1<'a>(
         )?),
         semantic_basis_id: portfolio.liability_basis_id().to_bytes(),
         claim_count: count,
+        basis_scale: dclutch_product::payoff::runtime_v3::ProductBasisV3::decode(body_by_schema(
+            input.m0,
+            GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+            "Basis",
+        )?)
+        .map_err(|cause| Error::new(format!("Series M0 Basis projection: {cause:?}")))?
+        .payout_scale(),
         claims_rent_principals,
         permit_bump,
         projected_bump,

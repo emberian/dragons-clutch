@@ -105,7 +105,7 @@ pub struct ClaimsCompositionV3<'a> {
     external_once: Option<&'a [u8]>,
     close: Option<ProtocolPositionRequestV2>,
     admit_route: Option<u16>,
-    mutation_route: u16,
+    mutation_route: Option<u16>,
     close_route: Option<u16>,
 }
 
@@ -426,7 +426,6 @@ impl<'a> ClaimsCompositionV3<'a> {
                 .checked_add(1)
                 .ok_or(ClaimsCompositionErrorV3::EffectProgram)?;
         }
-        let mutation_route = mutation_route.ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
         let mutation_count = u8::from(affine.is_some())
             .checked_add(u8::from(signed_delta.is_some()))
             .and_then(|count| count.checked_add(u8::from(sparse_native_transfer.is_some())))
@@ -435,7 +434,13 @@ impl<'a> ClaimsCompositionV3<'a> {
             .and_then(|count| count.checked_add(u8::from(rational_lifecycle.is_some())))
             .and_then(|count| count.checked_add(u8::from(external_once.is_some())))
             .ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
-        if mutation_count != 1 {
+        let admission_only = mutation_count == 0
+            && admit.is_some()
+            && close.is_none()
+            && state == CompositionStateV3::Admitted;
+        if (!admission_only && mutation_count != 1)
+            || (mutation_count == 1 && mutation_route.is_none())
+        {
             return Err(ClaimsCompositionErrorV3::MissingAffine);
         }
         if let Some(affine) = affine {
@@ -446,16 +451,17 @@ impl<'a> ClaimsCompositionV3<'a> {
                 require_close_join(request, affine)?;
             }
         } else if let Some(ref sparse) = sparse_native_transfer {
+            let sparse_route = mutation_route.ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
             validate_sparse_lifecycle_composition(
                 effect,
                 admit.as_ref(),
                 admit_route,
                 sparse,
-                mutation_route,
+                sparse_route,
                 close.as_ref(),
                 close_route,
             )?;
-        } else if admit.is_some() || close.is_some() {
+        } else if mutation_count != 0 && (admit.is_some() || close.is_some()) {
             return Err(ClaimsCompositionErrorV3::Order);
         }
         Ok(Self {
@@ -527,15 +533,20 @@ impl<'a> ClaimsCompositionV3<'a> {
         self.admit_route
     }
 
-    /// EffectProgram route selecting the sole Claims mutation.
+    /// EffectProgram route selecting the sole Claims mutation, when present.
     ///
-    /// Retained as the source-compatible name for existing affine callers.
-    pub const fn affine_route(self) -> u16 {
+    /// Admission-only compositions return `None`; their route remains exposed
+    /// by [`Self::admit_route`].
+    pub const fn affine_route(self) -> Option<u16> {
         self.mutation_route
     }
 
-    /// EffectProgram route selecting the sole Claims mutation.
-    pub const fn mutation_route(self) -> u16 {
+    /// EffectProgram route selecting the sole Claims mutation, when present.
+    ///
+    /// Admission is independently executable and owns its canonical route;
+    /// admitting a vacant zero-balance Position therefore has no mutation
+    /// route and returns `None` here.
+    pub const fn mutation_route(self) -> Option<u16> {
         self.mutation_route
     }
 
@@ -1463,9 +1474,83 @@ mod tests {
         )
         .expect("composition");
         assert_eq!(composition.admit_route(), Some(0));
-        assert_eq!(composition.affine_route(), 1);
+        assert_eq!(composition.affine_route(), Some(1));
         assert_eq!(composition.close_route(), Some(2));
         assert_eq!(composition.affine().expect("affine").position_count(), 2);
+    }
+
+    #[test]
+    fn admission_only_owns_its_route_and_refuses_empty_duplicate_or_non_affine_joins() {
+        let buyer = id(11);
+        let admit = position_request(ProtocolPositionActionV2::Admit, buyer, MARKET_REVISION, 0)
+            .to_bytes()
+            .expect("admit")
+            .to_vec();
+        let admit_route = route(0, admit.clone());
+        let (effect_bytes, requests) = effect(core::slice::from_ref(&admit_route));
+        let composition = ClaimsCompositionV3::decode_selected(
+            ProgramV3::decode(&effect_bytes).expect("admission EffectProgram"),
+            TAIL_COUNT,
+            &[1],
+            &[id(40)],
+            &requests,
+            parent(),
+        )
+        .expect("admission-only composition");
+        assert_eq!(composition.admit_route(), Some(0));
+        assert_eq!(composition.mutation_route(), None);
+        assert_eq!(composition.close_route(), None);
+        assert_eq!(
+            composition.admit().map(|request| request.position_owner),
+            Some(buyer)
+        );
+
+        let (empty_effect, empty_requests) = effect(&[]);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&empty_effect).expect("empty EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &empty_requests,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::MissingAffine)
+        );
+
+        let (duplicate_effect, duplicate_requests) =
+            effect(&[admit_route.clone(), admit_route.clone()]);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&duplicate_effect).expect("duplicate EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &duplicate_requests,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Order)
+        );
+
+        let founding_route = RouteFixture {
+            role: 1,
+            kind: 0,
+            enabled: false,
+            fixed_account_count: CLAIMS_FOUNDING_FIXED_ACCOUNT_COUNT_V5,
+            request: founding_request().to_bytes().to_vec(),
+        };
+        let (joined_effect, joined_requests) = effect(&[admit_route, founding_route]);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&joined_effect).expect("joined EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &joined_requests,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Order)
+        );
     }
 
     #[test]
@@ -1484,7 +1569,7 @@ mod tests {
         )
         .expect("signed composition");
         assert!(composition.affine().is_none());
-        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(composition.mutation_route(), Some(0));
         assert_eq!(
             composition.signed_delta().expect("signed").position_count(),
             2
@@ -1539,7 +1624,7 @@ mod tests {
             composition.external_once(),
             Some(external_request.as_slice())
         );
-        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(composition.mutation_route(), Some(0));
 
         for hostile in [
             ClaimsExternalOnceV3::new(&external_request, 30).expect("wrong frame"),
@@ -1604,7 +1689,7 @@ mod tests {
         )
         .expect("disabled admission composition");
         assert_eq!(composition.admit(), None);
-        assert_eq!(composition.affine_route(), 1);
+        assert_eq!(composition.affine_route(), Some(1));
         scalars[0] = 1;
         assert_eq!(
             ClaimsCompositionV3::decode_selected(
@@ -2118,7 +2203,7 @@ mod tests {
             parent(),
         )
         .expect("sparse composition");
-        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(composition.mutation_route(), Some(0));
         assert_eq!(composition.sparse_native_transfer(), Some(sparse_request()));
         assert!(composition.affine().is_none());
         assert!(composition.signed_delta().is_none());
@@ -2216,7 +2301,7 @@ mod tests {
         )
         .expect("admit sparse close");
         assert_eq!(composition.admit_route(), Some(0));
-        assert_eq!(composition.mutation_route(), 1);
+        assert_eq!(composition.mutation_route(), Some(1));
         assert_eq!(composition.close_route(), Some(2));
         assert_eq!(composition.sparse_native_transfer(), Some(sparse));
 
@@ -2363,7 +2448,7 @@ mod tests {
             parent(),
         )
         .expect("founding composition");
-        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(composition.mutation_route(), Some(0));
         assert_eq!(composition.founding(), Some(founding_request()));
         assert!(composition.affine().is_none());
         assert!(composition.signed_delta().is_none());

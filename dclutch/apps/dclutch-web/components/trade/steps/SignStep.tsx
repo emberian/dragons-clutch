@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import StepRefusal from '@/components/trade/StepRefusal';
+import WalletDirectory, { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import { type StepRefusalV1 } from '@/lib/tradeFlowRefusals';
 import { base64, type WalletPreparationState } from '@/lib/tradeFlowMachine';
 
@@ -30,7 +31,7 @@ import { base64, type WalletPreparationState } from '@/lib/tradeFlowMachine';
 
 /** Has signature A happened? Every state past preparation implies it has. */
 function intentSignedV1(state: WalletPreparationState): boolean {
-  return state.kind === 'operator-required' || state.kind === 'wallet-preparable'
+  return state.kind === 'payer-wallet-required' || state.kind === 'wallet-preparable'
     || state.kind === 'wallet-signed' || state.kind === 'submitted' || state.kind === 'executed';
 }
 
@@ -47,6 +48,8 @@ export default function SignStep({
   onRouteText,
   onPrepare,
   onSignPacket,
+  wallets,
+  onWalletConnected,
   refusal,
 }: Readonly<{
   walletPreparation: WalletPreparationState;
@@ -56,6 +59,8 @@ export default function SignStep({
   onRouteText: (next: string) => void;
   onPrepare: () => void;
   onSignPacket: () => void;
+  wallets: WalletDirectoryHandleV1;
+  onWalletConnected: (address: string) => void;
   /**
    * The refusal this step OWNS, routed by the host. Not every refusal the
    * preparation raised belongs here -- a buy-side ticket refuses during
@@ -111,11 +116,16 @@ export default function SignStep({
       >Sign my intent, then authenticate the packet</button>
     </div>}
 
-    {walletPreparation.kind === 'wallet-preparable' && <div className="portfolio-claim">
-      <span>Wallet-preparable · not signed as a transaction</span>
+    {(walletPreparation.kind === 'wallet-preparable' || walletPreparation.kind === 'payer-wallet-required') && <div className="portfolio-claim">
+      <span>{walletPreparation.kind === 'payer-wallet-required' ? 'Buyer intent signed · route payer still needed' : 'Wallet-preparable · not signed as a transaction'}</span>
       <strong>{walletPreparation.preparation.transactionPlan.wireBytes.length} bytes · {walletPreparation.preparation.transactionPlan.loadedAddresses} LUT addresses · 61 unique keys</strong>
       <p>Route slot {walletPreparation.preparation.binding.routeObservedSlot}; blockhash slot {walletPreparation.preparation.binding.blockhashObservedSlot.toString()}; expires at block height {walletPreparation.preparation.binding.lastValidBlockHeight.toString()}. Frozen table {walletPreparation.preparation.transactionPlan.transaction.message.addressTableLookups[0]?.accountKey.toBase58()}.</p>
-      <div className="direct-actions"><button type="button" onClick={onSignPacket}>Sign this packet</button></div>
+      {walletPreparation.kind === 'payer-wallet-required' && <>
+        <p>{walletPreparation.preparation.reason} Buyer {walletPreparation.preparation.binding.taker.owner} remains the buyer; connecting the payer does not change either signed intent.</p>
+        <label><span>Portable signed buyer ticket</span><textarea readOnly rows={6} value={walletPreparation.takerTicket} /></label>
+        <WalletDirectory directory={wallets} onConnected={onWalletConnected} purpose={`connect route payer ${walletPreparation.preparation.payer} for the transaction signature`} />
+      </>}
+      <div className="direct-actions"><button type="button" disabled={wallets.address !== walletPreparation.preparation.payer} onClick={onSignPacket}>{walletPreparation.kind === 'payer-wallet-required' ? 'Sign as the route payer' : 'Sign this packet'}</button></div>
       <p className="direct-status">This request still does not submit. Your wallet must preserve the exact message bytes; any rewrite is refused.</p>
       <details className="trade-v3-bytes">
         <summary>The exact bytes your wallet will be given</summary>

@@ -78,3 +78,22 @@ pages, 266 link-checked pages, six guides and 25 directory indexes. Logs:
 `/private/tmp/dclutch-reference-check-f173bb8b9-20260908.log`, and
 `/private/tmp/dclutch-pages-34257345585.log`. The runtime and validation limits
 above still apply.
+
+## Addendum — checkpoint retirement and CPI repair, 2026-09-08 17:45 UTC
+
+Cut `60b9372c0dd46ac843bfd57889c2a97c433a87e6` publishes source
+`6c7a9885888d03565f64dea0d8427fae11fd4baf`, tree
+`1d6dc6c48d14f9fe27837b75a3dc7fd5fab94f0e`. It carries checkpoint retirement
+convergence, borrowed-source CPI preparation, and the WholeUnwrap evidence
+reference. The credential sweep found zero findings, the published tree
+matched, and the committed reference check reached its fixed point unchanged.
+
+[Workflow 34258862103](https://github.com/emberian/dragons-clutch/actions/runs/34258862103)
+and deployment `6333552804` succeeded at `2026-09-08T17:45:02Z` in the existing
+Pages environment. The workflow rendered 42 app routes and assembled 450 files:
+197 documentation pages, 267 link-checked pages, six guides and 25 directory
+indexes. Logs: `/private/tmp/dclutch-cut-6c7a98858-20260908.log`,
+`/private/tmp/dclutch-reference-check-6c7a98858-20260908.log`, and
+`/private/tmp/dclutch-pages-34258862103.log`. Historical execution and current
+implementation checkpoints still do not establish the fresh cohort or a
+completed current-source lifecycle.

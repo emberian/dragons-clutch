@@ -1044,18 +1044,18 @@ fn authenticate_projected_facts(
         prepared,
         lock_receipt,
     )?;
-    let quantity = request
-        .hoard_principal()
-        .checked_div(product.basis_scale)
-        .filter(|quantity| *quantity > 0)
-        .ok_or(CoreSbfError::Arithmetic)?;
-    if quantity
-        .checked_mul(product.basis_scale)
-        .ok_or(CoreSbfError::Arithmetic)?
-        != request.hoard_principal()
-    {
-        return Err(CoreSbfError::Funding);
-    }
+    let quantity = dclutch_claims::founding_plan_v1::founding_quantity_v1(
+        request.hoard_principal(),
+        product.basis_scale,
+    )
+    .map_err(|cause| {
+        use dclutch_claims::founding_plan_v1::FoundingPlanErrorV1;
+        solana_program::msg!("Series founding quantity: {:?}", cause);
+        match cause {
+            FoundingPlanErrorV1::NonIntegralPrincipal => CoreSbfError::Funding,
+            _ => CoreSbfError::Arithmetic,
+        }
+    })?;
     let realize_request_digest = realize_request_digest(&projected)?;
     let (realize_receipt_digest, realize_revision) = realize_receipt_facts(
         &projected,

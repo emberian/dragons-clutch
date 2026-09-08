@@ -14,15 +14,6 @@ const render = (
   refusal={refusal}
 />);
 
-const OPERATOR_REQUIRED_V1: WalletPreparationState = Object.freeze({
-  kind: 'operator-required' as const,
-  payer: 'Payer1111111111111111111111111111111111111',
-  reason: 'the authenticated route names another fee payer',
-  takerTicket: '{"kind":"dclutch/direct-intent-ticket/v1"}',
-  routeObservedSlot: '490712003',
-  lastValidBlockHeight: '4001',
-});
-
 const WALLET_SIGNED_V1: WalletPreparationState = Object.freeze({
   kind: 'wallet-signed' as const,
   signature: 'Sig1111111111111111111111111111111111111111',
@@ -47,7 +38,6 @@ describe('step 7, the one send', () => {
   it('offers a send control only where sending is the thing to do', () => {
     expect(render(WALLET_SIGNED_V1)).toContain('>Send it</button>');
     expect(render({ kind: 'idle' })).not.toContain('Send it');
-    expect(render(OPERATOR_REQUIRED_V1)).not.toContain('Send it');
     // Submitted: in flight. No control could help, so none is drawn.
     expect(render({
       kind: 'submitted', journal: {} as never, signature: 'Sig111', takerBefore: null,
@@ -59,26 +49,6 @@ describe('step 7, the one send', () => {
     const html = render(WALLET_SIGNED_V1);
     expect(html).toContain('Wallet signed · saved locally, not yet submitted');
     expect(html).toContain('nothing has been sent to RPC');
-  });
-
-  /**
-   * `operator-required` IS A FIRST-CLASS OUTCOME, NOT AN ERROR.
-   *
-   * The trader did everything right; the route's payer is somebody else. They
-   * are holding a real, portable, signed ticket, and dressing that as a
-   * failure would tell them their signature was wasted when it is the exact
-   * artifact the flow was for. It gets `flow-terminal` -- the same weight as
-   * `executed` -- and it is never rendered through the refusal treatment.
-   */
-  it('gives operator-required the weight of a finished outcome, not a refusal', () => {
-    const html = render(OPERATOR_REQUIRED_V1);
-    expect(html).toContain('flow-terminal');
-    expect(html).toContain('Your intent is signed. Nothing has executed.');
-    expect(html).toContain('Payer1111111111111111111111111111111111111');
-    expect(html).toContain('This page has not built, signed, or submitted a transaction.');
-    // Not an alert, and not the amber refusal treatment.
-    expect(html).not.toContain('flow-refusal');
-    expect(html).not.toContain('role="alert"');
   });
 
   it('sends the reader to the explorer once it is finalized, and only then', () => {
@@ -94,7 +64,7 @@ describe('step 7, the one send', () => {
   });
 
   it('keeps the never-send-twice promise standing in every state', () => {
-    for (const state of [{ kind: 'idle' } as WalletPreparationState, WALLET_SIGNED_V1, OPERATOR_REQUIRED_V1]) {
+    for (const state of [{ kind: 'idle' } as WalletPreparationState, WALLET_SIGNED_V1]) {
       expect(render(state)).toContain('The signed packet is saved in this browser before its one send, so a reload picks it up rather than sending twice.');
     }
   });

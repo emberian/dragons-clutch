@@ -15,7 +15,6 @@ const NOTHING_DONE_V1: FlowProgressV1 = Object.freeze({
   intentSigned: false,
   packetSigned: false,
   executed: false,
-  operatorRequired: false,
   packetWallDetail: null,
 });
 
@@ -81,20 +80,15 @@ describe('the seven steps, and which one you are on', () => {
     expect(statuses(held)[3]).toBe('current');
   });
 
-  /**
-   * `operator-required` finishes step 6. The trader signed their intent and
-   * holds a real portable ticket; the route's payer is somebody else. Marking
-   * that step unfinished would tell a reader their signature did not count.
-   */
-  it('treats operator-required as a finished signing, and opens the send step', () => {
+  it('keeps signing current until the distinct route payer signs the packet', () => {
     const steps = tradeFlowStepsV1({
       ...NOTHING_DONE_V1,
       participantReady: true, outcomePicked: true, ticketReady: true,
-      previewReady: true, intentSigned: true, operatorRequired: true,
+      previewReady: true, intentSigned: true,
     });
-    expect(steps[5]!.status).toBe('done');
-    expect(steps[6]!.status).toBe('current');
-    expect(steps[6]!.blockedReason).toBeNull();
+    expect(steps[5]!.status).toBe('current');
+    expect(steps[6]!.status).toBe('blocked');
+    expect(steps[6]!.blockedReason).toContain('Sign the packet first');
   });
 
   it('blocks the send step on a signature, and says signing is not sending', () => {

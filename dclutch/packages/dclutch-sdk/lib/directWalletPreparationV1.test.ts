@@ -421,18 +421,21 @@ describe('Direct wallet preparation V1', () => {
     expect(plan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
   });
 
-  it('returns an honest operator handoff naming the exact route payer and does not compile', async () => {
+  it('compiles the exact route-payer packet without conflating payer and buyer identities', async () => {
     const input = await fixture('operator');
     const prepared = prepareDirectWalletTransactionV1(input);
     expect(prepared).toMatchObject({
-      status: 'operator-required',
-      payerBranch: 'operator-required',
+      status: 'payer-wallet-required',
+      payerBranch: 'route-payer',
       payer: input.routeInspection.route.payer,
     });
     expect(prepared.payer).not.toBe(input.context.current.connectedWallet);
-    expect('transactionPlan' in prepared).toBe(false);
-    if (prepared.status !== 'operator-required') throw new Error('unreachable test branch');
+    if (prepared.status !== 'payer-wallet-required') throw new Error('unreachable test branch');
     expect(prepared.signedIntents).toEqual({ seller: input.signedSeller, buyer: input.signedTaker });
+    expect(prepared.transactionPlan.requiredSigners).toEqual([input.routeInspection.route.payer]);
+    expect(prepared.transactionPlan.transaction.message.staticAccountKeys[0]!.toBase58()).toBe(input.routeInspection.route.payer);
+    expect(prepared.binding.connectedWallet).toBe(input.signedTaker.maker);
+    expect(prepared.reason).toContain('Connect the authenticated route payer');
   });
 
   it('refuses account switches and mixed RPC or genesis acquisition contexts', async () => {

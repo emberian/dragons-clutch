@@ -60,6 +60,20 @@ replay snapshot. Core's canonical expected ProjectFound receipt constructor is
 shared with Trading. No request-bank input supplies a future receipt or digest.
 The subsequent Custody CPI still verifies the actual Core producer and receipt.
 
+Matched Claims requests and Core permits now have one pure construction owner,
+`dclutch-claims::founding_plan_v1`. Core supplies authenticated physical facts
+and retains admission and the actual permit write; Trading predicts the pair
+from its authenticated occurrence bank. The owner derives the positive exact
+principal/Product-payout-scale quotient. Both the intent and Claims request
+name the projected State address that Realize rewrites in place, and Claims
+binds the fresh normal replay's 0-to-1 transition. Lock's source replay closes
+and is a separate address. The adapter also applies the native Source cap and
+joins it to the predicted Core state. Market publication previews expose the
+same compiler-derived cap so component fixtures cannot invent another ceiling.
+Actual Core-written permit bytes remain an independent integration obligation;
+agreement between two callers of this constructor alone does not prove their
+account observations were authenticated correctly.
+
 ## Projection and immutable artifacts
 
 AccountProfile already provides `ProjectKey`, `ProjectDataIdentity`,

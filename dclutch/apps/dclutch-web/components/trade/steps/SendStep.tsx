@@ -16,12 +16,9 @@ import { type WalletPreparationState } from '@/lib/tradeFlowMachine';
  * would be inviting the exact double-send the journal underneath exists to
  * make impossible.
  *
- * **`operator-required` is a first-class outcome, not an error.** The trader
- * did everything right; the route's payer is somebody else. It gets the same
- * visual weight as `executed`, because it is a finished piece of work that
- * produced a real, portable, signed artifact -- and rendering it as a failure
- * would tell a reader they had wasted their signature when they are holding
- * the thing the whole flow was for.
+ * A route with a distinct payer remains in the signing step until that payer
+ * signs the exact compiled packet. This step therefore has one job for every
+ * route: submit a complete saved packet, once.
  */
 export default function SendStep({
   walletPreparation,
@@ -35,13 +32,6 @@ export default function SendStep({
 }>) {
   return <>
     {refusal !== null && <StepRefusal refusal={refusal} />}
-
-    {walletPreparation.kind === 'operator-required' && <div className="portfolio-claim flow-terminal">
-      <span>Your intent is signed. Nothing has executed.</span>
-      <strong>Route payer {walletPreparation.payer}</strong>
-      <p>{walletPreparation.reason} The authenticated route was observed at slot {walletPreparation.routeObservedSlot}; its blockhash expires at block height {walletPreparation.lastValidBlockHeight}. Give the exact signed taker ticket below to that payer. This page has not built, signed, or submitted a transaction.</p>
-      <label><span>Your signed taker ticket</span><textarea readOnly rows={7} value={walletPreparation.takerTicket} /></label>
-    </div>}
 
     {walletPreparation.kind === 'wallet-signed' && <div className="portfolio-claim">
       <span>Wallet signed · saved locally, not yet submitted</span>

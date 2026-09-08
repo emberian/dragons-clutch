@@ -12,12 +12,12 @@ extern crate alloc;
 use alloc::boxed::Box;
 
 use crate::series::projected_custody_v3::{SeriesProjectedCustodyPhysicalV3, project_consume_v3};
-use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
-use dclutch_custody::{CustodyReplayV1, ProjectedCustodyStateV2};
-use dclutch_market::{
-    CoreState, FoundingIntentV5, Identity, Phase, Readiness, SeriesFoundingPermitV1,
-    SeriesPermitExpiryRequestV1,
+use dclutch_claims::founding_plan_v1::{
+    FoundingPlanInputV1, FoundingPlanV1, derive_founding_plan_v1, founding_quantity_v1,
 };
+use dclutch_claims::founding_v5::ClaimsFoundingRequestV5;
+use dclutch_custody::{CustodyReplayV1, ProjectedCustodyStateV2};
+use dclutch_market::{CoreState, Identity, Phase, Readiness, SeriesPermitExpiryRequestV1};
 use dclutch_sha256_adapter::digest;
 use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2, admit_occurrence,
@@ -42,6 +42,8 @@ pub struct SeriesFoundingClaimsPhysicalV1 {
     /// failure-escrow PDA derives from this width even when the categorical
     /// basis leaves that escrow vacant.
     pub claim_count: u32,
+    /// Exact payout scale from the authenticated Product Basis projection.
+    pub basis_scale: u64,
     /// Canonical Claims aggregate, founder Position and admission accounts.
     pub aggregate: [u8; 32],
     pub position: [u8; 32],
@@ -100,6 +102,7 @@ pub enum SeriesFoundingChildrenErrorV1 {
     Content,
     Projection,
     Claims,
+    PrincipalCapacity,
     Permit,
 }
 
@@ -154,25 +157,23 @@ pub fn derive_series_founding_children_v1(
     let (locked, lock_digest, lock_receipt_digest) = lock_poststate(&input, &escrow, lock)?;
     let (realize_digest, receipt_digest, receipt_revision) =
         realization_poststate(&input, &escrow, &locked, realize)?;
-    let intent = founding_intent(
+    let founding = founding_plan(
         &input,
         &escrow,
         expiry,
         realize_digest,
         receipt_digest,
         receipt_revision,
-    )?;
-    let intent_digest = intent_digest(&intent)?;
-    let claims = founding_claims(
-        &input,
-        &escrow,
-        lock,
         lock_digest,
         lock_receipt_digest,
-        intent_digest,
     )?;
-    let permit = founding_permit(*intent, intent_digest, &claims)?;
-    assemble_children(projected_input, lock, realize, &claims, permit)
+    assemble_children(
+        projected_input,
+        lock,
+        realize,
+        &founding.claims,
+        SeriesPermitExpiryRequestV1::new(founding.permit),
+    )
 }
 
 #[inline(never)]
@@ -213,6 +214,7 @@ fn authenticated_projection(
     if state.phase != Phase::Founding
         || state.readiness != Readiness::Prepaid
         || state.terminal_winner != 0
+        || state.principal_cap_sets != input.principal_cap_sets
         || state.outstanding_capabilities != 0
         || state.terminal_receipt.is_some()
         || state.identity.market_id.to_bytes() != escrow.market().to_bytes()
@@ -335,126 +337,77 @@ fn realization_poststate(
 }
 
 #[inline(never)]
-fn founding_intent(
+fn founding_plan(
     input: &SeriesFoundingChildrenInputV1<'_>,
     escrow: &dclutch_trading::series::PrefoundingSeriesEscrowV3,
     expiry: u64,
     realize_digest: [u8; 32],
     receipt_digest: [u8; 32],
     receipt_revision: u64,
-) -> Result<Box<FoundingIntentV5>, SeriesFoundingChildrenErrorV1> {
-    let intent = FoundingIntentV5::new(
-        input.claims.permit_bump,
-        identity(escrow.release_set().to_bytes())?,
-        identity(escrow.market().to_bytes())?,
-        identity(input.product.product_record().to_bytes())?,
-        identity(
-            escrow
-                .future_market()
-                .identity()
-                .resolution_policy
-                .to_bytes(),
-        )?,
-        identity(escrow.founder().to_bytes())?,
-        identity(escrow.ticket_id().to_bytes())?,
-        identity(input.parent_root)?,
-        identity(input.source_replay_account)?,
-        identity(input.projected.physical.escrow_vault)?,
-        identity(input.projected.physical.hoard_vault)?,
-        identity(realize_digest)?,
-        identity(receipt_digest)?,
-        identity(input.trading_program)?,
-        identity(input.claims.claims_program)?,
-        identity(input.projected.physical.rent_credit)?,
-        escrow.generation(),
-        1,
-        escrow.hoard_principal(),
-        expiry,
-        receipt_revision,
-        input.claims.normal_replay_revision,
-    )
-    .map_err(|_| SeriesFoundingChildrenErrorV1::Permit)?;
-    Ok(Box::new(intent))
-}
-
-#[inline(never)]
-fn intent_digest(intent: &FoundingIntentV5) -> Result<[u8; 32], SeriesFoundingChildrenErrorV1> {
-    let intent_digest: [u8; 32] = digest(
-        &intent
-            .encode()
-            .map_err(|_| SeriesFoundingChildrenErrorV1::Permit)?,
-    )
-    .into();
-    Ok(intent_digest)
-}
-
-#[inline(never)]
-fn founding_claims(
-    input: &SeriesFoundingChildrenInputV1<'_>,
-    escrow: &dclutch_trading::series::PrefoundingSeriesEscrowV3,
-    lock: &dclutch_custody::ProjectedCustodyRequestV1,
     lock_digest: [u8; 32],
     lock_receipt_digest: [u8; 32],
-    intent_digest: [u8; 32],
-) -> Result<Box<ClaimsFoundingRequestV5>, SeriesFoundingChildrenErrorV1> {
-    let claims_input = ClaimsFoundingRequestInputV5 {
+) -> Result<Box<FoundingPlanV1>, SeriesFoundingChildrenErrorV1> {
+    let quantity = founding_quantity_v1(escrow.hoard_principal(), input.claims.basis_scale)
+        .map_err(founding_error)?;
+    dclutch_source::MarketPrincipalCapSetsV1::read(input.principal_cap_sets)
+        .admit_growth(0, quantity)
+        .map_err(|_| SeriesFoundingChildrenErrorV1::PrincipalCapacity)?;
+    let facts = FoundingPlanInputV1 {
+        bump: input.claims.permit_bump,
         release_set: escrow.release_set().to_bytes(),
         market: escrow.market().to_bytes(),
-        product_record_digest: input.product.product_record().to_bytes(),
-        product_instance_id: input.product.stable_product_id().to_bytes(),
-        linked_basis_record_digest: input.claims.linked_basis_record_digest,
-        semantic_basis_id: input.claims.semantic_basis_id,
+        product_record: input.product.product_record().to_bytes(),
+        product_id: input.product.stable_product_id().to_bytes(),
+        linked_basis_record: input.claims.linked_basis_record_digest,
+        semantic_basis: input.claims.semantic_basis_id,
+        source: escrow
+            .future_market()
+            .identity()
+            .resolution_policy
+            .to_bytes(),
         founder: escrow.founder().to_bytes(),
-        founding_intent_digest: intent_digest,
+        context: escrow.ticket_id().to_bytes(),
+        capability_root: input.parent_root,
+        projected_replay: input.realized_hoard_replay_account,
+        funding_source: input.projected.physical.escrow_vault,
+        hoard: input.projected.physical.hoard_vault,
+        projected_request_digest: realize_digest,
+        projected_receipt_digest: receipt_digest,
+        custody_lock_request_digest: lock_digest,
+        custody_lock_receipt_digest: lock_receipt_digest,
+        trading_program: input.trading_program,
+        claims_program: input.claims.claims_program,
+        rent_credit: input.projected.physical.rent_credit,
+        rent_program: input.rent_program,
         aggregate: input.claims.aggregate,
         position: input.claims.position,
         admission: input.claims.admission,
-        funding_source: input.projected.physical.escrow_vault,
-        hoard: input.projected.physical.hoard_vault,
-        custody_replay: input.realized_hoard_replay_account,
-        rent_credit: input.projected.physical.rent_credit,
-        rent_program: input.rent_program,
-        claims_program: input.claims.claims_program,
-        trading_program: input.trading_program,
-        custody_request_digest: lock_digest,
-        custody_receipt_digest: lock_receipt_digest,
         generation: escrow.generation(),
         claim_count: input.claims.claim_count,
-        quantity: 1,
-        basis_scale: escrow.hoard_principal(),
-        pre_source_amount: escrow.hoard_principal(),
-        post_source_amount: 0,
-        pre_hoard_amount: 0,
-        post_hoard_amount: escrow.hoard_principal(),
-        pre_custody_revision: lock.expected_revision,
-        post_custody_revision: lock.resulting_revision,
-        aggregate_rent_principal: input.claims.aggregate_rent_principal,
-        position_rent_principal: input.claims.position_rent_principal,
-        admission_rent_principal: input.claims.admission_rent_principal,
-        observed_aggregate_lamports: input.claims.observed_aggregate_lamports,
-        observed_position_lamports: input.claims.observed_position_lamports,
-        observed_admission_lamports: input.claims.observed_admission_lamports,
-        pre_aggregate_revision: 0,
-        post_aggregate_revision: 1,
-        pre_position_revision: 0,
-        post_position_revision: 1,
+        quantity,
+        basis_scale: input.claims.basis_scale,
+        expiry_slot: expiry,
+        projected_resulting_revision: receipt_revision,
+        normal_replay_revision: input.claims.normal_replay_revision,
+        source_amount: escrow.hoard_principal(),
+        hoard_amount: escrow.hoard_principal(),
+        aggregate_rent: input.claims.aggregate_rent_principal,
+        position_rent: input.claims.position_rent_principal,
+        admission_rent: input.claims.admission_rent_principal,
+        aggregate_lamports: input.claims.observed_aggregate_lamports,
+        position_lamports: input.claims.observed_position_lamports,
+        admission_lamports: input.claims.observed_admission_lamports,
     };
-    let claims = ClaimsFoundingRequestV5::new(claims_input)
-        .map_err(|_| SeriesFoundingChildrenErrorV1::Claims)?;
-    Ok(Box::new(claims))
+    derive_founding_plan_v1(&facts)
+        .map(Box::new)
+        .map_err(founding_error)
 }
 
-#[inline(never)]
-fn founding_permit(
-    intent: FoundingIntentV5,
-    intent_digest: [u8; 32],
-    claims: &ClaimsFoundingRequestV5,
-) -> Result<SeriesPermitExpiryRequestV1, SeriesFoundingChildrenErrorV1> {
-    let claims_digest: [u8; 32] = digest(&claims.to_bytes()).into();
-    let permit =
-        SeriesFoundingPermitV1::new(intent, identity(intent_digest)?, identity(claims_digest)?)
-            .map_err(|_| SeriesFoundingChildrenErrorV1::Permit)?;
-    Ok(SeriesPermitExpiryRequestV1::new(permit))
+fn founding_error(
+    cause: dclutch_claims::founding_plan_v1::FoundingPlanErrorV1,
+) -> SeriesFoundingChildrenErrorV1 {
+    solana_program::msg!("Series native founding construction: {:?}", cause);
+    SeriesFoundingChildrenErrorV1::Claims
 }
 
 #[inline(never)]
@@ -474,6 +427,7 @@ fn assemble_children(
     }))
 }
 
+#[cfg(test)]
 fn identity(value: [u8; 32]) -> Result<Identity, SeriesFoundingChildrenErrorV1> {
     Identity::new(value).map_err(|_| SeriesFoundingChildrenErrorV1::Content)
 }
@@ -575,7 +529,7 @@ mod tests {
         let receipt = super::super::derived_prepare_v1::derive_series_project_found_receipt_v1(
             escrow.future_market().identity(),
             p,
-            1,
+            3,
         )
         .expect("canonical expected Core receipt");
         let receipt_digest = digest(&receipt.encode().expect("receipt bytes"));
@@ -633,7 +587,7 @@ mod tests {
                 generation: 1,
             },
             outstanding_capabilities: 0,
-            principal_cap_sets: 1,
+            principal_cap_sets: 3,
             rent_beneficiary: ident(35),
             terminal_receipt: None,
             bumps: StateBumpsV1::UNRECORDED,
@@ -642,6 +596,7 @@ mod tests {
             linked_basis_record_digest: [50; 32],
             semantic_basis_id: [51; 32],
             claim_count: 3,
+            basis_scale: 3,
             aggregate: [52; 32],
             position: [53; 32],
             admission: [54; 32],
@@ -677,6 +632,30 @@ mod tests {
             claims,
         };
         let output = derive_series_founding_children_v1(input).expect("derived children");
+        let mut over_capacity = input;
+        over_capacity.principal_cap_sets = 2;
+        assert_eq!(
+            founding_plan(
+                &over_capacity,
+                &escrow,
+                expiry,
+                [1; 32],
+                [2; 32],
+                4,
+                [3; 32],
+                [4; 32]
+            ),
+            Err(SeriesFoundingChildrenErrorV1::PrincipalCapacity),
+        );
+        let mut wrong_core = core;
+        wrong_core.principal_cap_sets = 2;
+        assert_eq!(
+            derive_series_founding_children_v1(SeriesFoundingChildrenInputV1 {
+                predicted_core_state: &wrong_core,
+                ..input
+            }),
+            Err(SeriesFoundingChildrenErrorV1::Projection)
+        );
         assert_eq!(
             output.projected_physical.projection_receipt_digest,
             receipt_digest
@@ -689,6 +668,19 @@ mod tests {
             "Claims advances the projected State address Realize rewrites, not Lock's source cursor",
         );
         assert_eq!(output.claims.collateral_transferred(), 9);
+        assert_eq!(output.claims.quantity(), 3);
+        assert_eq!(output.claims.basis_scale(), 3);
+        assert_eq!(
+            output
+                .permit_expiry
+                .permit()
+                .intent()
+                .projected_replay()
+                .to_bytes(),
+            [61; 32]
+        );
+        assert_eq!(output.claims.pre_custody_revision(), 0);
+        assert_eq!(output.claims.post_custody_revision(), 1);
         output
             .permit_expiry
             .permit()

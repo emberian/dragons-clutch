@@ -402,6 +402,26 @@ fn seed_prepare(
     .map_err(content)
 }
 
+#[inline(never)]
+fn authenticate_projected_receipt(
+    escrow: &PrefoundingSeriesEscrowV3,
+    projected: SeriesProjectedCustodyPhysicalV3,
+    state: &dclutch_custody::ProjectedCustodyStateV2,
+) -> Result<()> {
+    let expected_receipt =
+        crate::series::derived_prepare_v1::derive_series_project_found_receipt_v1(
+            escrow.future_market().identity(),
+            projected,
+            state.principal_cap_sets,
+        )
+        .map_err(content)?;
+    require(
+        hash(&expected_receipt.encode().map_err(content)?).to_bytes()
+            == state.request.projection_receipt_digest,
+    )?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn seed_terminal(
@@ -432,17 +452,7 @@ fn seed_terminal(
             && state.next_revision == 2
             && state.locked_amount == 0,
     )?;
-    let expected_receipt =
-        crate::series::derived_prepare_v1::derive_series_project_found_receipt_v1(
-            escrow.future_market().identity(),
-            projected,
-            state.principal_cap_sets,
-        )
-        .map_err(content)?;
-    require(
-        hash(&expected_receipt.encode().map_err(content)?).to_bytes()
-            == state.request.projection_receipt_digest,
-    )?;
+    authenticate_projected_receipt(escrow, projected, &state)?;
     require(
         projected.caller_program == program_id.to_bytes()
             && projected.core_program == frame.core_program.key.to_bytes()
@@ -823,6 +833,7 @@ fn claims_physical(
         linked_basis_record_digest: product.linked_basis_record.content_digest.to_bytes(),
         semantic_basis_id: product.semantic_basis_id.to_bytes(),
         claim_count: count,
+        basis_scale: product.payout_scale,
         aggregate: aggregate.to_bytes(),
         position: position.to_bytes(),
         admission: admission.to_bytes(),
@@ -880,3 +891,7 @@ fn content<T: core::fmt::Debug>(cause: T) -> ProgramError {
     solana_program::msg!("Series derived facts: {:?}", cause);
     TradingSbfError::Content.into()
 }
+
+#[cfg(test)]
+#[path = "series_registers_tests.rs"]
+mod tests;

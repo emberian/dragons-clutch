@@ -23,11 +23,14 @@ use dclutch_claims::{
     frame_spec_v1::ClaimsFrameRoleV1,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-        LiabilityBasisMarketInputV2, LiabilityBasisMarketSeedsV2, LiabilityBasisPositionInputV2,
+        LiabilityBasisMarketInputV2, LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2,
+        LiabilityBasisPositionInputV2, LiabilityBasisPositionViewV2,
         encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
         put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
     },
-    protocol_position_v2::{PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionSeedsV2},
+    protocol_position_v2::{
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionV2, ProtocolPositionSeedsV2,
+    },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody::{
@@ -1005,6 +1008,16 @@ fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
     bytes
 }
 
+fn token_account_amount(bytes: &[u8]) -> u64 {
+    u64::from_le_bytes(
+        bytes
+            .get(64..72)
+            .expect("canonical token account amount")
+            .try_into()
+            .expect("u64 token amount"),
+    )
+}
+
 /// A child-owned account that has been prepaid but remains vacant until its
 /// owner allocates it. Claims admission deliberately requires this floor while
 /// still requiring the System owner and an empty body: no caller can allocate
@@ -1030,6 +1043,7 @@ fn place_order_corpus(
     campaign: &CampaignV1,
     chain: &ChainPrestateV1,
     order_id: [u8; 32],
+    quote_reserve: u64,
 ) -> PlaceOrderCorpusV1 {
     let claims_market = Pubkey::find_program_address(
         &LiabilityBasisMarketSeedsV2::new(chain.market.key.to_bytes())
@@ -1141,13 +1155,13 @@ fn place_order_corpus(
             &campaign.rent,
             GENERAL_COLLATERAL_MINT,
             GENERAL_TOKEN_PROGRAM,
-            token_mint_bytes(4),
+            token_mint_bytes(quote_reserve),
         ),
         maker_token: data_account(
             &campaign.rent,
             maker_token,
             GENERAL_TOKEN_PROGRAM,
-            token_account_bytes(GENERAL_COLLATERAL_MINT, maker, 4),
+            token_account_bytes(GENERAL_COLLATERAL_MINT, maker, quote_reserve),
         ),
         // Claims admission has no payer account. Its Position and admission
         // PDAs must therefore arrive as System-owned, data-empty accounts
@@ -2914,7 +2928,9 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // their owners, while the escrow Position, admission, replay, and vault are
     // vacant at the child contracts' PDAs.  The action therefore has to create
     // the exact child state it later spends.
-    let place_corpus = place_order_corpus(&campaign, &chain, order_record.order_id());
+    let quote_reserve = order_record.quote_reserve().expect("exact quote reserve");
+    let place_corpus =
+        place_order_corpus(&campaign, &chain, order_record.order_id(), quote_reserve);
     assert_eq!(
         place_corpus.order_identity.key.to_bytes(),
         order_record.order_id(),
@@ -3055,6 +3071,71 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
             "PlaceOrder did not create {name}"
         );
     }
+    let aggregate_account = chain_account(&mut context, place_corpus.claims_market.key).await;
+    let aggregate = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+        .expect("PlaceOrder preserves the canonical Claims aggregate");
+    assert_eq!(aggregate.revision, 1);
+    for outcome in 0..OUTCOME_COUNT {
+        assert_eq!(
+            aggregate
+                .supply(&aggregate_account.data, outcome)
+                .expect("aggregate supply"),
+            4,
+            "buy-side admission does not mint or burn aggregate claims"
+        );
+    }
+    let maker_position_account = chain_account(&mut context, place_corpus.maker_position.key).await;
+    let maker_position = LiabilityBasisPositionViewV2::decode(&maker_position_account.data)
+        .expect("canonical maker Position");
+    assert_eq!(maker_position.revision, 1);
+    for outcome in 0..OUTCOME_COUNT {
+        assert_eq!(
+            maker_position
+                .balance(&maker_position_account.data, outcome)
+                .expect("maker balance"),
+            4,
+            "buy-side admission does not debit maker claims"
+        );
+    }
+    let escrow_position_account =
+        chain_account(&mut context, place_corpus.escrow_position.key).await;
+    let escrow_position = LiabilityBasisPositionViewV2::decode(&escrow_position_account.data)
+        .expect("canonical admitted escrow Position");
+    assert_eq!(escrow_position.revision, 0);
+    assert_eq!(escrow_position.owner, order_record.order_id());
+    for outcome in 0..OUTCOME_COUNT {
+        assert_eq!(
+            escrow_position
+                .balance(&escrow_position_account.data, outcome)
+                .expect("escrow balance"),
+            0,
+            "buy-side admission creates an exact zero-balance escrow Position"
+        );
+    }
+    let admission_account = chain_account(&mut context, place_corpus.escrow_admission.key).await;
+    let admission = ProtocolPositionAdmissionV2::decode(&admission_account.data)
+        .expect("canonical persisted escrow admission");
+    assert_eq!(admission.position_owner(), order_record.order_id());
+    assert_eq!(admission.market_revision(), aggregate.revision);
+    assert_eq!(admission.outcome_count(), OUTCOME_COUNT);
+    assert_eq!(
+        token_account_amount(
+            &chain_account(&mut context, place_corpus.escrow_vault.key)
+                .await
+                .data,
+        ),
+        quote_reserve,
+        "Custody holds the exact signed quote reserve"
+    );
+    assert_eq!(
+        token_account_amount(
+            &chain_account(&mut context, place_corpus.maker_token.key)
+                .await
+                .data,
+        ),
+        0,
+        "the one funded maker source paid exactly the quote reserve"
+    );
     chain = ChainPrestateV1 {
         market: observed_binding(&mut context, campaign.state.market.key).await,
         root: observed_binding(&mut context, open.root).await,

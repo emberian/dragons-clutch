@@ -20,9 +20,8 @@ use dclutch_claims::{
     },
 };
 use dclutch_custody::{
-    CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1,
-    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyReplayV1,
-    CustodyRequestV1, OperationV1,
+    CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1,
+    CompartmentV1, CustodyReceiptV1, CustodyReplayV1, CustodyRequestV1, OperationV1,
 };
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::rent::lifecycle_v2::{
@@ -38,8 +37,8 @@ use dclutch_market::{
     ClaimsEffectObservation, CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase,
     REQUEST_BYTES, RETIRED_CANDIDATE_DIGEST_DOMAIN_V1, RETIREMENT_BUNDLE_BYTES_V1,
     RETIREMENT_CUSTODY_RECEIPT_COUNT_V1, RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1,
-    RETIREMENT_RECEIPT_BYTES_V1, RETIREMENT_ROLE_COUNT_V1, Request, RetirementBundleV1,
-    RetirementReceiptInputV1, RetirementReceiptV1, Role, STATE_BYTES, retire,
+    RETIREMENT_ROLE_COUNT_V1, Request, RetirementBundleV1, RetirementReceiptInputV1,
+    RetirementReceiptV1, Role, STATE_BYTES, retire,
 };
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source::resolution::{
@@ -301,17 +300,6 @@ struct ClaimsCloseEvidence {
 }
 
 #[derive(Clone, Copy)]
-struct CustodyRequestJoin {
-    context: [u8; 32],
-    realm: [u8; 32],
-    candidate: [u8; 32],
-    order: [u8; 32],
-    order_nonce: u64,
-    page_index: u32,
-    execution_index: u32,
-}
-
-#[derive(Clone, Copy, Clone, Copy)]
 struct RetiredTransitionPlan {
     core_refund: u64,
     candidate_digest: [u8; 32],

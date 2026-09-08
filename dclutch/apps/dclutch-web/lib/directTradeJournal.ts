@@ -1,3 +1,5 @@
+import { PublicKey } from '@solana/web3.js';
+
 import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   type ClientOperationScopeV1,
@@ -19,6 +21,7 @@ import { type SignatureStatusObservation } from '@dclutch/sdk/rpc';
 
 export type DirectTradeJournalPlanV1 = Readonly<{
   payer: string;
+  taker: string;
   lookupTable: string;
   routeObservedSlot: string;
   blockhashObservedSlot: string;
@@ -30,12 +33,34 @@ function canonicalPlanText(plan: DirectTradeJournalPlanV1): string {
   return JSON.stringify(Object.freeze({
     schema: 'dclutch-direct-inline-journal-plan-v1',
     payer: plan.payer,
+    taker: plan.taker,
     lookupTable: plan.lookupTable,
     routeObservedSlot: plan.routeObservedSlot,
     blockhashObservedSlot: plan.blockhashObservedSlot,
     lastValidBlockHeight: plan.lastValidBlockHeight,
     messageBase64: plan.messageBase64,
   }));
+}
+
+/** Recover the economic taker independently of the wallet that paid for the packet. */
+export function directTradeJournalTakerV1(journal: ClientOperationJournalV1): string {
+  if (journal.operation !== 'direct-inline-v3') throw new Error('journal is not one Direct crossing');
+  let decoded: unknown;
+  try { decoded = JSON.parse(journal.plan); } catch { throw new Error('Direct journal plan is not JSON'); }
+  if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('Direct journal plan must be one object');
+  const plan = decoded as Record<string, unknown>;
+  const expected = ['blockhashObservedSlot', 'lastValidBlockHeight', 'lookupTable', 'messageBase64', 'payer', 'routeObservedSlot', 'schema', 'taker'];
+  const keys = Object.keys(plan).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error('Direct journal plan has missing or unknown fields');
+  }
+  if (plan.schema !== 'dclutch-direct-inline-journal-plan-v1' || typeof plan.taker !== 'string') {
+    throw new Error('Direct journal plan has another schema or no taker');
+  }
+  let taker: string;
+  try { taker = new PublicKey(plan.taker).toBase58(); } catch { throw new Error('Direct journal taker is not one canonical Solana address'); }
+  if (taker !== plan.taker) throw new Error('Direct journal taker is not canonical base58 text');
+  return taker;
 }
 
 /** The unsigned journal input for one exact prepared Direct packet. */

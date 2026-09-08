@@ -476,7 +476,7 @@ enum PostResourceEvidenceV3 {
 
 fn composition_owns_route(composition: ClaimsCompositionV3<'_>, route: u16) -> bool {
     composition.admit_route() == Some(route)
-        || composition.mutation_route() == route
+        || composition.mutation_route() == Some(route)
         || composition.close_route() == Some(route)
 }
 

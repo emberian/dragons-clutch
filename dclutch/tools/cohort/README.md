@@ -610,10 +610,13 @@ preserves a dependency must run before the stage that owns and closes it.
 
 The consequences for reading this file and cohort-17's evidence:
 
-- **the terminal sequence's stages are `CoreBeginRetiring`,
+- **the semantic terminal order is `CoreBeginRetiring`,
   `DirectBeginRetiring`, `DirectCloseCapability`, `ResolutionCloseFund`,
   `RetirementReplayHandoff`, `AggregateRetirement`.** The Direct close is stage
-  THREE now and the Resolution close is stage FOUR; every sentence above this
+  THREE now and the Resolution close is stage FOUR. The terminal-sequence
+  driver executes the first five through `TerminalStageV1::PRECHECKPOINT`;
+  `AggregateRetirement` executes only through its four checkpoint packets.
+  Every sentence above this
   one, and every line of
   `docs/evidence/COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md`, was written
   under the old numbering and says the opposite. The JOURNAL FILENAMES did not
@@ -764,6 +767,15 @@ one-shot -- is not this row's route for any shape. The first loop now waits on
 which every shape reaches. A categorical market therefore retires through the
 four packets here too (`AggregateRetirementFrameShapeV1::Categorical`, 35
 accounts): one rule, not a shape-dependent one.
+
+**DATED ADDENDUM, 2026-09-08.** The journey now calls the existing
+`local-private-validator-aggregate-retirement-lookup-table-v1` producer after
+the five-stage handoff and before the four checkpoint packets. It does not
+reuse the terminal table: the producer derives the checkpoint operations'
+exact address union, publishes and freezes that table under the retirement
+payer, reads it back, and recompiles all four fixed-width packets over it. A
+restart reuses the bound producer report, while the campaign reauthenticates
+the live frozen table and its address digest before signing.
 
 **A SECOND wall sits behind that one, and it is a program change rather than a
 founding input: a market founded REFUNDING cannot reach this row at all.**

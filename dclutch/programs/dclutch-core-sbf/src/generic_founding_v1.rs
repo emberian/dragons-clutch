@@ -8,7 +8,7 @@ use alloc::boxed::Box;
 
 use dclutch_claims::founding_v5::{
     CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingAggregateSeedsV5,
-    ClaimsFoundingReceiptV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
+    ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
 };
 use dclutch_claims::{
     liability_basis_state_v2::{
@@ -35,7 +35,7 @@ use dclutch_market::capability_manifest::{
 use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_market::{
-    Action, Admission, ChildEffectObservation, CoreState, FoundingIntentV5,
+    Action, Admission, ChildEffectObservation, CoreState,
     GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1, GENERIC_FOUNDING_MAX_FUNDING_STATES_V1,
     GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1, GenericFoundingAckV1, GenericFoundingRequestV1,
     GenericFoundingStageV1, Identity, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase, Readiness,
@@ -1538,49 +1538,8 @@ fn account<'accounts, 'info>(
     accounts.get(index).ok_or(CoreSbfError::AccountFrame)
 }
 
-/// Fully authenticated inputs to the family-neutral Claims founding compiler.
-pub(crate) struct GenericFoundingPermitInputV1 {
-    pub(crate) bump: u8,
-    pub(crate) release_set: [u8; 32],
-    pub(crate) market: [u8; 32],
-    pub(crate) product_record: [u8; 32],
-    pub(crate) product_id: [u8; 32],
-    pub(crate) linked_basis_record: [u8; 32],
-    pub(crate) semantic_basis: [u8; 32],
-    pub(crate) source: [u8; 32],
-    pub(crate) founder: [u8; 32],
-    pub(crate) context: [u8; 32],
-    pub(crate) capability_root: [u8; 32],
-    pub(crate) projected_replay: [u8; 32],
-    pub(crate) funding_source: [u8; 32],
-    pub(crate) hoard: [u8; 32],
-    pub(crate) projected_request_digest: [u8; 32],
-    pub(crate) projected_receipt_digest: [u8; 32],
-    pub(crate) custody_lock_request_digest: [u8; 32],
-    pub(crate) custody_lock_receipt_digest: [u8; 32],
-    pub(crate) trading_program: [u8; 32],
-    pub(crate) claims_program: [u8; 32],
-    pub(crate) rent_credit: [u8; 32],
-    pub(crate) rent_program: [u8; 32],
-    pub(crate) aggregate: [u8; 32],
-    pub(crate) position: [u8; 32],
-    pub(crate) admission: [u8; 32],
-    pub(crate) generation: u64,
-    pub(crate) claim_count: u32,
-    pub(crate) quantity: u64,
-    pub(crate) basis_scale: u64,
-    pub(crate) expiry_slot: u64,
-    pub(crate) projected_resulting_revision: u64,
-    pub(crate) normal_replay_revision: u64,
-    pub(crate) source_amount: u64,
-    pub(crate) hoard_amount: u64,
-    pub(crate) aggregate_rent: u64,
-    pub(crate) position_rent: u64,
-    pub(crate) admission_rent: u64,
-    pub(crate) aggregate_lamports: u64,
-    pub(crate) position_lamports: u64,
-    pub(crate) admission_lamports: u64,
-}
+/// Fully authenticated inputs to the shared native Claims founding constructor.
+pub(crate) use dclutch_claims::founding_plan_v1::FoundingPlanInputV1 as GenericFoundingPermitInputV1;
 
 /// One exact Claims request and matching Core-owned one-shot permit.
 pub(crate) struct GenericFoundingPermitPlanV1 {
@@ -1592,111 +1551,13 @@ pub(crate) struct GenericFoundingPermitPlanV1 {
 pub(crate) fn build_permit_plan(
     input: GenericFoundingPermitInputV1,
 ) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
-    let intent = build_founding_intent(&input)?;
-    let intent_digest = digest_founding_intent(&intent)?;
-    let claims_digest = build_claims_request_digest(&input, intent_digest)?;
-    finish_permit_plan(*intent, intent_digest, claims_digest)
-}
-
-#[inline(never)]
-fn build_founding_intent(
-    input: &GenericFoundingPermitInputV1,
-) -> Result<Box<FoundingIntentV5>, CoreSbfError> {
-    FoundingIntentV5::new(
-        input.bump,
-        identity(input.release_set)?,
-        identity(input.market)?,
-        identity(input.product_record)?,
-        identity(input.source)?,
-        identity(input.founder)?,
-        identity(input.context)?,
-        identity(input.capability_root)?,
-        identity(input.projected_replay)?,
-        identity(input.funding_source)?,
-        identity(input.hoard)?,
-        identity(input.projected_request_digest)?,
-        identity(input.projected_receipt_digest)?,
-        identity(input.trading_program)?,
-        identity(input.claims_program)?,
-        identity(input.rent_credit)?,
-        input.generation,
-        input.quantity,
-        input.basis_scale,
-        input.expiry_slot,
-        input.projected_resulting_revision,
-        input.normal_replay_revision,
-    )
-    .map(Box::new)
-    .map_err(|_| CoreSbfError::Reference)
-}
-
-#[inline(never)]
-fn digest_founding_intent(intent: &FoundingIntentV5) -> Result<[u8; 32], CoreSbfError> {
-    Ok(hash(&intent.encode().map_err(|_| CoreSbfError::Reference)?).to_bytes())
-}
-
-#[inline(never)]
-fn build_claims_request_digest(
-    input: &GenericFoundingPermitInputV1,
-    intent_digest: [u8; 32],
-) -> Result<[u8; 32], CoreSbfError> {
-    let claims = ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
-        release_set: input.release_set,
-        market: input.market,
-        product_record_digest: input.product_record,
-        product_instance_id: input.product_id,
-        linked_basis_record_digest: input.linked_basis_record,
-        semantic_basis_id: input.semantic_basis,
-        founder: input.founder,
-        founding_intent_digest: intent_digest,
-        aggregate: input.aggregate,
-        position: input.position,
-        admission: input.admission,
-        hoard: input.hoard,
-        rent_credit: input.rent_credit,
-        rent_program: input.rent_program,
-        claims_program: input.claims_program,
-        trading_program: input.trading_program,
-        funding_source: input.funding_source,
-        custody_replay: input.projected_replay,
-        custody_request_digest: input.custody_lock_request_digest,
-        custody_receipt_digest: input.custody_lock_receipt_digest,
-        generation: input.generation,
-        claim_count: input.claim_count,
-        quantity: input.quantity,
-        basis_scale: input.basis_scale,
-        pre_source_amount: input.source_amount,
-        post_source_amount: 0,
-        pre_hoard_amount: 0,
-        post_hoard_amount: input.hoard_amount,
-        pre_custody_revision: 0,
-        post_custody_revision: input.normal_replay_revision,
-        aggregate_rent_principal: input.aggregate_rent,
-        position_rent_principal: input.position_rent,
-        admission_rent_principal: input.admission_rent,
-        observed_aggregate_lamports: input.aggregate_lamports,
-        observed_position_lamports: input.position_lamports,
-        observed_admission_lamports: input.admission_lamports,
-        pre_aggregate_revision: 0,
-        post_aggregate_revision: 1,
-        pre_position_revision: 0,
-        post_position_revision: 1,
-    })
-    .map_err(|_| CoreSbfError::Reference)?;
-    Ok(hash(&claims.to_bytes()).to_bytes())
-}
-
-#[inline(never)]
-fn finish_permit_plan(
-    intent: FoundingIntentV5,
-    intent_digest: [u8; 32],
-    claims_digest: [u8; 32],
-) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
+    let plan =
+        dclutch_claims::founding_plan_v1::derive_founding_plan_v1(&input).map_err(|cause| {
+            solana_program::msg!("native Claims founding construction: {:?}", cause);
+            CoreSbfError::Reference
+        })?;
     Ok(GenericFoundingPermitPlanV1 {
-        permit: Box::new(
-            SeriesFoundingPermitV1::new(intent, identity(intent_digest)?, identity(claims_digest)?)
-                .map_err(|_| CoreSbfError::Reference)?,
-        ),
+        permit: Box::new(plan.permit),
     })
 }
 

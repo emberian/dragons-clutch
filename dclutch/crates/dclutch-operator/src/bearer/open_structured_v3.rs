@@ -1606,7 +1606,7 @@ mod tests {
             composition_parent(),
         )
         .expect("the Claims composition must admit the route this operator emits");
-        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(composition.mutation_route(), Some(0));
         assert_eq!(
             composition
                 .rational_representation()

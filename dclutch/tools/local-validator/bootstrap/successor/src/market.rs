@@ -4258,6 +4258,8 @@ pub(crate) struct MarketPublicationPreviewV1 {
     pub(crate) basis: Vec<u8>,
     pub(crate) price_gate: Option<Vec<u8>>,
     pub(crate) source: Vec<u8>,
+    /// Source-native principal ceiling from the same compiled record closure.
+    pub(crate) principal_cap_sets: u64,
     pub(crate) manifest: Vec<u8>,
 }
 
@@ -4277,6 +4279,7 @@ pub(crate) fn compile_market_publication_preview_v1(
         basis: bodies.basis,
         price_gate: bodies.price_gate,
         source: bodies.source,
+        principal_cap_sets: bodies.principal_cap_sets,
         manifest: bodies.manifest,
     })
 }

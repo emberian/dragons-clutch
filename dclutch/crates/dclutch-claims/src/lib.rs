@@ -21,6 +21,7 @@ pub mod composition_v3;
 pub mod custody_replay_v1;
 pub mod founder_bond_v1;
 pub mod founding_v5;
+pub mod founding_plan_v1;
 pub mod fractional_claim_check_compaction_receipt_v1;
 pub mod fractional_claim_check_compaction_request_v1;
 pub mod fractional_claim_check_conservation_v1;

@@ -27,8 +27,8 @@
 //! their crash-safety contract, not an inconvenience. `direct_trade` walks
 //! replay-setup, token-setup, four lookup acts, the capability seal and the
 //! Hot execution; `wallet_terminal_payout_exterior` walks four lookup acts and
-//! the payout; `terminal_sequence` walks the six protocol mutations of
-//! [`dclutch_market_retirement_v1_operator::terminal_stage_order_v1::TerminalStageV1::ORDERED`];
+//! the payout; `terminal_sequence` walks the five pre-checkpoint mutations of
+//! [`dclutch_market_retirement_v1_operator::terminal_stage_order_v1::TerminalStageV1::PRECHECKPOINT`];
 //! `aggregate_retirement_exterior` walks the four
 //! checkpoint packets. So each stage here is a BOUNDED loop with a stated
 //! ceiling, and a stage that hits its ceiling reports how far it got rather
@@ -55,16 +55,15 @@ use crate::{Error, Result};
 
 const UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1: u64 = 17_001;
 
-/// The terminal sequence's six protocol mutations, in the order the driver runs
-/// them, rendered for a transcript.
+/// The terminal sequence's five pre-checkpoint mutations, in driver order.
 ///
 /// READ, NEVER RESTATED. This file used to print the six by hand, in three
 /// places, and printed the wrong order after PROGRAMS-18A reversed the pair a
 /// devnet market had already been retired against. The order has one author --
 /// `dclutch_market_retirement_v1_operator::terminal_stage_order_v1` -- and this
-/// tier calls the driver that reads it.
-fn terminal_stage_order_v1() -> String {
-    TerminalStageV1::ORDERED
+/// tier calls the driver that reads its pre-checkpoint prefix.
+fn terminal_precheckpoint_order_v1() -> String {
+    TerminalStageV1::PRECHECKPOINT
         .iter()
         .map(|stage| stage.kebab())
         .collect::<Vec<_>>()
@@ -76,7 +75,7 @@ fn terminal_stage_order_v1() -> String {
 /// Every driver below advances at most one durable action per invocation, so
 /// this is a bound on ACTS and not on retries. The longest chain in the table
 /// is `direct_trade`'s eight, and `terminal_sequence` can add four lookup acts
-/// in front of its six protocol stages; twenty-four is comfortably above both
+/// in front of its five protocol stages; twenty-four is comfortably above both
 /// and small enough that a driver stuck on one action is REPORTED within a
 /// minute rather than spun on.
 const RESUMPTION_CEILING_V1: usize = 24;
@@ -1256,7 +1255,8 @@ pub(crate) fn retire(
     // the pre-PROGRAMS-18A ordering written into a string. The stage's contents
     // are `TerminalStageV1::ORDERED` and the note renders them; the label says
     // what the stage IS, and nothing here restates the order by hand.
-    let sequence_stage = "retirement: the shipped driver walks the terminal sequence's ordered six";
+    let sequence_stage =
+        "retirement: the shipped driver walks the five pre-checkpoint terminal stages";
     let journal_dir = context.dir("terminal-journal")?;
     let session = context.work.join("terminal-session.json");
     let completion = context.work.join("terminal-completion.json");
@@ -1314,13 +1314,8 @@ pub(crate) fn retire(
     // earlier terminal refusal: the driver named that earlier barrier, and a
     // maker close would merely add a second, unrelated refusal.
     if !completion.exists() && terminal_needs_maker_replay_close(&outcome) {
-        let parameters_ready = found_protocol_parameters(
-            rpc,
-            context,
-            spine,
-            fee_payer,
-            fee_payer_keypair,
-        );
+        let parameters_ready =
+            found_protocol_parameters(rpc, context, spine, fee_payer, fee_payer_keypair);
         let upkeep_ready = parameters_ready
             && found_upkeep_vault(rpc, context, spine, fee_payer, fee_payer_keypair);
         // ONE CLOSE PER MAKER. A Direct fill opens a maker replay on BOTH
@@ -1346,24 +1341,19 @@ pub(crate) fn retire(
     }
     let label = "journey retirement: terminal sequence";
     let (landed, compute) = harvest_dir(rpc, label, &journal_dir, &mut spine.transactions);
-    let lookup_table: Option<String>;
     match outcome {
         Ok(passes) => {
             let document = read_json(&completion)?;
-            lookup_table = document
-                .get("lookup_table")
-                .or_else(|| document.get("lookupTable"))
-                .and_then(Value::as_str)
-                .map(str::to_owned);
             spine.executed(
                 sequence_stage,
                 landed,
                 compute,
                 format!(
                     "`local-private-validator-terminal-sequence-v1 --execute`, {passes} \
-                     invocations, one durable stage each over the ordered six -- {} -- with \
-                     an exact-union routing table built by the same journal machinery in front.",
-                    terminal_stage_order_v1()
+                     invocations, one durable stage each over the pre-checkpoint order -- {} -- \
+                     with an exact-union routing table built by the same journal machinery in \
+                     front. Aggregate retirement now belongs only to its four-packet campaign.",
+                    terminal_precheckpoint_order_v1()
                 ),
             );
             spine.reports.insert("terminal-sequence".into(), document);
@@ -1374,10 +1364,11 @@ pub(crate) fn retire(
                 &error,
                 format!(
                     "The shipped terminal-sequence driver refused at invocation {passes}: \
-                     {error}. {landed} of its acts had already finalized, over the ordered six \
+                     {error}. {landed} of its acts had already finalized, over the \
+                     pre-checkpoint order \
                      {}. Nothing past this stage is driven, and no retirement ledger is written \
                      for a sequence that did not complete.",
-                    terminal_stage_order_v1()
+                    terminal_precheckpoint_order_v1()
                 ),
             );
             spine.reports.insert(
@@ -1393,20 +1384,101 @@ pub(crate) fn retire(
         }
     }
 
-    // ---- 3. the four checkpointed packets
-    let checkpoint_stage =
-        "retirement: the four checkpointed aggregate-retirement packets, to Retired";
-    let Some(table) = lookup_table else {
+    // ---- 3. the checkpoint campaign's own immutable routing table
+    let table_stage = "retirement: publish the aggregate checkpoint routing table";
+    let table_report = context.work.join("retirement-lookup-table.json");
+    if !table_report.exists() {
+        let arguments = vec![
+            "--rpc-url".to_owned(),
+            context.rpc_url.to_owned(),
+            "--plan".to_owned(),
+            context.plan.display().to_string(),
+            "--evidence".to_owned(),
+            context.campaign_report.display().to_string(),
+            "--refreshed-evidence".to_owned(),
+            refresh.display().to_string(),
+            "--market".to_owned(),
+            context.market.to_string(),
+            "--source-receipt".to_owned(),
+            source_receipt.to_string(),
+            "--fee-payer".to_owned(),
+            fee_payer.to_string(),
+            "--fee-payer-keypair".to_owned(),
+            fee_payer_keypair.display().to_string(),
+            "--output".to_owned(),
+            table_report.display().to_string(),
+            "--execute".to_owned(),
+        ];
+        if let Err(error) =
+            crate::aggregate_retirement_exterior::run_owned_loopback_lookup_table(arguments)
+        {
+            spine.refused(
+                table_stage,
+                &error.to_string(),
+                "The aggregate checkpoint derives its own exact address union, publishes and \
+                 freezes that table, then compiles all four packets over its read-back bytes."
+                    .into(),
+            );
+            return Ok(());
+        }
+    }
+    let table_document = read_json(&table_report)?;
+    let market_text = context.market.to_string();
+    let receipt_text = source_receipt.to_string();
+    let payer_text = fee_payer.to_string();
+    let table = table_document
+        .get("lookupTable")
+        .and_then(Value::as_str)
+        .filter(|_| {
+            table_document.get("executed").and_then(Value::as_bool) == Some(true)
+                && table_document.get("market").and_then(Value::as_str)
+                    == Some(market_text.as_str())
+                && table_document.get("sourceReceipt").and_then(Value::as_str)
+                    == Some(receipt_text.as_str())
+                && table_document.get("payer").and_then(Value::as_str) == Some(payer_text.as_str())
+        })
+        .map(str::to_owned);
+    let Some(table) = table else {
         spine.refused(
-            checkpoint_stage,
-            "the terminal completion named no lookup table",
-            "`local-private-validator-aggregate-retirement-v1` requires `--lookup-table` and the \
-             terminal sequence's completion is its one author here; a completion that names none \
-             is a finding about that document rather than about the retirement."
+            table_stage,
+            "the aggregate routing-table report did not bind the current market, receipt and payer",
+            "A resumed journey accepts the prior table report only when its inputs match this \
+             retirement. The four-packet campaign re-reads the table, proves its frozen \
+             authority, exact address union and data digest before signing."
                 .into(),
         );
         return Ok(());
     };
+    let table_label = "journey retirement: aggregate checkpoint routing table";
+    let (table_landed, table_compute) =
+        harvest_document(rpc, table_label, &table_document, &mut spine.transactions);
+    if table_landed == 0 {
+        spine.refused(
+            table_stage,
+            "the aggregate routing-table report yielded no finalized transaction",
+            "A table report is accepted only when at least one of its publication signatures \
+             re-reads as a finalized signed packet from this validator."
+                .into(),
+        );
+        return Ok(());
+    }
+    spine.executed(
+        table_stage,
+        table_landed,
+        table_compute,
+        "The canonical aggregate-retirement producer derived the four packets' exact address \
+         union, published it under the retirement payer's authority, froze it, read it back, and \
+         reproduced every packet's fixed wire width. A restart reuses this report and the \
+         campaign re-authenticates the live frozen table before signing."
+            .into(),
+    );
+    spine
+        .reports
+        .insert("aggregate-retirement-lookup-table".into(), table_document);
+
+    // ---- 4. the four checkpointed packets
+    let checkpoint_stage =
+        "retirement: the four checkpointed aggregate-retirement packets, to Retired";
     let retirement_journal = context.dir("retirement-journal")?;
     let campaign = context.work.join("retirement-campaign.json");
     let retirement_completion = context.work.join("retirement-completion.json");
@@ -1644,7 +1716,9 @@ fn found_protocol_parameters(
 fn is_exact_parameters_found_report(document: &Value, custody: Pubkey) -> bool {
     document.get("command").and_then(Value::as_str) == Some("parameters-found")
         && document.get("custody").and_then(Value::as_str) == Some(custody.to_string().as_str())
-        && document.pointer("/poststate/recordOwner").and_then(Value::as_str)
+        && document
+            .pointer("/poststate/recordOwner")
+            .and_then(Value::as_str)
             == Some(custody.to_string().as_str())
         && document.pointer("/poststate/pendingProposal") == Some(&Value::Bool(false))
         && document.pointer("/poststate/hoardPrincipalMoved") == Some(&Value::from(0))

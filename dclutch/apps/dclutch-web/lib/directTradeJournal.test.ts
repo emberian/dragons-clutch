@@ -5,6 +5,7 @@ import {
   directInlineJournalInputV1,
   directTradeBalanceChangesV1,
   directTradeFinalizedCompletionV1,
+  directTradeJournalTakerV1,
 } from '@/lib/directTradeJournal';
 import { type SignatureStatusObservation } from '@dclutch/sdk/rpc';
 
@@ -16,6 +17,7 @@ const SCOPE = Object.freeze({
 
 const PLAN = Object.freeze({
   payer: SCOPE.owner,
+  taker: '6WQBaQtV6K2V3yRSsUp2ToBWyAE6NLC8PnRoaQdZckz4',
   lookupTable: 'GcE6LWbduoATDgK8jsGyj2i8ywV37fcAYABKCmKgttDz',
   routeObservedSlot: '100',
   blockhashObservedSlot: '101',
@@ -43,9 +45,30 @@ describe('the Direct trade journal seam', () => {
     expect(input.operationDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(input.intent).toBe('{"ticket":"signed"}');
     expect(JSON.parse(input.plan)).toMatchObject({ schema: 'dclutch-direct-inline-journal-plan-v1', lastValidBlockHeight: '250' });
+    expect(directTradeJournalTakerV1({
+      ...input,
+      format: 'dclutch-client-operation-journal-v1',
+      intentDigest: '0'.repeat(64),
+      planDigest: '0'.repeat(64),
+      phase: 'unsigned',
+      signature: null,
+      signedWireBase64: null,
+    })).toBe(PLAN.taker);
     // A different packet is a different operation identity.
     const other = await directInlineJournalInputV1(SCOPE, '{"ticket":"signed"}', PLAN, Uint8Array.from([9, 9, 9]));
     expect(other.operationDigest).not.toBe(input.operationDigest);
+  });
+
+  it('refuses a substituted or malformed taker in saved recovery metadata', async () => {
+    const input = await directInlineJournalInputV1(SCOPE, '{"ticket":"signed"}', PLAN, Uint8Array.from([1]));
+    const journal = {
+      ...input,
+      format: 'dclutch-client-operation-journal-v1' as const,
+      intentDigest: '0'.repeat(64), planDigest: '0'.repeat(64), phase: 'unsigned' as const,
+      signature: null, signedWireBase64: null,
+    };
+    expect(() => directTradeJournalTakerV1({ ...journal, plan: JSON.stringify({ ...JSON.parse(input.plan), taker: 'not-a-key' }) })).toThrow(/canonical Solana address/);
+    expect(() => directTradeJournalTakerV1({ ...journal, plan: JSON.stringify({ ...JSON.parse(input.plan), extra: true }) })).toThrow(/missing or unknown fields/);
   });
 
   it('refuses an empty ticket or empty message bytes', async () => {

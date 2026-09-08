@@ -17,7 +17,6 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
-use dclutch_core_contract::ContentId;
 use dclutch_custody::{
     CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
@@ -465,10 +464,10 @@ const DIRECT_CLOSE_CAPABILITY_COMPUTE_UNIT_LIMIT_V1: u32 = 515_929;
 /// landed inside it -- `CoreBeginRetiring` at 23,106 and `DirectBeginRetiring`
 /// at 92,137. `DirectCloseCapability` met the meter on cohort-17's market 2 and
 /// now carries its own measured row, which is what that comment said the
-/// finding would be. `RetirementReplayHandoff` and `AggregateRetirement` have
-/// still never executed on any chain; nothing here can honestly declare a
-/// number for them, and if one meets the meter the finding is a third measured
-/// row, not a blanket.
+/// finding would be. `RetirementReplayHandoff` has its own accepted execution;
+/// `AggregateRetirement` is retained in the semantic order but executes only
+/// through the four-packet checkpoint campaign and therefore has no budget in
+/// this driver.
 const fn terminal_stage_compute_unit_limit_v1(stage: TerminalStageV1) -> Option<u32> {
     match stage {
         TerminalStageV1::ResolutionCloseFund => Some(RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1),
@@ -6718,6 +6717,32 @@ fn retirement_replay_handoff_snapshot_keys_v1(
     keys
 }
 
+/// Derive this Market's failure escrow from the Claims-owned aggregate.
+fn derived_failure_escrow_v1(
+    preliminary: &FinalizedSnapshotV1,
+    aggregate: Pubkey,
+    claims: Pubkey,
+) -> Result<Option<dclutch_operator::failure_escrow_v1::FailureEscrowV1>> {
+    let account = preliminary
+        .account(aggregate)
+        .map_err(|error| Error::new(format!("Claims aggregate: {error}")))?;
+    if account.owner != claims || account.lamports == 0 {
+        return Ok(None);
+    }
+    let Ok(view) =
+        dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2::decode(&account.data)
+    else {
+        return Ok(None);
+    };
+    Ok(dclutch_operator::failure_escrow_v1::failure_escrow_v1(
+        claims,
+        view.logical_market,
+        aggregate,
+        view.claim_count,
+    )
+    .ok())
+}
+
 pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
@@ -7032,7 +7057,7 @@ fn plan_record_pair_v1(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pub
     Ok((pubkey(&pair.raw)?, pubkey(&pair.staging)?))
 }
 
-/// Project the six coordinate closures used only to derive the immutable ALT
+/// Project the five pre-checkpoint coordinate closures used only to derive the immutable ALT
 /// stable-key union. Request-bound coordinates use nonzero planning
 /// commitments and are deliberately excluded from the table; every eventual
 /// stage still supplies and authenticates its fresh exact request-bound frame.
@@ -7047,7 +7072,6 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
 ) -> Result<(Vec<TerminalMetaClosureV1>, Pubkey)> {
     let registry = pubkey(&plan.registry.program_id)?;
     let core = pubkey(&plan.core.program_id)?;
-    let claims = pubkey(&plan.claims.program_id)?;
     let trading = pubkey(&plan.trading.program_id)?;
     let resolution = pubkey(&plan.resolution.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
@@ -7595,7 +7619,7 @@ fn fresh_protocol_stage_from_chain_v1(
     market: Pubkey,
     payer: Pubkey,
     table: Pubkey,
-    source_receipt: Pubkey,
+    _source_receipt: Pubkey,
     stage: TerminalStageV1,
     funded_rent_rate: u32,
     compute_unit_limit: Option<u32>,
@@ -8490,7 +8514,7 @@ fn canonical_union_addresses(addresses: &[Pubkey]) -> Result<Vec<Pubkey>> {
     Ok(canonical)
 }
 
-/// Build the only admitted terminal ALT union from all six typed coordinate
+/// Build the only admitted terminal ALT union from all five pre-checkpoint typed coordinate
 /// closures. Only semantic-owner-assigned `LookupStable` identities enter the
 /// table. Signers, program identities, and request/balance-bound coordinates
 /// remain inline even when their public keys happen to look durable. This runs
@@ -8506,7 +8530,7 @@ pub(crate) fn terminal_lookup_union_from_closures_v1(
             .any(|(closure, expected)| closure.stage != expected)
     {
         return Err(refusal(
-            "ALT coordinate closure set is not the exact ordered six-stage sequence",
+            "ALT coordinate closure set is not the exact five-stage pre-checkpoint sequence",
         ));
     }
     let mut assigned = BTreeMap::<Pubkey, TerminalAddressClassV1>::new();
@@ -8548,7 +8572,7 @@ pub(crate) fn terminal_lookup_union_from_closures_v1(
                 && !account.is_writable;
             if account.pubkey == Pubkey::default() && !names_system_program {
                 // Which stage, and which index within its frame. A closure set
-                // spanning six stages and a couple of hundred metas behind one
+                // spanning five stages and a couple of hundred metas behind one
                 // string is a refusal nobody can act on.
                 return Err(refusal(&format!(
                     "ALT coordinate closure for {:?} carries a vacant account identity at frame \
@@ -13608,24 +13632,40 @@ mod tests {
     }
 
     #[test]
-    fn terminal_alt_union_requires_all_six_typed_closures_in_order() {
+    fn terminal_alt_union_requires_all_five_precheckpoint_closures_in_order() {
         let payer = key(1);
         let closures = TerminalStageV1::PRECHECKPOINT
             .into_iter()
             .enumerate()
             .map(|(index, stage)| meta_closure(stage, u8::try_from(index + 10).unwrap()))
             .collect::<Vec<_>>();
-        let union = terminal_lookup_union_from_closures_v1(payer, &closures).expect("six closures");
-        assert_eq!(union.len(), 7, "six distinct roles plus one shared role");
+        let union =
+            terminal_lookup_union_from_closures_v1(payer, &closures).expect("five closures");
+        assert_eq!(union.len(), 6, "five distinct roles plus one shared role");
         assert!(union.contains(&key(90)));
 
-        assert!(terminal_lookup_union_from_closures_v1(payer, &closures[..5]).is_err());
+        assert_eq!(
+            terminal_lookup_union_from_closures_v1(payer, &closures[..4])
+                .expect_err("missing pre-checkpoint closure must refuse")
+                .to_string(),
+            "REFUSED terminal sequence: ALT coordinate closure set is not the exact five-stage pre-checkpoint sequence"
+        );
         let mut reordered = closures.clone();
         reordered.swap(1, 2);
-        assert!(terminal_lookup_union_from_closures_v1(payer, &reordered).is_err());
+        assert_eq!(
+            terminal_lookup_union_from_closures_v1(payer, &reordered)
+                .expect_err("reordered pre-checkpoint closures must refuse")
+                .to_string(),
+            "REFUSED terminal sequence: ALT coordinate closure set is not the exact five-stage pre-checkpoint sequence"
+        );
         let mut vacant = closures;
         vacant[0].accounts[0].pubkey = Pubkey::default();
-        assert!(terminal_lookup_union_from_closures_v1(payer, &vacant).is_err());
+        assert_eq!(
+            terminal_lookup_union_from_closures_v1(payer, &vacant)
+                .expect_err("vacant coordinate must refuse")
+                .to_string(),
+            "REFUSED terminal sequence: ALT coordinate closure for CoreBeginRetiring carries a vacant account identity at frame index 0 of 2"
+        );
     }
 
     #[test]

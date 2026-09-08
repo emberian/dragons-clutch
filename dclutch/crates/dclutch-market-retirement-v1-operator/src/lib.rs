@@ -22,7 +22,6 @@ use dclutch_claims::{
         ClaimsRetirementCheckpointHandoffReceiptV1, ClaimsRetirementCheckpointHandoffRequestV1,
     },
 };
-use dclutch_core_contract::ContentId;
 use dclutch_custody::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
     CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,

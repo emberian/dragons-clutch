@@ -111,11 +111,12 @@ export type DirectWalletPreparationV1 =
     transactionPlan: DirectInlineTransactionPlanV3;
   }>
   | Readonly<{
-    status: 'operator-required';
-    payerBranch: 'operator-required';
+    status: 'payer-wallet-required';
+    payerBranch: 'route-payer';
     payer: string;
     binding: DirectWalletExecutionBindingV1;
     signedIntents: Readonly<{ seller: SignedDirectIntentV3; buyer: SignedDirectIntentV3 }>;
+    transactionPlan: DirectInlineTransactionPlanV3;
     reason: string;
   }>;
 
@@ -275,9 +276,10 @@ function requireRuntimeJoin(route: DirectHotRouteInspectionV3['route'], index: n
 }
 
 /**
- * Bind already-authenticated Direct observations to the wallet that is still
- * connected, then compile only when that wallet is the route's exact payer.
- * This function is pure caller-owned preparation: it never signs or submits.
+ * Bind already-authenticated Direct observations to the buyer wallet that is
+ * still connected, then compile the route payer's exact packet. When payer
+ * and buyer differ the result preserves both identities and requires a second
+ * wallet handoff; this pure function never signs or submits.
  */
 export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationInputV1): DirectWalletPreparationV1 {
   const { routeInspection, crossingPlan, context } = input;
@@ -503,17 +505,6 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
     taker: participantBinding(takerParticipant, takerNonceObservation),
   });
 
-  if (route.payer !== connectedWallet) {
-    return Object.freeze({
-      status: 'operator-required',
-      payerBranch: 'operator-required',
-      payer: route.payer,
-      binding,
-      signedIntents: Object.freeze({ seller: input.signedSeller, buyer: input.signedTaker }),
-      reason: `The authenticated route requires ${route.payer} to pay and sign the transaction; the connected taker wallet supplied only its signed Direct intent.`,
-    });
-  }
-
   // Mine the wire's eight reserved bump bytes here, from the finalized bodies
   // this same inspection already read and authenticated. Off chain each search
   // is free; on chain each rejected candidate costs the PROGRAM 1,500 CU at a
@@ -558,8 +549,19 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
   if (transactionPlan.minedBumpHintSlots === 0) {
     throw new Error('mined Direct wallet wire carries an absent bump-hint block');
   }
-  if (transactionPlan.requiredSigners.length !== 1 || transactionPlan.requiredSigners[0] !== connectedWallet) {
-    throw new Error('compiled Direct transaction does not name the connected wallet as its sole exact payer');
+  if (transactionPlan.requiredSigners.length !== 1 || transactionPlan.requiredSigners[0] !== route.payer) {
+    throw new Error('compiled Direct transaction does not name the authenticated route payer as its sole exact signer');
+  }
+  if (route.payer !== connectedWallet) {
+    return Object.freeze({
+      status: 'payer-wallet-required',
+      payerBranch: 'route-payer',
+      payer: route.payer,
+      binding,
+      signedIntents: Object.freeze({ seller: input.signedSeller, buyer: input.signedTaker }),
+      transactionPlan,
+      reason: `The buyer intent is signed. Connect the authenticated route payer ${route.payer} to sign this exact transaction packet.`,
+    });
   }
   return Object.freeze({
     status: 'wallet-preparable',

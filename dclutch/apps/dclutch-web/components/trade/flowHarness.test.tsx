@@ -66,7 +66,7 @@ describe('the trade flow layout harness', () => {
       participantReady: true, outcomePicked: true, outcomeCountKnown: true,
       ticketReady: true, sizeAccepted: true, previewReady: true,
       intentSigned: false, packetSigned: false, executed: false,
-      operatorRequired: false, packetWallDetail: null,
+      packetWallDetail: null,
     });
     const gate = marketGateV1([{
       name: 'activation',
@@ -83,7 +83,9 @@ describe('the trade flow layout harness', () => {
         <PreviewReceipt plan={PLAN_V1} admission={ADMISSION_V1} replaySlot="490712003" denomination={SIX_DECIMALS_V1} priceScale={1_000_000n} feeBasisPoints={0} outcomeLabel={label} />
       </FlowStep>
       <FlowStep step={steps[5]!}>
-        <SignStep walletPreparation={{ kind: 'idle' }} previewReady routeText="" publishedRoute={null} onRouteText={() => {}} onPrepare={() => {}} onSignPacket={() => {}} refusal={null} />
+        <SignStep walletPreparation={{ kind: 'idle' }} previewReady routeText="" publishedRoute={null} onRouteText={() => {}} onPrepare={() => {}} onSignPacket={() => {}}
+          wallets={{ state: { kind: 'idle', message: '' }, wallets: [], refusals: [], address: null, connectedWalletId: null } as never}
+          onWalletConnected={() => {}} refusal={null} />
       </FlowStep>
       <StepRefusal refusal={assignRefusalV1('the ticket seller’s finalized Position does not cover this fill', 6)} />
       <MarketGateCard gate={gate} />

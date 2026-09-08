@@ -29,6 +29,7 @@ import {
   directInlineJournalInputV1,
   directTradeBalanceChangesV1,
   directTradeFinalizedCompletionV1,
+  directTradeJournalTakerV1,
   type DirectTradeBalanceSnapshotV1,
 } from '@/lib/directTradeJournal';
 import { parseQuantityV1, type DenominationV1 } from '@dclutch/sdk/quantity';
@@ -71,15 +72,10 @@ import {
 /**
  * The Direct trade flow, as a machine.
  *
- * This module holds the orchestration that used to live inside
- * MarketTradePanel, and it holds it UNCHANGED. That is the point: the eight
- * functions below implement durable intent before key access, signature match
- * on resume, never a second send, and five separate re-checks that the chain
- * under the flow is still the chain the flow started on. That discipline is
- * the product, it has been audited where it stands, and a redesign of the
- * panel is not a licence to rewrite it. What moved is the code's ADDRESS, not
- * its behaviour -- the rendering that surrounds it is free to change, and the
- * conditions in here are not.
+ * This module owns the Direct orchestration used by MarketTradePanel: durable
+ * intent before key access, exact actor binding, signature match on resume,
+ * never a second send, and repeated checks that the chain under the flow is
+ * still the chain the flow started on.
  *
  * The factory shape is what makes the move exact. React rebuilds a component's
  * closures on every render, so a function that captured `participant` from one
@@ -114,12 +110,10 @@ export type WalletPreparationState =
     takerBefore: DirectTradeBalanceSnapshotV1;
   }>
   | Readonly<{
-    kind: 'operator-required';
-    payer: string;
-    reason: string;
+    kind: 'payer-wallet-required';
+    preparation: Extract<DirectWalletPreparationV1, { status: 'payer-wallet-required' }>;
     takerTicket: string;
-    routeObservedSlot: string;
-    lastValidBlockHeight: string;
+    takerBefore: DirectTradeBalanceSnapshotV1;
   }>
   | Readonly<{
     kind: 'wallet-signed';
@@ -266,11 +260,12 @@ export type DirectTradeFlowContextV1 = Readonly<{
 export type DirectTradeFlowMachineV1 = Readonly<{
   invalidatePreview: () => void;
   invalidateWalletState: () => void;
+  acceptWalletConnection: (address: string) => void;
   inspect: () => Promise<void>;
   previewIntent: () => Promise<void>;
   prepareWalletIntent: () => Promise<void>;
   signPreparedTransaction: () => Promise<void>;
-  pollDirectJournal: (journal: ClientOperationJournalV1, takerBefore: DirectTradeBalanceSnapshotV1 | null) => Promise<void>;
+  pollDirectJournal: (journal: ClientOperationJournalV1, takerOwner: string, takerBefore: DirectTradeBalanceSnapshotV1 | null) => Promise<void>;
   submitDirectPacket: () => Promise<void>;
 }>;
 
@@ -293,6 +288,17 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
     setParticipant(null);
     setParticipantStatus('Your wallet changed. Ask the chain again before previewing a crossing.');
     invalidatePreview();
+  }
+
+  function acceptWalletConnection(address: string): void {
+    if (walletPreparation.kind === 'payer-wallet-required') {
+      setParticipant(null);
+      setParticipantStatus(address === walletPreparation.preparation.payer
+        ? `Route payer ${address} is connected for the transaction signature. The authenticated buyer remains ${walletPreparation.preparation.binding.taker.owner}.`
+        : `This packet still requires route payer ${walletPreparation.preparation.payer}. The authenticated buyer remains ${walletPreparation.preparation.binding.taker.owner}.`);
+      return;
+    }
+    invalidateWalletState();
   }
 
   async function inspect() {
@@ -344,8 +350,9 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
         'direct-inline-v3',
       );
       if (saved !== null && saved.phase === 'submitted') {
+        const takerOwner = directTradeJournalTakerV1(saved);
         setWalletPreparation({ kind: 'submitted', journal: saved, signature: saved.signature!, takerBefore: null, confirmation: 'A submitted Direct packet is saved for this exact chain, Market, and wallet. Resuming its signature; it is never sent twice.' });
-        void pollDirectJournal(saved, null);
+        void pollDirectJournal(saved, takerOwner, null);
       }
     } catch {
       // Read-only cluster or no local storage: nothing could have been submitted from here.
@@ -545,34 +552,27 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
         }),
       });
       const takerTicket = encodeDirectIntentTicketV1(signedTaker);
-      if (prepared.status === 'operator-required') {
-        setWalletPreparation({
-          kind: 'operator-required',
-          payer: prepared.payer,
-          reason: prepared.reason,
-          takerTicket,
-          routeObservedSlot: prepared.binding.routeObservedSlot,
-          lastValidBlockHeight: prepared.binding.lastValidBlockHeight.toString(),
-        });
-        return;
-      }
       if (takerParticipant.status !== 'ready') throw new Error('your participant accounts are not ready to trade, so a packet will not be prepared');
       const takerBefore = Object.freeze({
         positionBalances: takerParticipant.positionBalances,
         spendableCollateralAtoms: takerParticipant.spendableCollateralAtoms,
       });
-      setWalletPreparation({ kind: 'wallet-preparable', preparation: prepared, takerTicket, takerBefore });
+      if (prepared.status === 'payer-wallet-required') {
+        setWalletPreparation({ kind: 'payer-wallet-required', preparation: prepared, takerTicket, takerBefore });
+      } else {
+        setWalletPreparation({ kind: 'wallet-preparable', preparation: prepared, takerTicket, takerBefore });
+      }
     } catch (error) {
       setWalletPreparation({ kind: 'refused', reason: errorMessage(error) });
     }
   }
 
   async function signPreparedTransaction() {
-    if (walletPreparation.kind !== 'wallet-preparable') return;
+    if (walletPreparation.kind !== 'wallet-preparable' && walletPreparation.kind !== 'payer-wallet-required') return;
     const prepared = walletPreparation.preparation;
     const { takerTicket, takerBefore } = walletPreparation;
     try {
-      if (wallets.address !== prepared.binding.connectedWallet) throw new Error('connected wallet changed after Direct preparation');
+      if (wallets.address !== prepared.payer) throw new Error(`connect the exact route payer ${prepared.payer} before signing this transaction`);
       const client = new SolanaRpcClient(endpoint);
       const admission = await client.assertMutationCluster();
       if (admission.endpoint !== prepared.binding.rpcEndpoint || admission.genesisHash !== prepared.binding.genesisHash) {
@@ -592,10 +592,11 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
       const scope = Object.freeze({
         clusterGenesis: prepared.binding.genesisHash,
         market: marketAddress,
-        owner: prepared.binding.connectedWallet,
+        owner: prepared.payer,
       });
       const journalInput = await directInlineJournalInputV1(scope, takerTicket, {
         payer: prepared.payer,
+        taker: prepared.binding.taker.owner,
         lookupTable,
         routeObservedSlot: prepared.binding.routeObservedSlot,
         blockhashObservedSlot: prepared.binding.blockhashObservedSlot.toString(),
@@ -662,6 +663,7 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
   /** Poll one submitted Direct signature to finalized truth, then show the Position change. */
   async function pollDirectJournal(
     journal: ClientOperationJournalV1,
+    takerOwner: string,
     takerBefore: DirectTradeBalanceSnapshotV1 | null,
   ): Promise<void> {
     const signature = journal.signature;
@@ -675,7 +677,7 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
           return;
         }
         if (directTradeFinalizedCompletionV1(status)) {
-          const readiness = await inspectDirectParticipantReadinessV1(client, participantReadRequest(journal.owner));
+          const readiness = await inspectDirectParticipantReadinessV1(client, participantReadRequest(takerOwner));
           if (readiness.status !== 'ready') throw new Error(`the crossing finalized but your participant accounts read back ${readiness.status}: ${readiness.reason}`);
           const afterSnapshot = Object.freeze({
             positionBalances: readiness.positionBalances,
@@ -718,7 +720,7 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
       setWalletPreparation({ kind: 'submitted', journal: submitted, signature, takerBefore, confirmation: 'Saved before submission; sending the exact signed packet…' });
       const returned = await submitSignedTransactionV1(client, submittedClientOperationWireV1(submitted));
       requireSubmittedSignatureMatchV1(signature, returned);
-      await pollDirectJournal(submitted, takerBefore);
+      await pollDirectJournal(submitted, directTradeJournalTakerV1(submitted), takerBefore);
     } catch (error) {
       if (submitted !== null) setWalletPreparation({ kind: 'submitted', journal: submitted, signature, takerBefore, confirmation: `${errorMessage(error)} The submitted record stays saved; reloading never resubmits it.` });
       else setWalletPreparation({ kind: 'refused', reason: errorMessage(error) });
@@ -728,6 +730,7 @@ export function createDirectTradeFlowMachineV1(context: DirectTradeFlowContextV1
   return Object.freeze({
     invalidatePreview,
     invalidateWalletState,
+    acceptWalletConnection,
     inspect,
     previewIntent,
     prepareWalletIntent,

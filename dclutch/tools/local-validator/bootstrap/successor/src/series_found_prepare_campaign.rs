@@ -61,6 +61,7 @@ pub(crate) struct SeriesFoundPrepareSelectionInputV1<'a> {
     /// Exact M0 Portfolio coefficient count, carried to the Claims V6 child
     /// because its appended failure escrow derives from the runtime width.
     pub(crate) claim_count: u32,
+    pub(crate) basis_scale: u64,
     pub(crate) claims_rent_principals: [u64; 3],
     pub(crate) permit_bump: u8,
     pub(crate) projected_bump: u8,
@@ -356,6 +357,7 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
         linked_basis_record_digest: input.linked_basis_record_digest,
         semantic_basis_id: input.semantic_basis_id,
         claim_count: input.claim_count,
+        basis_scale: input.basis_scale,
         aggregate: physical.claims.aggregate.to_bytes(),
         position: physical.claims.position.to_bytes(),
         admission: physical.claims.admission.to_bytes(),
@@ -1128,12 +1130,17 @@ pub(crate) mod tests {
             ],
             core_projection: CoreProductGraphProjectionV1::Recorded,
             core_walk: CoreProductGraphWalkV1::ProjectedFounding,
-            principal_cap_sets: 1,
+            principal_cap_sets: prepared.publication.principal_cap_sets,
             linked_basis_record_digest: record_identity(&prepared.publication.basis),
             semantic_basis_id: content(
                 &prepared.facts.occurrences[occurrence_index].liability_basis,
             )
             .to_bytes(),
+            basis_scale: dclutch_product::payoff::runtime_v3::ProductBasisV3::decode(
+                &prepared.publication.basis,
+            )
+            .expect("canonical M0 Basis")
+            .payout_scale(),
             claim_count: dclutch_product::PortfolioV2::decode(&prepared.publication.portfolio)
                 .expect("canonical M0 Portfolio")
                 .coefficient_count(),
@@ -1368,7 +1375,7 @@ pub(crate) mod tests {
             manifest,
             rent_credit,
             project_found,
-            principal_cap_sets: 1,
+            principal_cap_sets: prepared.publication.principal_cap_sets,
             series_prepare_records,
             series_prepare_vacancies: vec![key(11), key(12)],
         }

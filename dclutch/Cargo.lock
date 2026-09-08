@@ -2267,6 +2267,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "dclutch-claims",
+ "dclutch-claims-sbf",
  "dclutch-core-contract",
  "dclutch-custody",
  "dclutch-market",

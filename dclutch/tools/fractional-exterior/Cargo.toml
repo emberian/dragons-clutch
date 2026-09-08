@@ -17,6 +17,7 @@ publish = false
 dclutch-operator = { path = "../../crates/dclutch-operator" }
 dclutch-market = { path = "../../crates/dclutch-market" }
 dclutch-claims = { path = "../../crates/dclutch-claims" }
+dclutch-claims-sbf = { path = "../../programs/dclutch-claims-sbf", features = ["no-entrypoint"] }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody = { path = "../../crates/dclutch-custody" }
 dclutch-product = { path = "../../crates/dclutch-product" }

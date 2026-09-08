@@ -6,6 +6,14 @@ import { type WalletPreparationState } from '@/lib/tradeFlowMachine';
 import { assignRefusalV1 } from '@/lib/tradeFlowRefusals';
 
 const noop = () => {};
+const PAYER = 'Payer1111111111111111111111111111111111111';
+const BUYER = 'Buyer1111111111111111111111111111111111111';
+
+const walletDirectory = (address: string | null) => ({
+  state: { kind: 'idle', message: '' }, wallets: [], refusals: [], address,
+  connectedWalletId: null, connect: async () => ({ status: 'refused', reason: 'unused' }),
+  forget: noop, handoff: () => ({}),
+}) as never;
 
 const render = (
   walletPreparation: WalletPreparationState,
@@ -18,17 +26,29 @@ const render = (
   onRouteText={noop}
   onPrepare={noop}
   onSignPacket={noop}
+  wallets={walletDirectory(null)}
+  onWalletConnected={noop}
   refusal={null}
   {...overrides}
 />);
 
-const OPERATOR_REQUIRED_V1: WalletPreparationState = Object.freeze({
-  kind: 'operator-required' as const,
-  payer: 'Payer1111111111111111111111111111111111111',
-  reason: 'the route names another payer',
+const PAYER_REQUIRED_V1: WalletPreparationState = Object.freeze({
+  kind: 'payer-wallet-required' as const,
+  preparation: {
+    status: 'payer-wallet-required',
+    payer: PAYER,
+    reason: `Connect the authenticated route payer ${PAYER}`,
+    binding: {
+      taker: { owner: BUYER }, routeObservedSlot: '490712003',
+      blockhashObservedSlot: 490712100n, lastValidBlockHeight: 4001n,
+    },
+    transactionPlan: {
+      wireBytes: new Uint8Array(1204), loadedAddresses: 37,
+      transaction: { message: { serialize: () => Uint8Array.from([1, 2, 3]), addressTableLookups: [{ accountKey: { toBase58: () => 'Lut111' } }] } },
+    },
+  } as never,
   takerTicket: '{"kind":"dclutch/direct-intent-ticket/v1"}',
-  routeObservedSlot: '490712003',
-  lastValidBlockHeight: '4001',
+  takerBefore: {} as never,
 });
 
 describe('step 6, the two signatures', () => {
@@ -67,14 +87,25 @@ describe('step 6, the two signatures', () => {
    * true and nothing executed.
    */
   it('says what the first signature produced, on every path that reaches it', () => {
-    const signed = render(OPERATOR_REQUIRED_V1);
+    const signed = render(PAYER_REQUIRED_V1);
     expect(signed).toContain('Your intent is signed. Nothing has executed.');
     expect(signed.split('signature-done').length - 1).toBe(1);
   });
 
   it('does not offer to sign again once the intent is signed', () => {
     expect(idle).toContain('Sign my intent, then authenticate the packet');
-    expect(render(OPERATOR_REQUIRED_V1)).not.toContain('Sign my intent, then authenticate the packet');
+    expect(render(PAYER_REQUIRED_V1)).not.toContain('Sign my intent, then authenticate the packet');
+  });
+
+  it('keeps buyer and payer distinct, and enables the packet signature only for the route payer', () => {
+    const waiting = render(PAYER_REQUIRED_V1);
+    expect(waiting).toContain(`Buyer ${BUYER} remains the buyer`);
+    expect(waiting).toContain(`route payer ${PAYER}`);
+    expect(waiting).toContain('Portable signed buyer ticket');
+    expect(waiting).toContain('disabled=""');
+    const payerConnected = render(PAYER_REQUIRED_V1, { wallets: walletDirectory(PAYER) });
+    expect(payerConnected).toContain('>Sign as the route payer</button>');
+    expect(payerConnected).not.toContain('disabled=""');
   });
 
   it('says the packet request still does not submit, where the request is', () => {

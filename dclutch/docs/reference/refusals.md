@@ -300,46 +300,46 @@ The 23 campaigns contributing binding claims:
 
 | code | refusal | meaning | checked firing | binding claim | provenance |
 | --- | --- | --- | --- | --- | --- |
-| `0x3000` | `CoreSbfError::Instruction` | Instruction bytes or action-specific inactive fields refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:94` |
-| `0x3001` | `CoreSbfError::AccountFrame` | Account count, order, privilege, executable flag, or alias refused. | -- | resolution-pre-market-funding-programtest; retirement-checkpoint-programtest; tier1 | `programs/dclutch-core-sbf/src/lib.rs:96` |
-| `0x3002` | `CoreSbfError::FinalizedRecord` | Finalized record owner, PDA, cursor absence, Rent, digest, or schema refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:98` |
-| `0x3003` | `CoreSbfError::Reference` | Realm/Product/result-domain/Market identity linkage refused. | -- | retirement-replay-handoff-programtest | `programs/dclutch-core-sbf/src/lib.rs:100` |
-| `0x3004` | `CoreSbfError::Release` | Registry cache, Loader-backed current deployment, or release-set join refused. | -- | retirement-replay-handoff-programtest | `programs/dclutch-core-sbf/src/lib.rs:102` |
-| `0x3005` | `CoreSbfError::Market` | Core Market PDA, owner, width, phase, or generation refused. | -- | retirement-checkpoint-programtest; retirement-replay-handoff-programtest; tier4-series-occurrence-programtest | `programs/dclutch-core-sbf/src/lib.rs:104` |
-| `0x3006` | `CoreSbfError::RentCredit` | RentCredit owner, bytes, PDA, or persisted beneficiary refused. | -- | tier1 | `programs/dclutch-core-sbf/src/lib.rs:106` |
-| `0x3007` | `CoreSbfError::Creation` | System, Rent, Clock, vacant account, or exact creation plan refused. | -- | retirement-replay-handoff-programtest | `programs/dclutch-core-sbf/src/lib.rs:108` |
-| `0x3008` | `CoreSbfError::Funding` | Capability manifest entry, funding ledger, custody, deadline, or PDA refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:110` |
-| `0x3009` | `CoreSbfError::CallerAuthority` | Canonical release-pinned Core caller authority refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:112` |
-| `0x300A` | `CoreSbfError::ChildCpi` | Selected child invocation or immediate return-data producer refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:114` |
-| `0x300B` | `CoreSbfError::ChildAck` | Child acknowledgement or post-funding physical delta refused. | -- | retirement-checkpoint-programtest; tier4-series-occurrence-programtest | `programs/dclutch-core-sbf/src/lib.rs:116` |
-| `0x300C` | `CoreSbfError::Transition` | Generated semantic transition refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:118` |
-| `0x300D` | `CoreSbfError::Commit` | Commit-last Core state persistence postcheck refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:120` |
-| `0x300E` | `CoreSbfError::Arithmetic` | Checked arithmetic or bounded conversion refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:122` |
-| `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | -- | tier1 | `programs/dclutch-core-sbf/src/lib.rs:124` |
-| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:132` |
-| `0x3011` | `CoreSbfError::RecoveryWalkUnavailable` | **RETIRED: this refusal has no producer, and reaching it is impossible.** | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:152` |
-| `0x3012` | `CoreSbfError::PriceGateRequired` | A basis declaring degree >= 2 was founded with no `DCLTPGT1` price-gate certificate account offered. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:160` |
-| `0x3013` | `CoreSbfError::PriceGateBasisMismatch` | The certificate account offered was not the one the authenticated basis record names. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:168` |
-| `0x3014` | `CoreSbfError::PriceGateHullRefused` | **The hull identity failed.** `price * mass != sum(weight * payout)` at some claim, with every payout recomputed through the production evaluator rather than read from the certificate. This is the refusal a forged certificate earns. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:173` |
-| `0x3015` | `CoreSbfError::PriceGateCapacity` | The certificate carried no hull atoms, or more than the affine-Caratheodory capacity of ten permits. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:176` |
-| `0x3016` | `CoreSbfError::PriceGateNonCanonical` | The certificate's body was non-canonical: padding past a declared width, coordinates not strictly increasing, a zero atom weight, a non-primitive weight scale, or prices not partitioning the scale. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:180` |
-| `0x3017` | `CoreSbfError::InfrastructurePredecessorAbsent` | The succession ceremony found no decodable V1 profile at its PDA. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:186` |
-| `0x3018` | `CoreSbfError::InfrastructureIdentityMoved` | A succession tried to move the Registry or Rent program identity. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:193` |
-| `0x3019` | `CoreSbfError::InfrastructureNotForward` | The succession does not move strictly forward. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:201` |
-| `0x301A` | `CoreSbfError::InfrastructureConsentMissing` | A moved binding lacks its predecessor release's bound authority. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:208` |
-| `0x301B` | `CoreSbfError::InfrastructureAlreadySucceeded` | The V2 profile PDA is already occupied: the succession happened. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:214` |
-| `0x301C` | `CoreSbfError::UnsupportedAction` | A wire action this program decodes and no longer composes. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:230` |
-| `0x301D` | `CoreSbfError::FundedRent` | The rent a funding ledger was FUNDED at did not price its balance. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:239` |
-| `0x301E` | `CoreSbfError::SeriesMarketRent` | The Market slot a scheduled occurrence names holds less than the rent that occurrence itself budgeted. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:257` |
-| `0x301F` | `CoreSbfError::SeriesMarketVacancy` | The Market slot a scheduled occurrence names is not the vacant system-owned account a founding may create into. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:265` |
-| `0x3020` | `CoreSbfError::ParentReference` | The `ParentReferenceV1` record did not authenticate against the child's own Source spec, or the frame and the spec disagree about whether this is a child at all: a `DerivedFromParents` spec with no parent tail, or a tail offered to a spec of another access profile. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:276` |
-| `0x3021` | `CoreSbfError::ParentPhase` | A parent is not Open or Terminal: still Founding (its Product record is not yet authenticated) or already Retiring/Retired (its certificate account may be gone before the child reads it; design §4.4). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:280` |
-| `0x3022` | `CoreSbfError::ParentBinding` | A parent's own Market state -- generation, Product-record digest -- or its own `ResultDomainV2` region count is not what the reference binds. A founder who mis-stated a parent's width would either refund holders on an ordinary parent outcome or mint against cells no parent selector reaches; the reference is proved against the parent here, once. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:286` |
-| `0x3023` | `CoreSbfError::ParentSame` | Both parents are one market, or a parent is the child. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:288` |
-| `0x3024` | `CoreSbfError::ParentConditionOnFailure` | A conditional child's condition names its parent's failure coordinate: a market that pays on an outage, which decision 0025 forbids one level down and this refuses one level up (`conditionOnFailure`). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:292` |
-| `0x3025` | `CoreSbfError::ParentConditionOutOfRange` | A conditional child's condition names an outcome past its parent's width (`conditionOutOfRange`). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:295` |
-| `0x3026` | `CoreSbfError::ParentWidthOverflow` | The child's width exceeds the General bank cap (`widthOverflow`). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:297` |
-| `0x3027` | `CoreSbfError::ParentEmpty` | The reference names a parent with no ordinary outcome (`emptyParent`). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:308` |
+| `0x3000` | `CoreSbfError::Instruction` | Instruction bytes or action-specific inactive fields refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:93` |
+| `0x3001` | `CoreSbfError::AccountFrame` | Account count, order, privilege, executable flag, or alias refused. | -- | resolution-pre-market-funding-programtest; retirement-checkpoint-programtest; tier1 | `programs/dclutch-core-sbf/src/lib.rs:95` |
+| `0x3002` | `CoreSbfError::FinalizedRecord` | Finalized record owner, PDA, cursor absence, Rent, digest, or schema refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:97` |
+| `0x3003` | `CoreSbfError::Reference` | Realm/Product/result-domain/Market identity linkage refused. | -- | retirement-replay-handoff-programtest | `programs/dclutch-core-sbf/src/lib.rs:99` |
+| `0x3004` | `CoreSbfError::Release` | Registry cache, Loader-backed current deployment, or release-set join refused. | -- | retirement-replay-handoff-programtest | `programs/dclutch-core-sbf/src/lib.rs:101` |
+| `0x3005` | `CoreSbfError::Market` | Core Market PDA, owner, width, phase, or generation refused. | -- | retirement-checkpoint-programtest; retirement-replay-handoff-programtest; tier4-series-occurrence-programtest | `programs/dclutch-core-sbf/src/lib.rs:103` |
+| `0x3006` | `CoreSbfError::RentCredit` | RentCredit owner, bytes, PDA, or persisted beneficiary refused. | -- | tier1 | `programs/dclutch-core-sbf/src/lib.rs:105` |
+| `0x3007` | `CoreSbfError::Creation` | System, Rent, Clock, vacant account, or exact creation plan refused. | -- | retirement-replay-handoff-programtest | `programs/dclutch-core-sbf/src/lib.rs:107` |
+| `0x3008` | `CoreSbfError::Funding` | Capability manifest entry, funding ledger, custody, deadline, or PDA refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:109` |
+| `0x3009` | `CoreSbfError::CallerAuthority` | Canonical release-pinned Core caller authority refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:111` |
+| `0x300A` | `CoreSbfError::ChildCpi` | Selected child invocation or immediate return-data producer refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:113` |
+| `0x300B` | `CoreSbfError::ChildAck` | Child acknowledgement or post-funding physical delta refused. | -- | retirement-checkpoint-programtest; tier4-series-occurrence-programtest | `programs/dclutch-core-sbf/src/lib.rs:115` |
+| `0x300C` | `CoreSbfError::Transition` | Generated semantic transition refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:117` |
+| `0x300D` | `CoreSbfError::Commit` | Commit-last Core state persistence postcheck refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:119` |
+| `0x300E` | `CoreSbfError::Arithmetic` | Checked arithmetic or bounded conversion refused. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:121` |
+| `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | -- | tier1 | `programs/dclutch-core-sbf/src/lib.rs:123` |
+| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:131` |
+| `0x3011` | `CoreSbfError::RecoveryWalkUnavailable` | **RETIRED: this refusal has no producer, and reaching it is impossible.** | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:151` |
+| `0x3012` | `CoreSbfError::PriceGateRequired` | A basis declaring degree >= 2 was founded with no `DCLTPGT1` price-gate certificate account offered. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:159` |
+| `0x3013` | `CoreSbfError::PriceGateBasisMismatch` | The certificate account offered was not the one the authenticated basis record names. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:167` |
+| `0x3014` | `CoreSbfError::PriceGateHullRefused` | **The hull identity failed.** `price * mass != sum(weight * payout)` at some claim, with every payout recomputed through the production evaluator rather than read from the certificate. This is the refusal a forged certificate earns. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:172` |
+| `0x3015` | `CoreSbfError::PriceGateCapacity` | The certificate carried no hull atoms, or more than the affine-Caratheodory capacity of ten permits. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:175` |
+| `0x3016` | `CoreSbfError::PriceGateNonCanonical` | The certificate's body was non-canonical: padding past a declared width, coordinates not strictly increasing, a zero atom weight, a non-primitive weight scale, or prices not partitioning the scale. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:179` |
+| `0x3017` | `CoreSbfError::InfrastructurePredecessorAbsent` | The succession ceremony found no decodable V1 profile at its PDA. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:185` |
+| `0x3018` | `CoreSbfError::InfrastructureIdentityMoved` | A succession tried to move the Registry or Rent program identity. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:192` |
+| `0x3019` | `CoreSbfError::InfrastructureNotForward` | The succession does not move strictly forward. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:200` |
+| `0x301A` | `CoreSbfError::InfrastructureConsentMissing` | A moved binding lacks its predecessor release's bound authority. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:207` |
+| `0x301B` | `CoreSbfError::InfrastructureAlreadySucceeded` | The V2 profile PDA is already occupied: the succession happened. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:213` |
+| `0x301C` | `CoreSbfError::UnsupportedAction` | A wire action this program decodes and no longer composes. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:229` |
+| `0x301D` | `CoreSbfError::FundedRent` | The rent a funding ledger was FUNDED at did not price its balance. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:238` |
+| `0x301E` | `CoreSbfError::SeriesMarketRent` | The Market slot a scheduled occurrence names holds less than the rent that occurrence itself budgeted. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:256` |
+| `0x301F` | `CoreSbfError::SeriesMarketVacancy` | The Market slot a scheduled occurrence names is not the vacant system-owned account a founding may create into. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:264` |
+| `0x3020` | `CoreSbfError::ParentReference` | The `ParentReferenceV1` record did not authenticate against the child's own Source spec, or the frame and the spec disagree about whether this is a child at all: a `DerivedFromParents` spec with no parent tail, or a tail offered to a spec of another access profile. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:275` |
+| `0x3021` | `CoreSbfError::ParentPhase` | A parent is not Open or Terminal: still Founding (its Product record is not yet authenticated) or already Retiring/Retired (its certificate account may be gone before the child reads it; design §4.4). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:279` |
+| `0x3022` | `CoreSbfError::ParentBinding` | A parent's own Market state -- generation, Product-record digest -- or its own `ResultDomainV2` region count is not what the reference binds. A founder who mis-stated a parent's width would either refund holders on an ordinary parent outcome or mint against cells no parent selector reaches; the reference is proved against the parent here, once. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:285` |
+| `0x3023` | `CoreSbfError::ParentSame` | Both parents are one market, or a parent is the child. | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:287` |
+| `0x3024` | `CoreSbfError::ParentConditionOnFailure` | A conditional child's condition names its parent's failure coordinate: a market that pays on an outage, which decision 0025 forbids one level down and this refuses one level up (`conditionOnFailure`). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:291` |
+| `0x3025` | `CoreSbfError::ParentConditionOutOfRange` | A conditional child's condition names an outcome past its parent's width (`conditionOutOfRange`). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:294` |
+| `0x3026` | `CoreSbfError::ParentWidthOverflow` | The child's width exceeds the General bank cap (`widthOverflow`). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:296` |
+| `0x3027` | `CoreSbfError::ParentEmpty` | The reference names a parent with no ordinary outcome (`emptyParent`). | -- | -- | `programs/dclutch-core-sbf/src/lib.rs:307` |
 
 ## custody
 

@@ -135,7 +135,7 @@ export default function MarketTradePanel({
   // when they lived in this function body. The orchestration itself is in
   // lib/tradeFlowMachine.ts and is unchanged by this panel's redesign.
   const {
-    invalidatePreview, invalidateWalletState, inspect, previewIntent,
+    invalidatePreview, acceptWalletConnection, inspect, previewIntent,
     prepareWalletIntent, signPreparedTransaction, submitDirectPacket,
   } = createDirectTradeFlowMachineV1({
     endpoint, marketAddress, coreProgramId, registryProgramId, claimsProgramId,
@@ -196,8 +196,14 @@ export default function MarketTradePanel({
   const ticket = ticketState.kind === 'ready' ? ticketState.ticket : null;
   const fillOrKill = ticket !== null && ticket.intent.lifecycle === 0;
 
+  const preparedBuyerReady = participant !== null && participant.status === 'ready'
+    || walletPreparation.kind === 'wallet-preparable'
+    || walletPreparation.kind === 'payer-wallet-required'
+    || walletPreparation.kind === 'wallet-signed'
+    || walletPreparation.kind === 'submitted'
+    || walletPreparation.kind === 'executed';
   const steps = tradeFlowStepsV1({
-    participantReady: participant !== null && participant.status === 'ready',
+    participantReady: preparedBuyerReady,
     outcomePicked: outcome !== null,
     outcomeCountKnown: inspected?.outcomeCount != null,
     ticketReady: ticket !== null,
@@ -206,7 +212,6 @@ export default function MarketTradePanel({
     intentSigned: walletPreparation.kind !== 'idle' && walletPreparation.kind !== 'working' && walletPreparation.kind !== 'refused',
     packetSigned: walletPreparation.kind === 'wallet-signed' || walletPreparation.kind === 'submitted' || walletPreparation.kind === 'executed',
     executed: walletPreparation.kind === 'executed',
-    operatorRequired: walletPreparation.kind === 'operator-required',
     packetWallDetail: packetWall?.detail ?? null,
   });
 
@@ -288,7 +293,7 @@ export default function MarketTradePanel({
 
       <FlowStep step={stepAt(1)}>
         <p className="direct-status" aria-live="polite">{participantStatus}</p>
-        <WalletDirectory directory={wallets} onConnected={invalidateWalletState} />
+        <WalletDirectory directory={wallets} onConnected={acceptWalletConnection} />
         {wallets.address === null
           ? <p className="direct-status">Connect a wallet to see where you stand.</p>
           : participant !== null && participant.status === 'ready'
@@ -469,6 +474,8 @@ export default function MarketTradePanel({
           onRouteText={(next) => { setRouteText(next); setWalletPreparation({ kind: 'idle' }); }}
           onPrepare={() => void prepareWalletIntent()}
           onSignPacket={() => void signPreparedTransaction()}
+          wallets={wallets}
+          onWalletConnected={acceptWalletConnection}
           refusal={refusalFor(6)}
         />
       </FlowStep>

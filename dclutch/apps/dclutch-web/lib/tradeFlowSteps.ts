@@ -60,8 +60,6 @@ export type FlowProgressV1 = Readonly<{
   packetSigned: boolean;
   /** The packet was submitted once and read back finalized. */
   executed: boolean;
-  /** The route's payer is somebody else. A first-class outcome, not an error. */
-  operatorRequired: boolean;
   /** The `packet` wall's detail, when the measured geometry exceeds the limit. */
   packetWallDetail: string | null;
 }>;
@@ -83,8 +81,9 @@ const STEP_NAMES_V1: ReadonlyArray<Readonly<{
  *
  * Step 4 is done when a size DECISION stands, which a blank box already is --
  * blank means "take the ticket in full" and is the commonest correct answer.
- * Step 6 is done when the packet is signed OR when the route named another
- * payer: `operator-required` is a completed signing, not a failed one.
+ * Step 6 is done only when the transaction packet is signed. A distinct route
+ * payer leaves this step current until that independently connected wallet
+ * signs the exact packet.
  */
 function stepDoneV1(index: FlowStepIndexV1, progress: FlowProgressV1): boolean {
   switch (index) {
@@ -93,7 +92,7 @@ function stepDoneV1(index: FlowStepIndexV1, progress: FlowProgressV1): boolean {
     case 3: return progress.ticketReady;
     case 4: return progress.ticketReady && progress.sizeAccepted;
     case 5: return progress.previewReady;
-    case 6: return progress.packetSigned || progress.operatorRequired;
+    case 6: return progress.packetSigned;
     case 7: return progress.executed;
   }
 }
@@ -129,7 +128,6 @@ function stepBlockedReasonV1(index: FlowStepIndexV1, progress: FlowProgressV1): 
       if (progress.packetWallDetail !== null) return progress.packetWallDetail;
       return progress.previewReady ? null : 'Preview the crossing first — you sign what the preview showed.';
     case 7:
-      if (progress.operatorRequired) return null;
       return progress.packetSigned ? null : 'Sign the packet first. Signing is not sending, and this step is the send.';
   }
 }

@@ -86,6 +86,8 @@ pub enum SeriesChildBankErrorV1 {
     Custody,
     /// Typed Claims coordinates did not join the admitted occurrence.
     Claims,
+    /// Claims must advance the fresh realized Hoard replay, not Lock's closing source.
+    ClaimsReplay,
     /// Typed permit expiry did not join the admitted occurrence.
     PermitExpiry,
     /// Core request construction or encoding refused.
@@ -473,6 +475,11 @@ fn validate_claims(
     projected: SeriesProjectedCustodyPhysicalV3,
     physical: SeriesClaimsPhysicalV1,
 ) -> Result<(), SeriesChildBankErrorV1> {
+    if claims.pre_custody_revision() != 0
+        || claims.post_custody_revision() != dclutch_custody::SOURCE_COMPARTMENT_REPLAY_REVISION_V1
+    {
+        return Err(SeriesChildBankErrorV1::ClaimsReplay);
+    }
     let identity = escrow.future_market().identity();
     if claims.release_set() != escrow.release_set().to_bytes()
         || claims.market() != escrow.market().to_bytes()
@@ -485,8 +492,6 @@ fn validate_claims(
         || claims.post_source_amount() != 0
         || claims.pre_hoard_amount() != 0
         || claims.post_hoard_amount() != escrow.hoard_principal()
-        || claims.pre_custody_revision() != 2
-        || claims.post_custody_revision() != 3
         || claims.funding_source() != custody.escrow_vault
         || claims.hoard() != projected.hoard_vault
         || claims.custody_replay() != physical.custody_replay
@@ -750,8 +755,8 @@ mod tests {
             post_source_amount: 0,
             pre_hoard_amount: 0,
             post_hoard_amount: 9,
-            pre_custody_revision: 2,
-            post_custody_revision: 3,
+            pre_custody_revision: 0,
+            post_custody_revision: dclutch_custody::SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
             aggregate_rent_principal: 65,
             position_rent_principal: 66,
             admission_rent_principal: 67,
@@ -846,6 +851,22 @@ mod tests {
         .expect("current source");
         compile_series_release_v5(source.as_source()).expect("compiled release");
     }
+    #[test]
+    fn closing_source_revision_cannot_masquerade_as_realized_hoard_replay() {
+        let fixture = fixture();
+        let mut input = fixture.input();
+        input.claims = ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+            pre_custody_revision: 2,
+            post_custody_revision: 3,
+            ..input.claims.input()
+        })
+        .expect("well-formed different replay transition");
+        assert_eq!(
+            SeriesChildBankV1::produce(input),
+            Err(SeriesChildBankErrorV1::ClaimsReplay)
+        );
+    }
+
     #[test]
     fn typed_and_physical_substitutions_refuse_exactly() {
         let fixture = fixture();
