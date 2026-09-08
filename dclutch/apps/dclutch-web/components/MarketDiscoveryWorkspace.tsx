@@ -4,6 +4,7 @@ import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import MarketFilterBar from '@/components/MarketFilterBar';
+import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
@@ -15,7 +16,6 @@ import { collateralDenominationV1 } from '@dclutch/sdk/marketDenomination';
 import { inspectMarketQuestionsV1, type MarketQuestionV1 } from '@dclutch/sdk/marketQuestion';
 import { formatQuantityV1 } from '@dclutch/sdk/quantity';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
-import { docsHrefV1 } from '@/lib/flags';
 import {
   curateMarketListingV1,
   enumerateCoreMarketAddressesV1,
@@ -374,9 +374,9 @@ export function EmptyMarkets({
   if (deployment.cluster === 'devnet') {
     return <div>
       <p className="market-empty">
-        No market on devnet yet.{' '}
-        <Anchor href={docsHrefV1('evidence/DEPLOY_1.html', 'docs/evidence/DEPLOY_1.md')}>Read the deployment evidence →</Anchor>
+        No market in a supported layout was found in this deployment.
       </p>
+      <PublicDeploymentEvidence deployment={deployment} />
       <HistoricalMarketAccounts accounts={incompatible} />
     </div>;
   }
@@ -489,7 +489,7 @@ export default function MarketDiscoveryWorkspace() {
     <section className="trade-v3-hero hero-solo">
       <div>
         <p className="eyebrow">Markets on {deployment.label}</p>
-        <h1>Every market<br /><em>on devnet.</em></h1>
+        <h1>Find a market.<br /><em>Follow its story.</em></h1>
         <p>Markets you can trade come first. Below them: markets whose trading can never be switched on, setups that were never finished, and markets from an older version of the protocol.</p>
       </div>
     </section>

@@ -1295,6 +1295,21 @@ fn prepare_inner(
     ] {
         writer.upgradeable_program(label, program, &deployment.image)?;
     }
+    // The accelerator is not one of the seven execution-release roles, but a
+    // local General compiler observes it through its real Loader pair.  Plant
+    // that pair with the same checked ProgramData image the plan used to mint
+    // its ArtifactRelease; a record without these accounts is not deployment
+    // evidence on a local validator.
+    if let Some((_, deployment)) = general_accelerator.as_ref() {
+        writer.upgradeable_program(
+            "general-accelerator",
+            args.general_accelerator
+                .as_ref()
+                .expect("accelerator facts only exist with accelerator input")
+                .program,
+            &deployment.image,
+        )?;
+    }
     for (label, program, expected_programdata, deployment_slot, expected_elf_sha256, elf) in [
         (
             "pyth-receiver",
@@ -2804,11 +2819,11 @@ mod tests {
             pin.semantic_release_id,
         );
         assert_eq!(hex(&sha256_bytes(&body)), record.content_sha256);
-        // A genesis-published record is also a genesis account, so the eighth
-        // publication is one more of them and exactly one.
+        // The accelerator publication adds its record account and the real
+        // Program/ProgramData Loader pair that a local compiler observes.
         assert_eq!(
             with_accelerator.genesis_accounts.len(),
-            baseline.genesis_accounts.len() + 1,
+            baseline.genesis_accounts.len() + 3,
         );
 
         let _ = fs::remove_dir_all(&without_root);

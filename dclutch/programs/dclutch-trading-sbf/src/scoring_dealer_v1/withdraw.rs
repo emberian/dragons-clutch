@@ -154,6 +154,7 @@ pub fn process_dealer_withdraw_v1(
             transfer_index: 0,
             amount: request.amount,
         },
+        None,
     )?;
     hot_cu_checkpoint!("scoring-dealer:withdraw:custody");
 

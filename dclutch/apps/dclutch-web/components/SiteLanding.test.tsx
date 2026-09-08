@@ -25,7 +25,8 @@ describe('the front door', () => {
   it('says plainly where this stands before it says anything else', () => {
     expect(html).toContain('On devnet — nothing for sale');
     expect(html).toContain('No featured market has been staged');
-    expect(html).toContain('no value at risk anywhere');
+    expect(html).toContain('devnet preview using test tokens');
+    expect(html).not.toContain('no value at risk anywhere');
   });
 
   it('does not promise the reader a view of activity that is not there', () => {
@@ -45,7 +46,7 @@ describe('the front door', () => {
     // needing an open market "will tell you plainly that there is not one yet,
     // instead of failing quietly". Deleted -- the pages do it, they no longer
     // announce that they will.
-    expect(html).toContain('Eight programs, deployed on devnet');
+    expect(html).toContain('8 program addresses in the Devnet configuration');
     expect(html).not.toContain('failing quietly');
   });
 

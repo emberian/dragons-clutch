@@ -361,6 +361,7 @@ pub fn process_dealer_found_v1(
             transfer_index: 2,
             amount: request.deposit,
         },
+        Some(sponsor),
     )?;
     hot_cu_checkpoint!("scoring-dealer:found:deposit");
 

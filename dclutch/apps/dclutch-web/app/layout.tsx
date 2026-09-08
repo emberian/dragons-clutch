@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
   subsets: ['latin'],
 });
 
-const TITLE = 'dClutch · Prediction markets, fully backed, on Solana devnet';
+const TITLE = 'dClutch · Fully collateralized markets on Solana devnet';
 const DESCRIPTION =
-  'Buy claims on real-world outcomes. Each one is backed by collateral locked up before the claim exists, so there is no way to lose more than you paid. Running on Solana devnet: nothing is for sale and nothing is at risk.';
+  'Explore markets, design bounded payoffs, and follow the records behind each claim. Collateral is locked before claims are issued. A Solana devnet preview using test tokens.';
 
 // Absolute URLs on purpose: share cards are read by scrapers against the
 // public host, and a relative URL in a static export resolves to nothing

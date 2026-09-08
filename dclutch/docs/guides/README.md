@@ -1,11 +1,12 @@
 # Guides
 
-- [Trader guide](trader.md) — what a claim is, what protection costs, and
-  what can and cannot happen to your money.
+- [Reader guide](reader.md) — start here: one bounded-price example, how
+  claims are backed and resolved, why the mechanism can be useful, and which
+  devnet entrances are actually open.
+- [Trader guide](trader.md) — what a claim is, what protection costs, how the
+  Direct browser path works, and what can and cannot happen to your money.
 - [Operator guide](operator.md) — how to create a market: what you fix up
   front, how to fund it, and how to pick a resolution window that works.
-- [Reader guide](reader.md) — what dClutch is, what works today, and how
-  to run the whole thing yourself.
 - [Client developers guide](client-developers.md) — building a bot,
   dashboard, or integration: the SDK, the CLI, and a working example of
   each core flow.
@@ -22,7 +23,7 @@ Two generated reference pages back these guides up:
 generated reference — routes, costs, decisions — lives in the
 [repository](../reference/README.md).
 
-The seven dClutch programs are deployed on Solana devnet as a cohort — a full
+The eight dClutch programs are deployed on Solana devnet as a cohort — a full
 redeploy with fresh ids each time, the previous cohort abandoned in place — and
 the live cohort's markets are read off the chain by the site. Every market's
 collateral is a devnet test token, so there is nothing to buy with money and

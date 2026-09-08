@@ -13,8 +13,8 @@ use dclutch_claims::{
     composition::{CompositionExposureBundleV3, RecordAdmissionV3},
     rational_kernel::RepresentationDescriptorV2,
     rational_lifecycle::{
-        LIFECYCLE_HEADER_BYTES_V2, LifecycleRequestV2,
-        hot_v6::STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1,
+        LIFECYCLE_HEADER_BYTES_V2, LifecycleHeaderV2, LifecycleRequestV2,
+        hot_v6::{RationalLifecycleHotRequestV6, STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1},
     },
     structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
 };
@@ -57,6 +57,7 @@ use dclutch_registry::{
 use serde_json::json;
 use sha2::Digest as _;
 use solana_sdk::{
+    hash::hash,
     instruction::AccountMeta,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
@@ -1002,6 +1003,7 @@ fn activate_structured_receipt_v1(
             exposure_product_width: exposure.product_width(),
         },
     )?;
+    let header = derive_selected_lifecycle_parent_v6(header)?;
     let mut lifecycle_bytes = vec![0; LIFECYCLE_HEADER_BYTES_V2];
     LifecycleRequestV2::new(header, &[])
         .map_err(|error| Error::new(format!("Structured receipt lifecycle header: {error:?}")))?
@@ -1209,6 +1211,25 @@ fn activate_structured_receipt_v1(
     )
 }
 
+/// Bind the Claims child to the exact V6 family bytes that Hot will carry.
+///
+/// The family form has a zero parent context by design; the child carries the
+/// digest of that form.  Start from a nonzero provisional context because the
+/// Claims lifecycle decoder refuses an unbound child before Hot can derive it.
+fn derive_selected_lifecycle_parent_v6(mut header: LifecycleHeaderV2) -> Result<LifecycleHeaderV2> {
+    header.parent_context = [1; 32];
+    let provisional = LifecycleRequestV2::new(header, &[]).map_err(|error| {
+        Error::new(format!(
+            "Structured receipt provisional lifecycle: {error:?}"
+        ))
+    })?;
+    let mut family_bytes = vec![0; LIFECYCLE_HEADER_BYTES_V2];
+    let family = RationalLifecycleHotRequestV6::from_child_into(provisional, &mut family_bytes)
+        .map_err(|error| Error::new(format!("Structured receipt V6 family: {error:?}")))?;
+    header.parent_context = hash(family.as_bytes()).to_bytes();
+    Ok(header)
+}
+
 fn activation_snapshot_slot_v1(observed: u64, minimum: u64) -> Result<u64> {
     if observed == 0 || observed < minimum {
         return Err(Error::new(
@@ -1335,6 +1356,52 @@ fn write_json(path: &std::path::Path, value: &serde_json::Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_v6_parent_derives_from_the_zeroed_family_form() {
+        use dclutch_claims::{
+            rational_lifecycle::hot_v6::RationalLifecycleHotRequestV6,
+            rational_lifecycle::{LifecycleActionV2, LifecycleHeaderV2, LifecycleRequestV2},
+        };
+        use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+        use solana_sdk::hash::hash;
+
+        let header = LifecycleHeaderV2 {
+            action: LifecycleActionV2::ActivateReceipt,
+            release_set: [1; 32],
+            market: [2; 32],
+            graph_id: [3; 32],
+            descriptor_id: [4; 32],
+            parent_context: [0; 32],
+            representation_authority: [5; 32],
+            receipt_mint: [6; 32],
+            token_program: TOKEN_2022_PROGRAM_ID,
+            rent_credit: [7; 32],
+            rent_program: [8; 32],
+            generation: 1,
+            expected_claims_market_revision: 1,
+            observed_receipt_lamports: 1,
+            receipt_rent_principal: 1,
+            expected_receipt_supply: 0,
+            outcome_count: 2,
+            coordinate_count: 0,
+            rent_credit_before: 1,
+            rent_credit_after: 1,
+        };
+        assert_eq!(
+            LifecycleRequestV2::new(header, &[]),
+            Err(dclutch_claims::rational_lifecycle::Error::InvalidIdentity),
+            "a child cannot use Hot's zeroed family context"
+        );
+        let derived =
+            super::derive_selected_lifecycle_parent_v6(header).expect("canonical V6 parent digest");
+        let child = LifecycleRequestV2::new(derived, &[]).expect("bound Claims child");
+        let mut family_bytes =
+            vec![0; dclutch_claims::rational_lifecycle::LIFECYCLE_HEADER_BYTES_V2];
+        let family = RationalLifecycleHotRequestV6::from_child_into(child, &mut family_bytes)
+            .expect("family projection");
+        assert_eq!(derived.parent_context, hash(family.as_bytes()).to_bytes());
+    }
+
     #[test]
     fn duplicate_execute_refuses() {
         let error = super::parse_arguments(vec!["--execute".into(), "--execute".into()])

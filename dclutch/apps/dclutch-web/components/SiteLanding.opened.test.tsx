@@ -44,7 +44,7 @@ describe('the front door, once a market is open', () => {
     // answer is read instead of guessing it.
     expect(html).toContain('Its cohort link and state are read from the chain');
     for (const phase of ['open', 'resolved', 'winding down', 'finished', 'still being set up']) {
-      expect(html.slice(html.indexOf('Where this stands'), html.indexOf('landing-key-art'))).not.toContain(phase);
+      expect(html.slice(html.indexOf('Where this stands'), html.indexOf('</aside>'))).not.toContain(phase);
     }
   });
 
@@ -55,7 +55,7 @@ describe('the front door, once a market is open', () => {
     // Renegotiated 2026-08-31 with the sibling test: both arms of the old
     // conditional blurb are deleted, so neither can go stale. What this file
     // still pins is the OTHER dated sentence -- the hero aside -- switching.
-    expect(html).toContain('Eight programs, deployed on devnet');
+    expect(html).toContain('8 program addresses in the Devnet configuration');
     expect(html).not.toContain('will tell you plainly that there is not one yet');
   });
 
@@ -63,7 +63,7 @@ describe('the front door, once a market is open', () => {
     // An open market does not make devnet tokens worth anything. This is the
     // sentence that must survive the market opening, not be swept out with it.
     expect(html).toContain('On devnet — nothing for sale');
-    expect(html).toContain('worthless by construction');
-    expect(html).toContain('no value at risk anywhere');
+    expect(html).toContain('devnet preview using test tokens');
+    expect(html).not.toContain('no value at risk anywhere');
   });
 });

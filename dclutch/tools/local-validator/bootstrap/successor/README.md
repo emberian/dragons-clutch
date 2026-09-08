@@ -695,8 +695,14 @@ signs nothing and performs no CPI. The commit half — Trading's
 `process_hot_execution_v3` writing the capability root and returning a
 `DCLTHAK3` ack — additionally needs a founded Market whose capability manifest
 selects General, and whose capability root exists. Both now have drivers:
-`local-private-validator-market-v1` with `DCLUTCH_MARKET_CAPABILITY=general`
-compiles the selected market input, and
+`local-private-validator-general-market-v1` compiles the selected market input
+from an authenticated eight-link local plan: it observes the real checked
+accelerator Program and ProgramData at the policy snapshot floor and reads the
+compiler, toolchain, selection-policy, and checked translation evidence from
+inspectable files. It accepts only the selected 165-byte Token or 170-byte
+ImmutableOwner Token-2022 account profile. The caller supplies no accelerator
+program, ELF, semantic release, deployment slot, or authority: those all come
+from the authenticated plan and live Loader observation. Then
 `local-private-validator-general-capability-activation-v1` creates the root.
 `general_market_selection_requirements_v1` states the six facts such a Market
 must carry.

@@ -1036,8 +1036,9 @@ fn authenticate_generic_funding_and_capability_root(
 /// The selected capability release is content-addressed family data and is
 /// deliberately distinct from the generic Trading interpreter semantic
 /// release (decision 0003). Every companion entry must name the exact activated
-/// Resolution release. This generation's direct-capable founding is exactly
-/// one selected Trading entry plus three Resolution companions.
+/// Resolution release. A direct-capable founding has exactly one selected
+/// Trading entry; every other entry is a Resolution companion. The manifest's
+/// own bounded width decides how many companion rows a Source family bought.
 fn founding_controller_masks(
     manifest: CapabilityManifestV1<'_>,
     resolution_semantic_release: [u8; 32],
@@ -1068,7 +1069,24 @@ fn founding_controller_masks(
         }
         entry_index = entry_index.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
     }
-    if manifest.entry_count() != 4 || resolution_mask.count_ones() != 3 {
+    let required_union = if manifest.entry_count() == u16::BITS as u16 {
+        u16::MAX
+    } else {
+        1_u16
+            .checked_shl(u32::from(manifest.entry_count()))
+            .and_then(|value| value.checked_sub(1))
+            .ok_or(CoreSbfError::Arithmetic)?
+    };
+    if resolution_mask.count_ones()
+        != u32::from(
+            manifest
+                .entry_count()
+                .checked_sub(1)
+                .ok_or(CoreSbfError::Funding)?,
+        )
+        || resolution_mask & trading_mask != 0
+        || resolution_mask | trading_mask != required_union
+    {
         return Err(CoreSbfError::Funding);
     }
     Ok([resolution_mask, trading_mask])
@@ -2230,14 +2248,14 @@ mod tests {
         }
     }
 
-    fn manifest_with_foreign_entries(foreign: &[usize]) -> Vec<u8> {
+    fn manifest_with_foreign_entries(entry_count: usize, foreign: &[usize]) -> Vec<u8> {
         let native = CompartmentFundingV1::native_lamports(1).expect("native");
         let none = CompartmentFundingV1::not_applicable();
         let amounts =
             FundingAmountsV1::new(native, native, none, none, native, none, none).expect("amounts");
         let quote = FundingQuoteV1::new(amounts, None).expect("quote");
         let mut entries = Vec::new();
-        for index in 0_usize..4 {
+        for index in 0_usize..entry_count {
             let byte = u8::try_from(index).expect("bounded index");
             entries.push(
                 CapabilityEntryV1::new(
@@ -2270,7 +2288,7 @@ mod tests {
     #[test]
     fn founding_controller_masks_follow_the_authenticated_selected_entry() {
         for trading_index in 0_usize..4 {
-            let bytes = manifest_with_foreign_entries(&[trading_index]);
+            let bytes = manifest_with_foreign_entries(4, &[trading_index]);
             let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
             let trading_mask = 1_u16 << trading_index;
             assert_eq!(
@@ -2285,8 +2303,26 @@ mod tests {
     }
 
     #[test]
+    fn founding_controller_masks_admit_the_five_row_ensemble_partition() {
+        for trading_index in 0_usize..5 {
+            let bytes = manifest_with_foreign_entries(5, &[trading_index]);
+            let manifest = CapabilityManifestV1::decode(&bytes).expect("five-row manifest");
+            let trading_mask = 1_u16 << trading_index;
+            assert_eq!(
+                founding_controller_masks(
+                    manifest,
+                    [0x30; 32],
+                    u16::try_from(trading_index).expect("bounded index"),
+                ),
+                Ok([0b1_1111 ^ trading_mask, trading_mask]),
+                "the Direct entry may occupy any canonical Ensemble row",
+            );
+        }
+    }
+
+    #[test]
     fn founding_controller_masks_refuse_ambiguous_or_invalid_selection() {
-        let all_resolution = manifest_with_foreign_entries(&[]);
+        let all_resolution = manifest_with_foreign_entries(4, &[]);
         assert_eq!(
             founding_controller_masks(
                 CapabilityManifestV1::decode(&all_resolution).expect("manifest"),
@@ -2296,7 +2332,7 @@ mod tests {
             Err(CoreSbfError::Funding),
         );
 
-        let two_foreign = manifest_with_foreign_entries(&[1, 3]);
+        let two_foreign = manifest_with_foreign_entries(4, &[1, 3]);
         assert_eq!(
             founding_controller_masks(
                 CapabilityManifestV1::decode(&two_foreign).expect("manifest"),
@@ -2306,7 +2342,7 @@ mod tests {
             Err(CoreSbfError::Funding),
         );
 
-        let one_foreign = manifest_with_foreign_entries(&[3]);
+        let one_foreign = manifest_with_foreign_entries(4, &[3]);
         assert_eq!(
             founding_controller_masks(
                 CapabilityManifestV1::decode(&one_foreign).expect("manifest"),

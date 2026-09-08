@@ -1165,8 +1165,16 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
         let claims_program = claims(ClaimsFrameRoleV1::ClaimsProgram)?;
         let claims_market = claims(ClaimsFrameRoleV1::ClaimsMarket)?;
         let maker_position = claims(ClaimsFrameRoleV1::AffinePosition(0))?;
-        let rent_credit = claims(ClaimsFrameRoleV1::RentCredit)?;
-        let rent_program = claims(ClaimsFrameRoleV1::RentProgram)?;
+        let claims_admit = |role| {
+            let coordinate = general_place_order_admit_claims_coordinate_v3(role)
+                .map_err(|_| TradingSbfError::Content)?;
+            observations
+                .get(usize::from(coordinate))
+                .copied()
+                .ok_or(TradingSbfError::Content)
+        };
+        let rent_credit = claims_admit(ClaimsFrameRoleV1::RentCredit)?;
+        let rent_program = claims_admit(ClaimsFrameRoleV1::RentProgram)?;
         // The AccountProfile has already authenticated each role's executable
         // bit.  Preserve those exact role requirements in the semantic adapter
         // rather than treating opaque bodies as a self-authenticating graph.

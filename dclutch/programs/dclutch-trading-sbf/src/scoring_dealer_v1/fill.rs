@@ -242,6 +242,7 @@ pub fn process_dealer_fill_v1(
         facts,
         fund.market,
         fund_account.key.to_bytes(),
+        taker,
         request.taker,
         hash(instruction_data).to_bytes(),
         legs,
@@ -306,6 +307,7 @@ fn settle_cash_legs_v1<'info>(
     facts: MarketFactsV1,
     market: [u8; 32],
     fund_context: [u8; 32],
+    taker_account: &AccountInfo<'info>,
     taker: [u8; 32],
     parent: [u8; 32],
     legs: CashLegsV1,
@@ -342,6 +344,7 @@ fn settle_cash_legs_v1<'info>(
             facts,
             market,
             hoard_context,
+            taker_account,
             taker,
             parent,
             legs.taker_to_hoard,
@@ -355,6 +358,7 @@ fn settle_cash_legs_v1<'info>(
             facts,
             market,
             fund_context,
+            taker_account,
             taker,
             parent,
             legs,
@@ -397,6 +401,7 @@ fn fund_to_hoard_leg_v1<'info>(
             transfer_index: 0,
             amount,
         },
+        None,
     )
 }
 
@@ -410,6 +415,7 @@ fn taker_to_hoard_leg_v1<'info>(
     facts: MarketFactsV1,
     market: [u8; 32],
     hoard_context: [u8; 32],
+    taker_account: &AccountInfo<'info>,
     taker: [u8; 32],
     parent: [u8; 32],
     amount: u64,
@@ -434,6 +440,7 @@ fn taker_to_hoard_leg_v1<'info>(
             transfer_index: 1,
             amount,
         },
+        Some(taker_account),
     )
 }
 
@@ -447,6 +454,7 @@ fn net_leg_v1<'info>(
     facts: MarketFactsV1,
     market: [u8; 32],
     fund_context: [u8; 32],
+    taker_account: &AccountInfo<'info>,
     taker: [u8; 32],
     parent: [u8; 32],
     legs: CashLegsV1,
@@ -481,6 +489,7 @@ fn net_leg_v1<'info>(
             transfer_index: 2,
             amount: legs.fund_to_taker.max(legs.taker_to_fund),
         },
+        if to_taker { None } else { Some(taker_account) },
     )
 }
 

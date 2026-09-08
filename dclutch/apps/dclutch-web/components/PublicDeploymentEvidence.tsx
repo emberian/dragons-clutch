@@ -1,7 +1,9 @@
 import {
   DEVNET_DEPLOYMENT_V1,
   DEVNET_PROGRAM_EVIDENCE_V1,
+  DEVNET_RELEASE_EVIDENCE_V1,
   deployedProgramRolesV1,
+  isPublishedDevnetDeploymentV1,
   type DeploymentV1,
 } from '@dclutch/sdk/deployments';
 import { docsHrefV1 } from '@/lib/flags';
@@ -29,8 +31,11 @@ export function publicDeploymentEvidenceDocumentV1(): Readonly<Record<string, un
         firstDeploymentSlot: DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot,
       }),
     ]))),
-    evidence: 'docs/evidence/COHORT16_DEPLOYED_SEALED_2026_09_05.md §2',
-    note: 'These are Solana devnet test programs, and they are NOT permanent. Devnet is disposable here by ruling: each cohort is a full redeploy at fresh addresses, and the cohort before it is closed, which returns its rent to pay for the next. This page named DEPLOY-1 — cohort-8 — for a day after cohort-8 was closed and all seven of its ProgramData accounts had been deleted, while its Program stubs stayed executable and kept naming them. There are eight programs now: the seven roles every account derivation and owner check names, and the accelerator, which owns no account and which the General, Dealer and Series routes call into. deploymentSlot is where each program was read to sit, not a historical first deployment. This document is a static projection and cannot observe a chain. For the current slot, read the ProgramData account — which the /operate deployment inspector now does live, reporting each role that has been upgraded since this app was built.',
+    cohort: DEVNET_RELEASE_EVIDENCE_V1.cohort,
+    sourceCommit: DEVNET_RELEASE_EVIDENCE_V1.sourceCommit,
+    releaseGateSha256: DEVNET_RELEASE_EVIDENCE_V1.releaseGateSha256,
+    evidence: DEVNET_RELEASE_EVIDENCE_V1.evidencePath,
+    note: 'Historical deployment evidence for these Solana devnet test programs. The recorded slots and addresses do not establish current liveness or unchanged code. Read the ProgramData accounts through the deployment inspector to check the current release. Every new cohort uses fresh identities.',
   });
 }
 
@@ -42,13 +47,13 @@ export function publicDeploymentEvidenceDownloadHrefV1(): string {
 export default function PublicDeploymentEvidence({
   deployment,
 }: Readonly<{ deployment: DeploymentV1 }>) {
-  if (deployment.cluster !== 'devnet') {
-    return <p className="direct-status">You selected {deployment.label}. Addresses came from your own configuration.</p>;
+  if (!isPublishedDevnetDeploymentV1(deployment)) {
+    return <p className="direct-status">Selected deployment: {deployment.label}. No checked deployment record is attached to this selection.</p>;
   }
   return <div className="direct-actions" aria-label="Checked deployment evidence">
     <a
       className="secondary-action"
-      href={docsHrefV1('evidence/COHORT16_DEPLOYED_SEALED_2026_09_05.html', 'docs/evidence/COHORT16_DEPLOYED_SEALED_2026_09_05.md')}
+      href={docsHrefV1(DEVNET_RELEASE_EVIDENCE_V1.evidencePath.replace(/^docs\//, '').replace(/\.md$/, '.html'), DEVNET_RELEASE_EVIDENCE_V1.evidencePath)}
     >Read the checked deployment record →</a>
     <a
       className="secondary-action"

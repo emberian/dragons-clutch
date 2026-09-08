@@ -660,12 +660,17 @@ fn authenticate_market(
         || aggregate.logical_market != header.market
         || aggregate.release_set != header.release_set
         || aggregate.registry_program != common.registry.key.to_bytes()
-        || aggregate.claim_count != header.outcome_count
         || aggregate.revision != header.expected_claims_market_revision
         || aggregate.generation != header.generation
     {
         return Err(RationalLifecycleSbfErrorV2::Market.into());
     }
+    // The aggregate owns Product width N; this header owns representation
+    // width K. A sparse representation need not have one coordinate per
+    // Product outcome. `prepare` authenticates K against the finalized
+    // descriptor. Coordinate actions additionally authenticate the Product
+    // through ProtocolPosition; receipt-wide actions create or close only a
+    // zero-supply Mint and do not mutate the aggregate or mint liabilities.
     drop(aggregate_data);
 
     let core_data = common

@@ -4226,6 +4226,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                 &plan,
                 &authority,
                 &forge,
+                args.origin.may_airdrop(),
                 None,
                 None,
                 None,
@@ -4680,6 +4681,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             &plan,
             &payer,
             &forge,
+            args.origin.may_airdrop(),
             Some(actors),
             market.as_ref(),
             founding_keys,
@@ -4864,11 +4866,30 @@ fn founding_checkpoint_resume_v1(
     }
 }
 
+/// Exact loopback funding missing from the distinct succession payer.
+///
+/// The V2 profile's reported rent debit and the validator's exact quote for
+/// this message are the only lamports this transaction can charge to its
+/// payer. The local faucet exists only on the loopback rail; every other origin
+/// keeps the payer externally funded and reaches the normal simulator refusal
+/// if it is not.
+fn loopback_succession_payer_shortfall_v1(
+    held_lamports: u64,
+    profile_rent_debit_lamports: u64,
+    exact_transaction_fee_lamports: u64,
+) -> Result<u64> {
+    let required = profile_rent_debit_lamports
+        .checked_add(exact_transaction_fee_lamports)
+        .ok_or_else(|| Error::new("succession payer funding requirement overflowed"))?;
+    Ok(required.saturating_sub(held_lamports))
+}
+
 fn execute_succession_stage_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     authority: &Keypair,
     forge: &KeyForge,
+    may_airdrop: bool,
     initial_state: &StageStateV1,
     transactions: &mut Vec<crate::model::TransactionEvidence>,
 ) -> Result<()> {
@@ -4970,6 +4991,30 @@ fn execute_succession_stage_v1(
             report.required_signers
         )));
     }
+    if may_airdrop {
+        let held = rpc
+            .account(payer.pubkey())?
+            .map_or(0, |account| account.lamports);
+        let exact_transaction_fee_lamports = rpc.fee_for_v0_message(
+            "infrastructure-succession",
+            &[report.instruction.clone()],
+            payer.pubkey(),
+            report.observation,
+            &[],
+        )?;
+        let shortfall = loopback_succession_payer_shortfall_v1(
+            held,
+            report.profile_rent_debit_lamports,
+            exact_transaction_fee_lamports,
+        )?;
+        if shortfall != 0 {
+            transactions.push(rpc.airdrop(
+                "fund loopback succession fee payer",
+                payer.pubkey(),
+                shortfall,
+            )?);
+        }
+    }
     let simulation = rpc.simulate_v0(
         "infrastructure-succession",
         &[report.instruction.clone()],
@@ -5026,6 +5071,7 @@ fn execute_stages(
     plan: &SuccessorPlan,
     authority: &Keypair,
     forge: &KeyForge,
+    may_airdrop: bool,
     founding_actors: Option<crate::market::FoundingActorsV1>,
     market: Option<&crate::model::MarketRunInput>,
     founding_keys: Option<(Pubkey, Pubkey)>,
@@ -5144,7 +5190,15 @@ fn execute_stages(
                 runtime::verify_profile(rpc, plan)?;
             }
             StageV1::Succession => {
-                execute_succession_stage_v1(rpc, plan, authority, forge, state, &mut transactions)?;
+                execute_succession_stage_v1(
+                    rpc,
+                    plan,
+                    authority,
+                    forge,
+                    may_airdrop,
+                    state,
+                    &mut transactions,
+                )?;
             }
             StageV1::Activation => {
                 for (label, instruction) in
@@ -6886,6 +6940,24 @@ mod tests {
         assert_eq!(
             administration_required_roles_v1(&states, StageV1::Initialize),
             vec![role::CORE_UPGRADE_AUTHORITY]
+        );
+    }
+
+    #[test]
+    fn loopback_succession_payer_funds_only_its_exact_profile_and_fee_shortfall() {
+        assert_eq!(
+            loopback_succession_payer_shortfall_v1(0, 4_343_040, 10_000)
+                .expect("exact payer requirement"),
+            4_353_040
+        );
+        assert_eq!(
+            loopback_succession_payer_shortfall_v1(4_353_040, 4_343_040, 10_000)
+                .expect("already funded payer"),
+            0
+        );
+        assert_eq!(
+            loopback_succession_payer_shortfall_v1(9_000, 0, 10_000).expect("fee-only payer"),
+            1_000
         );
     }
 

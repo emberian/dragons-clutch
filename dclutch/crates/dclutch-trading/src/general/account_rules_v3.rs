@@ -17,6 +17,7 @@ use crate::general_config::{
 use dclutch_claims::frame_spec_v1::{
     ClaimsFrameDataV1, ClaimsFrameRoleV1, ClaimsFrameSpecV1, FramePrivilegesV1,
 };
+use dclutch_claims::protocol_position_v2::ProtocolPositionActionV2;
 use dclutch_custody::{
     CustodyFrameDataV1, CustodyFramePrivilegesV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
     OperationV1,
@@ -2591,6 +2592,50 @@ pub fn general_place_order_affine_claims_coordinate_v3(wanted: ClaimsFrameRoleV1
     Err(GeneralAccountRuleErrorV3::Geometry)
 }
 
+/// Return one physical account from PlaceOrder's preceding Claims Position-admit frame.
+///
+/// The Position-admit owns the lifecycle RentCredit and its executable Rent
+/// program. They are absent from the later affine packet, whose two Position
+/// entries are sorted privately just before its CPI.
+pub fn general_place_order_admit_claims_coordinate_v3(wanted: ClaimsFrameRoleV1) -> Result<u16> {
+    let action = Action::PlaceOrder;
+    let frame = GeneralChildFrameV3::ClaimsProtocolPosition(ProtocolPositionActionV2::Admit);
+    let mut route = 0_u16;
+    while route < general_effect_route_count_v3(action) {
+        let selected = general_effect_route_frame_v3(action, route)
+            .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+        if selected.frame == frame {
+            let spec = ClaimsFrameSpecV1::protocol_position(ProtocolPositionActionV2::Admit);
+            let mut relative = 0_u16;
+            while relative
+                < selected
+                    .frame
+                    .account_count()
+                    .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?
+            {
+                if spec
+                    .account(relative)
+                    .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?
+                    .role()
+                    == wanted
+                {
+                    return selected
+                        .account_start
+                        .checked_add(relative)
+                        .ok_or(GeneralAccountRuleErrorV3::Geometry);
+                }
+                relative = relative
+                    .checked_add(1)
+                    .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+            }
+        }
+        route = route
+            .checked_add(1)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    }
+    Err(GeneralAccountRuleErrorV3::Geometry)
+}
+
 const fn route_alias(representative: u16) -> AccountRuleWithPrestateInputV2 {
     AccountRuleWithPrestateInputV2 {
         rule: AccountRuleInputV2 {
@@ -4194,6 +4239,35 @@ mod tests {
             general_place_order_affine_claims_coordinate_v3(ClaimsFrameRoleV1::AffinePosition(1))
                 .expect("escrow Position");
         assert!(maker < escrow, "outer profile keeps maker before escrow");
+    }
+
+    #[test]
+    fn place_order_typed_claims_adapter_reads_rent_from_position_admit() {
+        for role in [
+            ClaimsFrameRoleV1::RentCredit,
+            ClaimsFrameRoleV1::RentProgram,
+        ] {
+            let coordinate =
+                general_place_order_admit_claims_coordinate_v3(role).expect("Position-admit role");
+            let (frame, relative) =
+                child_coordinate(Action::PlaceOrder, coordinate).expect("PlaceOrder child frame");
+            assert_eq!(
+                frame,
+                GeneralChildFrameV3::ClaimsProtocolPosition(ProtocolPositionActionV2::Admit),
+            );
+            assert_eq!(
+                ClaimsFrameSpecV1::protocol_position(ProtocolPositionActionV2::Admit)
+                    .account(relative)
+                    .map(|account| account.role()),
+                Ok(role),
+            );
+        }
+        assert_ne!(
+            general_place_order_admit_claims_coordinate_v3(ClaimsFrameRoleV1::RentCredit)
+                .expect("admit credit"),
+            general_place_order_affine_claims_coordinate_v3(ClaimsFrameRoleV1::AffinePosition(0))
+                .expect("affine maker"),
+        );
     }
 
     #[test]

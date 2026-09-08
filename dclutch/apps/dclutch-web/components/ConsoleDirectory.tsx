@@ -1,3 +1,6 @@
+'use client';
+
+import { useState } from 'react';
 import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
@@ -121,46 +124,51 @@ const SELECTED_SENTENCE_V1 = capabilitySelectedGateSentenceV1(
 );
 
 export default function ConsoleDirectory() {
+  const [search, setSearch] = useState('');
+  const words = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const matches = (standing: CapabilityStandingV1): boolean => {
+    const text = [standing.action.action, standing.action.guarantee, capabilityVenueTextV1(standing),
+      ...browserActPrerequisitesV1(standing).map((entry) => entry.statement),
+      ...standing.walls.map((entry) => entry.statement)].join(' ').toLocaleLowerCase();
+    return words.every((word) => text.includes(word));
+  };
+  const visible = LISTED_V1.filter(matches);
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/console" status="operator tools" />}>
 
-    <section className="trade-v3-hero">
+    <section className="trade-v3-hero hero-solo console-hero">
       <div>
-        <p className="eyebrow">Everything dClutch can do, and where each act happens</p>
-        <h1>Choose the<br /><em>outcome.</em></h1>
-        <p>{LISTED_V1.length} protocol acts are routed below. Each one says what it produces,
-        whose authority it asks for, and the one promise it keeps about signing,
-        sending, and recovery. Market-participant acts stay on the
+        <p className="eyebrow">The dClutch console</p>
+        <h1>What do you<br /><em>want to do?</em></h1>
+        <p>Find a tool for each step of a market&rsquo;s life. Each action shows
+        what you need, where it runs, and whether it asks for a signature.
+        Market-participant acts stay on the
         selected <Anchor href="/markets">Market</Anchor>.</p>
-        <p>None of these claims is written down. Each is derived from the module
-        that builds the act and the route that reaches it, so this page can only
-        say what the code does. {WALLED_V1.length} further acts have no venue here
-        yet; each names its wall on the <Anchor href="/operate">operations console</Anchor>.
-        Artifact inputs name their producer, and the complete provenance table
-        is <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts, and where they come from”</a>.</p>
-        <p><strong>And here is what is not on this page.</strong> {ACCESS_SENTENCE_V1} That
-        count is the route census’s own: every route a program selects from an
-        instruction’s first eight bytes, matched against the acts above and the
-        venue each one actually has. It is computed on every render from the
-        same tables the cards are, so it cannot drift from them — and it is
-        deliberately the harsher of the two readings, because a route some
-        module can encode but no act offers is not a capability a person can
-        perform.</p>
-        <p><strong>And the gates that are not the Market&rsquo;s phase.</strong> {MACHINE_SENTENCE_V1} {SELECTED_SENTENCE_V1} A
-        Direct root, a Series ticket, a funding-ledger slot, a projected-custody
-        ladder and a Source resolution state are
-        separate discriminants in separate accounts, and a Market is
-        <em> Open</em> for the whole span in which several of them move. Every
-        figure here is computed on each render from the census table and the
-        decoders&rsquo; own tag tables, so it says what the code can read and
-        never what anyone hoped it could.</p>
       </div>
     </section>
 
+    <nav className="console-stages" aria-label="Market lifecycle">
+      {STAGE_BANDS_V1.map((band, index) => <a href={`#console-${band.stage}`} key={band.stage} onClick={() => setSearch('')}>
+        <span>{String(index + 1).padStart(2, '0')}</span>
+        <strong>{band.title}</strong>
+        <small>{standingsForStageV1(band.stage).length} actions</small>
+      </a>)}
+    </nav>
+    <div className="console-find" role="search" aria-label="Find a protocol action">
+      <label htmlFor="console-search">Find an action</label>
+      <input id="console-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Try redeem, wallet, collateral…" />
+      <p role="status">{visible.length} of {LISTED_V1.length} actions</p>
+    </div>
+
     <section aria-label="Protocol acts by lifecycle stage">
+      {visible.length > 0 ? null : <div className="console-empty">
+        <h2>No action matches that search.</h2>
+        <p>Try a different term, or return to the full directory.</p>
+        <button className="secondary-action" type="button" onClick={() => setSearch('')}>Show all actions</button>
+      </div>}
       {STAGE_BANDS_V1.map((band, index) => {
-        const standings = standingsForStageV1(band.stage);
+        const standings = visible.filter((standing) => standing.action.stage === band.stage);
         if (standings.length === 0) return null;
-        return <Card className="trade-v3-card" key={band.stage}>
+        return <Card className="trade-v3-card console-stage" id={`console-${band.stage}`} key={band.stage}>
           <header><span>{String(index + 1).padStart(2, '0')}</span><div><h2>{band.title}</h2><p>{band.deck}</p></div></header>
           <CardContent className="console-index p-0">
             {standings.map((standing) => {
@@ -196,8 +204,16 @@ export default function ConsoleDirectory() {
       </Card>
     </section>
 
-    <p className="console-stage-note">Stages are the only grouping this page decides. Everything
-    else — which acts exist, where each one runs, and what it asks for — comes
-    from the capability catalogue and this application&rsquo;s own routes.</p>
+    <details className="console-coverage">
+      <summary>Coverage, limitations, and artifact sources</summary>
+      <p>{WALLED_V1.length} further acts have no venue here; each names its wall
+      on the <Anchor href="/operate">operations console</Anchor>. The cards above
+      come from the capability catalogue and the application&rsquo;s routes.</p>
+      <p>Artifact inputs name their producer. Read <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts, and where they come from”</a> for the complete table.</p>
+      <p>{ACCESS_SENTENCE_V1}</p>
+      <p>{MACHINE_SENTENCE_V1} {SELECTED_SENTENCE_V1}</p>
+      <p>A Market&rsquo;s phase is only part of its state. Trading roots, Series
+      tickets, funding ledgers, and resolution records have their own gates.</p>
+    </details>
   </PageShell>;
 }

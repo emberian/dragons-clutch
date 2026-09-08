@@ -133,3 +133,18 @@ reasonable `max_age`, a source that really publishes) and survivable (a
 fallback outcome you'd be willing to live with, funded for real). It
 should happen because nothing published — never because your market asked
 a question nothing could answer.
+
+### Recovery is also precommitted
+
+A market can select funded recovery depth between its primary source and the
+failure walk. The source lifecycle distinguishes primary, recovery, resolved,
+exhausted, and failure states; a funded recovery ladder has run on real program
+bytes. Treat each rung as another immutable part of the market's answer
+procedure. Its source identity, conditions, and funding belong in the founding
+records, not in an operator decision after the outcome becomes inconvenient.
+
+If a recovery route resolves the stated statistic, its result settles the
+market through the same fixed partition. If every selected route is exhausted,
+only then does the published failure outcome become available. Recovery reserve
+and walk funding are separate named obligations; neither may be borrowed from
+Hoard principal.

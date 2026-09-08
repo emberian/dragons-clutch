@@ -40,6 +40,7 @@ mod fractional_market;
 mod funding_readiness;
 mod general_capability_activation;
 mod general_devnet_market;
+mod general_local_market;
 mod general_market;
 mod general_session;
 mod general_settlement_fixture;
@@ -507,6 +508,9 @@ fn run() -> Result<()> {
             local_mutable::run_authenticate(arguments.collect())
         }
         Some("local-private-validator-market-v1") => local_mutable::run_market(arguments.collect()),
+        Some(command) if command == general_local_market::COMMAND_V1 => {
+            general_local_market::run(arguments.collect())
+        }
         Some(command) if command == OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[1] => {
             terminal_sequence::run_terminal_sequence_owned_loopback_v1(arguments.collect())
         }

@@ -8,6 +8,28 @@ chains and devnet. Devnet assets and executions are public-test evidence, not
 mainnet evidence. Treat a live deployment as a dClutch deployment only when its
 checked release manifest authenticates the programs and profile it names.
 
+## Which browser page can trade?
+
+The public site has two Direct surfaces with intentionally different jobs.
+Console `/trade` reacquires a route and previews exact fill arithmetic; it is
+read-only and asks neither for a wallet signature nor for submission. The
+detailed Market pages (`/markets/<address>` and `/market`) carry the Direct
+participant and execution flow when the market authenticates as open and has a
+checked route.
+
+On an eligible detailed Market page, the browser checks your Position and
+collateral account, can admit your wallet where the checked first-admission
+binding permits it, lets you select an outcome and a maker's signed offer, and
+then prepares the exact transaction. It saves the unsigned packet before the
+wallet opens, saves the signed packet before its single send, and checks the
+finalized poststate before reporting completion. A market that fails any of the
+market, route, phase, or prestate checks does not expose a trade.
+
+That path is a way to take an existing signed offer. It is not a promise of an
+order book, a buyer, a price, or an executable route for every market. The
+[reader guide](reader.md) explains what the market is backing; this guide
+explains what the Direct terms mean once one is available.
+
 ## What a claim is
 
 A market asks one question with a bounded, checkable answer — say, where
@@ -110,9 +132,11 @@ with real width. The first valid observation from that source inside the
 window settles the market; every later one is rejected. No committee, no
 vote, nobody to appeal to — and nobody to be surprised by.
 
-If the source publishes nothing through the whole window, the market
-takes a fallback outcome that was disclosed and funded before it opened.
-You know before you trade exactly what silence produces.
+If the source publishes nothing through the whole window, the market can take
+the disclosed recovery path it selected and funded before opening. If that
+path is exhausted, the permissionless failure walk commits the published
+failure outcome. You know before you trade what silence produces; neither the
+founder nor a later committee gets to invent a different answer.
 
 ## When the protocol says no
 

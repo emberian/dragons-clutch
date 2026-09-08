@@ -15,10 +15,11 @@ use dclutch_market::{
 };
 use dclutch_registry::{
     record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId},
-    release_set::CapabilityExecutionSelectionV1,
+    release_set::{CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1},
 };
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
+use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 use std::{fs, path::PathBuf};
 
 use crate::{
@@ -32,6 +33,7 @@ use crate::{
         SelectedActivationRecordPairV1, SelectedCapabilityActivationInputV1,
         build_selected_capability_activation_plan_v1, execute_selected_capability_activation_v1,
     },
+    series_geometry::{SeriesPrepareRoleLayoutV1, SeriesPrepareRoleSourceV1},
 };
 
 /// Finalized Registry coordinates for the immutable two-leaf Series founder
@@ -280,6 +282,26 @@ pub(crate) struct SeriesParentRootV1 {
     pub(crate) root: Pubkey,
     /// Registry-derived raw/staging bumps carried in the root header.
     pub(crate) record_bumps: SelectedRecordBumpsV1,
+}
+
+/// Produce the Series parent M1 from the same checked Resolution release as a
+/// normal local Market, then attach the already-normalized Series closure.
+///
+/// The Template remains the M0 child configuration within `selected`; this
+/// creates a separate M1 manifest whose selected entry names that Template.
+/// Keeping this at the driver boundary prevents a caller from reusing the
+/// Direct child input after the Series payload has been attached.
+pub(crate) fn build_series_parent_market_v1(
+    plan: &SuccessorPlan,
+    registry: Pubkey,
+    selected: SelectedCapabilityV1,
+) -> Result<MarketRunInput> {
+    require_series_parent_payload_v1(&selected)?;
+    let resolution_release = crate::direct_market::authenticated_resolution_release_v1(plan)?;
+    let mut parent = crate::market::demo_market_input_base(registry, resolution_release)?;
+    crate::selected_capability::attach_selected_capability_v1(&mut parent, selected)?;
+    crate::market::validate_market_input(&parent)?;
+    Ok(parent)
 }
 
 /// Derive the parent Series root from the complete parent Market input.
@@ -659,4 +681,1173 @@ fn pair_from_id_v1(
         content,
         bumps,
     })
+}
+
+/// Persisted authoring facts for the immutable two-occurrence Series founder.
+///
+/// The source Market determines the M0 Product, Realm, Source and Direct
+/// manifest.  These fields deliberately cover only the facts the Template
+/// author owns: generator identities, schedule, and the two separately
+/// committed funding partitions.  Keeping the boundary narrow prevents a
+/// campaign document from substituting the child Market's canonical bodies.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SeriesFounderAuthoringInputV1 {
+    pub(crate) product_generator: String,
+    pub(crate) occurrence_generator: String,
+    pub(crate) capability_template: String,
+    pub(crate) product_derivation: String,
+    pub(crate) occurrence_derivation: String,
+    pub(crate) capability_derivation: String,
+    pub(crate) funding_derivation: String,
+    pub(crate) first_slot: u64,
+    pub(crate) period_slots: u64,
+    pub(crate) retry_window: u64,
+    pub(crate) close_rent: u64,
+    pub(crate) occurrences: [SeriesOccurrenceAuthoringInputV1; 2],
+}
+
+/// One exact M0 occurrence funding partition.  These are principal and
+/// pre-paid non-principal amounts, not a caller-selected future account.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SeriesOccurrenceAuthoringInputV1 {
+    pub(crate) funding_list: String,
+    pub(crate) hoard_principal: u64,
+    pub(crate) market_rent: u64,
+    pub(crate) capability_native: u64,
+    pub(crate) founding_work: u64,
+}
+
+/// Decode only canonical content identities and the Series owner's bounded
+/// funding constructor.  A live driver calls this before
+/// `prepare_series_founder_from_market_v1`; no test fixture identity crosses
+/// that boundary.
+pub(crate) fn decode_series_founder_authoring_v1(
+    input: &SeriesFounderAuthoringInputV1,
+) -> Result<(
+    crate::series_founder::SeriesTemplatePolicyV1,
+    [crate::series_founder::SeriesOccurrenceFundingV1; 2],
+)> {
+    let id = |value: &str, label: &str| {
+        ContentId::new(hex32(value)?).map_err(|_| Error::new(format!("Series {label} identity")))
+    };
+    let policy = crate::series_founder::SeriesTemplatePolicyV1 {
+        product_generator: id(&input.product_generator, "product generator")?,
+        occurrence_generator: id(&input.occurrence_generator, "occurrence generator")?,
+        capability_template: id(&input.capability_template, "capability template")?,
+        product_derivation: id(&input.product_derivation, "product derivation")?,
+        occurrence_derivation: id(&input.occurrence_derivation, "occurrence derivation")?,
+        capability_derivation: id(&input.capability_derivation, "capability derivation")?,
+        funding_derivation: id(&input.funding_derivation, "funding derivation")?,
+        first_slot: input.first_slot,
+        period_slots: input.period_slots,
+        retry_window: input.retry_window,
+        close_rent: input.close_rent,
+    };
+    let decode_occurrence = |occurrence: &SeriesOccurrenceAuthoringInputV1| -> Result<crate::series_founder::SeriesOccurrenceFundingV1> {
+        Ok(crate::series_founder::SeriesOccurrenceFundingV1 {
+            funding_list: id(&occurrence.funding_list, "funding list")?,
+            funds: dclutch_trading::series::FoundingFundsV3::new(
+                occurrence.hoard_principal,
+                occurrence.market_rent,
+                occurrence.capability_native,
+                occurrence.founding_work,
+            )
+            .map_err(|error| Error::new(format!("Series occurrence funding: {error:?}")))?,
+        })
+    };
+    let [first, second] = &input.occurrences;
+    let funding = [decode_occurrence(first)?, decode_occurrence(second)?];
+    Ok((policy, funding))
+}
+
+#[cfg(test)]
+mod authoring_tests {
+    use super::*;
+
+    fn input() -> SeriesFounderAuthoringInputV1 {
+        let identity = |byte| format!("{byte:02x}").repeat(32);
+        SeriesFounderAuthoringInputV1 {
+            product_generator: identity(1),
+            occurrence_generator: identity(2),
+            capability_template: identity(3),
+            product_derivation: identity(4),
+            occurrence_derivation: identity(5),
+            capability_derivation: identity(6),
+            funding_derivation: identity(7),
+            first_slot: 100,
+            period_slots: 10,
+            retry_window: 2,
+            close_rent: 1,
+            occurrences: [
+                SeriesOccurrenceAuthoringInputV1 {
+                    funding_list: identity(8),
+                    hoard_principal: 9,
+                    market_rent: 2,
+                    capability_native: 3,
+                    founding_work: 4,
+                },
+                SeriesOccurrenceAuthoringInputV1 {
+                    funding_list: identity(9),
+                    hoard_principal: 18,
+                    market_rent: 2,
+                    capability_native: 3,
+                    founding_work: 4,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn authoring_decoder_keeps_two_funding_partitions_distinct() {
+        let (_, funding) = decode_series_founder_authoring_v1(&input()).unwrap();
+        assert_eq!(funding[0].funds.hoard_principal(), 9);
+        assert_eq!(funding[1].funds.hoard_principal(), 18);
+    }
+
+    #[test]
+    fn authoring_decoder_refuses_noncanonical_identity() {
+        let mut hostile = input();
+        hostile.funding_derivation = "aa".into();
+        assert!(decode_series_founder_authoring_v1(&hostile).is_err());
+    }
+}
+
+/// One finality-bound source observation used to author the local scenario.
+/// The rent schedule is kept as its canonical sysvar bytes until the caller
+/// has checked both its owner and its bincode round-trip.
+#[derive(Clone, Debug)]
+pub(crate) struct SeriesLocalScenarioObservationV1 {
+    pub(crate) finalized_slot: u64,
+    pub(crate) rent: solana_program::rent::Rent,
+}
+
+/// A finalized token source observation that the first SeriesEscrow Lock will
+/// consume.  The scenario derives both occurrence principals from `amount`,
+/// never from a descriptive Market-input scalar.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SeriesFounderSourceObservationV1 {
+    pub(crate) source: Pubkey,
+    pub(crate) amount: u64,
+}
+
+/// Read and authenticate the concrete external Token-2022 source before it
+/// becomes the first occurrence's SeriesEscrow Lock source.
+pub(crate) fn observe_series_founder_source_v1(
+    rpc: &mut Rpc,
+    source: Pubkey,
+    mint: Pubkey,
+    founder: Pubkey,
+) -> Result<SeriesFounderSourceObservationV1> {
+    if source == Pubkey::default() || mint == Pubkey::default() || founder == Pubkey::default() {
+        return Err(Error::new(
+            "Series founder source observation named a default key",
+        ));
+    }
+    let account = rpc.required_account(source, "Series founder token source")?;
+    let amount = authenticate_series_founder_source_account_v1(&account, mint, founder)?;
+    Ok(SeriesFounderSourceObservationV1 { source, amount })
+}
+
+fn authenticate_series_founder_source_account_v1(
+    account: &RpcAccount,
+    mint: Pubkey,
+    founder: Pubkey,
+) -> Result<u64> {
+    use dclutch_custody::token_svm::{AccountState, TOKEN_2022_PROGRAM_ID, TokenAccount};
+
+    let token = TokenAccount::parse(&account.data)
+        .map_err(|error| Error::new(format!("Series founder token source: {error:?}")))?;
+    if account.owner != Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID)
+        || account.executable
+        || token.mint != mint.to_bytes()
+        || token.owner != founder.to_bytes()
+        || token.state != AccountState::Initialized
+        || token.amount == 0
+    {
+        return Err(Error::new(
+            "Series founder source did not authenticate as an initialized founder Token-2022 account",
+        ));
+    }
+    Ok(token.amount)
+}
+
+#[cfg(test)]
+mod founder_source_tests {
+    use dclutch_custody::token_svm::{TOKEN_2022_PROGRAM_ID, TokenAccount};
+
+    use super::*;
+
+    fn account(mint: Pubkey, founder: Pubkey) -> RpcAccount {
+        let initial = TokenAccount::initialized_base_bytes(mint.to_bytes(), founder.to_bytes())
+            .expect("canonical base token account");
+        let data = TokenAccount::project_amount_poststate(&initial, 41)
+            .expect("canonical token amount poststate");
+        RpcAccount {
+            lamports: 1,
+            owner: Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
+            executable: false,
+            rent_epoch: 0,
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn founder_source_requires_the_named_mint_owner_and_nonzero_balance() {
+        let mint = Pubkey::new_unique();
+        let founder = Pubkey::new_unique();
+        assert_eq!(
+            authenticate_series_founder_source_account_v1(&account(mint, founder), mint, founder)
+                .expect("authenticated founder source"),
+            41
+        );
+
+        let mut hostile = account(mint, founder);
+        hostile.owner = Pubkey::new_unique();
+        let error = authenticate_series_founder_source_account_v1(&hostile, mint, founder)
+            .expect_err("non-Token-2022 owner must refuse");
+        assert_eq!(
+            error.to_string(),
+            "Series founder source did not authenticate as an initialized founder Token-2022 account"
+        );
+    }
+}
+
+/// Read the exact finality point and Rent schedule that bound the first two
+/// occurrence partitions.  This is intentionally separate from the scenario
+/// constructor so the later M1 compiler can retain the slot it was based on.
+pub(crate) fn observe_local_series_scenario_v1(
+    rpc: &mut Rpc,
+) -> Result<SeriesLocalScenarioObservationV1> {
+    let finalized_slot = rpc.finalized_slot()?;
+    if finalized_slot == 0 {
+        return Err(Error::new("Series local scenario observed slot zero"));
+    }
+    let account = rpc.required_account(solana_sdk_ids::sysvar::rent::ID, "Rent sysvar")?;
+    if account.owner != solana_sdk_ids::sysvar::ID || account.executable {
+        return Err(Error::new(
+            "Series local scenario Rent sysvar owner or executable bit changed",
+        ));
+    }
+    let rent: solana_program::rent::Rent = bincode::deserialize(&account.data)
+        .map_err(|error| Error::new(format!("Series local scenario Rent sysvar: {error}")))?;
+    let encoded = bincode::serialize(&rent)
+        .map_err(|error| Error::new(format!("Series local scenario Rent encoding: {error}")))?;
+    if encoded != account.data {
+        return Err(Error::new(
+            "Series local scenario Rent sysvar was not canonical",
+        ));
+    }
+    Ok(SeriesLocalScenarioObservationV1 {
+        finalized_slot,
+        rent,
+    })
+}
+
+/// Author the one concrete local-validator Series scenario from the M0 Direct
+/// manifest, current Rent quote, and a finalized slot.  Every generator and
+/// derivation identity is domain-separated from that exact M0 manifest; no
+/// repeated-byte fixture identity is admitted.  Both occurrence partitions
+/// reserve current fixed-layout rent before dividing the funded collateral,
+/// so their committed principal can never exceed the real source budget.
+pub(crate) fn local_series_founder_scenario_v1(
+    plan: &SuccessorPlan,
+    child_market: &MarketRunInput,
+    collateral_mint: Pubkey,
+    founder_source_amount: u64,
+    rent: &solana_program::rent::Rent,
+    finalized_slot: u64,
+) -> Result<(
+    crate::series_founder::SeriesTemplatePolicyV1,
+    [crate::series_founder::SeriesOccurrenceFundingV1; 2],
+)> {
+    if finalized_slot == 0 {
+        return Err(Error::new(
+            "Series local scenario requires a finalized slot",
+        ));
+    }
+    let registry = pubkey(&plan.registry.program_id)?;
+    let preview = crate::market::compile_market_publication_preview_v1(
+        registry,
+        child_market,
+        collateral_mint,
+    )?;
+    let manifest = record_identity(&preview.manifest);
+    let identity = |label: &[u8]| -> Result<ContentId> {
+        let mut digest = Sha256::new();
+        digest.update(b"dclutch/local-validator/series-founder-scenario/v1\0");
+        digest.update(label);
+        digest.update([0]);
+        digest.update(manifest);
+        ContentId::new(digest.finalize().into())
+            .map_err(|_| Error::new("Series local scenario identity was zero"))
+    };
+    let market_rent = rent.minimum_balance(dclutch_market::STATE_BYTES);
+    let capability_native = rent.minimum_balance(
+        dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
+    );
+    let founding_work =
+        rent.minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3);
+    let one_reserve = market_rent
+        .checked_add(capability_native)
+        .and_then(|value| value.checked_add(founding_work))
+        .ok_or_else(|| Error::new("Series local scenario rent reserve overflow"))?;
+    let total_reserve = one_reserve
+        .checked_mul(2)
+        .ok_or_else(|| Error::new("Series local scenario two-occurrence reserve overflow"))?;
+    let distributable = founder_source_amount
+        .checked_sub(total_reserve)
+        .ok_or_else(|| {
+            Error::new(
+                "Series local scenario observed founder source cannot prepay two child rents",
+            )
+        })?;
+    let first_principal = distributable / 2;
+    let second_principal = distributable
+        .checked_sub(first_principal)
+        .ok_or_else(|| Error::new("Series local scenario principal partition overflow"))?;
+    if first_principal == 0 || second_principal == 0 {
+        return Err(Error::new(
+            "Series local scenario leaves a zero child Hoard principal",
+        ));
+    }
+    let funding = |label: &[u8],
+                   hoard_principal|
+     -> Result<crate::series_founder::SeriesOccurrenceFundingV1> {
+        Ok(crate::series_founder::SeriesOccurrenceFundingV1 {
+            funding_list: identity(label)?,
+            funds: dclutch_trading::series::FoundingFundsV3::new(
+                hoard_principal,
+                market_rent,
+                capability_native,
+                founding_work,
+            )
+            .map_err(|error| Error::new(format!("Series local scenario funding: {error:?}")))?,
+        })
+    };
+    let first_slot = finalized_slot
+        .checked_add(8)
+        .ok_or_else(|| Error::new("Series local scenario first slot overflow"))?;
+    Ok((
+        crate::series_founder::SeriesTemplatePolicyV1 {
+            product_generator: identity(b"product-generator")?,
+            occurrence_generator: identity(b"occurrence-generator")?,
+            capability_template: identity(b"capability-template")?,
+            product_derivation: identity(b"product-derivation")?,
+            occurrence_derivation: identity(b"occurrence-derivation")?,
+            capability_derivation: identity(b"capability-derivation")?,
+            funding_derivation: identity(b"funding-derivation")?,
+            first_slot,
+            period_slots: 32,
+            retry_window: 16,
+            close_rent: founding_work,
+        },
+        [
+            funding(b"occurrence-0", first_principal)?,
+            funding(b"occurrence-1", second_principal)?,
+        ],
+    ))
+}
+
+/// Prepare the canonical two-leaf M0 founder from a live validator snapshot.
+/// This is the first production source hydrator: it joins the child Direct
+/// Market bytes, real collateral Mint, authenticated founder source balance,
+/// on-chain Rent, and current slot before any Template or occurrence bytes
+/// are generated.
+pub(crate) fn prepare_local_series_founder_from_market_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    child_market: &MarketRunInput,
+    collateral_mint: Pubkey,
+    founder: Pubkey,
+    refund_owner: Pubkey,
+    founder_source: Pubkey,
+) -> Result<(
+    crate::series_founder::PreparedSeriesFounderV1,
+    SeriesLocalScenarioObservationV1,
+)> {
+    if collateral_mint == Pubkey::default()
+        || founder == Pubkey::default()
+        || refund_owner == Pubkey::default()
+        || founder_source == Pubkey::default()
+    {
+        return Err(Error::new(
+            "Series local founder named a default Mint or actor",
+        ));
+    }
+    let observation = observe_local_series_scenario_v1(rpc)?;
+    let source = observe_series_founder_source_v1(rpc, founder_source, collateral_mint, founder)?;
+    let (policy, funding) = local_series_founder_scenario_v1(
+        plan,
+        child_market,
+        collateral_mint,
+        source.amount,
+        &observation.rent,
+        observation.finalized_slot,
+    )?;
+    let prepared = crate::series_founder::prepare_series_founder_from_market_v1(
+        plan,
+        child_market,
+        collateral_mint,
+        founder,
+        refund_owner,
+        policy,
+        funding,
+    )?;
+    Ok((prepared, observation))
+}
+
+/// One Registry raw/staging pair that has already reached finality.  The
+/// hydrator retains the canonical body so geometry can prove both the raw
+/// address and its width, rather than treating a record as an arbitrary
+/// Registry-owned account.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SeriesPrepareFinalizedRecordV1<'a> {
+    pub(crate) schema: [u8; 32],
+    pub(crate) body: &'a [u8],
+    pub(crate) raw: Pubkey,
+    pub(crate) staging: Pubkey,
+}
+
+/// A non-record M0 ProjectFound coordinate read at finality.  M0's raw
+/// records are represented by [`SeriesPrepareFinalizedRecordV1`] instead;
+/// splitting them prevents a caller from claiming that a byte-identical
+/// Registry account is the raw PDA for a different record identity.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SeriesPrepareFinalizedAccountV1 {
+    pub(crate) address: Pubkey,
+    pub(crate) expected_owner: Pubkey,
+}
+
+/// The finalized M0 frame forwarded by projected-Custody's Initialize child.
+/// It is the ordinary Core `ProjectFound36` order, with the Rent sysvar
+/// omitted by Core.  The M0 Market remains a vacant coordinate: Prepare never
+/// creates Core state, and Consume's later Found is its only creator.
+pub(crate) struct SeriesPrepareM0FrameV1<'a> {
+    pub(crate) project_found: [Pubkey; dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
+    pub(crate) records: &'a [SeriesPrepareFinalizedRecordV1<'a>],
+    pub(crate) finalized_accounts: &'a [SeriesPrepareFinalizedAccountV1],
+}
+
+/// Inputs that turn the semantic-owner child bank into the complete physical
+/// first-Prepare layout.  M1 is the active Series parent (`parent_root`),
+/// while the ProjectFound frame and Template leaves are M0 child facts.
+pub(crate) struct SeriesPrepareHydratorInputV1<'a> {
+    pub(crate) registry: Pubkey,
+    pub(crate) core: Pubkey,
+    pub(crate) trading: Pubkey,
+    pub(crate) custody: Pubkey,
+    pub(crate) rent_program: Pubkey,
+    pub(crate) parent_root: Pubkey,
+    pub(crate) m0: SeriesPrepareM0FrameV1<'a>,
+    pub(crate) template: SeriesPrepareFinalizedRecordV1<'a>,
+    pub(crate) occurrence: SeriesPrepareFinalizedRecordV1<'a>,
+    pub(crate) ticket: SeriesPrepareFinalizedRecordV1<'a>,
+    pub(crate) portfolio: SeriesPrepareFinalizedRecordV1<'a>,
+    pub(crate) children: &'a dclutch_operator::series_child_bank_v1::SeriesChildBankV1,
+}
+
+/// Hydrate all 111 Series Prepare roles from the decoded semantic-owner child
+/// requests.  This is intentionally a layout constructor, not an RPC reader:
+/// `observe_series_prepare_geometry_v1` performs the one finalized snapshot
+/// after this function has made every address, owner, canonical record body,
+/// and permitted vacancy explicit.
+pub(crate) fn hydrate_series_prepare_role_layout_v1<'a>(
+    input: &'a SeriesPrepareHydratorInputV1<'a>,
+) -> Result<SeriesPrepareRoleLayoutV1<'a>> {
+    use dclutch_custody::{CustodyRequestV1, ProjectedCustodyRequestV1};
+
+    let children = input.children.prepare_requests();
+    let projected_initialize = ProjectedCustodyRequestV1::decode(children.projected_initialize)
+        .map_err(|error| {
+            Error::new(format!(
+                "Series Prepare projected Initialize decode: {error:?}"
+            ))
+        })?;
+    let projected_open =
+        ProjectedCustodyRequestV1::decode(children.projected_open).map_err(|error| {
+            Error::new(format!(
+                "Series Prepare projected OpenHoard decode: {error:?}"
+            ))
+        })?;
+    let replay_initialize =
+        CustodyRequestV1::decode(children.replay_initialize).map_err(|error| {
+            Error::new(format!(
+                "Series Prepare replay Initialize decode: {error:?}"
+            ))
+        })?;
+    let escrow_open = CustodyRequestV1::decode(children.escrow_open)
+        .map_err(|error| Error::new(format!("Series Prepare escrow Open decode: {error:?}")))?;
+    let escrow_lock = CustodyRequestV1::decode(children.escrow_lock)
+        .map_err(|error| Error::new(format!("Series Prepare escrow Lock decode: {error:?}")))?;
+
+    require_prepare_projected_pair_v1(
+        projected_initialize,
+        projected_open,
+        input.parent_root,
+        input.trading,
+        input.core,
+        input.rent_program,
+    )?;
+    for request in [replay_initialize, escrow_open, escrow_lock] {
+        require_prepare_custody_request_v1(request, input)?;
+    }
+
+    let outer = [
+        finalized_v1("M1 Series root", input.parent_root, input.trading, None),
+        record_raw_v1("M0 Template", input.registry, input.template)?,
+        record_raw_v1("M0 occurrence", input.registry, input.occurrence)?,
+        record_raw_v1("M0 Portfolio", input.registry, input.portfolio)?,
+        record_raw_v1("M0 Ticket", input.registry, input.ticket)?,
+        SeriesPrepareRoleSourceV1::PredictedVacancy {
+            role: "M0 Ticket replay",
+            address: ticket_state_address_v1(input)?,
+            fixed_data_len: u32::try_from(
+                dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3,
+            )
+            .map_err(|_| Error::new("Series Ticket replay width escaped u32"))?,
+        },
+    ];
+    let projected_initialize =
+        projected_frame_v1::<47>(input, projected_initialize, children.projected_initialize)?;
+    let projected_open = projected_frame_v1::<15>(input, projected_open, children.projected_open)?;
+    let replay_initialize =
+        custody_frame_v1::<13>(input, replay_initialize, children.replay_initialize)?;
+    let escrow_open = custody_frame_v1::<16>(input, escrow_open, children.escrow_open)?;
+    let escrow_lock = custody_frame_v1::<14>(input, escrow_lock, children.escrow_lock)?;
+    Ok(SeriesPrepareRoleLayoutV1 {
+        outer,
+        projected_initialize,
+        projected_open,
+        replay_initialize,
+        escrow_open,
+        escrow_lock,
+    })
+}
+
+fn finalized_v1<'a>(
+    role: &'static str,
+    address: Pubkey,
+    owner: Pubkey,
+    body: Option<&'a [u8]>,
+) -> SeriesPrepareRoleSourceV1<'a> {
+    SeriesPrepareRoleSourceV1::Finalized {
+        role,
+        address,
+        expected_owner: owner,
+        canonical_body: body,
+    }
+}
+
+fn record_raw_v1<'a>(
+    role: &'static str,
+    registry: Pubkey,
+    record: SeriesPrepareFinalizedRecordV1<'a>,
+) -> Result<SeriesPrepareRoleSourceV1<'a>> {
+    let key = RecordKeyV1::new(
+        SchemaReleaseId::new(record.schema)
+            .map_err(|_| Error::new("Series Prepare record schema was zero"))?,
+        ContentDigest::new(Sha256::digest(record.body).into())
+            .map_err(|_| Error::new("Series Prepare record digest was zero"))?,
+    );
+    let derive = |seeds: RecordPdaSeedsV1| {
+        Pubkey::find_program_address(
+            &[
+                seeds.domain(),
+                seeds.schema_release_id().as_bytes(),
+                seeds.expected_digest().as_bytes(),
+            ],
+            &registry,
+        )
+        .0
+    };
+    if record.raw != derive(key.raw_record_pda_seeds())
+        || record.staging != derive(key.staging_cursor_pda_seeds())
+    {
+        return Err(Error::new(format!(
+            "Series Prepare {role} record pair was noncanonical"
+        )));
+    }
+    Ok(finalized_v1(role, record.raw, registry, Some(record.body)))
+}
+
+fn ticket_state_address_v1(input: &SeriesPrepareHydratorInputV1<'_>) -> Result<Pubkey> {
+    let ticket = ContentId::new(Sha256::digest(input.ticket.body).into())
+        .map_err(|_| Error::new("Series Prepare Ticket identity was zero"))?;
+    Ok(Pubkey::find_program_address(
+        &[
+            dclutch_trading::series::replay::SERIES_TICKET_STATE_PDA_DOMAIN_V3,
+            input.parent_root.as_ref(),
+            ticket.as_bytes(),
+        ],
+        &input.trading,
+    )
+    .0)
+}
+
+fn require_prepare_projected_pair_v1(
+    initialize: dclutch_custody::ProjectedCustodyRequestV1,
+    open: dclutch_custody::ProjectedCustodyRequestV1,
+    parent_root: Pubkey,
+    trading: Pubkey,
+    core: Pubkey,
+    rent_program: Pubkey,
+) -> Result<()> {
+    use dclutch_custody::ProjectedCustodyOperationV1;
+    if initialize.operation != ProjectedCustodyOperationV1::Initialize
+        || open.operation != ProjectedCustodyOperationV1::OpenHoard
+        || initialize.market != open.market
+        || initialize.release_set != open.release_set
+        || initialize.parent_capability_root != parent_root.to_bytes()
+        || open.parent_capability_root != parent_root.to_bytes()
+        || initialize.caller_program != trading.to_bytes()
+        || open.caller_program != trading.to_bytes()
+        || initialize.core_program != core.to_bytes()
+        || open.core_program != core.to_bytes()
+        || initialize.rent_program != rent_program.to_bytes()
+        || open.rent_program != rent_program.to_bytes()
+    {
+        return Err(Error::new(
+            "Series Prepare projected children did not join the active M1 root",
+        ));
+    }
+    Ok(())
+}
+
+fn require_prepare_custody_request_v1(
+    request: dclutch_custody::CustodyRequestV1,
+    input: &SeriesPrepareHydratorInputV1<'_>,
+) -> Result<()> {
+    if request.caller_role != dclutch_custody::CallerRoleV1::Trading
+        || request.caller_program != input.trading.to_bytes()
+        || request.market != input.m0.project_found[1].to_bytes()
+    {
+        return Err(Error::new(
+            "Series Prepare Custody child did not join M0 and Trading",
+        ));
+    }
+    Ok(())
+}
+
+fn projected_frame_v1<'a, const N: usize>(
+    input: &'a SeriesPrepareHydratorInputV1<'a>,
+    request: dclutch_custody::ProjectedCustodyRequestV1,
+    bytes: &[u8],
+) -> Result<[SeriesPrepareRoleSourceV1<'a>; N]> {
+    use dclutch_custody::{
+        ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1, ProjectedCustodyStateSeedsV2,
+    };
+    let digest = solana_program::hash::hash(bytes).to_bytes();
+    let caller = Pubkey::find_program_address(
+        &ProjectedCustodyCallerSeedsV1::new(request, digest).as_slices(),
+        &input.trading,
+    )
+    .0;
+    let state = Pubkey::find_program_address(
+        &ProjectedCustodyStateSeedsV2::from_request(request).as_slices(),
+        &input.custody,
+    )
+    .0;
+    let cache = Pubkey::find_program_address(
+        &[
+            dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
+            &request.release_set,
+        ],
+        &input.registry,
+    )
+    .0;
+    let common = [
+        SeriesPrepareRoleSourceV1::PredictedVacancy {
+            role: "projected caller authority",
+            address: caller,
+            fixed_data_len: 0,
+        },
+        SeriesPrepareRoleSourceV1::PredictedVacancy {
+            role: "projected Custody state",
+            address: state,
+            fixed_data_len: u32::try_from(dclutch_custody::PROJECTED_CUSTODY_STATE_BYTES_V2)
+                .map_err(|_| Error::new("projected state width escaped u32"))?,
+        },
+        finalized_v1("activation cache", cache, input.registry, None),
+        finalized_v1(
+            "Registry program",
+            input.registry,
+            bpf_loader_upgradeable::ID,
+            None,
+        ),
+        finalized_v1(
+            "Trading program",
+            input.trading,
+            bpf_loader_upgradeable::ID,
+            None,
+        ),
+        finalized_v1(
+            "Trading ProgramData",
+            crate::upgrade::target_programdata(input.trading),
+            bpf_loader_upgradeable::ID,
+            None,
+        ),
+        finalized_v1(
+            "M0 RentCredit",
+            Pubkey::new_from_array(request.rent_credit),
+            input.rent_program,
+            None,
+        ),
+    ];
+    match request.operation {
+        ProjectedCustodyOperationV1::Initialize => {
+            let mut values = Vec::from(common);
+            values.extend([
+                finalized_v1("Core program", input.core, bpf_loader_upgradeable::ID, None),
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.payer))?,
+                finalized_v1("Rent sysvar", sysvar::rent::ID, sysvar::ID, None),
+                finalized_v1(
+                    "System program",
+                    system_program::ID,
+                    native_loader::ID,
+                    None,
+                ),
+            ]);
+            for address in input.m0.project_found {
+                values.push(m0_source_v1(input, address)?);
+            }
+            values
+                .try_into()
+                .map_err(|_| Error::new("Series Prepare projected Initialize frame drifted"))
+        }
+        ProjectedCustodyOperationV1::OpenHoard => {
+            let mut values = Vec::from(common);
+            let vault = Pubkey::new_from_array(request.hoard_vault);
+            let expected_vault = Pubkey::find_program_address(
+                &dclutch_custody::CustodyVaultSeedsV1::new(
+                    request.market,
+                    request.release_set,
+                    request.context_digest,
+                    dclutch_custody::CompartmentV1::HoardPrincipal,
+                )
+                .as_slices(),
+                &input.custody,
+            )
+            .0;
+            if vault != expected_vault {
+                return Err(Error::new(
+                    "Series Prepare Hoard vault PDA differed from Custody seeds",
+                ));
+            }
+            let authority = Pubkey::find_program_address(
+                &dclutch_custody::CustodyAuthoritySeedsV1::new(request.market, request.release_set)
+                    .as_slices(),
+                &input.custody,
+            )
+            .0;
+            values.extend([
+                SeriesPrepareRoleSourceV1::PredictedVacancy {
+                    role: "projected Hoard vault",
+                    address: vault,
+                    fixed_data_len: u32::try_from(dclutch_custody::token_svm::ACCOUNT_BYTES)
+                        .map_err(|_| Error::new("Hoard vault width escaped u32"))?,
+                },
+                SeriesPrepareRoleSourceV1::PredictedVacancy {
+                    role: "Custody authority",
+                    address: authority,
+                    fixed_data_len: 0,
+                },
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.mint))?,
+                finalized_v1(
+                    "Token program",
+                    Pubkey::new_from_array(request.token_program),
+                    native_loader::ID,
+                    None,
+                ),
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.payer))?,
+                finalized_v1("Rent sysvar", sysvar::rent::ID, sysvar::ID, None),
+                finalized_v1(
+                    "System program",
+                    system_program::ID,
+                    native_loader::ID,
+                    None,
+                ),
+                m0_source_v1(input, Pubkey::new_from_array(request.market))?,
+            ]);
+            values
+                .try_into()
+                .map_err(|_| Error::new("Series Prepare projected OpenHoard frame drifted"))
+        }
+        _ => Err(Error::new(
+            "Series Prepare projected child selected an unsupported operation",
+        )),
+    }
+}
+
+fn custody_frame_v1<'a, const N: usize>(
+    input: &'a SeriesPrepareHydratorInputV1<'a>,
+    request: dclutch_custody::CustodyRequestV1,
+    bytes: &[u8],
+) -> Result<[SeriesPrepareRoleSourceV1<'a>; N]> {
+    use dclutch_custody::{CustodyFrameRoleV1, CustodyFrameSpecV1};
+    let spec = CustodyFrameSpecV1::new(request.operation);
+    if usize::from(spec.account_count()) != N {
+        return Err(Error::new(
+            "Series Prepare Custody frame cardinality drifted",
+        ));
+    }
+    let digest = solana_program::hash::hash(bytes).to_bytes();
+    let authority = Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::new(
+            ContentId::new(request.release_set)
+                .map_err(|_| Error::new("Series Prepare Custody release was zero"))?,
+            request.market,
+            ExecutionRoleV1::Trading,
+            request.context,
+            digest,
+        )
+        .map_err(|_| Error::new("Series Prepare Custody caller seeds refused"))?
+        .as_slices(),
+        &input.trading,
+    )
+    .0;
+    let replay = Pubkey::find_program_address(
+        &dclutch_custody::CustodyReplaySeedsV1::from_request(request).as_slices(),
+        &input.custody,
+    )
+    .0;
+    let cache = Pubkey::find_program_address(
+        &[
+            dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
+            &request.release_set,
+        ],
+        &input.registry,
+    )
+    .0;
+    let mut values = Vec::with_capacity(N);
+    for index in 0..N {
+        let role = spec
+            .account(u16::try_from(index).map_err(|_| Error::new("Custody index escaped u16"))?)
+            .map_err(|_| Error::new("Series Prepare Custody frame coordinate refused"))?
+            .role();
+        let source = match role {
+            CustodyFrameRoleV1::CallerAuthority => SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "Custody caller authority",
+                address: authority,
+                fixed_data_len: 0,
+            },
+            CustodyFrameRoleV1::CoreMarket => {
+                m0_source_v1(input, Pubkey::new_from_array(request.market))?
+            }
+            CustodyFrameRoleV1::ActivationCache => {
+                finalized_v1("activation cache", cache, input.registry, None)
+            }
+            CustodyFrameRoleV1::RegistryProgram => finalized_v1(
+                "Registry program",
+                input.registry,
+                bpf_loader_upgradeable::ID,
+                None,
+            ),
+            CustodyFrameRoleV1::CallerProgram => finalized_v1(
+                "Trading program",
+                input.trading,
+                bpf_loader_upgradeable::ID,
+                None,
+            ),
+            CustodyFrameRoleV1::CallerProgramData => finalized_v1(
+                "Trading ProgramData",
+                crate::upgrade::target_programdata(input.trading),
+                bpf_loader_upgradeable::ID,
+                None,
+            ),
+            CustodyFrameRoleV1::RealmRecord => m0_source_v1(input, input.m0.project_found[4])?,
+            CustodyFrameRoleV1::RealmStaging => m0_source_v1(input, input.m0.project_found[5])?,
+            CustodyFrameRoleV1::Replay => SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "SeriesEscrow replay",
+                address: replay,
+                fixed_data_len: u32::try_from(dclutch_custody::CUSTODY_REPLAY_BYTES_V1)
+                    .map_err(|_| Error::new("Custody replay width escaped u32"))?,
+            },
+            CustodyFrameRoleV1::Payer => {
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.payer))?
+            }
+            CustodyFrameRoleV1::SystemProgram => finalized_v1(
+                "System program",
+                system_program::ID,
+                native_loader::ID,
+                None,
+            ),
+            CustodyFrameRoleV1::RentSysvar => {
+                finalized_v1("Rent sysvar", sysvar::rent::ID, sysvar::ID, None)
+            }
+            CustodyFrameRoleV1::Mint => {
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.mint))?
+            }
+            CustodyFrameRoleV1::Vault => custody_vault_source_v1(
+                input,
+                request,
+                request.operation == dclutch_custody::OperationV1::OpenVault,
+            )?,
+            CustodyFrameRoleV1::CustodyAuthority => SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "Custody authority",
+                address: Pubkey::find_program_address(
+                    &dclutch_custody::CustodyAuthoritySeedsV1::new(
+                        request.market,
+                        request.release_set,
+                    )
+                    .as_slices(),
+                    &input.custody,
+                )
+                .0,
+                fixed_data_len: 0,
+            },
+            CustodyFrameRoleV1::TokenProgram => finalized_v1(
+                "Token program",
+                Pubkey::new_from_array(request.token_program),
+                native_loader::ID,
+                None,
+            ),
+            CustodyFrameRoleV1::TransferSource => {
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.source))?
+            }
+            CustodyFrameRoleV1::TransferDestination => {
+                custody_transfer_destination_v1(input, request)?
+            }
+            CustodyFrameRoleV1::RentRefund => {
+                m0_nonrecord_v1(input, Pubkey::new_from_array(request.rent_refund))?
+            }
+        };
+        values.push(source);
+    }
+    values
+        .try_into()
+        .map_err(|_| Error::new("Series Prepare Custody frame cardinality changed"))
+}
+
+fn custody_vault_source_v1<'a>(
+    input: &'a SeriesPrepareHydratorInputV1<'a>,
+    request: dclutch_custody::CustodyRequestV1,
+    creating: bool,
+) -> Result<SeriesPrepareRoleSourceV1<'a>> {
+    let context = if creating {
+        request.destination_vault_context
+    } else {
+        request.source_vault_context
+    };
+    let vault = if creating {
+        request.destination
+    } else {
+        request.source
+    };
+    let compartment = if creating {
+        request.destination_compartment
+    } else {
+        request.source_compartment
+    };
+    let address = Pubkey::new_from_array(vault);
+    if address
+        != Pubkey::find_program_address(
+            &dclutch_custody::CustodyVaultSeedsV1::new(
+                request.market,
+                request.release_set,
+                context,
+                compartment,
+            )
+            .as_slices(),
+            &input.custody,
+        )
+        .0
+    {
+        return Err(Error::new(
+            "Series Prepare Custody vault differed from canonical seeds",
+        ));
+    }
+    Ok(SeriesPrepareRoleSourceV1::PredictedVacancy {
+        role: "SeriesEscrow vault",
+        address,
+        fixed_data_len: u32::try_from(dclutch_custody::token_svm::ACCOUNT_BYTES)
+            .map_err(|_| Error::new("Custody vault width escaped u32"))?,
+    })
+}
+
+fn custody_transfer_destination_v1<'a>(
+    input: &'a SeriesPrepareHydratorInputV1<'a>,
+    request: dclutch_custody::CustodyRequestV1,
+) -> Result<SeriesPrepareRoleSourceV1<'a>> {
+    if request.destination_compartment == dclutch_custody::CompartmentV1::SeriesEscrow {
+        custody_vault_source_v1(input, request, true)
+    } else {
+        m0_nonrecord_v1(input, Pubkey::new_from_array(request.destination))
+    }
+}
+
+fn m0_source_v1<'a>(
+    input: &'a SeriesPrepareHydratorInputV1<'a>,
+    address: Pubkey,
+) -> Result<SeriesPrepareRoleSourceV1<'a>> {
+    m0_frame_source_v1(input.registry, &input.m0, address)
+}
+
+fn m0_frame_source_v1<'a>(
+    registry: Pubkey,
+    m0: &'a SeriesPrepareM0FrameV1<'a>,
+    address: Pubkey,
+) -> Result<SeriesPrepareRoleSourceV1<'a>> {
+    if address == m0.project_found[1] {
+        return Ok(SeriesPrepareRoleSourceV1::PredictedVacancy {
+            role: "vacant M0 Core Market",
+            address,
+            fixed_data_len: 0,
+        });
+    }
+    for record in m0.records {
+        if address == record.raw {
+            return record_raw_v1("M0 finalized record", registry, *record);
+        }
+        if address == record.staging {
+            record_raw_v1("M0 finalized record", registry, *record)?;
+            return Ok(SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "M0 vacant record staging",
+                address,
+                fixed_data_len: 0,
+            });
+        }
+    }
+    m0_frame_nonrecord_v1(m0, address)
+}
+
+fn m0_nonrecord_v1<'a>(
+    input: &'a SeriesPrepareHydratorInputV1<'a>,
+    address: Pubkey,
+) -> Result<SeriesPrepareRoleSourceV1<'a>> {
+    m0_frame_nonrecord_v1(&input.m0, address)
+}
+
+fn m0_frame_nonrecord_v1<'a>(
+    m0: &'a SeriesPrepareM0FrameV1<'a>,
+    address: Pubkey,
+) -> Result<SeriesPrepareRoleSourceV1<'a>> {
+    let account = m0
+        .finalized_accounts
+        .iter()
+        .find(|account| account.address == address)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "Series Prepare omitted finalized M0 account {address}"
+            ))
+        })?;
+    Ok(finalized_v1(
+        "finalized M0 account",
+        address,
+        account.expected_owner,
+        None,
+    ))
+}
+
+#[cfg(test)]
+mod prepare_hydrator_tests {
+    use super::*;
+    use dclutch_custody::{
+        CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
+        ProjectedCustodyRequestV1,
+    };
+
+    fn projected(root: Pubkey) -> ProjectedCustodyRequestV1 {
+        ProjectedCustodyRequestV1 {
+            operation: ProjectedCustodyOperationV1::Initialize,
+            caller_role: ProjectedCallerRoleV1::TradingCapability,
+            market: [1; 32],
+            generation: 1,
+            realm: [2; 32],
+            product_record: [3; 32],
+            product: [4; 32],
+            source: [5; 32],
+            release_set: [6; 32],
+            projection_receipt_digest: [7; 32],
+            parent_capability_root: root.to_bytes(),
+            context_digest: [8; 32],
+            caller_program: [9; 32],
+            payer: [10; 32],
+            core_program: [11; 32],
+            rent_program: [12; 32],
+            refund_owner: [13; 32],
+            rent_credit: [14; 32],
+            hoard_vault: [15; 32],
+            funding_source_vault: [16; 32],
+            funding_source_context: [17; 32],
+            funding_source_compartment: CompartmentV1::SeriesEscrow,
+            mint: [18; 32],
+            token_program: [19; 32],
+            collateral_release: [20; 32],
+            expiry_slot: 2,
+            expected_revision: 0,
+            resulting_revision: 1,
+            amount: 0,
+            state_rent_lamports: 1,
+            vault_rent_lamports: 1,
+            funding_source_replay_revision: 3,
+            funding_source_state_rent_lamports: 1,
+            funding_source_vault_rent_lamports: 1,
+        }
+    }
+
+    #[test]
+    fn projected_prepare_children_cannot_substitute_the_m1_root() {
+        let root = Pubkey::new_unique();
+        let wrong = Pubkey::new_unique();
+        let error = require_prepare_projected_pair_v1(
+            projected(wrong),
+            ProjectedCustodyRequestV1 {
+                operation: ProjectedCustodyOperationV1::OpenHoard,
+                expected_revision: 1,
+                resulting_revision: 2,
+                ..projected(wrong)
+            },
+            root,
+            Pubkey::new_from_array([9; 32]),
+            Pubkey::new_from_array([11; 32]),
+            Pubkey::new_from_array([12; 32]),
+        )
+        .expect_err("M1 root substitution must refuse");
+        assert_eq!(
+            error.to_string(),
+            "Series Prepare projected children did not join the active M1 root"
+        );
+    }
+
+    #[test]
+    fn m0_core_coordinate_remains_a_vacancy_until_consume_found() {
+        let market = Pubkey::new_unique();
+        let mut project_found = [Pubkey::default(); dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2];
+        project_found[1] = market;
+        let m0 = SeriesPrepareM0FrameV1 {
+            project_found,
+            records: &[],
+            finalized_accounts: &[],
+        };
+        assert!(matches!(
+            m0_frame_source_v1(Pubkey::new_unique(), &m0, market)
+                .expect("M0 Core coordinate"),
+            SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "vacant M0 Core Market",
+                address,
+                fixed_data_len: 0,
+            } if address == market
+        ));
+    }
+
+    #[test]
+    fn record_pair_requires_canonical_registry_pdas() {
+        let error = record_raw_v1(
+            "forged record",
+            Pubkey::new_unique(),
+            SeriesPrepareFinalizedRecordV1 {
+                schema: [1; 32],
+                body: b"canonical body",
+                raw: Pubkey::new_unique(),
+                staging: Pubkey::new_unique(),
+            },
+        )
+        .expect_err("arbitrary Registry pair must refuse");
+        assert_eq!(
+            error.to_string(),
+            "Series Prepare forged record record pair was noncanonical"
+        );
+    }
 }

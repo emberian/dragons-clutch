@@ -183,7 +183,8 @@ describe('Market discovery route', () => {
         ]),
       }}
     />);
-    expect(empty).toContain('No market on devnet yet');
+    expect(empty).toContain('No market in a supported layout was found in this deployment.');
+    expect(empty).toContain('COHORT17_SEATED_FILLED_RETIRING_2026_09_06');
     expect(empty).toContain('Made by an older version of the protocol');
     expect(empty).toContain('not listed as current');
     expect(empty).toContain(legacyAddress);

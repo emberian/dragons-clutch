@@ -359,6 +359,7 @@ struct Fixture {
     release: [u8; 32],
     cache: Pubkey,
     graph: ProductLbv2FixtureV2,
+    representation_width: u32,
     descriptor_raw: Pubkey,
     descriptor_staging: Pubkey,
     descriptor_id: [u8; 32],
@@ -385,6 +386,10 @@ struct Fixture {
 }
 
 fn fixture() -> (ProgramTest, Fixture) {
+    fixture_with_representation_width(None)
+}
+
+fn fixture_with_representation_width(width: Option<u32>) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -478,12 +483,13 @@ fn fixture() -> (ProgramTest, Fixture) {
         RationalReceiptMintSeedsV2::new(graph_digest, graph.core_market.to_bytes(), release)
             .expect("receipt seeds");
     let receipt_mint = Pubkey::find_program_address(&receipt_seeds.as_slices(), &CLAIMS).0;
+    let representation_width = width.unwrap_or(graph.outcome_count);
     let descriptor = descriptor_bytes(
         graph_digest,
         graph.core_market,
         release,
         receipt_mint,
-        graph.outcome_count,
+        representation_width,
     );
     let (descriptor_raw, descriptor_staging, descriptor_id) =
         finalized_descriptor(&mut test, descriptor);
@@ -578,6 +584,7 @@ fn fixture() -> (ProgramTest, Fixture) {
             release,
             cache,
             graph,
+            representation_width,
             descriptor_raw,
             descriptor_staging,
             descriptor_id,
@@ -690,7 +697,7 @@ fn request_declaring(
         observed_receipt_lamports,
         receipt_rent_principal: f.receipt_rent,
         expected_receipt_supply: 0,
-        outcome_count: f.graph.outcome_count,
+        outcome_count: f.representation_width,
         coordinate_count: u32::try_from(rows.len()).expect("coordinate count"),
         rent_credit_before: rent_before,
         rent_credit_after: rent_before.checked_add(credit).expect("rent after"),
@@ -1594,7 +1601,110 @@ const ACCOUNTS_REFUSAL: u32 = RationalLifecycleSbfErrorV2::Accounts as u32;
 /// gate that never reached the check the hostile is named after.
 fn refused_with(logs: &[String], code: u32) -> bool {
     let needle = format!("custom program error: {code:#x}");
-    logs.iter().any(|line| line.contains(&needle))
+    logs.iter().any(|line| line.ends_with(&needle))
+}
+
+/// Product positions have N coordinates; a sparse receipt describes K. Mint
+/// creation carries no liabilities and must keep these two owners distinct.
+/// The Product fixture has 258 actual claim coordinates while this descriptor
+/// has two representation coordinates. This is component evidence with seeded
+/// Core/Claims state, not evidence of local-validator founding.
+#[tokio::test]
+async fn sparse_receipt_lifecycle_keeps_product_n_separate_from_representation_k() {
+    let (test, f) = fixture_with_representation_width(Some(2));
+    assert_eq!(f.graph.outcome_count, 258);
+    assert_eq!(f.representation_width, 2);
+    let mut context = test.start_with_context().await;
+    let canonical = request(
+        &f,
+        LifecycleActionV2::ActivateReceipt,
+        f.rent_credit_initial,
+    );
+    let decoded = LifecycleRequestV2::decode(&canonical).expect("canonical receipt request");
+    let mut foreign_width = decoded.header();
+    foreign_width.outcome_count = 3;
+    let mut foreign = vec![0; LIFECYCLE_HEADER_BYTES_V2];
+    LifecycleRequestV2::new(foreign_width, &[])
+        .expect("well-formed but foreign descriptor width")
+        .encode_into(&mut foreign)
+        .expect("foreign request bytes");
+    let accepted_instruction = wrapped(&f, canonical.clone(), false, false);
+    let hostile_instruction = wrapped(&f, foreign, false, false);
+    let addresses = lookup_addresses(
+        context.payer.pubkey(),
+        &[accepted_instruction.clone(), hostile_instruction.clone()],
+    );
+    let table = create_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-lifecycle: sparse receipt routing",
+    )
+    .await;
+    let keys = [
+        f.graph.core_market,
+        f.graph.claims_market,
+        f.rent_credit,
+        f.receipt_mint,
+    ];
+    let mut before = Vec::new();
+    for key in keys {
+        before.push(account(&mut context, key).await);
+    }
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        hostile_instruction,
+        table,
+        &addresses,
+        "claims rational-lifecycle: sparse receipt refuses substituted descriptor width",
+    )
+    .await
+    .expect("hostile sparse receipt transaction");
+    assert!(!accepted);
+    assert!(
+        logs.iter().any(|line| line
+            == &format!(
+                "Program {CLAIMS} failed: custom program error: {:#x}",
+                RationalLifecycleSbfErrorV2::Instruction as u32
+            )),
+        "{}",
+        logs.join("\n")
+    );
+    let mut after = Vec::new();
+    for key in keys {
+        after.push(account(&mut context, key).await);
+    }
+    assert_eq!(
+        after, before,
+        "descriptor refusal rolls back every protocol account"
+    );
+    let (accepted, logs, returned, _) = submit(
+        &mut context,
+        accepted_instruction,
+        table,
+        &addresses,
+        "claims rational-lifecycle: sparse receipt activation commits",
+    )
+    .await
+    .expect("accepted sparse receipt transaction");
+    assert!(accepted, "{}", logs.join("\n"));
+    assert_lifecycle_receipt(returned, &canonical, LifecycleActionV2::ActivateReceipt);
+    let mint = account(&mut context, f.receipt_mint)
+        .await
+        .expect("created receipt Mint");
+    assert_eq!(mint.owner, TOKEN_2022);
+    assert_lifecycle_mint_is_terminally_burnable(
+        f.receipt_mint,
+        &mint.data,
+        f.representation_authority,
+        0,
+    );
+    for (index, key) in keys[..3].iter().enumerate() {
+        assert_eq!(
+            account(&mut context, *key).await,
+            before[index],
+            "zero-supply receipt creation does not change Core, aggregate or credit"
+        );
+    }
 }
 
 /// A STRANGER'S ONE LAMPORT NO LONGER BLOCKS A RECEIPT-MINT ACTIVATION.

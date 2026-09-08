@@ -3185,7 +3185,9 @@ mod tests {
             std::env::var("DCLUTCH_SUCCESSOR_CUSTODY_ELF"),
         )
         else {
-            return;
+            panic!(
+                "real-SBF successor validator requires all checked ELF and gate environment variables; refusing a no-work pass"
+            );
         };
         let checked_gate = PathBuf::from(
             std::env::var("DCLUTCH_SUCCESSOR_CHECKED_GATE")
@@ -3462,6 +3464,38 @@ mod tests {
                 .expect("test Direct compiler");
         let market_input = crate::market::demo_market_input(registry, direct.compiler())
             .expect("canonical demo market input");
+        let future_collateral = crate::market::create_real_collateral_for_market_v1(
+            &mut rpc,
+            &authority,
+            &KeyForge::random(),
+            &market_input,
+            &mut publication_transactions,
+        )
+        .expect("real collateral for future Series M0");
+        let future = crate::market::publish_future_market_immutable_records_v1(
+            &mut rpc,
+            &plan,
+            &market_input,
+            future_collateral.mint,
+            &authority,
+            &mut publication_transactions,
+        )
+        .expect("real M0 immutable publication and lifecycle RentCredit");
+        let future_credit = rpc
+            .required_account(future.rent_credit, "future M0 lifecycle RentCredit")
+            .expect("future M0 lifecycle credit poststate");
+        assert_eq!(
+            future_credit.owner,
+            pubkey(&plan.rent_credit.program_id).unwrap()
+        );
+        assert_eq!(
+            future_credit.data.len(),
+            dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2
+        );
+        assert_eq!(
+            future.project_found.len(),
+            dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2
+        );
         let market_evidence = crate::market::execute_found_market(
             &mut rpc,
             &plan,

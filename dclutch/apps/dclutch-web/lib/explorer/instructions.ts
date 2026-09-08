@@ -61,6 +61,38 @@ export type InstructionRenderer = Readonly<{
  * for it.
  */
 const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze([
+  {
+    routeId: 'trading/scoring_dealer_v1::found::process_dealer_found_v1',
+    summary: 'Founds a scoring Dealer with a sealed pricing rule and sponsor-funded collateral.',
+  },
+  {
+    routeId: 'trading/scoring_dealer_v1::quote::process_dealer_quote_v1',
+    summary: 'Records the Dealer’s marginal prices for the requested fund revision.',
+  },
+  {
+    routeId: 'trading/scoring_dealer_v1::fill::process_dealer_fill_v1',
+    summary: 'Executes a taker’s proposed claim exchange after checking the Dealer’s prices, inventory, and capital.',
+  },
+  {
+    routeId: 'trading/scoring_dealer_v1::withdraw::process_dealer_withdraw_v1',
+    summary: 'Returns releasable Dealer collateral to its sponsor while preserving the required capital floor.',
+  },
+  {
+    routeId: 'accelerator/dealer::process_scoring_row_v1',
+    summary: 'Evaluates the scoring Dealer’s fill witness inside the accelerator.',
+  },
+  {
+    routeId: 'custody/upkeep_vault_v1::process',
+    summary: 'Founds an upkeep vault or records a permitted deposit or protocol credit, separate from Hoard principal.',
+  },
+  {
+    routeId: 'custody/protocol_parameters_v1::process',
+    summary: 'Founds governed protocol parameters, proposes a change, withdraws a proposal, or applies a matured proposal.',
+  },
+  {
+    routeId: 'resolution/derived_transport_v1::process_derived_settle_v1',
+    summary: 'Settles a child market from authenticated terminal certificates of its precommitted parent markets.',
+  },
   // ------------------------------------------------------------------- claims
   {
     routeId: 'claims/affine_batch_v2::process',

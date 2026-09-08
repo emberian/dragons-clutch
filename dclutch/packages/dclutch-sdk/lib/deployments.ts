@@ -17,7 +17,7 @@ import { SOLANA_DEVNET_GENESIS_HASH_V1 } from './rpc';
  *
  * - `devnet` — the CURRENT cohort's substrate, redeployed whole at fresh
  *   identities each time and byte-verified dump-side per program
- *   (`docs/evidence/COHORT16_DEPLOYED_SEALED_2026_09_05.md` §2). Mutable under
+ *   (the record named by `DEVNET_RELEASE_EVIDENCE_V1`). Mutable under
  *   the retained deployer authority per decision 0012; a moved deployment slot
  *   is named `ReleaseSupersededByUpgrade` by the release layer, so baking these
  *   addresses does not assert immutability — the slot-pinned admission still
@@ -134,6 +134,14 @@ export function deployedProgramRolesV1(deployment: DeploymentV1): ReadonlyArray<
   return deployment.programs.accelerator === undefined ? PROTOCOL_ROLES_V1 : DEPLOYED_PROGRAM_ROLES_V1;
 }
 
+/** Historical release provenance; never a claim about a fresh RPC observation. */
+export const DEVNET_RELEASE_EVIDENCE_V1 = Object.freeze({
+  cohort: 17,
+  sourceCommit: '932edc83fc5a108fa362be216c84a3b0f78f29b4',
+  releaseGateSha256: 'a98ed988f9d266084b3835dc5f838a03c8513810669395373960d58ce7df6be3',
+  evidencePath: 'docs/evidence/COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md',
+});
+
 export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   cluster: 'devnet',
   label: 'Devnet',
@@ -184,22 +192,14 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   // pinning Core at deployment slot 493941954.
   // A session follows past this when it ages out; a reader cannot.
   activationCache: 'CKuMxu7gQN5SuoP58Ns7pFgida9WkvuyYK2cjpusPuHX',
-  provenance: 'Cohort-16’s devnet substrate, deployed 2026-09-05 from commit f2ae6bf75 on one named release builder, every ProgramData balance equal to (128 + 45 + elf_bytes) × 5,080 lamports exactly and every live image compared to its candidate ELF before the next role spent. Cohort-15 was closed the same morning — all eight of its ProgramData accounts read AccountNotFound while its Program stubs stayed executable and kept naming them — and the 44.42 SOL its rent returned paid for this one, which cost 36.50. It is the first cohort with EIGHT programs on the chain: the three accelerator links became one, and General batches, the Dealer’s first market and the whole Series family depend on a binary that until now nothing had deployed. It is also the first cohort to found a REFUNDING market: an oracle outage on GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY pays one atom to every ordinary claim and nothing at all to the failure coordinate, which this site derives from that market’s own authenticated basis record rather than being told.',
+  provenance: `Cohort-${DEVNET_RELEASE_EVIDENCE_V1.cohort}, deployed on Solana devnet from ${DEVNET_RELEASE_EVIDENCE_V1.sourceCommit}. The recorded release reproduced all eight program images on the named builder. These addresses and recorded deployment slots identify that release; current account state is read separately.`,
 });
 
 /**
- * Cohort-16's ProgramData addresses and deployment slots.
- *
- * READ, not copied from a record, and not derived either: each address is the
- * 32 bytes the Program account itself names at offset 4, and each slot is the
- * u64 at offset 4 of that ProgramData account's own Loader-v3 header. Read
- * finalized at slot 493,692,510 -- hours after the deploy rather than the
- * minute after it, which is the stronger reading: these slots are what the
- * chain still says, not what the deploy reported. They run 493,638,685 through
- * 493,639,473, one per program in the order the eight were deployed, and they
- * reproduce COHORT16_DEPLOYED_SEALED_2026_09_05.md §2 without reading it --
- * including the accelerator's, which no prior cohort's table could carry
- * because no prior runbook deployed it.
+ * Cohort-17's recorded ProgramData addresses and deployment slots. The
+ * derivation script reads each address from its Program account and each slot
+ * from the corresponding Loader-v3 ProgramData header. These are static
+ * deployment evidence, not a current liveness observation.
  *
  * THAT LAST CHECK IS THE ONE THAT MATTERS. A closed program keeps its 36-byte
  * Program account, its executable flag and the ProgramData address it names --
@@ -243,6 +243,13 @@ export const LOCAL_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
 });
 
 export const DEFAULT_DEPLOYMENT_V1: DeploymentV1 = DEVNET_DEPLOYMENT_V1;
+
+/** A cluster label alone cannot attach this cohort's evidence to other programs. */
+export function isPublishedDevnetDeploymentV1(deployment: DeploymentV1): boolean {
+  return deployment.cluster === 'devnet'
+    && deployment.genesisHash === DEVNET_DEPLOYMENT_V1.genesisHash
+    && DEPLOYED_PROGRAM_ROLES_V1.every((role) => deployment.programs[role] === DEVNET_DEPLOYMENT_V1.programs[role]);
+}
 
 /** Labels for the programs of one deployment, keyed by address. */
 export function deploymentProgramLabelsV1(deployment: DeploymentV1): Readonly<Record<string, string>> {

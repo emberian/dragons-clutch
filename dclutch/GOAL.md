@@ -59,6 +59,10 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-07 | renovate the existing Pages app and guide hierarchy; correct selected-deployment provenance and fill explorer mappings | — | [development wave](docs/design/DEVELOPMENT_WAVE_2026_09_07.md#existing-public-site) |
+| 2026-09-07 | Recovery capture reaches terminal state without relaxing packet freshness | — | [founding and capture evidence](docs/evidence/FOUNDING_PACKET_FRESHNESS_RUNTIME_2026_09_07.md) |
+| 2026-09-07 | Claims component-count join reproduced red and repaired under a controlled real-ELF swap | — | [component evidence](docs/evidence/CLAIMS_RATIONAL_LIFECYCLE_COMPONENT_MIX_2026_09_07.md) |
+| 2026-09-07 | fresh infrastructure floor completes its transactions; eight compute-budget rows remain red | — | [floor evidence](docs/evidence/INFRASTRUCTURE_FLOOR_88AEC17E8_2026_09_07.md) |
 | 2026-08-26 | cycle 1 launched: local-first, assurance parked, frontend first-class | [WAVE L1](docs/ledger/WAVE_2026-08-26_to_2026-09-02.md#L1) | `PROJECT_METHOD.md` |
 | 2026-08-27 | the market is open (run 6); DEPLOY-1 lands the substrate on devnet | [WAVE L509](docs/ledger/WAVE_2026-08-26_to_2026-09-02.md#L509), [L1016](docs/ledger/WAVE_2026-08-26_to_2026-09-02.md#L1016) | `docs/evidence/DEPLOY_1.md`, decision 0012 |
 | 2026-08-27 | the aspiration audit: what was intended and never mapped | — | `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` |

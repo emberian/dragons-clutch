@@ -4,6 +4,7 @@ import {
   DEVNET_PROGRAM_EVIDENCE_V1,
   PROTOCOL_ROLE_MEANING_V1,
   deployedProgramRolesV1,
+  isPublishedDevnetDeploymentV1,
   type DeployedProgramRoleV1,
   type DeploymentV1,
 } from '@dclutch/sdk/deployments';
@@ -104,7 +105,7 @@ export async function inspectProtocolHomeV1(client: ProtocolHomeRpc, deployment:
       owner: account?.owner ?? null,
       ownerLabel: account === null ? null : LOADER_LABELS.get(account.owner) ?? null,
       lamports: account?.lamports ?? null,
-      deploymentSlot: deployment.cluster === 'devnet' ? DEVNET_PROGRAM_EVIDENCE_V1[role]?.deploymentSlot ?? null : null,
+      deploymentSlot: isPublishedDevnetDeploymentV1(deployment) ? DEVNET_PROGRAM_EVIDENCE_V1[role]?.deploymentSlot ?? null : null,
     });
   });
 

@@ -104,11 +104,15 @@ impl SeriesPrepareWidthV1 {
         Ok(width)
     }
 
-    fn require_observed(&self, expected: u32, coordinate: usize) -> Result<()> {
+    fn require_root_width(&self, expected: u32, coordinate: usize) -> Result<()> {
         match self {
-            Self::Observed { data_len, .. } if *data_len == expected => Ok(()),
+            Self::Observed { data_len, .. } | Self::Predicted { data_len, .. }
+                if *data_len == expected =>
+            {
+                Ok(())
+            }
             _ => Err(Error::new(format!(
-                "Series Prepare coordinate {coordinate} must name the finalized root account at width {expected}"
+                "Series Prepare coordinate {coordinate} must name the finalized or pre-activation predicted root at width {expected}"
             ))),
         }
     }
@@ -284,6 +288,24 @@ pub(crate) fn observe_series_prepare_geometry_v1(
     })
 }
 
+/// Bind the pre-activation geometry embedded in immutable selected artifacts
+/// to the post-activation finalized frame. M1's root cannot be observed until
+/// selector-255 creates it, so the compiler carries its release-owned
+/// predicted width; every role is then re-read before Prepare.
+pub(crate) fn require_series_prepare_geometry_invariance_v1(
+    predicted: &[u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize],
+    observed: &[u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize],
+) -> Result<()> {
+    for (coordinate, (expected, actual)) in predicted.iter().zip(observed).enumerate() {
+        if expected != actual {
+            return Err(Error::new(format!(
+                "Series Prepare finalized geometry changed at coordinate {coordinate}: predicted {expected}, observed {actual}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl SeriesPrepareRoleSourceV1<'_> {
     fn address(&self) -> Pubkey {
         match self {
@@ -419,7 +441,7 @@ pub(crate) fn build_series_prepare_geometry_v1(
     {
         widths[coordinate] = source.width(coordinate)?;
     }
-    input.outer.root.require_observed(
+    input.outer.root.require_root_width(
         u32::try_from(SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5)
             .map_err(|_| Error::new("Series Prepare root width escaped u32"))?,
         0,
@@ -638,13 +660,13 @@ mod tests {
     }
 
     #[test]
-    fn root_and_ticket_state_cannot_swap_observation_kinds() {
+    fn root_and_ticket_state_keep_their_prestate_kinds() {
         let root = u32::try_from(SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5).unwrap();
         let ticket_state =
             u32::try_from(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3).unwrap();
         let input = SeriesPrepareGeometryInputV1 {
             outer: SeriesPrepareOuterWidthsV1 {
-                root: predicted("root-must-exist", root),
+                root: SeriesPrepareWidthV1::canonical_record("root-is-not-a-record", &[0; 1]),
                 template: SeriesPrepareWidthV1::canonical_record("template", &[0; 1]),
                 occurrence: SeriesPrepareWidthV1::canonical_record("occurrence", &[0; 1]),
                 portfolio: SeriesPrepareWidthV1::canonical_record("portfolio", &[0; 1]),
@@ -658,6 +680,20 @@ mod tests {
             escrow_lock: std::array::from_fn(|_| observed("live", 1)),
         };
         let error = build_series_prepare_geometry_v1(&input).unwrap_err();
-        assert!(error.to_string().contains("finalized root"));
+        assert!(
+            error
+                .to_string()
+                .contains("finalized or pre-activation predicted root")
+        );
+    }
+
+    #[test]
+    fn finalized_geometry_must_equal_the_compiled_pre_activation_prediction() {
+        let expected = [7_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
+        let mut changed = expected;
+        changed[76] = 8;
+        let error = require_series_prepare_geometry_invariance_v1(&expected, &changed)
+            .expect_err("a changed live role must not reuse selected bytes");
+        assert!(error.to_string().contains("coordinate 76"));
     }
 }

@@ -532,8 +532,20 @@ pub(crate) fn run_engine_with_admitted_candidate(
         let claims_market = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ClaimsMarket)?;
         let maker_position =
             claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::AffinePosition(0))?;
-        let rent_credit = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentCredit)?;
-        let rent_program = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentProgram)?;
+        let claims_admit = |role| {
+            let coordinate = dclutch_trading::general::account_rules_v3::general_place_order_admit_claims_coordinate_v3(role)
+                .map_err(|_| BuilderError::Projection("general-place-order-claims-admit-frame"))?;
+            observations
+                .get(usize::from(coordinate))
+                .copied()
+                .ok_or(BuilderError::Projection(
+                    "general-place-order-claims-admit-frame",
+                ))
+        };
+        let rent_credit =
+            claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentCredit)?;
+        let rent_program =
+            claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentProgram)?;
         dclutch_trading::general::hot_candidate_v3::seed_general_place_order_actual_identities_v2(
             dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderActualFrameV2 {
                 core_market_key: core_market.key(),

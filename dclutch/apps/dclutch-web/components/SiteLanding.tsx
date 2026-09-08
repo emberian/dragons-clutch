@@ -1,3 +1,5 @@
+'use client';
+
 import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
@@ -5,7 +7,8 @@ import FeaturedMarketStanding from '@/components/FeaturedMarketStanding';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import LandingPulse from '@/components/charts/LandingPulse';
 
-import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { deployedProgramRolesV1 } from '@dclutch/sdk/deployments';
+import { useDeploymentV1 } from '@/lib/deploymentStore';
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 
 /**
@@ -22,45 +25,43 @@ export const FIELD_NOTES_HREF_V1 = '/notes/plan-to-compost-at-least-three/';
 /**
  * The front door.
  *
- * This is `/` — the first page anyone who types the domain sees, so it owes
- * them two things before it owes them a control: what dClutch is, in words a
- * reader who has never opened the repository can follow, and the plain fact
- * that its current public deployment is a devnet preview. Both were written
- * hand-authored Pages landing (`tools/genref/render-site.mjs`); this is that
- * same copy, moved into the app because the app is what the domain root now
- * serves. The lifecycle workbench that used to sit here is unchanged and still
- * mounted at `/workbench`, which is where it always was as well.
+ * Explain the protocol and link to its existing market and design tools.
+ * This component is the domain root in the GitHub Pages export.
  *
- * No chain is read here and no address is asked for. Every card is a link.
+ * Market counts and the featured record use the selected deployment through
+ * their existing readers. The evidence beside them must use that selection too.
  */
 export default function SiteLanding() {
-  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/" status="live devnet programs" />}>
+  const deployment = useDeploymentV1();
+  return <PageShell className="product-shell trade-v3-shell landing" header={<Nav current="/" status={`${deployment.label} preview`} />}>
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Prediction markets on Solana, fully backed by collateral</p>
-        <h1>Buy the answer<br /><em>you believe in.</em></h1>
-        <p>Pick an outcome — where the SOL price lands on Friday, say — and buy
-        claims on it. If you are right, each claim pays you one unit of
-        collateral. If you are wrong, it pays nothing.</p>
-        <p>Every claim is backed by collateral locked up before the claim
-        exists. So there is nothing borrowed, nothing to be liquidated, and no
-        way to lose more than you paid.</p>
+        <p className="eyebrow">Fully collateralized markets on Solana</p>
+        <h1>Give your view<br /><em>a payoff.</em></h1>
+        <p>Where will a price land? Which outcome will happen? dClutch lets
+        a market define the possibilities and the claims that pay for each one.</p>
+        <p>The collateral is locked before claims are issued. The market fixes
+        its payout rules and resolution sources when it is created.</p>
+        <div className="landing-actions">
+          <Anchor className="secondary-action landing-primary" href="/markets">Explore markets →</Anchor>
+          <Anchor className="secondary-action" href="/create">Design a market →</Anchor>
+        </div>
       </div>
-      {/* This aside is the one thing on the page that dates, so it reads the
-          same public cut the launch page does rather than hard-coding a
-          moment. Opening a market is a fixture edit; the front door should not
-          need a second one to stop saying markets are still being set up. */}
+      {/* The featured record is read through the existing deployment reader. */}
       <aside>
         <span>Where this stands</span>
-        <strong>On devnet — nothing for sale</strong>
-        <p>dClutch runs on Solana&apos;s devnet, a public test network whose
-        tokens are worthless by construction. The programs are deployed.{' '}
-        <FeaturedMarketStanding /> There
-        is no token, nothing to buy, and no value at risk anywhere. If you want
-        to try it, devnet SOL is free from the{' '}
-        <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.</p>
+        <strong>{deployment.cluster === 'devnet' ? 'On devnet — nothing for sale' : `${deployment.label} deployment selected`}</strong>
+        <p>{deployment.cluster === 'devnet'
+          ? <>This is a Solana devnet preview using test tokens. To try the devnet flows, devnet SOL is free from the <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.</>
+          : <>The market reads below use your selected {deployment.label.toLowerCase()} deployment.</>}</p>
+        <p><FeaturedMarketStanding /></p>
       </aside>
+    </section>
+
+    <section className="trade-v3-card landing-observation">
+      <header><span>↗</span><div><h2>The selected deployment</h2><p>Market state read from {deployment.label}.</p></div><Anchor href="/pulse">Watch activity →</Anchor></header>
+      <LandingPulse />
     </section>
 
     {/* The key art: the one image on the site, and it is the thesis — a
@@ -79,19 +80,18 @@ export default function SiteLanding() {
       />
     </figure>
 
-    <section className="trade-v3-card">
-      <header><span>··</span><div><h2>What is out there right now</h2></div></header>
-      {/* FE-CHART mount: LandingPulse reads the counts from the active
-          deployment and feeds the presentational NumberStrip. */}
-      <LandingPulse />
+    <section className="landing-explanation" aria-label="How a market works">
+      <div><p className="eyebrow">From a question to a claim</p><h2>Know what can happen.<br />Know what it pays.</h2>
+        <a href={docsHrefV1('guides/reader.html', 'docs/guides/reader.md')}>Read a worked example →</a></div>
+      <ol>
+        <li><span>01</span><div><h3>Define the possibilities</h3><p>A price market divides its range into outcomes. Its rules also say what happens if the source cannot provide an answer.</p></div></li>
+        <li><span>02</span><div><h3>Back the claims</h3><p>Collateral covers the claims&rsquo; promised payouts. Trading changes who holds the claims; the backing remains in custody.</p></div></li>
+        <li><span>03</span><div><h3>Resolve and redeem</h3><p>The precommitted source and recovery rules determine the result. Holders redeem the payout their claims entitle them to.</p></div></li>
+      </ol>
     </section>
 
     <section className="trade-v3-card">
-      {/* The second dated sentence on this page, and it dated the same way the
-          aside did: it went on saying no market was open after one was. It
-          reads the same published cut, so opening a market is still one
-          fixture edit and the front door still stops claiming otherwise. */}
-      <header><span>01</span><div><h2>Try it</h2><p>Eight programs, deployed on devnet.</p></div></header>
+      <header><span>01</span><div><h2>Find your way around</h2><p>{deployedProgramRolesV1(deployment).length} program addresses in the {deployment.label} configuration.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/markets">Browse the markets →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">See what a wallet holds →</Anchor>
@@ -100,8 +100,9 @@ export default function SiteLanding() {
         <Anchor className="secondary-action" href="/explorer">Look up any account →</Anchor>
         <Anchor className="secondary-action" href="/console">Operator tools →</Anchor>
       </div>
-      <p className="direct-status">Every program address and the slot it was deployed at:</p>
-      <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />
+      <details className="landing-evidence"><summary>Deployment record and program addresses</summary>
+        <PublicDeploymentEvidence deployment={deployment} />
+      </details>
     </section>
 
     {smokeStoryEnabledV1() && <section className="trade-v3-card">

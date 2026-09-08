@@ -44,12 +44,14 @@ operator whose continued presence is required for holders to get paid.
   trips and exact hostile rollback. The dated authority is
   `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md`; this does not substitute for
   local-validator founding or full protocol route coverage.
-- Checked eight-program builds now exist through `df6fddba9`, including the
-  Claims Core-credit anchor and Dealer beneficiary repair. Earlier intermediate
-  revisions have matching frame pairs; no final-source frame pair is claimed.
-  The next General projection and Ensemble allocation changes require a new
-  all-program build. Publication cuts carry development work; they do
-  not assert that a build has become a deployed cohort.
+- The strict eight-program build at `a7f9f226d` is sealed, including the Claims
+  component-count repair, General Claims funding-coordinate repair, full
+  Ensemble funding partition and Dealer delegated Custody V2 frame repairs.
+  Its checked gate on hbox is `dclutch-strict-a7f9f226-20260907/candidate/`
+  `CHECKED_UPGRADE_GATE.json`, SHA-256
+  `6d02cebd1980ce2d84d6dc7b33533e6f40a2044a4159b5bf95334bcb6b467abe`.
+  Fresh family execution is underway. No final-source frame pair or new devnet
+  cohort is claimed. Publication cuts carry development work.
 - Direct's validator journey has executed founding/Open, admission, nonzero
   fills and fees, objective Pyth resolution, and wallet payouts. The retirement
   rerun invokes the actual upkeep producer before closing maker roots. The
@@ -95,17 +97,20 @@ operator whose continued presence is required for holders to get paid.
   real transport CLI reached fixed-three assumptions in host and pre-market
   funding wires. Those consumers now derive the full selection, with accepted
   two-member and exact missing/extra/foreign member-run controls. Actual funding
-  then exposed a remaining three-row ledger allocation for four Resolution
-  rows; that runtime owner is being repaired before replaying capture.
+  then exposed a remaining three-row ledger allocation and Core's fixed-four
+  funding partition. Both repairs are in the sealed build; fresh capture is
+  running against it.
   Recovery exhaustion reached terminal
   admission and all three refund payouts, recorded in
   `docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md`. Capture's prior
   Pyth submit succeeded but execution correctly refused an elapsed deadline.
-  A measured 900-second rung is committed. Its fresh run instead stopped at
-  an expired Core-funding packet before Pyth. Phase timings are instrumented,
-  and the shared validator launcher now honors an explicit tick profile. A
-  fresh 64-tick control is running; the previous 16-tick result cannot establish
-  its outcome or justify relaxing packet freshness.
+  A measured 900-second rung is committed. A later expired Core-funding packet
+  prompted phase instrumentation. The fresh 16-tick diagnostic now completes
+  all six founding transactions and reaches Recovery resolution, selector 0,
+  with Core terminal poststate. The separate 64-tick control stopped before
+  planning because its source window no longer matched projected slot-time.
+  Packet freshness was not relaxed; the earlier long stall's cause remains
+  unproven. See `docs/evidence/FOUNDING_PACKET_FRESHNESS_RUNTIME_2026_09_07.md`.
 - Structured's Claims operations have executed against real ELFs. The V6 child bridge and per-Market publication producer are committed.
   Executing the entrance exposed a missing root-creation descriptor. The set
   now enumerates seven action descriptors plus one V1 root-activation
@@ -121,8 +126,11 @@ operator whose continued presence is required for holders to get paid.
   construction next exposed a wrong descriptor selection and an N/K join.
   Correcting those reached the demo producer's invented release ID, incompatible
   with the real Core-selected execution release. The producer now binds the
-  checked release; its immutable old Market must be replaced. A fresh actual
-  receipt poststate remains owed.
+  checked release; its immutable old Market must be replaced. The next Claims
+  join incorrectly equated component count N with outcome count K. A controlled
+  real-ELF red/green run repairs that join while preserving exact hostile
+  rollback; see `docs/evidence/CLAIMS_RATIONAL_LIFECYCLE_COMPONENT_MIX_2026_09_07.md`.
+  That is component evidence. A fresh actual receipt poststate remains owed.
 - Browser joining now carries the linked-basis binding, requires finalized
   confirmation and authenticated poststate, and resumes its transaction journal.
   Generated reference/client mirrors and the capability graph have converged.
@@ -136,12 +144,37 @@ operator whose continued presence is required for holders to get paid.
   stop/resume controls and a checked static status publisher. It still needs a checked new cohort,
   actual markets and ticket-author provenance before instantiation and
   supervision on devnet.
-- The initial local-validator tier at `0a869a766` still has thirteen compute
-  budget regressions. A fresh floor at `88aec17e8` is running with native
-  workspace checks and explicit refusal of containment no-op builds. Those
-  budgets have not been widened. Complete protocol
+- The fresh local-validator floor at `88aec17e8` completed 209 transactions;
+  eight compute-budget rows remain red, compared with thirteen in the older
+  run. Its native checks, runtime hashes, witnesses and limited route coverage
+  are recorded in `docs/evidence/INFRASTRUCTURE_FLOOR_88AEC17E8_2026_09_07.md`.
+  Budgets have not been widened. Complete protocol
   route coverage, final release gates, devnet redeployment and a running public
   aquarium remain open deliverables.
+
+## Existing public site
+
+The publication repository's `origin/main:.github/workflows/pages.yml` builds
+`dclutch/apps/dclutch-web` at the domain root and renders the existing
+`docs/guides/README.md` index under `/docs`. GitHub's Pages metadata names
+`clutch.dregg.pro` and workflow deployment. The workflow is manual; a publication
+cut alone does not deploy Pages. The last successful deployment at inspection
+was run `33442687321`, source `9fe6ec20872a94380a8c291d87afe976d5efcf29`, on
+2026-08-31. The publication checkout's parked branch is not its published main;
+inspect `origin/main` explicitly.
+
+The renovation uses the current homepage, market discovery, console and explorer
+components. It moves market/design entrances and observed activity into view,
+adds search over the console's existing capability catalogue, and decodes the
+Dealer's generated layouts and previously unmapped instructions. The current
+Devnet SDK addresses were cohort 17 while their human provenance still named
+cohort 16; the evidence now follows the actual configured program set and
+identifies historical observations separately from fresh reads. Reader, trader
+and operator explanations remain in the existing guide hierarchy.
+
+Publication requires the existing static export, documentation renderer and
+link checks, then a cut and the existing Pages workflow. Runtime execution and
+the new devnet cohort remain separate outstanding work.
 
 ## Execution order and completion evidence
 

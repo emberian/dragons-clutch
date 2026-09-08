@@ -131,6 +131,7 @@ use dclutch_trading::{
     },
     general::{
         account_rules_v3::{
+            general_place_order_admit_claims_coordinate_v3,
             general_place_order_affine_claims_coordinate_v3,
             general_place_order_transfer_custody_coordinate_v3,
         },

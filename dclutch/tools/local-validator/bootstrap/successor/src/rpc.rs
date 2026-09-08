@@ -1859,6 +1859,41 @@ impl Rpc {
         self.latest_blockhash_with_height()
     }
 
+    /// Quote the validator's exact fee for the v0 packet this campaign will
+    /// simulate and submit.
+    ///
+    /// The packet has a fresh blockhash because `getFeeForMessage` prices one
+    /// actual message. The caller must still compile its eventual submission
+    /// afresh, as a blockhash is a liveness input rather than a durable plan.
+    pub(crate) fn fee_for_v0_message(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        fee_payer: Pubkey,
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<u64> {
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let (blockhash, _) = self.latest_blockhash_with_height()?;
+        let plan = dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
+            fee_payer,
+            &bounded,
+            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            observation,
+            tables,
+        )
+        .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+        let message = plan.message.serialize();
+        self.call(
+            "getFeeForMessage",
+            &json!([BASE64.encode(message), {"commitment":"finalized"}]),
+        )?
+        .get("value")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::new(format!("{label}: getFeeForMessage omitted exact fee")))
+    }
+
     pub(crate) fn simulate_v0(
         &mut self,
         label: &str,

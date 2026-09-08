@@ -480,6 +480,23 @@ fn local_semantic_release_preimage_v1(role: &str, shipped_elf_sha256: &str) -> R
     crate::upgrade::checked_semantic_release_preimage_v1(role, shipped_elf_sha256)
 }
 
+/// The accelerator is outside the seven protocol-owned role identities, so
+/// its local release uses the checked artifact manifest's own semantic identity.
+/// The gate authenticates both that manifest and the ELF; no caller supplies a
+/// second accelerator identity for a loopback plan.
+fn checked_accelerator_semantic_release_id_v1(
+    checked_manifest: &[u8],
+    raw_elf_sha256: &str,
+) -> Result<String> {
+    let checked = CheckedReleaseV1::decode(checked_manifest).map_err(release_error)?;
+    if hex(&checked.artifact_digest()) != raw_elf_sha256 {
+        return Err(Error::new(
+            "checked accelerator manifest artifact digest differs from its gate ELF",
+        ));
+    }
+    Ok(hex(checked.semantic_release_id().as_bytes()))
+}
+
 fn checked_build_command_v1(role: &str, build_mode: LocalMutableBuildModeV1) -> Result<String> {
     let package = match role {
         "core" => "dclutch-core-sbf",
@@ -619,12 +636,21 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
         expected_labels.insert(format!("loader.{loader_label}.program"));
         expected_labels.insert(format!("loader.{loader_label}.programdata"));
     }
+    if plan.general_accelerator.is_some() {
+        expected_labels.insert("loader.general-accelerator.program".into());
+        expected_labels.insert("loader.general-accelerator.programdata".into());
+    }
     for role in ["pyth-receiver", "pyth-router"] {
         expected_labels.insert(format!("loader.{role}.program"));
         expected_labels.insert(format!("loader.{role}.programdata"));
     }
     expected_labels.insert(crate::plan::REGISTRY_SUCCESSION_BUFFER_LABEL_V1.into());
-    if plan.genesis_accounts.len() != 19
+    let expected_account_count = if plan.general_accelerator.is_some() {
+        21
+    } else {
+        19
+    };
+    if plan.genesis_accounts.len() != expected_account_count
         || plan
             .genesis_accounts
             .keys()
@@ -633,7 +659,7 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
             != expected_labels
     {
         return Err(Error::new(
-            "checked local plan does not contain the exact eighteen Loader pair pins plus one Registry succession Buffer pin",
+            "checked local plan does not contain the exact Loader pair pins plus one Registry succession Buffer pin",
         ));
     }
 
@@ -731,6 +757,24 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
             )));
         }
     }
+    if let Some(accelerator) = plan.general_accelerator.as_ref() {
+        let accelerator_gate = CheckedLocalMutableGateInputV1 {
+            path: PathBuf::from(&set.checked_release_gate_path),
+            sha256: set.checked_release_gate_sha256.clone(),
+            source_revision: set.source_revision.clone(),
+            source_tree_sha256: set.source_tree_sha256.clone(),
+            build_mode: LocalMutableBuildModeV1::Ordinary,
+        };
+        authenticate_local_accelerator_pair_v1(
+            plan,
+            accelerator,
+            authority,
+            &accelerator_gate,
+            &directory,
+            &mut coordinates,
+        )?;
+    }
+
     let provider = local_validator_release_v1()
         .map_err(|error| Error::new(format!("local Pyth release projection: {error:?}")))?;
     let provider = provider.release();
@@ -867,9 +911,113 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
             "checked local Registry succession Buffer or plan pin changed",
         ));
     }
-    if coordinates.len() != 19 {
+    if coordinates.len() != expected_account_count {
         return Err(Error::new(
-            "checked local account directory does not close over nineteen distinct coordinates",
+            "checked local account directory does not close over its exact distinct coordinates",
+        ));
+    }
+    Ok(())
+}
+
+/// Re-authenticate the extra local Loader pair that General observes.  This is
+/// deliberately separate from `local_role_projection`: the accelerator is not
+/// a release-set role and must never become one merely because it shares Loader
+/// mechanics with the seven role pairs.
+fn authenticate_local_accelerator_pair_v1(
+    plan: &SuccessorPlan,
+    accelerator: &ProgramPin,
+    authority: Pubkey,
+    gate: &CheckedLocalMutableGateInputV1,
+    directory: &Path,
+    coordinates: &mut BTreeSet<Pubkey>,
+) -> Result<()> {
+    let validated = authenticate_checked_release_gate_role_for_local_v1(
+        &gate.path,
+        &gate.sha256,
+        &gate.source_revision,
+        &gate.source_tree_sha256,
+        "accelerator",
+        Path::new(&accelerator.checked_candidate_elf_path),
+    )?;
+    let expected_semantic = checked_accelerator_semantic_release_id_v1(
+        &validated.checked_build_manifest,
+        &validated.raw_elf_sha256,
+    )?;
+    let program_key = pubkey(&accelerator.program_id)?;
+    let programdata_key = pubkey(&accelerator.programdata_id)?;
+    let expected_programdata =
+        Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    let expected_slot = u64::try_from(crate::upgrade::CHECKED_ROLE_ORDER_V1.len())
+        .ok()
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| Error::new("checked local accelerator slot overflowed"))?;
+    if programdata_key != expected_programdata
+        || accelerator.checked_candidate_elf_sha256 != validated.raw_elf_sha256
+        || accelerator.elf_sha256 != validated.raw_elf_sha256
+        || accelerator.live_elf_sha256 != validated.raw_elf_sha256
+        || accelerator.live_elf_padding_bytes != 0
+        || accelerator.semantic_release_id != expected_semantic
+        || accelerator.upgrade_authority.as_deref() != Some(authority.to_string().as_str())
+        || accelerator.deployment_source != "observed-programdata-account"
+        || accelerator.deployment_slot != expected_slot
+    {
+        return Err(Error::new(
+            "checked local General accelerator pin differs from its gate ELF, semantic manifest, canonical slot, retained authority, or Loader linkage",
+        ));
+    }
+    let program_label = "loader.general-accelerator.program";
+    let programdata_label = "loader.general-accelerator.programdata";
+    let program_pin = plan
+        .genesis_accounts
+        .get(program_label)
+        .ok_or_else(|| Error::new("checked local plan omitted General accelerator Program"))?;
+    let programdata_pin = plan
+        .genesis_accounts
+        .get(programdata_label)
+        .ok_or_else(|| Error::new("checked local plan omitted General accelerator ProgramData"))?;
+    let program = crate::plan::authenticate_cli_account_file_v1(
+        &directory.join(format!("{}.json", program_pin.address)),
+        program_pin,
+    )?;
+    let programdata = crate::plan::authenticate_cli_account_file_v1(
+        &directory.join(format!("{}.json", programdata_pin.address)),
+        programdata_pin,
+    )?;
+    let program_view = ProgramV3View::parse(&program.data)
+        .map_err(|error| Error::new(format!("General accelerator Program: {error:?}")))?;
+    let programdata_view = ProgramDataV3View::parse(&programdata.data)
+        .map_err(|error| Error::new(format!("General accelerator ProgramData: {error:?}")))?;
+    for coordinate in [program_key, programdata_key] {
+        if coordinate == Pubkey::default()
+            || coordinate == system_program::ID
+            || coordinate == bpf_loader_upgradeable::ID
+            || !coordinates.insert(coordinate)
+        {
+            return Err(Error::new(
+                "checked local General accelerator Loader coordinates are aliased or reserved",
+            ));
+        }
+    }
+    if program.pubkey != program_key
+        || program_pin.address != accelerator.program_id
+        || program.owner != bpf_loader_upgradeable::ID
+        || !program.executable
+        || program.rent_epoch != 0
+        || program.lamports != Rent::default().minimum_balance(program.data.len())
+        || program_view.programdata() != programdata_key.to_bytes()
+        || programdata.pubkey != programdata_key
+        || programdata_pin.address != accelerator.programdata_id
+        || programdata.owner != bpf_loader_upgradeable::ID
+        || programdata.executable
+        || programdata.rent_epoch != 0
+        || programdata.lamports != Rent::default().minimum_balance(programdata.data.len())
+        || programdata_view.deployment_slot() != expected_slot
+        || programdata_view.upgrade_authority() != Some(authority.to_bytes())
+        || hex(&Sha256::digest(programdata_view.elf())) != accelerator.live_elf_sha256
+        || programdata_pin.data_sha256 != accelerator.programdata_sha256
+    {
+        return Err(Error::new(
+            "checked local General accelerator Loader pair or on-disk account evidence changed",
         ));
     }
     Ok(())
@@ -1296,6 +1444,58 @@ fn prepare_local_mutable_parsed_v1(
         artifacts.insert(role, (program, elf, validated.raw_elf_sha256));
     }
 
+    // The eighth checked gate link is a General accelerator, not a cohort role.
+    // It still needs a real Program/ProgramData pair in the local validator so
+    // the General compiler can observe exactly what the selected certificates
+    // will name.
+    let accelerator_program =
+        Pubkey::new_from_array(derive(LOCAL_ID_DOMAIN_V1, seed, "accelerator"));
+    let accelerator_elf = gate_root.join("elf/accelerator.so");
+    let accelerator_validated = authenticate_checked_release_gate_role_for_local_v1(
+        &gate.path,
+        &gate.sha256,
+        &gate.source_revision,
+        &gate.source_tree_sha256,
+        "accelerator",
+        &accelerator_elf,
+    )?;
+    let accelerator_slot = u64::try_from(crate::upgrade::CHECKED_ROLE_ORDER_V1.len())
+        .ok()
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| Error::new("local accelerator deployment slot overflowed"))?;
+    let accelerator_programdata = loader_programdata_bytes(
+        &fs::read(&accelerator_elf)?,
+        accelerator_slot,
+        Some(authority),
+    );
+    let accelerator_programdata_path = programdata_dir.join("accelerator.bin");
+    write_bytes_create_new(
+        &accelerator_programdata_path,
+        &accelerator_programdata,
+        0o600,
+    )?;
+    let accelerator_semantic_release_id = checked_accelerator_semantic_release_id_v1(
+        &accelerator_validated.checked_build_manifest,
+        &accelerator_validated.raw_elf_sha256,
+    )?;
+    programs.insert(
+        "general-accelerator".into(),
+        accelerator_program.to_string(),
+    );
+    let general_accelerator = crate::plan::GeneralAcceleratorPrepareInputV1 {
+        program: accelerator_program,
+        elf: accelerator_elf,
+        elf_sha256: accelerator_validated.raw_elf_sha256.clone(),
+        semantic_release_id: accelerator_semantic_release_id,
+        deployment: RoleDeploymentInputV1 {
+            observed_programdata: Some(accelerator_programdata_path),
+            observed_programdata_bytes: None,
+            expected_live_elf_sha256: Some(accelerator_validated.raw_elf_sha256),
+            genesis_deployment_slot: 0,
+            expected_upgrade_authority: Some(authority),
+        },
+    };
+
     let artifact = |role: &'static str| -> Result<(Pubkey, PathBuf, String, String)> {
         let (program, elf, sha256) = artifacts
             .get(role)
@@ -1360,7 +1560,7 @@ fn prepare_local_mutable_parsed_v1(
             rent_credit_sha256,
             rent_credit_semantic_release_id,
             checked_upgrade_set: None,
-            general_accelerator: None,
+            general_accelerator: Some(general_accelerator),
         },
         &gate,
     )?;

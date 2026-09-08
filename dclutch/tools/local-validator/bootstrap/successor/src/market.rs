@@ -4730,6 +4730,147 @@ pub(crate) fn native_composition_bodies_for_test(
     ))
 }
 
+/// Finalized M0 records and the Core-owned ordinary ProjectFound frame that
+/// first Prepare forwards through projected Custody.  The addresses come from
+/// the same publisher ordinary Found uses, which makes it impossible for a
+/// Series caller to restate this exact frame from a different manifest.
+#[derive(Clone, Debug)]
+pub(crate) struct FutureMarketImmutablePublicationV1 {
+    pub(crate) realm: PublishedRecord,
+    pub(crate) product: PublishedRecord,
+    pub(crate) domain: PublishedRecord,
+    pub(crate) portfolio: PublishedRecord,
+    pub(crate) manifest: PublishedRecord,
+    /// Rent-owned lifetime sink that projected Custody authenticates before
+    /// M0's Core Market is founded.
+    pub(crate) rent_credit: Pubkey,
+    pub(crate) project_found: [Pubkey; dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
+}
+
+/// Publish the complete immutable Registry closure for a future Market without
+/// creating any Core or custody state.  It does create M0's Rent-program
+/// lifecycle credit, which projected Custody must authenticate before the
+/// child is founded. A Series Template commits this M0 Direct graph before
+/// the child is founded; it must not borrow M1's Series manifest or preseed
+/// child Core or custody accounts.
+pub(crate) fn publish_future_market_immutable_records_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    collateral_mint: Pubkey,
+    payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<FutureMarketImmutablePublicationV1> {
+    validate_market_input(input)?;
+    if input.selected_capability.is_some() {
+        return Err(Error::new(
+            "future immutable publication expects an M0 Direct Market without a selected family payload",
+        ));
+    }
+    let registry = pubkey(&plan.registry.program_id)?;
+    let targets = derive_founding_targets(plan, input, collateral_mint)?;
+    let release_set = hex32(&plan.release_set_id)?;
+    let (records, _) = publish_market_records(
+        rpc,
+        registry,
+        input,
+        collateral_mint,
+        targets.open_market,
+        release_set,
+        payer,
+        transactions,
+    )?;
+    // First Prepare reaches projected-Custody before M0's Core Market exists,
+    // but projected-Custody authenticates this lifecycle credit on every
+    // operation.  Create it through Rent's real instruction now; it is the
+    // prepaid lifecycle sink, not a preseeded Core or custody state.
+    let generation = open_market_generation_v1(input)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+    let credit = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            targets.open_market.as_ref(),
+            &generation.to_le_bytes(),
+        ],
+        &rent_program,
+    )
+    .0;
+    let keys = found_snapshot_keys(plan, payer.pubkey(), targets.open_market, credit, &records)?;
+    let minimum_slot = transactions
+        .last()
+        .map(|transaction| transaction.slot)
+        .ok_or_else(|| {
+            Error::new("future M0 publication emitted no finalized record transaction")
+        })?;
+    let snapshot = finalized_snapshot(rpc, &keys, minimum_slot)?;
+    let projection = project_found_v2(
+        generation,
+        projection_state(
+            rpc,
+            plan,
+            &snapshot,
+            payer.pubkey(),
+            targets.open_market,
+            &records,
+        )?,
+    )
+    .map_err(|error| Error::new(format!("future M0 ProjectFound projection: {error:?}")))?;
+    if projection.market_address != targets.open_market {
+        return Err(Error::new(
+            "future M0 ProjectFound changed the canonical child Market",
+        ));
+    }
+    let create = build_lifecycle_rent_create_v2(
+        &projection,
+        LifecycleRentCreateStateV2 {
+            payer: snapshot.observation(payer.pubkey())?,
+            credit_destination: snapshot.observation(credit)?,
+            refund_wallet: snapshot.observation(payer.pubkey())?,
+            rent_program: snapshot.observation(rent_program)?,
+            system_program: snapshot.observation(system_program::ID)?,
+            rent: snapshot.observation(sysvar::rent::ID)?,
+        },
+    )
+    .map_err(|error| Error::new(format!("future M0 RentV2 Create: {error:?}")))?;
+    transactions.push(rpc.send(
+        "create future M0 lifecycle RentCreditV2",
+        std::slice::from_ref(&create.instruction),
+        payer,
+    )?);
+    let credit_account = rpc.required_account(credit, "future M0 lifecycle RentCreditV2")?;
+    if credit_account.owner != rent_program
+        || credit_account.executable
+        || credit_account.data.len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
+        || LifecycleRentCreditV2::decode(&credit_account.data)
+            .map_err(|error| Error::new(format!("future M0 RentV2 state: {error:?}")))?
+            != create.state
+        || credit_account.lamports < create.rent_debit
+    {
+        return Err(Error::new(
+            "future M0 lifecycle RentCreditV2 poststate differed from its checked Rent plan",
+        ));
+    }
+    let project_found = ordinary_project_found_snapshot_keys_v2(
+        plan,
+        payer.pubkey(),
+        targets.open_market,
+        credit,
+        &records,
+    )?;
+    let project_found = project_found
+        .try_into()
+        .map_err(|_| Error::new("M0 ordinary ProjectFound frame changed its exact cardinality"))?;
+    Ok(FutureMarketImmutablePublicationV1 {
+        realm: records.realm,
+        product: records.product,
+        domain: records.domain,
+        portfolio: records.portfolio,
+        manifest: records.manifest,
+        rent_credit: credit,
+        project_found,
+    })
+}
+
 fn publish_market_records(
     rpc: &mut Rpc,
     registry: Pubkey,

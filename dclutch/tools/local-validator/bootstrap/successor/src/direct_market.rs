@@ -776,6 +776,19 @@ pub(crate) fn observe_local_market_policy_v1(
     rpc_url: &str,
     registry: Pubkey,
 ) -> Result<(SuccessorPlan, DirectDevnetPolicyObservationV1)> {
+    let (plan, _, observation) =
+        observe_local_market_policy_with_rpc_v1(plan_path, rpc_url, registry)?;
+    Ok((plan, observation))
+}
+
+/// Loopback counterpart of the devnet observation that keeps the authenticated
+/// read-only connection open for a capability that must observe another
+/// deployment at the same finalized floor.
+pub(crate) fn observe_local_market_policy_with_rpc_v1(
+    plan_path: &Path,
+    rpc_url: &str,
+    registry: Pubkey,
+) -> Result<(SuccessorPlan, Rpc, DirectDevnetPolicyObservationV1)> {
     let origin = ClusterOriginV1::parse(rpc_url, None)?;
     if !matches!(origin, ClusterOriginV1::Loopback { .. }) {
         return Err(Error::new(
@@ -803,7 +816,7 @@ pub(crate) fn observe_local_market_policy_v1(
         floor = floor.max(observation_plan.registry.deployment_slot);
     }
     let observation = observe_policy_v1(&mut rpc, &observation_plan, floor)?;
-    Ok((plan, observation))
+    Ok((plan, rpc, observation))
 }
 
 fn authenticate_live_role_v1(

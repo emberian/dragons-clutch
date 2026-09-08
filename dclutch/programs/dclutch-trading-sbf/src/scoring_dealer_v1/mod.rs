@@ -28,10 +28,12 @@ use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
 use dclutch_claims::protocol_position_v2::{ProtocolPositionActionV2, ProtocolPositionSeedsV2};
+use dclutch_custody::token_svm::instruction::approve_checked;
+use dclutch_custody::token_svm::{InstructionSpec, Mint};
 use dclutch_custody::{
     CUSTODY_BUMP_RELAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyFrameSpecV1,
-    CustodyReceiptV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
-    TRANSFER_ACCOUNT_COUNT_V1,
+    CustodyReceiptV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1,
+    DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
 use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
@@ -48,7 +50,7 @@ use solana_program::{
     account_info::AccountInfo,
     hash::hash,
     instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke_signed, set_return_data},
+    program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -767,9 +769,31 @@ pub(crate) fn read_replay_v1(window: &[AccountInfo<'_>]) -> Result<CustodyReplay
 }
 
 #[inline(never)]
-pub(crate) fn invoke_custody_transfer_v1(
+pub(crate) fn invoke_custody_transfer_v1<'accounts, 'info>(
     program_id: &Pubkey,
-    leg: CustodyLegV1<'_, '_>,
+    leg: CustodyLegV1<'accounts, 'info>,
+    external_owner: Option<&'accounts AccountInfo<'info>>,
+) -> Result<()> {
+    if leg.source_compartment == CompartmentV1::External {
+        return invoke_delegated_custody_transfer_v2(
+            program_id,
+            leg,
+            external_owner.ok_or(ScoringDealerErrorV1::Frame)?,
+        );
+    }
+    if external_owner.is_some() {
+        return Err(ScoringDealerErrorV1::Frame.into());
+    }
+    invoke_standard_custody_transfer_v1(program_id, leg)
+}
+
+/// The original Custody wire remains the whole path for Custody-owned source
+/// compartments. Keeping it out of the delegated frame is also what lets the
+/// accelerator link measure each physical authority profile independently.
+#[inline(never)]
+fn invoke_standard_custody_transfer_v1<'accounts, 'info>(
+    program_id: &Pubkey,
+    leg: CustodyLegV1<'accounts, 'info>,
 ) -> Result<()> {
     if leg.amount == 0 {
         return Ok(());
@@ -781,7 +805,206 @@ pub(crate) fn invoke_custody_transfer_v1(
     let source = get(leg.window, 10)?;
     let destination = get(leg.window, 11)?;
     let token_program = get(leg.window, 13)?;
-    let request = CustodyRequestV1 {
+    let request = custody_request_v1(program_id, &leg, mint, source, destination, token_program)?;
+    let request_bytes = request
+        .to_bytes()
+        .map_err(|_| ScoringDealerErrorV1::Custody)?;
+    invoke_standard_custody_request_v1(program_id, leg, &request_bytes)
+}
+
+#[inline(never)]
+fn invoke_delegated_custody_transfer_v2<'accounts, 'info>(
+    program_id: &Pubkey,
+    leg: CustodyLegV1<'accounts, 'info>,
+    owner: &'accounts AccountInfo<'info>,
+) -> Result<()> {
+    if leg.amount == 0 {
+        return Ok(());
+    }
+    if leg.window.len() != TRANSFER_ACCOUNT_COUNT_V1 as usize {
+        return Err(ScoringDealerErrorV1::Frame.into());
+    }
+    let mint = get(leg.window, 9)?;
+    let source = get(leg.window, 10)?;
+    let destination = get(leg.window, 11)?;
+    let token_program = get(leg.window, 13)?;
+    let request = custody_request_v1(program_id, &leg, mint, source, destination, token_program)?;
+    let delegated_request =
+        prepare_terminal_delegated_request_v2(&leg, request, mint, source, token_program, owner)?;
+    let request_bytes = delegated_request
+        .encode()
+        .map_err(|_| ScoringDealerErrorV1::Custody)?
+        .to_vec();
+    invoke_delegated_custody_request_v2(program_id, leg, delegated_request, &request_bytes)
+}
+
+/// Sign, invoke and authenticate the V2 successor after its temporary
+/// approval has been composed in the preceding physical frame.
+#[inline(never)]
+fn invoke_delegated_custody_request_v2(
+    program_id: &Pubkey,
+    leg: CustodyLegV1<'_, '_>,
+    delegated_request: DelegatedCustodyRequestV2,
+    request_bytes: &[u8],
+) -> Result<()> {
+    let request_digest = hash(&request_bytes).to_bytes();
+    let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
+        leg.facts.release_set,
+        leg.market,
+        ExecutionRoleV1::Trading,
+        leg.context,
+        request_digest,
+    )
+    .map_err(|_| ScoringDealerErrorV1::Release)?;
+    let (authority, bump) = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+    if get(leg.window, 0)?.key != &authority {
+        return Err(ScoringDealerErrorV1::Release.into());
+    }
+    // The bump relay: Custody derives its replay and transfer authority for
+    // itself; `[0, 0]` after the request means "search", exactly as the hot
+    // path's `child_relay` documents.
+    let mut data = Vec::with_capacity(request_bytes.len() + CUSTODY_BUMP_RELAY_BYTES_V1);
+    data.extend_from_slice(&request_bytes);
+    data.extend_from_slice(&[0_u8; CUSTODY_BUMP_RELAY_BYTES_V1]);
+    let metas = child_metas_v1(leg.window, custody_privileges_v1(OperationV1::Transfer))?;
+    let instruction = Instruction {
+        program_id: *leg.custody_program.key,
+        accounts: metas,
+        data,
+    };
+    let mut infos = Vec::with_capacity(leg.window.len() + 1);
+    infos.extend_from_slice(leg.window);
+    infos.push(leg.custody_program.clone());
+    let bump_seed = [bump];
+    let [domain, release, market, role, context, digest] = authority_seeds.as_slices();
+    invoke_signed(
+        &instruction,
+        &infos,
+        &[&[domain, release, market, role, context, digest, &bump_seed]],
+    )
+    .map_err(crate::child_refused_v1)?;
+    verify_delegated_custody_receipt_v2(leg, delegated_request, request_digest)
+}
+
+/// Authenticate Custody's successor receipt and the replay it just committed.
+#[inline(never)]
+fn verify_delegated_custody_receipt_v2(
+    leg: CustodyLegV1<'_, '_>,
+    delegated_request: DelegatedCustodyRequestV2,
+    request_digest: [u8; 32],
+) -> Result<()> {
+    let (producer, receipt) = get_return_data().ok_or(ScoringDealerErrorV1::Custody)?;
+    if producer != *leg.custody_program.key {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
+    let receipt = {
+        let receipt = DelegatedCustodyReceiptV2::decode(&receipt)
+            .map_err(|_| ScoringDealerErrorV1::Custody)?;
+        if receipt.starts_atomic_debit != delegated_request.starts_atomic_debit
+            || receipt.terminal != delegated_request.terminal
+            || receipt.delegate_before != delegated_request.delegate_before
+            || receipt.delegate_after != delegated_request.delegate_after
+            || receipt.total_debit != delegated_request.total_debit
+            || receipt.allowance_before != delegated_request.allowance_before
+            || receipt.allowance_after != delegated_request.allowance_after
+        {
+            return Err(ScoringDealerErrorV1::Custody.into());
+        }
+        receipt.custody
+    };
+    let replay_data = get(leg.window, 8)?
+        .try_borrow_data()
+        .map_err(|_| ScoringDealerErrorV1::Custody)?;
+    let replay_digest = hash(&replay_data).to_bytes();
+    let replay =
+        CustodyReplayV1::decode(&replay_data).map_err(|_| ScoringDealerErrorV1::Custody)?;
+    if replay.next_revision != delegated_request.custody.resulting_revision
+        || replay.last_request_digest != request_digest
+        || replay.last_poststate_commitment != receipt.evidence.poststate_commitment
+    {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
+    receipt
+        .verify_for(delegated_request.custody, request_digest, replay_digest)
+        .map_err(|_| ScoringDealerErrorV1::Custody)?;
+    Ok(())
+}
+
+/// Approve exactly this physical debit, then bind the V2 successor request to
+/// the approval. The surrounding instruction remains atomic, so a later
+/// Custody refusal rolls this temporary delegation back with the whole route.
+#[inline(never)]
+fn prepare_terminal_delegated_request_v2<'accounts, 'info>(
+    leg: &CustodyLegV1<'accounts, 'info>,
+    request: CustodyRequestV1,
+    mint: &AccountInfo<'info>,
+    source: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    owner: &AccountInfo<'info>,
+) -> Result<DelegatedCustodyRequestV2> {
+    if !owner.is_signer || owner.key.to_bytes() != leg.source_owner {
+        return Err(ScoringDealerErrorV1::Frame.into());
+    }
+    let decimals = Mint::parse(
+        &mint
+            .try_borrow_data()
+            .map_err(|_| ScoringDealerErrorV1::Custody)?,
+    )
+    .map_err(|_| ScoringDealerErrorV1::Custody)?
+    .decimals;
+    let custody_authority = get(leg.window, 12)?;
+    let approve = approve_checked(
+        token_program.key.to_bytes(),
+        source.key.to_bytes(),
+        mint.key.to_bytes(),
+        custody_authority.key.to_bytes(),
+        owner.key.to_bytes(),
+        leg.amount,
+        decimals,
+    )
+    .map_err(|_| ScoringDealerErrorV1::Custody)?;
+    invoke(
+        &token_instruction(&approve),
+        &[
+            source.clone(),
+            mint.clone(),
+            custody_authority.clone(),
+            owner.clone(),
+            token_program.clone(),
+        ],
+    )
+    .map_err(crate::child_refused_v1)?;
+    let successor = DelegatedCustodyRequestV2 {
+        custody: request,
+        starts_atomic_debit: true,
+        terminal: true,
+        delegate_before: custody_authority.key.to_bytes(),
+        delegate_after: [0; 32],
+        total_debit: leg.amount,
+        allowance_before: leg.amount,
+        allowance_after: 0,
+    };
+    if !is_terminal_delegated_debit_v2(
+        successor.starts_atomic_debit,
+        successor.terminal,
+        successor.total_debit,
+        successor.allowance_before,
+        successor.allowance_after,
+    ) {
+        return Err(ScoringDealerErrorV1::Custody.into());
+    }
+    Ok(successor)
+}
+
+fn custody_request_v1(
+    program_id: &Pubkey,
+    leg: &CustodyLegV1<'_, '_>,
+    mint: &AccountInfo<'_>,
+    source: &AccountInfo<'_>,
+    destination: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Result<CustodyRequestV1> {
+    Ok(CustodyRequestV1 {
         operation: OperationV1::Transfer,
         caller_role: CallerRoleV1::Trading,
         source_compartment: leg.source_compartment,
@@ -819,11 +1042,16 @@ pub(crate) fn invoke_custody_transfer_v1(
             .ok_or(ScoringDealerErrorV1::Overflow)?,
         amount: leg.amount,
         rent_lamports: 0,
-    };
-    let request_bytes = request
-        .to_bytes()
-        .map_err(|_| ScoringDealerErrorV1::Custody)?;
-    let request_digest = hash(&request_bytes).to_bytes();
+    })
+}
+
+#[inline(never)]
+fn invoke_standard_custody_request_v1(
+    program_id: &Pubkey,
+    leg: CustodyLegV1<'_, '_>,
+    request_bytes: &[u8],
+) -> Result<()> {
+    let request_digest = hash(request_bytes).to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
         leg.facts.release_set,
         leg.market,
@@ -836,16 +1064,12 @@ pub(crate) fn invoke_custody_transfer_v1(
     if get(leg.window, 0)?.key != &authority {
         return Err(ScoringDealerErrorV1::Release.into());
     }
-    // The bump relay: Custody derives its replay and transfer authority for
-    // itself; `[0, 0]` after the request means "search", exactly as the hot
-    // path's `child_relay` documents.
     let mut data = Vec::with_capacity(request_bytes.len() + CUSTODY_BUMP_RELAY_BYTES_V1);
-    data.extend_from_slice(&request_bytes);
+    data.extend_from_slice(request_bytes);
     data.extend_from_slice(&[0_u8; CUSTODY_BUMP_RELAY_BYTES_V1]);
-    let metas = child_metas_v1(leg.window, custody_privileges_v1(OperationV1::Transfer))?;
     let instruction = Instruction {
         program_id: *leg.custody_program.key,
-        accounts: metas,
+        accounts: child_metas_v1(leg.window, custody_privileges_v1(OperationV1::Transfer))?,
         data,
     };
     let mut infos = Vec::with_capacity(leg.window.len() + 1);
@@ -873,6 +1097,41 @@ pub(crate) fn invoke_custody_transfer_v1(
         return Err(ScoringDealerErrorV1::Custody.into());
     }
     Ok(())
+}
+
+fn token_instruction<const ACCOUNTS: usize, const DATA: usize>(
+    specification: &InstructionSpec<ACCOUNTS, DATA>,
+) -> Instruction {
+    let mut accounts = Vec::with_capacity(ACCOUNTS);
+    for role in specification.accounts() {
+        let address = Pubkey::new_from_array(*role.address());
+        accounts.push(if role.is_writable() {
+            AccountMeta::new(address, role.is_signer())
+        } else {
+            AccountMeta::new_readonly(address, role.is_signer())
+        });
+    }
+    Instruction {
+        program_id: Pubkey::new_from_array(*specification.program_id()),
+        accounts,
+        data: specification.data().to_vec(),
+    }
+}
+
+/// The only delegated profile Dealer may compose: one exact debit whose
+/// allowance is consumed and whose delegate is revoked by Custody.
+const fn is_terminal_delegated_debit_v2(
+    starts_atomic_debit: bool,
+    terminal: bool,
+    total_debit: u64,
+    allowance_before: u64,
+    allowance_after: u64,
+) -> bool {
+    starts_atomic_debit
+        && terminal
+        && total_debit != 0
+        && total_debit == allowance_before
+        && allowance_after == 0
 }
 
 /// Commit the fund: the bytes must still be the ones this route read, and
@@ -938,6 +1197,16 @@ mod tests {
     use dclutch_custody::{INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OPEN_VAULT_ACCOUNT_COUNT_V1};
 
     use super::*;
+
+    /// Dealer's external debit is one exact delegation, not standing custody
+    /// authority. A residual allowance or a split debit refuses before CPI.
+    #[test]
+    fn delegated_dealer_debit_is_terminal_and_exact() {
+        assert!(is_terminal_delegated_debit_v2(true, true, 47, 47, 0));
+        assert!(!is_terminal_delegated_debit_v2(true, true, 47, 47, 1));
+        assert!(!is_terminal_delegated_debit_v2(true, true, 47, 46, 0));
+        assert!(!is_terminal_delegated_debit_v2(false, true, 47, 47, 0));
+    }
 
     /// The privileges this program writes into a child's metas are the child's
     /// own, coordinate for coordinate, and not a rule this program invented.

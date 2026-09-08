@@ -11,6 +11,7 @@ import {
   DEVNET_DEPLOYMENT_V1,
   DEVNET_PROGRAM_EVIDENCE_V1,
   LOCAL_DEPLOYMENT_V1,
+  DEVNET_RELEASE_EVIDENCE_V1,
 } from '@dclutch/sdk/deployments';
 
 describe('public deployment evidence', () => {
@@ -36,6 +37,9 @@ describe('public deployment evidence', () => {
     }
     expect(document.genesisHash).toBe(DEVNET_DEPLOYMENT_V1.genesisHash);
     expect(document.activationCache).toBe(DEVNET_DEPLOYMENT_V1.activationCache);
+    expect(document.cohort).toBe(DEVNET_RELEASE_EVIDENCE_V1.cohort);
+    expect(document.sourceCommit).toBe(DEVNET_RELEASE_EVIDENCE_V1.sourceCommit);
+    expect(document.evidence).toBe(DEVNET_RELEASE_EVIDENCE_V1.evidencePath);
   });
 
   it('downloads the exact projection as one bounded JSON document', () => {
@@ -65,7 +69,14 @@ describe('public deployment evidence', () => {
     const local = renderToStaticMarkup(
       <PublicDeploymentEvidence deployment={LOCAL_DEPLOYMENT_V1} />,
     );
-    expect(local).toContain('Addresses came from your own configuration');
+    expect(local).toContain('Selected deployment: Local');
     expect(local).not.toContain('download=');
+  });
+
+  it('does not attach checked evidence to different programs carrying the devnet label', () => {
+    const changed = { ...DEVNET_DEPLOYMENT_V1, programs: { ...DEVNET_DEPLOYMENT_V1.programs, core: LOCAL_DEPLOYMENT_V1.programs.core } };
+    const html = renderToStaticMarkup(<PublicDeploymentEvidence deployment={changed} />);
+    expect(html).not.toContain('Checked deployment evidence');
+    expect(html).not.toContain('download=');
   });
 });

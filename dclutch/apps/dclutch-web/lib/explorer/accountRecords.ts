@@ -26,6 +26,18 @@
  *     Where the emitted name settles neither, both forms are shown.
  */
 import { PublicKey } from '@solana/web3.js';
+import * as SCORING from '@dclutch/sdk/generated/scoringRuleV1';
+import {
+  RULE_MAGIC,
+  FUND_MAGIC,
+  QUOTE_MAGIC,
+  FOUND_REQUEST_MAGIC,
+  QUOTE_REQUEST_MAGIC,
+  FILL_REQUEST_MAGIC,
+  WITHDRAW_REQUEST_MAGIC,
+  RECEIPT_MAGIC,
+  FILL_WITNESS_MAGIC,
+} from '@dclutch/sdk/generated/scoringRuleV1';
 
 import {
   STATE_MACHINE_RECORDS_V1,
@@ -793,6 +805,7 @@ export type RecordFieldKind =
   | 'identity32'
   | 'enum'
   | 'reserved'
+  | 'u64-vector'
   | 'span';
 
 export type EnumTag = Readonly<{ tag: number; name: string }>;
@@ -1035,6 +1048,188 @@ const SCALAR_BYTES = 8;
  * new magic in a generated module fails that gate until it appears here.
  */
 const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
+  // Scoring Dealer layouts emitted from ScoringRuleAbiV1.lean.
+  {
+    magic: RULE_MAGIC,
+    name: 'Scoring Dealer rule',
+    family: 'Trading',
+    summary: 'The sealed pricing rule and its founding subsidy.',
+    width: { kind: 'fixed', bytes: SCORING.RULE_BYTES },
+    fields: [
+      field('Schema version', SCORING.RULE_VERSION_OFFSET, 'u16'),
+      field('Outcome count', SCORING.RULE_OUTCOME_COUNT_OFFSET, 'u8'),
+      field('Reserved', SCORING.RULE_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.RULE_MARKET_ID_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.RULE_DEALER_ID_OFFSET, 'identity'),
+      field('Liquidity parameter', SCORING.RULE_LIQUIDITY_OFFSET, 'u64'),
+      field('Price scale', SCORING.RULE_SCALE_OFFSET, 'u64'),
+      field('Price tolerance', SCORING.RULE_TOLERANCE_OFFSET, 'u64'),
+      field('Founding subsidy in claim units', SCORING.RULE_SUBSIDY_OFFSET, 'u64'),
+    ],
+    note: null,
+  },
+  {
+    magic: FUND_MAGIC,
+    name: 'Scoring Dealer fund',
+    family: 'Trading',
+    summary: 'The sponsor, collateral vault, cash, inventory accounting, and revision of a Dealer.',
+    width: { kind: 'fixed', bytes: SCORING.FUND_BYTES },
+    fields: [
+      field('Schema version', SCORING.FUND_VERSION_OFFSET, 'u16'),
+      field('Outcome count', SCORING.FUND_OUTCOME_COUNT_OFFSET, 'u8'),
+      field('Phase', SCORING.FUND_PHASE_OFFSET, 'enum', { tags: [{ tag: SCORING.FUND_PHASE_OPEN, name: 'Open' }, { tag: SCORING.FUND_PHASE_RETIRED, name: 'Retired' }] }),
+      field('Reserved', SCORING.FUND_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.FUND_MARKET_ID_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.FUND_DEALER_ID_OFFSET, 'identity'),
+      field('Sponsor', SCORING.FUND_SPONSOR_OFFSET, 'pubkey'),
+      field('Rule digest', SCORING.FUND_RULE_DIGEST_OFFSET, 'identity'),
+      field('Collateral vault', SCORING.FUND_VAULT_OFFSET, 'pubkey'),
+      field('Collateral atoms per claim unit', SCORING.FUND_CLAIM_UNIT_ATOMS_OFFSET, 'u64'),
+      field('Cash in collateral atoms', SCORING.FUND_CASH_OFFSET, 'u64'),
+      field('Minimum inventory in claim units', SCORING.FUND_INVENTORY_MINIMUM_OFFSET, 'u64'),
+      field('Liquidity cost in claim units', SCORING.FUND_LIQUIDITY_COST_OFFSET, 'u64'),
+      field('Fund revision', SCORING.FUND_REVISION_OFFSET, 'u64'),
+      field('PDA bump', SCORING.FUND_BUMP_OFFSET, 'u8'),
+      field('Reserved tail', SCORING.FUND_RESERVED_TAIL_OFFSET, 'reserved'),
+    ],
+    note: null,
+  },
+  {
+    magic: QUOTE_MAGIC,
+    name: 'Scoring Dealer quote',
+    family: 'Trading',
+    summary: 'Prices recorded for one fund revision; this record does not guarantee a later fill.',
+    width: { kind: 'fixed', bytes: SCORING.QUOTE_BYTES },
+    fields: [
+      field('Schema version', SCORING.QUOTE_VERSION_OFFSET, 'u16'),
+      field('Outcome count', SCORING.QUOTE_OUTCOME_COUNT_OFFSET, 'u8'),
+      field('Reserved', SCORING.QUOTE_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.QUOTE_MARKET_ID_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.QUOTE_DEALER_ID_OFFSET, 'identity'),
+      field('Quoted fund revision', SCORING.QUOTE_FUND_REVISION_OFFSET, 'u64'),
+      field('Quote slot', SCORING.QUOTE_SLOT_OFFSET, 'u64'),
+      field('Price denominator', SCORING.QUOTE_SCALE_OFFSET, 'u64'),
+      field('Scaled prices by coordinate', SCORING.QUOTE_PRICES_OFFSET, 'u64-vector'),
+      field('PDA bump', SCORING.QUOTE_BUMP_OFFSET, 'u8'),
+      field('Reserved tail', SCORING.QUOTE_RESERVED_TAIL_OFFSET, 'reserved'),
+    ],
+    note: 'Vectors show every stored coordinate; entries beyond the outcome count must be zero. This is a layout reading, not a pricing or conservation certificate.',
+  },
+  {
+    magic: FOUND_REQUEST_MAGIC,
+    name: 'Scoring Dealer founding request',
+    family: 'Trading',
+    summary: 'The sponsor commits pricing parameters and deposits the capital needed to found a Dealer.',
+    width: { kind: 'fixed', bytes: SCORING.FOUND_REQUEST_BYTES },
+    fields: [
+      field('Schema version', SCORING.FOUND_REQUEST_VERSION_OFFSET, 'u16'),
+      field('Outcome count', SCORING.FOUND_REQUEST_OUTCOME_COUNT_OFFSET, 'u8'),
+      field('Reserved', SCORING.FOUND_REQUEST_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.FOUND_REQUEST_MARKET_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.FOUND_REQUEST_DEALER_ID_OFFSET, 'identity'),
+      field('Selected release set', SCORING.FOUND_REQUEST_RELEASE_SET_OFFSET, 'identity'),
+      field('Liquidity parameter', SCORING.FOUND_REQUEST_LIQUIDITY_OFFSET, 'u64'),
+      field('Price scale', SCORING.FOUND_REQUEST_SCALE_OFFSET, 'u64'),
+      field('Price tolerance', SCORING.FOUND_REQUEST_TOLERANCE_OFFSET, 'u64'),
+      field('Deposit in collateral atoms', SCORING.FOUND_REQUEST_DEPOSIT_OFFSET, 'u64'),
+      field('Collateral atoms per claim unit', SCORING.FOUND_REQUEST_CLAIM_UNIT_ATOMS_OFFSET, 'u64'),
+      field('Market generation', SCORING.FOUND_REQUEST_GENERATION_OFFSET, 'u64'),
+    ],
+    note: null,
+  },
+  {
+    magic: QUOTE_REQUEST_MAGIC,
+    name: 'Scoring Dealer quote request',
+    family: 'Trading',
+    summary: 'Requests a quote against the exact fund revision the caller read.',
+    width: { kind: 'fixed', bytes: SCORING.QUOTE_REQUEST_BYTES },
+    fields: [
+      field('Schema version', SCORING.QUOTE_REQUEST_VERSION_OFFSET, 'u16'),
+      field('Reserved', SCORING.QUOTE_REQUEST_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.QUOTE_REQUEST_MARKET_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.QUOTE_REQUEST_DEALER_ID_OFFSET, 'identity'),
+      field('Expected fund revision', SCORING.QUOTE_REQUEST_EXPECTED_FUND_REVISION_OFFSET, 'u64'),
+    ],
+    note: null,
+  },
+  {
+    magic: FILL_REQUEST_MAGIC,
+    name: 'Scoring Dealer fill request',
+    family: 'Trading',
+    summary: 'The taker proposes a revision-bound exchange of claims at an exact scaled price vector.',
+    width: { kind: 'fixed', bytes: SCORING.FILL_REQUEST_BYTES },
+    fields: [
+      field('Schema version', SCORING.FILL_REQUEST_VERSION_OFFSET, 'u16'),
+      field('Outcome count', SCORING.FILL_REQUEST_OUTCOME_COUNT_OFFSET, 'u8'),
+      field('Reserved', SCORING.FILL_REQUEST_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.FILL_REQUEST_MARKET_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.FILL_REQUEST_DEALER_ID_OFFSET, 'identity'),
+      field('Taker', SCORING.FILL_REQUEST_TAKER_OFFSET, 'pubkey'),
+      field('Expected fund revision', SCORING.FILL_REQUEST_EXPECTED_FUND_REVISION_OFFSET, 'u64'),
+      field('Complete sets minted at par', SCORING.FILL_REQUEST_MINT_OFFSET, 'u64'),
+      field('Scaled prices by coordinate', SCORING.FILL_REQUEST_PRICES_OFFSET, 'u64-vector'),
+      field('Claims the Dealer receives', SCORING.FILL_REQUEST_RECEIVE_OFFSET, 'u64-vector'),
+      field('Claims the Dealer delivers', SCORING.FILL_REQUEST_DELIVER_OFFSET, 'u64-vector'),
+    ],
+    note: 'Vectors show every stored coordinate; entries beyond the outcome count must be zero. This is a layout reading, not a pricing or conservation certificate.',
+  },
+  {
+    magic: WITHDRAW_REQUEST_MAGIC,
+    name: 'Scoring Dealer withdrawal request',
+    family: 'Trading',
+    summary: 'The sponsor requests collateral that the fund can release without violating its capital floor.',
+    width: { kind: 'fixed', bytes: SCORING.WITHDRAW_REQUEST_BYTES },
+    fields: [
+      field('Schema version', SCORING.WITHDRAW_REQUEST_VERSION_OFFSET, 'u16'),
+      field('Reserved', SCORING.WITHDRAW_REQUEST_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.WITHDRAW_REQUEST_MARKET_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.WITHDRAW_REQUEST_DEALER_ID_OFFSET, 'identity'),
+      field('Expected fund revision', SCORING.WITHDRAW_REQUEST_EXPECTED_FUND_REVISION_OFFSET, 'u64'),
+      field('Withdrawal in collateral atoms', SCORING.WITHDRAW_REQUEST_AMOUNT_OFFSET, 'u64'),
+    ],
+    note: null,
+  },
+  {
+    magic: RECEIPT_MAGIC,
+    name: 'Scoring Dealer receipt',
+    family: 'Trading',
+    summary: 'Return data binds an executed request to the fund state it produced.',
+    width: { kind: 'fixed', bytes: SCORING.RECEIPT_BYTES },
+    fields: [
+      field('Schema version', SCORING.RECEIPT_VERSION_OFFSET, 'u16'),
+      field('Route', SCORING.RECEIPT_ROUTE_OFFSET, 'enum', { tags: [{ tag: SCORING.ROUTE_FOUND, name: 'Found' }, { tag: SCORING.ROUTE_QUOTE, name: 'Quote' }, { tag: SCORING.ROUTE_FILL, name: 'Fill' }, { tag: SCORING.ROUTE_WITHDRAW, name: 'Withdraw' }] }),
+      field('Outcome count', SCORING.RECEIPT_OUTCOME_COUNT_OFFSET, 'u8'),
+      field('Reserved', SCORING.RECEIPT_RESERVED_OFFSET, 'reserved'),
+      field('Request digest', SCORING.RECEIPT_REQUEST_DIGEST_OFFSET, 'identity'),
+      field('Market', SCORING.RECEIPT_MARKET_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.RECEIPT_DEALER_ID_OFFSET, 'identity'),
+      field('Resulting fund revision', SCORING.RECEIPT_FUND_REVISION_OFFSET, 'u64'),
+      field('Cash in collateral atoms', SCORING.RECEIPT_CASH_OFFSET, 'u64'),
+      field('Minimum inventory in claim units', SCORING.RECEIPT_INVENTORY_MINIMUM_OFFSET, 'u64'),
+      field('Liquidity cost in claim units', SCORING.RECEIPT_LIQUIDITY_COST_OFFSET, 'u64'),
+      field('Dealer paid in claim units', SCORING.RECEIPT_DEALER_PAYS_OFFSET, 'u64'),
+      field('Dealer received in claim units', SCORING.RECEIPT_DEALER_RECEIVES_OFFSET, 'u64'),
+      field('Resulting fund digest', SCORING.RECEIPT_FUND_DIGEST_OFFSET, 'identity'),
+    ],
+    note: null,
+  },
+  {
+    magic: FILL_WITNESS_MAGIC,
+    name: 'Scoring Dealer accelerator witness',
+    family: 'Trading',
+    summary: 'The embedded rule and inventory used by the accelerator to evaluate a Dealer fill.',
+    width: { kind: 'fixed', bytes: SCORING.FILL_WITNESS_BYTES },
+    fields: [
+      field('Schema version', SCORING.FILL_WITNESS_VERSION_OFFSET, 'u16'),
+      field('Outcome count', SCORING.FILL_WITNESS_OUTCOME_COUNT_OFFSET, 'u8'),
+      field('Reserved', SCORING.FILL_WITNESS_RESERVED_OFFSET, 'reserved'),
+      field('Embedded sealed rule', SCORING.FILL_WITNESS_RULE_OFFSET, 'span', { note: 'The complete scoring-rule record, including its own header.' }),
+      field('Inventory in claim units', SCORING.FILL_WITNESS_INVENTORY_OFFSET, 'u64-vector'),
+      field('Fund revision', SCORING.FILL_WITNESS_FUND_REVISION_OFFSET, 'u64'),
+      field('Cash in collateral atoms', SCORING.FILL_WITNESS_CASH_OFFSET, 'u64'),
+    ],
+    note: 'Vectors show every stored coordinate; entries beyond the outcome count must be zero. This is a layout reading, not a pricing or conservation certificate.',
+  },
   // ---------------------------------------------------------------- Core / Realm
   {
     magic: CORE_STATE_MAGIC,
@@ -2528,6 +2723,7 @@ export function trailingRecordForData(data: Uint8Array): Readonly<{ offset: numb
 
 export type DecodedFieldValue =
   | Readonly<{ form: 'scalar'; text: string }>
+  | Readonly<{ form: 'vector'; values: ReadonlyArray<string> }>
   | Readonly<{ form: 'address'; base58: string }>
   | Readonly<{ form: 'identity'; hex: string }>
   | Readonly<{ form: 'both'; base58: string | null; hex: string }>
@@ -2628,6 +2824,7 @@ function fieldWidth(spec: RecordSpec, index: number, headerEnd: number): number 
     case 'identity32':
       return IDENTITY_BYTES;
     case 'reserved':
+    case 'u64-vector':
     case 'span': {
       const next = spec.fields
         .map((entry) => entry.offset)
@@ -2707,6 +2904,15 @@ function decodeValue(field_: RecordField, data: Uint8Array, width: number): Deco
       return Object.freeze({ form: 'scalar', text: readUnsigned(data, field_.offset, width).toString() });
     case 'i64':
       return Object.freeze({ form: 'scalar', text: BigInt.asIntN(64, readUnsigned(data, field_.offset, width)).toString() });
+    case 'u64-vector': {
+      if (width % SCALAR_WIDTHS.u64 !== 0) {
+        return Object.freeze({ form: 'refused', reason: 'The declared vector span does not contain whole u64 coordinates.' });
+      }
+      return Object.freeze({ form: 'vector', values: Object.freeze(Array.from(
+        { length: width / SCALAR_WIDTHS.u64 },
+        (_, index) => readUnsigned(data, field_.offset + index * SCALAR_WIDTHS.u64, SCALAR_WIDTHS.u64).toString(),
+      )) });
+    }
     case 'i128':
       return Object.freeze({ form: 'scalar', text: BigInt.asIntN(128, readUnsigned(data, field_.offset, width)).toString() });
     case 'scale-exponent': {

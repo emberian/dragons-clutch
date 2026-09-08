@@ -62,7 +62,10 @@ pub(crate) struct SeriesFoundPrepareSelectionInputV1<'a> {
     /// compiler derives every Custody receipt commitment from this observation
     /// and the canonical request transitions.
     pub(crate) founder_source_amount: u64,
-    pub(crate) geometry: crate::series_source::SeriesObservedGeometryV1,
+    /// Present only when emitting immutable selected artifacts.  The typed
+    /// preprofile derives the child-bank first so a live hydrator can observe
+    /// its account geometry without inventing a placeholder profile.
+    pub(crate) geometry: Option<crate::series_source::SeriesObservedGeometryV1>,
     pub(crate) consume_shadow_certificate_program: dclutch_core_contract::ContentId,
     pub(crate) selected_release: dclutch_core_contract::ContentId,
     pub(crate) funding_ledger_slot_count: u16,
@@ -75,6 +78,11 @@ pub(crate) struct SeriesFoundPrepareSelectionInputV1<'a> {
 pub(crate) struct CompiledSeriesFoundPrepareSelectionV1 {
     pub(crate) parents: SeriesPrepareParentsV1,
     pub(crate) predicted_core: dclutch_market::CoreState,
+    /// Canonical child requests before they are embedded in the selected
+    /// artifact closure.  The live geometry hydrator derives the 111 Prepare
+    /// account observations from this semantic-owner output before a caller
+    /// publishes the selected bytes.
+    pub(crate) prepare_children: SeriesChildBankV1,
     pub(crate) selected: crate::model::SelectedCapabilityV1,
 }
 
@@ -110,14 +118,27 @@ pub(crate) fn require_series_selection_invariance_v1(
     Ok(())
 }
 
-/// Compile a Series-selected capability from admitted two-occurrence facts.
+/// Semantic child-bank facts derived before any account-profile bytes are
+/// emitted.  The runtime hydrator consumes this output to map every Prepare
+/// coordinate to a real address and observation, then hands the resulting
+/// geometry back to [`compile_series_found_prepare_selection_v1`].
 ///
-/// The function deliberately projects only the first occurrence.  The
-/// immutable Template still commits both occurrence records, and the release
-/// compiler owns the bounded bank for every action of that Template.
-pub(crate) fn compile_series_found_prepare_selection_v1(
-    mut input: SeriesFoundPrepareSelectionInputV1<'_>,
-) -> Result<CompiledSeriesFoundPrepareSelectionV1> {
+/// This split deliberately keeps a missing future account out of an
+/// ``ObservedGeometry`` placeholder: the bank is already a semantic-owner
+/// output, while the profile is necessarily a later validator observation.
+pub(crate) struct SeriesFoundPreparePreprofileV1 {
+    pub(crate) parents: SeriesPrepareParentsV1,
+    pub(crate) predicted_core: dclutch_market::CoreState,
+    pub(crate) prepare_children: SeriesChildBankV1,
+    physical: SeriesPhysicalMaterialV1,
+    projected_custody: SeriesProjectedCustodyPhysicalV3,
+}
+
+/// Derive the current occurrence's parent requests, projected physical state,
+/// and canonical child bank without requiring a caller-supplied width array.
+pub(crate) fn derive_series_found_prepare_preprofile_v1(
+    input: &mut SeriesFoundPrepareSelectionInputV1<'_>,
+) -> Result<SeriesFoundPreparePreprofileV1> {
     let parents = derive_series_prepare_parents_v1(input.lifecycle)?;
     input.material.prepare_parent_digest = parents.prepare_digest;
     input.material.expire_parent_digest = parents.expire_digest;
@@ -354,15 +375,36 @@ pub(crate) fn compile_series_found_prepare_selection_v1(
         expected_ticket_revision: 0,
     })
     .map_err(|error| Error::new(format!("Series child bank refused: {error:?}")))?;
+    Ok(SeriesFoundPreparePreprofileV1 {
+        parents,
+        predicted_core,
+        prepare_children: bank,
+        physical,
+        projected_custody: children.projected_physical,
+    })
+}
+
+/// Compile a Series-selected capability from admitted two-occurrence facts.
+///
+/// The function deliberately projects only the first occurrence.  The
+/// immutable Template still commits both occurrence records, and the release
+/// compiler owns the bounded bank for every action of that Template.
+pub(crate) fn compile_series_found_prepare_selection_v1(
+    mut input: SeriesFoundPrepareSelectionInputV1<'_>,
+) -> Result<CompiledSeriesFoundPrepareSelectionV1> {
+    let preprofile = derive_series_found_prepare_preprofile_v1(&mut input)?;
+    let geometry = input.geometry.ok_or_else(|| {
+        Error::new("Series selected compilation requires the hydrated Prepare geometry")
+    })?;
     let assembled = crate::series_source::assemble_series_selected_source_v1(
         crate::series_source::SeriesSourceAssemblyV1 {
             lifecycle: input.lifecycle,
             product: input.product,
             registry_program: input.registry_program,
-            custody: physical.prepare,
-            projected_custody: children.projected_physical,
-            children: bank,
-            geometry: input.geometry,
+            custody: preprofile.physical.prepare,
+            projected_custody: preprofile.projected_custody,
+            children: preprofile.prepare_children.clone(),
+            geometry,
             consume_shadow_certificate_program: input.consume_shadow_certificate_program,
             selected_release: input.selected_release,
             funding_ledger_slot_count: input.funding_ledger_slot_count,
@@ -371,8 +413,9 @@ pub(crate) fn compile_series_found_prepare_selection_v1(
         },
     )?;
     Ok(CompiledSeriesFoundPrepareSelectionV1 {
-        parents,
-        predicted_core,
+        parents: preprofile.parents,
+        predicted_core: preprofile.predicted_core,
+        prepare_children: preprofile.prepare_children,
         selected: assembled.selected,
     })
 }
@@ -893,14 +936,14 @@ mod tests {
             permit_bump,
             projected_bump: 1,
             founder_source_amount: escrow.hoard_principal(),
-            geometry: crate::series_source::SeriesObservedGeometryV1 {
+            geometry: Some(crate::series_source::SeriesObservedGeometryV1 {
                 prepare_fixed_data_lengths: [0; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize],
                 prepare_ticket_rent_lamports: rent
                     .minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3),
                 consume_fixed_data_lengths: [0; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
                 consume_funding_count: 1,
                 expire_fixed_data_lengths: [0; SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize],
-            },
+            }),
             consume_shadow_certificate_program: ContentId::new([62; 32])
                 .expect("shadow certificate program"),
             selected_release: template.release_set(),
@@ -964,6 +1007,28 @@ mod tests {
             &Pubkey::new_from_array([13; 32]),
         )
         .0
+    }
+
+    #[test]
+    fn preprofile_derives_child_bank_without_geometry_placeholder() {
+        let prepared = prepared_founder();
+        let mut input = compiler_input(
+            &prepared,
+            Pubkey::new_unique(),
+            &prepared.admitted.tickets()[0],
+        );
+        input.geometry = None;
+        let preprofile = derive_series_found_prepare_preprofile_v1(&mut input)
+            .expect("typed preprofile derives before the geometry observer");
+        assert!(!preprofile.parents.prepare_request.is_empty());
+        assert_eq!(
+            preprofile
+                .prepare_children
+                .prepare_requests()
+                .projected_initialize
+                .len(),
+            dclutch_trading_sbf::series::artifacts_v3::SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3
+        );
     }
 
     #[test]

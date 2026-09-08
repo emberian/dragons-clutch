@@ -1,6 +1,7 @@
 'use client';
 
 import PageShell from '@/components/PageShell';
+import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -133,6 +134,8 @@ function FieldValue({ field }: Readonly<{ field: DecodedField }>) {
   switch (value.form) {
     case 'scalar':
       return <span className="xp-num">{value.text}</span>;
+    case 'vector':
+      return <ol className="xp-scalars">{value.values.map((text, index) => <li key={index}><em>{index}</em>{text}</li>)}</ol>;
     case 'address':
       return (
         <Jump view="account" value={value.base58}>
@@ -673,7 +676,7 @@ function ProgramCard({ card }: Readonly<{ card: ProtocolProgramCardV1 }>) {
       <div className="xp-node-head">
         <strong>{roleTitle(card.role)}</strong>
         <Chip tone={card.status === 'live' ? 'pass' : 'fail'}>
-          {card.status === 'live' ? 'live · executable' : card.status === 'absent' ? 'ABSENT' : 'NOT EXECUTABLE'}
+          {card.status === 'live' ? 'executable account' : card.status === 'absent' ? 'absent' : 'not executable'}
         </Chip>
       </div>
       <p>{card.meaning}</p>
@@ -728,19 +731,20 @@ function ProtocolHomeView({ state, deployment }: Readonly<{ state: Async<Protoco
       )}
 
       <section className="xp-panel">
+        <p className="eyebrow">Recent protocol transactions</p>
+        {home.activity.length === 0 ? null : <ActivityRows rows={home.activity} />}
+        <Honest>{home.activityNote}</Honest>
+      </section>
+
+      <section className="xp-panel">
         <p className="eyebrow">
-          The {home.cards.length} programs · read live at finalized slot {home.observedSlot} · {home.clusterName} · solana {home.facts.solanaCore}
+          {home.cards.length} program accounts · finalized slot {home.observedSlot} · {home.clusterName} · solana {home.facts.solanaCore}
         </p>
         <div className="xp-node-grid">
           {home.cards.map((card) => <ProgramCard key={card.role} card={card} />)}
         </div>
         <Honest>{deployment.provenance}</Honest>
-      </section>
-
-      <section className="xp-panel">
-        <p className="eyebrow">Recent protocol transactions · decoded by name, newest first</p>
-        {home.activity.length === 0 ? null : <ActivityRows rows={home.activity} />}
-        <Honest>{home.activityNote}</Honest>
+        <Honest>An executable Program account can outlive its code. <Anchor href="/operate">Inspect the deployment</Anchor> to check its ProgramData and release.</Honest>
       </section>
     </div>
   );
@@ -965,12 +969,16 @@ export default function ChainExplorer() {
     <PageShell className="shell xp" header={<Nav current="/explorer" status="read-only projection" />} onClick={onJump}>
 
       <section className="xp-hero">
-        <p className="eyebrow">{deployedProgramRolesV1(deployment).length} devnet programs, live · no wallet, no setup</p>
-        <h1>Every record the protocol writes, decoded by its own schema.</h1>
+        <p className="eyebrow">Protocol explorer · {deployment.label}</p>
+        <h1>Follow the market.<br />Inspect the record.</h1>
         <p className="lede">
-          Paste an address, a signature, or a program ID. The {deployedProgramRolesV1(deployment).length} {deployment.label} programs are below.
+          Look up an account or transaction, trace a market&rsquo;s collateral and claims,
+          or browse the {deployedProgramRolesV1(deployment).length} configured programs. No wallet needed.
         </p>
-        <PublicDeploymentEvidence deployment={deployment} />
+        <div className="direct-actions">
+          <Anchor className="secondary-action" href="/markets">Choose a market →</Anchor>
+          <Anchor className="secondary-action" href="/activity">Browse market activity →</Anchor>
+        </div>
       </section>
 
       <form className="xp-chain" onSubmit={query.view === 'record' ? (event) => void runRecord(event) : submitSearch}>
@@ -1024,6 +1032,11 @@ export default function ChainExplorer() {
           </>
         )}
       </section>
+
+      <details className="xp-panel xp-census">
+        <summary>Deployment record and program addresses</summary>
+        <PublicDeploymentEvidence deployment={deployment} />
+      </details>
 
       <details className="xp-panel xp-census">
         <summary>Developer note · the routes no leading magic selects</summary>
