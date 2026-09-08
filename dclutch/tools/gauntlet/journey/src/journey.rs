@@ -35,7 +35,7 @@ const TRANSCRIPT_SCHEMA_V1: &str = "dclutch-journey-transcript-v1";
 /// Core's provider execute 833 seconds after the primary window ended: the
 /// former 120-second interval had expired before the real Pyth transport began
 /// and the kernel correctly refused `DeadlineElapsed`.  This preserves at
-/// least 67 seconds of execution headroom on that measured path; remeasure it
+/// 187 seconds of execution headroom on that measured path; remeasure it
 /// when the provider route's transaction profile changes.
 const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:900";
 

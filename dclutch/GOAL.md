@@ -118,6 +118,8 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 | 2026-09-07 | Ensemble full funding selection is carried through operator, Core and Resolution; fresh diagnostic capture executes | [mask runtime evidence](docs/evidence/ENSEMBLE_MASK_RUNTIME_PROGRAM_TEST_2026_09_07.md) | diagnostic mixed artifact set; terminal validator execution still owed |
 | 2026-09-07 | preserved Direct journey reaches checkpointed retirement, exact refunds and finalized absence of Market, hoard, replay, credit and checkpoint | [diagnostic retirement evidence](docs/evidence/JOURNEY_RUNTIME567_DIAGNOSTIC_TAIL_2026_09_07.md) | runtime `56767e555`; fresh final-build repetition remains owed |
 
+| 2026-09-07 | Recovery exhaustion admits failure and drains the hoard through three ordinary founder payouts; artifact hashes and provenance limits are recorded | [exhaust evidence](docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md) | `71286f9bb` diagnostic host; `56767e555` runtime |
+
 A new delta is one new row here and one entry in the store it names. The
 GOAL ledger file is closed; the entries main appended during the swarm are
 `docs/ledger/2026-09-04.md`, verbatim, and later narrative goes in a new dated

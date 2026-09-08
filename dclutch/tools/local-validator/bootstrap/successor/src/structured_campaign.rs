@@ -187,12 +187,11 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             .checked_mul(2)
             .ok_or_else(|| Error::new("Structured campaign shard denominator overflows"))?
     };
-    // The composition encoder owns a fractional graph root, so its canonical
-    // denominator is the same selected Structured denominator.  The Portfolio
-    // supplies sparse coordinates and ratios; it does not authorize a
-    // denominator-one graph root.
-    let composition_denominator = denominator;
-    let scale = 1_u64;
+    // The graph keeps the Portfolio's exact payoff in lowest terms. Receipt
+    // atoms use the selected fractional unit; scale both sides together so
+    // raising that unit never changes the economic recipe.
+    let composition_denominator = portfolio_denominator;
+    let scale = denominator / portfolio_denominator;
     let mut coordinates = Vec::new();
     let mut composition_coefficients = Vec::new();
     let mut coefficients = Vec::new();

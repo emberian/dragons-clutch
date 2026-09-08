@@ -11,7 +11,8 @@ use dclutch_claims::{
     protocol_position_v2::{ProtocolPositionAdmissionSeedsV2, ProtocolPositionSeedsV2},
 };
 use dclutch_custody::{
-    CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+    CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
+    CustodyVaultSeedsV1, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
 use dclutch_market::{Action, ProjectFoundReceiptV2, Request};
 use dclutch_market::{Identity, SeriesFoundingPermitSeedsV1};
@@ -305,7 +306,11 @@ pub(crate) fn compile_series_found_prepare_selection_v1(
         observed_position_lamports: physical.claims.position_lamports,
         observed_admission_lamports: physical.claims.admission_lamports,
         permit_bump: input.permit_bump,
-        normal_replay_revision: replay.next_revision,
+        // This is the realized Market Hoard's fresh Trading replay, not the
+        // Series escrow source `replay` above.  Realization rewrites the
+        // projected state in place to this canonical cursor; Custody names
+        // the same cursor for its founding source compartment.
+        normal_replay_revision: SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
     };
     let children = derive_series_founding_children_v1(SeriesFoundingChildrenInputV1 {
         template: input.lifecycle.template_bytes,
@@ -650,4 +655,357 @@ pub(crate) fn materialize_series_found_prepare_v1(
         normal_replay,
         claims: input.claims_vacancy,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use dclutch_claims::{
+        founding_v5::ClaimsFoundingAggregateSeedsV5,
+        protocol_position_v2::{ProtocolPositionAdmissionSeedsV2, ProtocolPositionSeedsV2},
+    };
+    use dclutch_core_contract::ContentId;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_market::{
+        SeriesFoundingPermitSeedsV1,
+        capability_program::{
+            CapabilityRootHeaderV1, SelectedRecordBumpsV1, v4::CapabilityProgramV4,
+        },
+    };
+    use dclutch_operator::series_lifecycle_v3::{
+        SeriesCurrentOccurrenceV3, SeriesLifecycleSnapshotV3,
+    };
+    use dclutch_product::admission::{
+        PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+    };
+    use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+    use dclutch_trading::series::replay::SeriesStateV3;
+    use dclutch_trading::series::{
+        AuthenticatedProductProjectionV2, TemplateV3, admit_occurrence, admit_ticket,
+        pre_founding_series_escrow,
+    };
+    use dclutch_trading_sbf::series::{
+        account_profile_v4::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
+        expire_funding_artifacts_v5::SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5,
+        prepare_funding_artifacts_v5::SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5,
+    };
+    use sha2::Sha256;
+
+    use crate::{
+        core_bump_projection::CoreProductGraphProjectionV1,
+        market::{CoreProductGraphWalkV1, record_identity},
+        plan::{hex32, pubkey},
+        runtime::decode_hex,
+        series_founder::{
+            PreparedSeriesFounderV1, SeriesOccurrenceFundingV1, SeriesTemplatePolicyV1,
+            prepare_series_founder_from_market_v1,
+        },
+    };
+
+    fn content(hex: &str) -> ContentId {
+        ContentId::new(hex32(hex).expect("32-byte content identity"))
+            .expect("nonzero content identity")
+    }
+
+    fn prepared_founder() -> PreparedSeriesFounderV1 {
+        let (plan, input, mint, founder, refund_owner) =
+            crate::market::tests::selected_family_compiler_fixture_v1();
+        let id = |byte| ContentId::new([byte; 32]).expect("authored policy identity");
+        prepare_series_founder_from_market_v1(
+            &plan,
+            &input,
+            mint,
+            founder,
+            refund_owner,
+            SeriesTemplatePolicyV1 {
+                product_generator: id(1),
+                occurrence_generator: id(2),
+                capability_template: id(3),
+                product_derivation: id(4),
+                occurrence_derivation: id(5),
+                capability_derivation: id(6),
+                funding_derivation: id(7),
+                first_slot: 100,
+                period_slots: 10,
+                retry_window: 2,
+                close_rent: 1,
+            },
+            [
+                SeriesOccurrenceFundingV1 {
+                    funding_list: id(8),
+                    funds: dclutch_trading::series::FoundingFundsV3::new(9, 2, 3, 4)
+                        .expect("first funding"),
+                },
+                SeriesOccurrenceFundingV1 {
+                    funding_list: id(9),
+                    funds: dclutch_trading::series::FoundingFundsV3::new(18, 2, 3, 4)
+                        .expect("second funding"),
+                },
+            ],
+        )
+        .expect("canonical Market preview produces admitted Series leaves")
+    }
+
+    fn compiler_input<'a>(
+        prepared: &'a PreparedSeriesFounderV1,
+        parent_root: Pubkey,
+        ticket_bytes: &'a [u8],
+    ) -> SeriesFoundPrepareSelectionInputV1<'a> {
+        let registry = pubkey(&prepared.facts.registry_program).expect("Registry program");
+        let core = pubkey(&prepared.facts.core_program).expect("Core program");
+        let occurrence = admit_occurrence(
+            prepared.admitted.template(),
+            &prepared.admitted.occurrences()[0],
+            &prepared.admitted.siblings()[0],
+        )
+        .expect("first canonical occurrence");
+        let ticket = admit_ticket(ticket_bytes).expect("canonical ticket");
+        let product = AuthenticatedProductProjectionV2::new(
+            content(&prepared.facts.product.product_record),
+            content(&prepared.facts.product.stable_product_id),
+            content(&prepared.facts.product.result_domain),
+        );
+        let escrow = pre_founding_series_escrow(
+            occurrence,
+            ticket,
+            product,
+            dclutch_trading::series::AccountKeyV3::new(registry.to_bytes()).expect("Registry key"),
+        )
+        .expect("first canonical escrow");
+        let market = Pubkey::new_from_array(escrow.market().to_bytes());
+        let founder = Pubkey::new_from_array(escrow.founder().to_bytes());
+        // The Claims program has a fixed selected identity for the whole input,
+        // so derive all three vacant coordinates under that one program.
+        let claims = Pubkey::new_from_array([11; 32]);
+        let aggregate = Pubkey::find_program_address(
+            &ClaimsFoundingAggregateSeedsV5::new(market.to_bytes())
+                .expect("Claims aggregate seeds")
+                .as_slices(),
+            &claims,
+        )
+        .0;
+        let position = Pubkey::find_program_address(
+            &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), founder.to_bytes())
+                .expect("Claims position seeds")
+                .as_slices(),
+            &claims,
+        )
+        .0;
+        let admission = Pubkey::find_program_address(
+            &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), founder.to_bytes())
+                .expect("Claims admission seeds")
+                .as_slices(),
+            &claims,
+        )
+        .0;
+        let rent = Rent::default();
+        let custody = Pubkey::new_from_array([12; 32]);
+        let trading = Pubkey::new_from_array([13; 32]);
+        let rent_program = Pubkey::new_from_array([14; 32]);
+        let permit_bump = Pubkey::find_program_address(
+            &SeriesFoundingPermitSeedsV1::new(
+                Identity::new(escrow.release_set().to_bytes()).expect("release set identity"),
+                Identity::new(market.to_bytes()).expect("future Market identity"),
+                Identity::new(escrow.ticket_id().to_bytes()).expect("Ticket identity"),
+            )
+            .as_slices(),
+            &core,
+        )
+        .1;
+        let template = TemplateV3::decode(prepared.admitted.template()).expect("Template");
+        let lifecycle = SeriesLifecycleSnapshotV3 {
+            template_bytes: prepared.admitted.template(),
+            series: SeriesStateV3::new(template.close_rent()),
+            now_slot: 100,
+            current: Some(SeriesCurrentOccurrenceV3 {
+                occurrence_bytes: &prepared.admitted.occurrences()[0],
+                ticket_bytes,
+                siblings: &prepared.admitted.siblings()[0],
+                ticket_state: None,
+            }),
+            terminal_ticket: None,
+            observed_root_lamports: 1,
+            exact_root_rent: 1,
+            rent_sink: None,
+        };
+        SeriesFoundPrepareSelectionInputV1 {
+            lifecycle,
+            product,
+            registry_program: dclutch_trading::series::AccountKeyV3::new(registry.to_bytes())
+                .expect("Registry key"),
+            material: SeriesPhysicalMaterialInputV1 {
+                trading,
+                core,
+                custody,
+                claims,
+                rent_program,
+                market,
+                release_set: Identity::new(escrow.release_set().to_bytes())
+                    .expect("release set identity"),
+                ticket: Identity::new(escrow.ticket_id().to_bytes()).expect("Ticket identity"),
+                parent_root,
+                payer: Pubkey::new_from_array([15; 32]),
+                founder,
+                refund_owner: Pubkey::new_from_array(escrow.refund_owner().to_bytes()),
+                founder_source: Pubkey::new_from_array([16; 32]),
+                rent_credit: Pubkey::new_from_array([17; 32]),
+                mint: Pubkey::new_from_array([18; 32]),
+                token_program: Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
+                collateral_release: Identity::new([61; 32]).expect("collateral release"),
+                projection_receipt_digest: [1; 32],
+                prepare_parent_digest: [2; 32],
+                expire_parent_digest: [3; 32],
+                claims_vacancy: SeriesClaimsVacancyV1 {
+                    aggregate,
+                    position,
+                    admission,
+                    aggregate_lamports: 1,
+                    position_lamports: 1,
+                    admission_lamports: 1,
+                },
+                rent: rent.clone(),
+            },
+            core_product_graph: [
+                (
+                    PRODUCT_RECORD_SCHEMA_ID_V2,
+                    record_identity(&prepared.publication.product),
+                ),
+                (
+                    RESULT_DOMAIN_SCHEMA_ID_V2,
+                    record_identity(&prepared.publication.domain),
+                ),
+                (
+                    PORTFOLIO_SCHEMA_ID_V2,
+                    record_identity(&prepared.publication.portfolio),
+                ),
+                (
+                    GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+                    record_identity(&prepared.publication.basis),
+                ),
+            ],
+            core_projection: CoreProductGraphProjectionV1::Recorded,
+            core_walk: CoreProductGraphWalkV1::ProjectedFounding,
+            linked_basis_record_digest: record_identity(&prepared.publication.basis),
+            semantic_basis_id: content(&prepared.facts.occurrences[0].liability_basis).to_bytes(),
+            claims_rent_principals: [1, 1, 1],
+            permit_bump,
+            projected_bump: 1,
+            founder_source_amount: escrow.hoard_principal(),
+            geometry: crate::series_source::SeriesObservedGeometryV1 {
+                prepare_fixed_data_lengths: [0; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize],
+                prepare_ticket_rent_lamports: rent
+                    .minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3),
+                consume_fixed_data_lengths: [0; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
+                consume_funding_count: 1,
+                expire_fixed_data_lengths: [0; SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize],
+            },
+            consume_shadow_certificate_program: ContentId::new([62; 32])
+                .expect("shadow certificate program"),
+            selected_release: template.release_set(),
+            funding_ledger_slot_count: 1,
+            activation_deadline_slot: 101,
+            selected_manifest_entry_index: 0,
+            ticket_state_account: dclutch_trading::series::AccountKeyV3::new([19; 32])
+                .expect("Ticket state account"),
+        }
+    }
+
+    fn derived_parent_root(
+        prepared: &PreparedSeriesFounderV1,
+        compiled: &CompiledSeriesFoundPrepareSelectionV1,
+    ) -> Pubkey {
+        let descriptor = decode_hex(&compiled.selected.selected_descriptor_hex)
+            .expect("selected descriptor hex");
+        let descriptor = CapabilityProgramV4::decode(&descriptor).expect("selected descriptor");
+        let selection = CapabilityExecutionSelectionV1::new(
+            compiled.selected.selected_manifest_entry_index,
+            ContentId::new(record_identity(&prepared.publication.manifest))
+                .expect("canonical Market manifest identity"),
+            descriptor.kind(),
+            ContentId::new(
+                Sha256::digest(
+                    decode_hex(&compiled.selected.program_set_hex).expect("program set hex"),
+                )
+                .into(),
+            )
+            .expect("program set identity"),
+            ContentId::new(
+                Sha256::digest(decode_hex(&compiled.selected.config_hex).expect("config hex"))
+                    .into(),
+            )
+            .expect("config identity"),
+        )
+        .expect("selected execution projection");
+        let parent_market = Pubkey::new_from_array(
+            admit_occurrence(
+                prepared.admitted.template(),
+                &prepared.admitted.occurrences()[0],
+                &prepared.admitted.siblings()[0],
+            )
+            .expect("first occurrence")
+            .occurrence()
+            .market()
+            .to_bytes(),
+        );
+        let header = CapabilityRootHeaderV1::new(
+            TemplateV3::decode(prepared.admitted.template())
+                .expect("Template")
+                .release_set(),
+            parent_market.to_bytes(),
+            1,
+            selection,
+            SelectedRecordBumpsV1::default(),
+        )
+        .expect("canonical parent root header");
+        Pubkey::find_program_address(
+            &header.seeds().as_slices(),
+            &Pubkey::new_from_array([13; 32]),
+        )
+        .0
+    }
+
+    #[test]
+    fn canonical_market_two_occurrence_series_compiler_accepts_and_normalizes_parent_root() {
+        let prepared = prepared_founder();
+        let provisional_root = Pubkey::new_unique();
+        let provisional = compile_series_found_prepare_selection_v1(compiler_input(
+            &prepared,
+            provisional_root,
+            &prepared.admitted.tickets()[0],
+        ))
+        .expect("accepted provisional Series selection");
+        assert_eq!(provisional.selected.records.len(), 39);
+        assert!(!provisional.parents.prepare_request.is_empty());
+        assert!(!provisional.parents.expire_request.is_empty());
+
+        let actual_root = derived_parent_root(&prepared, &provisional);
+        assert_ne!(actual_root, provisional_root);
+        let actual = compile_series_found_prepare_selection_v1(compiler_input(
+            &prepared,
+            actual_root,
+            &prepared.admitted.tickets()[0],
+        ))
+        .expect("accepted derived-parent Series selection");
+        require_series_selection_invariance_v1(&provisional, &actual)
+            .expect("parent-root normalization preserves immutable publication bytes");
+
+        let hostile = prepared.admitted.tickets()[1].clone();
+        let mut bad_input = compiler_input(&prepared, actual_root, &prepared.admitted.tickets()[0]);
+        bad_input.lifecycle.current = Some(SeriesCurrentOccurrenceV3 {
+            occurrence_bytes: &prepared.admitted.occurrences()[0],
+            ticket_bytes: &hostile,
+            siblings: &prepared.admitted.siblings()[0],
+            ticket_state: None,
+        });
+        let bad_join = compile_series_found_prepare_selection_v1(bad_input);
+        let Err(error) = bad_join else {
+            panic!("second Ticket cannot join first occurrence");
+        };
+        assert_eq!(
+            error.to_string(),
+            "Series Prepare lifecycle refused: Content"
+        );
+    }
 }

@@ -15571,7 +15571,7 @@ fn pyth_market_input_base(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 
     /// Every founding journal has an owner that will put it in the projection.
     ///
@@ -19321,6 +19321,27 @@ mod tests {
         .expect("founding targets, other mint");
         assert_ne!(other_mint.realm_record, first.realm_record);
         assert_ne!(other_mint.open_market, first.open_market);
+    }
+
+    /// Real canonical compiler inputs shared by family publication controls.
+    pub(crate) fn selected_family_compiler_fixture_v1()
+    -> (SuccessorPlan, MarketRunInput, Pubkey, Pubkey, Pubkey) {
+        let mut fixture = split_founding_fixture_v1();
+        fixture.plan.release_set_id = hex(&[7; 32]);
+        let registry = pubkey(&fixture.plan.registry.program_id).expect("Registry");
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        );
+        let input = demo_market_input(registry, direct.compiler()).expect("Market input");
+        (
+            fixture.plan,
+            input,
+            fixture.mint,
+            fixture.founder,
+            fixture.payer,
+        )
     }
 
     #[test]

@@ -77,7 +77,7 @@ use crate::{Error, Result};
 /// 2026-09-07 capture reached Core's provider execute at `1788824350`; its
 /// finalized WindowSpec ended at `1788823517`, so the former 120-second rung
 /// had expired before execute and the Source kernel correctly returned
-/// `DeadlineElapsed`.  The resulting 67-second headroom is a measured
+/// `DeadlineElapsed`.  The resulting 187-second headroom is a measured
 /// profile, not a protocol bound; remeasure it when this walk's transaction
 /// profile changes.
 pub(crate) const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:900";

@@ -273,15 +273,22 @@ pub(crate) fn compile_structured_publication_closure_v1(
         .map(|index| hashv(&[LEAF_DOMAIN_V1, &graph_id, &index.to_le_bytes()]).to_bytes())
         .collect::<Vec<_>>();
     let mut nodes = Vec::with_capacity(leaves.len().saturating_add(1));
-    for (index, id) in leaves.iter().enumerate() {
+    // Graph storage is ordered by (rank, node id), independently of the
+    // representation coordinates that give leaves their economic meaning.
+    let mut node_order = (0..leaves.len()).collect::<Vec<_>>();
+    node_order.sort_by_key(|index| leaves[*index]);
+    for (position, index) in node_order.iter().copied().enumerate() {
+        let id = &leaves[index];
         let coordinate =
             u32::try_from(index).map_err(|_| Error::new("Structured leaf coordinate overflow"))?;
+        let first_term = u32::try_from(position)
+            .map_err(|_| Error::new("Structured leaf term position overflow"))?;
         nodes.push(CompositionNodeInputV3 {
             id: *id,
             rank: 0,
             first_edge: 0,
             edge_count: 0,
-            first_term: coordinate,
+            first_term,
             term_count: 1,
             kind: CompositionNodeKindV3::Native,
             native_outcome: coordinate,
@@ -302,10 +309,11 @@ pub(crate) fn compile_structured_publication_closure_v1(
         flattened_denominator: input.composition_denominator,
     });
     let mut edges = Vec::with_capacity(leaves.len());
-    for (index, id) in leaves.iter().enumerate() {
-        let coordinate =
-            u32::try_from(index).map_err(|_| Error::new("Structured edge coordinate overflow"))?;
-        let coefficient = *input.coefficients.get(index).ok_or_else(|| {
+    for (position, index) in node_order.iter().copied().enumerate() {
+        let id = &leaves[index];
+        let coordinate = u32::try_from(position)
+            .map_err(|_| Error::new("Structured edge coordinate overflow"))?;
+        let coefficient = *input.composition_coefficients.get(index).ok_or_else(|| {
             Error::new("Structured coefficient width changed while compiling the graph")
         })?;
         edges.push(CompositionEdgeInputV3 {
@@ -314,9 +322,11 @@ pub(crate) fn compile_structured_publication_closure_v1(
             coefficient,
         });
     }
-    let mut terms = (0..width)
+    let mut terms = node_order
+        .iter()
+        .copied()
         .map(|index| SparseTermV3 {
-            outcome: index,
+            outcome: u32::try_from(index).expect("bounded representation coordinate"),
             numerator: 1,
         })
         .collect::<Vec<_>>();
@@ -499,20 +509,23 @@ pub(crate) fn compile_structured_publication_closure_v1(
         &mut structured_terms,
     )
     .map_err(|error| Error::new(format!("Structured terms: {error:?}")))?;
-    let admission = |id| RecordAdmissionV3 {
+    let admission = |id, digest| RecordAdmissionV3 {
         selected_id: id,
         finalized_id: id,
-        recomputed_digest: id,
-        finalized_digest: id,
+        recomputed_digest: digest,
+        finalized_digest: digest,
         record_authenticated: true,
     };
     let bundle = decode_composition_bundle_v3(
         &composition_descriptor,
-        admission(hash(&composition_descriptor).to_bytes()),
+        admission(
+            hash(&composition_descriptor).to_bytes(),
+            hash(&composition_descriptor).to_bytes(),
+        ),
         &graph,
-        admission(hash(&graph).to_bytes()),
+        admission(graph_id, hash(&graph).to_bytes()),
         &translation,
-        admission(hash(&translation).to_bytes()),
+        admission(translation_id, hash(&translation).to_bytes()),
     )
     .map_err(|error| Error::new(format!("Structured composition admission: {error:?}")))?;
     let shard = FractionalExposureTermsV2::decode(
@@ -544,7 +557,7 @@ pub(crate) fn compile_structured_publication_closure_v1(
     .map_err(|error| Error::new(format!("Structured terms admission: {error:?}")))?;
     let exposure_bundle = dclutch_claims::composition::CompositionExposureBundleV3::decode(
         &exposure,
-        admission(exposure_id),
+        admission(exposure_id, exposure_id),
     )
     .map_err(|error| Error::new(format!("Structured exposure admission: {error:?}")))?;
     let representation_descriptor =
@@ -1026,6 +1039,73 @@ fn coefficients_bytes(values: &[u64]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sparse_publication_input_v1(market: Pubkey) -> StructuredPublicationInputV1 {
+        let (plan, input, mint, _, _) = crate::market::tests::selected_family_compiler_fixture_v1();
+        let preview = crate::market::compile_market_publication_preview_v1(
+            pubkey(&plan.registry.program_id).expect("Registry"),
+            &input,
+            mint,
+        )
+        .expect("canonical founding bodies");
+        let release_set = hex32(&plan.release_set_id).expect("release set");
+        let portfolio = dclutch_product::PortfolioV2::decode(&preview.portfolio)
+            .expect("canonical Portfolio");
+        assert_eq!(portfolio.coefficient_count(), 4);
+        assert_eq!(portfolio.denominator(), 1);
+        assert_eq!(
+            portfolio.coefficients().collect::<Vec<_>>(),
+            vec![1, 0, 1, 0]
+        );
+        StructuredPublicationInputV1 {
+            market,
+            release_set,
+            claims_program: pubkey(&plan.claims.program_id).expect("Claims"),
+            token_behavior_body: TokenBehaviorSelectionV2::new(
+                hash(&preview.realm).to_bytes(),
+                release_set,
+            )
+            .expect("Token behavior")
+            .to_bytes()
+            .to_vec(),
+            product_record_body: preview.product,
+            result_domain_body: preview.domain,
+            portfolio_body: preview.portfolio,
+            product_basis_body: preview.basis,
+            price_gate_body: preview.price_gate,
+            product_coordinates: vec![0, 2],
+            denominator: 2,
+            composition_denominator: 1,
+            composition_coefficients: vec![1, 1],
+            coefficients: vec![2, 2],
+        }
+    }
+
+    #[test]
+    fn sparse_structured_producer_admits_complete_portfolio_closure() {
+        // Varying the Market changes hashed node identities. Every ordering
+        // must compile, while sparse coordinates retain their economic meaning.
+        for seed in 101..=108 {
+            let input = sparse_publication_input_v1(Pubkey::new_from_array([seed; 32]));
+            let closure = compile_structured_publication_closure_v1(&input)
+                .expect("complete sparse K=2, N=4 publication admission");
+            assert_eq!(closure.publication_targets().len(), 7);
+            assert_eq!(closure.representation_descriptor.outcome_count, 2);
+            assert_eq!(closure.representation_descriptor.denominator, 2);
+        }
+    }
+
+    #[test]
+    fn sparse_structured_producer_refuses_a_different_receipt_payoff() {
+        let mut input = sparse_publication_input_v1(Pubkey::new_from_array([109; 32]));
+        input.coefficients[0] = 3;
+        assert_eq!(
+            compile_structured_publication_closure_v1(&input)
+                .expect_err("receipt cannot disagree with the canonical composition")
+                .to_string(),
+            "Structured descriptor derivation: Terms",
+        );
+    }
 
     #[test]
     fn zero_market_refuses_before_any_founding_body_is_accepted() {

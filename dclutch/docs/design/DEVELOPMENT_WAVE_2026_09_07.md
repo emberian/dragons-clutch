@@ -44,10 +44,10 @@ operator whose continued presence is required for holders to get paid.
   trips and exact hostile rollback. The dated authority is
   `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md`; this does not substitute for
   local-validator founding or full protocol route coverage.
-- Checked eight-program builds now exist through `7f1ad2acf`; `a628bfd39`
-  and `5cbc1e777` also have matching independent frame captures.
-  These remain intermediate: later General and Claims changes require a
-  fresh all-program build. Publication cuts carry development work; they do
+- Checked eight-program builds now exist through `53004ae59`, including the
+  General token-owner adapter and Claims Core-credit anchor. Its two frame
+  captures match. Later Ensemble funding and Dealer beneficiary repairs still
+  require a fresh all-program build. Publication cuts carry development work; they do
   not assert that a build has become a deployed cohort.
 - Direct's validator journey has executed founding/Open, admission, nonzero
   fills and fees, objective Pyth resolution, and wallet payouts. The retirement
@@ -71,29 +71,45 @@ operator whose continued presence is required for holders to get paid.
   replay observations. Explicit immutable-record construction now binds the
   ordinary Market compiler's actual Product, Realm, Source and manifest.
   Typed child receipt/Claims production and the selected-release assembler
-  are implemented. Their actual Found/Prepare driver is being connected;
-  the complete two-occurrence validator campaign has not run.
+  are implemented. The connected compiler now executes a native accepted
+  control producing 39 records, with root-normalization and bad-Ticket checks.
+  That fixture does not prove actual parent-manifest or physical account geometry.
+  The real Found/Prepare driver is being connected; the complete two-occurrence
+  validator campaign has not run.
 - General's accepted nonempty path is being run after repairing action-scoped
   lifecycle funding and the semantic outer frame / key-sorted Claims child
   boundary. Its next repair reads the actual external token-account owner,
   respecting the selected token profile's variable account width. Dealer's
-  RentCredit repair is running in a fresh validator campaign; a nonzero fill
-  is still unexecuted. Adversarial review additionally found and repaired
-  Dealer/Claims admission's missing join to Core's committed rent-credit address.
+  first RentCredit repair exposed a second false assumption: its sponsor need
+  not be the immutable Market credit's refund beneficiary. Finalized account
+  bytes located that exact mismatch; the repair retains the canonical credit
+  and Core anchor. A nonzero Dealer fill is still unexecuted.
 - Ensemble fold/reclaim has accepted real-ELF poststates. Its direct Pyth member
   producer is being executed separately so pre-captured fragment fixtures do
   not stand in for capture evidence. The two-member compiler and first-member
-  real transport CLI are running against a checked validator. Recovery's
-  exhaustion branch reached terminal admission and all three refund payouts;
-  Capture is restarting after the prospective-vacancy reader repair.
+  real transport CLI reached fixed-three assumptions in host and pre-market
+  funding wires. Those consumers now derive the full selection, with accepted
+  two-member and exact missing/extra/foreign member-run controls; a new runtime
+  is required before replaying capture. Recovery exhaustion reached terminal
+  admission and all three refund payouts, recorded in
+  `docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md`. Capture's prior
+  Pyth submit succeeded but execution correctly refused an elapsed deadline.
+  A measured 900-second rung is committed. Its fresh run instead stopped at
+  an expired Core-funding packet before Pyth; packet timing is being localized.
 - Structured's Claims operations have executed against real ELFs. The V6 child bridge and per-Market publication producer are committed.
   Executing the entrance exposed a missing root-creation descriptor. The set
   now enumerates seven action descriptors plus one V1 root-activation
   descriptor. Generic root execution and receipt submission are wired. The
   validator founded the Market in 258 transactions, then exposed a partial
   JSON decoder rejecting the full selected-capability payload. That decoder
-  now consumes the canonical complete DTO; actual root/receipt poststates
-  remain owed.
+  now consumes the canonical complete DTO. Executing publication then exposed
+  unsorted hashed graph nodes and semantic IDs confused with content digests.
+  The actual producer now passes complete sparse K=2, N=4 admission across
+  eight Market identities; restoring each defect reproduces its exact failure.
+  The Portfolio payoff remains unchanged when receipt units are scaled.
+  The preserved validator now accepts selector-255 root activation. Receipt
+  construction next exposed a wrong descriptor selection; actual receipt
+  poststates remain owed.
 - Browser joining now carries the linked-basis binding, requires finalized
   confirmation and authenticated poststate, and resumes its transaction journal.
   Generated reference/client mirrors and the capability graph have converged.
