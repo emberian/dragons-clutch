@@ -1267,13 +1267,14 @@ pub(super) fn require_lifecycle_replan_agreement_v4(
 /// only thing that can move a lamport.
 pub(super) fn inspect_local_effect_discipline_v5(
     plans: &[PreparedLifecycleInvocationV3],
+    root_lifecycle_close: bool,
     resolved: ResolvedEffectV3,
     aliases: &[usize],
     written: &mut [bool],
     participation: Option<&mut [CoordinateParticipationV3]>,
 ) -> Result<(), ProgramError> {
     require_root_write_is_state_only(resolved, aliases)?;
-    if selected_root_lifecycle_close_v3(plans)? {
+    if root_lifecycle_close {
         require_no_root_local_mutation_v3(resolved, aliases)?;
     }
     inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, written)?;

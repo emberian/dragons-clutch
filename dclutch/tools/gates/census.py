@@ -1,7 +1,7 @@
 """tools/gate census -- the route census, enumerated from the Rust AST and checked unique.
 
   tools/gate census [--commit REV | --source DIR] [--work DIR] [--revision SHA] [--no-tests]
-      build tools/gauntlet/census (release, into <work>/census-target), run its own tests,
+      build dclutch-route-census (release, into this checkout's target), run its own tests,
       write <work>/out/inventory.json with --check-unique, render <work>/out/CENSUS.md
       from the shared <work>/out/ledger.json and tools/gauntlet/blocked.json.
   tools/gate census observe --bindings F --programs F --evidence F [--work DIR]
@@ -33,9 +33,10 @@ BLOCKED = REPO / "tools" / "gauntlet" / "blocked.json"
 
 
 def binary(work: Path, *, run_tests: bool = True, jobs: str = "4", dry_run: bool = False) -> Path:
-    """The census binary, built from THIS tree's crate (the instrument) into <work>/census-target.
+    """The census binary, built from THIS workspace into its own target directory.
 
     DCLUTCH_GATE_CENSUS_BIN names an already-built binary instead (the campaign runners, and the tests).
+    The observation ledger may be shared across checkouts; Cargo metadata may not.
     """
     if os.environ.get("DCLUTCH_GATE_CENSUS_BIN"):
         return Path(os.environ["DCLUTCH_GATE_CENSUS_BIN"])
@@ -43,14 +44,16 @@ def binary(work: Path, *, run_tests: bool = True, jobs: str = "4", dry_run: bool
         raise Prereq("cargo is not on PATH")
     if not (CRATE / "Cargo.toml").is_file():
         raise Prereq("tools/gauntlet/census is absent")
-    target = work / "census-target"
+    target = REPO / "target"
     env = {**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_BUILD_JOBS": jobs}
+    build = ["cargo", "build", "--locked", "--release", "--quiet", "-p", "dclutch-route-census"]
+    test = ["cargo", "test", "--locked", "--release", "--quiet", "-p", "dclutch-route-census"]
     if dry_run:
-        note(f"$ cd {CRATE} && CARGO_TARGET_DIR={target} cargo build --release" + (" && cargo test --release" if run_tests else ""))
+        note(f"$ cd {REPO} && CARGO_TARGET_DIR={target} {' '.join(build)}" + (f" && {' '.join(test)}" if run_tests else ""))
         return target / "release" / "dclutch-route-census"
-    if sh(["cargo", "build", "--release", "--quiet"], cwd=CRATE, env=env).returncode:
+    if sh(build, cwd=REPO, env=env).returncode:
         raise Prereq("the census crate did not build")
-    if run_tests and sh(["cargo", "test", "--release", "--quiet"], cwd=CRATE, env=env).returncode:
+    if run_tests and sh(test, cwd=REPO, env=env).returncode:
         raise Prereq("the census crate's own adversarial tests failed; its verdicts are not evidence")
     return target / "release" / "dclutch-route-census"
 

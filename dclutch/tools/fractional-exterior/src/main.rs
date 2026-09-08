@@ -180,6 +180,10 @@ fn main() -> ExitCode {
         Some("verify") => parse_verify(rest).and_then(|out| {
             let (entries, digest) = journal::verify(&out)?;
             println!("journal exact: {entries} entries, sha256 {digest}");
+            let (transactions, native_digest) = journal::verify_native_evidence(&out)?;
+            println!(
+                "finalized instruction evidence exact: {transactions} transactions, sha256 {native_digest}"
+            );
             Ok(())
         }),
         Some("prepare-claim-check") => parse_with_elves(rest).and_then(|(elf, out, _)| {

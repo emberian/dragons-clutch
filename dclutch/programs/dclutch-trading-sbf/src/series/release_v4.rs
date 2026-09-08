@@ -103,7 +103,7 @@ use super::{
     consume_artifacts_v4::{
         SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4,
         SERIES_CONSUME_TRANSITION_BYTES_V4, SeriesConsumeChildRequestsV4,
-        encode_series_consume_effect_v4_from_requests_atomic,
+        encode_series_consume_effect_artifact_v4_atomic,
         encode_series_consume_request_profile_v4_atomic,
         encode_series_consume_transition_v4_atomic, series_consume_effect_bytes_v4,
     },
@@ -586,8 +586,7 @@ pub fn series_consume_selected_release_v4(
     let effect_bytes = series_consume_effect_bytes_v4(input.template_occurrence_count);
     let mut effect_scratch = vec![0_u8; effect_bytes];
     let mut effect = vec![0_u8; effect_bytes];
-    encode_series_consume_effect_v4_from_requests_atomic(
-        input.child_requests,
+    encode_series_consume_effect_artifact_v4_atomic(
         input.template_occurrence_count,
         &mut base_scratch,
         &mut base,
@@ -802,7 +801,9 @@ mod tests {
     /// hand-carried width silently became a `validate_request_coverage`
     /// refusal rather than a compile error.
     fn registers() -> ([u64; CONSUME_SCALARS], [[u8; 32]; CONSUME_IDENTITIES]) {
-        ([128, 64, 2, 32, 7, 9, 4], [[9_u8; 32]; CONSUME_IDENTITIES])
+        let mut scalars = [0_u64; CONSUME_SCALARS];
+        scalars[..7].copy_from_slice(&[128, 64, 2, 32, 7, 9, 4]);
+        (scalars, [[9_u8; 32]; CONSUME_IDENTITIES])
     }
 
     /// Authenticate the canonical release exactly as the on-chain join would,

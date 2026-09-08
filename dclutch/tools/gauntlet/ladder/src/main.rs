@@ -238,6 +238,7 @@ fn run() -> Result<()> {
     match arguments.next().as_deref() {
         Some("run") => run_ladder(arguments.collect()),
         Some("ensemble") => run_ensemble(arguments.collect()),
+        Some("ensemble-resume") => run_ensemble_resume(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -359,12 +360,45 @@ fn run_ensemble(arguments: Vec<String>) -> Result<()> {
     })
 }
 
+fn run_ensemble_resume(arguments: Vec<String>) -> Result<()> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(flag) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(Error::new(format!("{flag} was given twice")));
+        }
+    }
+    let rpc_port: u16 = required(&values, "--rpc-port")?
+        .parse()
+        .map_err(|_| Error::new("--rpc-port must be a port number"))?;
+    let terminal_sequence: u64 = required(&values, "--terminal-sequence")?
+        .parse()
+        .map_err(|_| Error::new("--terminal-sequence must be a decimal u64"))?;
+    ensemble::resume(ensemble::EnsembleResumeRequestV1 {
+        transcript: absolute(required(&values, "--transcript")?, "--transcript")?,
+        rpc_port,
+        plan: absolute(required(&values, "--plan")?, "--plan")?,
+        founding_evidence: absolute(
+            required(&values, "--founding-evidence")?,
+            "--founding-evidence",
+        )?,
+        payer_keypair: absolute(required(&values, "--payer-keypair")?, "--payer-keypair")?,
+        terminal_sequence,
+    })
+}
+
 fn usage() {
     println!(
         "Usage:\n  dclutch-ladder-campaign ensemble --transcript ABSOLUTE_NEW_JSON --work ABSOLUTE_DIR --rpc-port PORT \
       --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \
       --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \
-      --expected-source-tree-sha256 HEX64 --seed HEX64\n  dclutch-ladder-campaign run --walk exhaust|capture \\\n      \
+      --expected-source-tree-sha256 HEX64 --seed HEX64\n  dclutch-ladder-campaign ensemble-resume \\
+      --transcript ABSOLUTE_NEW_JSON --rpc-port PORT --plan ABSOLUTE_PLAN_JSON \\
+      --founding-evidence ABSOLUTE_FOUNDING_EVIDENCE_JSON \\
+      --payer-keypair ABSOLUTE_KEYPAIR_JSON --terminal-sequence U64\n  dclutch-ladder-campaign run --walk exhaust|capture \\\n      \
          --transcript ABSOLUTE_NEW_JSON --work ABSOLUTE_DIR --rpc-port PORT \\\n      \
          --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
          --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \

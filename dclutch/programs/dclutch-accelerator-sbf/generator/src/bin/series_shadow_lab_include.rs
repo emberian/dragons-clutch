@@ -274,7 +274,7 @@ fn hex(bytes: &[u8]) -> String {
 ///
 /// Every field is lab filler in the same sense the toolchain manifest is: a
 /// distinct nonzero value, not a chain fact. What matters is that the bytes
-/// DECODE, because `encode_series_consume_effect_v4_from_requests_atomic`
+/// DECODE, because `encode_series_consume_effect_artifact_v4_atomic`
 /// rebuilds this request as a root-independent transport template rather than
 /// copying it through. The template zeroes the root-derived coordinates, so
 /// the values chosen here do not reach the emitted Claims route bytes.

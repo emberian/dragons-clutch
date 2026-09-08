@@ -15,7 +15,7 @@ reachable inside an entry route's request.
 | --- | --- | --- | --- | --- | --- | --- |
 | `accelerator` | `dclutch-accelerator-sbf` | 0xC | 4 | 3 | 41 | `process_instruction` (programs/dclutch-accelerator-sbf/src/lib.rs:72) |
 | `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 24 | 168 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:96) |
-| `core` | `dclutch-core-sbf` | 0x3 | 21 | 15 | 40 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:377) |
+| `core` | `dclutch-core-sbf` | 0x3 | 21 | 13 | 40 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:377) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 6 | 15 | 45 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:229) |
 | `registry` | `dclutch-registry-sbf` | 0x1 | 7 | 4 | 22 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:244) |
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:128) |

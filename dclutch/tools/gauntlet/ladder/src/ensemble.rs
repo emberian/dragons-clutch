@@ -16,7 +16,7 @@ use dclutch_source::{
     relay::instruction::{EnsembleFoldInstructionV1, ReclaimMemberSeatInstructionV1},
     resolution::{
         EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1,
-        RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2,
+        RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2, ResolutionCertificateV2,
     },
 };
 use solana_sdk::{
@@ -33,6 +33,7 @@ use crate::{
     provider::ProviderPlanV1,
     resolution::{RecordPairV1, ResolutionAddressesV1},
     rpc::Rpc,
+    stages::MarketAddressesV1,
 };
 
 /// Build one direct member capture from one finalized post-update lifecycle.
@@ -273,17 +274,24 @@ pub(crate) fn post_submit_and_capture_member_v1(
         .pubkey;
     let fragment_rent =
         rpc.minimum_balance(dclutch_source::resolution::RESOLUTION_CERTIFICATE_BYTES_V2)?;
+    let prepaid_seat = rpc.required_account(seat, "prepaid Ensemble member fragment seat")?;
+    if prepaid_seat.owner != system_program::ID
+        || prepaid_seat.executable
+        || !prepaid_seat.data.is_empty()
+        || prepaid_seat.lamports < fragment_rent
+    {
+        return Err(Error::new(
+            "Ensemble member fragment seat was not prepaid by founding before capture",
+        ));
+    }
     let resolver_rent = rpc.minimum_balance(0)?;
     transactions.push(rpc.send_with_signers(
-        "ensemble: prepay the member fragment seat and distinct resolver",
-        &[
-            solana_system_interface::instruction::transfer(&payer.pubkey(), &seat, fragment_rent),
-            solana_system_interface::instruction::transfer(
-                &payer.pubkey(),
-                &provider.resolver.pubkey(),
-                resolver_rent,
-            ),
-        ],
+        "ensemble: establish the distinct member resolver after founding prepaid its seat",
+        &[solana_system_interface::instruction::transfer(
+            &payer.pubkey(),
+            &provider.resolver.pubkey(),
+            resolver_rent,
+        )],
         payer,
         &[],
     )?);
@@ -654,6 +662,131 @@ fn ensemble_fold_instruction_v1(
     ))
 }
 
+/// Verify the two still-vacant terminal coordinates before asking Resolution
+/// to create or reclaim them. A fresh campaign requires founding to have
+/// prepaid both. A retained ledger created before that producer rule may opt
+/// into one explicit diagnostic top-up so its already-accepted captures remain
+/// usable.
+///
+/// The returned value records the exact finalized posture before and after the
+/// transfer.  In particular, an absent account remains distinguishable from a
+/// present System-owned zero-data account in retained-ledger evidence.
+fn prepay_ensemble_terminal_coordinates_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    certificate: Pubkey,
+    receipt: Pubkey,
+    vacant_seat: Pubkey,
+    allow_retained_ledger_top_up: bool,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<serde_json::Value> {
+    fn posture(rpc: &mut Rpc, address: Pubkey, label: &str) -> Result<serde_json::Value> {
+        Ok(match rpc.account(address)? {
+            Some(account) => serde_json::json!({
+                "address": address.to_string(),
+                "present": true,
+                "owner": account.owner.to_string(),
+                "lamports": account.lamports,
+                "data_len": account.data.len(),
+                "data_is_zero": account.data.iter().all(|byte| *byte == 0),
+                "executable": account.executable,
+            }),
+            None => serde_json::json!({
+                "address": address.to_string(),
+                "present": false,
+                "label": label,
+            }),
+        })
+    }
+
+    let certificate_before = rpc.account(certificate)?;
+    let receipt_before = rpc.account(receipt)?;
+    let vacancy_before = rpc.account(vacant_seat)?;
+    let before = serde_json::json!({
+        "success_certificate": posture(rpc, certificate, "success certificate")?,
+        "fold_receipt": posture(rpc, receipt, "fold receipt")?,
+        "vacant_member_seat": posture(rpc, vacant_seat, "vacant member seat")?,
+    });
+    if receipt_before.is_some() {
+        return Err(Error::new(
+            "Ensemble fold receipt coordinate already exists before its one-shot fold",
+        ));
+    }
+
+    let required =
+        rpc.minimum_balance(dclutch_source::resolution::RESOLUTION_CERTIFICATE_BYTES_V2)?;
+    let top_up = |account: Option<&crate::rpc::RpcAccount>, label: &str| -> Result<u64> {
+        match account {
+            None => Ok(required),
+            Some(account)
+                if account.owner == system_program::ID
+                    && !account.executable
+                    && account.data.is_empty() =>
+            {
+                Ok(required.saturating_sub(account.lamports))
+            }
+            Some(_) => Err(Error::new(format!(
+                "Ensemble {label} is not a vacant System coordinate before prepayment"
+            ))),
+        }
+    };
+    let certificate_top_up = top_up(certificate_before.as_ref(), "success certificate")?;
+    let vacancy_top_up = top_up(vacancy_before.as_ref(), "member vacancy")?;
+    if !allow_retained_ledger_top_up && (certificate_top_up != 0 || vacancy_top_up != 0) {
+        return Err(Error::new(
+            "fresh Ensemble founding did not prepay its success certificate and every member seat before capture",
+        ));
+    }
+    let mut instructions = Vec::with_capacity(2);
+    if certificate_top_up != 0 {
+        instructions.push(solana_system_interface::instruction::transfer(
+            &payer.pubkey(),
+            &certificate,
+            certificate_top_up,
+        ));
+    }
+    if vacancy_top_up != 0 {
+        instructions.push(solana_system_interface::instruction::transfer(
+            &payer.pubkey(),
+            &vacant_seat,
+            vacancy_top_up,
+        ));
+    }
+    if !instructions.is_empty() {
+        transactions.push(rpc.send_with_signers(
+            "ensemble: prepay the success certificate and uncaptured member seat",
+            &instructions,
+            payer,
+            &[],
+        )?);
+    }
+    for (address, label) in [
+        (certificate, "success certificate"),
+        (vacant_seat, "vacant member seat"),
+    ] {
+        let account = rpc.required_account(address, label)?;
+        if account.owner != system_program::ID
+            || account.executable
+            || !account.data.is_empty()
+            || account.lamports < required
+        {
+            return Err(Error::new(format!(
+                "Ensemble {label} prepayment did not produce the required System-owned coordinate"
+            )));
+        }
+    }
+    Ok(serde_json::json!({
+        "retained_ledger_top_up_allowed": allow_retained_ledger_top_up,
+        "required_lamports_each": required,
+        "before": before,
+        "after": {
+            "success_certificate": posture(rpc, certificate, "success certificate")?,
+            "fold_receipt": posture(rpc, receipt, "fold receipt")?,
+            "vacant_member_seat": posture(rpc, vacant_seat, "vacant member seat")?,
+        },
+    }))
+}
+
 /// Wait for the exact strict clock predicate Source applies to an Ensemble
 /// fold.  Block time is a historical slot projection; the `Clock` account in
 /// the transaction frame is the fact the Source transition actually reads.
@@ -761,6 +894,262 @@ pub(crate) struct EnsembleRequestV1 {
     pub(crate) expected_source_revision: String,
     pub(crate) expected_source_tree_sha256: String,
     pub(crate) seed: String,
+}
+
+/// Continue the one preserved Ensemble ledger which has already accepted its
+/// three member captures. The caller supplies the original plan, founding
+/// evidence, and campaign payer key: this path never re-founds, re-signs, or
+/// substitutes any captured provider object.
+pub(crate) struct EnsembleResumeRequestV1 {
+    pub(crate) transcript: std::path::PathBuf,
+    pub(crate) rpc_port: u16,
+    pub(crate) plan: std::path::PathBuf,
+    pub(crate) founding_evidence: std::path::PathBuf,
+    pub(crate) payer_keypair: std::path::PathBuf,
+    pub(crate) terminal_sequence: u64,
+}
+
+fn resume_founding_accounts_v1(
+    founding_evidence: &std::path::Path,
+) -> Result<std::collections::BTreeMap<String, crate::model::AccountEvidence>> {
+    let evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(founding_evidence)?)?;
+    serde_json::from_value(
+        evidence
+            .get("execution")
+            .and_then(|execution| execution.get("market"))
+            .and_then(|market| market.get("accounts"))
+            .cloned()
+            .ok_or_else(|| {
+                Error::new("retained Ensemble founding evidence omits execution.market.accounts")
+            })?,
+    )
+    .map_err(Into::into)
+}
+
+/// Fold and reclaim the exact already-captured cohort after a process boundary.
+///
+/// Every captor comes from its Resolution-owned fragment certificate. The one
+/// vacancy remains an explicit System-owned seat; a changed cardinality or
+/// owner refuses before this function signs a transaction.
+pub(crate) fn resume(request: EnsembleResumeRequestV1) -> Result<()> {
+    if request.transcript.exists() {
+        return Err(Error::new(format!(
+            "ensemble resume transcript already exists: {}",
+            request.transcript.display()
+        )));
+    }
+    let plan: SuccessorPlan = serde_json::from_slice(&std::fs::read(&request.plan)?)?;
+    let accounts = resume_founding_accounts_v1(&request.founding_evidence)?;
+    let mut rpc = Rpc::connect(&format!("http://127.0.0.1:{}/", request.rpc_port))?;
+    let market_addresses = MarketAddressesV1::from_evidence(&accounts)?;
+    let addresses = crate::resolution::derive(&mut rpc, &plan, &market_addresses, &accounts)?;
+    let payer = crate::substrate::load_keypair(&request.payer_keypair)?;
+    let source = SourceResolutionStateV2::decode(
+        &rpc.required_account(
+            addresses.source_state,
+            "retained Ensemble Source before fold",
+        )?
+        .data,
+    )
+    .map_err(|error| Error::new(format!("retained Ensemble Source: {error:?}")))?;
+    if source.phase() != SourceResolutionPhaseV1::Primary {
+        return Err(Error::new(
+            "retained Ensemble Source is not Primary before its requested fold",
+        ));
+    }
+    if source.generation() != addresses.generation {
+        return Err(Error::new(
+            "retained Ensemble Source generation disagrees with founded Market",
+        ));
+    }
+    let material = SourceMaterialV3::decode(
+        &rpc.required_account(addresses.source_material.raw, "retained Ensemble material")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("retained Ensemble material: {error:?}")))?;
+    if material.ensemble().members() != 4 || material.ensemble().quorum() != 3 {
+        return Err(Error::new(
+            "retained Ensemble material is not the four-member quorum-three campaign",
+        ));
+    }
+    let mut captors = Vec::with_capacity(usize::from(material.ensemble().members()));
+    let mut seats = Vec::with_capacity(usize::from(material.ensemble().members()));
+    for member in 0..material.ensemble().members() {
+        let seat = Pubkey::find_program_address(
+            &EnsembleFragmentSeatSeedsV1::new(
+                addresses.source_state.to_bytes(),
+                member,
+                request.terminal_sequence,
+            )
+            .seeds(),
+            &addresses.resolution_program,
+        )
+        .0;
+        seats.push(seat);
+        match rpc.account(seat)? {
+            Some(account) if account.owner == addresses.resolution_program => {
+                let certificate =
+                    ResolutionCertificateV2::decode(&account.data).map_err(|error| {
+                        Error::new(format!("retained Ensemble fragment {member}: {error:?}"))
+                    })?;
+                if certificate.kind != ResolutionCertificateKindV2::ResolutionSuccess
+                    || certificate.generation != addresses.generation
+                    || certificate.source_material != source.material_id().to_bytes()
+                {
+                    return Err(Error::new(format!(
+                        "retained Ensemble fragment {member} does not join this Source generation"
+                    )));
+                }
+                captors.push(Some(Pubkey::new_from_array(certificate.receipt_account)));
+            }
+            // The fold itself prepays the unclaimed member's seat. An absent
+            // coordinate is therefore the canonical pre-fold vacancy; accept
+            // a System-owned vacancy too, but no other owner.
+            None => captors.push(None),
+            Some(account) if account.owner == system_program::ID => captors.push(None),
+            Some(account) => {
+                return Err(Error::new(format!(
+                    "retained Ensemble member {member} seat has unexpected owner {}",
+                    account.owner
+                )));
+            }
+        }
+    }
+    if captors.iter().filter(|captor| captor.is_some()).count() != 3
+        || captors.get(3).copied().flatten().is_some()
+    {
+        return Err(Error::new(
+            "retained Ensemble does not have exactly members zero through two captured and member three vacant",
+        ));
+    }
+    await_ensemble_fold_deadline_v1(&mut rpc, &addresses)?;
+    let (fold, receipt, derived_seats) = ensemble_fold_instruction_v1(
+        &mut rpc,
+        payer.pubkey(),
+        &addresses,
+        &captors,
+        request.terminal_sequence,
+    )?;
+    if derived_seats != seats {
+        return Err(Error::new(
+            "retained Ensemble fold derived different fragment seats than its checked prestate",
+        ));
+    }
+    let mut transactions = Vec::new();
+    let certificate = fold
+        .accounts
+        .get(5)
+        .ok_or_else(|| Error::new("retained Ensemble fold omitted its success certificate"))?
+        .pubkey;
+    let terminal_coordinate_preparation = prepay_ensemble_terminal_coordinates_v1(
+        &mut rpc,
+        &payer,
+        certificate,
+        receipt,
+        seats[3],
+        true,
+        &mut transactions,
+    )?;
+    send_wide_v1(
+        &mut rpc,
+        &payer,
+        "ensemble resume: fold the retained three-member quorum",
+        &fold,
+        &[],
+        &mut transactions,
+    )?;
+    let folded = SourceResolutionStateV2::decode(
+        &rpc.required_account(
+            addresses.source_state,
+            "retained Ensemble Source after fold",
+        )?
+        .data,
+    )
+    .map_err(|error| Error::new(format!("retained Ensemble folded Source: {error:?}")))?;
+    if folded.phase() != SourceResolutionPhaseV1::Resolved {
+        return Err(Error::new(
+            "retained Ensemble fold did not write a resolved Source terminal",
+        ));
+    }
+    let receipt_value = EnsembleFoldReceiptV1::decode(
+        &rpc.required_account(receipt, "retained Ensemble fold receipt")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("retained Ensemble fold receipt: {error:?}")))?;
+    if receipt_value.consumed_count != 3
+        || !receipt_value.consumed(0)
+        || !receipt_value.consumed(1)
+        || !receipt_value.consumed(2)
+        || receipt_value.consumed(3)
+    {
+        return Err(Error::new(
+            "retained Ensemble fold receipt did not consume only the three captured members",
+        ));
+    }
+    let vacant_seat = seats[3];
+    let vacant_before = rpc
+        .required_account(vacant_seat, "retained vacant Ensemble member seat")?
+        .lamports;
+    let beneficiary_before = rpc
+        .required_account(
+            addresses.rent_beneficiary,
+            "retained Ensemble rent beneficiary",
+        )?
+        .lamports;
+    let reclaim = reclaim_member_seat_instruction_v1(
+        payer.pubkey(),
+        &addresses,
+        vacant_seat,
+        3,
+        request.terminal_sequence,
+    )?;
+    send_wide_v1(
+        &mut rpc,
+        &payer,
+        "ensemble resume: reclaim the retained vacant fourth member seat",
+        &reclaim,
+        &[],
+        &mut transactions,
+    )?;
+    if rpc
+        .account(vacant_seat)?
+        .is_some_and(|account| account.lamports != 0)
+    {
+        return Err(Error::new(
+            "retained Ensemble reclaim left lamports in the vacant fourth seat",
+        ));
+    }
+    let beneficiary_after = rpc
+        .required_account(
+            addresses.rent_beneficiary,
+            "retained Ensemble rent beneficiary after reclaim",
+        )?
+        .lamports;
+    if beneficiary_after.checked_sub(beneficiary_before) != Some(vacant_before) {
+        return Err(Error::new(
+            "retained Ensemble reclaim did not credit the exact vacant-seat rent",
+        ));
+    }
+    std::fs::write(
+        &request.transcript,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "campaign": "ensemble-retained-ledger-fold-reclaim-v1",
+            "evidence_level": "local-validator / retained accepted three-capture cohort / real router+receiver ELFs",
+            "rpc_url": rpc.url(),
+            "plan": request.plan,
+            "founding_evidence": request.founding_evidence,
+            "terminal_sequence": request.terminal_sequence,
+            "captured_members": [0, 1, 2],
+            "reclaimed_member": 3,
+            "fold_receipt": receipt.to_string(),
+            "success_certificate": certificate.to_string(),
+            "vacant_seat": vacant_seat.to_string(),
+            "vacant_rent_lamports": vacant_before,
+            "terminal_coordinate_preparation": terminal_coordinate_preparation,
+            "transactions": transactions,
+        }))?,
+    )?;
+    Ok(())
 }
 
 /// Mint a member's distinct VAA about the immutable period the market sold.
@@ -981,6 +1370,23 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
         ],
         1,
     )?;
+    let certificate = fold
+        .accounts
+        .get(5)
+        .ok_or_else(|| Error::new("Ensemble fold omitted its success certificate"))?
+        .pubkey;
+    let vacant_seat = *seats
+        .get(3)
+        .ok_or_else(|| Error::new("Ensemble fold omitted the vacant member seat"))?;
+    let terminal_coordinate_preparation = prepay_ensemble_terminal_coordinates_v1(
+        &mut rpc,
+        &payer,
+        certificate,
+        receipt,
+        vacant_seat,
+        false,
+        &mut transactions,
+    )?;
     send_wide_v1(
         &mut rpc,
         &payer,
@@ -1014,9 +1420,6 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
         ));
     }
     let vacant_member = 3_u8;
-    let vacant_seat = *seats
-        .get(usize::from(vacant_member))
-        .ok_or_else(|| Error::new("Ensemble fold omitted the vacant member seat"))?;
     let vacant_before = rpc
         .required_account(vacant_seat, "prepaid vacant Ensemble member seat")?
         .lamports;
@@ -1075,9 +1478,11 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
         "source_phase_after_each_capture": "Primary",
         "source_phase_after_fold": "Resolved",
         "fold_receipt": receipt.to_string(),
+        "success_certificate": certificate.to_string(),
         "fold_consumed_bitmap": receipt_value.consumed_bitmap,
         "reclaimed_member": vacant_member,
         "reclaimed_seat": vacant_seat.to_string(),
+        "terminal_coordinate_preparation": terminal_coordinate_preparation,
         "transactions": transactions,
     });
     if request.transcript.exists() {

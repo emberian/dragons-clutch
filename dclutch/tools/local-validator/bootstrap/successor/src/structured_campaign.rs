@@ -11,10 +11,25 @@ use std::path::{Path, PathBuf};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_claims::{
     composition::{CompositionExposureBundleV3, RecordAdmissionV3},
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketViewV2,
+        liability_basis_vector_width_v2,
+    },
+    protocol_position_v2::{
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
+        ProtocolPositionAdmissionSeedsV2, ProtocolPositionClaimsCapabilitySeedsV2,
+        ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
+        ProtocolPositionSeedsV2,
+    },
+    rational::{RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2},
     rational_kernel::RepresentationDescriptorV2,
     rational_lifecycle::{
-        LIFECYCLE_HEADER_BYTES_V2, LifecycleHeaderV2, LifecycleRequestV2,
-        hot_v6::{RationalLifecycleHotRequestV6, STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1},
+        LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LifecycleActionV2,
+        LifecycleCoordinateV2, LifecycleHeaderV2, LifecycleRequestV2,
+        hot_v6::{
+            RationalLifecycleHotRequestV6, STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1,
+            STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1,
+        },
     },
     structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
 };
@@ -88,7 +103,8 @@ use crate::{
     },
     structured_composition_admission::hydrate_structured_composition_admission_v1,
     structured_physical_frame::{
-        ActivateReceiptPhysicalInputsV1, activate_receipt_claims_instruction_v1,
+        ActivateReceiptPhysicalInputsV1, CoordinatePhysicalInputsV1,
+        activate_receipt_claims_instruction_v1, coordinate_claims_instruction_v1,
     },
 };
 
@@ -164,6 +180,13 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         &market_input,
         activation_slot,
     )?;
+    let coordinate_artifacts =
+        structured_activation::hydrate_selected_activate_coordinate_artifacts_v1(
+            &mut rpc,
+            registry,
+            &market_input,
+            activation_slot,
+        )?;
     let provisional = hydrate_structured_publication_input_same_slot_v1(
         &mut rpc,
         registry,
@@ -352,6 +375,7 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             &market_input,
             &evidence,
             &artifacts,
+            &coordinate_artifacts,
             &closure,
             published,
             activation_market,
@@ -944,6 +968,7 @@ fn activate_structured_receipt_v1(
     market_input: &[u8],
     evidence: &crate::campaign::CampaignTerminalEvidenceV1,
     artifacts: &structured_activation::StructuredActivateReceiptArtifactsV1,
+    coordinate_artifacts: &structured_activation::StructuredActivateReceiptArtifactsV1,
     closure: &crate::structured_claims_producer::StructuredPublicationClosureV1,
     published: &crate::structured_claims_producer::PublishedStructuredClosureV1,
     market: Pubkey,
@@ -1299,6 +1324,7 @@ fn activate_structured_receipt_v1(
         HOT_CAPABILITY_SEAL_ACCOUNT_V3,
         Pubkey::find_program_address(&seal_key.seeds().as_slices(), &trading).0,
     )?;
+    drop(place);
     let metas = fixed
         .iter()
         .enumerate()
@@ -1463,9 +1489,509 @@ fn activate_structured_receipt_v1(
             "Structured receipt poststate differs from canonical Mint or root state",
         ));
     }
+    let coordinates = activate_structured_coordinates_v1(
+        rpc,
+        payer,
+        plan,
+        evidence,
+        coordinate_artifacts,
+        market,
+        root,
+        representation_descriptor_record,
+        descriptor_value,
+        exposure,
+        hot_outer,
+        core_state.identity.realm_id.to_bytes(),
+        &mut fixed,
+        transactions,
+    )?;
     Ok(
-        json!({"slot": sent.slot, "receiptMint": receipt_mint.to_string(), "receiptMintLamports": mint.lamports, "receiptMintBytes": mint.data.len(), "root": root.to_string(), "rootBytes": root_after.data.len(), "rootStateSha256": sha256_hex(root_tail), "seal": fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3].to_string(), "routingTables": tables.iter().map(|table| table.key.to_string()).collect::<Vec<_>>() }),
+        json!({"slot": sent.slot, "receiptMint": receipt_mint.to_string(), "receiptMintLamports": mint.lamports, "receiptMintBytes": mint.data.len(), "root": root.to_string(), "rootBytes": root_after.data.len(), "rootStateSha256": sha256_hex(root_tail), "seal": fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3].to_string(), "routingTables": tables.iter().map(|table| table.key.to_string()).collect::<Vec<_>>(), "coordinates": coordinates }),
     )
+}
+
+/// Materialize every descriptor coordinate through the selected coordinate
+/// creation route and read back all four resources before representation may
+/// begin. Each request is rebuilt from a fresh finalized state snapshot.
+#[allow(clippy::too_many_arguments)]
+fn activate_structured_coordinates_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    plan: &SuccessorPlan,
+    evidence: &crate::campaign::CampaignTerminalEvidenceV1,
+    artifacts: &structured_activation::StructuredActivateReceiptArtifactsV1,
+    market: Pubkey,
+    root: Pubkey,
+    representation_descriptor_record: SelectedActivationRecordPairV1,
+    descriptor: RepresentationDescriptorV2<'_>,
+    exposure: CompositionExposureBundleV3<'_>,
+    hot_outer: CheckedRationalLifecycleHotOuterV3,
+    market_realm: [u8; 32],
+    fixed: &mut [Pubkey],
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<Vec<serde_json::Value>> {
+    use dclutch_custody::token_svm::{
+        ACCOUNT_BYTES, MINT_BYTES, Mint, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2,
+    };
+    use dclutch_registry::{ActivatedExecutionReleaseSetV1, release_set::ExecutionRoleV1};
+
+    let registry = pubkey(&plan.registry.program_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
+    let trading = pubkey(&plan.trading.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+    let aggregate = pubkey(
+        &evidence
+            .accounts
+            .get("claims_aggregate")
+            .ok_or_else(|| Error::new("Structured coordinate report omitted claims aggregate"))?
+            .address,
+    )?;
+    let mut report_pair =
+        |label: &str, schema: [u8; 32]| -> Result<SelectedActivationRecordPairV1> {
+            let row = evidence.accounts.get(label).ok_or_else(|| {
+                Error::new(format!("Structured coordinate report omitted {label}"))
+            })?;
+            let pair =
+                pair_from_digest_v1(registry, schema, crate::plan::hex32(&row.data_sha256)?)?;
+            require_live_structured_record_v1(rpc, registry, pair, label)?;
+            Ok(pair)
+        };
+    let product = report_pair(
+        "product_record",
+        dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
+    )?;
+    let result = report_pair(
+        "result_domain_record",
+        dclutch_product::admission::RESULT_DOMAIN_SCHEMA_ID_V2,
+    )?;
+    let portfolio = report_pair(
+        "portfolio_record",
+        dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2,
+    )?;
+    let basis = report_pair(
+        "linked_liability_basis_record",
+        dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    )?;
+    let pair = |index: usize| -> Result<SelectedActivationRecordPairV1> {
+        let value = &artifacts.bundle_records[index];
+        selected_pair_v1(registry, value.schema, &value.body)
+    };
+    let capability_descriptor = pair(0)?;
+    for (index, record) in [
+        (HOT_DESCRIPTOR_RAW_ACCOUNT_V3, capability_descriptor),
+        (HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, pair(1)?),
+        (HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, pair(2)?),
+        (HOT_LIFECYCLE_RAW_ACCOUNT_V3, pair(3)?),
+        (HOT_STRATEGY_RAW_ACCOUNT_V3, pair(4)?),
+        (HOT_TRANSITION_RAW_ACCOUNT_V3, pair(5)?),
+        (HOT_EFFECT_RAW_ACCOUNT_V3, pair(6)?),
+    ] {
+        fixed[index] = record.raw;
+        fixed[index + 1] = record.staging;
+    }
+    let representation_authority = Pubkey::new_from_array(descriptor.representation_authority());
+    let receipt_mint = Pubkey::new_from_array(descriptor.receipt_mint());
+    let core_state = CoreState::decode(
+        &rpc.account(market)?
+            .ok_or_else(|| Error::new("Structured coordinate Market vanished"))?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("Structured coordinate Market: {error:?}")))?;
+    let rent_credit = Pubkey::new_from_array(core_state.rent_beneficiary.to_bytes());
+    let activation = rpc
+        .account(pubkey(&plan.activation)?)?
+        .ok_or_else(|| Error::new("Structured coordinate activation cache vanished"))?;
+    let activated = ActivatedExecutionReleaseSetV1::decode(&activation.data).map_err(|error| {
+        Error::new(format!("Structured coordinate activation cache: {error:?}"))
+    })?;
+    let trading_release = activated.role(ExecutionRoleV1::Trading).release();
+    let seal_key = dclutch_vm::capability_seal::CapabilitySealKeyV1::new(
+        dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
+        capability_descriptor.content,
+        STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1,
+        trading_release.semantic_release_id().to_bytes(),
+        registry.to_bytes(),
+    )
+    .map_err(|error| Error::new(format!("Structured coordinate seal key: {error:?}")))?;
+    fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3] =
+        Pubkey::find_program_address(&seal_key.seeds().as_slices(), &trading).0;
+
+    let mut accepted = Vec::new();
+    for outcome in 0..descriptor.outcome_count() {
+        let outcome_bytes = outcome.to_le_bytes();
+        let shard_mint = Pubkey::find_program_address(
+            &[
+                RATIONAL_SHARD_MINT_SEED_V2,
+                &descriptor.descriptor_id(),
+                &outcome_bytes,
+            ],
+            &claims,
+        )
+        .0;
+        let structured_custody = Pubkey::find_program_address(
+            &[
+                RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+                &descriptor.descriptor_id(),
+                &outcome_bytes,
+            ],
+            &claims,
+        )
+        .0;
+        let owner_seeds =
+            ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor.descriptor_id(), outcome)
+                .map_err(|error| {
+                    Error::new(format!("Structured coordinate owner seeds: {error:?}"))
+                })?;
+        let owner = Pubkey::find_program_address(&owner_seeds.as_slices(), &claims).0;
+        let position_seeds = ProtocolPositionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
+            .map_err(|error| {
+            Error::new(format!("Structured coordinate Position seeds: {error:?}"))
+        })?;
+        let admission_seeds =
+            ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes()).map_err(
+                |error| Error::new(format!("Structured coordinate admission seeds: {error:?}")),
+            )?;
+        let position = Pubkey::find_program_address(&position_seeds.as_slices(), &claims).0;
+        let admission = Pubkey::find_program_address(&admission_seeds.as_slices(), &claims).0;
+        let addresses = [
+            market,
+            aggregate,
+            rent_credit,
+            receipt_mint,
+            solana_sdk_ids::sysvar::rent::ID,
+            root,
+            shard_mint,
+            structured_custody,
+            position,
+            admission,
+        ];
+        let (slot, accounts) = rpc.finalized_accounts(&addresses, artifacts.slot)?;
+        let required = |index: usize, label: &str| -> Result<crate::rpc::RpcAccount> {
+            accounts.get(index).cloned().flatten().ok_or_else(|| {
+                Error::new(format!("Structured coordinate snapshot omitted {label}"))
+            })
+        };
+        let market_account = required(0, "Market")?;
+        let aggregate_account = required(1, "Claims aggregate")?;
+        let rent_credit_account = required(2, "RentCredit")?;
+        let receipt_account = required(3, "receipt Mint")?;
+        let rent_account = required(4, "Rent sysvar")?;
+        let root_account = required(5, "capability root")?;
+        if accounts[6..].iter().any(Option::is_some) {
+            return Err(Error::new(
+                "Structured coordinate resources are not vacant before activation",
+            ));
+        }
+        let aggregate_view = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+            .map_err(|error| Error::new(format!("Structured coordinate aggregate: {error:?}")))?;
+        let rent_observed = dclutch_operator::ObservedAccount {
+            observation: dclutch_operator::Observation {
+                slot,
+                unix_timestamp: rpc.block_time(slot)?,
+                finality: dclutch_operator::Finality::Finalized,
+            },
+            key: solana_sdk_ids::sysvar::rent::ID,
+            owner: rent_account.owner,
+            lamports: rent_account.lamports,
+            executable: rent_account.executable,
+            data: rent_account.data.clone(),
+        };
+        let rent = decode_rent(&rent_observed)
+            .map_err(|error| Error::new(format!("Structured coordinate Rent: {error:?}")))?;
+        let receipt_supply = Mint::parse(
+            receipt_account
+                .data
+                .get(..MINT_BYTES)
+                .ok_or_else(|| Error::new("Structured coordinate receipt Mint is truncated"))?,
+        )
+        .map_err(|error| Error::new(format!("Structured coordinate receipt Mint: {error:?}")))?
+        .supply;
+        let position_width = liability_basis_vector_width_v2(
+            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+            exposure.product_width(),
+        )
+        .map_err(|error| Error::new(format!("Structured coordinate Position width: {error:?}")))?;
+        let row = LifecycleCoordinateV2 {
+            outcome,
+            coefficient: descriptor.coefficient(outcome).map_err(|error| {
+                Error::new(format!("Structured coordinate coefficient: {error:?}"))
+            })?,
+            shard_mint: shard_mint.to_bytes(),
+            structured_custody_account: structured_custody.to_bytes(),
+            claims_custody_owner: owner.to_bytes(),
+            claims_custody_position: position.to_bytes(),
+            position_admission: admission.to_bytes(),
+            observed_shard_lamports: rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2),
+            observed_structured_lamports: rent.minimum_balance(ACCOUNT_BYTES),
+            observed_position_lamports: rent.minimum_balance(position_width),
+            observed_admission_lamports: rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
+            shard_rent_principal: rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2),
+            structured_rent_principal: rent.minimum_balance(ACCOUNT_BYTES),
+            position_rent_principal: rent.minimum_balance(position_width),
+            admission_rent_principal: rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
+            expected_shard_supply: 0,
+            expected_structured_amount: 0,
+            expected_position_revision: 0,
+        };
+        let header = LifecycleHeaderV2 {
+            action: LifecycleActionV2::ActivateCoordinate,
+            release_set: core_state.identity.selected_release_set.to_bytes(),
+            market: market.to_bytes(),
+            graph_id: descriptor.graph_id(),
+            descriptor_id: descriptor.descriptor_id(),
+            parent_context: [0; 32],
+            representation_authority: representation_authority.to_bytes(),
+            receipt_mint: receipt_mint.to_bytes(),
+            token_program: descriptor.token_program(),
+            rent_credit: rent_credit.to_bytes(),
+            rent_program: rent_program.to_bytes(),
+            generation: core_state.identity.generation,
+            expected_claims_market_revision: aggregate_view.revision,
+            observed_receipt_lamports: receipt_account.lamports,
+            receipt_rent_principal: rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2),
+            expected_receipt_supply: receipt_supply,
+            outcome_count: exposure.product_width(),
+            coordinate_count: 1,
+            rent_credit_before: rent_credit_account.lamports,
+            rent_credit_after: rent_credit_account.lamports,
+        };
+        let mut coordinate_bytes = vec![0; LIFECYCLE_COORDINATE_BYTES_V2];
+        row.encode_into(&mut coordinate_bytes)
+            .map_err(|error| Error::new(format!("Structured coordinate row encode: {error:?}")))?;
+        let header =
+            derive_selected_lifecycle_parent_with_coordinates_v6(header, &coordinate_bytes)?;
+        let mut lifecycle_bytes =
+            vec![0; LIFECYCLE_HEADER_BYTES_V2 + LIFECYCLE_COORDINATE_BYTES_V2];
+        LifecycleRequestV2::new(header, &coordinate_bytes)
+            .map_err(|error| Error::new(format!("Structured coordinate lifecycle: {error:?}")))?
+            .encode_into(&mut lifecycle_bytes)
+            .map_err(|error| {
+                Error::new(format!("Structured coordinate lifecycle encode: {error:?}"))
+            })?;
+        let lifecycle_digest = hash(&lifecycle_bytes).to_bytes();
+        let protocol = ProtocolPositionRequestV2 {
+            action: ProtocolPositionActionV2::Admit,
+            owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
+            presence: ProtocolPositionPresenceV2::Vacant,
+            release_set: header.release_set,
+            market: header.market,
+            position_owner: owner.to_bytes(),
+            parent_request_digest: lifecycle_digest,
+            rent_credit: header.rent_credit,
+            rent_program: header.rent_program,
+            generation: header.generation,
+            expected_market_revision: header.expected_claims_market_revision,
+            expected_position_revision: row.expected_position_revision,
+            observed_position_lamports: row.observed_position_lamports,
+            observed_admission_lamports: row.observed_admission_lamports,
+            position_rent_principal: row.position_rent_principal,
+            admission_rent_principal: row.admission_rent_principal,
+            capability_descriptor: header.descriptor_id,
+            capability_outcome: row.outcome,
+        }
+        .new()
+        .map_err(|error| {
+            Error::new(format!("Structured coordinate Position request: {error:?}"))
+        })?;
+        let protocol_bytes = protocol.to_bytes().map_err(|error| {
+            Error::new(format!("Structured coordinate Position encode: {error:?}"))
+        })?;
+        let child_authority_seeds =
+            dclutch_registry::release_set::CallerAuthoritySeedsV1::from_bytes(
+                header.release_set,
+                header.market,
+                dclutch_registry::release_set::ExecutionRoleV1::Trading,
+                owner.to_bytes(),
+                hash(&protocol_bytes).to_bytes(),
+            )
+            .map_err(|error| {
+                Error::new(format!("Structured coordinate child authority: {error:?}"))
+            })?;
+        let child_authority =
+            Pubkey::find_program_address(&child_authority_seeds.as_slices(), &trading).0;
+        let child = coordinate_claims_instruction_v1(
+            CoordinatePhysicalInputsV1 {
+                common: ActivateReceiptPhysicalInputsV1 {
+                    trading,
+                    trading_programdata: pubkey(&plan.trading.programdata_id)?,
+                    claims,
+                    claims_programdata: pubkey(&plan.claims.programdata_id)?,
+                    registry,
+                    activation_cache: pubkey(&plan.activation)?,
+                    descriptor_raw: representation_descriptor_record.raw,
+                    descriptor_staging: representation_descriptor_record.staging,
+                    representation_authority,
+                    receipt_mint,
+                    rent_credit,
+                    rent_program,
+                    claims_market: aggregate,
+                    core_market: market,
+                    core,
+                    core_programdata: pubkey(&plan.core.programdata_id)?,
+                },
+                child_authority,
+                position,
+                admission,
+                shard_mint,
+                structured_custody,
+                owner,
+                basis_record: basis.raw,
+                basis_staging: basis.staging,
+                product_record: product.raw,
+                product_staging: product.staging,
+                result_record: result.raw,
+                result_staging: result.staging,
+                portfolio_record: portfolio.raw,
+                portfolio_staging: portfolio.staging,
+            },
+            &lifecycle_bytes,
+        )?;
+        let metas = fixed
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                if index == HOT_ROOT_ACCOUNT_V3 {
+                    AccountMeta::new(*key, false)
+                } else {
+                    AccountMeta::new_readonly(*key, false)
+                }
+            })
+            .collect::<Vec<_>>();
+        let frame = AuthenticatedRationalLifecycleHotFrameV1 {
+            fixed_accounts: metas,
+            strategy_accounts: Vec::new(),
+            root_data: root_account.data,
+            market_data: market_account.data,
+            release_set: core_state.identity.selected_release_set.to_bytes(),
+            market,
+            generation: core_state.identity.generation,
+            finalized_slot: slot,
+            hot_outer,
+        };
+        let hot = structured_activation::build_selected_activate_coordinate_instruction_v1(
+            artifacts,
+            &frame.state()?,
+            &child,
+            descriptor,
+            market_realm,
+        )?;
+        let seal = if rpc
+            .account(fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3])?
+            .is_none()
+        {
+            Some(
+                capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
+                    trading_program: trading,
+                    registry_program: registry,
+                    trading_semantic_release: trading_release.semantic_release_id().to_bytes(),
+                    descriptor_digest: capability_descriptor.content,
+                    action: STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1,
+                    fixed_frame: fixed,
+                    payer: payer.pubkey(),
+                })
+                .map_err(|error| {
+                    Error::new(format!("Structured coordinate seal builder: {error:?}"))
+                })?
+                .instruction,
+            )
+        } else {
+            None
+        };
+        let mut routing = std::collections::BTreeSet::new();
+        for instruction in seal.iter().chain(std::iter::once(&hot.instruction)) {
+            routing.insert(instruction.program_id);
+            routing.extend(instruction.accounts.iter().map(|meta| meta.pubkey));
+        }
+        let routing = routing.into_iter().collect::<Vec<_>>();
+        let (observation, tables) = crate::market::publish_routing_table_over_v1(
+            rpc,
+            payer,
+            &format!("STRUCTURED-COORDINATE-{outcome}"),
+            &routing,
+            transactions,
+        )?;
+        if let Some(seal) = seal.as_ref() {
+            let sent = rpc.send_v0_on_heap(
+                "materialize Structured coordinate capability seal",
+                std::slice::from_ref(seal),
+                payer,
+                observation,
+                &tables,
+                DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+            )?;
+            if let Some(error) = sent.error.as_ref() {
+                return Err(Error::new(format!(
+                    "Structured coordinate seal refused on chain: {error}"
+                )));
+            }
+            transactions.push(sent);
+        }
+        let sent = rpc.send_v0_on_heap(
+            &format!("activate Structured coordinate {outcome}"),
+            std::slice::from_ref(&hot.instruction),
+            payer,
+            observation,
+            &tables,
+            DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+        )?;
+        if let Some(error) = sent.error.as_ref() {
+            return Err(Error::new(format!(
+                "Structured coordinate {outcome} activation refused on chain: {error}"
+            )));
+        }
+        transactions.push(sent.clone());
+        let (_, after) = rpc.finalized_accounts(
+            &[shard_mint, structured_custody, position, admission],
+            sent.slot,
+        )?;
+        let live = after
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| Error::new("Structured coordinate activation omitted a poststate"))?;
+        if live[0].owner != Pubkey::new_from_array(descriptor.token_program())
+            || live[0].data.len() != TOKEN_2022_CLOSEABLE_MINT_BYTES_V2
+            || live[1].owner != Pubkey::new_from_array(descriptor.token_program())
+            || live[1].data.len() != ACCOUNT_BYTES
+            || live[2].owner != claims
+            || live[2].data.len() != position_width
+            || live[3].owner != claims
+            || live[3].data.len() != PROTOCOL_POSITION_ADMISSION_BYTES_V2
+        {
+            return Err(Error::new(
+                "Structured coordinate activation poststate differs from canonical resources",
+            ));
+        }
+        accepted.push(json!({
+            "outcome": outcome,
+            "coefficient": row.coefficient,
+            "slot": sent.slot,
+            "shardMint": shard_mint.to_string(),
+            "structuredCustody": structured_custody.to_string(),
+            "claimsCustodyPosition": position.to_string(),
+            "positionAdmission": admission.to_string(),
+            "seal": fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3].to_string(),
+            "routingTables": tables.iter().map(|table| table.key.to_string()).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(accepted)
+}
+
+fn derive_selected_lifecycle_parent_with_coordinates_v6(
+    mut header: LifecycleHeaderV2,
+    coordinate_bytes: &[u8],
+) -> Result<LifecycleHeaderV2> {
+    header.parent_context = [1; 32];
+    let provisional = LifecycleRequestV2::new(header, coordinate_bytes).map_err(|error| {
+        Error::new(format!(
+            "Structured coordinate provisional lifecycle: {error:?}"
+        ))
+    })?;
+    let mut family_bytes = vec![0; LIFECYCLE_HEADER_BYTES_V2 + coordinate_bytes.len()];
+    let family = RationalLifecycleHotRequestV6::from_child_into(provisional, &mut family_bytes)
+        .map_err(|error| Error::new(format!("Structured coordinate V6 family: {error:?}")))?;
+    header.parent_context = hash(family.as_bytes()).to_bytes();
+    Ok(header)
 }
 
 /// Bind the Claims child to the exact V6 family bytes that Hot will carry.

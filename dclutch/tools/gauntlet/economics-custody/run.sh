@@ -6,14 +6,16 @@ repo="$(cd "$(dirname "$0")/../../.." && pwd)"
 gate=""
 work=""
 port=""
+census="false"
 usage() {
-    echo "usage: tools/gauntlet/economics-custody/run.sh --checked-release-gate ABS_JSON --work ABS_NEW_DIR --rpc-port PORT"
+    echo "usage: tools/gauntlet/economics-custody/run.sh --checked-release-gate ABS_JSON --work ABS_NEW_DIR --rpc-port PORT [--census]"
 }
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --checked-release-gate) gate="${2:?missing gate}"; shift 2 ;;
         --work) work="${2:?missing work}"; shift 2 ;;
         --rpc-port) port="${2:?missing port}"; shift 2 ;;
+        --census) census="true"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 64 ;;
     esac
@@ -22,6 +24,9 @@ case "$gate" in /*) ;; *) usage >&2; exit 64 ;; esac
 case "$work" in /*) ;; *) usage >&2; exit 64 ;; esac
 case "$port" in ''|*[!0-9]*) usage >&2; exit 64 ;; esac
 [ "$port" -ge 1024 ] && [ "$port" -le 65494 ] || exit 64
+command -v solana-test-validator >/dev/null 2>&1 || {
+    echo "solana-test-validator is required" >&2; exit 2;
+}
 [ -f "$gate" ] && [ ! -L "$gate" ] || { echo "regular checked release gate required" >&2; exit 2; }
 [ ! -e "$work" ] || { echo "work must be new: $work" >&2; exit 2; }
 cd "$repo"
@@ -61,4 +66,25 @@ else
     status=1
 fi
 [ "$status" = 0 ] || tail -30 "$work/campaign.stderr" >&2
+
+if [ "$status" = 0 ] && [ "$census" = "true" ]; then
+    gauntlet_work="${DCLUTCH_GAUNTLET_WORK:-/private/tmp/dclutch-gauntlet}"
+    inventory="$gauntlet_work/out/inventory.json"
+    [ -f "$inventory" ] || {
+        echo "economics-custody: --census needs $inventory; run tools/gate census first" >&2
+        exit 2
+    }
+    programs="$work/campaign/programs.json"
+    jq '{registry:.registry.program_id, core:.core.program_id, claims:.claims.program_id,
+         trading:.trading.program_id, resolution:.resolution.program_id,
+         custody:.custody.program_id, rent:.rent_credit.program_id,
+         accelerator:.general_accelerator.program_id} |
+        with_entries(select(.value != null))' \
+        "$work/campaign/substrate/plan.json" > "$programs"
+
+    "$repo/tools/gate" census observe \
+        --work "$gauntlet_work" \
+        --bindings "$repo/tools/gauntlet/economics-custody/bindings.json" \
+        --programs "$programs" --evidence "$work/campaign/evidence.json" || status=$?
+fi
 exit "$status"

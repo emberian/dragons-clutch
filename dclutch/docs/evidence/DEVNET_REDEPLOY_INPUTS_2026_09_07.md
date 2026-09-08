@@ -39,3 +39,15 @@ the observed balance is `12,576,234,830` lamports (`12.576234830` SOL).
 Transaction fees, temporary upload buffers and simulator funding are additional.
 The final committed ELF sizes and RPC rent quotes must determine the actual
 deployment spend. The old cohort remains in place under current authorization.
+
+## 2026-09-08 addendum — bounded balance refresh
+
+At `2026-09-08T15:43:53Z`, two public RPC reads from
+`/Users/ember/dev/dclutch` at source
+`f749f3e2bdee79caa04da37b9e1b1763245a1b62` rechecked genesis and finalized
+balance. Genesis still matched the manifest's devnet identity. At finalized
+slot `495175150`, the same deployer still held `26,572,399,090` lamports.
+No funding or deployment transaction was submitted. The old ELF rent table
+above remains a historical quote; final committed ELF lengths require new
+quotes before deployment. The response is retained at
+`/private/tmp/dclutch-devnet-balance-refresh-20260908.json`.

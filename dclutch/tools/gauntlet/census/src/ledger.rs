@@ -256,6 +256,46 @@ fn decode_hex(value: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// Match the two Relay V1 variants whose finalized Ensemble campaign is being
+/// folded into the native ledger.
+///
+/// The inventory names these inner dispatch arms by enum variant rather than
+/// repeating the outer `DCLTRIX1` magic.  Their native discriminant is still
+/// present in the signed instruction at the Relay V1 action offset, so this is
+/// an exact byte check rather than an inference from a same-program log.  Keep
+/// this table deliberately closed: another variant needs its own evidence and
+/// test before the census can credit it.
+fn relay_v1_variant_selected(path: &str, data: &[u8]) -> bool {
+    const MAGIC: &[u8; 8] = b"DCLTRIX1";
+    const SCHEMA_VERSION: &[u8; 2] = &[1, 0];
+    const ACTION_OFFSET: usize = 10;
+    const HEADER_RESERVED: core::ops::Range<usize> = 11..16;
+    const TERMINAL_SEQUENCE: core::ops::Range<usize> = 24..32;
+    const ENSEMBLE_FOLD_BYTES: usize = 32;
+    const RECLAIM_MEMBER_SEAT_BYTES: usize = 40;
+    const RECLAIM_RESERVED: core::ops::Range<usize> = 33..40;
+
+    let (action, width) = match path {
+        "RelayInstructionV1::EnsembleFold" => (8, ENSEMBLE_FOLD_BYTES),
+        "RelayInstructionV1::ReclaimMemberSeat" => (9, RECLAIM_MEMBER_SEAT_BYTES),
+        _ => return false,
+    };
+    data.len() == width
+        && data.get(..MAGIC.len()) == Some(MAGIC)
+        && data.get(8..10) == Some(SCHEMA_VERSION)
+        && data.get(ACTION_OFFSET) == Some(&action)
+        && data
+            .get(HEADER_RESERVED)
+            .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
+        && data
+            .get(TERMINAL_SEQUENCE)
+            .is_some_and(|bytes| bytes.iter().any(|byte| *byte != 0))
+        && (path != "RelayInstructionV1::ReclaimMemberSeat"
+            || data
+                .get(RECLAIM_RESERVED)
+                .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0)))
+}
+
 /// Whether one finalized instruction's native bytes select this route.
 ///
 /// A route with a selector the census cannot evaluate is deliberately not a
@@ -291,11 +331,11 @@ fn route_selected(route: &Route, program_address: &str, instruction: &CampaignIn
         Selector::Length { value, .. } => value
             .and_then(|value| usize::try_from(value).ok())
             .is_some_and(|value| data.len() == value),
+        Selector::Variant { path } => relay_v1_variant_selected(path, &data),
         // These selectors depend on deserializing the instruction payload or
         // on a predicate body. The census has no native decoder for them, so
         // finalized bytes alone are insufficient to credit this route.
         Selector::Predicate { .. }
-        | Selector::Variant { .. }
         | Selector::Tag { .. }
         | Selector::Literal { .. }
         | Selector::Fallthrough => false,
@@ -884,6 +924,79 @@ mod tests {
             "{:?}",
             report.problems
         );
+    }
+
+    #[test]
+    fn relay_ensemble_variants_require_exact_native_action_and_width() {
+        let route = |path: &str| Route {
+            id: format!("resolution/process#{path}"),
+            kind: RouteKind::Action,
+            parent: Some("resolution/relay_transport_v1::process_relay_transport_v1".into()),
+            handler: "process".into(),
+            provenance: "programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:1".into(),
+            cfg: Vec::new(),
+            selectors: vec![Selector::Variant { path: path.into() }],
+            admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
+        };
+        let instruction = |data_hex: &str| CampaignInstruction {
+            program_id: "ResolutionProgram1111".into(),
+            data_hex: data_hex.into(),
+        };
+
+        let fold = route("RelayInstructionV1::EnsembleFold");
+        let reclaim = route("RelayInstructionV1::ReclaimMemberSeat");
+        // Exact instructions recovered from the finalized accepted packets at
+        // retained-ledger slots 20,927 and 21,057.
+        let fold_bytes = "44434c5452495831010008000000000002000000000000000100000000000000";
+        let reclaim_bytes =
+            "44434c54524958310100090000000000020000000000000001000000000000000300000000000000";
+        assert!(route_selected(
+            &fold,
+            "ResolutionProgram1111",
+            &instruction(fold_bytes)
+        ));
+        assert!(route_selected(
+            &reclaim,
+            "ResolutionProgram1111",
+            &instruction(reclaim_bytes)
+        ));
+
+        let mut wrong_action = decode_hex(fold_bytes).expect("fold bytes");
+        wrong_action[10] = 9;
+        assert!(!route_selected(
+            &fold,
+            "ResolutionProgram1111",
+            &instruction(&hex(&wrong_action))
+        ));
+        let short_reclaim = &reclaim_bytes[..reclaim_bytes.len() - 2];
+        assert!(!route_selected(
+            &reclaim,
+            "ResolutionProgram1111",
+            &instruction(short_reclaim)
+        ));
+
+        let mut noncanonical = decode_hex(reclaim_bytes).expect("reclaim bytes");
+        noncanonical[8] = 2;
+        assert!(!route_selected(
+            &reclaim,
+            "ResolutionProgram1111",
+            &instruction(&hex(&noncanonical))
+        ));
+        noncanonical = decode_hex(reclaim_bytes).expect("reclaim bytes");
+        noncanonical[11] = 1;
+        assert!(!route_selected(
+            &reclaim,
+            "ResolutionProgram1111",
+            &instruction(&hex(&noncanonical))
+        ));
+        noncanonical = decode_hex(reclaim_bytes).expect("reclaim bytes");
+        noncanonical[33] = 1;
+        assert!(!route_selected(
+            &reclaim,
+            "ResolutionProgram1111",
+            &instruction(&hex(&noncanonical))
+        ));
     }
 
     #[test]

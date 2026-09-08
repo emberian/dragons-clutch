@@ -1,0 +1,24 @@
+{
+  "campaign": "ensemble-retained-ledger-fold-reclaim-v1",
+  "note": "The accepted Fold and ReclaimMemberSeat transactions from the retained four-member/quorum-three local-validator campaign. Each binding is admitted only after the census matches the finalized native DCLTRIX1 instruction magic, exact width, action byte, and invoked Resolution program.",
+  "bindings": [
+    {
+      "label": "ensemble resume: fold the retained three-member quorum",
+      "routes": [
+        "resolution/process_ensemble_fold#EnsembleFold"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "Accepted EnsembleFold over captured members zero through two and vacant member three."
+    },
+    {
+      "label": "ensemble resume: reclaim the retained vacant fourth member seat",
+      "routes": [
+        "resolution/process_reclaim_member_seat#ReclaimMemberSeat"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "Accepted ReclaimMemberSeat for member three after the fold."
+    }
+  ]
+}

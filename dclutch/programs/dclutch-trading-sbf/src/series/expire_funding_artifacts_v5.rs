@@ -10,17 +10,14 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_custody::ProjectedCustodyRequestLayoutV1;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
     CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_SELECTION_OFFSET,
     hot_v3::{HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3},
 };
 use dclutch_market::{
-    SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_SERIES_REVISION_OFFSET_V1,
-    SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_TICKET_REVISION_OFFSET_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1, SeriesCoreRequestV1,
-    SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
+    SeriesPermitExpiryRequestV1,
 };
 use dclutch_product::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
@@ -50,8 +47,8 @@ use dclutch_vm::effect::{
         HEADER_BYTES as EFFECT_HEADER_BYTES_V3, OPERATION_BYTES as EFFECT_OPERATION_BYTES_V3,
         ROUTE_BYTES as EFFECT_ROUTE_BYTES_V3, RouteKindV3,
         encode::{
-            AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3,
-            RequestSpaceV3, RouteInputV3, ScalarCoordinateV3, encode_effect_program_v4_atomic,
+            AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, RequestSpaceV3,
+            RouteInputV3, ScalarCoordinateV3, encode_effect_program_v4_atomic,
         },
     },
     v4::{
@@ -106,7 +103,15 @@ pub use dclutch_trading::series::generated_expire_frame_v5::{
     SERIES_EXPIRE_TICKET_COORDINATE_V5, SERIES_EXPIRE_WRITABLE_REPRESENTATIVES_V5,
 };
 /// Common scalar register width authenticated by Expire artifacts.
-pub const SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5: u16 = 26;
+pub const SERIES_EXPIRE_DERIVED_REQUEST_SCALAR_START_V1: u16 = 26;
+/// Codec-derived scalar words carrying the native five-route request bank.
+pub const SERIES_EXPIRE_DERIVED_REQUEST_WORD_COUNT_V1: usize =
+    SERIES_EXPIRE_REQUEST_BANK_BYTES_V5 / 8;
+const _: () = assert!(SERIES_EXPIRE_REQUEST_BANK_BYTES_V5 % 8 == 0);
+const _: () = assert!(SERIES_EXPIRE_DERIVED_REQUEST_WORD_COUNT_V1 < u16::MAX as usize - 26);
+/// Exact shared scalar width including the authenticated native request words.
+pub const SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5: u16 = SERIES_EXPIRE_DERIVED_REQUEST_SCALAR_START_V1
+    + SERIES_EXPIRE_DERIVED_REQUEST_WORD_COUNT_V1 as u16;
 /// Common identity register width authenticated by Expire artifacts.
 pub const SERIES_EXPIRE_COMMON_IDENTITY_COUNT_V5: u16 = 12;
 
@@ -184,7 +189,7 @@ const TICKET_RECORD_OFFSET: u32 = 24;
 const RENT_CREDIT_BENEFICIARY_OFFSET: u32 = 16;
 
 const PROFILE_OPERATIONS: usize = 23;
-const EFFECT_OPERATIONS: usize = 9;
+const EFFECT_OPERATIONS: usize = 6 + SERIES_EXPIRE_DERIVED_REQUEST_WORD_COUNT_V1;
 const REQUEST_OPERATIONS: usize = 5;
 const TRANSITION_OPERATIONS: usize = 19;
 
@@ -309,14 +314,13 @@ pub type Result<T> = core::result::Result<T, SeriesExpireFundingArtifactErrorV5>
 /// Emits and hostile-decodes the canonical current-source Expire artifact bundle.
 pub fn emit_series_expire_funding_artifacts_v5(
     profile: SeriesExpireAccountProfileInputV5<'_>,
-    requests: SeriesExpireChildRequestsV5<'_>,
     occurrence_count: u32,
 ) -> Result<SeriesExpireFundingArtifactsV5> {
     Ok(SeriesExpireFundingArtifactsV5 {
         account_profile: emit_account_profile(profile)?,
         request_profile: emit_request_profile(occurrence_count)?,
         transition: emit_transition()?,
-        effect: emit_effect(requests, occurrence_count)?,
+        effect: emit_effect(occurrence_count)?,
     })
 }
 
@@ -711,11 +715,8 @@ fn emit_transition() -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn emit_effect(
-    requests: SeriesExpireChildRequestsV5<'_>,
-    occurrence_count: u32,
-) -> Result<Vec<u8>> {
-    let bank = encode_request_bank(requests)?;
+fn emit_effect(occurrence_count: u32) -> Result<Vec<u8>> {
+    let bank = [0_u8; SERIES_EXPIRE_REQUEST_BANK_BYTES_V5];
     let a = SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
     let p = SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3;
     let offsets = [
@@ -735,7 +736,8 @@ fn emit_effect(
     ];
     let account = AccountCoordinateV3::fixed;
     let scalar = ScalarCoordinateV3::common;
-    let operations = [
+    let mut operations = Vec::with_capacity(EFFECT_OPERATIONS);
+    operations.extend([
         EffectInstructionV3::write_u8(
             account(0),
             ROOT_PHASE_OFFSET,
@@ -766,28 +768,25 @@ fn emit_effect(
             TICKET_REVISION_OFFSET,
             scalar(SERIES_EXPIRE_CANDIDATE_TICKET_REVISION_SCALAR_V5),
         ),
-        EffectInstructionV3::write_request_identity(
-            3,
-            RequestSpaceV3::Fixed,
-            u32::try_from(ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET)
-                .map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?,
-            IdentityCoordinateV3::common(SERIES_EXPIRE_ROOT_KEY_IDENTITY_V5),
-        ),
-        EffectInstructionV3::write_request_u64(
-            4,
-            RequestSpaceV3::Fixed,
-            u32::try_from(SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_SERIES_REVISION_OFFSET_V1)
-                .map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?,
-            scalar(SERIES_EXPIRE_EXPECTED_ROOT_REVISION_SCALAR_V5),
-        ),
-        EffectInstructionV3::write_request_u64(
-            4,
-            RequestSpaceV3::Fixed,
-            u32::try_from(SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_TICKET_REVISION_OFFSET_V1)
-                .map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?,
-            scalar(SERIES_EXPIRE_EXPECTED_TICKET_REVISION_SCALAR_V5),
-        ),
-    ];
+    ]);
+    let mut word = SERIES_EXPIRE_DERIVED_REQUEST_SCALAR_START_V1;
+    for (route_index, range) in offsets.windows(2).enumerate() {
+        for offset in (0..range[1] - range[0]).step_by(8) {
+            operations.push(EffectInstructionV3::write_request_u64(
+                u16::try_from(route_index)
+                    .map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?,
+                RequestSpaceV3::Fixed,
+                u32::try_from(offset).map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?,
+                scalar(word),
+            ));
+            word = word
+                .checked_add(1)
+                .ok_or(SeriesExpireFundingArtifactErrorV5::Geometry)?;
+        }
+    }
+    if word != SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5 {
+        return Err(SeriesExpireFundingArtifactErrorV5::Geometry);
+    }
     let dependencies = [&SERIES_NO_RECEIPT_DEPENDENCIES_V3[..]; 5];
     let mut base_scratch = vec![0; SERIES_EXPIRE_BASE_EFFECT_BYTES_V5];
     let mut base = vec![0; SERIES_EXPIRE_BASE_EFFECT_BYTES_V5];
@@ -851,33 +850,6 @@ fn emit_effect(
         return Err(SeriesExpireFundingArtifactErrorV5::Effect);
     }
     Ok(v5)
-}
-
-fn encode_request_bank(requests: SeriesExpireChildRequestsV5<'_>) -> Result<Vec<u8>> {
-    // The permit body and Core occurrence request remain host-side authority
-    // facts only. The hashed release artifact carries the distinct transient
-    // transport with zero placeholders; authenticated RequestProfile scalars
-    // patch both revisions immediately before the Core CPI.
-    let _authority = (requests.permit_expiry, requests.core_expire);
-    let core = SeriesUnallocatedPermitExpiryRequestV1::new(0, 0).encode();
-    let mut projected_abort = *requests.projected_abort;
-    projected_abort
-        .get_mut(
-            ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET
-                ..ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET + 32,
-        )
-        .ok_or(SeriesExpireFundingArtifactErrorV5::Geometry)?
-        .fill(0);
-    let mut output = Vec::with_capacity(SERIES_EXPIRE_REQUEST_BANK_BYTES_V5);
-    output.extend_from_slice(requests.refund);
-    output.extend_from_slice(requests.close_vault);
-    output.extend_from_slice(requests.close_replay);
-    output.extend_from_slice(&projected_abort);
-    output.extend_from_slice(&core);
-    if output.len() != SERIES_EXPIRE_REQUEST_BANK_BYTES_V5 {
-        return Err(SeriesExpireFundingArtifactErrorV5::Geometry);
-    }
-    Ok(output)
 }
 
 fn route<'a>(role: FixedRole, index: usize, request: &'a [u8]) -> RouteInputV3<'a> {
@@ -962,7 +934,6 @@ fn alias_representative(coordinate: u16) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use dclutch_custody::{CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1};
-    use dclutch_market::{FoundingIntentV5, Identity, SeriesCoreActionV1, SeriesFoundingPermitV1};
     use dclutch_vm::account_profile::v2::AccountPrestateV2;
     use dclutch_vm::effect::v2::AccountPermission;
 
@@ -975,10 +946,6 @@ mod tests {
             fixed_data_lengths: &lengths,
         })
         .expect("Expire ProfileV3")
-    }
-
-    fn id(value: u8) -> Identity {
-        Identity::new([value; 32]).expect("nonzero identity")
     }
 
     fn custody_representative(role: CustodyFrameRoleV1, route_start: u16) -> u16 {
@@ -1115,69 +1082,6 @@ mod tests {
         true
     }
 
-    fn child_requests<'a>(
-        refund: &'a [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-        close_vault: &'a [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-        close_replay: &'a [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-        projected_abort: &'a [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    ) -> SeriesExpireChildRequestsV5<'a> {
-        let intent = FoundingIntentV5::new(
-            255,
-            id(1),
-            id(2),
-            id(3),
-            id(4),
-            id(5),
-            id(6),
-            id(7),
-            id(8),
-            id(9),
-            id(10),
-            id(11),
-            id(12),
-            id(13),
-            id(14),
-            id(15),
-            8,
-            1,
-            1,
-            100,
-            4,
-            1,
-        )
-        .expect("founding intent");
-        let permit_expiry = SeriesPermitExpiryRequestV1::new(
-            SeriesFoundingPermitV1::new(intent, id(16), id(17)).expect("permit"),
-        );
-        let core_expire = SeriesCoreRequestV1::occurrence(
-            SeriesCoreActionV1::Expire,
-            id(1),
-            id(18),
-            id(19),
-            id(2),
-            id(20),
-            id(3),
-            id(21),
-            id(5),
-            7,
-            3,
-            1,
-            22,
-            23,
-            24,
-            25,
-        )
-        .expect("Expire Core request");
-        SeriesExpireChildRequestsV5 {
-            refund,
-            close_vault,
-            close_replay,
-            projected_abort,
-            permit_expiry,
-            core_expire,
-        }
-    }
-
     #[test]
     fn outer_ticket_write_is_downgraded_for_the_core_child() {
         let bytes = profile();
@@ -1233,13 +1137,7 @@ mod tests {
 
         // The roles come from the REAL emitted Effect bytes, not from this
         // file's own list of them.
-        let refund = [0_u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
-        let projected_abort = [0_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let effect_bytes = emit_effect(
-            child_requests(&refund, &refund, &refund, &projected_abort),
-            1,
-        )
-        .expect("Expire EffectV5");
+        let effect_bytes = emit_effect(1).expect("Expire EffectV5");
         let effect = ProgramV5::decode(&effect_bytes).expect("EffectV5");
         let successor = effect.base().base();
         let mut custody_routes = 0_u16;
@@ -1346,10 +1244,6 @@ mod tests {
     /// endpoints.
     #[test]
     fn profile_width_and_effect_coverage_agree_for_every_occurrence_count() {
-        let refund = [0x21; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
-        let close_vault = [0x22; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
-        let close_replay = [0x23; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
-        let projected_abort = [0x24; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
         for occurrence_count in [0, 1, 2, 3, 4, 5, 8, 9, 1_000, u32::MAX] {
             let proof_count = series_proof_count_v3(occurrence_count);
             let request_bytes = series_action_request_bytes_v3(occurrence_count);
@@ -1374,11 +1268,7 @@ mod tests {
                 assert_eq!(profile.request_bytes(tail_count), Ok(request_bytes));
             }
 
-            let effect = emit_effect(
-                child_requests(&refund, &close_vault, &close_replay, &projected_abort),
-                occurrence_count,
-            )
-            .expect("Expire EffectV5");
+            let effect = emit_effect(occurrence_count).expect("Expire EffectV5");
             let effect = ProgramV5::decode(&effect).expect("EffectV5");
             let v4 = effect.base();
             assert_eq!(
@@ -1425,10 +1315,16 @@ mod tests {
         let request = emit_request_profile(1).expect("request profile");
         let request = RequestProfileV1::decode(&request).expect("request decode");
         assert_eq!(request.fixed_request_bytes(), 128);
-        assert_eq!(request.common_scalar_count(), 26);
+        assert_eq!(
+            request.common_scalar_count(),
+            SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5
+        );
         let transition = emit_transition().expect("transition");
         let transition = TransitionProgramV3::decode(&transition).expect("transition decode");
-        assert_eq!(transition.common_scalar_count(), 26);
+        assert_eq!(
+            transition.common_scalar_count(),
+            SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5
+        );
         assert_eq!(transition.common_identity_count(), 12);
         assert_eq!(transition.bytes().len(), SERIES_EXPIRE_TRANSITION_BYTES_V5);
         assert_eq!(
@@ -1439,15 +1335,7 @@ mod tests {
 
     #[test]
     fn effect_pins_routes_borrowed_proof_and_empty_funding() {
-        let refund = [0x21; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
-        let close_vault = [0x22; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
-        let close_replay = [0x23; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
-        let projected_abort = [0x24; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let bytes = emit_effect(
-            child_requests(&refund, &close_vault, &close_replay, &projected_abort),
-            4,
-        )
-        .expect("Expire EffectV5");
+        let bytes = emit_effect(4).expect("Expire EffectV5");
         let effect = ProgramV5::decode(&bytes).expect("EffectV5");
         assert_eq!(effect.funding_action_count(), 0);
         assert_eq!(effect.funding_seed_count(), 0);
@@ -1463,7 +1351,7 @@ mod tests {
             SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5
         );
         assert_eq!(base.route_count(), 5);
-        assert_eq!(base.fixed_operation_count(), 9);
+        assert_eq!(usize::from(base.fixed_operation_count()), EFFECT_OPERATIONS);
         for route_index in 0..5 {
             let route = base.route(route_index).expect("route");
             assert_eq!(

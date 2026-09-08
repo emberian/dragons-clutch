@@ -548,11 +548,7 @@ pub fn process_instruction(
     {
         let projected = ProjectFoundRequestV2::decode(instruction_data)
             .map_err(|_| CoreSbfError::Instruction)?;
-        let found_bytes = projected
-            .found
-            .encode()
-            .map_err(|_| CoreSbfError::Instruction)?;
-        return found::project(program_id, accounts, projected.found, &found_bytes);
+        return found::project(program_id, accounts, projected.found);
     }
     let request_bytes = instruction_data
         .get(..REQUEST_BYTES)

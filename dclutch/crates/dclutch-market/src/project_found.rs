@@ -1,5 +1,7 @@
 //! Family-neutral, read-only projection of one fully authenticated Found request.
 
+use dclutch_sha256_adapter::digest;
+
 use crate::{Action, Error as CoreError, Identity, REQUEST_BYTES, Request};
 
 /// Exact ProjectFound instruction prefix.
@@ -110,6 +112,65 @@ pub struct ProjectFoundReceiptV2 {
     pub principal_cap_sets: u64,
     /// SHA-256 of the exact embedded canonical Core Found request.
     pub found_request_digest: [u8; 32],
+}
+
+/// Authenticated semantic and physical facts projected by Core into one
+/// [`ProjectFoundReceiptV2`].
+///
+/// This contains no request bytes or caller-authored digest. The adapter that
+/// authenticates these facts supplies this value; [`derive_project_found_receipt_v2`]
+/// owns the canonical Found request encoding and digest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectFoundReceiptProjectionV2 {
+    /// Immutable Realm content identity.
+    pub realm: Identity,
+    /// Realm-selected collateral Mint.
+    pub collateral_mint: Identity,
+    /// Realm-selected Token or Token-2022 program.
+    pub token_program: Identity,
+    /// Realm-selected immutable collateral-adapter release.
+    pub collateral_release: Identity,
+    /// Exact Product finalized-record content identity.
+    pub product_record: Identity,
+    /// Exact semantic Product identity.
+    pub product: Identity,
+    /// Exact Source resolution-policy content identity.
+    pub source: Identity,
+    /// Exact selected execution-release-set content identity.
+    pub release_set: Identity,
+    /// Immutable infrastructure-selected Rent program.
+    pub rent_program: Identity,
+    /// Canonical source-policy ceiling in complete-set units.
+    pub principal_cap_sets: u64,
+}
+
+/// Derive the sole canonical ProjectFound receipt from one Found request and
+/// authenticated projection.
+///
+/// Both the Core producer and any adapter predicting the receipt call this
+/// function. The request digest therefore cannot be supplied independently of
+/// the exact canonical request whose Market and generation the receipt names.
+pub fn derive_project_found_receipt_v2(
+    found: Request,
+    projection: ProjectFoundReceiptProjectionV2,
+) -> Result<ProjectFoundReceiptV2, ProjectFoundError> {
+    ProjectFoundRequestV2::new(found)?;
+    let found_bytes = found.encode()?;
+    ProjectFoundReceiptV2::new(
+        found.market,
+        found.generation,
+        projection.realm,
+        projection.collateral_mint,
+        projection.token_program,
+        projection.collateral_release,
+        projection.product_record,
+        projection.product,
+        projection.source,
+        projection.release_set,
+        projection.rent_program,
+        projection.principal_cap_sets,
+        digest(&found_bytes),
+    )
 }
 
 impl ProjectFoundReceiptV2 {
@@ -324,6 +385,44 @@ mod tests {
         let bytes = receipt.encode().expect("receipt bytes");
         assert_eq!(ProjectFoundReceiptV2::decode(&bytes), Ok(receipt));
         assert_eq!(receipt.verify_found_request([11; 32]), Ok(()));
+
+        let projection = ProjectFoundReceiptProjectionV2 {
+            realm: id(2),
+            collateral_mint: id(3),
+            token_program: id(4),
+            collateral_release: id(5),
+            product_record: id(6),
+            product: id(7),
+            source: id(8),
+            release_set: id(9),
+            rent_program: id(10),
+            principal_cap_sets: u64::MAX,
+        };
+        let derived =
+            derive_project_found_receipt_v2(found, projection).expect("derived canonical receipt");
+        assert_eq!(
+            derived.found_request_digest,
+            digest(&found.encode().expect("Found bytes"))
+        );
+        assert_eq!(
+            derived,
+            ProjectFoundReceiptV2::new(
+                id(1),
+                9,
+                id(2),
+                id(3),
+                id(4),
+                id(5),
+                id(6),
+                id(7),
+                id(8),
+                id(9),
+                id(10),
+                u64::MAX,
+                digest(&found.encode().expect("Found bytes")),
+            )
+            .expect("receipt oracle")
+        );
     }
 
     #[test]
@@ -331,6 +430,24 @@ mod tests {
         let open = Request::administrative(Action::OpenMarket, 9, id(1));
         assert_eq!(
             ProjectFoundRequestV2::new(open),
+            Err(ProjectFoundError::NotFound)
+        );
+        assert_eq!(
+            derive_project_found_receipt_v2(
+                open,
+                ProjectFoundReceiptProjectionV2 {
+                    realm: id(2),
+                    collateral_mint: id(3),
+                    token_program: id(4),
+                    collateral_release: id(5),
+                    product_record: id(6),
+                    product: id(7),
+                    source: id(8),
+                    release_set: id(9),
+                    rent_program: id(10),
+                    principal_cap_sets: 11,
+                },
+            ),
             Err(ProjectFoundError::NotFound)
         );
         let mut bytes =

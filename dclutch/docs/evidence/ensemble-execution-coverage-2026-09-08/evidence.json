@@ -1,0 +1,97 @@
+{
+  "schema": "dclutch-ensemble-native-evidence-v1",
+  "campaign": "ensemble-retained-ledger-fold-reclaim-v1",
+  "source_transcript": "/home/hbox/dclutch-ensemble-four-member-q3-551ffc1b-host4d-port43320-20260908/ensemble-resume-fold-reclaim-accepted-v3-20260908.json",
+  "transactions": [
+    {
+      "compute_units_consumed": 383676,
+      "error": null,
+      "fee_lamports": 75000,
+      "fee_only_balance_change": false,
+      "instructions": [
+        {
+          "data_hex": "02c05c1500",
+          "program_id": "ComputeBudget111111111111111111111111111111"
+        },
+        {
+          "data_hex": "0350c3000000000000",
+          "program_id": "ComputeBudget111111111111111111111111111111"
+        },
+        {
+          "data_hex": "44434c5452495831010008000000000002000000000000000100000000000000",
+          "program_id": "7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R"
+        },
+        {
+          "data_hex": "080000003801000000000000",
+          "program_id": "11111111111111111111111111111111"
+        },
+        {
+          "data_hex": "010000006129d6e752f218aff252cd12a90b4b5c3abf33d2416c3bdbd1388ab5ac5b412e",
+          "program_id": "11111111111111111111111111111111"
+        },
+        {
+          "data_hex": "0000000080542b000000000018010000000000006129d6e752f218aff252cd12a90b4b5c3abf33d2416c3bdbd1388ab5ac5b412e",
+          "program_id": "11111111111111111111111111111111"
+        }
+      ],
+      "label": "ensemble resume: fold the retained three-member quorum",
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program 7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R invoke [1]",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program 7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R consumed 383376 of 1399700 compute units",
+        "Program 7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R success"
+      ],
+      "signature": "ukYyq4xpZHk3N59NQFBhtVtuQE71Wsjw4JYQwtZRpZa1yezAyU774p9FuNh8BEBshWQnJH4RHACjiVVmv9RZeTt",
+      "slot": 20927,
+      "transaction_metadata_available": true
+    },
+    {
+      "compute_units_consumed": 41986,
+      "error": null,
+      "fee_lamports": 75000,
+      "fee_only_balance_change": false,
+      "instructions": [
+        {
+          "data_hex": "02c05c1500",
+          "program_id": "ComputeBudget111111111111111111111111111111"
+        },
+        {
+          "data_hex": "0350c3000000000000",
+          "program_id": "ComputeBudget111111111111111111111111111111"
+        },
+        {
+          "data_hex": "44434c54524958310100090000000000020000000000000001000000000000000300000000000000",
+          "program_id": "7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R"
+        },
+        {
+          "data_hex": "0200000080ba2e0000000000",
+          "program_id": "11111111111111111111111111111111"
+        }
+      ],
+      "label": "ensemble resume: reclaim the retained vacant fourth member seat",
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program 7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R invoke [1]",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program 7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R consumed 41686 of 1399700 compute units",
+        "Program 7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R success"
+      ],
+      "signature": "RQkogBYrJ2oGTmECtZvorAM1rVUg88sMr5uRHrNhSYAXYWycE2tuKWsmUmNZy2chGSDrZDGNeZTd2njYENMAGLN",
+      "slot": 21057,
+      "transaction_metadata_available": true
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "schema": "dclutch-gauntlet-execution-ledger-v1",
+  "observations": [
+    {
+      "route": "claims/founding_v5::process",
+      "campaign": "live-structured-control",
+      "label": "live Structured accepted generic founding route",
+      "signature": "2U3PJ1SLaQ7Q5jwk7gf5oYKX4VjEjyFt2nAcPmRUXeQGQSJEDvwdUoKBw12f7wxuukJMJ8fkKa9KEtmc6i82mUKR",
+      "slot": 9789,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 871662,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "o2PjEqp3KqgYd1kFTGuC93DG5LHWRazFgP8HbeNSyhu",
+        "CAYbxNWuCWay57zaGRgBA6GB1uMZiWNJQzCpNkbkkHQe",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "2RXDG3hojY4LhX7vUcn79fdPnHmV72j9a5yVpVsFHJNw",
+        "11111111111111111111111111111111",
+        "Bfq84eMEv2uYAA96bcqiwjQwzC16ynjRxbsBRwqpTQKj"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "69c4b6f0483a4db29869c725ab65731e30198f5f3240e73e39f517e3c0c8a9de",
+      "evidence_path": "/Users/ember/dev/dclutch/docs/evidence/census-route-binding-2026-09-08/normalized-evidence.json"
+    },
+    {
+      "route": "trading/scoring_dealer_v1::fill::process_dealer_fill_v1",
+      "campaign": "scoring-dealer-local-validator",
+      "label": "dealer-fill",
+      "signature": "5juD5dkRCVfD3qKbwaWyE4W3dQ2p7BtXjoYmWzRY8arvmWBfKTTyXZqXCUGn39jd9EWDHmopbSejYzwWF2cNdYxh",
+      "slot": 8408,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 393855,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Fj47v4UkAqyYo4X45MEr3KhLiPxeQ3hp6TyCgfT6NCFX",
+        "6K9Yx9NMze2h9ETzTvcwEvvCeSA5vUiahFcvDpUAkPjz",
+        "GmcUdB9f4qXttRhB7AH6JkpjJPqxyYDRiz7DQrkRU9JS",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "0e7b5eb80b5ef780696de621c7d897a18945adae7e03e42af300774efe4b534c",
+      "evidence_path": "/Users/ember/dev/dclutch/docs/evidence/execution-coverage-2026-09-08/dealer-evidence.json"
+    },
+    {
+      "route": "trading/scoring_dealer_v1::found::process_dealer_found_v1",
+      "campaign": "scoring-dealer-local-validator",
+      "label": "dealer-found",
+      "signature": "4DPottw5ENC3ezTjL6BKV2BRdpMkqjfqmX5TsakDDrPo9xTv6cDgUhWB88gE5abRb5dX8WXAVJPPQW8i8SqHPsbN",
+      "slot": 8214,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 465738,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Fj47v4UkAqyYo4X45MEr3KhLiPxeQ3hp6TyCgfT6NCFX",
+        "11111111111111111111111111111111",
+        "GmcUdB9f4qXttRhB7AH6JkpjJPqxyYDRiz7DQrkRU9JS",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "6K9Yx9NMze2h9ETzTvcwEvvCeSA5vUiahFcvDpUAkPjz"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "0e7b5eb80b5ef780696de621c7d897a18945adae7e03e42af300774efe4b534c",
+      "evidence_path": "/Users/ember/dev/dclutch/docs/evidence/execution-coverage-2026-09-08/dealer-evidence.json"
+    },
+    {
+      "route": "trading/scoring_dealer_v1::quote::process_dealer_quote_v1",
+      "campaign": "scoring-dealer-local-validator",
+      "label": "dealer-quote",
+      "signature": "3Xc6iDeP6otxQgoLCcizYoq2dhSX6XisJnWtbpVvTtmceKUwzUY3jHRBZ1Cau5xsvSfwJzg7KrxzH9Nn2jGiY4bc",
+      "slot": 8246,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 41567,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Fj47v4UkAqyYo4X45MEr3KhLiPxeQ3hp6TyCgfT6NCFX"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "0e7b5eb80b5ef780696de621c7d897a18945adae7e03e42af300774efe4b534c",
+      "evidence_path": "/Users/ember/dev/dclutch/docs/evidence/execution-coverage-2026-09-08/dealer-evidence.json"
+    },
+    {
+      "route": "trading/scoring_dealer_v1::withdraw::process_dealer_withdraw_v1",
+      "campaign": "scoring-dealer-local-validator",
+      "label": "dealer-withdraw",
+      "signature": "2xtEfxu5UfHGRXiaEVsbAK3a9rgWvLeMEc5ykfZ7gVGr81FnKVsCgEfQ7svRS3J9pX4CHzJw7J1MUdRUf6jo6xzy",
+      "slot": 8443,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 149480,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "Fj47v4UkAqyYo4X45MEr3KhLiPxeQ3hp6TyCgfT6NCFX",
+        "GmcUdB9f4qXttRhB7AH6JkpjJPqxyYDRiz7DQrkRU9JS",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "0e7b5eb80b5ef780696de621c7d897a18945adae7e03e42af300774efe4b534c",
+      "evidence_path": "/Users/ember/dev/dclutch/docs/evidence/execution-coverage-2026-09-08/dealer-evidence.json"
+    }
+  ]
+}

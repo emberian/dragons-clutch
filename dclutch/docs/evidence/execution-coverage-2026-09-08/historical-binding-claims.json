@@ -1,0 +1,373 @@
+{
+  "schema": "dclutch-execution-coverage-analysis-2026-09-08-v1",
+  "source_revision": "4ef5a4eb6a313459395434ec712361090e888981",
+  "warning": "Historical binding claims are authored route labels. Only exact_agave_routes come from checked finalized native instruction evidence in this analysis.",
+  "totals": {
+    "inventory_routes": 164,
+    "inventory_refusals": 456,
+    "inventory_unclassified": 0,
+    "exact_devnet_accepted_routes": 46,
+    "exact_local_validator_accepted_routes": 5,
+    "exact_historical_agave_union_routes": 50,
+    "historical_success_claim_union_before_dealer": 119,
+    "historical_success_claim_union": 123,
+    "historical_refusal_only_claims": 0,
+    "no_historical_success_claim": 41,
+    "local_validator_claim_only_no_exact_checked_evidence": 32,
+    "program_test_only_success_claim": 41
+  },
+  "non_disjoint_success_claims": {
+    "devnet": 46,
+    "local-validator": 62,
+    "program-test": 71
+  },
+  "strongest_disjoint_success_claims": {
+    "devnet": 46,
+    "local-validator": 36,
+    "program-test": 41
+  },
+  "exact_local_validator_routes": [
+    "claims/founding_v5::process",
+    "trading/scoring_dealer_v1::fill::process_dealer_fill_v1",
+    "trading/scoring_dealer_v1::found::process_dealer_found_v1",
+    "trading/scoring_dealer_v1::quote::process_dealer_quote_v1",
+    "trading/scoring_dealer_v1::withdraw::process_dealer_withdraw_v1"
+  ],
+  "exact_agave_routes": [
+    "claims/custody_replay_v1::process",
+    "claims/founding_v5::process",
+    "claims/process_instruction",
+    "claims/terminal_settlement_v3::process",
+    "core/begin_retiring::process#BeginRetiring",
+    "core/capability::process#CloseCapability",
+    "core/found::process#Found",
+    "core/found::project",
+    "core/generic_founding_v1::process",
+    "core/process_found#FoundAndPermit",
+    "core/process_instruction",
+    "core/process_instruction#CloseCapability",
+    "core/process_instruction#Retire",
+    "core/process_open#Open",
+    "core/resolution::process#Retire",
+    "core/retire_v1::process_checkpoint_prepare#Retire",
+    "core/retirement_replay_handoff_v1::process",
+    "custody/initialize#Initialize",
+    "custody/lock_hoard_and_close_source#LockHoardAndCloseSource",
+    "custody/open_hoard#OpenHoard",
+    "custody/open_source_compartment#OpenSourceCompartment",
+    "custody/process_instruction",
+    "custody/projected::process",
+    "custody/realize_and_close#RealizeAndClose",
+    "registry/process_instruction",
+    "registry/record_v1::dispatch",
+    "rent/process_close_v2#Close",
+    "rent/process_create_v2#Create",
+    "rent/process_instruction",
+    "rent/process_sweep_v2#Sweep",
+    "resolution/core_effect::process_direct_funding_activation_v1",
+    "resolution/core_effect::process_direct_funding_close_v1",
+    "resolution/process_instruction",
+    "resolution/sponsored_push_v1::process_sponsored_push_v1",
+    "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1",
+    "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+    "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1",
+    "trading/direct_replay_setup_v1::process_direct_replay_setup_v1",
+    "trading/direct_token_setup_v1::process_direct_token_setup_v1",
+    "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+    "trading/hot_v3::process_capability_seal_v1",
+    "trading/hot_v3::process_hot_execution_v3",
+    "trading/process_instruction",
+    "trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1",
+    "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2",
+    "trading/scoring_dealer_v1::fill::process_dealer_fill_v1",
+    "trading/scoring_dealer_v1::found::process_dealer_found_v1",
+    "trading/scoring_dealer_v1::quote::process_dealer_quote_v1",
+    "trading/scoring_dealer_v1::withdraw::process_dealer_withdraw_v1",
+    "trading/user_position_admission_v1::process_user_position_admission_v1"
+  ],
+  "local_validator_claim_only_routes": [
+    "core/execute_provider_v3::process#ExecuteProvider",
+    "core/infrastructure::process_initialize",
+    "core/resolution::process#AdmitTerminal",
+    "core/resolution::process#CreateFund",
+    "core/resolution::process#VerifyFundReady",
+    "custody/apply#Apply",
+    "custody/credit_route#(UpkeepOperationV1::Credit,Some(credit))",
+    "custody/found#(UpkeepOperationV1::Found,None)",
+    "custody/found#Found",
+    "custody/propose#Propose",
+    "custody/protocol_parameters_v1::process",
+    "custody/upkeep_vault_v1::process",
+    "custody/withdraw#Withdraw",
+    "registry/lineage_v1::process",
+    "registry/process_abort#4",
+    "registry/process_activate_role#ActivateRole",
+    "registry/process_append#2",
+    "registry/process_begin#5",
+    "registry/process_finalize#3",
+    "registry/process_reauthenticate#Reauthenticate",
+    "resolution/core_effect::process_core_effect",
+    "resolution/pre_market_funding_v1::process_pre_market_funding_v2",
+    "resolution/process_advance_recovery#AdvanceRecovery",
+    "resolution/process_commit_deadline_failure#CommitDeadlineFailure",
+    "resolution/process_consume#ConsumeRecord",
+    "resolution/process_create#CreateFund",
+    "resolution/process_create_record#CreateRecord",
+    "resolution/process_submit#magic",
+    "resolution/process_verify#VerifyFundReady",
+    "resolution/provider_instruction_v3::process_provider_resolution_v3",
+    "resolution/provider_transport_v3::process_provider_transport_v3",
+    "resolution/relay_transport_v1::process_relay_transport_v1"
+  ],
+  "program_test_only_routes": [
+    "accelerator/process_instruction",
+    "claims/affine_batch_v2::process",
+    "claims/claim_check_compaction_v1::process_compaction",
+    "claims/claim_check_compaction_v1::process_open_escrow",
+    "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow",
+    "claims/claim_check_redemption_v1::process_redemption#else",
+    "claims/claims_conservation_v1::process",
+    "claims/fractional_claim_check_v1::process_fractional_compaction",
+    "claims/fractional_claim_check_v1::process_fractional_redemption",
+    "claims/fractional_retirement_v3::process",
+    "claims/market_closure_v1::process_checkpoint_handoff",
+    "claims/process_begin#Begin",
+    "claims/process_coordinate#RetireCoordinate",
+    "claims/process_finish#Finish",
+    "claims/protocol_position_v2::process",
+    "claims/rational_lifecycle_v2::process",
+    "claims/rational_representation_v2::process",
+    "claims/rational_representation_v2::process_replay_close",
+    "claims/signed_delta_v3::process",
+    "claims/sparse_native_transfer_v1::process",
+    "core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1",
+    "core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1",
+    "core/finish_checkpoint_retirement#AGGREGATE_RETIREMENT_FINISH_MAGIC_V1",
+    "core/retire_v1::process_checkpoint_suffix",
+    "core/series_consume::process",
+    "custody/abort_source_and_close#AbortSourceAndClose",
+    "custody/delegated::process",
+    "custody/retirement_replay_handoff_v1::process",
+    "resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1",
+    "resolution/process_abandon#magic",
+    "resolution/process_append#AppendObservation",
+    "resolution/process_capture#Capture",
+    "resolution/process_close_candidate#CloseCandidate",
+    "resolution/process_close_head#CloseHead",
+    "resolution/process_commit_failure#CommitFailure",
+    "resolution/process_retire#RetireRecord",
+    "resolution/process_seal#SealRecord",
+    "resolution/process_settle#Settle",
+    "trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1",
+    "trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1",
+    "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1"
+  ],
+  "refusal_only_claim_routes": [],
+  "no_successful_claim_routes": [
+    {
+      "route": "accelerator/dealer::process",
+      "class": "unrecorded",
+      "owner": "Dealer accelerator program owner; gauntlet evidence owner"
+    },
+    {
+      "route": "accelerator/dealer::process_scoring_row_v1",
+      "class": "unrecorded",
+      "owner": "Dealer accelerator program owner; gauntlet evidence owner"
+    },
+    {
+      "route": "accelerator/series::evaluate_selected_and_publish#accepted",
+      "class": "status-report",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "accelerator/series::process",
+      "class": "status-report",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "accelerator/set_return_data#ChunkedBankV2",
+      "class": "unwired",
+      "owner": "the programs lane (evidence emission in dealer-program-test); S11/gauntlet (runner, bindings)"
+    },
+    {
+      "route": "accelerator/set_return_data#OutputPageV3",
+      "class": "unwired",
+      "owner": "the programs lane (evidence emission in dealer-program-test); S11/gauntlet (runner, bindings)"
+    },
+    {
+      "route": "claims/fractional_atomic_v3::process",
+      "class": "unwired",
+      "owner": "S7 owns programs/dclutch-claims-sbf (evidence emission in the three remaining targets); S11/gauntlet owns the tier"
+    },
+    {
+      "route": "claims/market_closure_v1::process",
+      "class": "status-report",
+      "owner": "cycle-2 tranche A, Claims"
+    },
+    {
+      "route": "claims/process_open#WholeUnwrap",
+      "class": "unwired",
+      "owner": "S7 owns programs/dclutch-claims-sbf (evidence emission in the three remaining targets); S11/gauntlet owns the tier"
+    },
+    {
+      "route": "claims/process_terminal#TerminalZeroBurn",
+      "class": "unwired",
+      "owner": "S7 owns programs/dclutch-claims-sbf (evidence emission in the three remaining targets); S11/gauntlet owns the tier"
+    },
+    {
+      "route": "claims/series_founding_transport_v1::process",
+      "class": "status-report",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "core/activate_capability_child#ActivateCapability",
+      "class": "status-report",
+      "owner": "W1d (ADR 0004 fallout), then cycle-2"
+    },
+    {
+      "route": "core/capability::process#ActivateCapability",
+      "class": "status-report",
+      "owner": "W1d (ADR 0004 fallout), then cycle-2"
+    },
+    {
+      "route": "core/close_capability_child#CloseCapability",
+      "class": "status-report",
+      "owner": "W1d (ADR 0004 fallout), then cycle-2"
+    },
+    {
+      "route": "core/infrastructure_v2::process_initialize_v2",
+      "class": "structural",
+      "owner": "RELEASE-DEVNET (carries the evidence and the cohort-10 redeploy that lands c60b25e8)"
+    },
+    {
+      "route": "core/open_market::process#OpenMarket",
+      "class": "status-report",
+      "owner": "W1d"
+    },
+    {
+      "route": "core/process_instruction#else",
+      "class": "status-report",
+      "owner": "LEAN-TAGS-2, then whoever adds the malformed-Action hostile"
+    },
+    {
+      "route": "core/resolution::process#CloseFund",
+      "class": "repointing",
+      "owner": "the Core lane (a34ff595 welded the action; the id was repointed at the refusal 2026-09-02). Convicted by C-09 (WITNESS) 2026-09-01; the journey's builder call and false binding corrected by C-10 (WITNESS) 2026-09-02. Nothing is owed."
+    },
+    {
+      "route": "core/retire_v1::process#Retire",
+      "class": "status-report",
+      "owner": "cycle-2 (WAVE.md), retirement"
+    },
+    {
+      "route": "core/series_open::process",
+      "class": "status-report",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "core/series_permit_expiry::process",
+      "class": "status-report",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "core/series_permit_expiry_precommit_v1::process",
+      "class": "structural",
+      "owner": "the config-identity ruling (3) needs an owner across Core AND Trading -- it moves two ELFs and the convention `core/series_consume` is witnessed under -- and the Series lane owns (4), the TicketStateV3 producer in prepare_funding_artifacts_v5. (1) is permanent by design. (2) is closed."
+    },
+    {
+      "route": "custody/abort_open_and_close#AbortOpenAndClose",
+      "class": "status-report",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/lock_hoard#LockHoard",
+      "class": "status-report",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/refund_and_close#RefundAndClose",
+      "class": "status-report",
+      "owner": "W1d"
+    },
+    {
+      "route": "registry/continuation_v1::process",
+      "class": "status-report",
+      "owner": "W1d for the Open chain; cycle-2 tranche A"
+    },
+    {
+      "route": "registry/hot_continuation_v2::process",
+      "class": "status-report",
+      "owner": "gauntlet owner for a Direct-Hot validator tier; SMOKE-1 may discharge it first with equivalent finalized evidence"
+    },
+    {
+      "route": "resolution/core_effect::process_close#Retired",
+      "class": "structural",
+      "owner": "the Resolution lane owns core_effect.rs; the weld is the Core lane's (a34ff595). Delete this with the two `CloseFund` entries the day a caller for the composed close exists."
+    },
+    {
+      "route": "resolution/derived_transport_v1::process_derived_settle_v1",
+      "class": "status-report",
+      "owner": "CONVERGE-PRODUCT-SHAPES"
+    },
+    {
+      "route": "resolution/process_admit#AdmitTerminal",
+      "class": "status-report",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/process_close#CloseFund",
+      "class": "structural",
+      "owner": "the Resolution lane owns core_effect.rs; the weld is the Core lane's (a34ff595). Reason corrected by C-10 (WITNESS) 2026-09-02. Delete this and the `core/resolution::process#CloseFund` entry together the day a caller for the composed close exists."
+    },
+    {
+      "route": "resolution/process_ensemble_fold#EnsembleFold",
+      "class": "structural",
+      "owner": "the Source/Resolution lane (the fold and the reclaim); Core and the market compiler own the founding conjunct"
+    },
+    {
+      "route": "resolution/process_reclaim#magic",
+      "class": "status-report",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/process_reclaim_member_seat#ReclaimMemberSeat",
+      "class": "structural",
+      "owner": "the Source/Resolution lane; delete both rows the day a founding writes an ensemble material"
+    },
+    {
+      "route": "resolution/provider_instruction_v3::process_provider_resolution_v3#count",
+      "class": "unrecorded",
+      "owner": "Source/provider owner; gauntlet evidence owner"
+    },
+    {
+      "route": "trading/generic_founding_stages_v1::process_generic_found_and_permit_v1",
+      "class": "status-report",
+      "owner": "whoever owns tier 1's shape (unclaimed as of 2026-09-04)"
+    },
+    {
+      "route": "trading/generic_founding_stages_v1::process_generic_market_open_v1",
+      "class": "status-report",
+      "owner": "whoever owns tier 1's shape (unclaimed as of 2026-09-04)"
+    },
+    {
+      "route": "trading/hot_v3::process_capability_seal_close_v1",
+      "class": "status-report",
+      "owner": "gauntlet owner for the wiring (same shared-surface coordination as the seal write outer); devnet steward for the first real close of cohort-6's seals"
+    },
+    {
+      "route": "trading/outer::process_capability_lifecycle#else",
+      "class": "repointing",
+      "owner": "W1d for the Open path; W2d owns outer.rs"
+    },
+    {
+      "route": "trading/user_position_admission_v1::process_user_position_admission_v1#Admit",
+      "class": "unwired",
+      "owner": "the Trading lane (evidence emission); S11/gauntlet (runner, bindings)"
+    },
+    {
+      "route": "trading/user_position_admission_v1::process_user_position_admission_v1#Close",
+      "class": "unwired",
+      "owner": "the Trading lane (evidence emission); S11/gauntlet (runner, bindings)"
+    }
+  ]
+}

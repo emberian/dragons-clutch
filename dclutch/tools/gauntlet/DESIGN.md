@@ -127,18 +127,19 @@ Found31 was never submitted for months and no report anywhere said so.
   variant names and numeric values. Every entry carries `file:line` provenance.
   The enumeration is derived from the Rust AST (`syn`), not from a hand-kept
   list, so it cannot drift silently from the source.
-- `census observe` folds a campaign's **chain evidence** — the finalized
-  transaction records the campaign emitted, including their log messages — into
-  an append-only ledger of what was actually driven on a validator.
+- `census observe` folds a campaign's **chain evidence** — finalized
+  transaction records with native instruction bytes and log messages — into an
+  append-only ledger of what was actually driven on a validator. Instruction
+  bytes select the route; logs authenticate the invoked program frame.
 - `census report` renders EXECUTED / NEVER-EXECUTED per route and per refusal
   code.
 
 **The honesty rules, which matter more than the mechanism:**
 
-- A route counts as EXECUTED only when a **finalized transaction** in the
-  evidence names it *and* the chain's own log messages show that program
-  invoked. The harness's belief about what it submitted is cross-checked
-  against what the chain says ran.
+- A route counts as EXECUTED only when a **finalized transaction** carries a
+  native instruction whose bytes select that census route *and* the chain's own
+  log messages show that program invoked. A transaction label or binding cannot
+  establish this result.
 - A campaign transaction label with no binding to a census route is a **hard
   error**, not a skip. Unbound labels are how coverage silently rots.
 - A route that cannot be driven today — anything behind the not-yet-open Market,
@@ -147,6 +148,14 @@ Found31 was never submitted for months and no report anywhere said so.
   as anything else, never excluded from the denominator, and never suppressed.
 - There is no "expected coverage" threshold and no percentage to game. The
   report prints the routes.
+
+The tracked reference has an additional source boundary:
+`tools/gauntlet/execution-evidence.json` explicitly lists the immutable census
+ledgers it may treat as checked observations. `tools/genref/generate.mjs` keeps
+successful bindings, refusal bindings, ProgramTest observations, exact native
+refusals and accepted Agave observations in separate partitions. Devnet and
+local-validator totals remain separate, with their overlap reported as a
+historical union rather than final-source acceptance.
 
 The honest number will be ugly. That is the point. An ugly number that is true
 is worth more than 2,300 green tests that agreed with themselves.

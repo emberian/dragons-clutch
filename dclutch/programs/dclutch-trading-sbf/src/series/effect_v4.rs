@@ -747,7 +747,9 @@ pub(super) mod tests {
     fn registers(funding_count: u16) -> [u64; SCALARS] {
         // Request geometry in 0..5; the root-header generation and manifest
         // entry index occupy the two profile-projected scalars.
-        [128, 64, 2, 32, u64::from(funding_count), 9, 4]
+        let mut scalars = [0_u64; SCALARS];
+        scalars[..7].copy_from_slice(&[128, 64, 2, 32, u64::from(funding_count), 9, 4]);
+        scalars
     }
 
     #[test]

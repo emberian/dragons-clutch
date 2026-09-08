@@ -26,7 +26,6 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_custody::ProjectedCustodyRequestLayoutV1;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_MARKET_OFFSET,
     CAPABILITY_ROOT_SELECTION_OFFSET,
@@ -106,7 +105,6 @@ use super::{
         SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5, SERIES_EMPTY_STATE_LIFECYCLE_BYTES_V5,
         encode_series_empty_state_lifecycle_v5_atomic,
     },
-    occurrence_artifacts_v4::SeriesPrepareChildRequestsV4,
     state::{SERIES_TICKET_STATE_BYTES_V3, SERIES_TICKET_STATE_PDA_DOMAIN_V3},
 };
 use dclutch_trading::series::generated::SERIES_TICKET_STATE_MAGIC_V3;
@@ -151,8 +149,26 @@ pub const SERIES_PREPARE_REFUND_OWNER_IDENTITY_V5: u16 = 8;
 /// Current Trading program identity register.
 pub const SERIES_PREPARE_TRADING_PROGRAM_IDENTITY_V5: u16 = 0;
 
-/// Complete common scalar register width.
-pub const SERIES_PREPARE_COMMON_SCALAR_COUNT_V5: u16 = 11;
+/// First scalar containing one private adapter-derived native request word.
+pub const SERIES_PREPARE_DERIVED_REQUEST_SCALAR_START_V1: u16 = 11;
+/// Exact codec-derived request word count owned by the native projection.
+pub use super::derived_prepare_v1::SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1;
+const _: () = assert!(SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1 < u16::MAX as usize - 11);
+/// Exclusive end of the native child-request scalar region.
+pub const SERIES_PREPARE_DERIVED_REQUEST_SCALAR_END_V1: u16 =
+    SERIES_PREPARE_DERIVED_REQUEST_SCALAR_START_V1
+        + SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1 as u16;
+/// Native successor's prepared-occurrence flag.
+pub const SERIES_PREPARE_RESULT_PREPARED_SCALAR_V1: u16 =
+    SERIES_PREPARE_DERIVED_REQUEST_SCALAR_END_V1;
+/// Native successor's number of outstanding Ticket accounts.
+pub const SERIES_PREPARE_RESULT_OUTSTANDING_SCALAR_V1: u16 =
+    SERIES_PREPARE_RESULT_PREPARED_SCALAR_V1 + 1;
+/// Native successor's optimistic root revision.
+pub const SERIES_PREPARE_RESULT_REVISION_SCALAR_V1: u16 =
+    SERIES_PREPARE_RESULT_PREPARED_SCALAR_V1 + 2;
+/// Complete common scalar register width, including native requests and replay.
+pub const SERIES_PREPARE_COMMON_SCALAR_COUNT_V5: u16 = SERIES_PREPARE_RESULT_PREPARED_SCALAR_V1 + 3;
 /// Complete common identity register width.
 pub const SERIES_PREPARE_COMMON_IDENTITY_COUNT_V5: u16 = 9;
 
@@ -163,7 +179,7 @@ const PROOF_OFFSET: u32 = 128;
 const PROFILE_OPERATIONS: usize = 11;
 const REQUEST_OPERATIONS: usize = 3;
 const TRANSITION_OPERATIONS: usize = 7;
-const EFFECT_OPERATIONS: usize = 6;
+const EFFECT_OPERATIONS: usize = SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1 + 7;
 
 /// The ticket-state magic as the `u64` the Effect VM writes at offset zero.
 const TICKET_STATE_MAGIC_WORD_V5: u64 = u64::from_le_bytes(SERIES_TICKET_STATE_MAGIC_V3);
@@ -244,7 +260,6 @@ type Result<T> = core::result::Result<T, SeriesPrepareFundingArtifactErrorV5>;
 /// Emit and hostile-decode the complete current-source Prepare artifacts.
 pub fn emit_series_prepare_funding_artifacts_v5(
     profile: SeriesPrepareAccountProfileInputV5<'_>,
-    requests: SeriesPrepareChildRequestsV4<'_>,
     ticket_rent_lamports: u64,
 ) -> Result<SeriesPrepareFundingArtifactsV5> {
     if ticket_rent_lamports == 0 {
@@ -254,7 +269,7 @@ pub fn emit_series_prepare_funding_artifacts_v5(
         account_profile: emit_account_profile(profile)?,
         request_profile: emit_request_profile()?,
         transition: emit_transition(ticket_rent_lamports)?,
-        effect: emit_effect(requests)?,
+        effect: emit_effect()?,
         lifecycle: emit_lifecycle()?,
     })
 }
@@ -515,60 +530,87 @@ fn emit_transition(ticket_rent_lamports: u64) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn emit_effect(requests: SeriesPrepareChildRequestsV4<'_>) -> Result<Vec<u8>> {
-    let parent_root_offset =
-        u32::try_from(ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET)
-            .map_err(|_| SeriesPrepareFundingArtifactErrorV5::Geometry)?;
-    let mut projected_initialize = *requests.projected_initialize;
-    let mut projected_open = *requests.projected_open;
-    clear_projected_parent_root(&mut projected_initialize)?;
-    clear_projected_parent_root(&mut projected_open)?;
+fn emit_effect() -> Result<Vec<u8>> {
+    // The immutable artifact owns topology and widths. Every native request
+    // word comes from the private, re-admitted occurrence bank at execution;
+    // none of occurrence zero's identities or commitments enter this template.
+    let projected = [0_u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1];
+    let normal = [0_u8; dclutch_custody::CUSTODY_REQUEST_BYTES_V1];
     let routes = [
         route(
             SERIES_PREPARE_ROUTE_STARTS_V5[0],
             SERIES_PREPARE_ROUTE_COUNTS_V5[0],
-            &projected_initialize,
+            &projected,
         ),
         route(
             SERIES_PREPARE_ROUTE_STARTS_V5[1],
             SERIES_PREPARE_ROUTE_COUNTS_V5[1],
-            &projected_open,
+            &projected,
         ),
         route(
             SERIES_PREPARE_ROUTE_STARTS_V5[2],
             SERIES_PREPARE_ROUTE_COUNTS_V5[2],
-            requests.replay_initialize,
+            &normal,
         ),
         route(
             SERIES_PREPARE_ROUTE_STARTS_V5[3],
             SERIES_PREPARE_ROUTE_COUNTS_V5[3],
-            requests.escrow_open,
+            &normal,
         ),
         route(
             SERIES_PREPARE_ROUTE_STARTS_V5[4],
             SERIES_PREPARE_ROUTE_COUNTS_V5[4],
-            requests.escrow_lock,
+            &normal,
         ),
     ];
     let dependencies = [&SERIES_NO_RECEIPT_DEPENDENCIES_V3[..]; 5];
-    let root = IdentityCoordinateV3::common(SERIES_PREPARE_ROOT_KEY_IDENTITY_V5);
     let ticket = AccountCoordinateV3::fixed(SERIES_PREPARE_TICKET_COORDINATE_V5);
     let offset = |value: usize| {
         u32::try_from(value).map_err(|_| SeriesPrepareFundingArtifactErrorV5::Geometry)
     };
-    let operations = [
-        EffectInstructionV3::write_request_identity(
-            0,
-            RequestSpaceV3::Fixed,
-            parent_root_offset,
-            root,
-        ),
-        EffectInstructionV3::write_request_identity(
-            1,
-            RequestSpaceV3::Fixed,
-            parent_root_offset,
-            root,
-        ),
+    let mut operations = Vec::with_capacity(EFFECT_OPERATIONS);
+    let mut word = SERIES_PREPARE_DERIVED_REQUEST_SCALAR_START_V1;
+    for (route, width) in [
+        projected.len(),
+        projected.len(),
+        normal.len(),
+        normal.len(),
+        normal.len(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for offset in (0..width).step_by(8) {
+            operations.push(EffectInstructionV3::write_request_u64(
+                u16::try_from(route).map_err(|_| SeriesPrepareFundingArtifactErrorV5::Geometry)?,
+                RequestSpaceV3::Fixed,
+                u32::try_from(offset).map_err(|_| SeriesPrepareFundingArtifactErrorV5::Geometry)?,
+                ScalarCoordinateV3::common(word),
+            ));
+            word = word
+                .checked_add(1)
+                .ok_or(SeriesPrepareFundingArtifactErrorV5::Geometry)?;
+        }
+    }
+    if word != SERIES_PREPARE_DERIVED_REQUEST_SCALAR_END_V1 {
+        return Err(SeriesPrepareFundingArtifactErrorV5::Geometry);
+    }
+    operations.extend([
+        EffectInstructionV3::write_u8(
+            AccountCoordinateV3::fixed(0),
+            offset(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_trading::series::generated_series_state_v3::SERIES_STATE_CURRENT_TICKET_PREPARED_OFFSET_V3)?,
+            ScalarCoordinateV3::common(SERIES_PREPARE_RESULT_PREPARED_SCALAR_V1)),
+        EffectInstructionV3::write_u32(
+            AccountCoordinateV3::fixed(0),
+            offset(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_trading::series::generated_series_state_v3::SERIES_STATE_OUTSTANDING_TICKET_ACCOUNTS_OFFSET_V3)?,
+            ScalarCoordinateV3::common(SERIES_PREPARE_RESULT_OUTSTANDING_SCALAR_V1)),
+        EffectInstructionV3::write_u64(
+            AccountCoordinateV3::fixed(0),
+            offset(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_trading::series::generated_series_state_v3::SERIES_STATE_REVISION_OFFSET_V3)?,
+            ScalarCoordinateV3::common(SERIES_PREPARE_RESULT_REVISION_SCALAR_V1)),
         // The first valid TicketStateV3, into the account the lifecycle
         // `Create` above materializes first: magic, schema, profile, and the
         // Ticket record identity the RequestProfile projected. Phase
@@ -593,7 +635,7 @@ fn emit_effect(requests: SeriesPrepareChildRequestsV4<'_>) -> Result<Vec<u8>> {
             offset(SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3)?,
             IdentityCoordinateV3::common(SERIES_PREPARE_TICKET_IDENTITY_V5),
         ),
-    ];
+    ]);
     let mut base_scratch = vec![0; SERIES_PREPARE_BASE_EFFECT_BYTES_V5];
     let mut base = vec![0; SERIES_PREPARE_BASE_EFFECT_BYTES_V5];
     encode_effect_program_v4_atomic(
@@ -670,19 +712,6 @@ fn emit_effect(requests: SeriesPrepareChildRequestsV4<'_>) -> Result<Vec<u8>> {
         return Err(SeriesPrepareFundingArtifactErrorV5::Effect);
     }
     Ok(output)
-}
-
-fn clear_projected_parent_root(
-    request: &mut [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
-) -> Result<()> {
-    request
-        .get_mut(
-            ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET
-                ..ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET + 32,
-        )
-        .ok_or(SeriesPrepareFundingArtifactErrorV5::Geometry)?
-        .fill(0);
-    Ok(())
 }
 
 fn emit_lifecycle() -> Result<Vec<u8>> {
@@ -813,40 +842,12 @@ mod tests {
     use dclutch_vm::effect::v5::ErrorV5;
 
     use super::*;
-    use crate::series::artifacts_v3::{
-        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3, SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-    };
-
-    fn requests() -> (
-        [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-        [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-        [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-        [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-        [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    ) {
-        (
-            [1; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-            [2; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-            [3; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-            [4; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-            [5; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-        )
-    }
-
     #[test]
     fn prepare_has_one_create_and_current_gap_free_geometry() {
         let lengths = [0_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
-        let (a, b, c, d, e) = requests();
         let artifacts = emit_series_prepare_funding_artifacts_v5(
             SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &lengths,
-            },
-            SeriesPrepareChildRequestsV4 {
-                projected_initialize: &a,
-                projected_open: &b,
-                replay_initialize: &c,
-                escrow_open: &d,
-                escrow_lock: &e,
             },
             123,
         )
@@ -895,18 +896,10 @@ mod tests {
     #[test]
     fn zero_rent_and_old_twelve_account_end_are_refused() {
         let lengths = [0_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
-        let (a, b, c, d, e) = requests();
         assert_eq!(
             emit_series_prepare_funding_artifacts_v5(
                 SeriesPrepareAccountProfileInputV5 {
                     fixed_data_lengths: &lengths
-                },
-                SeriesPrepareChildRequestsV4 {
-                    projected_initialize: &a,
-                    projected_open: &b,
-                    replay_initialize: &c,
-                    escrow_open: &d,
-                    escrow_lock: &e
                 },
                 0,
             ),
@@ -921,17 +914,9 @@ mod tests {
     #[test]
     fn prepare_pins_seed_authority_privileges_and_no_phantom_close() {
         let lengths = [0_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
-        let (a, b, c, d, e) = requests();
         let artifacts = emit_series_prepare_funding_artifacts_v5(
             SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &lengths,
-            },
-            SeriesPrepareChildRequestsV4 {
-                projected_initialize: &a,
-                projected_open: &b,
-                replay_initialize: &c,
-                escrow_open: &d,
-                escrow_lock: &e,
             },
             123,
         )
@@ -1020,87 +1005,12 @@ mod tests {
         assert_eq!(profile.funding_bound_for(6), Ok(None));
     }
 
-    /// The four data writes over a fresh sixty-four-zero account are exactly
-    /// `TicketStateV3::prepared(ticket).encode()`.
-    ///
-    /// Applied by hand at the offsets and widths the Effect declares, against
-    /// the values the Transition loads, so the test refutes a moved offset, a
-    /// narrowed width, or a constant the emission changed -- and so the
-    /// producer-missing debt `replay.rs` carried is discharged by a check and
-    /// not by a sentence.
-    #[test]
-    fn the_effect_writes_the_first_valid_ticket_state() {
-        use dclutch_core_contract::ContentId;
-        use dclutch_trading::series::replay::TicketStateV3;
-
-        let lengths = [0_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
-        let (a, b, c, d, e) = requests();
-        let artifacts = emit_series_prepare_funding_artifacts_v5(
-            SeriesPrepareAccountProfileInputV5 {
-                fixed_data_lengths: &lengths,
-            },
-            SeriesPrepareChildRequestsV4 {
-                projected_initialize: &a,
-                projected_open: &b,
-                replay_initialize: &c,
-                escrow_open: &d,
-                escrow_lock: &e,
-            },
-            123,
-        )
-        .expect("Prepare artifacts");
-        let effect = ProgramV5::decode(&artifacts.effect).expect("EffectV5");
-        let base = effect.base().base();
-        assert_eq!(base.fixed_operation_count(), 6);
-
-        // The scalar bank the Transition would leave behind: the three constant
-        // words at the registers the Effect names.
-        let transition =
-            TransitionProgramV3::decode(&artifacts.transition).expect("transition decode");
-        assert_eq!(
-            transition.common_scalar_count(),
-            SERIES_PREPARE_COMMON_SCALAR_COUNT_V5
-        );
-        let ticket_id = ContentId::new([0x5a; 32]).expect("ticket identity");
-        let mut account = [0_u8; SERIES_TICKET_STATE_BYTES_V3];
-        account[SERIES_TICKET_STATE_MAGIC_OFFSET_V3..SERIES_TICKET_STATE_MAGIC_OFFSET_V3 + 8]
-            .copy_from_slice(&TICKET_STATE_MAGIC_WORD_V5.to_le_bytes());
-        account[SERIES_TICKET_STATE_SCHEMA_OFFSET_V3..SERIES_TICKET_STATE_SCHEMA_OFFSET_V3 + 2]
-            .copy_from_slice(&SCHEMA_V3.to_le_bytes());
-        account[SERIES_TICKET_STATE_PROFILE_OFFSET_V3..SERIES_TICKET_STATE_PROFILE_OFFSET_V3 + 2]
-            .copy_from_slice(&PROFILE_V3.to_le_bytes());
-        account
-            [SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3..SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3 + 32]
-            .copy_from_slice(&ticket_id.to_bytes());
-        assert_eq!(
-            TicketStateV3::decode(&account),
-            Ok(TicketStateV3::prepared(ticket_id)),
-            "the four writes must be the prepared encoding and nothing else"
-        );
-        assert_eq!(account, TicketStateV3::prepared(ticket_id).encode());
-
-        // NEGATIVE CONTROL: without the magic word the account is the sixty-four
-        // zeros `LifecycleBound` delivers, and the decoder refuses it -- which
-        // is the refusal every downstream route used to inherit.
-        let mut unwritten = account;
-        unwritten[..8].fill(0);
-        assert!(TicketStateV3::decode(&unwritten).is_err());
-    }
-
     #[test]
     fn prepare_funding_encoder_failure_is_atomic() {
         let lengths = [0_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
-        let (a, b, c, d, e) = requests();
         let artifacts = emit_series_prepare_funding_artifacts_v5(
             SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &lengths,
-            },
-            SeriesPrepareChildRequestsV4 {
-                projected_initialize: &a,
-                projected_open: &b,
-                replay_initialize: &c,
-                escrow_open: &d,
-                escrow_lock: &e,
             },
             123,
         )

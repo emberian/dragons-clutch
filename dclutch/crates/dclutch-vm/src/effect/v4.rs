@@ -33,8 +33,9 @@ use generated::{
 };
 
 use super::v3::{
-    Error as ErrorV3, ProgramV3, ProjectionV3, ResolvedEffectV3, ResolvedInvocationV3,
-    initialize_requests, overlaps, project_effect, representative, resolved_data_range,
+    Error as ErrorV3, OPERATION_BYTES, ProgramV3, ProjectionV3, RequestWriteOffsetCacheV3,
+    ResolvedEffectV3, ResolvedInvocationV3, initialize_requests, overlaps, project_effect,
+    representative, resolved_data_range,
 };
 
 /// Distinct successor magic.
@@ -780,6 +781,26 @@ impl<'a> ProgramV4<'a> {
         self.shift_effect(effect, scalars)
     }
 
+    fn resolved_effect_at_offset_validated(
+        self,
+        operation_offset: usize,
+        item: Option<u32>,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+        request_cache: &mut RequestWriteOffsetCacheV3,
+    ) -> ResultV4<ResolvedEffectV3> {
+        let effect = self.base.resolved_effect_at_offset_validated(
+            operation_offset,
+            item,
+            tail_count,
+            scalars,
+            identities,
+            request_cache,
+        )?;
+        self.shift_effect(effect, scalars)
+    }
+
     fn validate_span_table(self) -> ResultV4<()> {
         let mut previous_route = None;
         let mut index = 0_u16;
@@ -829,6 +850,13 @@ impl<'a> ProgramV4<'a> {
     }
 
     fn shift_effect(self, effect: ResolvedEffectV3, scalars: &[u64]) -> ResultV4<ResolvedEffectV3> {
+        // A program with no dynamic spans defines the identity coordinate
+        // transform. General publishes exactly this envelope. Return the
+        // already hostile-decoded V3 effect directly instead of re-entering
+        // the variant walk and the empty span machinery for every operation.
+        if self.span_count == 0 {
+            return Ok(effect);
+        }
         Ok(match effect {
             ResolvedEffectV3::Noop => ResolvedEffectV3::Noop,
             ResolvedEffectV3::TransferLamports {
@@ -1054,13 +1082,25 @@ pub fn project_atomic_visiting(
     // How many entries of `write_ranges` carry a resolved write so far.
     // Operations that write no account data contribute none.
     let mut resolved_writes = 0_usize;
+    let operations_start = program.base.operation_table_start_validated()?;
+    let item_operations_start = operations_start
+        .checked_add(
+            usize::from(program.base.fixed_operation_count())
+                .checked_mul(OPERATION_BYTES)
+                .ok_or(ErrorV4::Arithmetic)?,
+        )
+        .ok_or(ErrorV4::Arithmetic)?;
+    let mut request_cache = RequestWriteOffsetCacheV3::vacant();
+    let mut operation_offset = operations_start;
     let mut fixed = 0_u16;
     while fixed < program.base.fixed_operation_count() {
-        let resolved = program.resolved_fixed_effect(
-            fixed,
+        let resolved = program.resolved_effect_at_offset_validated(
+            operation_offset,
+            None,
             tail_count,
             projection.scalars,
             projection.identities,
+            &mut request_cache,
         )?;
         record_nonoverlapping_write_v4(
             resolved,
@@ -1072,18 +1112,23 @@ pub fn project_atomic_visiting(
             visit(resolved)?;
             project_effect(resolved, &mut projection)?;
         }
+        operation_offset = operation_offset
+            .checked_add(OPERATION_BYTES)
+            .ok_or(ErrorV4::Arithmetic)?;
         fixed = fixed.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
     }
     let mut item = 0_u32;
     while item < tail_count {
+        operation_offset = item_operations_start;
         let mut operation = 0_u16;
         while operation < program.base.item_operation_count() {
-            let resolved = program.resolved_item_effect(
-                item,
-                operation,
+            let resolved = program.resolved_effect_at_offset_validated(
+                operation_offset,
+                Some(item),
                 tail_count,
                 projection.scalars,
                 projection.identities,
+                &mut request_cache,
             )?;
             record_nonoverlapping_write_v4(
                 resolved,
@@ -1095,6 +1140,9 @@ pub fn project_atomic_visiting(
                 visit(resolved)?;
                 project_effect(resolved, &mut projection)?;
             }
+            operation_offset = operation_offset
+                .checked_add(OPERATION_BYTES)
+                .ok_or(ErrorV4::Arithmetic)?;
             operation = operation.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
         }
         item = item.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
@@ -1646,6 +1694,81 @@ mod tests {
         assert_eq!(program.range_count(), 0);
         assert_eq!(program.base().bytes(), base.as_slice());
         assert_eq!(program.account_count(0, &[0; 6]), Ok(26));
+
+        let scalars = [44, 0, 0, 0, 0, 0];
+        let identities = [[1; 32]];
+        assert_eq!(
+            program.resolved_fixed_effect(0, 0, &scalars, &identities),
+            program
+                .base()
+                .resolved_fixed_effect(0, 0, &scalars, &identities)
+                .map_err(ErrorV4::from),
+            "a zero-span V4 envelope is the identity over every V3-resolved effect"
+        );
+        assert_eq!(
+            program.base().resolved_fixed_effect(0, 0, &[], &identities),
+            Err(ErrorV3::WidthMismatch),
+            "the public V3 resolver retains its exact width refusal"
+        );
+        assert_eq!(
+            program.resolved_fixed_effect(0, 0, &[], &identities),
+            Err(ErrorV4::BaseProgram),
+            "the public V4 resolver retains the mapped V3 width refusal"
+        );
+
+        let aliases = core::array::from_fn::<_, 26, _>(|index| index);
+        let mut accounts = [AccountInput {
+            lamports: 3,
+            data_len: 0,
+        }; 26];
+        accounts[25].data_len = 8;
+        let mut permissions = [AccountPermission::read_only(); 26];
+        permissions[25] = AccountPermission::new(false, false, true);
+        let mut v3_scratch = [0_u64; 26];
+        let mut v3_output = [9_u64; 26];
+        let mut v4_scratch = [0_u64; 26];
+        let mut v4_output = [9_u64; 26];
+        crate::effect::v3::project_atomic(
+            program.base(),
+            0,
+            ProjectionV3 {
+                scalars: &scalars,
+                identities: &identities,
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut v3_scratch,
+                output_lamports: &mut v3_output,
+                requests: &mut [],
+            },
+        )
+        .expect("V3 projection");
+        let mut write_ranges = [ResolvedWriteRangeV4::vacant(); 1];
+        project_atomic(
+            program,
+            0,
+            ProjectionV3 {
+                scalars: &scalars,
+                identities: &identities,
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut v4_scratch,
+                output_lamports: &mut v4_output,
+                requests: &mut [],
+            },
+            &mut write_ranges,
+        )
+        .expect("zero-span V4 projection");
+        assert_eq!(v4_output, v3_output);
+
+        let mut hostile_base = output;
+        hostile_base[HEADER_BYTES_V4 + BASE_BYTES - OPERATION_BYTES] = 0xff;
+        assert_eq!(
+            ProgramV4::decode(&hostile_base),
+            Err(ErrorV4::BaseProgram),
+            "the no-span execution shortcut does not bypass V3 hostile decode"
+        );
 
         let mut hostile = output;
         hostile[6] = 1;

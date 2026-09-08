@@ -167,7 +167,7 @@ impl<'a> CoreConsumeFactsV1<'a> {
             || claims.admission() != physical.claims.admission.to_bytes()
             || claims.funding_source() != physical.projected.escrow_vault
             || claims.hoard() != physical.projected.hoard_vault
-            || claims.custody_replay() != physical.normal_replay.to_bytes()
+            || claims.custody_replay() != physical.realized_hoard_replay.to_bytes()
             || claims.rent_credit() != physical.projected.rent_credit
             || claims.rent_program() != input.rent_program.to_bytes()
             || claims.claims_program() != input.claims.to_bytes()
@@ -422,7 +422,7 @@ fn populate_open_v1<'a>(
         m0_source_v1(input, input.m0.project_found[11])?,
         final_source_v1(
             "normal Custody replay",
-            physical.normal_replay,
+            physical.realized_hoard_replay,
             input.custody,
             None,
         ),

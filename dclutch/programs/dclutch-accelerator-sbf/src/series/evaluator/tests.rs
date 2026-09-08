@@ -3,11 +3,16 @@ extern crate std;
 use std::vec::Vec;
 
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+};
 use dclutch_market::execution_strategy::shadow_v3::{
     ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
 };
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 use dclutch_trading::series::{
-    AuthenticatedProductProjectionV2, OccurrenceV3, generated, occurrence_content_id,
+    AuthenticatedProductProjectionV2, OccurrenceV3, SERIES_SUCCESSOR_KIND_PREIMAGE_V3, generated,
+    occurrence_content_id,
     replay::{SeriesStateV3, TicketStateV3},
     request::{SeriesActionV3, encode_series_action_header_v3},
     template_content_id, ticket_content_id,
@@ -141,13 +146,14 @@ struct SemanticFixture {
     occurrence: [u8; generated::SERIES_OCCURRENCE_BYTES_V3],
     ticket: [u8; generated::SERIES_TICKET_BYTES_V3],
     request: Vec<u8>,
-    series_state: [u8; dclutch_trading::series::replay::SERIES_STATE_BYTES_V3],
+    root_account: Vec<u8>,
     ticket_state: [u8; dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3],
     clock: [u8; 40],
     product: AuthenticatedProductProjectionV2,
     market: [u8; 32],
     root_bytes: [u8; 32],
     template_id_bytes: [u8; 32],
+    selected_config_bytes: [u8; 32],
     product_record_bytes: [u8; 32],
     registry_program_bytes: [u8; 32],
     trading_program_bytes: [u8; 32],
@@ -212,6 +218,32 @@ impl SemanticFixture {
             .expect("prepare occurrence one")
             .encode(occurrence_count)
             .expect("Series state");
+        let selected_config = id(11);
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            id(7),
+            ContentId::new(dclutch_sha256_adapter::digest(
+                SERIES_SUCCESSOR_KIND_PREIMAGE_V3,
+            ))
+            .expect("Series kind"),
+            id(8),
+            selected_config,
+        )
+        .expect("Series selection");
+        let root_header = CapabilityRootHeaderV1::new(
+            id(1),
+            market,
+            1,
+            selection,
+            SelectedRecordBumpsV1::default(),
+        )
+        .expect("root header");
+        let mut root_account = Vec::with_capacity(
+            CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_trading::series::replay::SERIES_STATE_BYTES_V3,
+        );
+        root_account.extend_from_slice(&root_header.to_bytes());
+        root_account.extend_from_slice(&series_state);
         let ticket_state = TicketStateV3::prepared(ticket_id).encode();
         let product_record =
             ContentId::new(decoded_occurrence.product_record().to_bytes()).expect("Product record");
@@ -226,13 +258,14 @@ impl SemanticFixture {
             occurrence,
             ticket,
             request,
-            series_state,
+            root_account,
             ticket_state,
             clock,
             product: AuthenticatedProductProjectionV2::new(product_record, id(61), id(62)),
             market,
             root_bytes: id(10).to_bytes(),
             template_id_bytes: template_id.to_bytes(),
+            selected_config_bytes: selected_config.to_bytes(),
             product_record_bytes: product_record.to_bytes(),
             registry_program_bytes: id(59).to_bytes(),
             trading_program_bytes: id(60).to_bytes(),
@@ -314,7 +347,7 @@ impl SemanticFixture {
         set(
             SERIES_CONFIG_COORDINATE_V4,
             AccountObservationV1::new(
-                &self.template_id_bytes,
+                &self.selected_config_bytes,
                 &[201_u8; 32],
                 1,
                 &self.template,
@@ -509,7 +542,7 @@ fn evaluator_geometry_is_derived_from_canonical_consume_emitters() {
 fn semantic_input_is_derived_from_the_authenticated_runtime_vector() {
     let fixture = SemanticFixture::new();
     let observations = fixture.observations(
-        &fixture.series_state,
+        &fixture.root_account,
         &fixture.ticket_state,
         &fixture.ticket,
         &fixture.root_bytes,
@@ -531,7 +564,35 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
     let fixture = SemanticFixture::new();
     let shadow = fixture.shadow();
 
-    let mut stale_root = fixture.series_state;
+    let series_state_only = fixture
+        .root_account
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .expect("Series state tail");
+    let observations = fixture.observations(
+        series_state_only,
+        &fixture.ticket_state,
+        &fixture.ticket,
+        &fixture.root_bytes,
+    );
+    assert_eq!(
+        evaluate_semantic_core_request(shadow, &observations, fixture.facts()),
+        Err(SeriesShadowAotErrorV4::Runtime)
+    );
+
+    let mut malformed_header = fixture.root_account.clone();
+    *malformed_header.first_mut().expect("root header byte") ^= 1;
+    let observations = fixture.observations(
+        &malformed_header,
+        &fixture.ticket_state,
+        &fixture.ticket,
+        &fixture.root_bytes,
+    );
+    assert_eq!(
+        evaluate_semantic_core_request(shadow, &observations, fixture.facts()),
+        Err(SeriesShadowAotErrorV4::Runtime)
+    );
+
+    let mut stale_root = fixture.root_account.clone();
     *stale_root.last_mut().expect("root byte") ^= 1;
     let observations = fixture.observations(
         &stale_root,
@@ -546,7 +607,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
 
     let substituted_ticket_state = TicketStateV3::prepared(id(99)).encode();
     let observations = fixture.observations(
-        &fixture.series_state,
+        &fixture.root_account,
         &substituted_ticket_state,
         &fixture.ticket,
         &fixture.root_bytes,
@@ -559,7 +620,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
     let mut substituted_ticket = fixture.ticket;
     *substituted_ticket.last_mut().expect("Ticket byte") ^= 1;
     let observations = fixture.observations(
-        &fixture.series_state,
+        &fixture.root_account,
         &fixture.ticket_state,
         &substituted_ticket,
         &fixture.root_bytes,
@@ -570,7 +631,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
     );
 
     let observations = fixture.observations(
-        &fixture.series_state,
+        &fixture.root_account,
         &fixture.ticket_state,
         &fixture.ticket,
         &fixture.root_bytes,
@@ -589,10 +650,34 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
     );
 
     let observations = fixture.observations(
-        &fixture.series_state,
+        &fixture.root_account,
         &fixture.ticket_state,
         &fixture.ticket,
         &[97_u8; 32],
+    );
+    assert_eq!(
+        evaluate_semantic_core_request(shadow, &observations, fixture.facts()),
+        Err(SeriesShadowAotErrorV4::Runtime)
+    );
+
+    let hostile_config = [96_u8; 32];
+    let registry_owner = [201_u8; 32];
+    let mut observations = fixture.observations(
+        &fixture.root_account,
+        &fixture.ticket_state,
+        &fixture.ticket,
+        &fixture.root_bytes,
+    );
+    *observations
+        .get_mut(SERIES_CONFIG_COORDINATE_V4)
+        .expect("config coordinate") = AccountObservationV1::new(
+        &hostile_config,
+        &registry_owner,
+        1,
+        &fixture.template,
+        false,
+        false,
+        false,
     );
     assert_eq!(
         evaluate_semantic_core_request(shadow, &observations, fixture.facts()),

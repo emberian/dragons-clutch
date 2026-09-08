@@ -53,6 +53,7 @@ const AGGREGATE_LABEL_V1: &str = "claims_aggregate";
 // activation owns selector six, after the five representation bundles.
 const CONFIG_RECORD_INDEX_V1: usize = 1;
 const ACTIVATE_RECEIPT_RECORD_START_V1: usize = 2 + 5 * 7;
+const ACTIVATE_COORDINATE_RECORD_START_V1: usize = ACTIVATE_RECEIPT_RECORD_START_V1 + 7;
 const ACTIVATION_RECORD_COUNT_V1: usize = 7;
 
 /// One bounded, same-finalized-slot activation observation.
@@ -233,6 +234,26 @@ pub(crate) struct StructuredActivateReceiptArtifactsV1 {
 pub(crate) fn selected_activate_receipt_record_expectations_v1(
     market_input_bytes: &[u8],
 ) -> Result<[SelectedReleaseRecordV1; 8]> {
+    selected_activation_record_expectations_v1(
+        market_input_bytes,
+        LifecycleActionV2::ActivateReceipt,
+    )
+}
+
+/// Derive the exact selected records the `ActivateCoordinate` route may read.
+pub(crate) fn selected_activate_coordinate_record_expectations_v1(
+    market_input_bytes: &[u8],
+) -> Result<[SelectedReleaseRecordV1; 8]> {
+    selected_activation_record_expectations_v1(
+        market_input_bytes,
+        LifecycleActionV2::ActivateCoordinate,
+    )
+}
+
+fn selected_activation_record_expectations_v1(
+    market_input_bytes: &[u8],
+    action: LifecycleActionV2,
+) -> Result<[SelectedReleaseRecordV1; 8]> {
     let input: MarketRunInput = serde_json::from_value(
         parse_json_without_duplicate_keys_v1(market_input_bytes)
             .map_err(|error| Error::new(format!("Structured market input {error}")))?,
@@ -252,50 +273,34 @@ pub(crate) fn selected_activate_receipt_record_expectations_v1(
             "market input selected another capability family for Structured activation",
         ));
     }
+    let (start, role) = match action {
+        LifecycleActionV2::ActivateReceipt => (ACTIVATE_RECEIPT_RECORD_START_V1, "ActivateReceipt"),
+        LifecycleActionV2::ActivateCoordinate => {
+            (ACTIVATE_COORDINATE_RECORD_START_V1, "ActivateCoordinate")
+        }
+        LifecycleActionV2::RetireCoordinate | LifecycleActionV2::RetireReceipt => {
+            return Err(Error::new(
+                "Structured selected creation artifacts do not own retirement",
+            ));
+        }
+    };
+    let selected_at = |offset: usize, suffix: &str, compiled: &str| {
+        selected_record_at_v1(
+            selected,
+            start + offset,
+            &format!("{role} {suffix}"),
+            compiled,
+        )
+    };
     Ok([
         selected_record_at_v1(selected, CONFIG_RECORD_INDEX_V1, "config", "config")?,
-        selected_record_at_v1(
-            selected,
-            ACTIVATE_RECEIPT_RECORD_START_V1,
-            "ActivateReceipt descriptor",
-            "descriptor",
-        )?,
-        selected_record_at_v1(
-            selected,
-            ACTIVATE_RECEIPT_RECORD_START_V1 + 1,
-            "ActivateReceipt account profile",
-            "account-profile",
-        )?,
-        selected_record_at_v1(
-            selected,
-            ACTIVATE_RECEIPT_RECORD_START_V1 + 2,
-            "ActivateReceipt request profile",
-            "request-profile",
-        )?,
-        selected_record_at_v1(
-            selected,
-            ACTIVATE_RECEIPT_RECORD_START_V1 + 3,
-            "ActivateReceipt lifecycle policy",
-            "lifecycle-policy",
-        )?,
-        selected_record_at_v1(
-            selected,
-            ACTIVATE_RECEIPT_RECORD_START_V1 + 4,
-            "ActivateReceipt strategy",
-            "strategy",
-        )?,
-        selected_record_at_v1(
-            selected,
-            ACTIVATE_RECEIPT_RECORD_START_V1 + 5,
-            "ActivateReceipt transition",
-            "transition",
-        )?,
-        selected_record_at_v1(
-            selected,
-            ACTIVATE_RECEIPT_RECORD_START_V1 + 6,
-            "ActivateReceipt effect",
-            "effect",
-        )?,
+        selected_at(0, "descriptor", "descriptor")?,
+        selected_at(1, "account profile", "account-profile")?,
+        selected_at(2, "request profile", "request-profile")?,
+        selected_at(3, "lifecycle policy", "lifecycle-policy")?,
+        selected_at(4, "strategy", "strategy")?,
+        selected_at(5, "transition", "transition")?,
+        selected_at(6, "effect", "effect")?,
     ])
 }
 
@@ -306,6 +311,38 @@ pub(crate) fn hydrate_selected_activate_receipt_artifacts_from_snapshot_v1(
     expected: &[SelectedReleaseRecordV1; 8],
     slot: u64,
     live: &[ObservedAccount],
+) -> Result<StructuredActivateReceiptArtifactsV1> {
+    hydrate_selected_activation_artifacts_from_snapshot_v1(
+        registry,
+        expected,
+        slot,
+        live,
+        LifecycleActionV2::ActivateReceipt,
+    )
+}
+
+/// Authenticate a selected coordinate-creation bundle from one finalized snapshot.
+pub(crate) fn hydrate_selected_activate_coordinate_artifacts_from_snapshot_v1(
+    registry: Pubkey,
+    expected: &[SelectedReleaseRecordV1; 8],
+    slot: u64,
+    live: &[ObservedAccount],
+) -> Result<StructuredActivateReceiptArtifactsV1> {
+    hydrate_selected_activation_artifacts_from_snapshot_v1(
+        registry,
+        expected,
+        slot,
+        live,
+        LifecycleActionV2::ActivateCoordinate,
+    )
+}
+
+fn hydrate_selected_activation_artifacts_from_snapshot_v1(
+    registry: Pubkey,
+    expected: &[SelectedReleaseRecordV1; 8],
+    slot: u64,
+    live: &[ObservedAccount],
+    action: LifecycleActionV2,
 ) -> Result<StructuredActivateReceiptArtifactsV1> {
     if slot == 0 || live.len() != expected.len() * 2 {
         return Err(Error::new(
@@ -372,7 +409,7 @@ pub(crate) fn hydrate_selected_activate_receipt_artifacts_from_snapshot_v1(
         .try_into()
         .map_err(|_| Error::new("Structured activation config width differs"))?;
     let bundle = RationalLifecycleSelectedBundleV6 {
-        action: LifecycleActionV2::ActivateReceipt,
+        action,
         release_set: token_behavior_selection.release_set(),
         token_program: token_behavior_selection.token_program(),
         token_behavior_selection: token_behavior_selection_bytes,
@@ -422,6 +459,31 @@ pub(crate) fn hydrate_selected_activate_receipt_artifacts_v1(
     )
 }
 
+/// Reconstruct the `ActivateCoordinate` V6 bundle from a dedicated snapshot.
+pub(crate) fn hydrate_selected_activate_coordinate_artifacts_v1(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    market_input_bytes: &[u8],
+    minimum_slot: u64,
+) -> Result<StructuredActivateReceiptArtifactsV1> {
+    let expected = selected_activate_coordinate_record_expectations_v1(market_input_bytes)?;
+    let addresses = expected
+        .iter()
+        .map(|record| record_coordinates_v1(registry, record.schema, &record.body))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flat_map(|(raw, staging)| [raw, staging])
+        .collect::<Vec<_>>();
+    let (observation, live) =
+        rpc.finalized_observed_accounts_admitting_vacant(&addresses, minimum_slot)?;
+    hydrate_selected_activate_coordinate_artifacts_from_snapshot_v1(
+        registry,
+        &expected,
+        observation.slot,
+        &live,
+    )
+}
+
 /// Build the canonical unsigned V6 `ActivateReceipt` instruction.
 ///
 /// The caller supplies the same-finalized Hot frame and per-Market rational
@@ -435,13 +497,51 @@ pub(crate) fn build_selected_activate_receipt_instruction_v1(
     representation_descriptor: RepresentationDescriptorV2<'_>,
     market_realm: [u8; 32],
 ) -> Result<RationalLifecycleHotInstructionV3> {
+    build_selected_activation_instruction_v1(
+        artifacts,
+        state,
+        claims_child,
+        representation_descriptor,
+        market_realm,
+        LifecycleActionV2::ActivateReceipt,
+    )
+}
+
+/// Build the canonical unsigned V6 `ActivateCoordinate` instruction.
+pub(crate) fn build_selected_activate_coordinate_instruction_v1(
+    artifacts: &StructuredActivateReceiptArtifactsV1,
+    state: &RationalLifecycleHotStateV3<'_>,
+    claims_child: &Instruction,
+    representation_descriptor: RepresentationDescriptorV2<'_>,
+    market_realm: [u8; 32],
+) -> Result<RationalLifecycleHotInstructionV3> {
+    build_selected_activation_instruction_v1(
+        artifacts,
+        state,
+        claims_child,
+        representation_descriptor,
+        market_realm,
+        LifecycleActionV2::ActivateCoordinate,
+    )
+}
+
+fn build_selected_activation_instruction_v1(
+    artifacts: &StructuredActivateReceiptArtifactsV1,
+    state: &RationalLifecycleHotStateV3<'_>,
+    claims_child: &Instruction,
+    representation_descriptor: RepresentationDescriptorV2<'_>,
+    market_realm: [u8; 32],
+    action: LifecycleActionV2,
+) -> Result<RationalLifecycleHotInstructionV3> {
     let request = LifecycleRequestV2::decode(&claims_child.data)
         .map_err(|error| Error::new(format!("Structured activation Claims child: {error:?}")))?;
-    if request.header().action != LifecycleActionV2::ActivateReceipt
-        || request.header().coordinate_count != 0
+    let expected_coordinates = u32::from(action == LifecycleActionV2::ActivateCoordinate);
+    if request.header().action != action
+        || request.header().coordinate_count != expected_coordinates
+        || artifacts.bundle.action != action
     {
         return Err(Error::new(
-            "Structured activation accepts only an ActivateReceipt child with no coordinates",
+            "Structured activation child geometry differs from the selected creation bundle",
         ));
     }
     let config_digest: [u8; 32] = Sha256::digest(&artifacts.config.body).into();

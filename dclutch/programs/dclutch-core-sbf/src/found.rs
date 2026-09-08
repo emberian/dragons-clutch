@@ -11,7 +11,8 @@ use dclutch_market::rent::lifecycle_v2::{
 use dclutch_market::{
     Action, Admission, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote,
     MarketCoreStateSeedsV2, MarketIdentity, PRODUCT_GRAPH_BUMP_COUNT, Product, ProductGraphBumpsV1,
-    ProjectFoundReceiptV2, Realm, Request, Role, STATE_BYTES, StateBumpsV1, VacantAccount, found,
+    ProjectFoundReceiptProjectionV2, Realm, Request, Role, STATE_BYTES, StateBumpsV1,
+    VacantAccount, derive_project_found_receipt_v2, found,
 };
 use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, Error as ProductRuntimeReaderError, FinalizedRecordFrameV2,
@@ -28,7 +29,6 @@ use dclutch_source::{
 };
 use solana_program::{
     account_info::AccountInfo,
-    hash::hash,
     program::{invoke, invoke_signed, set_return_data},
     pubkey::Pubkey,
     rent::Rent,
@@ -186,7 +186,6 @@ pub(crate) fn project(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: Request,
-    exact_found_request: &[u8],
 ) -> Result<(), solana_program::program_error::ProgramError> {
     if request.action != Action::Found {
         return Err(CoreSbfError::Instruction.into());
@@ -194,20 +193,20 @@ pub(crate) fn project(
     let frame = FoundAccounts::parse_project(program_id, accounts)?;
     let rent = Rent::get().map_err(|_| CoreSbfError::Creation)?;
     let prepared = prepare_boxed(program_id, &frame, request, &rent)?;
-    let receipt = ProjectFoundReceiptV2::new(
-        request.market,
-        request.generation,
-        identity(prepared.realm_id)?,
-        identity(prepared.collateral_mint)?,
-        identity(prepared.token_program)?,
-        identity(prepared.collateral_release)?,
-        identity(prepared.product_record_id)?,
-        identity(prepared.product_id)?,
-        identity(prepared.resolution_policy_id)?,
-        identity(prepared.release_set_id)?,
-        identity(frame.rent_program.key.to_bytes())?,
-        prepared.candidate_state().principal_cap_sets,
-        hash(exact_found_request).to_bytes(),
+    let receipt = derive_project_found_receipt_v2(
+        request,
+        ProjectFoundReceiptProjectionV2 {
+            realm: identity(prepared.realm_id)?,
+            collateral_mint: identity(prepared.collateral_mint)?,
+            token_program: identity(prepared.token_program)?,
+            collateral_release: identity(prepared.collateral_release)?,
+            product_record: identity(prepared.product_record_id)?,
+            product: identity(prepared.product_id)?,
+            source: identity(prepared.resolution_policy_id)?,
+            release_set: identity(prepared.release_set_id)?,
+            rent_program: identity(frame.rent_program.key.to_bytes())?,
+            principal_cap_sets: prepared.candidate_state().principal_cap_sets,
+        },
     )
     .map_err(|_| CoreSbfError::Transition)?;
     let bytes = receipt.encode().map_err(|_| CoreSbfError::Transition)?;

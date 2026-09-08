@@ -1,0 +1,41 @@
+{
+  "schema": "dclutch-gauntlet-execution-ledger-v1",
+  "observations": [
+    {
+      "route": "resolution/process_ensemble_fold#EnsembleFold",
+      "campaign": "ensemble-retained-ledger-fold-reclaim-v1",
+      "label": "ensemble resume: fold the retained three-member quorum",
+      "signature": "ukYyq4xpZHk3N59NQFBhtVtuQE71Wsjw4JYQwtZRpZa1yezAyU774p9FuNh8BEBshWQnJH4RHACjiVVmv9RZeTt",
+      "slot": 20927,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 383676,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R",
+        "11111111111111111111111111111111"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "a66e54215c7fece939ac461a599971514965b1647733db697d02147c1b892864",
+      "evidence_path": "docs/evidence/ensemble-execution-coverage-2026-09-08/evidence.json"
+    },
+    {
+      "route": "resolution/process_reclaim_member_seat#ReclaimMemberSeat",
+      "campaign": "ensemble-retained-ledger-fold-reclaim-v1",
+      "label": "ensemble resume: reclaim the retained vacant fourth member seat",
+      "signature": "RQkogBYrJ2oGTmECtZvorAM1rVUg88sMr5uRHrNhSYAXYWycE2tuKWsmUmNZy2chGSDrZDGNeZTd2njYENMAGLN",
+      "slot": 21057,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 41986,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "7YHYtFvQG65mAxqGvn5oeTX5SMVVNoyk3165DHc5rh4R",
+        "11111111111111111111111111111111"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "a66e54215c7fece939ac461a599971514965b1647733db697d02147c1b892864",
+      "evidence_path": "docs/evidence/ensemble-execution-coverage-2026-09-08/evidence.json"
+    }
+  ]
+}

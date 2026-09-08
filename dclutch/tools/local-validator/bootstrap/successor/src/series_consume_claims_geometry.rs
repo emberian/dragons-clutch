@@ -103,6 +103,11 @@ fn expected_claims_addresses_v1(
         dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
         "Product",
     )?;
+    let result_domain = m0_record_by_schema_v1(
+        input,
+        dclutch_product::admission::RESULT_DOMAIN_SCHEMA_ID_V2,
+        "Result domain",
+    )?;
     let basis = m0_record_by_schema_v1(
         input,
         dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -126,7 +131,7 @@ fn expected_claims_addresses_v1(
         || claims.admission() != physical.claims.admission.to_bytes()
         || claims.funding_source() != physical.projected.escrow_vault
         || claims.hoard() != physical.projected.hoard_vault
-        || claims.custody_replay() != physical.normal_replay.to_bytes()
+        || claims.custody_replay() != physical.realized_hoard_replay.to_bytes()
         || claims.rent_credit() != physical.projected.rent_credit
         || claims.rent_program() != input.rent_program.to_bytes()
         || claims.claims_program() != input.claims.to_bytes()
@@ -183,13 +188,13 @@ fn expected_claims_addresses_v1(
         physical.claims.admission,
         Pubkey::new_from_array(physical.projected.escrow_vault),
         Pubkey::new_from_array(physical.projected.hoard_vault),
-        physical.normal_replay,
+        physical.realized_hoard_replay,
         basis.raw,
         basis.staging,
         product.raw,
         product.staging,
-        input.records.occurrence.raw,
-        input.records.occurrence.staging,
+        result_domain.raw,
+        result_domain.staging,
         input.records.portfolio.raw,
         input.records.portfolio.staging,
         system_program::ID,

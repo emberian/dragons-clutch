@@ -1377,6 +1377,7 @@ pub(super) fn execute_authenticated_hot_v3(
         &transition_output_identities,
         account_inputs,
         &lifecycle_plans,
+        root_lifecycle_close,
         &effect_permissions,
         &aliases,
         runtime_accounts.len(),

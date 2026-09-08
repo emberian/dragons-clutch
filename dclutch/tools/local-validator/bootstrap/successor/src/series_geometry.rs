@@ -17,7 +17,6 @@ use dclutch_trading_sbf::series::{
     artifacts_v3::{
         SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3, SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
     },
-    occurrence_artifacts_v4::SeriesPrepareChildRequestsV4,
     prepare_funding_artifacts_v5::{
         SeriesPrepareAccountProfileInputV5, emit_series_prepare_funding_artifacts_v5,
     },
@@ -594,18 +593,9 @@ mod tests {
         };
         let widths = build_series_prepare_geometry_v1(&input).unwrap();
         assert_eq!(widths.len(), 111);
-        let zero_projected = [0; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let zero_escrow = [0; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
         let artifacts = emit_series_prepare_funding_artifacts_v5(
             SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &widths,
-            },
-            SeriesPrepareChildRequestsV4 {
-                projected_initialize: &zero_projected,
-                projected_open: &zero_projected,
-                replay_initialize: &zero_escrow,
-                escrow_open: &zero_escrow,
-                escrow_lock: &zero_escrow,
             },
             1,
         )

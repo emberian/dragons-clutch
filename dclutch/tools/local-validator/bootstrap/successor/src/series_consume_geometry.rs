@@ -449,9 +449,9 @@ pub(crate) fn require_series_consume_prestate_invariance_v1(
 pub(crate) fn resolve_series_consume_aliases_v1<'a>(
     roles: &mut [Option<SeriesConsumeRoleSourceV1<'a>>; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
 ) -> Result<()> {
-    for &(alias, representative) in SERIES_CONSUME_ROUTE_ALIASES_V4 {
+    for &(alias, representative_coordinate) in SERIES_CONSUME_ROUTE_ALIASES_V4 {
         let representative = roles
-            .get(representative)
+            .get(representative_coordinate)
             .and_then(Clone::clone)
             .ok_or_else(|| Error::new("Series Consume generated alias lacked representative"))?;
         let alias_slot = roles
@@ -459,9 +459,11 @@ pub(crate) fn resolve_series_consume_aliases_v1<'a>(
             .ok_or_else(|| Error::new("Series Consume generated alias escaped fixed frame"))?;
         if let Some(existing) = alias_slot {
             if existing.address() != representative.address() {
-                return Err(Error::new(
-                    "Series Consume generated alias named a different physical account",
-                ));
+                return Err(Error::new(format!(
+                    "Series Consume generated alias {alias}->{representative_coordinate} named different accounts {} and {}",
+                    existing.address(),
+                    representative.address(),
+                )));
             }
             continue;
         }
@@ -588,9 +590,39 @@ mod tests {
 
     use crate::series_found_prepare_campaign::{
         derive_series_found_prepare_preprofile_v1,
-        tests::{compiler_input, prepared_founder},
+        tests::{compiler_input_with_plan, prepared_founder_with_plan},
     };
     use crate::series_found_prepare_driver::SeriesPrepareFinalizedRecordV1;
+
+    fn published(
+        registry: Pubkey,
+        schema: [u8; 32],
+        body: &[u8],
+    ) -> crate::runtime::PublishedRecord {
+        let digest: [u8; 32] = Sha256::digest(body).into();
+        crate::runtime::PublishedRecord {
+            schema,
+            digest,
+            raw: Pubkey::find_program_address(
+                &[
+                    dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
+                    &schema,
+                    &digest,
+                ],
+                &registry,
+            )
+            .0,
+            staging: Pubkey::find_program_address(
+                &[
+                    dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
+                    &schema,
+                    &digest,
+                ],
+                &registry,
+            )
+            .0,
+        }
+    }
 
     fn pair<'a>(
         registry: Pubkey,
@@ -626,6 +658,180 @@ mod tests {
             body,
             raw,
             staging,
+        }
+    }
+
+    /// Construct the test M0 only through Market's ProjectFound projection
+    /// owner.  This fixture supplies canonical record facts; it cannot name
+    /// the ProjectFound coordinate order or substitute an independently
+    /// assembled M0 frame.
+    fn canonical_m0_publication(
+        prepared: &crate::series_founder::PreparedSeriesFounderV1,
+        plan: &crate::model::SuccessorPlan,
+        selection: &crate::series_found_prepare_campaign::SeriesFoundPrepareSelectionInputV1<'_>,
+        preprofile: &crate::series_found_prepare_campaign::SeriesFoundPreparePreprofileV1,
+    ) -> crate::market::FutureMarketImmutablePublicationV1 {
+        use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+        use dclutch_source::{
+            MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1,
+        };
+
+        let registry = Pubkey::new_from_array(selection.registry_program.to_bytes());
+        let (_, market_input, _, _, _) =
+            crate::market::tests::selected_family_compiler_fixture_v1();
+        let source_spec = crate::runtime::decode_hex(&market_input.source_spec_hex)
+            .expect("canonical source specification");
+        let source_capacity = crate::runtime::decode_hex(&market_input.source_capacity_profile_hex)
+            .expect("canonical source capacity profile");
+        let realm = published(
+            registry,
+            REALM_SCHEMA_RELEASE_ID_V1,
+            &prepared.publication.realm,
+        );
+        let product = published(
+            registry,
+            dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
+            &prepared.publication.product,
+        );
+        let domain = published(
+            registry,
+            dclutch_product::admission::RESULT_DOMAIN_SCHEMA_ID_V2,
+            &prepared.publication.domain,
+        );
+        let portfolio = published(
+            registry,
+            dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2,
+            &prepared.publication.portfolio,
+        );
+        let basis = published(
+            registry,
+            dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+            &prepared.publication.basis,
+        );
+        let source = published(
+            registry,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+            &prepared.publication.source,
+        );
+        let source_spec = published(registry, SOURCE_SPEC_SCHEMA_ID_V1, &source_spec);
+        let source_capacity = published(
+            registry,
+            SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+            &source_capacity,
+        );
+        let manifest = published(
+            registry,
+            dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            &prepared.publication.manifest,
+        );
+        let absent = [0_u8; 32];
+        let floor = (
+            Pubkey::find_program_address(
+                &[
+                    dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
+                    &MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+                    &absent,
+                ],
+                &registry,
+            )
+            .0,
+            Pubkey::find_program_address(
+                &[
+                    dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
+                    &MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+                    &absent,
+                ],
+                &registry,
+            )
+            .0,
+        );
+        let selected_release = preprofile
+            .predicted_core
+            .identity
+            .selected_release_set
+            .to_bytes();
+        let activation = Pubkey::find_program_address(
+            &[
+                dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
+                &selected_release,
+            ],
+            &registry,
+        )
+        .0;
+        let registry_artifact = crate::runtime::record(&plan, "registry_artifact_release")
+            .expect("canonical Registry artifact pair");
+        let rent_artifact = crate::runtime::record(&plan, "rent_artifact_release")
+            .expect("canonical Rent artifact pair");
+        let project_found = crate::market::project_found_snapshot_from_closure_v2(
+            crate::market::MarketProjectFoundProjectionV1 {
+                payer: selection.material.payer,
+                market: selection.material.market,
+                rent_credit: selection.material.rent_credit,
+                rent_program: crate::plan::pubkey(&plan.rent_credit.program_id)
+                    .expect("canonical Rent program"),
+                closure: crate::market::MarketProjectFoundClosureV1 {
+                    realm,
+                    product,
+                    domain,
+                    portfolio,
+                    basis,
+                    source,
+                    source_spec,
+                    source_capacity_profile: source_capacity,
+                    manipulation_floor: floor,
+                    manifest,
+                    activation,
+                    core: selection.material.core,
+                    core_programdata: crate::upgrade::target_programdata(selection.material.core),
+                    registry,
+                    infrastructure: crate::plan::pubkey(&plan.infrastructure_profile.address)
+                        .expect("canonical infrastructure profile"),
+                    registry_artifact,
+                    registry_programdata: crate::upgrade::target_programdata(registry),
+                    rent_artifact,
+                    rent_programdata: crate::upgrade::target_programdata(
+                        selection.material.rent_program,
+                    ),
+                    price_gate: None,
+                },
+            },
+        )
+        .expect("canonical ordinary ProjectFound projection")
+        .try_into()
+        .expect("canonical ProjectFound width");
+        let series_prepare_records = vec![
+            (realm, prepared.publication.realm.clone()),
+            (product, prepared.publication.product.clone()),
+            (domain, prepared.publication.domain.clone()),
+            (portfolio, prepared.publication.portfolio.clone()),
+            (basis, prepared.publication.basis.clone()),
+            (source, prepared.publication.source.clone()),
+            (
+                source_spec,
+                crate::runtime::decode_hex(&market_input.source_spec_hex).expect("source spec"),
+            ),
+            (
+                source_capacity,
+                crate::runtime::decode_hex(&market_input.source_capacity_profile_hex)
+                    .expect("source capacity"),
+            ),
+            (manifest, prepared.publication.manifest.clone()),
+        ]
+        .into_iter()
+        .map(|(published, body)| crate::market::FutureMarketFinalizedRecordV1 { published, body })
+        .collect();
+        crate::market::FutureMarketImmutablePublicationV1 {
+            realm,
+            product,
+            domain,
+            portfolio,
+            manifest,
+            rent_credit: selection.material.rent_credit,
+            project_found,
+            principal_cap_sets: selection.principal_cap_sets,
+            series_prepare_records,
+            series_prepare_vacancies: vec![floor.0, floor.1],
         }
     }
 
@@ -675,9 +881,14 @@ mod tests {
 
     #[test]
     fn full_constructor_compiles_initial_consume_profile_from_the_child_bank() {
-        let prepared = prepared_founder();
+        let (prepared, plan) = prepared_founder_with_plan();
         let parent_root = Pubkey::new_unique();
-        let mut selection = compiler_input(&prepared, parent_root, &prepared.admitted.tickets()[0]);
+        let mut selection = compiler_input_with_plan(
+            &prepared,
+            &plan,
+            parent_root,
+            &prepared.admitted.tickets()[0],
+        );
         selection.geometry = None;
         let registry = Pubkey::new_from_array(selection.registry_program.to_bytes());
         let preprofile = derive_series_found_prepare_preprofile_v1(&mut selection)
@@ -688,6 +899,41 @@ mod tests {
             preprofile.prepare_children.consume_requests().claims,
         )
         .expect("canonical Claims child");
+        let consume_children = preprofile.prepare_children.consume_requests();
+        let lock = dclutch_custody::ProjectedCustodyRequestV1::decode(consume_children.lock)
+            .expect("canonical projected Lock child");
+        let realize = dclutch_custody::ProjectedCustodyRequestV1::decode(consume_children.realize)
+            .expect("canonical projected Realize child");
+        let realized_replay_from_lock = Pubkey::find_program_address(
+            &dclutch_custody::ProjectedCustodyStateSeedsV2::from_request(lock).as_slices(),
+            &selection.material.custody,
+        )
+        .0;
+        let realized_replay_from_realize = Pubkey::find_program_address(
+            &dclutch_custody::ProjectedCustodyStateSeedsV2::from_request(realize).as_slices(),
+            &selection.material.custody,
+        )
+        .0;
+        let source_replay = Pubkey::find_program_address(
+            &dclutch_custody::ProjectedCustodySourceReplaySeedsV1::from_request(lock).as_slices(),
+            &selection.material.custody,
+        )
+        .0;
+        assert_eq!(
+            realized_replay_from_lock, realized_replay_from_realize,
+            "Lock and Realize own the same projected State address before Custody rewrites it",
+        );
+        assert_eq!(
+            realized_replay_from_realize,
+            preprofile.physical().realized_hoard_replay,
+            "the native ProjectedState seed is the in-place normal replay after Realize",
+        );
+        assert_eq!(
+            source_replay,
+            preprofile.physical().normal_replay,
+            "Lock's distinct source replay remains the SeriesEscrow cursor it closes",
+        );
+        assert_ne!(source_replay, realized_replay_from_realize);
         assert_eq!(
             claims.claim_count(),
             portfolio.coefficient_count(),
@@ -696,21 +942,19 @@ mod tests {
         dclutch_product::economic_slice::refunding_failure_index(claims.claim_count())
             .expect("every Series founding names a derivable V6 failure escrow");
 
-        let product = pair(
-            registry,
-            dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
-            &prepared.publication.product,
-        );
-        let basis = pair(
-            registry,
-            dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-            &prepared.publication.basis,
-        );
-        let portfolio = pair(
-            registry,
-            dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2,
-            &prepared.publication.portfolio,
-        );
+        let publication = canonical_m0_publication(&prepared, &plan, &selection, &preprofile);
+        let m0_records =
+            crate::series_found_prepare_driver::series_prepare_records_from_m0_publication_v1(
+                &publication,
+            );
+        let portfolio =
+            crate::series_found_prepare_driver::series_prepare_record_from_m0_publication_v1(
+                &m0_records,
+                dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2,
+                &prepared.publication.portfolio,
+                "Portfolio",
+            )
+            .expect("publisher Portfolio record");
         let template = pair(
             registry,
             dclutch_trading::series::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
@@ -726,22 +970,17 @@ mod tests {
             dclutch_trading::series::SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
             &prepared.admitted.tickets()[0],
         );
-        let records = [product, basis, portfolio];
-        let mut project_found = std::array::from_fn(|_| Pubkey::new_unique());
-        project_found[0] = selection.material.payer;
-        project_found[1] = selection.material.market;
-        project_found[2] = selection.material.rent_credit;
-        project_found[3] = selection.material.rent_program;
-        project_found[6] = product.raw;
-        project_found[7] = product.staging;
-        project_found[10] = portfolio.raw;
-        project_found[11] = portfolio.staging;
-        project_found[12] = basis.raw;
-        project_found[13] = basis.staging;
-        let mut finalized_accounts = project_found
+        let mut finalized_accounts = publication
+            .project_found
             .iter()
             .copied()
-            .filter(|address| *address != selection.material.market)
+            .filter(|address| {
+                *address != selection.material.market
+                    && !m0_records
+                        .iter()
+                        .any(|record| record.raw == *address || record.staging == *address)
+                    && !publication.series_prepare_vacancies.contains(address)
+            })
             .map(|address| SeriesPrepareFinalizedAccountV1 {
                 address,
                 expected_owner: Pubkey::new_unique(),
@@ -757,12 +996,11 @@ mod tests {
                 expected_owner: Pubkey::new_unique(),
             },
         ]);
-        let m0 = SeriesPrepareM0FrameV1 {
-            project_found,
-            records: &records,
-            vacancies: &[],
-            finalized_accounts: &finalized_accounts,
-        };
+        let m0 = crate::series_found_prepare_driver::series_prepare_m0_frame_from_publication_v1(
+            &publication,
+            &m0_records,
+            &finalized_accounts,
+        );
         let hydration = SeriesPrepareHydrationRecordsV1 {
             template,
             occurrence,
@@ -807,6 +1045,16 @@ mod tests {
             roles[6],
             SeriesConsumeRoleSourceV1::PreparedPrediction { .. }
         ));
+        assert_eq!(
+            roles[99].address(),
+            realized_replay_from_realize,
+            "Claims consumes the normal replay that native Realize writes into State",
+        );
+        assert_eq!(
+            roles[154].address(),
+            realized_replay_from_realize,
+            "Core Open consumes that same in-place normal replay",
+        );
 
         let mut widths = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
         for (coordinate, role) in roles.iter().enumerate() {
@@ -832,7 +1080,7 @@ mod tests {
         )
         .expect("initial Consume prestate compiles into Profile13");
 
-        let mut substituted_project_found = project_found;
+        let mut substituted_project_found = publication.project_found;
         substituted_project_found[1] = Pubkey::new_unique();
         let substituted_m0 = SeriesPrepareM0FrameV1 {
             project_found: substituted_project_found,

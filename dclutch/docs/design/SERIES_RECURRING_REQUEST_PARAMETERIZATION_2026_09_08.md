@@ -3,22 +3,35 @@
 Owner: correctness_architecture. Implementation in progress; no selected SBF
 or validator acceptance is implied.
 
-The five-action ProgramSet selects only on the action byte. Its current Prepare,
-Consume and Expire Effects nevertheless embed occurrence-specific child request
-bytes. Changing the occurrence therefore changes an immutable selected artifact.
-Parent-root normalization does not solve this conflict.
+The five-action ProgramSet selects only on the action byte. Prepare, Consume
+and Expire now publish zero native-request templates and materialize every
+request word from private, family-and-root-bound adapter banks. Prepare also
+writes its native root successor: the prior artifact created a Ticket without
+persisting the root's prepared flag, outstanding count, or revision.
 
-The executable native diagnosis is
-`series_found_prepare_campaign::recurrence_tests::known_defect_same_bundle_second_prepare_retains_first_occurrence_market`
+The executable native control is
+`series_found_prepare_campaign::recurrence_tests::same_bundle_native_consume_then_expire_preserves_all_replay_poststates`
 in `tools/local-validator/bootstrap/successor/src/series_recurrence_tests.rs`.
-It compiles the real five-action source from the ordinary Market publisher,
-advances Series replay with native Prepare/settle/Retire transitions, derives the
-second occurrence through the native child codecs, and executes the original
-RequestProfile, TransitionVM and Effect on that second family request. Its
-positive control requires exact equality with the first native Initialize
-request. Its known-defect result requires the first Market and Ticket-derived
-context to remain in the second projected request. The Effect scratch accounts
-are component fixtures, not physical-authentication or transaction evidence.
+It keeps the exact occurrence-zero ProgramSet through both occurrences; an
+independent occurrence-one compilation must produce identical five-action
+publication bytes. It uses the ordinary Market publisher's same retained Plan,
+actual occurrence codecs, and native replay transitions. It compares complete
+Prepare and Expire root/Ticket data projections with native encoded successors,
+preserving the canonical immutable root header; materialized Consume requests
+execute native projected-Custody Lock and Realize. Both Tickets remain until
+the root is terminal, then native Retire families execute the retained Retire
+artifact before native Close selection. Stale family/root banks refuse without
+changing their scalar destination.
+
+This is component evidence. Its account-profile register inputs and account
+memory are explicit scratch projections, and its terminal Rent observations are
+component fixtures. It does not authenticate AccountInfo provenance, execute
+Core/Claims CPIs or token transfers, realize FundingV5 account creation/deletion,
+or prove atomic transaction rollback. Runtime seeding/authentication, selected
+SBF frame/heap/CU measurement, and local-validator poststates remain required.
+The earlier executable recurrence falsifier is preserved at `cbc66cf9a`: its
+retained Prepare emitted occurrence zero's Market and Ticket context for the
+second family request. That milestone proved child projection only.
 
 ## One semantic construction owner
 
@@ -37,13 +50,15 @@ The existing construction owners to reuse are:
 | Normal Custody Prepare/Expire requests and their parent commitment | `series::custody_v3`; `derive_series_prepare_parents_v1` | Actual family request hashed by the adapter; selected programs and authenticated token/account observations |
 | Projected Custody context and requests | `series::projected_custody_v3` | Domain-separated Ticket context; derived future Market; canonical physical identities and Rent |
 | Core ProjectFound receipt digest | Core `ProjectFoundReceiptV2`; Custody `projected::process_initialize` | Custody already invokes Core and checks producer, receipt bytes and exact Found-request digest; retain this owner |
-| Consume Lock/Realize receipts, permit and Claims candidate | `series_founding_children_v1`; native Custody/Core/Claims receipt codecs | Observed post-Prepare projected state/replay; canonical predicted Core geometry; actual child receipts remain runtime authority |
-| Complete per-occurrence child bank | `series_child_bank_v1` | Its native content/physical joins plus authenticated replay and current family request, not host assertions |
+| Consume Lock/Realize receipts, permit and Claims candidate | `series::founding_children_v1`; native Custody/Core/Claims receipt codecs | Observed post-Prepare projected state/replay; canonical predicted Core geometry; actual child receipts remain runtime authority |
+| Complete per-occurrence child bank | `series::child_bank_v1` | Its native content/physical joins plus authenticated replay and current family request, not host assertions |
 
-The current child-bank and founding-child combinators live in `dclutch-operator`
-and depend on Trading's SBF adapters. Runtime reuse must move their semantic
-implementation to the existing shared adapter layer and make the operator
-consume it; adding an SBF dependency on the operator would create a cycle.
+The child-bank and founding-child implementations now live in the Trading
+adapter; the operator modules re-export them. `derived_prepare_v1` and
+`derived_terminal_v1` bind native construction to the actual family, root and
+replay snapshot. Core's canonical expected ProjectFound receipt constructor is
+shared with Trading. No request-bank input supplies a future receipt or digest.
+The subsequent Custody CPI still verifies the actual Core producer and receipt.
 
 ## Projection and immutable artifacts
 

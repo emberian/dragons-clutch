@@ -13,6 +13,8 @@ tools/gate reference --converge      # regenerate the reference AND the client m
 tools/gate reference --check --converge
                                      # is the COMMITTED revision already that fixpoint?
 tools/gate selftest                  # the loop's own refusal tests, seconds, no build
+node --test tools/genref/route-evidence.test.mjs
+                                     # the execution-evidence partition control
 ```
 
 `tools/gate reference` is a shim to `tools/gate reference` (the generated
@@ -26,8 +28,8 @@ escape spelled two ways; the driver consumes both and `generate.mjs` sees neithe
 | page | authority |
 |---|---|
 | `programs.md`, `routes.md`, `refusals.md` (code tables) | `dclutch-route-census inventory` (tools/gauntlet/census), run fresh from the tree with `--check-unique` |
-| `routes.md` (execution status) | `tools/gauntlet/*/bindings.json` (+ `*-bindings.json`) and `tools/gauntlet/blocked.json` |
-| `route-witnesses.md` | the same bindings, plus `tools/gauntlet/substrates.json` (which substrate each campaign ran on, CHECKED here against its runner) and `docs/evidence/witnesses/*.json` (devnet transactions, whose chain-derived fields are written by `tools/gauntlet/devnet-witness/corroborate.py`) |
+| `routes.md` (execution status) | `tools/gauntlet/execution-evidence.json` and its checked census ledgers; `docs/evidence/witnesses/*.json` for successful/refused devnet records; bindings and `blocked.json` remain separate claim/reason classes |
+| `route-witnesses.md` | the same exact evidence, plus the separate binding register from `tools/gauntlet/*/bindings.json` and `tools/gauntlet/substrates.json` |
 | `refusals.md` (band allocation) | the census inventory's `bands`, read from `crates/dclutch-refusal-registry/src/generated_bands.rs` |
 | `budgets.md` | `tools/gauntlet/CU_BUDGETS.json` |
 | `decisions.md` | `docs/decisions/*.md` |
@@ -101,9 +103,15 @@ half-written files.
 - Anything the ABI renderer does not recognize is carried verbatim into an
   "unrendered exports" section, never dropped — the reference must not
   silently narrow its source.
-- Route status is coarse and honest: "witnessed" means an in-tree campaign
-  binding names the route (campaign coverage, not a proof about all inputs);
-  "blocked" quotes `blocked.json`'s rule; a route with neither is printed as
-  NEVER-EXECUTED with no stated reason, which is the row that should make
-  someone uncomfortable. Binding refs that match no census route id get their
-  own table instead of being dropped.
+- Route status has one evidence boundary. `ACCEPTED-AGAVE-HISTORICAL` requires
+  a successful finalized native observation from a manifest-listed census
+  ledger or a successful corroborated devnet record. ProgramTest, exact
+  refusals, successful bindings without a durable ledger, refusal bindings,
+  blockers and unrecorded routes are separate classes. A binding can never
+  create an accepted or observed status. Binding refs that match no census
+  route id get their own table instead of being dropped.
+- `tools/gauntlet/execution-evidence.json` explicitly lists immutable census
+  ledgers. The generator validates their schema, route ids, outcome,
+  `finalized-instruction` level, signature, numeric slot, invoked-program list
+  and source-evidence digest. New ledgers change derived counts automatically;
+  historical totals are never edited in prose.

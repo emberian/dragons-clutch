@@ -30,7 +30,7 @@ use dclutch_trading_sbf::series::{
     consume_artifacts_v4::{
         SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4,
         SERIES_CONSUME_TRANSITION_BYTES_V4, SeriesConsumeChildRequestsV4,
-        encode_series_consume_effect_v4_from_requests_atomic,
+        encode_series_consume_effect_artifact_v4_atomic,
         encode_series_consume_request_profile_v4_atomic,
         encode_series_consume_transition_v4_atomic, series_consume_effect_bytes_v4,
     },
@@ -225,8 +225,7 @@ pub fn compile_series_shadow_bundle_v4(
     let effect_bytes = series_consume_effect_bytes_v4(source.occurrence_count);
     let mut effect_scratch = vec![0_u8; effect_bytes];
     let mut effect = vec![0_u8; effect_bytes];
-    encode_series_consume_effect_v4_from_requests_atomic(
-        source.child_requests,
+    encode_series_consume_effect_artifact_v4_atomic(
         source.occurrence_count,
         &mut base_scratch,
         &mut base_effect,

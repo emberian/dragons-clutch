@@ -60,7 +60,7 @@ use super::{
     },
     consume_artifacts_v4::{
         SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SeriesConsumeChildRequestsV4,
-        encode_series_consume_effect_v4_from_requests_atomic, series_consume_effect_bytes_v4,
+        encode_series_consume_effect_artifact_v4_atomic, series_consume_effect_bytes_v4,
     },
     expire_funding_artifacts_v5::{
         SERIES_EXPIRE_RENT_CREDIT_COORDINATE_V5, SERIES_EXPIRE_TICKET_COORDINATE_V5,
@@ -441,20 +441,17 @@ pub fn emit_current_series_release_source_v5(
     let expire_authority = expire_authority(input.template, input.expire_requests)?;
     let prepare = emit_series_prepare_funding_artifacts_v5(
         input.prepare_profile,
-        input.prepare_requests,
         input.prepare_ticket_rent_lamports,
     )
     .map_err(|_| SeriesReleaseErrorV5::Artifact)?;
     let consume = emit_current_consume_v5(
         input.consume_observed_data_lengths,
-        input.consume_requests,
         input.consume_funding_count,
         input.template_occurrence_count,
         consume_authority,
     )?;
     let expire = emit_series_expire_funding_artifacts_v5(
         input.expire_profile,
-        input.expire_requests,
         input.template_occurrence_count,
     )
     .map_err(|_| SeriesReleaseErrorV5::Artifact)?;
@@ -637,7 +634,6 @@ pub fn compile_series_release_v5(source: SeriesReleaseSourceV5<'_>) -> Result<Se
 
 fn emit_current_consume_v5(
     observed: &[u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
-    requests: SeriesConsumeChildRequestsV4<'_>,
     funding_count: u32,
     occurrence_count: u32,
     authority: SeriesOccurrenceAuthorityV5,
@@ -672,8 +668,7 @@ fn emit_current_consume_v5(
     let v4_bytes = series_consume_effect_bytes_v4(occurrence_count);
     let mut v4_scratch = vec![0_u8; v4_bytes];
     let mut v4 = vec![0_u8; v4_bytes];
-    encode_series_consume_effect_v4_from_requests_atomic(
-        requests,
+    encode_series_consume_effect_artifact_v4_atomic(
         occurrence_count,
         &mut base_scratch,
         &mut base,

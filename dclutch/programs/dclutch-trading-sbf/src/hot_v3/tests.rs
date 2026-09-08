@@ -3317,6 +3317,62 @@ fn root_lifecycle_close_refuses_effect_and_child_alias_overlap() {
 }
 
 #[test]
+fn cached_root_close_decision_preserves_local_effect_discipline() {
+    let plans = [root_close_plan_v3()];
+    let root_close = selected_root_lifecycle_close_v3(&plans).expect("root close decision");
+    let aliases = [0_usize, 1, 0];
+    let mut written = [];
+
+    assert_eq!(
+        inspect_local_effect_discipline_v5(
+            &plans,
+            root_close,
+            ResolvedEffectV3::WriteU8 {
+                account: 2,
+                offset: u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1).expect("offset"),
+                value: 1,
+            },
+            &aliases,
+            &mut written,
+            None,
+        ),
+        Err(TradingSbfError::Transition.into()),
+        "a close still refuses a write through a root alias"
+    );
+    assert_eq!(
+        inspect_local_effect_discipline_v5(
+            &plans,
+            root_close,
+            ResolvedEffectV3::WriteU8 {
+                account: 1,
+                offset: 0,
+                value: 1,
+            },
+            &aliases,
+            &mut written,
+            None,
+        ),
+        Ok(()),
+        "the same close still permits a write to a foreign state"
+    );
+    assert_eq!(
+        inspect_local_effect_discipline_v5(
+            &[],
+            selected_root_lifecycle_close_v3(&[]).expect("ordinary root decision"),
+            ResolvedEffectV3::RequireLamportsEq {
+                account: 0,
+                value: 37,
+            },
+            &aliases,
+            &mut written,
+            None,
+        ),
+        Ok(()),
+        "an ordinary live root retains its nonmutating positive case"
+    );
+}
+
+#[test]
 fn vacant_root_digest_binds_address_owner_balance_and_width() {
     let root = Pubkey::new_unique();
     let digest = vacant_root_poststate_digest_v3(&root);

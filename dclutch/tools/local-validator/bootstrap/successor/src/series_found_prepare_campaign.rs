@@ -12,7 +12,7 @@ use dclutch_claims::{
 };
 use dclutch_custody::{
     CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
-    CustodyVaultSeedsV1, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
+    CustodyVaultSeedsV1, ProjectedCustodyStateSeedsV2, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
 use dclutch_market::{Action, ProjectFoundReceiptV2, Request};
 use dclutch_market::{Identity, SeriesFoundingPermitSeedsV1};
@@ -89,6 +89,17 @@ pub(crate) struct CompiledSeriesFoundPrepareSelectionV1 {
     /// publishes the selected bytes.
     pub(crate) prepare_children: SeriesChildBankV1,
     pub(crate) selected: crate::model::SelectedCapabilityV1,
+    /// Private occurrence-derived words that seed the selected Prepare interpreter.
+    pub(crate) derived_prepare:
+        dclutch_trading_sbf::series::derived_prepare_v1::SeriesPrepareDerivedRequestsV1,
+    pub(crate) consume_request: Vec<u8>,
+    pub(crate) prepared_projected_state: dclutch_custody::ProjectedCustodyStateV2,
+    pub(crate) prepared_source_replay: dclutch_custody::CustodyReplayV1,
+    pub(crate) derived_consume:
+        dclutch_trading_sbf::series::derived_terminal_v1::SeriesConsumeDerivedRequestsV1,
+    pub(crate) derived_expire:
+        dclutch_trading_sbf::series::derived_terminal_v1::SeriesExpireDerivedRequestsV1,
+    pub(crate) physical: SeriesPhysicalMaterialV1,
 }
 
 /// Require the normalization boundary promised by the Series release owner:
@@ -135,6 +146,15 @@ pub(crate) struct SeriesFoundPreparePreprofileV1 {
     pub(crate) parents: SeriesPrepareParentsV1,
     pub(crate) predicted_core: dclutch_market::CoreState,
     pub(crate) prepare_children: SeriesChildBankV1,
+    pub(crate) derived_prepare:
+        dclutch_trading_sbf::series::derived_prepare_v1::SeriesPrepareDerivedRequestsV1,
+    pub(crate) consume_request: Vec<u8>,
+    pub(crate) prepared_projected_state: dclutch_custody::ProjectedCustodyStateV2,
+    pub(crate) prepared_source_replay: dclutch_custody::CustodyReplayV1,
+    pub(crate) derived_consume:
+        dclutch_trading_sbf::series::derived_terminal_v1::SeriesConsumeDerivedRequestsV1,
+    pub(crate) derived_expire:
+        dclutch_trading_sbf::series::derived_terminal_v1::SeriesExpireDerivedRequestsV1,
     physical: SeriesPhysicalMaterialV1,
     projected_custody: SeriesProjectedCustodyPhysicalV3,
 }
@@ -353,7 +373,7 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
         // the same cursor for its founding source compartment.
         normal_replay_revision: SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
     };
-    let children = derive_series_founding_children_v1(SeriesFoundingChildrenInputV1 {
+    let founding_input = SeriesFoundingChildrenInputV1 {
         template: input.lifecycle.template_bytes,
         occurrence: current.occurrence_bytes,
         siblings: current.siblings,
@@ -363,17 +383,70 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
         projected: SeriesProjectedCustodyPhysicalInputV1 {
             physical: physical.projected,
         },
-        project_found_receipt: receipt,
+        principal_cap_sets: input.principal_cap_sets,
         projected_state: projected,
         source_replay: replay,
         source_replay_account: physical.normal_replay.to_bytes(),
+        realized_hoard_replay_account: physical.realized_hoard_replay.to_bytes(),
         predicted_core_state: &predicted_core,
         parent_root: input.material.parent_root.to_bytes(),
         trading_program: input.material.trading.to_bytes(),
         rent_program: input.material.rent_program.to_bytes(),
         claims,
-    })
-    .map_err(|error| Error::new(format!("Series founding children refused: {error:?}")))?;
+    };
+    let children = derive_series_founding_children_v1(founding_input)
+        .map_err(|error| Error::new(format!("Series founding children refused: {error:?}")))?;
+    let after_prepare = input
+        .lifecycle
+        .series
+        .prepare_ticket(input.lifecycle.series.revision())
+        .map_err(|error| Error::new(format!("Series native Prepare replay: {error:?}")))?;
+    let prepared_ticket = TicketStateV3::prepared(ticket.content_id());
+    let consume_snapshot = SeriesOccurrenceSnapshotV3 {
+        template_bytes: input.lifecycle.template_bytes,
+        occurrence_bytes: current.occurrence_bytes,
+        ticket_bytes: current.ticket_bytes,
+        siblings: current.siblings,
+        series: after_prepare,
+        ticket_state: Some(prepared_ticket),
+        now_slot: occurrence.occurrence().scheduled_slot(),
+    };
+    let consume_request = dclutch_trading_sbf::series::operator::build_consume_v3(consume_snapshot)
+        .map_err(|error| Error::new(format!("Series native Consume family: {error:?}")))?
+        .as_bytes()
+        .to_vec();
+    let derived_consume =
+        dclutch_trading_sbf::series::derived_terminal_v1::derive_series_consume_requests_v1(
+            dclutch_trading_sbf::series::derived_terminal_v1::SeriesConsumeDerivedRequestInputV1 {
+                family_request: &consume_request,
+                snapshot: consume_snapshot,
+                founding: founding_input,
+                ticket_state_account: input.ticket_state_account,
+                permit_account: AccountKeyV3::new(physical.permit.to_bytes())
+                    .map_err(|_| Error::new("Series permit identity"))?,
+                principal_cap_sets: input.principal_cap_sets,
+            },
+        )
+        .map_err(|error| Error::new(format!("Series derived Consume bank: {error:?}")))?;
+    let derived_expire =
+        dclutch_trading_sbf::series::derived_terminal_v1::derive_series_expire_requests_v1(
+            dclutch_trading_sbf::series::derived_terminal_v1::SeriesExpireDerivedRequestInputV1 {
+                family_request: &parents.expire_request,
+                snapshot: SeriesOccurrenceSnapshotV3 {
+                    now_slot: expiry
+                        .checked_add(1)
+                        .ok_or_else(|| Error::new("Series expiry slot overflow"))?,
+                    ..consume_snapshot
+                },
+                product: input.product,
+                registry_program: input.registry_program,
+                parent_root: input.material.parent_root.to_bytes(),
+                custody: physical.expire,
+                projected: physical.projected,
+                principal_cap_sets: input.principal_cap_sets,
+            },
+        )
+        .map_err(|error| Error::new(format!("Series derived Expire bank: {error:?}")))?;
     let bank = SeriesChildBankV1::produce(SeriesChildBankInputV1 {
         template: input.lifecycle.template_bytes,
         occurrence: current.occurrence_bytes,
@@ -386,19 +459,47 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
         projected_custody: children.projected_physical,
         claims_physical: SeriesClaimsPhysicalV1 {
             claims_program: input.material.claims.to_bytes(),
-            custody_replay: physical.normal_replay.to_bytes(),
+            custody_replay: physical.realized_hoard_replay.to_bytes(),
         },
         claims: children.claims,
         permit_expiry: children.permit_expiry,
         ticket_state_account: input.ticket_state_account,
-        expected_series_revision: input.lifecycle.series.revision(),
-        expected_ticket_revision: 0,
+        expected_series_revision: after_prepare.revision(),
+        expected_ticket_revision: prepared_ticket.revision(),
     })
     .map_err(|error| Error::new(format!("Series child bank refused: {error:?}")))?;
+    let derived_prepare =
+        dclutch_trading_sbf::series::derived_prepare_v1::derive_series_prepare_requests_v1(
+            dclutch_trading_sbf::series::derived_prepare_v1::SeriesPrepareDerivedRequestInputV1 {
+                family_request: &parents.prepare_request,
+                snapshot: SeriesOccurrenceSnapshotV3 {
+                    template_bytes: input.lifecycle.template_bytes,
+                    occurrence_bytes: current.occurrence_bytes,
+                    ticket_bytes: current.ticket_bytes,
+                    siblings: current.siblings,
+                    series: input.lifecycle.series,
+                    ticket_state: current.ticket_state,
+                    now_slot: input.lifecycle.now_slot,
+                },
+                product: input.product,
+                registry_program: input.registry_program,
+                parent_root: input.material.parent_root.to_bytes(),
+                custody: physical.prepare,
+                projected_custody: children.projected_physical,
+                principal_cap_sets: input.principal_cap_sets,
+            },
+        )
+        .map_err(|error| Error::new(format!("Series derived Prepare bank: {error:?}")))?;
     Ok(SeriesFoundPreparePreprofileV1 {
         parents,
         predicted_core,
         prepare_children: bank,
+        derived_prepare,
+        consume_request,
+        prepared_projected_state: projected,
+        prepared_source_replay: replay,
+        derived_consume,
+        derived_expire,
         physical,
         projected_custody: children.projected_physical,
     })
@@ -438,6 +539,13 @@ pub(crate) fn compile_series_found_prepare_selection_v1(
         predicted_core: preprofile.predicted_core,
         prepare_children: preprofile.prepare_children,
         selected: assembled.selected,
+        derived_prepare: preprofile.derived_prepare,
+        consume_request: preprofile.consume_request,
+        prepared_projected_state: preprofile.prepared_projected_state,
+        prepared_source_replay: preprofile.prepared_source_replay,
+        physical: preprofile.physical,
+        derived_consume: preprofile.derived_consume,
+        derived_expire: preprofile.derived_expire,
     })
 }
 
@@ -564,9 +672,12 @@ pub(crate) struct SeriesPhysicalMaterialV1 {
     pub(crate) projected: SeriesProjectedCustodyPhysicalV3,
     pub(crate) permit: Pubkey,
     pub(crate) custody_authority: Pubkey,
-    /// The normal-Custody SeriesEscrow replay account. This is distinct from
-    /// the Custody signing authority and is consumed by projected Lock.
+    /// The normal-Custody SeriesEscrow source replay. Projected Lock consumes
+    /// and closes this account before Realize.
     pub(crate) normal_replay: Pubkey,
+    /// The projected-State PDA that Realize rewrites in place into the normal
+    /// Trading Custody replay for the realized Hoard.
+    pub(crate) realized_hoard_replay: Pubkey,
     pub(crate) claims: SeriesClaimsVacancyV1,
 }
 
@@ -629,6 +740,11 @@ pub(crate) fn materialize_series_found_prepare_v1(
     .0;
     let normal_replay = Pubkey::find_program_address(
         &CustodyReplaySeedsV1::new(market, release_set, CallerRoleV1::Trading, ticket).as_slices(),
+        &input.custody,
+    )
+    .0;
+    let realized_hoard_replay = Pubkey::find_program_address(
+        &ProjectedCustodyStateSeedsV2::new(market, release_set, context_digest).as_slices(),
         &input.custody,
     )
     .0;
@@ -717,6 +833,7 @@ pub(crate) fn materialize_series_found_prepare_v1(
         permit,
         custody_authority,
         normal_replay,
+        realized_hoard_replay,
         claims: input.claims_vacancy,
     })
 }
@@ -752,7 +869,7 @@ pub(crate) mod tests {
         PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1,
     };
-    use dclutch_trading::series::replay::SeriesStateV3;
+    use dclutch_trading::series::replay::{SeriesStateV3, TicketStateSeedsV3};
     use dclutch_trading::series::{
         AuthenticatedProductProjectionV2, TemplateV3, admit_occurrence, admit_ticket,
         pre_founding_series_escrow,
@@ -782,11 +899,12 @@ pub(crate) mod tests {
             .expect("nonzero content identity")
     }
 
-    pub(crate) fn prepared_founder() -> PreparedSeriesFounderV1 {
+    pub(crate) fn prepared_founder_with_plan()
+    -> (PreparedSeriesFounderV1, crate::model::SuccessorPlan) {
         let (plan, input, mint, founder, refund_owner) =
             crate::market::tests::selected_family_compiler_fixture_v1();
         let id = |byte| ContentId::new([byte; 32]).expect("authored policy identity");
-        prepare_series_founder_from_market_v1(
+        let prepared = prepare_series_founder_from_market_v1(
             &plan,
             &input,
             mint,
@@ -818,7 +936,12 @@ pub(crate) mod tests {
                 },
             ],
         )
-        .expect("canonical Market preview produces admitted Series leaves")
+        .expect("canonical Market preview produces admitted Series leaves");
+        (prepared, plan)
+    }
+
+    pub(crate) fn prepared_founder() -> PreparedSeriesFounderV1 {
+        prepared_founder_with_plan().0
     }
 
     pub(crate) fn compiler_input<'a>(
@@ -826,7 +949,8 @@ pub(crate) mod tests {
         parent_root: Pubkey,
         ticket_bytes: &'a [u8],
     ) -> SeriesFoundPrepareSelectionInputV1<'a> {
-        compiler_input_at_occurrence(prepared, parent_root, ticket_bytes, 0)
+        let (plan, _, _, _, _) = crate::market::tests::selected_family_compiler_fixture_v1();
+        compiler_input_with_plan_at_occurrence(prepared, &plan, parent_root, ticket_bytes, 0)
     }
 
     pub(crate) fn compiler_input_at_occurrence<'a>(
@@ -835,8 +959,34 @@ pub(crate) mod tests {
         ticket_bytes: &'a [u8],
         occurrence_index: usize,
     ) -> SeriesFoundPrepareSelectionInputV1<'a> {
-        let registry = pubkey(&prepared.facts.registry_program).expect("Registry program");
-        let core = pubkey(&prepared.facts.core_program).expect("Core program");
+        let (plan, _, _, _, _) = crate::market::tests::selected_family_compiler_fixture_v1();
+        compiler_input_with_plan_at_occurrence(
+            prepared,
+            &plan,
+            parent_root,
+            ticket_bytes,
+            occurrence_index,
+        )
+    }
+
+    pub(crate) fn compiler_input_with_plan<'a>(
+        prepared: &'a PreparedSeriesFounderV1,
+        plan: &crate::model::SuccessorPlan,
+        parent_root: Pubkey,
+        ticket_bytes: &'a [u8],
+    ) -> SeriesFoundPrepareSelectionInputV1<'a> {
+        compiler_input_with_plan_at_occurrence(prepared, plan, parent_root, ticket_bytes, 0)
+    }
+
+    pub(crate) fn compiler_input_with_plan_at_occurrence<'a>(
+        prepared: &'a PreparedSeriesFounderV1,
+        plan: &crate::model::SuccessorPlan,
+        parent_root: Pubkey,
+        ticket_bytes: &'a [u8],
+        occurrence_index: usize,
+    ) -> SeriesFoundPrepareSelectionInputV1<'a> {
+        let registry = pubkey(&plan.registry.program_id).expect("Registry program");
+        let core = pubkey(&plan.core.program_id).expect("Core program");
         let occurrence = admit_occurrence(
             prepared.admitted.template(),
             &prepared.admitted.occurrences()[occurrence_index],
@@ -858,9 +1008,9 @@ pub(crate) mod tests {
         .expect("first canonical escrow");
         let market = Pubkey::new_from_array(escrow.market().to_bytes());
         let founder = Pubkey::new_from_array(escrow.founder().to_bytes());
-        // The Claims program has a fixed selected identity for the whole input,
-        // so derive all three vacant coordinates under that one program.
-        let claims = Pubkey::new_from_array([11; 32]);
+        // Derive every program-owned coordinate from the selected Market plan:
+        // the canonical M0 ProjectFound projection uses the same identities.
+        let claims = pubkey(&plan.claims.program_id).expect("Claims program");
         let aggregate = Pubkey::find_program_address(
             &ClaimsFoundingAggregateSeedsV5::new(market.to_bytes())
                 .expect("Claims aggregate seeds")
@@ -883,9 +1033,14 @@ pub(crate) mod tests {
         )
         .0;
         let rent = Rent::default();
-        let custody = Pubkey::new_from_array([12; 32]);
-        let trading = Pubkey::new_from_array([13; 32]);
-        let rent_program = Pubkey::new_from_array([14; 32]);
+        let custody = pubkey(&plan.custody.program_id).expect("Custody program");
+        let trading = pubkey(&plan.trading.program_id).expect("Trading program");
+        let rent_program = pubkey(&plan.rent_credit.program_id).expect("Rent program");
+        let ticket_state = Pubkey::find_program_address(
+            &TicketStateSeedsV3::new(parent_root.to_bytes(), ticket.content_id()).as_slices(),
+            &trading,
+        )
+        .0;
         let permit_bump = Pubkey::find_program_address(
             &SeriesFoundingPermitSeedsV1::new(
                 Identity::new(escrow.release_set().to_bytes()).expect("release set identity"),
@@ -994,8 +1149,10 @@ pub(crate) mod tests {
             funding_ledger_slot_count: 1,
             activation_deadline_slot: 101,
             selected_manifest_entry_index: 0,
-            ticket_state_account: dclutch_trading::series::AccountKeyV3::new([19; 32])
-                .expect("Ticket state account"),
+            ticket_state_account: dclutch_trading::series::AccountKeyV3::new(
+                ticket_state.to_bytes(),
+            )
+            .expect("Ticket state account"),
         }
     }
 
@@ -1003,6 +1160,18 @@ pub(crate) mod tests {
         prepared: &PreparedSeriesFounderV1,
         compiled: &CompiledSeriesFoundPrepareSelectionV1,
     ) -> Pubkey {
+        let header = compiled_root_header(prepared, compiled);
+        Pubkey::find_program_address(
+            &header.seeds().as_slices(),
+            &Pubkey::new_from_array([13; 32]),
+        )
+        .0
+    }
+
+    pub(crate) fn compiled_root_header(
+        prepared: &PreparedSeriesFounderV1,
+        compiled: &CompiledSeriesFoundPrepareSelectionV1,
+    ) -> CapabilityRootHeaderV1 {
         let descriptor = decode_hex(&compiled.selected.selected_descriptor_hex)
             .expect("selected descriptor hex");
         let descriptor = CapabilityProgramV4::decode(&descriptor).expect("selected descriptor");
@@ -1046,11 +1215,7 @@ pub(crate) mod tests {
             SelectedRecordBumpsV1::default(),
         )
         .expect("canonical parent root header");
-        Pubkey::find_program_address(
-            &header.seeds().as_slices(),
-            &Pubkey::new_from_array([13; 32]),
-        )
-        .0
+        header
     }
 
     pub(crate) fn published_record(

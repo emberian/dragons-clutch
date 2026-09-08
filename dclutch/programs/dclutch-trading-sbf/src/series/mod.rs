@@ -20,6 +20,8 @@ pub mod activation_bundle_v1;
 pub mod artifacts_v3;
 /// Schema-bound V4 descriptor and global DCE5 Consume artifact admission.
 pub mod artifacts_v4;
+/// Shared native complete occurrence child-bank construction.
+pub mod child_bank_v1;
 /// Commit-last occurrence, funding, and terminal plans for recurring Series V3.
 ///
 /// This module is deliberately NOT named "lifecycle": the protocol-wide term
@@ -35,10 +37,14 @@ pub mod consume_artifacts_v4;
 pub mod custody_v3;
 /// Authenticated per-occurrence Prepare child request derivation.
 pub mod derived_prepare_v1;
+/// Native per-occurrence Consume and Expire request derivation.
+pub mod derived_terminal_v1;
 /// Global five-route Consume Effect V4 topology and route-window admission.
 pub mod effect_v4;
 /// Canonical current-source Expire ProfileV3/EffectV5 artifacts.
 pub mod expire_funding_artifacts_v5;
+/// Shared native founding child request and receipt projection.
+pub mod founding_children_v1;
 /// Canonical AccountProfileV3/EffectV5 funding-owned action artifacts.
 pub mod funding_artifacts_v5;
 /// Exact sparse family request consumed by the canonical Trading hot outer.

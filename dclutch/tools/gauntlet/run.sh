@@ -169,12 +169,13 @@ SOURCE="$WORK/source"
 ELF_DIR="$WORK/elf"
 BUILD_TARGET="$WORK/build-target"
 HOST_TARGET="$WORK/host-target"
-CENSUS_TARGET="$WORK/census-target"
 STAMPS="$WORK/stamps"
 OUT="$WORK/out"
 LOGS="$WORK/logs"
 RUNS="$WORK/runs"
-CENSUS_BIN="$CENSUS_TARGET/release/dclutch-route-census"
+# The ledger is shared across campaigns; the instrument's Cargo target belongs
+# to the checkout which builds it (tools/gate census owns that build).
+CENSUS_BIN="${DCLUTCH_GATE_CENSUS_BIN:-$REPO/target/release/dclutch-route-census}"
 BOOTSTRAP_BIN="$HOST_TARGET/release/dclutch-local-successor-bootstrap"
 
 INVENTORY="$OUT/inventory.json"

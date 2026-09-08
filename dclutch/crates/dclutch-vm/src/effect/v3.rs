@@ -1054,7 +1054,18 @@ impl<'a> ProgramV3<'a> {
         identities: &[[u8; 32]],
     ) -> Result<ResolvedEffectV3> {
         self.require_register_widths(tail_count, scalars, identities)?;
-        self.operation(false, index)?
+        self.resolved_fixed_effect_validated(index, tail_count, scalars, identities)
+    }
+
+    /// Resolve after the enclosing projection has proved the register widths.
+    pub(super) fn resolved_fixed_effect_validated(
+        self,
+        index: u16,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+    ) -> Result<ResolvedEffectV3> {
+        self.operation_validated(false, index)?
             .resolve(self, None, tail_count, scalars, identities)
     }
 
@@ -1071,8 +1082,54 @@ impl<'a> ProgramV3<'a> {
             return Err(Error::InvalidCoordinate);
         }
         self.require_register_widths(tail_count, scalars, identities)?;
-        self.operation(true, index)?
-            .resolve(self, Some(item), tail_count, scalars, identities)
+        self.resolved_item_effect_validated(item, index, tail_count, scalars, identities)
+    }
+
+    /// Resolve one in-range item after the projection proved register widths.
+    pub(super) fn resolved_item_effect_validated(
+        self,
+        item: u32,
+        index: u16,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+    ) -> Result<ResolvedEffectV3> {
+        self.operation_validated(true, index)?.resolve(
+            self,
+            Some(item),
+            tail_count,
+            scalars,
+            identities,
+        )
+    }
+
+    /// Resolve one operation at an offset derived from this validated
+    /// program's immutable operation table. The projection owns the table
+    /// cursor and request-route cache, so neither fact is recomputed for every
+    /// operation in the same walk.
+    pub(super) fn resolved_effect_at_offset_validated(
+        self,
+        operation_offset: usize,
+        item: Option<u32>,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+        request_cache: &mut RequestWriteOffsetCacheV3,
+    ) -> Result<ResolvedEffectV3> {
+        Operation::decode_validated(self.bytes, operation_offset)?.resolve_with_request_cache(
+            self,
+            item,
+            tail_count,
+            scalars,
+            identities,
+            Some(request_cache),
+        )
+    }
+
+    /// Start of the immutable operation table after program construction has
+    /// validated its complete shape.
+    pub(super) fn operation_table_start_validated(self) -> Result<usize> {
+        self.operations_start()
     }
 
     fn operation(self, item_body: bool, index: u16) -> Result<Operation> {
@@ -1092,6 +1149,26 @@ impl<'a> ProgramV3<'a> {
             usize::from(index)
         };
         Operation::decode(self.bytes, self.operation_offset(ordinal)?)
+    }
+
+    /// Decode an operation after `validate_shape` proved its reserved bytes.
+    fn operation_validated(self, item_body: bool, index: u16) -> Result<Operation> {
+        let count = if item_body {
+            self.item_operations
+        } else {
+            self.fixed_operations
+        };
+        if index >= count {
+            return Err(Error::InvalidCoordinate);
+        }
+        let ordinal = if item_body {
+            usize::from(self.fixed_operations)
+                .checked_add(usize::from(index))
+                .ok_or(Error::InvalidLength)?
+        } else {
+            usize::from(index)
+        };
+        Operation::decode_validated(self.bytes, self.operation_offset(ordinal)?)
     }
 
     /// Byte offset of the operation table.
@@ -1533,6 +1610,10 @@ impl Operation {
         if bytes.get(add(offset, 18)?..add(offset, 24)?) != Some([0_u8; 6].as_slice()) {
             return Err(Error::NonCanonicalReserved);
         }
+        Self::decode_validated(bytes, offset)
+    }
+
+    fn decode_validated(bytes: &[u8], offset: usize) -> Result<Self> {
         Ok(Self {
             opcode: byte(bytes, offset)?,
             mode: byte(bytes, add(offset, 1)?)?,
@@ -1760,6 +1841,18 @@ impl Operation {
         scalars: &[u64],
         identities: &[[u8; 32]],
     ) -> Result<ResolvedEffectV3> {
+        self.resolve_with_request_cache(program, item, tail_count, scalars, identities, None)
+    }
+
+    fn resolve_with_request_cache(
+        self,
+        program: ProgramV3<'_>,
+        item: Option<u32>,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+        request_cache: Option<&mut RequestWriteOffsetCacheV3>,
+    ) -> Result<ResolvedEffectV3> {
         if self.is_conditional_data_write()
             && scalars
                 .get(usize::from(self.account_b))
@@ -1904,13 +1997,24 @@ impl Operation {
             | OP_WRITE_REQUEST_U64
             | OP_WRITE_REQUEST_IDENTITY => {
                 let request_item = self.mode & MODE_REQUEST_ITEM != 0;
-                let offset = program.request_write_offset(
-                    self.route,
-                    request_item,
-                    item,
-                    tail_count,
-                    self.data_offset,
-                )?;
+                let offset = if let Some(cache) = request_cache {
+                    program.request_write_offset_cached(
+                        self.route,
+                        request_item,
+                        item,
+                        tail_count,
+                        self.data_offset,
+                        cache,
+                    )?
+                } else {
+                    program.request_write_offset(
+                        self.route,
+                        request_item,
+                        item,
+                        tail_count,
+                        self.data_offset,
+                    )?
+                };
                 let value = match self.opcode {
                     OP_WRITE_REQUEST_U8 => RequestValueV3::U8(
                         u8::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
@@ -2020,20 +2124,47 @@ impl ProgramV3<'_> {
         tail_count: u32,
         local_offset: u32,
     ) -> Result<usize> {
-        let route = self.route(route_index)?;
-        let mut offset = self.route_request_start(route_index, tail_count)?;
+        self.request_write_offset_cached(
+            route_index,
+            item_space,
+            item,
+            tail_count,
+            local_offset,
+            &mut RequestWriteOffsetCacheV3::vacant(),
+        )
+    }
+
+    fn request_write_offset_cached(
+        self,
+        route_index: u16,
+        item_space: bool,
+        item: Option<u32>,
+        tail_count: u32,
+        local_offset: u32,
+        cache: &mut RequestWriteOffsetCacheV3,
+    ) -> Result<usize> {
+        if cache.route_index != route_index {
+            let route = self.route(route_index)?;
+            *cache = RequestWriteOffsetCacheV3 {
+                route_index,
+                request_start: self.route_request_start(route_index, tail_count)?,
+                fixed_request_bytes: usize_from_u32(route.fixed_request_bytes)?,
+                item_request_bytes: usize_from_u32(route.item_request_bytes)?,
+            };
+        }
+        let mut offset = cache.request_start;
         if item_space {
             let item = item.ok_or(Error::InvalidCoordinate)?;
             if item >= tail_count {
                 return Err(Error::InvalidCoordinate);
             }
             offset = offset
-                .checked_add(usize_from_u32(route.fixed_request_bytes)?)
+                .checked_add(cache.fixed_request_bytes)
                 .and_then(|value| {
                     value.checked_add(
                         usize::try_from(item)
                             .ok()?
-                            .checked_mul(usize_from_u32(route.item_request_bytes).ok()?)?,
+                            .checked_mul(cache.item_request_bytes)?,
                     )
                 })
                 .ok_or(Error::ArithmeticOverflow)?;
@@ -2041,6 +2172,28 @@ impl ProgramV3<'_> {
         offset
             .checked_add(usize_from_u32(local_offset)?)
             .ok_or(Error::ArithmeticOverflow)
+    }
+}
+
+/// Last request route resolved by one projection walk.
+///
+/// `u16::MAX` cannot be a valid route index: a `u16` route count has valid
+/// indices only through `u16::MAX - 1`.
+pub(super) struct RequestWriteOffsetCacheV3 {
+    route_index: u16,
+    request_start: usize,
+    fixed_request_bytes: usize,
+    item_request_bytes: usize,
+}
+
+impl RequestWriteOffsetCacheV3 {
+    pub(super) const fn vacant() -> Self {
+        Self {
+            route_index: u16::MAX,
+            request_start: 0,
+            fixed_request_bytes: 0,
+            item_request_bytes: 0,
+        }
     }
 }
 
@@ -2112,29 +2265,49 @@ pub fn project_atomic(
     {
         *output = input.lamports;
     }
+    let operations_start = program.operation_table_start_validated()?;
+    let item_operations_start = operations_start
+        .checked_add(
+            usize::from(program.fixed_operations)
+                .checked_mul(OPERATION_BYTES)
+                .ok_or(Error::InvalidLength)?,
+        )
+        .ok_or(Error::InvalidLength)?;
+    let mut request_cache = RequestWriteOffsetCacheV3::vacant();
+    let mut operation_offset = operations_start;
     let mut fixed = 0_u16;
     while fixed < program.fixed_operations {
-        let effect = program.resolved_fixed_effect(
-            fixed,
+        let effect = program.resolved_effect_at_offset_validated(
+            operation_offset,
+            None,
             tail_count,
             projection.scalars,
             projection.identities,
+            &mut request_cache,
         )?;
         project_effect(effect, &mut projection)?;
+        operation_offset = operation_offset
+            .checked_add(OPERATION_BYTES)
+            .ok_or(Error::InvalidLength)?;
         fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
     }
     let mut item = 0_u32;
     while item < tail_count {
+        operation_offset = item_operations_start;
         let mut operation = 0_u16;
         while operation < program.item_operations {
-            let effect = program.resolved_item_effect(
-                item,
-                operation,
+            let effect = program.resolved_effect_at_offset_validated(
+                operation_offset,
+                Some(item),
                 tail_count,
                 projection.scalars,
                 projection.identities,
+                &mut request_cache,
             )?;
             project_effect(effect, &mut projection)?;
+            operation_offset = operation_offset
+                .checked_add(OPERATION_BYTES)
+                .ok_or(Error::InvalidLength)?;
             operation = operation.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         item = item.checked_add(1).ok_or(Error::InvalidLength)?;

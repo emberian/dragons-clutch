@@ -49,3 +49,12 @@ failed with ENOSPC before the selected test ran; its log remains at
 build target was removed, recovering space without deleting shared workspace
 artifacts. The General owner is rerunning the exact committed-source host
 control on hbox. No publication was made on the strength of these checks.
+
+## 2026-09-08 addendum — isolated hbox control accepted
+
+The General host control subsequently passed on exact source
+`097a14049fc27ba9b89ea72fcb4dd21dc902061e`, using that hbox checkout's own target.
+Integration verified all 3,230 exported source entries against the commit with
+zero mismatches. One named test executed and passed; no scheduler no-op marker
+was present. The complete provenance and publication are recorded in
+[PAGES_DEALER_GENERAL_CHECKPOINT_2026_09_08.md](PAGES_DEALER_GENERAL_CHECKPOINT_2026_09_08.md).

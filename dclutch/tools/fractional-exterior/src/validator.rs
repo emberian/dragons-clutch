@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
 };
-use solana_client::rpc_client::RpcClient;
+use solana_client::{rpc_client::RpcClient, rpc_request::RpcRequest};
 use solana_commitment_config::CommitmentConfig;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
@@ -314,6 +314,211 @@ fn expected_poststate(action: &stage::StagedAction) -> Value {
     })
 }
 
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn decode_base58(value: &str) -> Result<Vec<u8>> {
+    const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let leading_zeroes = value.bytes().take_while(|byte| *byte == b'1').count();
+    let mut decoded = Vec::<u8>::new();
+    for byte in value.bytes() {
+        let digit = ALPHABET
+            .iter()
+            .position(|candidate| *candidate == byte)
+            .ok_or_else(|| Error::new("finalized instruction data was not base58"))?;
+        let mut carry = digit;
+        for held in decoded.iter_mut().rev() {
+            let expanded = usize::from(*held) * 58 + carry;
+            *held = (expanded & 0xff) as u8;
+            carry = expanded >> 8;
+        }
+        while carry > 0 {
+            decoded.insert(0, (carry & 0xff) as u8);
+            carry >>= 8;
+        }
+    }
+    let mut answer = vec![0_u8; leading_zeroes];
+    answer.extend(decoded);
+    Ok(answer)
+}
+
+/// Recover one accepted packet from finalized transaction history.
+///
+/// The route census accepts neither the host's planned instruction nor an
+/// invoke log as route evidence. This re-reads the chain's packet, requires it
+/// to be byte-identical to the signed packet submitted above, then resolves
+/// top-level and CPI instruction program indexes through the finalized loaded
+/// addresses. The Claims request therefore comes from the validator's inner
+/// instruction metadata rather than from the fixture that authored it.
+fn finalized_instruction_evidence(
+    client: &RpcClient,
+    label: &str,
+    signature: &solana_sdk::signature::Signature,
+    submitted: &VersionedTransaction,
+    expected_inner: Option<(RpcPubkey, &[u8])>,
+    wire_bytes: usize,
+    poststate: &Value,
+) -> Result<Value> {
+    let finalized: Value = client.send(
+        RpcRequest::GetTransaction,
+        json!([
+            signature.to_string(),
+            {
+                "encoding": "base64",
+                "commitment": "finalized",
+                "maxSupportedTransactionVersion": 0,
+            }
+        ]),
+    )?;
+    let slot = finalized.get("slot").and_then(Value::as_u64).unwrap_or(0);
+    if slot == 0 {
+        return Err(Error::new(format!("{label} finalized at the invalid zero slot")).into());
+    }
+    let encoded = finalized
+        .get("transaction")
+        .and_then(Value::as_array)
+        .filter(|pair| pair.len() == 2 && pair.get(1).and_then(Value::as_str) == Some("base64"))
+        .and_then(|pair| pair.first())
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new(format!("{label} finalized packet was not canonical base64")))?;
+    let packet_bytes = STANDARD
+        .decode(encoded)
+        .map_err(|error| Error::new(format!("{label} finalized packet base64: {error}")))?;
+    let packet: VersionedTransaction = bincode::deserialize(&packet_bytes)
+        .map_err(|error| Error::new(format!("{label} finalized packet decode: {error}")))?;
+    if bincode::serialize(&packet)? != bincode::serialize(submitted)? {
+        return Err(Error::new(format!(
+            "{label} finalized packet differs from the packet that was signed and submitted"
+        ))
+        .into());
+    }
+    if packet.signatures.first() != Some(signature) {
+        return Err(Error::new(format!("{label} finalized packet changed signature")).into());
+    }
+    let meta = finalized
+        .get("meta")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::new(format!("{label} finalized transaction omitted metadata")))?;
+    if meta.get("err").is_none_or(|error| !error.is_null()) {
+        return Err(Error::new(format!("{label} finalized metadata reports a refusal")).into());
+    }
+
+    let loaded = meta
+        .get("loadedAddresses")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "{label} finalized metadata omitted lookup-table addresses"
+            ))
+        })?;
+    let mut account_keys = packet
+        .message
+        .static_account_keys()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    for class in ["writable", "readonly"] {
+        let values = loaded
+            .get(class)
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new(format!("{label} loaded addresses omitted {class}")))?;
+        for address in values {
+            account_keys.push(
+                address
+                    .as_str()
+                    .ok_or_else(|| {
+                        Error::new(format!("{label} loaded {class} address was not a string"))
+                    })?
+                    .to_owned(),
+            );
+        }
+    }
+
+    let resolve = |index: u8| -> Result<String> {
+        account_keys
+            .get(usize::from(index))
+            .cloned()
+            .ok_or_else(|| {
+                Error::new(format!("{label} instruction program index is out of range")).into()
+            })
+    };
+    let mut instructions = packet
+        .message
+        .instructions()
+        .iter()
+        .map(|instruction| {
+            Ok(json!({
+                "program_id": resolve(instruction.program_id_index)?,
+                "data_hex": hex_lower(&instruction.data),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut matched_inner = 0_usize;
+    if let Some(groups) = meta.get("innerInstructions").and_then(Value::as_array) {
+        for group in groups {
+            let inner = group
+                .get("instructions")
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error::new(format!("{label} finalized CPI group was malformed")))?;
+            for instruction in inner {
+                let program_index = instruction
+                    .get("programIdIndex")
+                    .and_then(Value::as_u64)
+                    .and_then(|index| u8::try_from(index).ok())
+                    .ok_or_else(|| {
+                        Error::new(format!("{label} finalized CPI omitted its program index"))
+                    })?;
+                let data =
+                    decode_base58(instruction.get("data").and_then(Value::as_str).ok_or_else(
+                        || Error::new(format!("{label} finalized CPI omitted native data")),
+                    )?)?;
+                let program_id = resolve(program_index)?;
+                if expected_inner.is_some_and(|(expected_program, expected_data)| {
+                    program_id == expected_program.to_string() && data == expected_data
+                }) {
+                    matched_inner += 1;
+                }
+                instructions.push(json!({
+                    "program_id": program_id,
+                    "data_hex": hex_lower(&data),
+                }));
+            }
+        }
+    }
+    if expected_inner.is_some() && matched_inner != 1 {
+        return Err(Error::new(format!(
+            "{label} finalized metadata contains {matched_inner} exact Claims CPI instructions; expected one"
+        ))
+        .into());
+    }
+    let logs = meta
+        .get("logMessages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new(format!("{label} finalized metadata omitted logs")))?;
+    if !logs.iter().all(Value::is_string) {
+        return Err(Error::new(format!("{label} finalized logs were malformed")).into());
+    }
+    let fee_lamports = meta
+        .get("fee")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::new(format!("{label} finalized metadata omitted its fee")))?;
+    let compute_units_consumed = meta.get("computeUnitsConsumed").and_then(Value::as_u64);
+    Ok(json!({
+        "label": label,
+        "signature": signature.to_string(),
+        "slot": slot,
+        "transaction_metadata_available": true,
+        "fee_lamports": fee_lamports,
+        "compute_units_consumed": compute_units_consumed,
+        "error": null,
+        "logs": logs,
+        "instructions": instructions,
+        "wire_bytes": wire_bytes,
+        "poststate": poststate,
+    }))
+}
+
 pub(crate) fn refusal_code(error: &str) -> Option<u32> {
     let marker = "custom program error: 0x";
     let start = error.find(marker)? + marker.len();
@@ -354,7 +559,7 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
         format!("http://127.0.0.1:{RPC_PORT}"),
         CommitmentConfig::finalized(),
     );
-    let outcome = (|| -> Result<Vec<journal::Entry>> {
+    let outcome = (|| -> Result<(Vec<journal::Entry>, Vec<Value>)> {
         await_health(&client)?;
         let payer = Keypair::new();
         let signature = client.request_airdrop(&payer.pubkey(), 5_000_000_000)?;
@@ -416,6 +621,7 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
         );
 
         let mut entries = Vec::new();
+        let mut native_evidence = Vec::new();
         for action in &staged.actions {
             // Every meta is an account the caller receives, including the Claims
             // program at index 0. The invoked program id is separate and is not
@@ -463,6 +669,31 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
                 }
             };
             let state = poststate(&client, &staged)?;
+            let expected_inner = if action.program == stage::CALLER {
+                Some((
+                    rpc(stage::CLAIMS),
+                    action.data.get(1..).ok_or_else(|| {
+                        Error::new(format!(
+                            "{} caller instruction omitted its action",
+                            action.name
+                        ))
+                    })?,
+                ))
+            } else {
+                None
+            };
+            let finalized = match &submitted {
+                Ok(signature) => Some(finalized_instruction_evidence(
+                    &client,
+                    action.name,
+                    signature,
+                    &transaction,
+                    expected_inner,
+                    wire,
+                    &state,
+                )?),
+                Err(_) => None,
+            };
             journal::append_observed(
                 out,
                 &json!({
@@ -503,8 +734,9 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
                 refusal,
                 poststate: state,
             });
+            native_evidence.push(finalized.expect("accepted transaction has finalized evidence"));
         }
-        Ok(entries)
+        Ok((entries, native_evidence))
     })();
 
     if keep {
@@ -512,9 +744,11 @@ pub fn run(elf_dir: &Path, out: &Path, keep: bool) -> Result<()> {
     } else {
         validator.stop();
     }
-    let entries = outcome?;
+    let (entries, native_evidence) = outcome?;
     let digest = journal::write_canonical(out, &entries)?;
     println!("canonical journal sha256 {digest}");
+    let native_digest = journal::write_native_evidence(out, &native_evidence)?;
+    println!("finalized instruction evidence sha256 {native_digest}");
     Ok(())
 }
 
@@ -586,4 +820,18 @@ pub fn write_preterminal_bridge(
     write_atomic(bridge_path, &bridge)
         .map_err(Error::new)
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_base58;
+
+    #[test]
+    fn finalized_instruction_base58_preserves_leading_zeroes() {
+        assert_eq!(decode_base58("").unwrap(), Vec::<u8>::new());
+        assert_eq!(decode_base58("1").unwrap(), vec![0]);
+        assert_eq!(decode_base58("1112").unwrap(), vec![0, 0, 0, 1]);
+        assert_eq!(decode_base58("2").unwrap(), vec![1]);
+        assert!(decode_base58("0").is_err());
+    }
 }

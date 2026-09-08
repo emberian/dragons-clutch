@@ -216,6 +216,14 @@
       "producer": "tools/gauntlet/journey/src/economics_campaign.rs",
       "note": "Completed 15-transaction Custody governance and upkeep campaign on a checked local validator: hostile and duplicate refusals, Found, Propose, matured Apply, Withdraw, upkeep Found, and nonzero Deposit Credit. The durable evidence is diagnostic host-current/runtime-checked local-validator evidence, not devnet evidence.",
       "reproducible": true
+    },
+    {
+      "campaign": "scoring-dealer-local-validator",
+      "substrate": "local-validator",
+      "runner": "tools/gauntlet/scoring-dealer/run.sh",
+      "producer": "tools/gauntlet/journey/src/dealer_campaign.rs",
+      "note": "Exactly four accepted Dealer instructions on a checked local validator: Found, Quote, nonzero Fill and Withdraw. The campaign carries its market-founding and funding infrastructure but does not bind those transactions to Dealer routes and does not claim settlement, resource retirement or the General accelerator route.",
+      "reproducible": true
     }
   ]
 }

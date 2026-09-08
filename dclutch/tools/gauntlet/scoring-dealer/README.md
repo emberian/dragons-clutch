@@ -5,7 +5,7 @@ Run on hbox through `swarm-build`, from a clean committed checkout:
 ```sh
 SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=6 swarm-build tools/gauntlet/scoring-dealer/run.sh \
   --checked-release-gate /absolute/release/CHECKED_UPGRADE_GATE.json \
-  --work /absolute/new/campaign-directory --rpc-port 27176
+  --work /absolute/new/campaign-directory --rpc-port 27176 --census
 ```
 
 The shared Journey binary owns this campaign's `dealer` command. It brings up
@@ -24,6 +24,10 @@ a rerun against its final source and artifacts.
 
 This is an execution campaign, not a declaration that every stage already
 passes. Its three native poststate-verifier controls are orchestration
-controls and contribute no protocol execution evidence. Census bindings must
-be authored from the transactions this campaign actually observes. Complete
-Dealer settlement and resource retirement remain additional lifecycle work.
+controls and contribute no protocol execution evidence. With `--census`, first
+run `tools/gate census` in the same checkout. The runner then selects the four
+terminal Dealer transactions from the completed evidence, derives the run's
+exact program-id map, and folds
+`tools/gauntlet/scoring-dealer/bindings.json` into that census work directory.
+It refuses if any of the four transactions is missing. Complete Dealer
+settlement and resource retirement remain additional lifecycle work.

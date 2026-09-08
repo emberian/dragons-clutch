@@ -12,7 +12,8 @@ use dclutch_custody::{
     ProjectedCustodyRequestV1, ProjectedCustodyStateV2,
 };
 use dclutch_market::{
-    Action, Identity, ProjectFoundReceiptV2, Request, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
+    Action, Identity, ProjectFoundReceiptProjectionV2, ProjectFoundReceiptV2, Request,
+    SeriesCoreFoundAckV2, SeriesCoreRequestV1, derive_project_found_receipt_v2,
 };
 use solana_program::hash::hash;
 
@@ -210,23 +211,20 @@ pub fn reconstruct_project_found_v1(
     let market = Identity::new(state.request.market)
         .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
     let found = Request::administrative(Action::Found, state.request.generation, market);
-    let found_bytes = found
-        .encode()
-        .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
-    let receipt = ProjectFoundReceiptV2::new(
-        market,
-        state.request.generation,
-        identity(state.request.realm)?,
-        identity(state.request.mint)?,
-        identity(state.request.token_program)?,
-        identity(state.request.collateral_release)?,
-        identity(state.request.product_record)?,
-        identity(state.request.product)?,
-        identity(state.request.source)?,
-        identity(state.request.release_set)?,
-        identity(state.request.rent_program)?,
-        state.principal_cap_sets,
-        hash(&found_bytes).to_bytes(),
+    let receipt = derive_project_found_receipt_v2(
+        found,
+        ProjectFoundReceiptProjectionV2 {
+            realm: identity(state.request.realm)?,
+            collateral_mint: identity(state.request.mint)?,
+            token_program: identity(state.request.token_program)?,
+            collateral_release: identity(state.request.collateral_release)?,
+            product_record: identity(state.request.product_record)?,
+            product: identity(state.request.product)?,
+            source: identity(state.request.source)?,
+            release_set: identity(state.request.release_set)?,
+            rent_program: identity(state.request.rent_program)?,
+            principal_cap_sets: state.principal_cap_sets,
+        },
     )
     .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
     let receipt_bytes = receipt

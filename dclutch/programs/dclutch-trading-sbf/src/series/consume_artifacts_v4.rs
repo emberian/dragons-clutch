@@ -1,20 +1,14 @@
-//! Canonical occurrence-specific artifact emitters for Series Consume.
+//! Immutable artifact emitters for recurring Series Consume.
 //!
-//! The five child requests are semantic inputs owned by their respective
-//! Core, Custody, and Claims codecs. This module does not restate those DTOs:
-//! it orders their exact encoded bytes into the generic Effect request bank
-//! and emits the matching RequestProfile, TransitionVM, and DCE5 programs.
+//! The native adapter derives child requests for each authenticated occurrence.
+//! This emitter owns only geometry and writes the private derived scalar words
+//! into zero templates; no occurrence identity enters immutable artifacts.
 //! All encoders are allocation-free and failure-atomic over caller buffers.
 
 #[cfg(not(target_os = "solana"))]
-use dclutch_claims::{
-    founding_v5::ClaimsFoundingRequestV5,
-    series_founding_transport_v1::{
-        SeriesClaimsFoundingTransportLayoutV1, SeriesClaimsFoundingTransportV1,
-    },
-};
+extern crate alloc;
 #[cfg(not(target_os = "solana"))]
-use dclutch_custody::ProjectedCustodyRequestLayoutV1;
+use alloc::vec::Vec;
 use dclutch_vm::effect::v3::{
     HEADER_BYTES as EFFECT_HEADER_BYTES_V4, OPERATION_BYTES as EFFECT_OPERATION_BYTES_V4,
     RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES as EFFECT_ROUTE_BYTES_V4,
@@ -25,8 +19,8 @@ use dclutch_vm::effect::{
     v3::{
         RouteKindV3,
         encode::{
-            EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3, RequestSpaceV3,
-            RouteInputV3, encode_effect_program_v4_atomic,
+            EffectGeometryV3, EffectInstructionV3, RequestSpaceV3, RouteInputV3,
+            ScalarCoordinateV3, encode_effect_program_v4_atomic,
         },
     },
 };
@@ -47,10 +41,6 @@ use dclutch_vm::v3::{
 #[cfg(not(target_os = "solana"))]
 use super::effect_v4::encode_series_consume_effect_v4_atomic;
 use super::{
-    account_profile_v4::{
-        SERIES_CONSUME_PERMIT_KEY_IDENTITY_V4, SERIES_CONSUME_ROOT_KEY_IDENTITY_V4,
-        SERIES_CONSUME_TICKET_KEY_IDENTITY_V4,
-    },
     artifacts_v3::{
         SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3,
         SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3, SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3,
@@ -76,7 +66,16 @@ use super::{
 /// fields. Identities 6..8 carry the outer root, Core permit, and derived
 /// Ticket replay keys used only to resolve root-independent child request templates; see
 /// [`super::account_profile_v4`].
-pub const SERIES_CONSUME_COMMON_SCALAR_COUNT_V4: u16 = 7;
+pub const SERIES_CONSUME_DERIVED_REQUEST_SCALAR_START_V1: u16 = 7;
+/// Codec-derived scalar words carrying the five native route requests.
+pub const SERIES_CONSUME_DERIVED_REQUEST_WORD_COUNT_V1: usize =
+    SERIES_CONSUME_IR_REQUEST_BYTES_V3 / 8;
+const _: () = assert!(SERIES_CONSUME_IR_REQUEST_BYTES_V3 % 8 == 0);
+const _: () = assert!(SERIES_CONSUME_DERIVED_REQUEST_WORD_COUNT_V1 < u16::MAX as usize - 7);
+/// Exact shared scalar width including the authenticated native request words.
+pub const SERIES_CONSUME_COMMON_SCALAR_COUNT_V4: u16 =
+    SERIES_CONSUME_DERIVED_REQUEST_SCALAR_START_V1
+        + SERIES_CONSUME_DERIVED_REQUEST_WORD_COUNT_V1 as u16;
 /// Exact common identity bank: the authenticated Trading program plus the
 /// five root-header identities plus the outer root, Core permit, and Ticket
 /// replay keys the AccountProfile projects.
@@ -94,7 +93,8 @@ pub const SERIES_CONSUME_TRANSITION_BYTES_V4: usize = TRANSITION_HEADER_BYTES_V4
 /// Exact number of ordered receipt-dependency entries in the five-route plan.
 pub const SERIES_CONSUME_RECEIPT_DEPENDENCY_COUNT_V4: usize = 4;
 /// Exact fixed request-normalization operation count.
-pub const SERIES_CONSUME_EFFECT_OPERATION_COUNT_V4: usize = 7;
+pub const SERIES_CONSUME_EFFECT_OPERATION_COUNT_V4: usize =
+    SERIES_CONSUME_DERIVED_REQUEST_WORD_COUNT_V1;
 /// Exact underlying ordered-dependency EffectProgram width.
 pub const SERIES_CONSUME_BASE_EFFECT_BYTES_V4: usize = EFFECT_HEADER_BYTES_V4
     + 5 * EFFECT_ROUTE_BYTES_V4
@@ -112,7 +112,6 @@ const PROOF_COUNT_SCALAR: u16 = 2;
 const HEADER_BYTES_SCALAR: u16 = 0;
 const PROOF_BYTES_SCALAR: u16 = 1;
 const PROOF_ITEM_BYTES_SCALAR: u16 = 3;
-const CORE_TICKET_IDENTITY_OFFSET: usize = 80;
 
 const LOCK_ACCOUNT_START: u16 = SERIES_CONSUME_INJECTED_ACCOUNT_COUNT_V4;
 const FOUND_ACCOUNT_START: u16 = LOCK_ACCOUNT_START + SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3;
@@ -121,12 +120,12 @@ const CLAIMS_ACCOUNT_START: u16 = REALIZE_ACCOUNT_START + SERIES_CONSUME_REALIZE
 const OPEN_ACCOUNT_START: u16 = CLAIMS_ACCOUNT_START + SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3;
 
 const _: () = assert!(SERIES_CONSUME_IR_REQUEST_BYTES_V3 == 3_040);
-const _: () = assert!(SERIES_CONSUME_BASE_EFFECT_BYTES_V4 == 3_432);
+const _: () = assert!(SERIES_CONSUME_BASE_EFFECT_BYTES_V4 == 12_384);
 // One Template with a canonical proof, one without: the pin now names both
 // widths, and the difference is exactly the two borrowed ranges Consume
 // declares only when the proof it borrows exists.
-const _: () = assert!(series_consume_effect_bytes_v4(1) == 3_472);
-const _: () = assert!(series_consume_effect_bytes_v4(2) == 3_504);
+const _: () = assert!(series_consume_effect_bytes_v4(1) == 12_424);
+const _: () = assert!(series_consume_effect_bytes_v4(2) == 12_456);
 const _: () = assert!(OPEN_ACCOUNT_START + SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3 == 164);
 
 /// Exact child requests owned by the canonical child codecs.
@@ -286,7 +285,7 @@ pub fn encode_series_consume_request_bank_v4_atomic(
     Ok(())
 }
 
-/// Emit the exact global five-route DCE5 program from canonical child bytes.
+/// Emit the immutable global five-route DCE5 program for native-derived request words.
 ///
 /// `base_output` is retained as a separately hostile-decodable intermediate;
 /// the final `output` is committed only after DCE5 validates the complete
@@ -296,8 +295,7 @@ pub fn encode_series_consume_request_bank_v4_atomic(
 /// resulting fixed bytes and executes them; it never recompiles this wide
 /// five-request bank in an SBF frame.
 #[cfg(not(target_os = "solana"))]
-pub fn encode_series_consume_effect_v4_from_requests_atomic(
-    requests: SeriesConsumeChildRequestsV4<'_>,
+pub fn encode_series_consume_effect_artifact_v4_atomic(
     occurrence_count: u32,
     base_scratch: &mut [u8],
     base_output: &mut [u8],
@@ -311,18 +309,10 @@ pub fn encode_series_consume_effect_v4_from_requests_atomic(
     {
         return Err(SeriesConsumeArtifactEmitErrorV4::Buffer);
     }
-    let mut lock = *requests.lock;
-    let mut core = *requests.core;
-    let mut realize = *requests.realize;
-    clear_projected_parent_root(&mut lock)?;
-    clear_core_ticket_identity(&mut core)?;
-    clear_projected_parent_root(&mut realize)?;
-    let claims = SeriesClaimsFoundingTransportV1::root_independent_template(
-        ClaimsFoundingRequestV5::decode(requests.claims)
-            .map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?,
-    )
-    .map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?
-    .to_bytes();
+    let lock = [0_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
+    let core = [0_u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
+    let realize = [0_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
+    let claims = [0_u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3];
     let routes = [
         route(
             FixedRole::Custody,
@@ -362,60 +352,33 @@ pub fn encode_series_consume_effect_v4_from_requests_atomic(
         &SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3[..],
         &SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3[..],
     ];
-    let parent_root_offset =
-        u32::try_from(ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET)
-            .map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?;
-    let claims_offset =
-        |offset| u32::try_from(offset).map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect);
-    let core_ticket_offset = u32::try_from(CORE_TICKET_IDENTITY_OFFSET)
-        .map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?;
-    let root = IdentityCoordinateV3::common(SERIES_CONSUME_ROOT_KEY_IDENTITY_V4);
-    let permit = IdentityCoordinateV3::common(SERIES_CONSUME_PERMIT_KEY_IDENTITY_V4);
-    let ticket = IdentityCoordinateV3::common(SERIES_CONSUME_TICKET_KEY_IDENTITY_V4);
-    let operations = [
-        EffectInstructionV3::write_request_identity(
-            0,
-            RequestSpaceV3::Fixed,
-            parent_root_offset,
-            root,
-        ),
-        EffectInstructionV3::write_request_identity(
-            1,
-            RequestSpaceV3::Fixed,
-            core_ticket_offset,
-            ticket,
-        ),
-        EffectInstructionV3::write_request_identity(
-            2,
-            RequestSpaceV3::Fixed,
-            parent_root_offset,
-            root,
-        ),
-        EffectInstructionV3::write_request_identity(
-            3,
-            RequestSpaceV3::Fixed,
-            claims_offset(SeriesClaimsFoundingTransportLayoutV1::FOUNDING_INTENT_DIGEST_OFFSET)?,
-            permit,
-        ),
-        EffectInstructionV3::write_request_identity(
-            3,
-            RequestSpaceV3::Fixed,
-            claims_offset(SeriesClaimsFoundingTransportLayoutV1::CUSTODY_REQUEST_DIGEST_OFFSET)?,
-            permit,
-        ),
-        EffectInstructionV3::write_request_identity(
-            3,
-            RequestSpaceV3::Fixed,
-            claims_offset(SeriesClaimsFoundingTransportLayoutV1::CUSTODY_RECEIPT_DIGEST_OFFSET)?,
-            permit,
-        ),
-        EffectInstructionV3::write_request_identity(
-            4,
-            RequestSpaceV3::Fixed,
-            core_ticket_offset,
-            ticket,
-        ),
-    ];
+    let mut operations = Vec::with_capacity(SERIES_CONSUME_EFFECT_OPERATION_COUNT_V4);
+    let mut word = SERIES_CONSUME_DERIVED_REQUEST_SCALAR_START_V1;
+    for (route, width) in [
+        lock.len(),
+        core.len(),
+        realize.len(),
+        claims.len(),
+        core.len(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for offset in (0..width).step_by(8) {
+            operations.push(EffectInstructionV3::write_request_u64(
+                u16::try_from(route).map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?,
+                RequestSpaceV3::Fixed,
+                u32::try_from(offset).map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?,
+                ScalarCoordinateV3::common(word),
+            ));
+            word = word
+                .checked_add(1)
+                .ok_or(SeriesConsumeArtifactEmitErrorV4::BaseEffect)?;
+        }
+    }
+    if word != SERIES_CONSUME_COMMON_SCALAR_COUNT_V4 {
+        return Err(SeriesConsumeArtifactEmitErrorV4::BaseEffect);
+    }
     encode_effect_program_v4_atomic(
         EffectGeometryV3 {
             fixed_accounts: SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4,
@@ -435,31 +398,6 @@ pub fn encode_series_consume_effect_v4_from_requests_atomic(
     .map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?;
     encode_series_consume_effect_v4_atomic(base_output, occurrence_count, successor_scratch, output)
         .map_err(|_| SeriesConsumeArtifactEmitErrorV4::Effect)
-}
-
-#[cfg(not(target_os = "solana"))]
-fn clear_core_ticket_identity(
-    request: &mut [u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3],
-) -> Result<(), SeriesConsumeArtifactEmitErrorV4> {
-    request
-        .get_mut(CORE_TICKET_IDENTITY_OFFSET..CORE_TICKET_IDENTITY_OFFSET + 32)
-        .ok_or(SeriesConsumeArtifactEmitErrorV4::BaseEffect)?
-        .fill(0);
-    Ok(())
-}
-
-#[cfg(not(target_os = "solana"))]
-fn clear_projected_parent_root(
-    request: &mut [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-) -> Result<(), SeriesConsumeArtifactEmitErrorV4> {
-    request
-        .get_mut(
-            ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET
-                ..ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET + 32,
-        )
-        .ok_or(SeriesConsumeArtifactEmitErrorV4::BaseEffect)?
-        .fill(0);
-    Ok(())
 }
 
 #[cfg(not(target_os = "solana"))]
@@ -489,21 +427,15 @@ pub(super) mod tests {
     extern crate alloc;
 
     use alloc::vec;
-    use dclutch_claims::founding_v5::ClaimsFoundingRequestInputV5;
-    use dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1;
+    use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
     use dclutch_vm::effect::v4::ProgramV4;
     use dclutch_vm::request_profile::RequestProfileV1;
     use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 
     use super::*;
 
-    /// The four canonical child requests every Consume emitter consumes.
-    ///
-    /// Lock, Core and Realize are opaque transport to the emitter, which only
-    /// zeroes their root-dependent windows; the Claims request is DECODED and
-    /// rebuilt as a root-independent template, so it must be a real
-    /// `ClaimsFoundingRequestV5` and not filler. Shared with `release_v4`,
-    /// whose selected-release compiler feeds the same emitter.
+    /// Distinct transport fixtures for bank serialization and publication tests.
+    /// Only Claims needs a canonical codec body; these are not native child execution.
     pub(crate) fn requests() -> (
         [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
         [u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3],
@@ -619,19 +551,11 @@ pub(super) mod tests {
 
     #[test]
     fn effect_emitter_preserves_exact_route_templates_and_dependencies() {
-        let (lock, core, realize, claims) = requests();
-        let inputs = SeriesConsumeChildRequestsV4 {
-            lock: &lock,
-            core: &core,
-            realize: &realize,
-            claims: &claims,
-        };
         let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
         let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
         let mut effect_scratch = vec![0_u8; series_consume_effect_bytes_v4(1)];
         let mut effect = vec![0_u8; series_consume_effect_bytes_v4(1)];
-        encode_series_consume_effect_v4_from_requests_atomic(
-            inputs,
+        encode_series_consume_effect_artifact_v4_atomic(
             1,
             &mut base_scratch,
             &mut base,
@@ -640,69 +564,22 @@ pub(super) mod tests {
         )
         .expect("effect");
         let decoded = ProgramV4::decode(&effect).expect("hostile decode DCE5");
-        assert_eq!(decoded.base().fixed_operation_count(), 7);
-        let lock_template = decoded.base().route_template(0).expect("lock").0;
         assert_eq!(
-            &lock_template[..ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET],
-            &lock[..ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET]
+            usize::from(decoded.base().fixed_operation_count()),
+            SERIES_CONSUME_EFFECT_OPERATION_COUNT_V4
         );
-        assert_eq!(
-            &lock_template[ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET
-                ..ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET + 32],
-            &[0; 32]
-        );
-        let mut core_template = core;
-        core_template[CORE_TICKET_IDENTITY_OFFSET..CORE_TICKET_IDENTITY_OFFSET + 32].fill(0);
-        assert_eq!(
-            decoded.base().route_template(1).expect("found").0,
-            core_template
-        );
-        let realize_template = decoded.base().route_template(2).expect("realize").0;
-        assert_eq!(
-            &realize_template[ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET
-                ..ProjectedCustodyRequestLayoutV1::PARENT_CAPABILITY_ROOT_OFFSET + 32],
-            &[0; 32]
-        );
-        let claims_template = decoded.base().route_template(3).expect("claims").0;
-        assert_eq!(
-            claims_template.get(..8),
-            Some(SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1.as_slice())
-        );
-        assert_eq!(
-            SeriesClaimsFoundingTransportV1::decode(claims_template)
-                .expect("transport")
-                .permit(),
-            [1; 32]
-        );
-        assert_eq!(
-            decoded.base().route_template(4).expect("open").0,
-            core_template
-        );
-        let operation_start = EFFECT_HEADER_BYTES_V4
-            + 5 * EFFECT_ROUTE_BYTES_V4
-            + SERIES_CONSUME_RECEIPT_DEPENDENCY_COUNT_V4 * RECEIPT_DEPENDENCY_BYTES;
-        let ticket_writes = base
-            .get(
-                operation_start
-                    ..operation_start
-                        + SERIES_CONSUME_EFFECT_OPERATION_COUNT_V4 * EFFECT_OPERATION_BYTES_V4,
-            )
-            .expect("fixed operation table")
-            .chunks_exact(EFFECT_OPERATION_BYTES_V4)
-            .filter_map(|operation| {
-                let register = u16::from_le_bytes(operation[6..8].try_into().expect("register"));
-                let offset = u32::from_le_bytes(operation[8..12].try_into().expect("offset"));
-                let route = u16::from_le_bytes(operation[16..18].try_into().expect("route"));
-                (register == SERIES_CONSUME_TICKET_KEY_IDENTITY_V4).then_some((route, offset))
-            })
-            .collect::<alloc::vec::Vec<_>>();
-        assert_eq!(
-            ticket_writes,
-            [
-                (1, CORE_TICKET_IDENTITY_OFFSET as u32),
-                (4, CORE_TICKET_IDENTITY_OFFSET as u32)
-            ]
-        );
+        for route in 0..5 {
+            assert!(
+                decoded
+                    .base()
+                    .route_template(route)
+                    .expect("route")
+                    .0
+                    .iter()
+                    .all(|byte| *byte == 0),
+                "immutable templates contain no occurrence facts"
+            );
+        }
         assert_eq!(
             decoded
                 .base()
@@ -727,42 +604,6 @@ pub(super) mod tests {
                 .receipt_dependency_count(),
             1
         );
-    }
-
-    #[test]
-    fn parent_root_derived_core_ticket_has_one_release_template() {
-        let (lock, core, realize, claims) = requests();
-        let emit = |core: &[u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3]| {
-            let inputs = SeriesConsumeChildRequestsV4 {
-                lock: &lock,
-                core,
-                realize: &realize,
-                claims: &claims,
-            };
-            let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
-            let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
-            let mut effect_scratch = vec![0_u8; series_consume_effect_bytes_v4(1)];
-            let mut effect = vec![0_u8; series_consume_effect_bytes_v4(1)];
-            encode_series_consume_effect_v4_from_requests_atomic(
-                inputs,
-                1,
-                &mut base_scratch,
-                &mut base,
-                &mut effect_scratch,
-                &mut effect,
-            )
-            .expect("Consume effect");
-            effect
-        };
-        let canonical = emit(&core);
-        let mut substituted_ticket = core;
-        substituted_ticket[CORE_TICKET_IDENTITY_OFFSET..CORE_TICKET_IDENTITY_OFFSET + 32]
-            .fill(0x44);
-        assert_eq!(canonical, emit(&substituted_ticket));
-
-        let mut substituted_static_coordinate = core;
-        substituted_static_coordinate[48..80].fill(0x55);
-        assert_ne!(canonical, emit(&substituted_static_coordinate));
     }
 
     #[test]

@@ -1,0 +1,42 @@
+{
+  "campaign": "scoring-dealer-local-validator",
+  "note": "The four accepted Dealer instructions driven by the dedicated checked local-validator campaign. Found, Quote, nonzero Fill and Withdraw are separate transactions with native instruction bytes; infrastructure and participant-funding transactions are deliberately not rebound here.",
+  "bindings": [
+    {
+      "label": "dealer-found",
+      "routes": [
+        "trading/scoring_dealer_v1::found::process_dealer_found_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "Accepted Dealer Found. The campaign reads back the Dealer state and its deposited collateral."
+    },
+    {
+      "label": "dealer-quote",
+      "routes": [
+        "trading/scoring_dealer_v1::quote::process_dealer_quote_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "Accepted Dealer Quote against the state created by Dealer Found."
+    },
+    {
+      "label": "dealer-fill",
+      "routes": [
+        "trading/scoring_dealer_v1::fill::process_dealer_fill_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "Accepted nonzero Dealer Fill. The campaign verifies 27 additional Hoard atoms, 9 taker atoms plus 18 Dealer atoms, and the corresponding claim balances."
+    },
+    {
+      "label": "dealer-withdraw",
+      "routes": [
+        "trading/scoring_dealer_v1::withdraw::process_dealer_withdraw_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "Accepted nonzero Dealer Withdraw. The campaign verifies the exact three-atom transfer."
+    }
+  ]
+}

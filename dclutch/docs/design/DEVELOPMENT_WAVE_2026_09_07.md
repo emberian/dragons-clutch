@@ -40,6 +40,14 @@ operator whose continued presence is required for holders to get paid.
 
 ## Current execution findings
 
+- The exact execution census is recorded in
+  `docs/evidence/EXECUTION_COVERAGE_CENSUS_2026_09_08.md`: 164 routes and 456
+  refusal codes, with five checked local-validator route observations and 46
+  historical devnet routes (50 in their union). The 123 historical successful
+  binding claims are a different quantity: 73 lack checked native evidence in
+  that corpus, and 41 routes have no successful claim. The report assigns the
+  missing routes to owners and names the existing census path for final-source
+  replay. None of these historical totals closes current-source coverage.
 - Claims' six named ProgramTest targets have executed, including backed round
   trips and exact hostile rollback. The dated authority is
   `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md`; this does not substitute for
@@ -105,14 +113,21 @@ operator whose continued presence is required for holders to get paid.
   The test named for two occurrences compiles the first occurrence twice with
   different roots; it does not execute the second. The repair must parameterize
   child requests from authenticated Occurrence, Ticket, root and native adapter
-  facts under the same immutable selection. Existing VM projection and request
-  write operations provide that mechanism. Astra owns this coupled change;
-  a Sol lane is separately bringing the evaluator's obsolete 5/1 input bank
-  into agreement with the canonical 7/9 bank. The first required proof retains
-  the same compiled artifacts while real replay state advances into occurrence
-  one. Selected SBF builds wait for that proof. Full constructor execution,
-  pre/post-Prepare certificate/include invariance, and two validator occurrences
-  remain owed; further compile-only fixtures do not close them.
+  facts under the same immutable selection. Commit `7ce009694` implements
+  native-derived private banks through the existing VM request writes and
+  moves their semantic construction into the Trading adapter. The replacement
+  native test retains the same five-action publication through Prepare and
+  Consume for occurrence zero, Prepare and Expire for occurrence one, both
+  terminal Ticket retirements and Root close. It compares complete Root and
+  Ticket encodings; this exposed and repairs Prepare's formerly missing Root
+  writes. Astra owns this coupled change through runtime integration, with Sol
+  owning AccountInfo authentication, bank seeding and selected evaluator
+  geometry. The isolated exact-source native repetition passes, with independent
+  source inventory verification, recorded in
+  `docs/evidence/SERIES_NATIVE_RECURRENCE_2026_09_08.md`. Actual child CPI and
+  rollback, heterogeneous occurrence geometry, selected SBF frames and two
+  validator occurrences remain owed. Native poststate agreement does not close
+  them.
 - General's accepted nonempty path is being run after repairing action-scoped
   lifecycle funding and the semantic outer frame / key-sorted Claims child
   boundary. Its next repair authenticates the actual Core, Realm, Claims
@@ -153,7 +168,11 @@ operator whose continued presence is required for holders to get paid.
   observed accelerator-owned page; native controls check ownership, width and
   rent. Runtime execution of that producer remains owed. Integration review
   also found the host session still counting callers with the old chunk
-  classifier; that consumer must derive its geometry from the selected transport.
+  classifier. That consumer now derives its geometry from the selected transport;
+  its exact-source hbox control passes. Actual mixed-runtime execution confirms
+  one accelerator invocation and accepted OpenBatch, but PlaceOrder still
+  exhausts compute during effect projection. Measured repeated lifecycle scans
+  are the next repair target; nonempty acceptance is still owed.
   The account is reusable scratch, and the accelerator currently has no close
   route, so rent recovery remains an explicit resource-lifecycle obligation.
   Accepted nonempty ProgramTest and local-validator poststates remain owed.
@@ -196,10 +215,20 @@ operator whose continued presence is required for holders to get paid.
   the Pyth deployment identity in its request and receipt. A focused control
   explicitly distinguishes both identities. The corrected host and sealed
   `551ffc1b` runtime accept all three captures on a fresh local validator, then
-  fold refuses with Resolution's Transition error. The retained account bytes
-  and failed transaction's Clock are being replayed through the native Source
-  owner to locate that refusal. Successful producer-backed fold and reclaim
-  remain owed.
+  fold refuses with Resolution's Transition error. Native replay of the exact
+  retained inputs identifies `DeadlineNotReached`; changing only Clock to after
+  the deadline accepts the Source transition. The host now waits on finalized
+  chain Clock. The preserved validator resumed after a verified backup; the
+  corrected host passes that guard and reaches a later `OutputState` refusal
+  during Fold simulation. The success certificate and uncaptured member seat
+  lacked rent. After explicit funding, the unchanged sealed runtime accepts
+  Fold and Reclaim: the Source is Resolved, the receipt consumes exactly three
+  members, and the fourth seat's entire rent reaches its persisted beneficiary.
+  The dated authority is
+  `docs/evidence/ENSEMBLE_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md`. This is
+  accepted retained-runtime execution. The Sol owner is separately checking
+  founding capitalization and payment timing: a late campaign-payer top-up
+  cannot prove that a newly founded market needs no rescue funding to finish.
   Recovery exhaustion reached terminal
   admission and all three refund payouts, recorded in
   `docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md`. Capture's prior

@@ -10,6 +10,7 @@ use dclutch_claims::rational_lifecycle::{
     hot_v6::RationalLifecycleHotRegisterLayoutV6,
 };
 use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
+use dclutch_product::DOMAIN_HEADER_BYTES;
 use dclutch_product::payoff::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
 use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
@@ -118,6 +119,11 @@ fn encode_rational_lifecycle_selected_account_profile(
             (14, _, _) => {
                 value.data_length =
                     u32::try_from(DESCRIPTOR_HEADER_BYTES).map_err(|_| Error::InvalidLength)?;
+                AccountPrestateV2::AdapterAuthenticatedVariableData
+            }
+            (35, _, _) => {
+                value.data_length =
+                    u32::try_from(DOMAIN_HEADER_BYTES).map_err(|_| Error::InvalidLength)?;
                 AccountPrestateV2::AdapterAuthenticatedVariableData
             }
             (_, Some(_), _) => {

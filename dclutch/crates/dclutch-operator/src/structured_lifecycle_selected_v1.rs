@@ -15,6 +15,11 @@ use crate::rational_lifecycle_hot::{
 use crate::structured_selected_release_v1::{
     StructuredPublicationRecordV1, StructuredSelectedReleaseInputV1,
 };
+use dclutch_claims::liability_basis_state_v2::{
+    LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+    liability_basis_vector_width_v2,
+};
+use dclutch_claims::protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2;
 use dclutch_claims::rational_kernel::DESCRIPTOR_HEADER_BYTES;
 use dclutch_claims::rational_lifecycle::LifecycleActionV2;
 use dclutch_claims::structured_kernel::{
@@ -27,6 +32,9 @@ use dclutch_custody::token_svm::{
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, v4::CapabilityProgramV4,
 };
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry::record::STAGING_CURSOR_BYTES_V1;
 use solana_program::hash::hash;
 
 /// Canonical action order for the only two creation transitions.
@@ -207,6 +215,16 @@ fn compile(
             .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?,
     )
     .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    let aggregate_bytes = liability_basis_vector_width_v2(
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+        product_basis.basis_width(),
+    )
+    .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    let position_bytes = liability_basis_vector_width_v2(
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        product_basis.basis_width(),
+    )
+    .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
     let logical = usize::from(
         lifecycle_logical_account_count_v3(
             action,
@@ -242,9 +260,59 @@ fn compile(
         u32::try_from(input.product_basis.len())
             .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
     *lengths
+        .get_mut(11)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+        u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
+            .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    *lengths
+        .get_mut(12)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+        crate::general_selected_release_v1::RENT_SYSVAR_ACCOUNT_BYTES_V1;
+    *lengths
         .get_mut(14)
         .ok_or(StructuredLifecycleSelectedErrorV1::Input)? = u32::try_from(DESCRIPTOR_HEADER_BYTES)
         .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    *lengths
+        .get_mut(15)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? = u32::try_from(STAGING_CURSOR_BYTES_V1)
+        .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    *lengths
+        .get_mut(19)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+        u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2)
+            .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    *lengths
+        .get_mut(21)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+        u32::try_from(aggregate_bytes).map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    *lengths
+        .get_mut(22)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+        u32::try_from(dclutch_market::STATE_BYTES)
+            .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    if action == LifecycleActionV2::ActivateCoordinate {
+        *lengths
+            .get_mut(26)
+            .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+            u32::try_from(position_bytes).map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+        *lengths
+            .get_mut(27)
+            .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+            u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+                .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+        for coordinate in [32_usize, 34, 36, 38] {
+            *lengths
+                .get_mut(coordinate)
+                .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+                u32::try_from(STAGING_CURSOR_BYTES_V1)
+                    .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+        }
+        *lengths
+            .get_mut(35)
+            .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+            u32::try_from(dclutch_product::DOMAIN_HEADER_BYTES)
+                .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    }
     build_rational_lifecycle_selected_bundle_v6(RationalLifecycleSelectedBundleInputV6 {
         action,
         account_profile: RationalLifecycleSelectedAccountProfileInputV5 {
@@ -312,6 +380,138 @@ mod tests {
         }
     }
 
+    fn assert_native_profile(
+        profile: dclutch_vm::account_profile::v2::AccountProfileV2<'_>,
+        action: LifecycleActionV2,
+    ) {
+        use dclutch_vm::account_profile::v2::AccountPrestateV2::{
+            AdapterAuthenticatedVariableData, AuthenticatedOpaqueReadonlyData,
+            AuthenticatedRouteAlias, Exact,
+        };
+
+        let width = 258_u32;
+        let logical = match action {
+            LifecycleActionV2::ActivateReceipt => 25_u16,
+            LifecycleActionV2::ActivateCoordinate => 39_u16,
+            _ => panic!("creation profile"),
+        };
+        for coordinate in 0..logical {
+            let (prestate, length) = match coordinate {
+                0 => (
+                    Exact,
+                    u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1).expect("root header")
+                        + input(&basis()).root_state_bytes,
+                ),
+                1 => (
+                    Exact,
+                    u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("config width"),
+                ),
+                2 => (
+                    Exact,
+                    u32::try_from(dclutch_product::admission::PRODUCT_RECORD_BYTES_V2)
+                        .expect("Product width"),
+                ),
+                3 => (
+                    Exact,
+                    u32::try_from(
+                        dclutch_product::portfolio_record_bytes(width as usize)
+                            .expect("Portfolio width"),
+                    )
+                    .expect("Portfolio width u32"),
+                ),
+                4 => (
+                    AdapterAuthenticatedVariableData,
+                    u32::try_from(BASIS_HEADER_BYTES_V3).expect("basis header"),
+                ),
+                6 | 7 | 8 | 9 | 10 | 13 | 17 | 18 | 20 | 23 | 24 | 28 | 29 => {
+                    (AuthenticatedOpaqueReadonlyData, 0)
+                }
+                11 => (
+                    Exact,
+                    u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
+                        .expect("activation cache"),
+                ),
+                12 => (
+                    Exact,
+                    crate::general_selected_release_v1::RENT_SYSVAR_ACCOUNT_BYTES_V1,
+                ),
+                14 => (
+                    AdapterAuthenticatedVariableData,
+                    u32::try_from(DESCRIPTOR_HEADER_BYTES).expect("descriptor header"),
+                ),
+                31 | 33 | 37 => (AuthenticatedRouteAlias, 0),
+                15 | 32 | 34 | 36 | 38 => (
+                    Exact,
+                    u32::try_from(STAGING_CURSOR_BYTES_V1).expect("staging cursor"),
+                ),
+                19 => (
+                    Exact,
+                    u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("RentCredit"),
+                ),
+                21 => (
+                    Exact,
+                    u32::try_from(
+                        liability_basis_vector_width_v2(
+                            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+                            width,
+                        )
+                        .expect("Claims aggregate"),
+                    )
+                    .expect("Claims aggregate u32"),
+                ),
+                22 => (
+                    Exact,
+                    u32::try_from(dclutch_market::STATE_BYTES).expect("Core market"),
+                ),
+                26 => (
+                    Exact,
+                    u32::try_from(
+                        liability_basis_vector_width_v2(
+                            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+                            width,
+                        )
+                        .expect("Claims Position"),
+                    )
+                    .expect("Claims Position u32"),
+                ),
+                27 => (
+                    Exact,
+                    u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+                        .expect("Position admission"),
+                ),
+                35 => (
+                    AdapterAuthenticatedVariableData,
+                    u32::try_from(dclutch_product::DOMAIN_HEADER_BYTES).expect("result header"),
+                ),
+                _ => (Exact, 0),
+            };
+            let rule = profile.rule(false, coordinate).expect("logical rule");
+            assert_eq!(rule.prestate(), prestate, "prestate {coordinate}");
+            assert_eq!(rule.data_length(), length, "data length {coordinate}");
+        }
+    }
+
+    #[test]
+    fn both_creation_selectors_match_every_native_planned_account_state() {
+        let basis = basis();
+        let closure = structured_activation_selected_closure_v1(input(&basis)).expect("closure");
+        for (action, bundle) in [
+            (
+                LifecycleActionV2::ActivateReceipt,
+                &closure.activate_receipt,
+            ),
+            (
+                LifecycleActionV2::ActivateCoordinate,
+                &closure.activate_coordinate,
+            ),
+        ] {
+            let profile =
+                dclutch_vm::account_profile::v2::AccountProfileV2::decode(&bundle.account_profile)
+                    .expect("Profile13");
+            assert_native_profile(profile, action);
+        }
+    }
+
     #[test]
     fn activation_closure_is_market_free_and_has_only_creation_actions() {
         let basis = basis();
@@ -361,6 +561,108 @@ mod tests {
                 .data_length(),
             u32::try_from(dclutch_product::portfolio_record_bytes(258).expect("Portfolio width"))
                 .expect("Portfolio width u32")
+        );
+        for (coordinate, expected, label) in [
+            (
+                11,
+                u32::try_from(dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
+                    .expect("activation cache width"),
+                "activation cache",
+            ),
+            (
+                12,
+                crate::general_selected_release_v1::RENT_SYSVAR_ACCOUNT_BYTES_V1,
+                "Rent sysvar",
+            ),
+            (
+                19,
+                u32::try_from(dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2)
+                    .expect("RentCredit width"),
+                "RentCredit",
+            ),
+            (
+                21,
+                u32::try_from(
+                    dclutch_claims::liability_basis_state_v2::liability_basis_vector_width_v2(
+                        dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+                        258,
+                    )
+                    .expect("Claims aggregate width"),
+                )
+                .expect("Claims aggregate width u32"),
+                "Claims aggregate",
+            ),
+            (
+                22,
+                u32::try_from(dclutch_market::STATE_BYTES).expect("Core market width"),
+                "Core market",
+            ),
+            (
+                15,
+                u32::try_from(dclutch_registry::record::STAGING_CURSOR_BYTES_V1)
+                    .expect("staging cursor width"),
+                "descriptor staging",
+            ),
+        ] {
+            assert_eq!(
+                profile.rule(false, coordinate).expect(label).data_length(),
+                expected,
+                "{label}"
+            );
+        }
+        let coordinate_profile = dclutch_vm::account_profile::v2::AccountProfileV2::decode(
+            &first.activate_coordinate.account_profile,
+        )
+        .expect("ActivateCoordinate profile");
+        for (coordinate, expected, label) in [
+            (
+                26,
+                u32::try_from(
+                    dclutch_claims::liability_basis_state_v2::liability_basis_vector_width_v2(
+                        dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+                        258,
+                    )
+                    .expect("Claims Position width"),
+                )
+                .expect("Claims Position width u32"),
+                "Claims Position",
+            ),
+            (
+                27,
+                u32::try_from(
+                    dclutch_claims::protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+                )
+                .expect("admission width"),
+                "Position admission",
+            ),
+        ] {
+            assert_eq!(
+                coordinate_profile
+                    .rule(false, coordinate)
+                    .expect(label)
+                    .data_length(),
+                expected,
+                "{label}"
+            );
+        }
+        for coordinate in [32_u16, 34, 36, 38] {
+            assert_eq!(
+                coordinate_profile
+                    .rule(false, coordinate)
+                    .expect("staging cursor")
+                    .data_length(),
+                u32::try_from(dclutch_registry::record::STAGING_CURSOR_BYTES_V1)
+                    .expect("staging cursor width")
+            );
+        }
+        let result = coordinate_profile.rule(false, 35).expect("result record");
+        assert_eq!(
+            result.data_length(),
+            u32::try_from(dclutch_product::DOMAIN_HEADER_BYTES).expect("result header width")
+        );
+        assert_eq!(
+            result.prestate(),
+            dclutch_vm::account_profile::v2::AccountPrestateV2::AdapterAuthenticatedVariableData
         );
     }
 

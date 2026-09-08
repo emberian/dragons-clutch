@@ -13,9 +13,11 @@ fresh `--work` produces a CENSUS.md reporting *162 never-executed* -- because
 the ledger it renders is empty until a campaign folds into it. That artifact was
 named in `docs/reference/routes.md` for months as "the evidence"; what is
 actually checkable from a checkout is `docs/reference/route-witnesses.md`, which
-is generated, tracked, and carries the artifact and digest behind every row.
-`tools/gate witness` is the only channel through which a public-chain transaction
-reaches it.
+is generated and tracked. It reads checked-in census ledgers only through
+`execution-evidence.json`, reads corroborated devnet transactions separately,
+and preserves campaign bindings as claims rather than execution evidence.
+`tools/gate witness` is the only channel through which a public-chain
+transaction reaches it.
 
 **Start with `DESIGN.md`.** It states why this exists and what makes an
 assertion admissible here. `TIERS.md` is the mechanics of adding a tier.
@@ -40,8 +42,9 @@ processors or mock programs qualify as campaign evidence.
 
 Alongside the campaign it maintains an **execution census**: a static
 enumeration of every program's public dispatch surface and refusal taxonomy,
-joined to a ledger of what has actually been driven on a validator, rendered as
-EXECUTED / NEVER-EXECUTED per route.
+joined to a ledger of what has actually been driven on a validator. The
+generated reference separates accepted and refused native observations,
+ProgramTest observations, binding claims and routes with no record.
 
 That census is the point. A route that is never executed produces silence, and
 silence reads as success in every test report ever written. Found31 was over the
@@ -103,3 +106,9 @@ evidence and it is not mainnet evidence (`AGENTS.md` names these as distinct
 levels). A green gauntlet is not verification and discharges no theorem; it
 establishes that the named routes executed on a real validator at real limits
 and that the named refusals refused.
+
+The generated reference admits a durable local-validator or ProgramTest ledger
+only when `tools/gauntlet/execution-evidence.json` lists it. An `executed`
+binding remains a successful binding claim until such a ledger is checked in;
+a `refused` binding remains a refusal claim. Finalized devnet evidence is a
+separate input and is never added to the local-validator total.

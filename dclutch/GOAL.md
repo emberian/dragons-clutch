@@ -59,6 +59,10 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-08 | an isolated exact-source Series native test retains one five-action publication through two occurrences, whole replay poststates, both Ticket retirements and Root close | — | [native recurrence proof and runtime boundaries](docs/evidence/SERIES_NATIVE_RECURRENCE_2026_09_08.md) |
+| 2026-09-08 | retained local-validator Ensemble accepts quorum-three Fold and fourth-seat Reclaim after explicit terminal rent funding; founding capitalization remains under review | — | [accepted Ensemble transactions](docs/evidence/ENSEMBLE_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md) |
+| 2026-09-08 | exact execution census separates five checked local-validator routes and 46 historical devnet routes from 123 authored success claims; missing routes have owners | — | [execution census and replay queue](docs/evidence/EXECUTION_COVERAGE_CENSUS_2026_09_08.md) |
+| 2026-09-08 | existing Pages publishes accepted Dealer evidence and General transport repairs from independently checked source | — | [publication and host control](docs/evidence/PAGES_DEALER_GENERAL_CHECKPOINT_2026_09_08.md) |
 | 2026-09-08 | Cargo cross-checkout target reuse reproduces silent success and foreign dependency metadata; committed-source checks require isolated targets | — | [instrument evidence](docs/evidence/CARGO_CROSS_CHECKOUT_TARGET_2026_09_08.md) |
 | 2026-09-08 | a fresh local-validator Dealer campaign accepts Found, Quote, a nonzero 9-unit Fill, and a one-unit Withdraw against the sealed 7d runtime | — | [Dealer campaign evidence](docs/evidence/DEALER_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md) |
 | 2026-09-08 | existing Pages publishes corrected cohort and compute explanations plus the Series recurrence repair scope | — | [correctness checkpoint publication](docs/evidence/PAGES_CORRECTNESS_CHECKPOINT_2026_09_08.md) |

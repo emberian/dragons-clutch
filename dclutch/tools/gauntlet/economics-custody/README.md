@@ -5,7 +5,7 @@ Run this on hbox through `swarm-build`, from a clean committed host:
 ```sh
 SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=6 swarm-build tools/gauntlet/economics-custody/run.sh \
   --checked-release-gate /absolute/CHECKED_UPGRADE_GATE.json \
-  --work /absolute/new/campaign-directory --rpc-port 47386
+  --work /absolute/new/campaign-directory --rpc-port 47386 --census
 ```
 
 The campaign links the checked-mutable substrate used by the Dealer campaign.
@@ -40,3 +40,10 @@ upkeep Found carries the same control over its vault. The source report records
 the current host revision separately from the checked runtime revision, so this
 is diagnostic host-current/runtime-checked evidence rather than a release
 claim.
+
+With `--census`, first run `tools/gate census` in the same checkout. After the
+campaign completes, the runner derives the exact program-id map from that run's
+plan and folds its native finalized instruction evidence with
+`tools/gauntlet/economics-custody/bindings.json`. Historical evidence made
+before native instruction capture was added cannot be promoted by this flag;
+the campaign must be replayed.

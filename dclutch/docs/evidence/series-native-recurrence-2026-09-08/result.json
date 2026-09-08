@@ -1,0 +1,24 @@
+{
+  "source_commit": "7ce009694e472971d49e89b51230101a5dac1420",
+  "source_path": "/tank/dregg-build/dclutch-series-7ce009694-20260908/source",
+  "source_entries_verified": 3242,
+  "source_mismatches": 0,
+  "source_manifest_sha256": "7dc7c3d6ae5a0df52eeb8c8174bee548b34a001f7f6e1917f4b7e8de84248ae6",
+  "test": "series_found_prepare_campaign::recurrence_tests::same_bundle_native_consume_then_expire_preserves_all_replay_poststates",
+  "command": "SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=6 swarm-build cargo test -p dclutch-local-successor-bootstrap --locked --bin dclutch-local-successor-bootstrap same_bundle_native_consume_then_expire_preserves_all_replay_poststates -- --test-threads=1",
+  "passed": 1,
+  "failed": 0,
+  "filtered": 949,
+  "test_seconds": 1.3,
+  "exit": 0,
+  "scheduler_reuse_marker": false,
+  "log_path": "/tank/dregg-build/dclutch-series-7ce009694-20260908/native-recurrence.log",
+  "log_sha256": "fb174cb5a7dc6a975f7f886b91a14b4c0e96b16aa0a500a20f3edd8a5383f164",
+  "toolchain_lines": [
+    "7ce009694e472971d49e89b51230101a5dac1420",
+    "/tank/dregg-build/dclutch-series-7ce009694-20260908/source",
+    "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+  ],
+  "evidence_level": "native component; no AccountInfo, CPI, FundingV5 physical lifecycle, rollback or validator claim"
+}

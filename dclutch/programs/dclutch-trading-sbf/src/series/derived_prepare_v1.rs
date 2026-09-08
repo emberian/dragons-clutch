@@ -3,19 +3,33 @@
 //! The immutable Prepare Effect carries scalar words derived by this module.
 //! Callers supply authenticated records and physical observations, never child
 //! request bytes or their digests. The physical runtime must still prove that
-//! the supplied root header, Product/Source projection, and immediate Core
-//! receipt came from the current transaction accounts.
+//! the supplied root header and Product/Source projection came from the current
+//! transaction accounts. The later Projected Custody child independently
+//! authenticates Core's actual receipt and return-data producer.
 
-use dclutch_market::{Action, ProjectFoundReceiptV2, Request};
+extern crate alloc;
+
+use alloc::{boxed::Box, vec};
+
+use dclutch_custody::CustodyRequestV1;
+use dclutch_market::{
+    Action, Identity, MarketIdentity, ProjectFoundError, ProjectFoundReceiptProjectionV2,
+    ProjectFoundReceiptV2, Request, derive_project_found_receipt_v2,
+};
 use dclutch_trading::series::{
-    AccountKeyV3, AuthenticatedProductProjectionV2, admit_occurrence, admit_ticket,
-    escrow::prepare_series_escrow_v3, pre_founding_series_escrow,
+    AccountKeyV3, AdmittedOccurrenceV3, AuthenticatedProductProjectionV2,
+    PrefoundingSeriesEscrowV3, admit_occurrence, admit_ticket,
+    escrow::{PrepareSeriesEscrowPlanV3, prepare_series_escrow_v3},
+    pre_founding_series_escrow,
+    replay::SeriesStateV3,
 };
 use solana_program::hash::hash;
 
 use super::{
     artifacts_v3::{
-        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3, SERIES_PREPARE_IR_REQUEST_BYTES_V3,
+        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3, SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3,
+        SERIES_PREPARE_IR_REQUEST_BYTES_V3, SERIES_PREPARE_PROJECTED_INITIALIZE_OFFSET_V3,
+        SERIES_PREPARE_PROJECTED_OPEN_OFFSET_V3, SERIES_PREPARE_REPLAY_INITIALIZE_OFFSET_V3,
         SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
     },
     custody_v3::{SeriesCustodyPhysicalV3, project_prepare_custody_v3},
@@ -29,6 +43,9 @@ use super::{
 /// Exact number of little-endian scalar words carrying the Prepare child bank.
 pub const SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1: usize =
     SERIES_PREPARE_IR_REQUEST_BYTES_V3 / 8;
+
+/// Exact number of scalars carrying the native Prepare root successor.
+pub const SERIES_PREPARE_DERIVED_REPLAY_SCALAR_COUNT_V1: usize = 3;
 
 const _: () = assert!(SERIES_PREPARE_IR_REQUEST_BYTES_V3 % 8 == 0);
 
@@ -49,8 +66,6 @@ pub struct SeriesPrepareDerivedRequestInputV1<'a> {
     pub custody: SeriesCustodyPhysicalV3,
     /// Projected Custody observations. Its receipt digest is derived here.
     pub projected_custody: SeriesProjectedCustodyPhysicalV3,
-    /// Immediate typed Core ProjectFound receipt.
-    pub project_found_receipt: ProjectFoundReceiptV2,
     /// Source-owner projection of the canonical principal ceiling.
     pub principal_cap_sets: u64,
 }
@@ -79,78 +94,116 @@ pub type Result<T> = core::result::Result<T, SeriesPrepareDerivedRequestErrorV1>
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SeriesPrepareDerivedRequestsV1 {
     family_request_digest: [u8; 32],
-    projected_initialize: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    projected_open: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    replay_initialize: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    escrow_open: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    escrow_lock: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
+    parent_root: [u8; 32],
+    successor: SeriesStateV3,
+    requests: Box<[u8]>,
 }
 
 impl SeriesPrepareDerivedRequestsV1 {
     /// Borrow the projected-replay initialization request.
-    pub const fn projected_initialize(&self) -> &[u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3] {
-        &self.projected_initialize
+    pub fn projected_initialize(&self) -> &[u8] {
+        self.request(
+            SERIES_PREPARE_PROJECTED_INITIALIZE_OFFSET_V3,
+            SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+        )
     }
 
     /// Borrow the projected-Hoard open request.
-    pub const fn projected_open(&self) -> &[u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3] {
-        &self.projected_open
+    pub fn projected_open(&self) -> &[u8] {
+        self.request(
+            SERIES_PREPARE_PROJECTED_OPEN_OFFSET_V3,
+            SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+        )
     }
 
     /// Borrow the normal Custody replay initialization request.
-    pub const fn replay_initialize(&self) -> &[u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3] {
-        &self.replay_initialize
+    pub fn replay_initialize(&self) -> &[u8] {
+        self.request(
+            SERIES_PREPARE_REPLAY_INITIALIZE_OFFSET_V3,
+            SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+        )
     }
 
     /// Borrow the normal SeriesEscrow Vault-open request.
-    pub const fn escrow_open(&self) -> &[u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3] {
-        &self.escrow_open
+    pub fn escrow_open(&self) -> &[u8] {
+        self.request(
+            SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3,
+            SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+        )
     }
 
     /// Borrow the founder-to-SeriesEscrow transfer request.
-    pub const fn escrow_lock(&self) -> &[u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3] {
-        &self.escrow_lock
+    pub fn escrow_lock(&self) -> &[u8] {
+        self.request(
+            SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3 + SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+            SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+        )
     }
 
     /// Write the complete request bank as ordered little-endian scalar words.
     ///
     /// `output` is exactly the appended request-word region, excluding the
     /// pre-existing Prepare scalars. Failure leaves the destination unchanged.
-    pub fn write_scalar_words(&self, family_request: &[u8], output: &mut [u64]) -> Result<()> {
-        if hash(family_request).to_bytes() != self.family_request_digest {
-            return Err(SeriesPrepareDerivedRequestErrorV1::FamilyRequest);
-        }
+    pub fn write_scalar_words(
+        &self,
+        family_request: &[u8],
+        authenticated_parent_root: [u8; 32],
+        output: &mut [u64],
+    ) -> Result<()> {
+        self.require_binding(family_request, authenticated_parent_root)?;
         if output.len() != SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1 {
             return Err(SeriesPrepareDerivedRequestErrorV1::ScalarGeometry);
         }
-        let mut scratch = [0_u64; SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1];
-        let mut destination = scratch.iter_mut();
-        for request in self.requests() {
-            for chunk in request.chunks_exact(8) {
-                let word = destination
-                    .next()
-                    .ok_or(SeriesPrepareDerivedRequestErrorV1::ScalarGeometry)?;
-                let bytes: [u8; 8] = chunk
-                    .try_into()
-                    .map_err(|_| SeriesPrepareDerivedRequestErrorV1::ScalarGeometry)?;
-                *word = u64::from_le_bytes(bytes);
-            }
+        for (word, chunk) in output.iter_mut().zip(self.requests.chunks_exact(8)) {
+            *word = u64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+            ]);
         }
-        if destination.next().is_some() {
-            return Err(SeriesPrepareDerivedRequestErrorV1::ScalarGeometry);
-        }
-        output.copy_from_slice(&scratch);
         Ok(())
     }
 
-    fn requests(&self) -> [&[u8]; 5] {
-        [
-            &self.projected_initialize,
-            &self.projected_open,
-            &self.replay_initialize,
-            &self.escrow_open,
-            &self.escrow_lock,
-        ]
+    /// Write the native Prepare root successor as prepared, outstanding, and revision.
+    ///
+    /// `output` is exactly the three appended replay scalars. Failure leaves
+    /// the destination unchanged.
+    pub fn write_replay_scalars(
+        &self,
+        family_request: &[u8],
+        authenticated_parent_root: [u8; 32],
+        output: &mut [u64],
+    ) -> Result<()> {
+        self.require_binding(family_request, authenticated_parent_root)?;
+        if output.len() != SERIES_PREPARE_DERIVED_REPLAY_SCALAR_COUNT_V1 {
+            return Err(SeriesPrepareDerivedRequestErrorV1::ScalarGeometry);
+        }
+        let successor = [
+            u64::from(self.successor.current_ticket_prepared()),
+            u64::from(self.successor.outstanding_ticket_accounts()),
+            self.successor.revision(),
+        ];
+        output.copy_from_slice(&successor);
+        Ok(())
+    }
+
+    fn require_binding(
+        &self,
+        family_request: &[u8],
+        authenticated_parent_root: [u8; 32],
+    ) -> Result<()> {
+        if hash(family_request).to_bytes() != self.family_request_digest {
+            return Err(SeriesPrepareDerivedRequestErrorV1::FamilyRequest);
+        }
+        if authenticated_parent_root != self.parent_root {
+            return Err(SeriesPrepareDerivedRequestErrorV1::Physical);
+        }
+        Ok(())
+    }
+
+    fn request(&self, offset: usize, width: usize) -> &[u8] {
+        offset
+            .checked_add(width)
+            .and_then(|end| self.requests.get(offset..end))
+            .unwrap_or(&[])
     }
 }
 
@@ -158,74 +211,208 @@ impl SeriesPrepareDerivedRequestsV1 {
 pub fn derive_series_prepare_requests_v1(
     input: SeriesPrepareDerivedRequestInputV1<'_>,
 ) -> Result<SeriesPrepareDerivedRequestsV1> {
-    let expected = build_prepare_v3(input.snapshot)
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
-    if expected.as_bytes() != input.family_request {
-        return Err(SeriesPrepareDerivedRequestErrorV1::FamilyRequest);
-    }
-    let occurrence = admit_occurrence(
-        input.snapshot.template_bytes,
-        input.snapshot.occurrence_bytes,
-        input.snapshot.siblings,
-    )
-    .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
-    let ticket = admit_ticket(input.snapshot.ticket_bytes)
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
-    let escrow =
-        pre_founding_series_escrow(occurrence, ticket, input.product, input.registry_program)
-            .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
+    derive_series_prepare_requests_inner(&input)
+}
 
-    require_physical_agreement(input)?;
-    require_project_found_receipt(input, escrow.future_market().identity())?;
+#[inline(never)]
+fn derive_series_prepare_requests_inner(
+    input: &SeriesPrepareDerivedRequestInputV1<'_>,
+) -> Result<SeriesPrepareDerivedRequestsV1> {
+    require_canonical_family(input.snapshot, input.family_request)?;
+    require_physical_agreement(input.parent_root, &input.custody, &input.projected_custody)?;
+    let context = derive_prepare_context(input.snapshot, input.product, input.registry_program)?;
+    let receipt_digest = derive_project_found_receipt_digest(
+        context.escrow.future_market().identity(),
+        input.projected_custody,
+        input.principal_cap_sets,
+    )?;
 
     let family_digest = hash(input.family_request).to_bytes();
-    let receipt_bytes = input
-        .project_found_receipt
-        .encode()
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::ProjectFoundReceipt)?;
-    let receipt_digest = hash(&receipt_bytes).to_bytes();
     let mut custody = input.custody;
     custody.parent_request_digest = family_digest;
     let mut projected = input.projected_custody;
     projected.projection_receipt_digest = receipt_digest;
-    let expiry = occurrence
-        .template()
-        .retry_through(escrow.occurrence())
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
-
-    let projected_initialize = project_prepare_initialize_v3(escrow, expiry, projected)
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?
-        .encode()
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?;
-    let projected_open = project_prepare_open_hoard_v3(escrow, expiry, projected)
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?
-        .encode()
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?;
-    let [replay_initialize, escrow_open, escrow_lock] =
-        project_prepare_custody_v3(prepare_series_escrow_v3(escrow), custody)
-            .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?;
+    let mut requests = vec![0_u8; SERIES_PREPARE_IR_REQUEST_BYTES_V3].into_boxed_slice();
+    write_projected_initialize(*context.escrow, context.expiry, projected, &mut requests)?;
+    write_projected_open(*context.escrow, context.expiry, projected, &mut requests)?;
+    write_normal_prepare_requests(
+        prepare_series_escrow_v3(*context.escrow),
+        custody,
+        &mut requests,
+    )?;
 
     Ok(SeriesPrepareDerivedRequestsV1 {
         family_request_digest: family_digest,
-        projected_initialize,
-        projected_open,
-        replay_initialize: replay_initialize
-            .to_bytes()
-            .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?,
-        escrow_open: escrow_open
-            .to_bytes()
-            .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?,
-        escrow_lock: escrow_lock
-            .to_bytes()
-            .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?,
+        parent_root: input.parent_root,
+        successor: context.successor,
+        requests,
     })
 }
 
-fn require_physical_agreement(input: SeriesPrepareDerivedRequestInputV1<'_>) -> Result<()> {
-    let custody = input.custody;
-    let projected = input.projected_custody;
-    if input.parent_root == [0; 32]
-        || projected.parent_capability_root != input.parent_root
+struct PrepareDerivationContextV1 {
+    escrow: Box<PrefoundingSeriesEscrowV3>,
+    expiry: u64,
+    successor: SeriesStateV3,
+}
+
+#[inline(never)]
+fn require_canonical_family(
+    snapshot: SeriesOccurrenceSnapshotV3<'_>,
+    family_request: &[u8],
+) -> Result<()> {
+    let expected =
+        build_prepare_v3(snapshot).map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
+    if expected.as_bytes() != family_request {
+        return Err(SeriesPrepareDerivedRequestErrorV1::FamilyRequest);
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn derive_prepare_context(
+    snapshot: SeriesOccurrenceSnapshotV3<'_>,
+    product: AuthenticatedProductProjectionV2,
+    registry_program: AccountKeyV3,
+) -> Result<PrepareDerivationContextV1> {
+    let occurrence = derive_admitted_occurrence(snapshot)?;
+    let expiry = occurrence
+        .template()
+        .retry_through(occurrence.occurrence().occurrence())
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
+    let escrow =
+        derive_prefounding_escrow(occurrence, snapshot.ticket_bytes, product, registry_program)?;
+    let successor = snapshot
+        .series
+        .prepare_ticket(snapshot.series.revision())
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
+    Ok(PrepareDerivationContextV1 {
+        escrow,
+        expiry,
+        successor,
+    })
+}
+
+#[inline(never)]
+fn derive_admitted_occurrence(
+    snapshot: SeriesOccurrenceSnapshotV3<'_>,
+) -> Result<AdmittedOccurrenceV3> {
+    admit_occurrence(
+        snapshot.template_bytes,
+        snapshot.occurrence_bytes,
+        snapshot.siblings,
+    )
+    .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)
+}
+
+#[inline(never)]
+/// Admit one Ticket against an already admitted occurrence and derive its escrow projection.
+pub(crate) fn derive_prefounding_escrow(
+    occurrence: AdmittedOccurrenceV3,
+    ticket_bytes: &[u8],
+    product: AuthenticatedProductProjectionV2,
+    registry_program: AccountKeyV3,
+) -> Result<Box<PrefoundingSeriesEscrowV3>> {
+    let ticket =
+        admit_ticket(ticket_bytes).map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
+    let escrow = pre_founding_series_escrow(occurrence, ticket, product, registry_program)
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Content)?;
+    Ok(Box::new(escrow))
+}
+
+#[inline(never)]
+fn derive_project_found_receipt_digest(
+    future: MarketIdentity,
+    projected: SeriesProjectedCustodyPhysicalV3,
+    principal_cap_sets: u64,
+) -> Result<[u8; 32]> {
+    let receipt = derive_series_project_found_receipt_v1(future, projected, principal_cap_sets)
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::ProjectFoundReceipt)?;
+    let bytes = receipt
+        .encode()
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::ProjectFoundReceipt)?;
+    Ok(hash(&bytes).to_bytes())
+}
+
+#[inline(never)]
+fn write_projected_initialize(
+    escrow: dclutch_trading::series::PrefoundingSeriesEscrowV3,
+    expiry: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+    output: &mut [u8],
+) -> Result<()> {
+    let request = project_prepare_initialize_v3(escrow, expiry, physical)
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?
+        .encode()
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?;
+    copy_request(
+        output,
+        SERIES_PREPARE_PROJECTED_INITIALIZE_OFFSET_V3,
+        &request,
+    )
+}
+
+#[inline(never)]
+fn write_projected_open(
+    escrow: dclutch_trading::series::PrefoundingSeriesEscrowV3,
+    expiry: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+    output: &mut [u8],
+) -> Result<()> {
+    let request = project_prepare_open_hoard_v3(escrow, expiry, physical)
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?
+        .encode()
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?;
+    copy_request(output, SERIES_PREPARE_PROJECTED_OPEN_OFFSET_V3, &request)
+}
+
+#[inline(never)]
+fn write_normal_prepare_requests(
+    plan: PrepareSeriesEscrowPlanV3,
+    physical: SeriesCustodyPhysicalV3,
+    output: &mut [u8],
+) -> Result<()> {
+    let [replay_initialize, escrow_open, escrow_lock] = project_prepare_custody_v3(plan, physical)
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?;
+    write_normal_request(
+        replay_initialize,
+        SERIES_PREPARE_REPLAY_INITIALIZE_OFFSET_V3,
+        output,
+    )?;
+    write_normal_request(escrow_open, SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3, output)?;
+    write_normal_request(
+        escrow_lock,
+        SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3 + SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+        output,
+    )
+}
+
+#[inline(never)]
+fn write_normal_request(request: CustodyRequestV1, offset: usize, output: &mut [u8]) -> Result<()> {
+    let encoded = request
+        .to_bytes()
+        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::Custody)?;
+    copy_request(output, offset, &encoded)
+}
+
+fn copy_request(output: &mut [u8], offset: usize, request: &[u8]) -> Result<()> {
+    let end = offset
+        .checked_add(request.len())
+        .ok_or(SeriesPrepareDerivedRequestErrorV1::ScalarGeometry)?;
+    output
+        .get_mut(offset..end)
+        .ok_or(SeriesPrepareDerivedRequestErrorV1::ScalarGeometry)?
+        .copy_from_slice(request);
+    Ok(())
+}
+
+#[inline(never)]
+fn require_physical_agreement(
+    parent_root: [u8; 32],
+    custody: &SeriesCustodyPhysicalV3,
+    projected: &SeriesProjectedCustodyPhysicalV3,
+) -> Result<()> {
+    if parent_root == [0; 32]
+        || projected.parent_capability_root != parent_root
         || custody.caller_program != projected.caller_program
         || custody.payer != projected.payer
         || custody.mint != projected.mint
@@ -241,34 +428,37 @@ fn require_physical_agreement(input: SeriesPrepareDerivedRequestInputV1<'_>) -> 
     Ok(())
 }
 
-fn require_project_found_receipt(
-    input: SeriesPrepareDerivedRequestInputV1<'_>,
-    future: dclutch_market::MarketIdentity,
-) -> Result<()> {
-    let receipt = input.project_found_receipt;
-    let projected = input.projected_custody;
-    let found = Request::administrative(Action::Found, future.generation, future.market_id)
-        .encode()
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::ProjectFoundReceipt)?;
-    receipt
-        .verify_found_request(hash(&found).to_bytes())
-        .map_err(|_| SeriesPrepareDerivedRequestErrorV1::ProjectFoundReceipt)?;
-    if receipt.market != future.market_id
-        || receipt.generation != future.generation
-        || receipt.realm != future.realm_id
-        || receipt.product_record != future.product_record
-        || receipt.product != future.product_id
-        || receipt.source != future.resolution_policy
-        || receipt.release_set != future.selected_release_set
-        || receipt.collateral_mint.to_bytes() != projected.mint
-        || receipt.token_program.to_bytes() != projected.token_program
-        || receipt.collateral_release.to_bytes() != projected.collateral_release
-        || receipt.rent_program.to_bytes() != projected.rent_program
-        || receipt.principal_cap_sets != input.principal_cap_sets
-    {
-        return Err(SeriesPrepareDerivedRequestErrorV1::ProjectFoundReceipt);
-    }
-    Ok(())
+/// Derive the ProjectFound receipt Core must return for one admitted Series
+/// future Market and authenticated physical/Source projection.
+///
+/// This is an expected receipt, constructed before the child invocation. The
+/// Projected Custody child still authenticates the actual Core return-data
+/// producer and exact returned bytes during that invocation.
+pub fn derive_series_project_found_receipt_v1(
+    future: MarketIdentity,
+    projected: SeriesProjectedCustodyPhysicalV3,
+    principal_cap_sets: u64,
+) -> core::result::Result<ProjectFoundReceiptV2, ProjectFoundError> {
+    let found = Request::administrative(Action::Found, future.generation, future.market_id);
+    derive_project_found_receipt_v2(
+        found,
+        ProjectFoundReceiptProjectionV2 {
+            realm: future.realm_id,
+            collateral_mint: Identity::new(projected.mint)
+                .map_err(|_| ProjectFoundError::ZeroIdentity)?,
+            token_program: Identity::new(projected.token_program)
+                .map_err(|_| ProjectFoundError::ZeroIdentity)?,
+            collateral_release: Identity::new(projected.collateral_release)
+                .map_err(|_| ProjectFoundError::ZeroIdentity)?,
+            product_record: future.product_record,
+            product: future.product_id,
+            source: future.resolution_policy,
+            release_set: future.selected_release_set,
+            rent_program: Identity::new(projected.rent_program)
+                .map_err(|_| ProjectFoundError::ZeroIdentity)?,
+            principal_cap_sets,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -295,9 +485,9 @@ mod tests {
         series: SeriesStateV3,
         product: AuthenticatedProductProjectionV2,
         registry: AccountKeyV3,
+        future: MarketIdentity,
         custody: SeriesCustodyPhysicalV3,
         projected: SeriesProjectedCustodyPhysicalV3,
-        receipt: ProjectFoundReceiptV2,
     }
 
     impl Fixture {
@@ -377,25 +567,6 @@ mod tests {
                 escrow_vault_rent_lamports: custody.vault_rent_lamports,
             };
             let future = escrow.future_market().identity();
-            let found = Request::administrative(Action::Found, future.generation, future.market_id)
-                .encode()
-                .expect("Found request");
-            let receipt = ProjectFoundReceiptV2::new(
-                future.market_id,
-                future.generation,
-                future.realm_id,
-                ident(projected.mint),
-                ident(projected.token_program),
-                ident(projected.collateral_release),
-                future.product_record,
-                future.product_id,
-                future.resolution_policy,
-                future.selected_release_set,
-                ident(projected.rent_program),
-                23,
-                hash(&found).to_bytes(),
-            )
-            .expect("ProjectFound receipt");
             Self {
                 template,
                 occurrence,
@@ -404,9 +575,9 @@ mod tests {
                 series,
                 product,
                 registry,
+                future,
                 custody,
                 projected,
-                receipt,
             }
         }
 
@@ -433,7 +604,6 @@ mod tests {
                 parent_root: self.projected.parent_capability_root,
                 custody: self.custody,
                 projected_custody: self.projected,
-                project_found_receipt: self.receipt,
                 principal_cap_sets: 23,
             })
         }
@@ -494,29 +664,70 @@ mod tests {
         let retry_boundary = fixture.derive(115).expect("last valid Prepare");
         assert_eq!(early, retry_boundary);
 
+        let found = Request::administrative(
+            Action::Found,
+            fixture.future.generation,
+            fixture.future.market_id,
+        )
+        .encode()
+        .expect("Found request");
+        let receipt = derive_series_project_found_receipt_v1(fixture.future, fixture.projected, 23)
+            .expect("expected ProjectFound receipt");
+        let oracle = ProjectFoundReceiptV2::new(
+            fixture.future.market_id,
+            fixture.future.generation,
+            fixture.future.realm_id,
+            ident(fixture.projected.mint),
+            ident(fixture.projected.token_program),
+            ident(fixture.projected.collateral_release),
+            fixture.future.product_record,
+            fixture.future.product_id,
+            fixture.future.resolution_policy,
+            fixture.future.selected_release_set,
+            ident(fixture.projected.rent_program),
+            23,
+            hash(&found).to_bytes(),
+        )
+        .expect("Core receipt oracle");
+        assert_eq!(receipt, oracle);
+
         let mut words = [0_u64; SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1];
         let family = build_prepare_v3(fixture.snapshot(100)).expect("canonical Prepare request");
         early
-            .write_scalar_words(family.as_bytes(), &mut words)
+            .write_scalar_words(
+                family.as_bytes(),
+                fixture.projected.parent_capability_root,
+                &mut words,
+            )
             .expect("exact scalar bank");
         let encoded = words
             .iter()
             .flat_map(|word| word.to_le_bytes())
             .collect::<std::vec::Vec<_>>();
         let expected = [
-            early.projected_initialize().as_slice(),
-            early.projected_open().as_slice(),
-            early.replay_initialize().as_slice(),
-            early.escrow_open().as_slice(),
-            early.escrow_lock().as_slice(),
+            early.projected_initialize(),
+            early.projected_open(),
+            early.replay_initialize(),
+            early.escrow_open(),
+            early.escrow_lock(),
         ]
         .concat();
         assert_eq!(encoded, expected);
         assert_eq!(encoded.len(), SERIES_PREPARE_IR_REQUEST_BYTES_V3);
+
+        let mut replay = [0_u64; SERIES_PREPARE_DERIVED_REPLAY_SCALAR_COUNT_V1];
+        early
+            .write_replay_scalars(
+                family.as_bytes(),
+                fixture.projected.parent_capability_root,
+                &mut replay,
+            )
+            .expect("native replay successor");
+        assert_eq!(replay, [1, 1, fixture.series.revision() + 1]);
     }
 
     #[test]
-    fn family_root_product_receipt_and_scalar_substitution_refuse_exactly() {
+    fn family_root_product_projection_and_scalar_substitution_refuse_exactly() {
         let fixture = Fixture::new();
         let snapshot = fixture.snapshot(100);
         let family = build_prepare_v3(snapshot).expect("canonical Prepare request");
@@ -530,7 +741,6 @@ mod tests {
             parent_root: fixture.projected.parent_capability_root,
             custody: fixture.custody,
             projected_custody: fixture.projected,
-            project_found_receipt: fixture.receipt,
             principal_cap_sets: 23,
         };
         assert_eq!(
@@ -556,7 +766,7 @@ mod tests {
         assert_eq!(
             derive_series_prepare_requests_v1(SeriesPrepareDerivedRequestInputV1 {
                 family_request: family.as_bytes(),
-                principal_cap_sets: 24,
+                principal_cap_sets: 0,
                 ..input
             }),
             Err(SeriesPrepareDerivedRequestErrorV1::ProjectFoundReceipt)
@@ -565,16 +775,37 @@ mod tests {
         let bank = fixture.derive(100).expect("canonical bank");
         let mut wrong_width = [7_u64; SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1 - 1];
         assert_eq!(
-            bank.write_scalar_words(family.as_bytes(), &mut wrong_width),
+            bank.write_scalar_words(
+                family.as_bytes(),
+                fixture.projected.parent_capability_root,
+                &mut wrong_width,
+            ),
             Err(SeriesPrepareDerivedRequestErrorV1::ScalarGeometry)
         );
         assert!(wrong_width.iter().all(|word| *word == 7));
 
         let mut stale_words = [9_u64; SERIES_PREPARE_DERIVED_REQUEST_WORD_COUNT_V1];
         assert_eq!(
-            bank.write_scalar_words(&substituted_family, &mut stale_words),
+            bank.write_scalar_words(
+                &substituted_family,
+                fixture.projected.parent_capability_root,
+                &mut stale_words,
+            ),
             Err(SeriesPrepareDerivedRequestErrorV1::FamilyRequest)
         );
         assert!(stale_words.iter().all(|word| *word == 9));
+
+        assert_eq!(
+            bank.write_scalar_words(family.as_bytes(), [98; 32], &mut stale_words),
+            Err(SeriesPrepareDerivedRequestErrorV1::Physical)
+        );
+        assert!(stale_words.iter().all(|word| *word == 9));
+
+        let mut stale_replay = [11_u64; SERIES_PREPARE_DERIVED_REPLAY_SCALAR_COUNT_V1];
+        assert_eq!(
+            bank.write_replay_scalars(family.as_bytes(), [98; 32], &mut stale_replay),
+            Err(SeriesPrepareDerivedRequestErrorV1::Physical)
+        );
+        assert!(stale_replay.iter().all(|word| *word == 11));
     }
 }

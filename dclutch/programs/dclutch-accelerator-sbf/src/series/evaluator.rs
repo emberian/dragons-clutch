@@ -4,7 +4,9 @@ use alloc::{vec, vec::Vec};
 
 use dclutch_core_contract::ContentId;
 use dclutch_market::SERIES_CORE_REQUEST_BYTES_V1;
-use dclutch_market::capability_program::v4::CapabilityProgramV4;
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, v4::CapabilityProgramV4,
+};
 use dclutch_market::execution_strategy::{
     shadow_digest_v3::{
         ShadowEffectProjectionV3, ShadowReceiptDependencyV3, ShadowResolvedRouteV3,
@@ -17,7 +19,7 @@ use dclutch_market::execution_strategy::{
 };
 use dclutch_sha256_adapter::digest;
 use dclutch_trading::series::{
-    AccountKeyV3, AuthenticatedProductProjectionV2,
+    AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_SUCCESSOR_KIND_PREIMAGE_V3,
     request::SeriesActionV3,
     shadow::{SeriesShadowInputV3, SeriesShadowObservationsV3, evaluate_series_shadow_v3},
     template_content_id,
@@ -209,80 +211,14 @@ pub fn evaluate_series_shadow_aot_v4(input: SeriesShadowEvaluationV4<'_>) -> Res
         input.profile_observations,
         input.transcript_observations,
     )?;
-    let mut account_scratch_scalars = [0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
-    let mut account_output_scalars = [0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
-    let mut account_scratch_identities = [[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
-    let mut account_output_identities = [[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
-    let mut account_input_scalars = [0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
-    account_input_scalars[SERIES_SHADOW_FUNDING_COUNT_SCALAR_V4] =
-        u64::try_from(funding_count).map_err(|_| SeriesShadowAotErrorV4::Runtime)?;
-    let mut account_input_identities = [[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
-    account_input_identities[0] = shadow.trading_program.to_bytes();
-    project_dynamic_fixed_spans_atomic(
+    let candidate = project_candidate_registers(
         profile,
-        shadow.shape.tail_count,
-        &[u32::try_from(funding_count).map_err(|_| SeriesShadowAotErrorV4::Runtime)?],
+        input.bundle.request_profile,
+        input.bundle.transition,
+        shadow,
+        funding_count,
         input.profile_observations,
-        ProjectionRegistersV2 {
-            input_scalars: &account_input_scalars,
-            input_identities: &account_input_identities,
-            scratch_scalars: &mut account_scratch_scalars,
-            scratch_identities: &mut account_scratch_identities,
-            output_scalars: &mut account_output_scalars,
-            output_identities: &mut account_output_identities,
-        },
-        None,
-    )
-    .map_err(|_| SeriesShadowAotErrorV4::AccountProfile)?;
-
-    let request_profile = RequestProfileV1::decode(input.bundle.request_profile)
-        .map_err(|_| SeriesShadowAotErrorV4::RequestProfile)?;
-    let family_header = shadow
-        .family_request
-        .get(..128)
-        .ok_or(SeriesShadowAotErrorV4::ShadowRequest)?;
-    let mut request_scratch_scalars = [0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
-    let mut request_output_scalars = [0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
-    let mut request_scratch_identities = [[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
-    let mut request_output_identities = [[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
-    project_request_atomic(
-        request_profile,
-        0,
-        family_header,
-        ProjectionRegistersV1 {
-            input_scalars: &account_output_scalars,
-            input_identities: &account_output_identities,
-            scratch_scalars: &mut request_scratch_scalars,
-            scratch_identities: &mut request_scratch_identities,
-            output_scalars: &mut request_output_scalars,
-            output_identities: &mut request_output_identities,
-        },
-    )
-    .map_err(|_| SeriesShadowAotErrorV4::RequestProfile)?;
-
-    let transition = TransitionProgramV3::decode(input.bundle.transition)
-        .map_err(|_| SeriesShadowAotErrorV4::Transition)?;
-    let mut transition_scratch_scalars = [0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
-    let mut candidate_scalars = [0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
-    let mut transition_scratch_identities = [[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
-    let mut candidate_identities = [[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
-    execute_fold_atomic(
-        transition,
-        0,
-        RegisterInput {
-            scalars: &request_output_scalars,
-            identities: &request_output_identities,
-        },
-        RegisterOutput {
-            scalars: &mut transition_scratch_scalars,
-            identities: &mut transition_scratch_identities,
-        },
-        RegisterOutput {
-            scalars: &mut candidate_scalars,
-            identities: &mut candidate_identities,
-        },
-    )
-    .map_err(|_| SeriesShadowAotErrorV4::Transition)?;
+    )?;
 
     let expected_core = evaluate_semantic_core_request(
         shadow,
@@ -295,8 +231,8 @@ pub fn evaluate_series_shadow_aot_v4(input: SeriesShadowEvaluationV4<'_>) -> Res
         shadow,
         funding_count,
         input.profile_observations,
-        &candidate_scalars,
-        &candidate_identities,
+        &candidate.scalars,
+        &candidate.identities,
     )?;
     require_core_request_equivalence(&request_bank, &routes, &expected_core)?;
 
@@ -306,8 +242,8 @@ pub fn evaluate_series_shadow_aot_v4(input: SeriesShadowEvaluationV4<'_>) -> Res
         .map_err(|_| SeriesShadowAotErrorV4::Digest)?;
     let candidate_digest = candidate_digest_v3(
         shadow.shape.tail_count,
-        &candidate_scalars,
-        &candidate_identities,
+        &candidate.scalars,
+        &candidate.identities,
     )
     .map_err(|_| SeriesShadowAotErrorV4::Digest)?;
     let projected_effect_digest = effect_digest_v3(ShadowEffectProjectionV3 {
@@ -328,6 +264,99 @@ pub fn evaluate_series_shadow_aot_v4(input: SeriesShadowEvaluationV4<'_>) -> Res
     Ok(ShadowAckV3::accepted(shadow, request_digest))
 }
 
+struct SeriesCandidateRegistersV4 {
+    scalars: Vec<u64>,
+    identities: Vec<[u8; 32]>,
+}
+
+/// Rotate exactly three register pairs through the three projection stages.
+///
+/// Keeping this frame separate from effect projection avoids retaining the
+/// projection banks in the evaluator caller. The private heap-backed banks
+/// retain the exact geometry owned by the canonical Consume artifacts.
+#[inline(never)]
+fn project_candidate_registers(
+    profile: AccountProfileV2<'_>,
+    request_profile_bytes: &[u8],
+    transition_bytes: &[u8],
+    shadow: ShadowRequestV3<'_>,
+    funding_count: usize,
+    observations: &[AccountObservationV1<'_>],
+) -> Result<SeriesCandidateRegistersV4> {
+    let mut first_scalars = vec![0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
+    let mut first_identities = vec![[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
+    let mut second_scalars = vec![0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
+    let mut second_identities = vec![[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
+    let mut third_scalars = vec![0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
+    let mut third_identities = vec![[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
+
+    first_scalars[SERIES_SHADOW_FUNDING_COUNT_SCALAR_V4] =
+        u64::try_from(funding_count).map_err(|_| SeriesShadowAotErrorV4::Runtime)?;
+    first_identities[0] = shadow.trading_program.to_bytes();
+    project_dynamic_fixed_spans_atomic(
+        profile,
+        shadow.shape.tail_count,
+        &[u32::try_from(funding_count).map_err(|_| SeriesShadowAotErrorV4::Runtime)?],
+        observations,
+        ProjectionRegistersV2 {
+            input_scalars: &first_scalars,
+            input_identities: &first_identities,
+            scratch_scalars: &mut second_scalars,
+            scratch_identities: &mut second_identities,
+            output_scalars: &mut third_scalars,
+            output_identities: &mut third_identities,
+        },
+        None,
+    )
+    .map_err(|_| SeriesShadowAotErrorV4::AccountProfile)?;
+
+    let request_profile = RequestProfileV1::decode(request_profile_bytes)
+        .map_err(|_| SeriesShadowAotErrorV4::RequestProfile)?;
+    let family_header = shadow
+        .family_request
+        .get(..128)
+        .ok_or(SeriesShadowAotErrorV4::ShadowRequest)?;
+    project_request_atomic(
+        request_profile,
+        0,
+        family_header,
+        ProjectionRegistersV1 {
+            input_scalars: &third_scalars,
+            input_identities: &third_identities,
+            scratch_scalars: &mut first_scalars,
+            scratch_identities: &mut first_identities,
+            output_scalars: &mut second_scalars,
+            output_identities: &mut second_identities,
+        },
+    )
+    .map_err(|_| SeriesShadowAotErrorV4::RequestProfile)?;
+
+    let transition = TransitionProgramV3::decode(transition_bytes)
+        .map_err(|_| SeriesShadowAotErrorV4::Transition)?;
+    execute_fold_atomic(
+        transition,
+        0,
+        RegisterInput {
+            scalars: &second_scalars,
+            identities: &second_identities,
+        },
+        RegisterOutput {
+            scalars: &mut third_scalars,
+            identities: &mut third_identities,
+        },
+        RegisterOutput {
+            scalars: &mut first_scalars,
+            identities: &mut first_identities,
+        },
+    )
+    .map_err(|_| SeriesShadowAotErrorV4::Transition)?;
+
+    Ok(SeriesCandidateRegistersV4 {
+        scalars: first_scalars,
+        identities: first_identities,
+    })
+}
+
 fn evaluate_semantic_core_request(
     shadow: ShadowRequestV3<'_>,
     observations: &[AccountObservationV1<'_>],
@@ -344,16 +373,30 @@ fn evaluate_semantic_core_request(
     let occurrence = observation(observations, SERIES_OCCURRENCE_RAW_COORDINATE_V4)?;
     let ticket = observation(observations, SERIES_TICKET_RAW_COORDINATE_V4)?;
     let clock = observation(observations, SERIES_CLOCK_COORDINATE_V4)?;
-    let template_id =
-        template_content_id(template.data()).map_err(|_| SeriesShadowAotErrorV4::Semantic)?;
+    template_content_id(template.data()).map_err(|_| SeriesShadowAotErrorV4::Semantic)?;
     let now_slot = clock
         .data()
         .get(..8)
         .and_then(|bytes| bytes.try_into().ok())
         .map(u64::from_le_bytes)
         .ok_or(SeriesShadowAotErrorV4::Runtime)?;
+    let root_data = root.data();
+    let (root_header_bytes, series_state) = root_data
+        .split_at_checked(CAPABILITY_ROOT_HEADER_BYTES_V1)
+        .ok_or(SeriesShadowAotErrorV4::Runtime)?;
+    if series_state.len() != dclutch_trading::series::replay::SERIES_STATE_BYTES_V3 {
+        return Err(SeriesShadowAotErrorV4::Runtime);
+    }
+    let root_header = CapabilityRootHeaderV1::decode(root_header_bytes)
+        .map_err(|_| SeriesShadowAotErrorV4::Runtime)?;
+    let series_kind = ContentId::new(digest(SERIES_SUCCESSOR_KIND_PREIMAGE_V3))
+        .map_err(|_| SeriesShadowAotErrorV4::Runtime)?;
     if root.key() != shadow.root.to_bytes()
-        || config.key() != template_id.to_bytes()
+        || root.owner() != shadow.trading_program.to_bytes()
+        || root_header.release_set() != shadow.release_set
+        || root_header.market() != shadow.market.to_bytes()
+        || root_header.selection().kind() != series_kind
+        || root_header.selection().config().to_bytes() != config.key()
         || product.key() != facts.product.product_record().to_bytes()
         || registry.key() != shadow.registry_program.to_bytes()
         || trading.key() != shadow.trading_program.to_bytes()
@@ -371,7 +414,7 @@ fn evaluate_semantic_core_request(
         template: template.data(),
         occurrence: Some(occurrence.data()),
         ticket: Some(ticket.data()),
-        series_state: root.data(),
+        series_state,
         ticket_state: Some(ticket_state.data()),
         observations: SeriesShadowObservationsV3 {
             product: Some(facts.product),
@@ -521,8 +564,8 @@ fn project_effect(
     shadow: ShadowRequestV3<'_>,
     funding_count: usize,
     observations: &[AccountObservationV1<'_>],
-    scalars: &[u64; SERIES_SHADOW_SCALAR_COUNT_V4],
-    identities: &[[u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4],
+    scalars: &[u64],
+    identities: &[[u8; 32]],
 ) -> Result<(Vec<u64>, Vec<u8>, Vec<ShadowResolvedRouteV3>)> {
     let effect =
         EffectProgramV4::decode(effect_bytes).map_err(|_| SeriesShadowAotErrorV4::Effect)?;

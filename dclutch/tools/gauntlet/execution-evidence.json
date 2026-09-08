@@ -1,0 +1,18 @@
+{
+  "schema": "dclutch-route-execution-evidence-manifest-v1",
+  "note": "Durable dclutch-route-census ledgers the generated reference may treat as checked native evidence. A bindings file is never evidence merely because it is listed elsewhere. Counts are derived from each ledger's observations, so a newer corpus is added as another immutable path rather than by editing historical totals.",
+  "ledgers": [
+    {
+      "path": "docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json",
+      "substrate": "local-validator",
+      "source_relation": "historical-source-split",
+      "note": "One preserved Structured Claims CPI plus Dealer Found, Quote, nonzero Fill and Withdraw. The dated census names each runtime and host source revision."
+    },
+    {
+      "path": "docs/evidence/ensemble-execution-coverage-2026-09-08/ledger.json",
+      "substrate": "local-validator",
+      "source_relation": "historical-source-split",
+      "note": "Accepted Ensemble Fold and Reclaim from exact source cohort 551ffc1b99abdf01478e7e963a1ac20a99e6c0f6. The retry host was rebuilt later, but invoked the unchanged Resolution ELF aa1efaa57dd24d1e27725df37d32132088fa972f32697e868e3063f416ba129c."
+    }
+  ]
+}

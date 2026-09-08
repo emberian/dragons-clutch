@@ -7,6 +7,10 @@
 //! CPI, or state-write authority; the projected outer and common Hot executor
 //! retain those physical responsibilities.
 
+extern crate alloc;
+
+use alloc::vec;
+
 use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
@@ -32,7 +36,7 @@ use dclutch_vm::account_profile::{
     },
 };
 use dclutch_vm::request_profile::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
-use dclutch_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
+use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 use solana_program::hash::hash;
 
 use crate::projected_market_v2::AuthenticatedFoundSpanV2;
@@ -44,6 +48,9 @@ use super::{
         SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
         SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TICKET_DERIVATION_PREIMAGE_V3,
         SERIES_WITNESS_ITEM_BYTES_V3, SeriesRequestSlicesV3,
+    },
+    consume_artifacts_v4::{
+        SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4, SERIES_CONSUME_COMMON_SCALAR_COUNT_V4,
     },
     effect_v4::{
         SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4, SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4,
@@ -504,38 +511,28 @@ fn validate_and_execute_header(profile: RequestProfileV1<'_>, header: &[u8]) -> 
     }
     let scalars = usize::from(profile.common_scalar_count());
     let identities = usize::from(profile.common_identity_count());
-    if scalars > MAX_SCALARS || identities > MAX_IDENTITIES {
+    if scalars != usize::from(SERIES_CONSUME_COMMON_SCALAR_COUNT_V4)
+        || identities != usize::from(SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4)
+    {
         return Err(SeriesArtifactErrorV4::Geometry);
     }
-    let input_scalars = [0_u64; MAX_SCALARS];
-    let input_identities = [[0_u8; 32]; MAX_IDENTITIES];
-    let mut scratch_scalars = [0_u64; MAX_SCALARS];
-    let mut scratch_identities = [[0_u8; 32]; MAX_IDENTITIES];
-    let mut output_scalars = [0_u64; MAX_SCALARS];
-    let mut output_identities = [[0_u8; 32]; MAX_IDENTITIES];
+    let input_scalars = vec![0_u64; scalars];
+    let input_identities = vec![[0_u8; 32]; identities];
+    let mut scratch_scalars = vec![0_u64; scalars];
+    let mut scratch_identities = vec![[0_u8; 32]; identities];
+    let mut output_scalars = vec![0_u64; scalars];
+    let mut output_identities = vec![[0_u8; 32]; identities];
     project_atomic(
         profile,
         0,
         header,
         ProjectionRegistersV1 {
-            input_scalars: input_scalars
-                .get(..scalars)
-                .ok_or(SeriesArtifactErrorV4::Geometry)?,
-            input_identities: input_identities
-                .get(..identities)
-                .ok_or(SeriesArtifactErrorV4::Geometry)?,
-            scratch_scalars: scratch_scalars
-                .get_mut(..scalars)
-                .ok_or(SeriesArtifactErrorV4::Geometry)?,
-            scratch_identities: scratch_identities
-                .get_mut(..identities)
-                .ok_or(SeriesArtifactErrorV4::Geometry)?,
-            output_scalars: output_scalars
-                .get_mut(..scalars)
-                .ok_or(SeriesArtifactErrorV4::Geometry)?,
-            output_identities: output_identities
-                .get_mut(..identities)
-                .ok_or(SeriesArtifactErrorV4::Geometry)?,
+            input_scalars: &input_scalars,
+            input_identities: &input_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut output_scalars,
+            output_identities: &mut output_identities,
         },
     )
     .map_err(|_| SeriesArtifactErrorV4::RequestProfile)
@@ -857,7 +854,8 @@ pub(super) mod tests {
         // Both banks are typed by the emitter's own width constants, so a
         // future widening is a compile error here rather than a runtime
         // `Successor` refusal from `validate_request_coverage`.
-        let scalars: [u64; CONSUME_SCALARS] = [128, 64, 2, 32, 7, 9, 4];
+        let mut scalars = [0_u64; CONSUME_SCALARS];
+        scalars[..7].copy_from_slice(&[128, 64, 2, 32, 7, 9, 4]);
         let identities = [[9_u8; 32]; CONSUME_IDENTITIES];
         let registers = SeriesConsumeArtifactRegistersV4 {
             tail_count: 258,
@@ -890,6 +888,35 @@ pub(super) mod tests {
         assert_eq!(
             validate_dynamic_account_span(substituted, effect, registers),
             Err(SeriesArtifactErrorV4::Geometry)
+        );
+    }
+
+    #[test]
+    fn canonical_wide_consume_header_projects_at_its_declared_geometry() {
+        assert!(CONSUME_SCALARS > dclutch_vm::MAX_SCALARS);
+        let mut scratch = vec![
+                0_u8;
+                crate::series::consume_artifacts_v4::SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4
+            ];
+        let mut bytes = vec![
+                0_u8;
+                crate::series::consume_artifacts_v4::SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4
+            ];
+        crate::series::consume_artifacts_v4::encode_series_consume_request_profile_v4_atomic(
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("canonical Consume RequestProfile");
+        let profile = RequestProfileV1::decode(&bytes).expect("decode RequestProfile");
+        let request = crate::series::effect_v4::tests::request();
+        assert_eq!(
+            validate_and_execute_header(
+                profile,
+                request
+                    .get(..SERIES_ACTION_HEADER_BYTES_V3)
+                    .expect("fixed Series header"),
+            ),
+            Ok(())
         );
     }
 }

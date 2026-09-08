@@ -1750,9 +1750,17 @@ impl DispatchWalk<'_> {
                     // criterion the wire actually has; the name is a habit.
                     let stated = self.recogniser_constants(&target);
                     if name.starts_with("is_") || !stated.is_empty() {
-                        out.push(Selector::Predicate {
-                            function: target.clone(),
-                        });
+                        // A one-expression equality against one magic is fully
+                        // represented by that magic. Keeping the predicate as
+                        // a second selector makes the evidence fold reject the
+                        // route even though the finalized bytes carry the
+                        // complete discriminator. More complex predicates
+                        // remain named and therefore fail closed in the fold.
+                        if !self.recogniser_is_exact_magic(&target, &stated) {
+                            out.push(Selector::Predicate {
+                                function: target.clone(),
+                            });
+                        }
                         for selector in stated {
                             if !out
                                 .iter()
@@ -1859,6 +1867,31 @@ impl DispatchWalk<'_> {
             }
         }
         stated
+    }
+
+    /// Whether a predicate's entire body is one equality against one magic.
+    ///
+    /// This deliberately recognizes only the narrow shape used by selectors
+    /// such as `is_dealer_found_v1`: one tail expression, `==`, and one magic
+    /// read from that expression. A conjunction, early-return decoder,
+    /// forwarding wrapper, length check or extra tag remains a `Predicate`
+    /// plus its readable constants, because the persisted selector vector
+    /// cannot say whether those facts are alternatives or conjunctions.
+    fn recogniser_is_exact_magic(&self, target: &str, stated: &[Selector]) -> bool {
+        if stated.len() != 1 || !matches!(stated[0], Selector::Magic { .. }) {
+            return false;
+        }
+        let resolved = self.predicates.resolve(target).or_else(|| {
+            let name = target.rsplit("::").next().unwrap_or(target);
+            self.predicates.resolve(name)
+        });
+        let Some(function) = resolved else {
+            return false;
+        };
+        let [Stmt::Expr(Expr::Binary(binary), None)] = function.block.stmts.as_slice() else {
+            return false;
+        };
+        matches!(binary.op, BinOp::Eq(_))
     }
 
     /// Scan one function body's statements for wire discriminants.
@@ -2614,6 +2647,12 @@ mod predicate_body_tests {
         }
     "#;
 
+    const COMPOUND_PREDICATE_SOURCE: &str = r#"
+        pub fn is_example_v1(input: &[u8]) -> bool {
+            input.get(..8) == Some(EXAMPLE_MAGIC_V1.as_slice()) && input.len() > 8
+        }
+    "#;
+
     /// The shape `DCLTGMF3` is written in: a predicate that delegates its
     /// whole parameter to a `decode`, which states the bytes in a GUARD.
     const FORWARDING_SOURCE: &str = r#"
@@ -2655,23 +2694,43 @@ mod predicate_body_tests {
     }
 
     #[test]
-    fn a_predicate_guard_carries_the_bytes_its_body_matches_on() {
+    fn an_exact_magic_predicate_collapses_to_its_complete_native_selector() {
         let rendered = selectors_for(
             "dclutch_example_contract::is_example_v1(instruction_data)",
             PREDICATE_SOURCE,
             Some("DCLTEXA1"),
         );
-        assert!(
-            rendered
-                .iter()
-                .any(|text| text == "predicate dclutch_example_contract::is_example_v1()"),
-            "the predicate must still be named: {rendered:?}"
+        assert_eq!(
+            rendered.len(),
+            1,
+            "the magic completely describes this predicate"
         );
         assert!(
             rendered
                 .iter()
                 .any(|text| text.contains("magic EXAMPLE_MAGIC_V1") && text.contains("DCLTEXA1")),
             "the predicate's own bytes must reach the row: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn a_compound_predicate_keeps_its_unreadable_part() {
+        let rendered = selectors_for(
+            "dclutch_example_contract::is_example_v1(instruction_data)",
+            COMPOUND_PREDICATE_SOURCE,
+            Some("DCLTEXA1"),
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|text| text == "predicate dclutch_example_contract::is_example_v1()"),
+            "the extra condition must remain visible and fail closed: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|text| text.contains("magic EXAMPLE_MAGIC_V1") && text.contains("DCLTEXA1")),
+            "the readable magic remains available for reports: {rendered:?}"
         );
     }
 
@@ -3067,7 +3126,7 @@ mod resolution_tests {
 /// say so.
 #[cfg(test)]
 mod dispatch_shape_tests {
-    use super::{ConstantIndex, CrateIndex, DispatchWalk, Selector, index_source};
+    use super::{ConstantIndex, DispatchWalk, Selector, index_source};
     use std::collections::{BTreeMap, BTreeSet};
 
     struct Walked {
