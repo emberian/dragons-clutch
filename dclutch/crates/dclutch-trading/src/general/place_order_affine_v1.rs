@@ -13,6 +13,7 @@ use alloc::vec::Vec;
 
 use dclutch_claims::affine_batch_v2::{
     AffineBatchPlanInputV2, AffineBatchPlanV2, AffineBatchRowInputV2, AffineBatchRowV2,
+    canonicalize_zero_transfer_rows_into_v2,
 };
 
 /// The typed PlaceOrder affine canonicalizer could not preserve an exact plan.
@@ -48,8 +49,22 @@ pub fn canonicalize_general_place_order_affine_v1(
     if semantic_position_keys[0] == semantic_position_keys[1] {
         return Err(GeneralPlaceOrderAffineErrorV1::AliasedPosition);
     }
-    let plan =
-        AffineBatchPlanV2::decode(request).map_err(|_| GeneralPlaceOrderAffineErrorV1::Plan)?;
+    // EffectProgram materializes one fixed affine row for every Product
+    // outcome. A selected Sell owns claims only at its signed interval, so
+    // unused rows arrive as the known Debit/Credit-zero producer placeholder.
+    // Compact those rows before the strict Claims decoder and before the child
+    // digest/caller authority are derived. The public on-chain decoder still
+    // rejects the raw placeholder; this is only the typed producer boundary.
+    output.clear();
+    output
+        .try_reserve_exact(request.len())
+        .map_err(|_| GeneralPlaceOrderAffineErrorV1::Allocation)?;
+    output.resize(request.len(), 0);
+    let normalized_len = canonicalize_zero_transfer_rows_into_v2(request, output.as_mut_slice())
+        .map_err(|_| GeneralPlaceOrderAffineErrorV1::Plan)?;
+    output.truncate(normalized_len);
+    let plan = AffineBatchPlanV2::decode(output.as_slice())
+        .map_err(|_| GeneralPlaceOrderAffineErrorV1::Plan)?;
     if plan.position_count() != 2 {
         return Err(GeneralPlaceOrderAffineErrorV1::Plan);
     }
@@ -71,6 +86,17 @@ pub fn canonicalize_general_place_order_affine_v1(
     ];
     let row_count =
         usize::try_from(plan.row_count()).map_err(|_| GeneralPlaceOrderAffineErrorV1::Plan)?;
+    let header = AffineBatchPlanInputV2 {
+        caller_role: plan.caller_role(),
+        release_set: plan.release_set(),
+        market: plan.market(),
+        request_id: plan.request_id(),
+        product_record_digest: plan.product_record_digest(),
+        semantic_basis_id: plan.semantic_basis_id(),
+        linked_basis_record_digest: plan.linked_basis_record_digest(),
+        expected_market_revision: plan.expected_market_revision(),
+        outcome_count: plan.outcome_count(),
+    };
     let mut rows = Vec::new();
     rows.try_reserve_exact(row_count)
         .map_err(|_| GeneralPlaceOrderAffineErrorV1::Allocation)?;
@@ -123,26 +149,11 @@ pub fn canonicalize_general_place_order_affine_v1(
 
     output.clear();
     output
-        .try_reserve_exact(request.len())
+        .try_reserve_exact(normalized_len)
         .map_err(|_| GeneralPlaceOrderAffineErrorV1::Allocation)?;
-    output.resize(request.len(), 0);
-    AffineBatchPlanV2::encode_into(
-        AffineBatchPlanInputV2 {
-            caller_role: plan.caller_role(),
-            release_set: plan.release_set(),
-            market: plan.market(),
-            request_id: plan.request_id(),
-            product_record_digest: plan.product_record_digest(),
-            semantic_basis_id: plan.semantic_basis_id(),
-            linked_basis_record_digest: plan.linked_basis_record_digest(),
-            expected_market_revision: plan.expected_market_revision(),
-            outcome_count: plan.outcome_count(),
-        },
-        &positions,
-        &rows,
-        output,
-    )
-    .map_err(|_| GeneralPlaceOrderAffineErrorV1::Plan)?;
+    output.resize(normalized_len, 0);
+    AffineBatchPlanV2::encode_into(header, &positions, &rows, output)
+        .map_err(|_| GeneralPlaceOrderAffineErrorV1::Plan)?;
     Ok(order)
 }
 
@@ -154,7 +165,8 @@ mod tests {
         CallerRole,
         affine_batch_v2::{
             AFFINE_BATCH_PLAN_HEADER_BYTES_V2, AFFINE_BATCH_POSITION_BYTES_V2,
-            AFFINE_BATCH_ROW_BYTES_V2, AffineBatchPositionV2, DeltaDirectionV2, SignedMagnitudeV2,
+            AFFINE_BATCH_ROW_BYTES_V2, AffineBatchErrorV2, AffineBatchPositionV2,
+            AffineBatchRequestLayoutV2, DeltaDirectionV2, SignedMagnitudeV2,
         },
     };
 
@@ -238,5 +250,100 @@ mod tests {
             assert_eq!(row.source_delta().magnitude(), 3);
             assert_eq!(row.destination_delta().magnitude(), 3);
         }
+    }
+
+    #[test]
+    fn compacts_mixed_sell_zero_rows_before_key_sort_and_child_digest() {
+        let positions = [
+            AffineBatchPositionV2::new([0x11; 32], 4).expect("maker Position"),
+            AffineBatchPositionV2::new([0x22; 32], 9).expect("escrow Position"),
+        ];
+        let rows = [
+            AffineBatchRowV2::new(
+                AffineBatchRowInputV2 {
+                    source_present: true,
+                    destination_present: true,
+                    outcome: 0,
+                    source_position_index: 0,
+                    destination_position_index: 1,
+                    aggregate_delta: magnitude(DeltaDirectionV2::Neutral, 0),
+                    source_delta: magnitude(DeltaDirectionV2::Debit, 3),
+                    destination_delta: magnitude(DeltaDirectionV2::Credit, 3),
+                },
+                2,
+                2,
+            )
+            .expect("first row"),
+            AffineBatchRowV2::new(
+                AffineBatchRowInputV2 {
+                    source_present: true,
+                    destination_present: true,
+                    outcome: 1,
+                    source_position_index: 0,
+                    destination_position_index: 1,
+                    aggregate_delta: magnitude(DeltaDirectionV2::Neutral, 0),
+                    source_delta: magnitude(DeltaDirectionV2::Debit, 3),
+                    destination_delta: magnitude(DeltaDirectionV2::Credit, 3),
+                },
+                2,
+                2,
+            )
+            .expect("selected row"),
+        ];
+        let mut raw = vec![
+            0_u8;
+            AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+                + 2 * AFFINE_BATCH_POSITION_BYTES_V2
+                + 2 * AFFINE_BATCH_ROW_BYTES_V2
+        ];
+        AffineBatchPlanV2::encode_into(
+            AffineBatchPlanInputV2 {
+                caller_role: CallerRole::Trading,
+                release_set: [1; 32],
+                market: [2; 32],
+                request_id: [3; 32],
+                product_record_digest: [4; 32],
+                semantic_basis_id: [5; 32],
+                linked_basis_record_digest: [6; 32],
+                expected_market_revision: 7,
+                outcome_count: 2,
+            },
+            &positions,
+            &rows,
+            &mut raw,
+        )
+        .expect("two-row template");
+        let first_row = AFFINE_BATCH_PLAN_HEADER_BYTES_V2 + 2 * AFFINE_BATCH_POSITION_BYTES_V2;
+        for offset in [
+            AffineBatchRequestLayoutV2::ROW_SOURCE_MAGNITUDE,
+            AffineBatchRequestLayoutV2::ROW_DESTINATION_MAGNITUDE,
+        ] {
+            raw[first_row + offset..first_row + offset + 8].copy_from_slice(&0_u64.to_le_bytes());
+        }
+        assert_eq!(
+            AffineBatchPlanV2::decode(&raw),
+            Err(AffineBatchErrorV2::InvalidDelta),
+            "the raw expanded producer rows are never accepted by Claims"
+        );
+
+        let mut output = Vec::new();
+        assert_eq!(
+            canonicalize_general_place_order_affine_v1(&raw, [[2; 32], [1; 32]], &mut output,)
+                .expect("General normalizes before its key-sorted child commitment"),
+            [1, 0]
+        );
+        let plan = AffineBatchPlanV2::decode(&output).expect("strict compact child");
+        assert_eq!(plan.row_count(), 1);
+        let row = plan.row(0).expect("retained Sell row");
+        assert_eq!(row.outcome(), 1);
+        assert_eq!(row.source_delta().direction(), DeltaDirectionV2::Debit);
+        assert_eq!(row.source_delta().magnitude(), 3);
+        assert_eq!(
+            row.destination_delta().direction(),
+            DeltaDirectionV2::Credit
+        );
+        assert_eq!(row.destination_delta().magnitude(), 3);
+        assert_eq!(row.source_position_index(), 1);
+        assert_eq!(row.destination_position_index(), 0);
     }
 }

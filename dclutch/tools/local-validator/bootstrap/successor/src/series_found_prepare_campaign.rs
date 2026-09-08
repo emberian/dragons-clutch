@@ -53,6 +53,9 @@ pub(crate) struct SeriesFoundPrepareSelectionInputV1<'a> {
     pub(crate) core_product_graph: [([u8; 32], [u8; 32]); 4],
     pub(crate) core_projection: crate::core_bump_projection::CoreProductGraphProjectionV1,
     pub(crate) core_walk: crate::market::CoreProductGraphWalkV1,
+    /// M0 Source-owner principal-cap projection carried by the canonical
+    /// future-Market publisher.
+    pub(crate) principal_cap_sets: u64,
     pub(crate) linked_basis_record_digest: [u8; 32],
     pub(crate) semantic_basis_id: [u8; 32],
     pub(crate) claims_rent_principals: [u64; 3],
@@ -66,7 +69,6 @@ pub(crate) struct SeriesFoundPrepareSelectionInputV1<'a> {
     /// preprofile derives the child-bank first so a live hydrator can observe
     /// its account geometry without inventing a placeholder profile.
     pub(crate) geometry: Option<crate::series_source::SeriesObservedGeometryV1>,
-    pub(crate) consume_shadow_certificate_program: dclutch_core_contract::ContentId,
     pub(crate) selected_release: dclutch_core_contract::ContentId,
     pub(crate) funding_ledger_slot_count: u16,
     pub(crate) activation_deadline_slot: u64,
@@ -134,6 +136,20 @@ pub(crate) struct SeriesFoundPreparePreprofileV1 {
     projected_custody: SeriesProjectedCustodyPhysicalV3,
 }
 
+impl SeriesFoundPreparePreprofileV1 {
+    /// Expose the canonical physical projection to the later Consume/Expire
+    /// geometry owners.  Those owners may name only these semantic-owner
+    /// coordinates; they do not reconstruct Custody or Claims addresses.
+    pub(crate) const fn physical(&self) -> &SeriesPhysicalMaterialV1 {
+        &self.physical
+    }
+
+    /// Exact projected-Custody physical state used to derive the child bank.
+    pub(crate) const fn projected_custody(&self) -> SeriesProjectedCustodyPhysicalV3 {
+        self.projected_custody
+    }
+}
+
 /// Derive the current occurrence's parent requests, projected physical state,
 /// and canonical child bank without requiring a caller-supplied width array.
 pub(crate) fn derive_series_found_prepare_preprofile_v1(
@@ -176,7 +192,7 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
         identity.selected_release_set,
         Identity::new(input.material.rent_program.to_bytes())
             .map_err(|_| Error::new("Series Rent program identity"))?,
-        1,
+        input.principal_cap_sets,
         Sha256::digest(found).into(),
     )
     .map_err(|error| Error::new(format!("Series ProjectFound receipt: {error:?}")))?;
@@ -194,7 +210,7 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
             product_graph: input.core_product_graph,
             projection: input.core_projection,
             walk: input.core_walk,
-            principal_cap_sets: 1,
+            principal_cap_sets: input.principal_cap_sets,
             rent_beneficiary: Identity::new(input.material.rent_credit.to_bytes())
                 .map_err(|_| Error::new("Series RentCredit identity"))?,
         })?;
@@ -391,6 +407,7 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
 /// compiler owns the bounded bank for every action of that Template.
 pub(crate) fn compile_series_found_prepare_selection_v1(
     mut input: SeriesFoundPrepareSelectionInputV1<'_>,
+    consume_shadow_certificate_program: dclutch_core_contract::ContentId,
 ) -> Result<CompiledSeriesFoundPrepareSelectionV1> {
     let preprofile = derive_series_found_prepare_preprofile_v1(&mut input)?;
     let geometry = input.geometry.ok_or_else(|| {
@@ -405,7 +422,7 @@ pub(crate) fn compile_series_found_prepare_selection_v1(
             projected_custody: preprofile.projected_custody,
             children: preprofile.prepare_children.clone(),
             geometry,
-            consume_shadow_certificate_program: input.consume_shadow_certificate_program,
+            consume_shadow_certificate_program,
             selected_release: input.selected_release,
             funding_ledger_slot_count: input.funding_ledger_slot_count,
             activation_deadline_slot: input.activation_deadline_slot,
@@ -930,6 +947,7 @@ mod tests {
             ],
             core_projection: CoreProductGraphProjectionV1::Recorded,
             core_walk: CoreProductGraphWalkV1::ProjectedFounding,
+            principal_cap_sets: 1,
             linked_basis_record_digest: record_identity(&prepared.publication.basis),
             semantic_basis_id: content(&prepared.facts.occurrences[0].liability_basis).to_bytes(),
             claims_rent_principals: [1, 1, 1],
@@ -944,8 +962,6 @@ mod tests {
                 consume_funding_count: 1,
                 expire_fixed_data_lengths: [0; SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize],
             }),
-            consume_shadow_certificate_program: ContentId::new([62; 32])
-                .expect("shadow certificate program"),
             selected_release: template.release_set(),
             funding_ledger_slot_count: 1,
             activation_deadline_slot: 101,
@@ -1035,11 +1051,11 @@ mod tests {
     fn canonical_market_two_occurrence_series_compiler_accepts_and_normalizes_parent_root() {
         let prepared = prepared_founder();
         let provisional_root = Pubkey::new_unique();
-        let provisional = compile_series_found_prepare_selection_v1(compiler_input(
-            &prepared,
-            provisional_root,
-            &prepared.admitted.tickets()[0],
-        ))
+        let certificate = ContentId::new([62; 32]).expect("shadow certificate program");
+        let provisional = compile_series_found_prepare_selection_v1(
+            compiler_input(&prepared, provisional_root, &prepared.admitted.tickets()[0]),
+            certificate,
+        )
         .expect("accepted provisional Series selection");
         assert_eq!(provisional.selected.records.len(), 39);
         assert!(!provisional.parents.prepare_request.is_empty());
@@ -1047,11 +1063,10 @@ mod tests {
 
         let actual_root = derived_parent_root(&prepared, &provisional);
         assert_ne!(actual_root, provisional_root);
-        let actual = compile_series_found_prepare_selection_v1(compiler_input(
-            &prepared,
-            actual_root,
-            &prepared.admitted.tickets()[0],
-        ))
+        let actual = compile_series_found_prepare_selection_v1(
+            compiler_input(&prepared, actual_root, &prepared.admitted.tickets()[0]),
+            certificate,
+        )
         .expect("accepted derived-parent Series selection");
         require_series_selection_invariance_v1(&provisional, &actual)
             .expect("parent-root normalization preserves immutable publication bytes");
@@ -1064,7 +1079,7 @@ mod tests {
             siblings: &prepared.admitted.siblings()[0],
             ticket_state: None,
         });
-        let bad_join = compile_series_found_prepare_selection_v1(bad_input);
+        let bad_join = compile_series_found_prepare_selection_v1(bad_input, certificate);
         let Err(error) = bad_join else {
             panic!("second Ticket cannot join first occurrence");
         };

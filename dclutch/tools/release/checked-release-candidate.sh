@@ -24,6 +24,20 @@ usage: checked-release-candidate.sh [options]
   --tool PATH    prebuilt dclutch-release-tool binary (never emits an Upgrade gate;
                  default source-pinned build under --work is required for that gate)
   --commit REV   source revision to archive (default: HEAD)
+  --series-shadow-generated-include PATH
+                 absolute canonical Series Shadow include selected for the
+                 accelerator. It is accepted only with all three source
+                 witnesses below, regenerated from the pinned source, then
+                 compared byte-for-byte before any SBF build.
+  --series-shadow-source-manifest PATH
+                 absolute canonical source manifest that regenerates the
+                 selected include.
+  --series-shadow-compiler-source PATH
+                 absolute canonical compiler-source manifest committed by the
+                 Series Shadow source manifest.
+  --series-shadow-toolchain-manifest PATH
+                 absolute canonical toolchain manifest committed by the Series
+                 Shadow source manifest.
   --builder NAME execution substrate label: local, persvati, container, or
                  hbox (default: local; hbox refuses unless inside swarm-build).
                  The named RELEASE builder artifact is platform-tools on
@@ -82,12 +96,20 @@ NODE_ARCHIVE=""
 KEEP_ELF="false"
 ALLOW_DIAGNOSTICS="false"
 DIAGNOSTIC_BUILDER="false"
+SERIES_SHADOW_GENERATED_INCLUDE=""
+SERIES_SHADOW_SOURCE_MANIFEST=""
+SERIES_SHADOW_COMPILER_SOURCE=""
+SERIES_SHADOW_TOOLCHAIN_MANIFEST=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --tool) TOOL="${2:?--tool needs a value}"; PREBUILT_TOOL="true"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
+        --series-shadow-generated-include) SERIES_SHADOW_GENERATED_INCLUDE="${2:?--series-shadow-generated-include needs a value}"; shift 2 ;;
+        --series-shadow-source-manifest) SERIES_SHADOW_SOURCE_MANIFEST="${2:?--series-shadow-source-manifest needs a value}"; shift 2 ;;
+        --series-shadow-compiler-source) SERIES_SHADOW_COMPILER_SOURCE="${2:?--series-shadow-compiler-source needs a value}"; shift 2 ;;
+        --series-shadow-toolchain-manifest) SERIES_SHADOW_TOOLCHAIN_MANIFEST="${2:?--series-shadow-toolchain-manifest needs a value}"; shift 2 ;;
         --builder) BUILDER="${2:?--builder needs a value}"; shift 2 ;;
         --node) NODE="${2:?--node needs a value}"; shift 2 ;;
         --node-archive) NODE_ARCHIVE="${2:?--node-archive needs a value}"; shift 2 ;;
@@ -119,6 +141,29 @@ if [ -z "$REPO" ]; then
     REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
+if [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
+    [ -n "$SERIES_SHADOW_SOURCE_MANIFEST" ] \
+        && [ -n "$SERIES_SHADOW_COMPILER_SOURCE" ] \
+        && [ -n "$SERIES_SHADOW_TOOLCHAIN_MANIFEST" ] \
+        || { echo "--series-shadow-generated-include requires --series-shadow-source-manifest, --series-shadow-compiler-source, and --series-shadow-toolchain-manifest" >&2; exit 2; }
+elif [ -n "$SERIES_SHADOW_SOURCE_MANIFEST" ] \
+    || [ -n "$SERIES_SHADOW_COMPILER_SOURCE" ] \
+    || [ -n "$SERIES_SHADOW_TOOLCHAIN_MANIFEST" ]; then
+    echo "Series Shadow source witnesses require --series-shadow-generated-include" >&2
+    exit 2
+fi
+for series_shadow_argument in \
+    "$SERIES_SHADOW_GENERATED_INCLUDE" \
+    "$SERIES_SHADOW_SOURCE_MANIFEST" \
+    "$SERIES_SHADOW_COMPILER_SOURCE" \
+    "$SERIES_SHADOW_TOOLCHAIN_MANIFEST"; do
+    if [ -n "$series_shadow_argument" ]; then
+        case "$series_shadow_argument" in
+            /*) ;;
+            *) echo "Series Shadow selected-build inputs must be absolute canonical paths" >&2; exit 2 ;;
+        esac
+    fi
+done
 if [ "$KEEP_ELF" = "true" ]; then
     echo "refusing --keep-elf: a checked release requires a fresh top-package compile marker for every SBF link; use a new --work root" >&2
     exit 2
@@ -340,9 +385,29 @@ PROVENANCE_DIR="$WORK/provenance"
 PRODUCT_HANDOFF_DIR="$WORK/product-handoff"
 PRODUCT_BUILD_DIR="$WORK/product-handoff-build"
 TOOLCHAIN_DIR="$WORK/toolchain"
+SERIES_SHADOW_DIR="$WORK/series-shadow"
+SERIES_SHADOW_STAGED_INCLUDE="$SERIES_SHADOW_DIR/series_shadow_generated.rs"
+SERIES_SHADOW_STAGED_SOURCE_MANIFEST="$SERIES_SHADOW_DIR/series_shadow_source_manifest.bin"
+SERIES_SHADOW_STAGED_COMPILER_SOURCE="$SERIES_SHADOW_DIR/compiler_source_manifest.bin"
+SERIES_SHADOW_STAGED_TOOLCHAIN_MANIFEST="$SERIES_SHADOW_DIR/toolchain_manifest.bin"
+SERIES_SHADOW_PROVENANCE="$PROVENANCE_DIR/series-shadow-selected-inputs.tsv"
+SERIES_SHADOW_VERIFY_LOG="$WORK/series-shadow-verify.log"
 
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
+require_regular_canonical_series_shadow_input() {
+    local option="$1" input="$2"
+    [ -f "$input" ] && [ ! -L "$input" ] \
+        || { echo "$option must be a regular non-symlink file" >&2; exit 2; }
+    local parent canonical bytes
+    parent="$(cd "$(dirname "$input")" && pwd -P)"
+    canonical="$parent/$(basename "$input")"
+    [ "$input" = "$canonical" ] \
+        || { echo "$option must be an absolute canonical path" >&2; exit 2; }
+    bytes="$(wc -c < "$input" | tr -d ' ')"
+    [ "$bytes" -gt 0 ] && [ "$bytes" -le 1048576 ] \
+        || { echo "$option width must be in 1..1048576 bytes" >&2; exit 2; }
+}
 
 # A step whose whole output goes to a log ABORTS SILENTLY under `set -e`, and
 # the guard written underneath it -- "did not emit a regular executable" -- is
@@ -432,9 +497,16 @@ PROVENANCE_DIR="$WORK/provenance"
 PRODUCT_HANDOFF_DIR="$WORK/product-handoff"
 PRODUCT_BUILD_DIR="$WORK/product-handoff-build"
 TOOLCHAIN_DIR="$WORK/toolchain"
+SERIES_SHADOW_DIR="$WORK/series-shadow"
+SERIES_SHADOW_STAGED_INCLUDE="$SERIES_SHADOW_DIR/series_shadow_generated.rs"
+SERIES_SHADOW_STAGED_SOURCE_MANIFEST="$SERIES_SHADOW_DIR/series_shadow_source_manifest.bin"
+SERIES_SHADOW_STAGED_COMPILER_SOURCE="$SERIES_SHADOW_DIR/compiler_source_manifest.bin"
+SERIES_SHADOW_STAGED_TOOLCHAIN_MANIFEST="$SERIES_SHADOW_DIR/toolchain_manifest.bin"
+SERIES_SHADOW_PROVENANCE="$PROVENANCE_DIR/series-shadow-selected-inputs.tsv"
+SERIES_SHADOW_VERIFY_LOG="$WORK/series-shadow-verify.log"
 rm -f "$UPGRADE_GATE" "$RELEASE_GATE" "$GATE_DIGEST_FILE" "$CAMPAIGN_PACK" "$SUMMARY"
 rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR" "$PROVENANCE_DIR" \
-    "$WORK/run" "$PRODUCT_HANDOFF_DIR" "$PRODUCT_BUILD_DIR" "$TOOLCHAIN_DIR"
+    "$WORK/run" "$PRODUCT_HANDOFF_DIR" "$PRODUCT_BUILD_DIR" "$TOOLCHAIN_DIR" "$SERIES_SHADOW_DIR"
 mkdir -p "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR" "$PROVENANCE_DIR" \
     "$PRODUCT_HANDOFF_DIR" "$PRODUCT_BUILD_DIR" "$TOOLCHAIN_DIR"
 
@@ -470,6 +542,73 @@ echo "commit: $SOURCE_REVISION"
 rm -rf "$SOURCE"
 mkdir -p "$SOURCE"
 git -C "$REPO" archive "$SOURCE_REVISION" | tar -x -C "$SOURCE"
+
+# A selected Series Shadow ELF is built from a complete source-manifest
+# reconstruction. A generated-looking header or a handful of expected
+# constants prove neither authorship nor the rest of the bytes, so this runner
+# accepts the full source witnesses, invokes the archived generator, and
+# compares the regenerated include byte-for-byte before SBF work.
+if [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
+    require_regular_canonical_series_shadow_input \
+        "--series-shadow-generated-include" "$SERIES_SHADOW_GENERATED_INCLUDE"
+    require_regular_canonical_series_shadow_input \
+        "--series-shadow-source-manifest" "$SERIES_SHADOW_SOURCE_MANIFEST"
+    require_regular_canonical_series_shadow_input \
+        "--series-shadow-compiler-source" "$SERIES_SHADOW_COMPILER_SOURCE"
+    require_regular_canonical_series_shadow_input \
+        "--series-shadow-toolchain-manifest" "$SERIES_SHADOW_TOOLCHAIN_MANIFEST"
+    mkdir -p "$SERIES_SHADOW_DIR"
+    cp "$SERIES_SHADOW_GENERATED_INCLUDE" "$SERIES_SHADOW_STAGED_INCLUDE"
+    cp "$SERIES_SHADOW_SOURCE_MANIFEST" "$SERIES_SHADOW_STAGED_SOURCE_MANIFEST"
+    cp "$SERIES_SHADOW_COMPILER_SOURCE" "$SERIES_SHADOW_STAGED_COMPILER_SOURCE"
+    cp "$SERIES_SHADOW_TOOLCHAIN_MANIFEST" "$SERIES_SHADOW_STAGED_TOOLCHAIN_MANIFEST"
+    cmp -s "$SERIES_SHADOW_GENERATED_INCLUDE" "$SERIES_SHADOW_STAGED_INCLUDE" \
+        || { echo "staged Series Shadow generated include differs from its admitted input" >&2; exit 1; }
+    cmp -s "$SERIES_SHADOW_SOURCE_MANIFEST" "$SERIES_SHADOW_STAGED_SOURCE_MANIFEST" \
+        || { echo "staged Series Shadow source manifest differs from its admitted input" >&2; exit 1; }
+    cmp -s "$SERIES_SHADOW_COMPILER_SOURCE" "$SERIES_SHADOW_STAGED_COMPILER_SOURCE" \
+        || { echo "staged Series Shadow compiler source differs from its admitted input" >&2; exit 1; }
+    cmp -s "$SERIES_SHADOW_TOOLCHAIN_MANIFEST" "$SERIES_SHADOW_STAGED_TOOLCHAIN_MANIFEST" \
+        || { echo "staged Series Shadow toolchain manifest differs from its admitted input" >&2; exit 1; }
+    SERIES_SHADOW_SEMANTIC_SOURCE="$SOURCE/programs/dclutch-trading-sbf/src/series/consume_artifacts_v4.rs"
+    SERIES_SHADOW_VERIFIER="$SOURCE/programs/dclutch-accelerator-sbf/generator/src/bin/series_shadow_checked_include.rs"
+    [ -f "$SERIES_SHADOW_SEMANTIC_SOURCE" ] && [ -f "$SERIES_SHADOW_VERIFIER" ] \
+        || { echo "refusing: pinned source lacks the Series Shadow selected-include verifier inputs" >&2; exit 1; }
+    if (
+        cd "$SOURCE"
+        CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$HOST_TARGET" \
+            cargo run --locked --offline -p dclutch-series-shadow-bundle-generator \
+                --bin series_shadow_checked_include -- \
+                "$SERIES_SHADOW_STAGED_SOURCE_MANIFEST" \
+                "$SERIES_SHADOW_STAGED_INCLUDE" \
+                "$SERIES_SHADOW_SEMANTIC_SOURCE" \
+                "$SERIES_SHADOW_STAGED_COMPILER_SOURCE" \
+                "$SERIES_SHADOW_STAGED_TOOLCHAIN_MANIFEST"
+    ) > "$SERIES_SHADOW_VERIFY_LOG" 2>&1; then
+        :
+    else
+        series_shadow_status=$?
+        step_refused "source-pinned Series Shadow include reconstruction" \
+            "$SERIES_SHADOW_VERIFY_LOG" "$series_shadow_status"
+    fi
+    {
+        printf 'format=dclutch-series-shadow-selected-inputs-v1\n'
+        printf 'source_revision=%s\n' "$SOURCE_REVISION"
+        printf 'source_tree_sha256=%s\n' "$SOURCE_DIGEST"
+        printf 'source_manifest=series-shadow/series_shadow_source_manifest.bin\n'
+        printf 'source_manifest_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_STAGED_SOURCE_MANIFEST")"
+        printf 'generated_include=series-shadow/series_shadow_generated.rs\n'
+        printf 'generated_include_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_STAGED_INCLUDE")"
+        printf 'semantic_source=source/programs/dclutch-trading-sbf/src/series/consume_artifacts_v4.rs\n'
+        printf 'semantic_source_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_SEMANTIC_SOURCE")"
+        printf 'compiler_source=series-shadow/compiler_source_manifest.bin\n'
+        printf 'compiler_source_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_STAGED_COMPILER_SOURCE")"
+        printf 'toolchain_manifest=series-shadow/toolchain_manifest.bin\n'
+        printf 'toolchain_manifest_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_STAGED_TOOLCHAIN_MANIFEST")"
+        printf 'verification=source-pinned-regeneration-byte-compare-passed\n'
+        printf 'verification_log_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_VERIFY_LOG")"
+    } > "$SERIES_SHADOW_PROVENANCE"
+fi
 
 # Cargo's `--locked` refusal is the per-invocation admission. This manifest is
 # the repository-wide complement: it proves that no build created, removed, or
@@ -638,6 +777,9 @@ while IFS=$'\t' read -r label package; do
     build_target_relative="${link_target#"$WORK"/}"
     build_feature_suffix="$(sbf_shipped_feature_suffix "$package")"
     build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked"
+    if [ "$package" = "dclutch-accelerator-sbf" ] && [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
+        build_invocation="DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE=series-shadow/series_shadow_generated.rs $build_invocation"
+    fi
     printf 'dclutch-sbf-build-run-v1=%s\n' "$BUILD_RUN_ID" > "$link_log"
     printf 'dclutch-sbf-build-invocation-v1=%s\n' "$build_invocation" >> "$link_log"
     if [ -n "$stem" ]; then
@@ -645,8 +787,14 @@ while IFS=$'\t' read -r label package; do
     fi
     (
         cd "$SOURCE"
-        CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
-            cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+        if [ "$package" = "dclutch-accelerator-sbf" ] && [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
+            DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE="$SERIES_SHADOW_STAGED_INCLUDE" \
+                CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
+                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+        else
+            CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
+                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+        fi
     ) >>"$link_log" 2>&1
     cat "$link_log" >> "$BUILD_LOG"
     count="$(grep -Ec "$DIAGNOSTIC_PATTERN" "$link_log" || true)"
@@ -782,7 +930,12 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
                 RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
                     CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$frame_target" \
                     cargo build-sbf --manifest-path "programs/$package/Cargo.toml" \
-                        --features hot-cu-profile -- --locked
+                    --features hot-cu-profile -- --locked
+            elif [ "$package" = "dclutch-accelerator-sbf" ] && [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
+                RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
+                    DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE="$SERIES_SHADOW_STAGED_INCLUDE" \
+                    CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$frame_target" \
+                    cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
             else
                 RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
                     CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$frame_target" \
@@ -843,6 +996,10 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
         frame_feature_suffix="$(sbf_profile_feature_suffix "$package")"
         build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked"
         frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml$frame_feature_suffix -- --locked"
+        if [ "$package" = "dclutch-accelerator-sbf" ] && [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
+            build_invocation="DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE=series-shadow/series_shadow_generated.rs $build_invocation"
+            frame_invocation="DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE=series-shadow/series_shadow_generated.rs $frame_invocation"
+        fi
         build_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$WORK/build-$label.log" | tail -n 1)"
         frame_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$WORK/frame-build-$label.log" | tail -n 1)"
         object_stem="$(printf '%s' "$package" | tr '-' '_')"
@@ -1206,6 +1363,17 @@ fi
     printf 'sbf_build_freshness_links=%s\n' "$BUILD_LINK_COUNT"
     printf 'sbf_build_diagnostics_total=%s\n' "$DIAGNOSTIC_TOTAL"
     printf 'sbf_build_diagnostics_accepted=%s\n' "$ALLOW_DIAGNOSTICS"
+    if [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
+        printf 'series_shadow_release_selected=true\n'
+        printf 'series_shadow_generated_include_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_STAGED_INCLUDE")"
+        printf 'series_shadow_generated_include=series-shadow/series_shadow_generated.rs\n'
+        printf 'series_shadow_source_manifest_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_STAGED_SOURCE_MANIFEST")"
+        printf 'series_shadow_source_manifest=series-shadow/series_shadow_source_manifest.bin\n'
+        printf 'series_shadow_selected_inputs_provenance=provenance/series-shadow-selected-inputs.tsv\n'
+        printf 'series_shadow_selected_inputs_provenance_sha256=%s\n' "$(sha256 "$SERIES_SHADOW_PROVENANCE")"
+    else
+        printf 'series_shadow_release_selected=false\n'
+    fi
     if [ -f "$WORK/build-diagnostics.txt" ]; then
         sed -n 's/^/sbf_build_diagnostics./p' "$WORK/build-diagnostics.txt"
     fi

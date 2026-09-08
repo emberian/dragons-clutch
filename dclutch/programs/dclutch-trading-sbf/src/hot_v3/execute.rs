@@ -1067,6 +1067,11 @@ pub(super) fn execute_authenticated_hot_v3(
         request_digest,
         trusted_environment,
         product_outcome_count,
+        prepared
+            .product_runtime_v3
+            .linked_basis_record
+            .content_digest
+            .to_bytes(),
         scalar_count,
         identity_count,
     )?;

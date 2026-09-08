@@ -11,7 +11,7 @@ use dclutch_operator::general_successor as shared;
 
 use crate::{
     Error, Result,
-    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
+    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
     rpc::{Rpc, WritePolicyV1},
 };
 
@@ -139,6 +139,8 @@ mod tests {
 
 /// Publish the frozen routing table one General route's own instruction needs.
 pub(crate) const DEVNET_LOOKUP_TABLE_COMMAND_V1: &str = "devnet-general-lookup-table-v1";
+pub(crate) const LOCAL_LOOKUP_TABLE_COMMAND_V1: &str =
+    "local-private-validator-general-lookup-table-v1";
 
 pub(crate) fn lookup_table_usage() -> String {
     format!(
@@ -163,14 +165,23 @@ struct LookupArgumentsV1 {
 }
 
 pub(crate) fn run_lookup_table_devnet(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_lookup_arguments_v1(arguments)?;
+    run_lookup_table(arguments, ExpectedClusterV1::Devnet)
+}
+
+/// Publish the route-owned table on one validator this campaign owns.
+pub(crate) fn run_lookup_table_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run_lookup_table(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn run_lookup_table(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse_lookup_arguments_v1(arguments, expected)?;
     if arguments.evidence.exists() {
         return Err(Error::new(format!(
             "refusing to overwrite {}",
             arguments.evidence.display()
         )));
     }
-    crate::cluster::ExpectedClusterV1::Devnet.authenticate(&arguments.origin)?;
+    expected.authenticate(&arguments.origin)?;
     let route_bytes = shared::read_bounded_route_file_v1(&arguments.route).map_err(lift)?;
     let route = shared::parse_route_v1(&route_bytes).map_err(lift)?;
     let payer = shared::route_payer_v1(&route);
@@ -191,8 +202,11 @@ pub(crate) fn run_lookup_table_devnet(arguments: Vec<String>) -> Result<()> {
     println!("snapshot accounts    {}", addresses.len());
     println!("table addresses      {}", required.len());
     let mut evidence = serde_json::json!({
-        "schema": "dclutch-devnet-general-lookup-table-evidence-v1",
-        "cluster": "devnet",
+        "schema": match expected {
+            ExpectedClusterV1::Devnet => "dclutch-devnet-general-lookup-table-evidence-v1",
+            ExpectedClusterV1::OwnedLoopback => "dclutch-local-general-lookup-table-evidence-v1",
+        },
+        "cluster": expected.evidence_label(),
         "rpcUrl": arguments.origin.redacted_url(),
         "route": arguments.route.display().to_string(),
         "payer": payer.to_string(),
@@ -213,10 +227,9 @@ pub(crate) fn run_lookup_table_devnet(arguments: Vec<String>) -> Result<()> {
         .payer_keypair
         .as_deref()
         .ok_or_else(|| Error::new("--execute requires --payer-keypair"))?;
-    let signer = solana_sdk::signature::Keypair::new_from_array(crate::campaign::read_keypair_file(
-        path,
-        "General lookup table payer",
-    )?);
+    let signer = solana_sdk::signature::Keypair::new_from_array(
+        crate::campaign::read_keypair_file(path, "General lookup table payer")?,
+    );
     // THE ROUTE'S PAYER IS THE ONE THAT MAY SIGN THIS.
     //
     // `canonical_general_lookup_addresses_v3` excludes the payer and every
@@ -262,7 +275,10 @@ pub(crate) fn run_lookup_table_devnet(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn parse_lookup_arguments_v1(arguments: Vec<String>) -> Result<LookupArgumentsV1> {
+fn parse_lookup_arguments_v1(
+    arguments: Vec<String>,
+    expected: ExpectedClusterV1,
+) -> Result<LookupArgumentsV1> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut route = None;
@@ -291,10 +307,14 @@ fn parse_lookup_arguments_v1(arguments: Vec<String>) -> Result<LookupArgumentsV1
         }
     }
     let rpc_url = rpc_url.ok_or_else(|| Error::new("--rpc-url is required"))?;
-    let acknowledgment =
-        acknowledgment.ok_or_else(|| Error::new("--i-mean-devnet GENESIS_HASH is required"))?;
+    let acknowledgment = match expected {
+        ExpectedClusterV1::Devnet => Some(
+            acknowledgment.ok_or_else(|| Error::new("--i-mean-devnet GENESIS_HASH is required"))?,
+        ),
+        ExpectedClusterV1::OwnedLoopback => acknowledgment,
+    };
     Ok(LookupArgumentsV1 {
-        origin: ClusterOriginV1::parse(&rpc_url, Some(&acknowledgment))?,
+        origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
         route: absolute_path_v1(route, "--route")?,
         payer_keypair: payer_keypair.map(PathBuf::from),
         evidence: absolute_path_v1(evidence, "--evidence")?,
@@ -308,6 +328,8 @@ fn parse_lookup_arguments_v1(arguments: Vec<String>) -> Result<LookupArgumentsV1
 
 /// Produce, sign, simulate and submit one General successor transaction.
 pub(crate) const DEVNET_EXECUTE_COMMAND_V1: &str = "devnet-general-successor-execute-v1";
+pub(crate) const LOCAL_EXECUTE_COMMAND_V1: &str =
+    "local-private-validator-general-successor-execute-v1";
 
 pub(crate) fn execute_usage() -> String {
     format!(
@@ -333,7 +355,16 @@ struct ExecuteArgumentsV1 {
 }
 
 pub(crate) fn run_execute_devnet(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_execute_arguments_v1(arguments)?;
+    run_execute(arguments, ExpectedClusterV1::Devnet)
+}
+
+/// Execute one exact General successor plan on an owned loopback validator.
+pub(crate) fn run_execute_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run_execute(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn run_execute(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse_execute_arguments_v1(arguments, expected)?;
     for path in [&arguments.plan_output, &arguments.evidence] {
         if path.exists() {
             return Err(Error::new(format!(
@@ -342,7 +373,7 @@ pub(crate) fn run_execute_devnet(arguments: Vec<String>) -> Result<()> {
             )));
         }
     }
-    crate::cluster::ExpectedClusterV1::Devnet.authenticate(&arguments.origin)?;
+    expected.authenticate(&arguments.origin)?;
     let route_bytes = shared::read_bounded_route_file_v1(&arguments.route).map_err(lift)?;
     let route = shared::parse_route_v1(&route_bytes).map_err(lift)?;
     let payer_key = shared::route_payer_v1(&route);
@@ -358,9 +389,8 @@ pub(crate) fn run_execute_devnet(arguments: Vec<String>) -> Result<()> {
     let (blockhash, last_valid_block_height) = rpc.recent_blockhash_with_height_v1()?;
     let document = shared::produce_plan_v5(&route, observed, blockhash).map_err(lift)?;
     shared::write_new_plan_v5(&arguments.plan_output, &document).map_err(lift)?;
-    let plan: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&arguments.plan_output)?)
-            .map_err(|error| Error::new(format!("plan document: {error}")))?;
+    let plan: serde_json::Value = serde_json::from_slice(&std::fs::read(&arguments.plan_output)?)
+        .map_err(|error| Error::new(format!("plan document: {error}")))?;
     let encoded = plan
         .get("transactionBase64")
         .and_then(serde_json::Value::as_str)
@@ -399,8 +429,11 @@ pub(crate) fn run_execute_devnet(arguments: Vec<String>) -> Result<()> {
             .map_or_else(|| "none".to_owned(), ToString::to_string)
     );
     let mut evidence = serde_json::json!({
-        "schema": "dclutch-devnet-general-successor-execute-evidence-v1",
-        "cluster": "devnet",
+        "schema": match expected {
+            ExpectedClusterV1::Devnet => "dclutch-devnet-general-successor-execute-evidence-v1",
+            ExpectedClusterV1::OwnedLoopback => "dclutch-local-general-successor-execute-evidence-v1",
+        },
+        "cluster": expected.evidence_label(),
         "rpcUrl": arguments.origin.redacted_url(),
         "route": arguments.route.display().to_string(),
         "plan": arguments.plan_output.display().to_string(),
@@ -432,10 +465,9 @@ pub(crate) fn run_execute_devnet(arguments: Vec<String>) -> Result<()> {
         .payer_keypair
         .as_deref()
         .ok_or_else(|| Error::new("--execute requires --payer-keypair"))?;
-    let signer = solana_sdk::signature::Keypair::new_from_array(crate::campaign::read_keypair_file(
-        path,
-        "General successor payer",
-    )?);
+    let signer = solana_sdk::signature::Keypair::new_from_array(
+        crate::campaign::read_keypair_file(path, "General successor payer")?,
+    );
     if solana_sdk::signer::Signer::pubkey(&signer) != payer_key {
         return Err(Error::new(format!(
             "the route names payer {payer_key} and the keypair holds {}",
@@ -513,7 +545,10 @@ fn base64_decode_v1(value: &str) -> Result<Vec<u8>> {
         .map_err(|error| Error::new(format!("plan transaction base64: {error}")))
 }
 
-fn parse_execute_arguments_v1(arguments: Vec<String>) -> Result<ExecuteArgumentsV1> {
+fn parse_execute_arguments_v1(
+    arguments: Vec<String>,
+    expected: ExpectedClusterV1,
+) -> Result<ExecuteArgumentsV1> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut route = None;
@@ -544,10 +579,14 @@ fn parse_execute_arguments_v1(arguments: Vec<String>) -> Result<ExecuteArguments
         }
     }
     let rpc_url = rpc_url.ok_or_else(|| Error::new("--rpc-url is required"))?;
-    let acknowledgment =
-        acknowledgment.ok_or_else(|| Error::new("--i-mean-devnet GENESIS_HASH is required"))?;
+    let acknowledgment = match expected {
+        ExpectedClusterV1::Devnet => Some(
+            acknowledgment.ok_or_else(|| Error::new("--i-mean-devnet GENESIS_HASH is required"))?,
+        ),
+        ExpectedClusterV1::OwnedLoopback => acknowledgment,
+    };
     Ok(ExecuteArgumentsV1 {
-        origin: ClusterOriginV1::parse(&rpc_url, Some(&acknowledgment))?,
+        origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
         route: absolute_path_v1(route, "--route")?,
         plan_output: absolute_path_v1(plan_output, "--plan-output")?,
         payer_keypair: payer_keypair.map(PathBuf::from),

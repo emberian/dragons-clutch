@@ -11,7 +11,7 @@ use dclutch_chain_bundle_builder::{
     bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1},
     frame::{
         BuiltAccountV1, SYSTEM_PROGRAM_BUILTIN_NAME_V1, data_account, external_with_view,
-        program_with_view, rent_sysvar_bytes, system_program_builtin, vacant,
+        program_with_view, system_program_builtin, vacant,
     },
     general::{
         GeneralActionPrestateV1, GeneralRequestEvidenceV1, GeneralRequestInputV1,
@@ -27,7 +27,7 @@ use dclutch_claims::{
         encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
         put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
     },
-    protocol_position_v2::ProtocolPositionSeedsV2,
+    protocol_position_v2::{PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionSeedsV2},
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody::{
@@ -260,6 +260,11 @@ fn load_accelerator_elf() -> Vec<u8> {
 fn load_token_2022_elf() -> Vec<u8> {
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR"));
     fs::read(directory.join("spl_token_2022.so")).expect("current Token-2022 ELF")
+}
+
+fn load_rent_elf() -> Vec<u8> {
+    let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR"));
+    fs::read(directory.join("dclutch_rent_sbf.so")).expect("current Rent ELF")
 }
 
 /// Both bumps derive through `RecordKeyV1`, the constructor the Record
@@ -790,7 +795,7 @@ fn build_campaign_with_entry(
     CampaignV1 {
         outcome_count,
         payer,
-        rent,
+        rent: rent.clone(),
         substrate,
         releases,
         product,
@@ -800,11 +805,17 @@ fn build_campaign_with_entry(
         state,
         waist_facts,
         accelerator_artifact: accelerator_artifact.to_bytes().to_vec(),
-        accelerator_program: program_with_view(ACCELERATOR_PROGRAM, accelerator_programdata),
-        accelerator_programdata_account: external_with_view(
-            accelerator_programdata,
-            bpf_loader_upgradeable::ID,
-            waist::programdata_v2(substrate, accelerator_elf),
+        accelerator_program: observed_rent_funded(
+            &rent,
+            program_with_view(ACCELERATOR_PROGRAM, accelerator_programdata),
+        ),
+        accelerator_programdata_account: observed_rent_funded(
+            &rent,
+            external_with_view(
+                accelerator_programdata,
+                bpf_loader_upgradeable::ID,
+                waist::programdata_v2(substrate, accelerator_elf),
+            ),
         ),
         externally_installed: [
             ACCELERATOR_PROGRAM,
@@ -956,6 +967,27 @@ fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
     bytes
 }
 
+/// A child-owned account that has been prepaid but remains vacant until its
+/// owner allocates it. Claims admission deliberately requires this floor while
+/// still requiring the System owner and an empty body: no caller can allocate
+/// the off-curve PDA before the Claims program does.
+fn prepaid_vacant(rent: &Rent, key: Pubkey, eventual_bytes: usize) -> BuiltAccountV1 {
+    let mut account = vacant(key);
+    account.account.lamports = rent.minimum_balance(eventual_bytes);
+    account
+}
+
+/// The loader, sysvar, and Registry records this frame reads are already
+/// installed by ProgramTest.  Their chain view carries the current rent floor,
+/// even though the harness keeps an inert external installation placeholder.
+fn observed_rent_funded(rent: &Rent, account: BuiltAccountV1) -> BuiltAccountV1 {
+    let mut observed = account.chain_view().clone();
+    if !observed.data.is_empty() {
+        observed.lamports = rent.minimum_balance(observed.data.len());
+    }
+    account.with_observed(observed)
+}
+
 fn place_order_corpus(
     campaign: &CampaignV1,
     chain: &ChainPrestateV1,
@@ -1079,8 +1111,22 @@ fn place_order_corpus(
             GENERAL_TOKEN_PROGRAM,
             token_account_bytes(GENERAL_COLLATERAL_MINT, maker, 4),
         ),
-        escrow_position: vacant(children.position),
-        escrow_admission: vacant(children.admission),
+        // Claims admission has no payer account. Its Position and admission
+        // PDAs must therefore arrive as System-owned, data-empty accounts
+        // prepaid to the exact widths it will allocate. Keeping them at zero
+        // made the host encode an underfunded child request that Claims
+        // correctly refused before the CPI could create either account.
+        escrow_position: prepaid_vacant(
+            &campaign.rent,
+            children.position,
+            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
+                + usize::try_from(campaign.outcome_count).expect("outcome width") * 8,
+        ),
+        escrow_admission: prepaid_vacant(
+            &campaign.rent,
+            children.admission,
+            PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+        ),
         escrow_replay: vacant(children.replay),
         escrow_vault: vacant(children.vault),
         custody_authority: vacant(custody_authority),
@@ -1093,17 +1139,28 @@ fn place_order_child_bindings(
     chain: &ChainPrestateV1,
     corpus: &PlaceOrderCorpusV1,
     order_terms: &BuiltAccountV1,
+    rent_sysvar: &BuiltAccountV1,
 ) -> Vec<(usize, BuiltAccountV1)> {
-    let program = |key| program_with_view(key, waist::programdata(key));
-    let rent_sysvar = || {
-        external_with_view(
-            sysvar::rent::ID,
-            sysvar::ID,
-            rent_sysvar_bytes(&campaign.rent),
+    let program = |key| {
+        observed_rent_funded(
+            &campaign.rent,
+            program_with_view(key, waist::programdata(key)),
         )
     };
+    // ProgramTest owns the Rent sysvar body.  Its current wire uses the
+    // post-SIMD-0194 layout while `solana_program::Rent::default()` has the
+    // legacy-but-economically-equivalent representation, so only the bank
+    // observation is authoritative for this admitted transcript.
+    let rent_sysvar = || rent_sysvar.clone();
+    // The activation cache is an already-finalized Registry record.  Unlike a
+    // sysvar or builtin, it carries its serialized account rent at execution;
+    // model it with the same rent-funded record constructor the bank used when
+    // release waist installed it.  Treating the exact body as an external
+    // one-lamport view changed the admitted observation transcript before the
+    // Custody InitializeReplay CPI.
     let activation = || {
-        external_with_view(
+        data_account(
+            &campaign.rent,
             campaign.releases.activation,
             waist::REGISTRY_PROGRAM_ID,
             campaign.releases.activation_data.to_vec(),
@@ -1155,22 +1212,31 @@ fn place_order_child_bindings(
                         program(waist::TRADING_PROGRAM_ID)
                     }
                     ClaimsFrameRoleV1::TradingProgramData
-                    | ClaimsFrameRoleV1::CallerProgramData => external_with_view(
-                        campaign.releases.trading_programdata,
-                        bpf_loader_upgradeable::ID,
-                        waist::programdata_v2(campaign.substrate, &waist::elves().trading),
+                    | ClaimsFrameRoleV1::CallerProgramData => observed_rent_funded(
+                        &campaign.rent,
+                        external_with_view(
+                            campaign.releases.trading_programdata,
+                            bpf_loader_upgradeable::ID,
+                            waist::programdata_v2(campaign.substrate, &waist::elves().trading),
+                        ),
                     ),
                     ClaimsFrameRoleV1::ClaimsProgram => program(waist::CLAIMS_PROGRAM_ID),
-                    ClaimsFrameRoleV1::ClaimsProgramData => external_with_view(
-                        campaign.releases.claims_programdata,
-                        bpf_loader_upgradeable::ID,
-                        waist::programdata_v2(campaign.substrate, &waist::elves().claims),
+                    ClaimsFrameRoleV1::ClaimsProgramData => observed_rent_funded(
+                        &campaign.rent,
+                        external_with_view(
+                            campaign.releases.claims_programdata,
+                            bpf_loader_upgradeable::ID,
+                            waist::programdata_v2(campaign.substrate, &waist::elves().claims),
+                        ),
                     ),
                     ClaimsFrameRoleV1::CoreProgram => program(waist::CORE_PROGRAM_ID),
-                    ClaimsFrameRoleV1::CoreProgramData => external_with_view(
-                        campaign.releases.core_programdata,
-                        bpf_loader_upgradeable::ID,
-                        waist::programdata_v2(campaign.substrate, &waist::elves().core),
+                    ClaimsFrameRoleV1::CoreProgramData => observed_rent_funded(
+                        &campaign.rent,
+                        external_with_view(
+                            campaign.releases.core_programdata,
+                            bpf_loader_upgradeable::ID,
+                            waist::programdata_v2(campaign.substrate, &waist::elves().core),
+                        ),
                     ),
                     ClaimsFrameRoleV1::PositionOwnerIdentity => order_terms.clone(),
                     ClaimsFrameRoleV1::RentCredit => chain.rent_credit.clone(),
@@ -1191,10 +1257,13 @@ fn place_order_child_bindings(
                     CustodyFrameRoleV1::ActivationCache => activation(),
                     CustodyFrameRoleV1::RegistryProgram => program(waist::REGISTRY_PROGRAM_ID),
                     CustodyFrameRoleV1::CallerProgram => program(waist::TRADING_PROGRAM_ID),
-                    CustodyFrameRoleV1::CallerProgramData => external_with_view(
-                        campaign.releases.trading_programdata,
-                        bpf_loader_upgradeable::ID,
-                        waist::programdata_v2(campaign.substrate, &waist::elves().trading),
+                    CustodyFrameRoleV1::CallerProgramData => observed_rent_funded(
+                        &campaign.rent,
+                        external_with_view(
+                            campaign.releases.trading_programdata,
+                            bpf_loader_upgradeable::ID,
+                            waist::programdata_v2(campaign.substrate, &waist::elves().trading),
+                        ),
                     ),
                     CustodyFrameRoleV1::RealmRecord => corpus.realm.clone(),
                     CustodyFrameRoleV1::RealmStaging => corpus.realm_staging.clone(),
@@ -1216,6 +1285,62 @@ fn place_order_child_bindings(
             Some((usize::from(coordinate), account))
         })
         .collect()
+}
+
+/// The child frame does not install its selected programs, loader records, or
+/// sysvars.  Their account facts belong to ProgramTest's bank.  Re-read those
+/// exact facts after `OpenBatch` rather than predicting them from a local
+/// `Rent` default: the profile still authenticates the selected addresses and
+/// the child adapters still authenticate the bodies they consume.
+async fn observe_existing_place_order_child_bindings(
+    context: &mut solana_program_test::ProgramTestContext,
+    bindings: Vec<(usize, BuiltAccountV1)>,
+) -> Vec<(usize, BuiltAccountV1)> {
+    let sources = general_frame_sources_v1(Action::PlaceOrder).expect("PlaceOrder frame sources");
+    let is_bank_owned = |source: GeneralFrameSourceV1| match source {
+        GeneralFrameSourceV1::SystemProgram | GeneralFrameSourceV1::CustodyCallee => true,
+        GeneralFrameSourceV1::Claims(_, role) => matches!(
+            role,
+            ClaimsFrameRoleV1::RentSysvar
+                | ClaimsFrameRoleV1::SystemProgram
+                | ClaimsFrameRoleV1::RegistryProgram
+                | ClaimsFrameRoleV1::TradingProgram
+                | ClaimsFrameRoleV1::CallerProgram
+                | ClaimsFrameRoleV1::TradingProgramData
+                | ClaimsFrameRoleV1::CallerProgramData
+                | ClaimsFrameRoleV1::ClaimsProgram
+                | ClaimsFrameRoleV1::ClaimsProgramData
+                | ClaimsFrameRoleV1::CoreProgram
+                | ClaimsFrameRoleV1::CoreProgramData
+                | ClaimsFrameRoleV1::RentProgram
+        ),
+        GeneralFrameSourceV1::Custody(_, role) => matches!(
+            role,
+            CustodyFrameRoleV1::RegistryProgram
+                | CustodyFrameRoleV1::CallerProgram
+                | CustodyFrameRoleV1::CallerProgramData
+                | CustodyFrameRoleV1::SystemProgram
+                | CustodyFrameRoleV1::RentSysvar
+                | CustodyFrameRoleV1::TokenProgram
+        ),
+        _ => false,
+    };
+    let mut observed = Vec::with_capacity(bindings.len());
+    for (coordinate, binding) in bindings {
+        let source = sources
+            .iter()
+            .find_map(|(source_coordinate, source)| {
+                (*source_coordinate == u16::try_from(coordinate).expect("frame coordinate"))
+                    .then_some(*source)
+            })
+            .expect("every PlaceOrder child binding has a typed source");
+        if is_bank_owned(source) {
+            observed.push((coordinate, observed_binding(context, binding.key).await));
+        } else {
+            observed.push((coordinate, binding));
+        }
+    }
+    observed
 }
 
 /// One immutable evidence record, installed at the address of its own digest.
@@ -1548,30 +1673,62 @@ async fn assert_frame_control(
     context: &mut solana_program_test::ProgramTestContext,
     case: &HostCase,
 ) {
+    let sources = general_frame_sources_v1(case.action).expect("General frame sources");
+    let mut mismatches = Vec::new();
     for coordinate in 0..case.built.bundle.logical.len() {
         let Some(built) = case.built.bundle.logical.get(coordinate) else {
             continue;
         };
         let view = built.chain_view();
         let observed = chain_account(context, built.key).await;
-        assert_eq!(
-            (
+        if observed.owner != view.owner
+            || observed.lamports != view.lamports
+            || observed.data != view.data
+            || observed.executable != view.executable
+        {
+            let source = sources.iter().find_map(|(source_coordinate, source)| {
+                (usize::from(*source_coordinate) == coordinate).then_some(*source)
+            });
+            let first_byte = observed
+                .data
+                .iter()
+                .zip(view.data.iter())
+                .position(|(actual, modelled)| actual != modelled)
+                .map_or_else(
+                    || {
+                        if observed.data.len() == view.data.len() {
+                            "none".to_owned()
+                        } else {
+                            "past shared prefix".to_owned()
+                        }
+                    },
+                    |index| {
+                        format!(
+                            "{index}: bank={:#04x} host={:#04x}",
+                            observed.data[index], view.data[index]
+                        )
+                    },
+                );
+            mismatches.push(format!(
+                "coordinate {coordinate} source={source:?} key={} bank=({},{},{},{}) host=({},{},{},{}) first_data_difference={first_byte}",
+                built.key,
                 observed.owner,
                 observed.lamports,
                 observed.data.len(),
-                observed.executable
-            ),
-            (view.owner, view.lamports, view.data.len(), view.executable),
-            "{:?}: logical coordinate {coordinate} ({}) is modelled by the host as something the bank does not hold",
-            case.action,
-            built.key,
-        );
-        assert_eq!(
-            observed.data, view.data,
-            "{:?}: logical coordinate {coordinate} ({}) has the declared width and different bytes",
-            case.action, built.key,
-        );
+                observed.executable,
+                view.owner,
+                view.lamports,
+                view.data.len(),
+                view.executable,
+            ));
+        }
     }
+    assert!(
+        mismatches.is_empty(),
+        "{:?}: host frame differs from bank:\n{}",
+        case.action,
+        mismatches.join("\n")
+    );
     assert_eq!(
         chain_account(context, system_program::ID).await.data,
         SYSTEM_PROGRAM_BUILTIN_NAME_V1.as_bytes(),
@@ -2370,6 +2527,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let elves = waist::elves();
     let accelerator_elf = load_accelerator_elf();
     let token_2022_elf = load_token_2022_elf();
+    let rent_elf = load_rent_elf();
     let rent = Rent::default();
     let payer = Keypair::new_from_array([0x11; 32]);
     let fee_payer = Keypair::new_from_array([0x12; 32]);
@@ -2391,6 +2549,13 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         "spl_token_2022",
         GENERAL_TOKEN_PROGRAM,
         &token_2022_elf,
+        substrate,
+    );
+    waist::add_program_v2(
+        &mut test,
+        "dclutch_rent_sbf",
+        waist::RENT_PROGRAM_ID,
+        &rent_elf,
         substrate,
     );
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
@@ -2560,15 +2725,54 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         order_record.order_id(),
         "the Claims escrow owner is the signed order identity"
     );
-    let place_bindings = place_order_child_bindings(
-        &campaign,
-        &chain,
-        &place_corpus,
-        place_evidence
-            .order_terms
-            .as_ref()
-            .expect("signed order terms"),
+    let expected_position_rent = campaign.rent.minimum_balance(
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
+            + usize::try_from(campaign.outcome_count).expect("outcome width") * 8,
     );
+    let expected_admission_rent = campaign
+        .rent
+        .minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2);
+    for (name, account, rent_floor) in [
+        (
+            "Claims escrow Position",
+            &place_corpus.escrow_position,
+            expected_position_rent,
+        ),
+        (
+            "Claims escrow admission",
+            &place_corpus.escrow_admission,
+            expected_admission_rent,
+        ),
+    ] {
+        assert_eq!(
+            account.account.owner,
+            system_program::ID,
+            "{name} is vacant"
+        );
+        assert!(
+            account.account.data.is_empty(),
+            "{name} has no preallocated body"
+        );
+        assert_eq!(
+            account.account.lamports, rent_floor,
+            "{name} is prepaid to the exact Claims allocation width"
+        );
+    }
+    let observed_rent = observed_binding(&mut context, sysvar::rent::ID).await;
+    let place_bindings = observe_existing_place_order_child_bindings(
+        &mut context,
+        place_order_child_bindings(
+            &campaign,
+            &chain,
+            &place_corpus,
+            place_evidence
+                .order_terms
+                .as_ref()
+                .expect("signed order terms"),
+            &observed_rent,
+        ),
+    )
+    .await;
     let place = build_action_case_with_evidence_and_bindings(
         &campaign,
         Action::PlaceOrder,

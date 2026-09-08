@@ -570,6 +570,28 @@ fn chain_derived_source_is_byte_identical_and_emits_exact_build_inputs() {
 }
 
 #[test]
+fn copied_generated_header_with_changed_body_refuses_exact_include_check() {
+    let fixture = Fixture::new();
+    let built =
+        build_series_shadow_preselection_v1(fixture.preselection_source()).expect("preselection");
+    let mut copied_header_changed_body = built.generated_include.clone();
+    let body_byte = copied_header_changed_body
+        .iter_mut()
+        .rev()
+        .find(|byte| **byte != b'\n')
+        .expect("generated include has a body byte");
+    *body_byte ^= 1;
+
+    assert_eq!(
+        require_exact_series_shadow_generated_include_v1(
+            &built.manifest,
+            &copied_header_changed_body,
+        ),
+        Err(SeriesShadowSourceOperatorErrorV1::Include)
+    );
+}
+
+#[test]
 fn stale_observation_and_toolchain_substitution_refuse() {
     let fixture = Fixture::new();
     let mut stale_observation = fixture.input();

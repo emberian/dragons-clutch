@@ -44,14 +44,13 @@ operator whose continued presence is required for holders to get paid.
   trips and exact hostile rollback. The dated authority is
   `docs/evidence/CLAIMS_CAMPAIGNS_2026_09_07.md`; this does not substitute for
   local-validator founding or full protocol route coverage.
-- The strict eight-program build at `a7f9f226d` is sealed, including the Claims
-  component-count repair, General Claims funding-coordinate repair, full
-  Ensemble funding partition and Dealer delegated Custody V2 frame repairs.
-  Its checked gate on hbox is `dclutch-strict-a7f9f226-20260907/candidate/`
-  `CHECKED_UPGRADE_GATE.json`, SHA-256
-  `6d02cebd1980ce2d84d6dc7b33533e6f40a2044a4159b5bf95334bcb6b467abe`.
-  Fresh family execution is underway. No final-source frame pair or new devnet
-  cohort is claimed. Publication cuts carry development work.
+- Two further strict eight-program checkpoints are sealed: `687431e0e` for
+  Dealer/Ensemble and `68153eefc` for the General repair closure. Both passed
+  fresh links, frame measurements and artifact checks; exact source and gate
+  hashes live in `docs/evidence/STRICT_ALL_EIGHT_CHECKPOINTS_2026_09_08.md`.
+  These are diagnostic builds. No final-source frame pair, selected Series
+  accelerator execution or new devnet cohort is claimed. Publication cuts
+  carry development work.
 - Direct's validator journey has executed founding/Open, admission, nonzero
   fills and fees, objective Pyth resolution, and wallet payouts. The retirement
   rerun invokes the actual upkeep producer before closing maker roots. The
@@ -83,9 +82,12 @@ operator whose continued presence is required for holders to get paid.
   bodies. The missing certificate producer now authors the existing semantic
   certificate wire before strategy/descriptor compilation; the stale claim
   that this needs a new certificate binding has been removed. A preselection
-  producer now resolves the first-use ordering cycle. Checked accelerator
-  evidence, the selected include and runnable parent-Market Found/Prepare
-  command are being connected. The complete
+  producer now resolves the certificate ordering cycle. The selected-build
+  runner reconstructs the complete generated include from the pinned source
+  manifest before SBF compilation. The live input constructor now derives
+  Basis, Trading-owned Ticket and principal-cap facts from their owners.
+  Non-Prepare geometry and the provisional-to-final parent-root boundary
+  still need canonical producers before the Found/Prepare command can run. The complete
   two-occurrence validator campaign has not run; the unselected accelerator
   build does not establish that path.
 - General's accepted nonempty path is being run after repairing action-scoped
@@ -98,17 +100,25 @@ operator whose continued presence is required for holders to get paid.
   creation executes, but Market record publication exposes an incomplete
   sponsor projection. The incomplete new publication-cost mirror is removed;
   the local test resumes with the existing validator launcher's explicit fixture
-  payer funding. That grant is test setup, not a protocol cost estimate or a
-  devnet funding policy. The dated authority for the reached stages is
-  `docs/evidence/GENERAL_LOOPBACK_SOURCE_SPLIT_2026_09_07.md`.
+  payer funding. That fresh validator run now completes founding in 559
+  transactions and opens the General Market. The sole fixture grant went to
+  the campaign payer; protocol-created roles received their funding through
+  protocol transactions. It is test setup, not a protocol cost estimate or a
+  devnet funding policy. The dated authority is
+  `docs/evidence/GENERAL_LOOPBACK_FOUNDING_ADDENDUM_2026_09_08.md`.
+  Separately, the serial General PlaceOrder ProgramTest reproduces an actual
+  allocation failure on both the old and fresh `68153eefc` Trading ELF, before
+  accelerator invocation. Profile checkpoints locate CPI backing-buffer
+  allocation as the next repair; heap and compute limits are unchanged.
   General's nonempty accepted trade remains owed. Dealer's
   first RentCredit repair exposed a second false assumption: its sponsor need
   not be the immutable Market credit's refund beneficiary. Finalized account
   bytes located that exact mismatch; the repair retains the canonical credit
   and Core anchor. Correcting the external Custody authority's V2 request
   digest now reaches accepted Dealer Found and Quote. Fill next exposed a
-  signed-delta position table emitted in semantic rather than canonical owner
-  order; its host/runtime repair awaits the next checked runtime and execution.
+  signed-delta position table whose host and runtime disagreed about semantic
+  owner order versus Position PDA order. Both now use the Claims semantic
+  owner order; the sealed `687431e0e` runtime is executing the fresh campaign.
   A nonzero Dealer fill is still unexecuted.
 - Ensemble fold/reclaim has accepted real-ELF poststates. Its direct Pyth member
   producer is being executed separately so pre-captured fragment fixtures do
@@ -121,8 +131,10 @@ operator whose continued presence is required for holders to get paid.
   then exposed a receipt rent quote for three rows instead of the authenticated
   ledger width. The receipt and relay consumers now carry that exact width;
   focused mixed-ELF ProgramTests cover multi-row fold/reclaim and the direct
-  three-row control. The Journey producer now derives the full mask and wires
-  two fresh Pyth captures, quorum fold and the unused third member's reclaim.
+  three-row control. Foundable Ensemble quorum is canonically odd. The Journey
+  campaign now uses four members, three fresh Pyth captures, quorum-three fold
+  and reclaim of the unused fourth member. It validates this shape before
+  infrastructure publication; its fresh `687431e0e` validator run is in progress.
   Full local-validator capture/fold/reclaim remains owed.
   Recovery exhaustion reached terminal
   admission and all three refund payouts, recorded in

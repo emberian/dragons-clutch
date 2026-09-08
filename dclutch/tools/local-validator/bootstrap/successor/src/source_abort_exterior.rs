@@ -1753,6 +1753,7 @@ mod tests {
             compute_units_consumed: Some(1),
             error: None,
             logs: Vec::new(),
+            instructions: Vec::new(),
         });
         let second = journal(
             SourceAbortRecoveryOperationV1::ControllerFirst,
@@ -1903,6 +1904,7 @@ mod tests {
             compute_units_consumed: Some(100_000),
             error: None,
             logs: Vec::new(),
+            instructions: Vec::new(),
         }
     }
 

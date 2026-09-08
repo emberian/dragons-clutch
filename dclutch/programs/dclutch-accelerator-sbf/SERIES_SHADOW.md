@@ -64,24 +64,30 @@ value or zero/default certificate is a selected release.
 Tests cover reproducible certificate/include generation and hostile refusal of
 a substituted semantic release or generated contract artifact tuple.
 
-## Remaining checked-release wall
+## Checked selected-build boundary and remaining wall
 
-The checked-release pipeline still does not select a Series generated include:
-`tools/release/checked-release-candidate.sh` leaves
-`DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE` absent, so current checked releases
-remain intentionally fail-closed. The next selected accelerator build must:
+`tools/release/checked-release-candidate.sh` now accepts one absolute,
+canonical `--series-shadow-generated-include` path. It stages the exact
+generator output beneath its work root, applies it only to the accelerator's
+ordinary and frame builds through `DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE`,
+and records the staged SHA-256 in `SUMMARY.txt`. It takes no shell command and
+no textual certificate identity.
 
-1. Authenticate the checked ArtifactRelease and take its semantic release
-   identity plus exact translation-validation identity into the source
-   operator.
-2. Finalize the returned Certificate bytes, require its record content identity
-   to equal `build_inputs.certificate`, and hand that value to the Series
-   Prepare driver.
-3. Atomically stage the returned include, set
-   `DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE` for the actual accelerator build,
-   and refuse a selected build without it.
-4. Register the new ArtifactRelease only after its exact ELF digest and live
-   deployment checks pass.
+The Series driver must still perform the complete vertical slice:
 
-No sizing, budget, or runtime claim is made for a selected Series accelerator
-until that checked build and registration evidence exists.
+1. Authenticate the shared checked accelerator ArtifactRelease, then derive
+   the Certificate from its semantic release and checked compiler, toolchain,
+   and translation evidence.
+2. Reauthenticate the generated Certificate, manifest, and include; atomically
+   write them in its new output directory; finalize the Certificate record and
+   require its content identity to equal `build_inputs.certificate`.
+3. Invoke the checked candidate with that staged include. Reauthenticate the
+   selected checked manifest and ELF against the same source revision and
+   semantic release, then derive the selected ArtifactRelease from that exact
+   manifest.
+4. Finalize the selected ArtifactRelease record and check its raw/staging pair,
+   Loader deployment, and exact ProgramData ELF before claiming selected
+   runtime evidence.
+
+No selected SBF build, Registry publication, deployment, budget, or runtime
+claim exists until this driver produces that evidence.

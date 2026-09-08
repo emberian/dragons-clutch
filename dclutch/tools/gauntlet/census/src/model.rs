@@ -316,6 +316,24 @@ pub struct Ledger {
     pub observations: Vec<Observation>,
 }
 
+/// Evidence level for one ledger observation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvidenceLevel {
+    /// The current fold matched finalized native instruction bytes to the
+    /// inventory selectors.
+    FinalizedInstruction,
+    /// A legacy row predating native instruction evidence. It remains in the
+    /// append-only artifact, but cannot count as current route coverage.
+    LegacyProgramOnly,
+}
+
+impl Default for EvidenceLevel {
+    fn default() -> Self {
+        Self::LegacyProgramOnly
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Outcome {
@@ -349,6 +367,11 @@ pub struct Observation {
     /// Program addresses the finalized log messages show as invoked. This is
     /// the chain's account of what ran, not the harness's.
     pub programs_invoked: Vec<String>,
+    /// Whether this row was admitted with native finalized instruction
+    /// evidence. Missing in old ledger artifacts means legacy program-only
+    /// evidence via the serde default.
+    #[serde(default)]
+    pub evidence_level: EvidenceLevel,
     /// SHA-256 of the evidence document this observation was folded from.
     pub evidence_sha256: String,
     pub evidence_path: String,
@@ -372,7 +395,10 @@ pub struct Bindings {
 pub struct Binding {
     /// Exact campaign transaction label, or a `prefix*` glob.
     pub label: String,
-    /// Census route ids this transaction drove.
+    /// Census route ids this transaction drove. `census observe` admits these
+    /// only when the campaign evidence carries finalized native instruction
+    /// bytes whose selectors match; a generic program invoke log cannot
+    /// distinguish sibling routes in one program.
     pub routes: Vec<String>,
     /// Program label whose invocation the chain logs must show.
     pub program: String,

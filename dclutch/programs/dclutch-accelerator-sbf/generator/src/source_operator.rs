@@ -373,6 +373,23 @@ pub fn emit_series_shadow_generated_include_v1(
     emit_generated_include(SeriesShadowSourceManifestV1::decode(manifest_bytes)?)
 }
 
+/// Re-emit a selected include and require that its complete bytes are canonical.
+///
+/// This is the admission counterpart of
+/// [`emit_series_shadow_generated_include_v1`].  A recognizable generated
+/// header is not provenance: callers that select an include for an executable
+/// build must first reconstruct its source manifest, then use this comparison
+/// to reject a copied header or any changed constant/body byte.
+pub fn require_exact_series_shadow_generated_include_v1(
+    manifest_bytes: &[u8],
+    include_bytes: &[u8],
+) -> SourceOperatorResult<()> {
+    if emit_series_shadow_generated_include_v1(manifest_bytes)? != include_bytes {
+        return Err(SeriesShadowSourceOperatorErrorV1::Include);
+    }
+    Ok(())
+}
+
 fn require_observation(input: &SeriesShadowObservedSourceV1<'_>) -> SourceOperatorResult<()> {
     let expected = input.checked_release.observation;
     if input.replay.observation != expected

@@ -239,7 +239,7 @@ pub fn stamp_series_release_owned_widths_v4(
 ) {
     for (coordinate, width) in [(ROOT, root_bytes), (TICKET_REPLAY, ticket_bytes)] {
         lengths[coordinate] = width;
-        for (alias, representative) in ROUTE_ALIASES {
+        for (alias, representative) in SERIES_CONSUME_ROUTE_ALIASES_V4 {
             if *representative == coordinate {
                 lengths[*alias] = width;
             }
@@ -255,7 +255,9 @@ fn fixed_rule(
         .get(coordinate)
         .copied()
         .ok_or(SeriesConsumeAccountProfileErrorV4::Geometry)?;
-    if let Some((_, representative)) = ROUTE_ALIASES.iter().find(|(alias, _)| *alias == coordinate)
+    if let Some((_, representative)) = SERIES_CONSUME_ROUTE_ALIASES_V4
+        .iter()
+        .find(|(alias, _)| *alias == coordinate)
     {
         return Ok(AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
@@ -296,7 +298,7 @@ fn fixed_rule(
 fn validate_alias_lengths(
     lengths: &[u32; FIXED_RULE_COUNT],
 ) -> Result<(), SeriesConsumeAccountProfileErrorV4> {
-    for (coordinate, representative) in ROUTE_ALIASES {
+    for (coordinate, representative) in SERIES_CONSUME_ROUTE_ALIASES_V4 {
         if lengths.get(*coordinate) != lengths.get(*representative) {
             return Err(SeriesConsumeAccountProfileErrorV4::Geometry);
         }
@@ -387,7 +389,11 @@ const EXECUTABLE_COORDINATES: &[usize] = &[
 // Base coordinates exclude the inserted FundingState span. Every target is an
 // earlier fixed coordinate and the dynamic profile shifts both source and
 // target consistently after insertion coordinate 67.
-const ROUTE_ALIASES: &[(usize, usize)] = &[
+/// Canonical physical representative for every aliased fixed Consume
+/// coordinate. Off-chain geometry admission must use this table before
+/// specializing Profile13 widths; a mirror would create a second alias
+/// authority.
+pub const SERIES_CONSUME_ROUTE_ALIASES_V4: &[(usize, usize)] = &[
     (20, 18),
     (21, 11),
     (25, 2),
@@ -589,7 +595,7 @@ mod tests {
     fn aliases_are_zero_privilege_and_representatives_own_outer_union() {
         let bytes = encoded_profile();
         let profile = AccountProfileV2::decode(&bytes).expect("profile");
-        for (alias, _) in ROUTE_ALIASES {
+        for (alias, _) in SERIES_CONSUME_ROUTE_ALIASES_V4 {
             let alias = u16::try_from(*alias).expect("bounded alias coordinate");
             let rule = profile.rule(false, alias).expect("alias rule");
             assert_eq!(rule.privileges(), 0);

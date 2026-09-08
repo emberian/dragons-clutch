@@ -11,8 +11,8 @@ use dclutch_provider_transport_v3_operator::{
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_source::{
-    EnsembleFoldReceiptV1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RecoveryPolicyV2, SourceMaterialV3,
-    SourceResolutionPhaseV1, SourceResolutionStateV2,
+    EnsembleFoldReceiptV1, EnsembleSpecV1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RecoveryPolicyV2,
+    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2,
     relay::instruction::{EnsembleFoldInstructionV1, ReclaimMemberSeatInstructionV1},
     resolution::{
         EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1,
@@ -709,7 +709,7 @@ fn send_wide_v1(
     Ok(())
 }
 
-/// Arguments for the local-only two-capture Ensemble campaign.
+/// Arguments for the local-only three-capture Ensemble campaign.
 pub(crate) struct EnsembleRequestV1 {
     pub(crate) transcript: std::path::PathBuf,
     pub(crate) work: std::path::PathBuf,
@@ -721,12 +721,27 @@ pub(crate) struct EnsembleRequestV1 {
     pub(crate) seed: String,
 }
 
-/// Found a canonical three-member, quorum-two Ensemble market and carry two
+/// Mint a member's distinct VAA about the immutable period the market sold.
+///
+/// The sequence distinguishes independently authenticated member submissions;
+/// it does not advance the terminal observation time after founding.
+fn member_publication_request_v1(
+    minted_at: i64,
+    sequence: u64,
+) -> crate::pyth_lab_publication::LabPublicationRequestV1 {
+    crate::pyth_lab_publication::LabPublicationRequestV1::at(minted_at, sequence)
+}
+
+/// Found a canonical four-member, quorum-three Ensemble market and carry three
 /// authenticated Pyth members through the terminal fold, then reclaim the
 /// remaining prepaid vacancy. The transcript is only written after all three
 /// state transitions exist, so it cannot claim a transport that never crossed
 /// the real router/receiver boundary.
 pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
+    EnsembleSpecV1::new(4, 3)
+        .map_err(|error| Error::new(format!("Ensemble input: {error:?}")))?
+        .validate_foundable()
+        .map_err(|error| Error::new(format!("Ensemble founding quorum: {error:?}")))?;
     std::fs::create_dir_all(&request.work)?;
     let substrate_dir = request.work.join("substrate");
     let checked = crate::substrate::bring_up(&crate::substrate::SubstrateRequestV1 {
@@ -755,8 +770,8 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
     )?;
     let shape = crate::market::LocalMarketShapeV1 {
         ensemble: Some(crate::model::EnsembleMarketInputV1 {
-            members: 3,
-            quorum: 2,
+            members: 4,
+            quorum: 3,
             rungs: 0,
         }),
         price_update_image: Some(publication.projected_price_update.clone()),
@@ -821,9 +836,12 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
             "first direct member capture did not create a Resolution-owned fragment",
         ));
     }
-    let second_slot = rpc.finalized_slot()?;
+    // Every member answers the immutable terminal question compiled from the
+    // first publication.  A distinct VAA sequence prevents replay, while its
+    // publication time must remain ABOUT that same market period; reading the
+    // current block time here would produce a fresh but late observation.
     let second_publication = crate::pyth_lab_publication::mint_lab_publication_v1(
-        crate::pyth_lab_publication::LabPublicationRequestV1::at(rpc.block_time(second_slot)?, 2),
+        member_publication_request_v1(minted_at, 2),
         [0; 32],
     )?;
     let second_provider = ProviderPlanV1::derive(&mut rpc, &checked.plan)?;
@@ -864,6 +882,50 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
             "second direct member capture did not create a Resolution-owned fragment",
         ));
     }
+    let third_publication = crate::pyth_lab_publication::mint_lab_publication_v1(
+        member_publication_request_v1(minted_at, 3),
+        [0; 32],
+    )?;
+    let third_provider = ProviderPlanV1::derive(&mut rpc, &checked.plan)?;
+    let third_report = post_submit_and_capture_member_v1(
+        &mut rpc,
+        &payer,
+        &checked.plan,
+        &addresses,
+        &third_provider,
+        &third_publication,
+        2,
+        1,
+        &mut transactions,
+    )?;
+    let third_source = SourceResolutionStateV2::decode(
+        &rpc.required_account(
+            addresses.source_state,
+            "Ensemble Source after third member capture",
+        )?
+        .data,
+    )
+    .map_err(|error| Error::new(format!("Ensemble third Source poststate: {error:?}")))?;
+    if third_source.phase() != SourceResolutionPhaseV1::Primary {
+        return Err(Error::new(
+            "third direct member capture changed Source before the Ensemble fold",
+        ));
+    }
+    let third_fragment = third_report
+        .instruction
+        .accounts
+        .get(3)
+        .ok_or_else(|| Error::new("third direct member report omitted fragment seat"))?
+        .pubkey;
+    if rpc
+        .required_account(third_fragment, "captured third Ensemble member fragment")?
+        .owner
+        != addresses.resolution_program
+    {
+        return Err(Error::new(
+            "third direct member capture did not create a Resolution-owned fragment",
+        ));
+    }
     let (fold, receipt, seats) = ensemble_fold_instruction_v1(
         &mut rpc,
         payer.pubkey(),
@@ -871,6 +933,7 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
         &[
             Some(first_provider.resolver.pubkey()),
             Some(second_provider.resolver.pubkey()),
+            Some(third_provider.resolver.pubkey()),
             None,
         ],
         1,
@@ -878,7 +941,7 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
     send_wide_v1(
         &mut rpc,
         &payer,
-        "ensemble: fold the captured member quorum to one terminal",
+        "ensemble: fold the captured three-member quorum to one terminal",
         &fold,
         &[],
         &mut transactions,
@@ -897,16 +960,17 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
         &rpc.required_account(receipt, "Ensemble fold receipt")?.data,
     )
     .map_err(|error| Error::new(format!("Ensemble fold receipt: {error:?}")))?;
-    if receipt_value.consumed_count != 2
+    if receipt_value.consumed_count != 3
         || !receipt_value.consumed(0)
         || !receipt_value.consumed(1)
-        || receipt_value.consumed(2)
+        || !receipt_value.consumed(2)
+        || receipt_value.consumed(3)
     {
         return Err(Error::new(
-            "Ensemble fold receipt did not consume exactly the two captured members",
+            "Ensemble fold receipt did not consume exactly the three captured members",
         ));
     }
-    let vacant_member = 2_u8;
+    let vacant_member = 3_u8;
     let vacant_seat = *seats
         .get(usize::from(vacant_member))
         .ok_or_else(|| Error::new("Ensemble fold omitted the vacant member seat"))?;
@@ -951,17 +1015,19 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
         ));
     }
     let transcript = serde_json::json!({
-        "campaign": "ensemble-two-member-capture-fold-reclaim-v1",
+        "campaign": "ensemble-three-member-capture-fold-reclaim-v1",
         "evidence_level": "local-validator / real router+receiver ELFs / fresh checked cohort",
         "checked_release_gate_sha256": request.expected_gate_sha256,
         "expected_source_revision": request.expected_source_revision,
         "publications": [
             {"publish_time": minted_at, "sequence": publication.request.sequence, "signed_vaa_bytes": publication.signed_vaa.len()},
             {"publish_time": second_publication.request.publish_time, "sequence": second_publication.request.sequence, "signed_vaa_bytes": second_publication.signed_vaa.len()}
+            ,{"publish_time": third_publication.request.publish_time, "sequence": third_publication.request.sequence, "signed_vaa_bytes": third_publication.signed_vaa.len()}
         ],
         "captured_members": [
             {"member": 0, "fragment_seat": first_fragment.to_string()},
             {"member": 1, "fragment_seat": second_fragment.to_string()}
+            ,{"member": 2, "fragment_seat": third_fragment.to_string()}
         ],
         "source_phase_after_each_capture": "Primary",
         "source_phase_after_fold": "Resolved",
@@ -978,4 +1044,47 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
     }
     std::fs::write(&request.transcript, serde_json::to_vec_pretty(&transcript)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use dclutch_source::{ContentId, WindowKind, WindowSpecV1};
+
+    #[test]
+    fn member_vaas_keep_the_market_period_while_sequences_remain_distinct() {
+        const MINTED_AT: i64 = 1_788_840_593;
+        const LATE_BLOCK_TIME: i64 = 1_788_841_489;
+        let window = WindowSpecV1::new(
+            ContentId::new([7; 32]).expect("source identity"),
+            WindowKind::Terminal,
+            MINTED_AT - 300,
+            MINTED_AT,
+            1_200,
+            0,
+            ContentId::new([8; 32]).expect("schedule identity"),
+        )
+        .expect("terminal window");
+        let second = super::member_publication_request_v1(MINTED_AT, 2);
+        let third = super::member_publication_request_v1(MINTED_AT, 3);
+
+        assert!(
+            window
+                .contains_observation(second.publish_time)
+                .expect("terminal admission"),
+            "the second VAA remains about the market period"
+        );
+        assert!(
+            window
+                .contains_observation(third.publish_time)
+                .expect("terminal admission"),
+            "the third VAA remains about the market period"
+        );
+        assert_ne!(second.sequence, third.sequence, "member VAAs cannot replay");
+        assert!(
+            !window
+                .contains_observation(LATE_BLOCK_TIME)
+                .expect("terminal admission"),
+            "the observed old block-time construction is late and must refuse"
+        );
+    }
 }

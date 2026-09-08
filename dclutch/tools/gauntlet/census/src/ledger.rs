@@ -2,9 +2,11 @@
 //!
 //! The ledger's whole value is that it records what the CHAIN says ran, not
 //! what the harness believes it submitted. Every observation is cross-checked
-//! against the finalized transaction's own log messages before it is admitted,
-//! and a campaign transaction with no binding is a hard error rather than a
-//! silent skip.
+//! against the finalized transaction's own evidence before it is admitted.
+//! Logs authenticate the program frame, while authenticated instruction bytes
+//! are matched against the inventory's native selectors to authenticate the
+//! route within that program. A campaign transaction with no binding is a hard
+//! error rather than a silent skip.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,7 +14,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    Binding, Bindings, Inventory, LEDGER_SCHEMA_V1, Ledger, Observation, Outcome, ProgramMap,
+    Binding, Bindings, EvidenceLevel, Inventory, LEDGER_SCHEMA_V1, Ledger, Observation, Outcome,
+    ProgramMap, Route, Selector,
 };
 
 pub struct FoldReport {
@@ -29,6 +32,16 @@ struct CampaignTransaction {
     error: Option<String>,
     compute_units: Option<u64>,
     logs: Vec<String>,
+    /// Instructions recovered from the finalized transaction packet and its
+    /// finalized CPI metadata. Generic invoke/success logs cannot distinguish
+    /// two routes in one program, so this is required before a route claim is
+    /// admitted.
+    instructions: Option<Vec<CampaignInstruction>>,
+}
+
+struct CampaignInstruction {
+    program_id: String,
+    data_hex: String,
 }
 
 fn read_transactions(evidence: &Value) -> Result<Vec<CampaignTransaction>, String> {
@@ -64,6 +77,32 @@ fn read_transactions(evidence: &Value) -> Result<Vec<CampaignTransaction>, Strin
                     .collect()
             })
             .unwrap_or_default();
+        let instructions = match entry.get("instructions") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let values = value
+                    .as_array()
+                    .ok_or("campaign transaction `instructions` is not an array")?;
+                let mut found = Vec::with_capacity(values.len());
+                for value in values {
+                    let program_id = value
+                        .get("program_id")
+                        .and_then(Value::as_str)
+                        .ok_or("campaign instruction omitted `program_id`")?
+                        .to_owned();
+                    let data_hex = value
+                        .get("data_hex")
+                        .and_then(Value::as_str)
+                        .ok_or("campaign instruction omitted `data_hex`")?
+                        .to_owned();
+                    found.push(CampaignInstruction {
+                        program_id,
+                        data_hex,
+                    });
+                }
+                Some(found)
+            }
+        };
         found.push(CampaignTransaction {
             label,
             signature,
@@ -72,6 +111,7 @@ fn read_transactions(evidence: &Value) -> Result<Vec<CampaignTransaction>, Strin
             error,
             compute_units: entry.get("compute_units_consumed").and_then(Value::as_u64),
             logs,
+            instructions,
         });
     }
     Ok(found)
@@ -200,6 +240,66 @@ fn matches_label(pattern: &str, label: &str) -> bool {
         }
     }
     true
+}
+
+fn decode_hex(value: &str) -> Option<Vec<u8>> {
+    if value.len() % 2 != 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    let mut chars = value.chars();
+    while let (Some(high), Some(low)) = (chars.next(), chars.next()) {
+        let high = high.to_digit(16)?;
+        let low = low.to_digit(16)?;
+        bytes.push(((high << 4) | low) as u8);
+    }
+    Some(bytes)
+}
+
+/// Whether one finalized instruction's native bytes select this route.
+///
+/// A route with a selector the census cannot evaluate is deliberately not a
+/// match. The caller reports insufficient evidence instead of turning a
+/// generic same-program invocation into route coverage.
+fn route_selected(route: &Route, program_address: &str, instruction: &CampaignInstruction) -> bool {
+    // Enumeration folds every selector seen while reaching one handler into
+    // this vector. That vector can contain conjunctive guards, or alternatives
+    // from two dispatch arms merged under one route id; the persisted model
+    // does not preserve which shape it was. A single native selector is the
+    // only unambiguous form this adapter can authenticate. Refuse every wider
+    // vector rather than treating alternatives as a conjunction (or a union).
+    if instruction.program_id != program_address || route.selectors.len() != 1 {
+        return false;
+    }
+    let Some(data) = decode_hex(&instruction.data_hex) else {
+        return false;
+    };
+    route.selectors.iter().all(|selector| match selector {
+        Selector::Magic { bytes, ascii, .. } => {
+            let expected = if let Some(ascii) = ascii {
+                ascii.as_bytes().to_vec()
+            } else if let Some(bytes) = bytes {
+                let Some(decoded) = decode_hex(bytes.trim_start_matches("0x")) else {
+                    return false;
+                };
+                decoded
+            } else {
+                return false;
+            };
+            !expected.is_empty() && data.starts_with(&expected)
+        }
+        Selector::Length { value, .. } => value
+            .and_then(|value| usize::try_from(value).ok())
+            .is_some_and(|value| data.len() == value),
+        // These selectors depend on deserializing the instruction payload or
+        // on a predicate body. The census has no native decoder for them, so
+        // finalized bytes alone are insufficient to credit this route.
+        Selector::Predicate { .. }
+        | Selector::Variant { .. }
+        | Selector::Tag { .. }
+        | Selector::Literal { .. }
+        | Selector::Fallthrough => false,
+    })
 }
 
 /// Fold a campaign's evidence document into the ledger.
@@ -343,6 +443,55 @@ pub fn fold(
             }
         }
 
+        // A Program <id> invoke/success pair proves only that the program ran.
+        // It does not prove which instruction branch ran when two routes share
+        // that program. The producer must carry the finalized packet's native
+        // instruction bytes (and finalized CPI bytes when available); this
+        // census matches those bytes against the inventory selectors below.
+        if !binding.routes.is_empty() {
+            let Some(instructions) = transaction.instructions.as_ref() else {
+                problems.push(format!(
+                    "`{}` claims route(s) [{}], but finalized evidence has no native \
+                     instruction bytes; route admission has insufficient instruction evidence",
+                    transaction.label,
+                    binding.routes.join(", ")
+                ));
+                continue;
+            };
+            let matched: Vec<&str> = binding
+                .routes
+                .iter()
+                .filter_map(|route_id| {
+                    let route = inventory
+                        .programs
+                        .iter()
+                        .flat_map(|program| program.routes.iter())
+                        .find(|route| route.id == *route_id)?;
+                    let owner = route.id.split('/').next()?;
+                    let address = programs.get(owner)?;
+                    instructions
+                        .iter()
+                        .any(|instruction| route_selected(route, address, instruction))
+                        .then_some(route_id.as_str())
+                })
+                .collect();
+            let missing: Vec<&str> = binding
+                .routes
+                .iter()
+                .filter(|route| !matched.contains(&route.as_str()))
+                .map(String::as_str)
+                .collect();
+            if !missing.is_empty() {
+                problems.push(format!(
+                    "`{}` claims route(s) [{}], but finalized native instruction evidence \
+                     selected no matching route; the route binding is not corroborated",
+                    transaction.label,
+                    missing.join(", ")
+                ));
+                continue;
+            }
+        }
+
         let observed_outcome = if transaction.failed {
             Outcome::Refused
         } else {
@@ -444,6 +593,7 @@ pub fn fold(
                 refusal_program: refusal_program.clone(),
                 compute_units: transaction.compute_units,
                 programs_invoked: invoked.clone(),
+                evidence_level: EvidenceLevel::FinalizedInstruction,
                 evidence_sha256: evidence_sha256.clone(),
                 evidence_path: evidence_path.to_string(),
             });
@@ -463,7 +613,16 @@ pub fn fold(
 
     // Keep the ledger canonically ordered and free of exact duplicates.
     ledger.observations.sort_by(|left, right| {
-        (&left.route, left.slot, &left.signature).cmp(&(&right.route, right.slot, &right.signature))
+        let level = |observation: &Observation| match observation.evidence_level {
+            EvidenceLevel::FinalizedInstruction => 0_u8,
+            EvidenceLevel::LegacyProgramOnly => 1_u8,
+        };
+        (&left.route, left.slot, &left.signature, level(left)).cmp(&(
+            &right.route,
+            right.slot,
+            &right.signature,
+            level(right),
+        ))
     });
     ledger
         .observations
@@ -485,7 +644,7 @@ pub fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::model::{
-        Binding, Inventory, ProgramSurface, Refusal, Route, RouteKind, UnnamedRefusal,
+        Binding, Inventory, ProgramSurface, Refusal, Route, RouteKind, Selector, UnnamedRefusal,
     };
     use serde_json::json;
 
@@ -499,17 +658,40 @@ mod tests {
                 label: "core".into(),
                 crate_root: "programs/dclutch-core-sbf/src/lib.rs".into(),
                 entrypoints: Vec::new(),
-                routes: vec![Route {
-                    id: "core/found::process#Found".into(),
-                    kind: RouteKind::Entry,
-                    parent: None,
-                    handler: "found::process".into(),
-                    selectors: Vec::new(),
-                    provenance: "programs/dclutch-core-sbf/src/lib.rs:252".into(),
-                    cfg: Vec::new(),
-                    admissible_prestates: Vec::new(),
-                    selected_prestates: Vec::new(),
-                }],
+                routes: vec![
+                    Route {
+                        id: "core/found::process#Found".into(),
+                        kind: RouteKind::Entry,
+                        parent: None,
+                        handler: "found::process".into(),
+                        provenance: "programs/dclutch-core-sbf/src/lib.rs:252".into(),
+                        cfg: Vec::new(),
+                        selectors: vec![Selector::Magic {
+                            constant: "FOUND".into(),
+                            bytes: Some("01".into()),
+                            ascii: None,
+                            provenance: None,
+                        }],
+                        admissible_prestates: Vec::new(),
+                        selected_prestates: Vec::new(),
+                    },
+                    Route {
+                        id: "core/found::process#Other".into(),
+                        kind: RouteKind::Entry,
+                        parent: None,
+                        handler: "found::process".into(),
+                        provenance: "programs/dclutch-core-sbf/src/lib.rs:253".into(),
+                        cfg: Vec::new(),
+                        selectors: vec![Selector::Magic {
+                            constant: "OTHER".into(),
+                            bytes: Some("02".into()),
+                            ascii: None,
+                            provenance: None,
+                        }],
+                        admissible_prestates: Vec::new(),
+                        selected_prestates: Vec::new(),
+                    },
+                ],
                 refusals: vec![Refusal {
                     id: "core/CoreSbfError::RentCredit".into(),
                     enum_name: "CoreSbfError".into(),
@@ -563,6 +745,7 @@ mod tests {
             "slot": 7,
             "error": null,
             "compute_units_consumed": 234_043,
+            "instructions": [{"program_id": program, "data_hex": "01"}],
             "logs": [format!("Program {program} invoke [1]"), format!("Program {program} success")]
         })
     }
@@ -624,6 +807,83 @@ mod tests {
         );
         assert_eq!(report.admitted, 1);
         assert!(report.problems.is_empty(), "{:?}", report.problems);
+    }
+
+    #[test]
+    fn generic_same_program_logs_cannot_credit_the_wrong_route() {
+        // Both sibling routes run in Core and therefore emit the same generic
+        // invoke/success transcript. The finalized instruction selects Other,
+        // so a Found binding must remain unadmitted.
+        let mut wrong = success("create canonical Found31 Market", "CoreProgram1111");
+        wrong["instructions"] = json!([{
+            "program_id": "CoreProgram1111",
+            "data_hex": "02"
+        }]);
+        let report = run(&bindings(executed_binding()), &evidence(&json!([wrong])));
+        assert_eq!(report.admitted, 0);
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("selected no matching route")),
+            "{:?}",
+            report.problems
+        );
+    }
+
+    #[test]
+    fn missing_finalized_instruction_bytes_are_insufficient_evidence() {
+        let mut generic = success("create canonical Found31 Market", "CoreProgram1111");
+        generic
+            .as_object_mut()
+            .expect("transaction object")
+            .remove("instructions");
+        let report = run(&bindings(executed_binding()), &evidence(&json!([generic])));
+        assert_eq!(report.admitted, 0);
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("insufficient instruction evidence")),
+            "{:?}",
+            report.problems
+        );
+    }
+
+    #[test]
+    fn merged_selector_vectors_are_insufficient_evidence() {
+        let mut inventory = inventory();
+        inventory.programs[0].routes[0]
+            .selectors
+            .push(Selector::Magic {
+                constant: "ALTERNATIVE".into(),
+                bytes: Some("02".into()),
+                ascii: None,
+                provenance: None,
+            });
+        let mut ledger = Ledger::default();
+        let report = fold(
+            &mut ledger,
+            &inventory,
+            &bindings(executed_binding()),
+            &programs(),
+            &evidence(&json!([success(
+                "create canonical Found31 Market",
+                "CoreProgram1111"
+            )])),
+            "fixture.json",
+            b"{}",
+        )
+        .expect("fold");
+        assert_eq!(report.admitted, 0);
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("selected no matching route")),
+            "{:?}",
+            report.problems
+        );
     }
 
     #[test]
@@ -713,6 +973,7 @@ mod tests {
             "slot": 7,
             "error": {"InstructionError": [0, {"Custom": 6}]},
             "compute_units_consumed": 6_958,
+            "instructions": [{"program_id": "CoreProgram1111", "data_hex": "01"}],
             "logs": ["Program CoreProgram1111 invoke [1]",
                      "Program CoreProgram1111 failed: custom program error: 0x6"]
         }]);
@@ -776,6 +1037,7 @@ mod tests {
             "slot": 11,
             "error": {"InstructionError": [0, {"Custom": 6}]},
             "compute_units_consumed": 12_345,
+            "instructions": [{"program_id": "CoreProgram1111", "data_hex": "01"}],
             "logs": ["Program CoreProgram1111 invoke [1]",
                      "Program CoreProgram1111 success",
                      "Program TestCaller11111 failed: custom program error: 0x6"]
@@ -902,6 +1164,7 @@ mod tests {
             "slot": 8,
             "error": {"InstructionError": [0, {"Custom": 7}]},
             "compute_units_consumed": 6_958,
+            "instructions": [{"program_id": "CoreProgram1111", "data_hex": "01"}],
             "logs": ["Program CoreProgram1111 invoke [1]",
                      "Program CoreProgram1111 failed: custom program error: 0x7"]
         }]);
@@ -922,6 +1185,7 @@ mod tests {
             "slot": 8,
             "error": {"InstructionError": [0, {"Custom": 6}]},
             "compute_units_consumed": 6_958,
+            "instructions": [{"program_id": "CoreProgram1111", "data_hex": "01"}],
             "logs": ["Program CoreProgram1111 invoke [1]",
                      "Program CoreProgram1111 failed: custom program error: 0x6"]
         }]);
@@ -982,6 +1246,7 @@ mod tests {
             "slot": 9,
             "error": {"InstructionError": [0, "PrivilegeEscalation"]},
             "compute_units_consumed": 0,
+            "instructions": [{"program_id": "CoreProgram1111", "data_hex": "01"}],
             "logs": ["Program CoreProgram1111 invoke [1]",
                      "Program CoreProgram1111 failed: Cross-program invocation with unauthorized signer"]
         }]));

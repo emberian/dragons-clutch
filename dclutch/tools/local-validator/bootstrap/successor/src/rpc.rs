@@ -27,11 +27,132 @@ use solana_sdk::{
 use crate::{
     Error, Result,
     cluster::{ClusterOriginV1, LOOPBACK_PACING, PacingV1},
-    model::{AccountEvidence, TransactionEvidence},
+    model::{AccountEvidence, InstructionEvidence, TransactionEvidence},
     plan::{hex, pubkey},
 };
 
 const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
+
+// Chain-derived CPI payload bound; unlike the serialized packet limit this is
+// the bank's per-instruction data ceiling and permits legal CPI payloads above
+// 1,232 bytes.
+#[allow(deprecated)]
+const FINALIZED_CPI_DATA_BYTES: usize = solana_transaction_context::MAX_INSTRUCTION_DATA_LEN;
+
+fn finalized_failed_instruction_index(meta: &Value) -> Option<usize> {
+    meta.get("err")
+        .filter(|error| !error.is_null())
+        .and_then(|error| error.get("InstructionError"))
+        .and_then(Value::as_array)
+        .and_then(|fields| fields.first())
+        .and_then(Value::as_u64)
+        .and_then(|index| usize::try_from(index).ok())
+}
+
+fn finalized_instruction_evidence(packet: &[u8], meta: &Value) -> Result<Vec<InstructionEvidence>> {
+    let transaction: VersionedTransaction = bincode::deserialize(packet)
+        .map_err(|error| Error::new(format!("finalized packet instructions: {error}")))?;
+    let mut account_keys = transaction.message.static_account_keys().to_vec();
+    if let Some(loaded) = meta.get("loadedAddresses").filter(|value| !value.is_null()) {
+        for field in ["writable", "readonly"] {
+            let values = loaded
+                .get(field)
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error::new(format!("finalized packet loadedAddresses.{field}")))?;
+            for value in values {
+                let address = value
+                    .as_str()
+                    .ok_or_else(|| Error::new("finalized packet loaded address was not a string"))?
+                    .parse::<Pubkey>()
+                    .map_err(|error| {
+                        Error::new(format!("finalized packet loaded address: {error}"))
+                    })?;
+                account_keys.push(address);
+            }
+        }
+    }
+    let failed_index = finalized_failed_instruction_index(meta);
+    // A failed transaction can carry serialized instructions after the one
+    // that failed. Those bytes are authenticated packet contents, but they
+    // were never executed and therefore cannot corroborate a route.
+    if meta.get("err").is_some_and(|error| !error.is_null()) && failed_index.is_none() {
+        return Ok(Vec::new());
+    }
+    let top_level_len = transaction.message.instructions().len();
+    if failed_index.is_some_and(|failed| failed >= top_level_len) {
+        return Ok(Vec::new());
+    }
+    let mut found = Vec::new();
+    for (index, instruction) in transaction.message.instructions().iter().enumerate() {
+        if failed_index.is_some_and(|failed| index > failed) {
+            break;
+        }
+        let program_id = account_keys
+            .get(usize::from(instruction.program_id_index))
+            .ok_or_else(|| {
+                Error::new("finalized packet instruction program index was out of bounds")
+            })?;
+        found.push(InstructionEvidence {
+            program_id: program_id.to_string(),
+            data_hex: hex(&instruction.data),
+        });
+    }
+    if let Some(inner) = meta
+        .get("innerInstructions")
+        .filter(|value| !value.is_null())
+    {
+        let inner = inner.as_array().ok_or_else(|| {
+            Error::new("finalized transaction innerInstructions was not an array")
+        })?;
+        for group in inner {
+            let values = group
+                .get("instructions")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    Error::new("finalized transaction inner instruction group was malformed")
+                })?;
+            let group_index = group
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|index| usize::try_from(index).ok())
+                .ok_or_else(|| Error::new("finalized inner instruction group omitted index"))?;
+            if group_index >= top_level_len {
+                return Ok(Vec::new());
+            }
+            if failed_index.is_some_and(|failed| group_index > failed) {
+                continue;
+            }
+            for instruction in values {
+                let program_id_index = instruction
+                    .get("programIdIndex")
+                    .and_then(Value::as_u64)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .ok_or_else(|| {
+                        Error::new("finalized inner instruction omitted programIdIndex")
+                    })?;
+                let program_id = account_keys.get(program_id_index).ok_or_else(|| {
+                    Error::new("finalized inner instruction program index was out of bounds")
+                })?;
+                let encoded = instruction
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::new("finalized inner instruction omitted data"))?;
+                let mut decoded = vec![0_u8; FINALIZED_CPI_DATA_BYTES];
+                let length = solana_sdk::bs58::decode(encoded)
+                    .onto(decoded.as_mut_slice())
+                    .map_err(|error| {
+                        Error::new(format!("finalized inner instruction data: {error}"))
+                    })?;
+                let data = decoded[..length].to_vec();
+                found.push(InstructionEvidence {
+                    program_id: program_id.to_string(),
+                    data_hex: hex(&data),
+                });
+            }
+        }
+    }
+    Ok(found)
+}
 
 /// Heap frame the two founding routes request, and why it now does something.
 ///
@@ -768,6 +889,7 @@ impl Rpc {
                     .collect()
             })
             .unwrap_or_default();
+        let instructions = finalized_instruction_evidence(&packet, meta)?;
         // Absent and JSON null both mean the transaction published no return
         // data. Anything present must be the canonical `[base64, "base64"]`
         // pair; a noncanonical encoding is refused rather than coerced,
@@ -819,6 +941,7 @@ impl Rpc {
                 compute_units_consumed,
                 error: meta_error,
                 logs,
+                instructions,
             },
             packet,
             return_data,
@@ -1459,6 +1582,7 @@ impl Rpc {
             label,
             signature,
             None,
+            Some(&packet.packet_base64),
             false,
             packet.last_valid_block_height,
         )? {
@@ -1484,6 +1608,7 @@ impl Rpc {
             label,
             signature,
             None,
+            Some(&packet.packet_base64),
             false,
             packet.last_valid_block_height,
         )? {
@@ -1831,7 +1956,15 @@ impl Rpc {
             .first()
             .ok_or_else(|| Error::new(format!("{label}: the packet carries no signature")))?;
         self.submit_signed_packet_once(label, &packet, signature, false)?;
-        match self.confirm_inner(label, signature, None, false, last_valid_block_height)? {
+        let encoded = BASE64.encode(&packet);
+        match self.confirm_inner(
+            label,
+            signature,
+            Some(&encoded),
+            Some(&encoded),
+            false,
+            last_valid_block_height,
+        )? {
             ConfirmOutcomeV1::Confirmed(evidence) => Ok(evidence),
             ConfirmOutcomeV1::Dropped => Err(Error::new(format!(
                 "{label}: signature {signature} expired without a finalized status; produce a \
@@ -2213,6 +2346,7 @@ impl Rpc {
             label,
             signature,
             Some(encoded),
+            Some(encoded),
             expect_failure,
             last_valid_block_height,
         )
@@ -2223,6 +2357,7 @@ impl Rpc {
         label: &str,
         signature: Signature,
         resubmit_packet: Option<&str>,
+        evidence_packet: Option<&str>,
         expect_failure: bool,
         last_valid_block_height: u64,
     ) -> Result<ConfirmOutcomeV1> {
@@ -2425,6 +2560,15 @@ impl Rpc {
                     .collect()
             })
             .unwrap_or_default();
+        let instructions = match evidence_packet {
+            Some(encoded) => {
+                let packet = BASE64
+                    .decode(encoded)
+                    .map_err(|error| Error::new(format!("{label} packet base64: {error}")))?;
+                finalized_instruction_evidence(&packet, meta)?
+            }
+            None => Vec::new(),
+        };
         Ok(ConfirmOutcomeV1::Confirmed(TransactionEvidence {
             label: label.into(),
             signature: signature.to_string(),
@@ -2435,6 +2579,7 @@ impl Rpc {
             compute_units_consumed,
             error: meta_error,
             logs,
+            instructions,
         }))
     }
 
@@ -2482,6 +2627,7 @@ impl Rpc {
             compute_units_consumed: None,
             error: None,
             logs: Vec::new(),
+            instructions: Vec::new(),
         })
     }
 }
@@ -2805,14 +2951,313 @@ mod tests {
             "the refusal must name the fix, not just the fact: {rendered}"
         );
     }
+
+    #[test]
+    fn finalized_instruction_fixture_resolves_rpc_indexes_and_native_cpi_bound() {
+        use std::borrow::Cow;
+
+        use solana_address_lookup_table_interface::{
+            program as lookup_table_program,
+            state::{AddressLookupTable, LookupTableMeta},
+        };
+
+        let payer = Keypair::new();
+        let program_id = Pubkey::new_unique();
+        let loaded_program_id = Pubkey::new_unique();
+        let observation = Observation {
+            slot: 20,
+            unix_timestamp: 30,
+            finality: Finality::Finalized,
+        };
+        let table = AddressLookupTable {
+            meta: LookupTableMeta {
+                authority: None,
+                deactivation_slot: u64::MAX,
+                last_extended_slot: 19,
+                ..LookupTableMeta::default()
+            },
+            addresses: Cow::Owned(vec![loaded_program_id]),
+        };
+        let table = ObservedAccount {
+            observation,
+            key: Pubkey::new_unique(),
+            owner: lookup_table_program::ID,
+            lamports: 1,
+            executable: false,
+            data: table.serialize_for_tests().expect("table bytes"),
+        };
+        let top_level = Instruction {
+            program_id,
+            accounts: vec![solana_sdk::instruction::AccountMeta::new(
+                loaded_program_id,
+                false,
+            )],
+            data: vec![1, 2, 3],
+        };
+        let bounded = bounded_instructions(std::slice::from_ref(&top_level), None)
+            .expect("bounded instruction");
+        let routed = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded,
+            Hash::new_unique(),
+            observation,
+            std::slice::from_ref(&table),
+        )
+        .expect("v0 message with a loaded address");
+        let transaction = VersionedTransaction::try_new(routed.message, &[&payer])
+            .expect("signed v0 transaction");
+        let packet = bincode::serialize(&transaction).expect("packet bytes");
+        let loaded_index = transaction.message.static_account_keys().len();
+        let top_level_index = transaction.message.instructions().len() - 1;
+        let cpi_data = vec![0x42; 1_233];
+        let meta = json!({
+            "err": null,
+            "loadedAddresses": {
+                "writable": [loaded_program_id.to_string()],
+                "readonly": []
+            },
+            "innerInstructions": [{
+                "index": top_level_index,
+                "instructions": [{
+                    "programIdIndex": loaded_index,
+                    "accounts": [],
+                    "data": encode_base58(&cpi_data),
+                    "stackHeight": 2
+                }]
+            }]
+        });
+        let evidence = finalized_instruction_evidence(&packet, &meta)
+            .expect("realistic finalized JSON instruction fixture");
+        assert!(evidence.iter().any(|instruction| {
+            instruction.program_id == program_id.to_string()
+                && instruction.data_hex == hex(&top_level.data)
+        }));
+        assert!(evidence.iter().any(|instruction| {
+            instruction.program_id == loaded_program_id.to_string()
+                && instruction.data_hex == hex(&cpi_data)
+        }));
+
+        let exact_data = vec![0x43; FINALIZED_CPI_DATA_BYTES];
+        let exact_meta = json!({
+            "err": null,
+            "loadedAddresses": {"writable": [loaded_program_id.to_string()], "readonly": []},
+            "innerInstructions": [{
+                "index": top_level_index,
+                "instructions": [{
+                    "programIdIndex": loaded_index,
+                    "accounts": [],
+                    "data": encode_base58(&exact_data),
+                    "stackHeight": 2
+                }]
+            }]
+        });
+        let exact = finalized_instruction_evidence(&packet, &exact_meta)
+            .expect("native CPI ceiling is accepted");
+        assert!(exact.iter().any(|instruction| {
+            instruction.program_id == loaded_program_id.to_string()
+                && instruction.data_hex.len() == 2 * FINALIZED_CPI_DATA_BYTES
+        }));
+
+        let over_data = vec![0x44; FINALIZED_CPI_DATA_BYTES + 1];
+        let over_meta = json!({
+            "err": null,
+            "loadedAddresses": {"writable": [loaded_program_id.to_string()], "readonly": []},
+            "innerInstructions": [{
+                "index": top_level_index,
+                "instructions": [{
+                    "programIdIndex": loaded_index,
+                    "accounts": [],
+                    "data": encode_base58(&over_data),
+                    "stackHeight": 2
+                }]
+            }]
+        });
+        assert!(
+            finalized_instruction_evidence(&packet, &over_meta).is_err(),
+            "one byte over the bank CPI bound must refuse"
+        );
+    }
+
+    #[test]
+    fn finalized_instruction_fixture_excludes_top_level_bytes_after_failed_index() {
+        let payer = Keypair::new();
+        let program_id = Pubkey::new_unique();
+        let instructions = vec![
+            Instruction {
+                program_id,
+                accounts: Vec::new(),
+                data: vec![1],
+            },
+            Instruction {
+                program_id,
+                accounts: Vec::new(),
+                data: vec![2],
+            },
+        ];
+        let transaction = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&payer.pubkey()),
+            &[&payer],
+            Hash::new_from_array([0x22; 32]),
+        );
+        let packet = bincode::serialize(&transaction).expect("packet bytes");
+        let meta = json!({
+            "err": {"InstructionError": [0, {"Custom": 1}]},
+            "loadedAddresses": null,
+            "innerInstructions": null
+        });
+        let evidence = finalized_instruction_evidence(&packet, &meta)
+            .expect("realistic failed finalized JSON instruction fixture");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].program_id, program_id.to_string());
+        assert_eq!(evidence[0].data_hex, "01");
+
+        let unknown_failure = json!({
+            "err": {"AccountNotFound": null},
+            "loadedAddresses": null,
+            "innerInstructions": null
+        });
+        assert!(
+            finalized_instruction_evidence(&packet, &unknown_failure)
+                .expect("unknown failure shape remains explicit no-evidence")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn poll_only_confirmation_can_parse_packet_evidence_without_resubmitting() {
+        let payer = Keypair::new();
+        let instruction = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: Vec::new(),
+            data: vec![1],
+        };
+        let transaction = Transaction::new_signed_with_payer(
+            std::slice::from_ref(&instruction),
+            Some(&payer.pubkey()),
+            &[&payer],
+            Hash::new_from_array([0x22; 32]),
+        );
+        let packet = bincode::serialize(&transaction).expect("packet bytes");
+        let encoded = BASE64.encode(&packet);
+        let signature = transaction.signatures[0];
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind confirmation RPC");
+        let address = listener.local_addr().expect("confirmation RPC address");
+        let sends = Arc::new(AtomicUsize::new(0));
+        let observed_sends = Arc::clone(&sends);
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("confirmation RPC request");
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 4 * 1024];
+                loop {
+                    let length = stream
+                        .read(&mut chunk)
+                        .expect("read confirmation RPC request");
+                    if length == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..length]);
+                    let Some(headers_end) =
+                        request.windows(4).position(|window| window == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&request[..headers_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then_some(value.trim())
+                        })
+                        .and_then(|length| length.parse::<usize>().ok())
+                        .expect("confirmation RPC content length");
+                    if request.len() >= headers_end + 4 + content_length {
+                        break;
+                    }
+                }
+                let body = String::from_utf8_lossy(&request);
+                let request_id = serde_json::from_str::<Value>(
+                    body.split_once("\r\n\r\n")
+                        .map_or(body.as_ref(), |(_, body)| body),
+                )
+                .expect("confirmation RPC request JSON")
+                .get("id")
+                .and_then(Value::as_u64)
+                .expect("confirmation RPC request id");
+                let result = if body.contains("getSignatureStatuses") {
+                    json!({
+                        "value": [{
+                            "confirmationStatus": "finalized",
+                            "err": null,
+                            "slot": 7
+                        }]
+                    })
+                } else if body.contains("getTransaction") {
+                    json!({
+                        "slot": 7,
+                        "meta": {
+                            "err": null,
+                            "fee": 0,
+                            "computeUnitsConsumed": 1,
+                            "preBalances": [0],
+                            "postBalances": [0],
+                            "logMessages": [],
+                            "loadedAddresses": null,
+                            "innerInstructions": null
+                        }
+                    })
+                } else {
+                    observed_sends.fetch_add(1, Ordering::SeqCst);
+                    json!({"value": null})
+                };
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": result
+                })
+                .to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                )
+                .expect("write confirmation RPC response");
+            }
+        });
+        let url = Url::parse(&format!("http://{address}/")).expect("confirmation RPC URL");
+        let pacing = PacingV1 {
+            minimum_call_interval: Duration::ZERO,
+            confirm_timeout: Duration::from_secs(2),
+            resubmit_interval: Duration::ZERO,
+        };
+        let mut rpc = Rpc::build(url, pacing, WritePolicyV1::Writes).expect("confirmation RPC");
+        let outcome = rpc
+            .confirm_inner("poll-only", signature, None, Some(&encoded), false, 99)
+            .expect("poll-only confirmation");
+        assert!(matches!(outcome, ConfirmOutcomeV1::Confirmed(_)));
+        server.join().expect("confirmation RPC server");
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
+    }
+
     use std::{
-        io::Read as _,
+        io::{Read as _, Write as _},
         net::TcpListener,
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         },
     };
+
+    fn encode_base58(bytes: &[u8]) -> String {
+        let mut output = vec![0_u8; bytes.len().saturating_mul(2).saturating_add(1)];
+        let length = solana_sdk::bs58::encode(bytes)
+            .onto(output.as_mut_slice())
+            .expect("base58 fixture fits output");
+        String::from_utf8(output[..length].to_vec()).expect("base58 is ASCII")
+    }
 
     fn account_value_v1() -> Value {
         json!({

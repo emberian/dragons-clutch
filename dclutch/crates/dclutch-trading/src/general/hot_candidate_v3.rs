@@ -634,7 +634,7 @@ pub enum GeneralPlaceOrderTokenObservationErrorV1 {
 }
 
 /// Actual PlaceOrder accounts whose opaque bodies General must authenticate
-/// before it may seed its three outer semantic identities.
+/// before it may seed its outer identities and child lifecycle observations.
 ///
 /// The AccountProfile authenticates their frame geometry and privileges.  This
 /// SVM adapter additionally binds the raw Realm and existing maker Position to
@@ -663,6 +663,10 @@ pub struct GeneralPlaceOrderActualFrameV2<'a> {
     pub maker_position_key: [u8; 32],
     pub maker_position_owner: [u8; 32],
     pub maker_position_data: &'a [u8],
+    pub protocol_position_lamports: u64,
+    pub protocol_position_admission_lamports: u64,
+    /// Content digest of the authenticated Product-runtime linked basis record.
+    pub linked_basis_record_digest: [u8; 32],
     pub rent_credit_key: [u8; 32],
     pub rent_credit_owner: [u8; 32],
     pub rent_credit_data: &'a [u8],
@@ -768,21 +772,26 @@ pub fn general_place_order_source_token_owner_v2(
     Ok(source.owner)
 }
 
-/// Seed PlaceOrder's external Custody source owner from the actual selected
-/// token account, after AccountProfile has authenticated the route geometry.
+/// Seed PlaceOrder's child-request inputs from the actual authenticated frame,
+/// after AccountProfile has authenticated its route geometry.
 ///
 /// This is deliberately separate from signed-term seeding.  The signed header
-/// supplies the maker assertion; this adapter supplies the token-account fact;
-/// `project_general_place_order_candidate_in_place_v3` joins the two through
-/// `EnvironmentCustodySourceOwner`.
+/// supplies the maker assertion; this adapter supplies actual Core, Rent,
+/// token-account, and prepaid-child facts.
+/// `project_general_place_order_candidate_in_place_v3` joins the two rather
+/// than treating request bytes as observations.
 #[cfg(feature = "svm")]
 pub fn seed_general_place_order_actual_identities_v2(
     frame: GeneralPlaceOrderActualFrameV2<'_>,
+    scalars: &mut [u64],
     identities: &mut [[u8; 32]],
 ) -> core::result::Result<(), GeneralPlaceOrderTokenObservationErrorV1> {
-    if identities.len()
-        != usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+    if scalars.len()
+        < usize::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
             .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?
+        || identities.len()
+            != usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?
     {
         return Err(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity);
     }
@@ -893,6 +902,26 @@ pub fn seed_general_place_order_actual_identities_v2(
     )?;
     *identities
         .get_mut(
+            usize::try_from(identity::RELEASE_SET)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
+        core.identity.selected_release_set.to_bytes();
+    *identities
+        .get_mut(
+            usize::try_from(identity::RENT_PROGRAM)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = frame.rent_program_key;
+    *identities
+        .get_mut(
+            usize::try_from(identity::LINKED_BASIS_RECORD_DIGEST)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
+        frame.linked_basis_record_digest;
+    *identities
+        .get_mut(
             usize::try_from(identity::CUSTODY_SOURCE_OWNER)
                 .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
         )
@@ -910,6 +939,20 @@ pub fn seed_general_place_order_actual_identities_v2(
         )
         .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
         rent_credit_beneficiary;
+    *scalars
+        .get_mut(
+            usize::try_from(scalar::OBSERVED_POSITION_LAMPORTS)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
+        frame.protocol_position_lamports;
+    *scalars
+        .get_mut(
+            usize::try_from(scalar::OBSERVED_ADMISSION_LAMPORTS)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
+        frame.protocol_position_admission_lamports;
     Ok(())
 }
 
@@ -2304,6 +2347,7 @@ pub fn project_general_place_order_candidate_in_place_v3(
         environment.rent_credit != owner,
         PlaceOrderClauseV3::EnvironmentRentCredit,
     )?;
+    let mut claims_affine_active = false;
     for item in 0..outcome_count {
         let base = GENERAL_HOT_COMMON_SCALARS_V3
             .checked_add(
@@ -2389,6 +2433,10 @@ pub fn project_general_place_order_candidate_in_place_v3(
                 .ok_or(GeneralHotCandidateErrorV3::RevisionOverflow)?,
         ),
         (scalar::POSITION_ONE_REVISION, 0),
+        // The EffectProgram appends exactly one affine item per Product
+        // outcome. Its fixed request header must name that same count before
+        // Claims decodes the concatenated packet.
+        (scalar::CLAIMS_ROW_COUNT, u64::from(outcome_count)),
         (scalar::CLAIMS_SOURCE_PRESENT, 1),
         (scalar::CLAIMS_DESTINATION_PRESENT, 1),
         (scalar::CLAIMS_SOURCE_POSITION_INDEX, 0),
@@ -2419,6 +2467,7 @@ pub fn project_general_place_order_candidate_in_place_v3(
         let quantity = terms
             .claim_reserve(item)
             .map_err(GeneralHotCandidateErrorV3::Collection)?;
+        claims_affine_active |= quantity != 0;
         for (coordinate, value) in [
             (item_scalar::OUTCOME, u64::from(item)),
             (item_scalar::CLAIMS_AGGREGATE_MAGNITUDE, 0),
@@ -2433,6 +2482,14 @@ pub fn project_general_place_order_candidate_in_place_v3(
             )?;
         }
     }
+    // A Buy can have no maker-owned claims to escrow.  Its Position admission
+    // still runs, while the Affine Claims transfer is absent rather than an
+    // invalid Debit/Credit zero row.
+    write_scalar(
+        candidate,
+        scalar::CLAIMS_AFFINE_ACTIVE,
+        u64::from(claims_affine_active),
+    )?;
     Ok(())
 }
 
@@ -7968,6 +8025,16 @@ mod tests {
             assert_eq!(read_scalar(&candidate, scalar::CUSTODY_AMOUNT), Ok(6));
             assert_eq!(read_scalar(&candidate, scalar::CUSTODY_ACTIVE), Ok(1));
             assert_eq!(
+                read_scalar(&candidate, scalar::CLAIMS_AFFINE_ACTIVE),
+                Ok(1),
+                "a seller's nonempty signed claim reserve enables the affine transfer"
+            );
+            assert_eq!(
+                read_scalar(&candidate, scalar::CLAIMS_ROW_COUNT),
+                Ok(u64::from(outcome_count)),
+                "the fixed affine header must name every appended Product row"
+            );
+            assert_eq!(
                 read_scalar(&candidate, scalar::ORDER_POST_PHASE),
                 Ok(u64::from(GeneralOrderPhaseV1::Placed.tag()))
             );
@@ -7980,6 +8047,69 @@ mod tests {
             assert_eq!(
                 read_scalar(&candidate, last + item_scalar::CLAIMS_DESTINATION_MAGNITUDE),
                 Ok(4)
+            );
+        }
+    }
+
+    #[test]
+    fn place_order_buy_keeps_claims_affine_inactive_while_admitting_its_escrow_position() {
+        let outcome_count = 2;
+        let mut environment = environment();
+        let config = open_batch_config(environment);
+        let (root, batch) = opened_batch(outcome_count, environment, config);
+        let current_slot = 101;
+        let order_bytes = placed_order_bytes(outcome_count, environment, batch, current_slot);
+        let order = GeneralOrderV2::decode(&order_bytes).expect("buy order");
+        environment.destination_vault_context = order.order_id();
+        environment.custody_source_owner = order.header().owner_id;
+        environment.settlement_position_owner = order.order_id();
+        environment.rent_credit = order.header().owner_id;
+        let mut candidate =
+            place_order_input(outcome_count, environment, root, batch, order, current_slot);
+        let mut signed_terms =
+            vec![0; general_signed_order_terms_len_v2(outcome_count).expect("signed width")];
+        order
+            .encode_signed_terms_into(&mut signed_terms)
+            .expect("signed immutable terms");
+
+        project_general_place_order_candidate_in_place_v3(
+            &root.to_bytes(),
+            &batch_record(batch),
+            config,
+            outcome_count,
+            environment,
+            Some(order.order_id()),
+            &signed_terms,
+            &mut candidate,
+        )
+        .expect("buy admission");
+
+        assert_eq!(
+            read_scalar(&candidate, scalar::CLAIMS_AFFINE_ACTIVE),
+            Ok(0),
+            "a Buy has no maker claim reserve to transfer"
+        );
+        assert_eq!(
+            read_scalar(&candidate, scalar::CLAIMS_ROW_COUNT),
+            Ok(u64::from(outcome_count)),
+            "the effect wire retains its authenticated Product width"
+        );
+        assert_eq!(
+            read_scalar(&candidate, scalar::ORDER_POST_PHASE),
+            Ok(u64::from(GeneralOrderPhaseV1::Placed.tag())),
+            "the order and its escrow Position still admit"
+        );
+        for item in 0..outcome_count {
+            let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+            assert_eq!(
+                read_scalar(&candidate, base + item_scalar::CLAIMS_SOURCE_MAGNITUDE),
+                Ok(0),
+                "Buy claims source row {item} is empty"
+            );
+            assert_eq!(
+                read_scalar(&candidate, base + item_scalar::CLAIMS_DESTINATION_MAGNITUDE),
+                Ok(0),
+                "Buy claims destination row {item} is empty"
             );
         }
     }

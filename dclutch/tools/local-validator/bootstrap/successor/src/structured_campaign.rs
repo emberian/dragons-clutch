@@ -49,7 +49,8 @@ use dclutch_operator::{
         NativeBasisCompositionInputV1, compile_native_basis_composition_v1,
     },
 };
-use dclutch_product::PortfolioV2;
+use dclutch_product::admission::ProductRecordV2;
+use dclutch_product::{PortfolioV2, ResultDomainV2};
 use dclutch_registry::{
     record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId},
     release_set::CapabilityExecutionSelectionV1,
@@ -257,6 +258,14 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         coefficients.clone(),
     )?;
     let closure = compile_structured_publication_closure_v1(&input)?;
+    // Authenticate the already-founded Product graph before publishing any
+    // continuation records.  The report is allowed to name coordinates, but
+    // it is not allowed to smuggle a stale graph past the same width join
+    // Trading will perform in its Hot prelude.  In particular, a Product
+    // domain with three outcomes and a four-coefficient Portfolio otherwise
+    // becomes the coarse Trading `Content` refusal after another publication
+    // batch has already been committed.
+    preflight_structured_product_graph_v1(&mut rpc, registry, &evidence)?;
     let mut transactions = Vec::new();
     let payer = if arguments.execute {
         Some(Keypair::new_from_array(crate::campaign::read_keypair_file(
@@ -826,12 +835,16 @@ fn activate_structured_receipt_v1(
     let strategy = pair(4)?;
     let transition = pair(5)?;
     let effect = pair(6)?;
-    let report_pair = |label: &str, schema: [u8; 32]| -> Result<SelectedActivationRecordPairV1> {
+    let mut report_pair = |label: &str,
+                           schema: [u8; 32]|
+     -> Result<SelectedActivationRecordPairV1> {
         let row = evidence
             .accounts
             .get(label)
             .ok_or_else(|| Error::new(format!("Structured receipt report omitted {label}")))?;
-        pair_from_digest_v1(registry, schema, crate::plan::hex32(&row.data_sha256)?)
+        let pair = pair_from_digest_v1(registry, schema, crate::plan::hex32(&row.data_sha256)?)?;
+        require_live_structured_record_v1(rpc, registry, pair, label)?;
+        Ok(pair)
     };
     let product = report_pair(
         "product_record",
@@ -1293,6 +1306,102 @@ fn pair_from_digest_v1(
     })
 }
 
+/// Authenticate the live raw owner of a report-backed Product graph record.
+///
+/// The report is evidence from the founding run, not a permission to hand a
+/// Hot instruction a PDA whose account has since vanished. Trading's common
+/// reader maps a missing, wrong-owner, or wrong-body raw record to its coarse
+/// `Content` refusal. Resolve that accusation here while the producer still
+/// knows the semantic row and canonical Registry coordinate.
+fn require_live_structured_record_v1(
+    rpc: &mut crate::rpc::Rpc,
+    registry: Pubkey,
+    pair: SelectedActivationRecordPairV1,
+    label: &str,
+) -> Result<()> {
+    let observed = rpc.account(pair.raw)?;
+    validate_live_structured_record_v1(registry, pair, label, observed.as_ref())
+}
+
+fn validate_live_structured_record_v1(
+    registry: Pubkey,
+    pair: SelectedActivationRecordPairV1,
+    label: &str,
+    observed: Option<&crate::rpc::RpcAccount>,
+) -> Result<()> {
+    let observed = observed.ok_or_else(|| {
+        Error::new(format!(
+            "Structured receipt {label} raw record is absent at canonical PDA {}",
+            pair.raw
+        ))
+    })?;
+    if observed.owner != registry {
+        return Err(Error::new(format!(
+            "Structured receipt {label} raw record owner {} differs from Registry {}",
+            observed.owner, registry
+        )));
+    }
+    let digest: [u8; 32] = sha2::Sha256::digest(&observed.data).into();
+    if digest != pair.content {
+        return Err(Error::new(format!(
+            "Structured receipt {label} raw record body digest differs at canonical PDA {}",
+            pair.raw
+        )));
+    }
+    Ok(())
+}
+
+fn preflight_structured_product_graph_v1(
+    rpc: &mut crate::rpc::Rpc,
+    registry: Pubkey,
+    evidence: &crate::campaign::CampaignTerminalEvidenceV1,
+) -> Result<()> {
+    let mut live_body = |label: &str, schema: [u8; 32]| -> Result<Vec<u8>> {
+        let row = evidence
+            .accounts
+            .get(label)
+            .ok_or_else(|| Error::new(format!("Structured receipt report omitted {label}")))?;
+        let pair = pair_from_digest_v1(registry, schema, crate::plan::hex32(&row.data_sha256)?)?;
+        require_live_structured_record_v1(rpc, registry, pair, label)?;
+        rpc.account(pair.raw)?
+            .map(|account| account.data)
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "Structured receipt {label} vanished during preflight"
+                ))
+            })
+    };
+    let product = live_body(
+        "product_record",
+        dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
+    )?;
+    let domain = live_body(
+        "result_domain_record",
+        dclutch_product::admission::RESULT_DOMAIN_SCHEMA_ID_V2,
+    )?;
+    let portfolio = live_body(
+        "portfolio_record",
+        dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2,
+    )?;
+    ProductRecordV2::decode(&product)
+        .map_err(|error| Error::new(format!("Structured receipt Product record: {error:?}")))?;
+    let domain = ResultDomainV2::decode(&domain)
+        .map_err(|error| Error::new(format!("Structured receipt result domain: {error:?}")))?;
+    let portfolio = PortfolioV2::decode(&portfolio)
+        .map_err(|error| Error::new(format!("Structured receipt Portfolio: {error:?}")))?;
+    let outcome_count = domain.outcome_count().map_err(|error| {
+        Error::new(format!("Structured receipt result domain width: {error:?}"))
+    })?;
+    if outcome_count != portfolio.coefficient_count() {
+        return Err(Error::new(format!(
+            "Structured receipt Product graph outcome width {} differs from Portfolio coefficient count {}",
+            outcome_count,
+            portfolio.coefficient_count(),
+        )));
+    }
+    Ok(())
+}
+
 fn input_release_slot(
     artifacts: &structured_activation::StructuredActivateReceiptArtifactsV1,
     activation_slot: u64,
@@ -1456,6 +1565,56 @@ mod tests {
         };
         super::mark_claims_child_caller_signer_v1(&mut child).expect("caller authority coordinate");
         assert!(child.accounts[0].is_signer);
+    }
+
+    #[test]
+    fn receipt_record_preflight_names_a_missing_live_raw_account() {
+        use sha2::{Digest as _, Sha256};
+        use solana_sdk::pubkey::Pubkey;
+
+        let registry = Pubkey::new_unique();
+        let body = b"live linked basis body";
+        let pair = super::SelectedActivationRecordPairV1 {
+            raw: Pubkey::new_unique(),
+            staging: Pubkey::new_unique(),
+            schema: [1; 32],
+            content: Sha256::digest(body).into(),
+            bumps: [254, 255],
+        };
+        let error = super::validate_live_structured_record_v1(registry, pair, "linked_basis", None)
+            .expect_err("missing raw record must refuse before Hot construction");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Structured receipt linked_basis raw record is absent at canonical PDA {}",
+                pair.raw
+            )
+        );
+    }
+
+    #[test]
+    fn receipt_record_preflight_accepts_registry_owned_matching_raw_account() {
+        use sha2::{Digest as _, Sha256};
+        use solana_sdk::pubkey::Pubkey;
+
+        let registry = Pubkey::new_unique();
+        let body = b"live linked basis body".to_vec();
+        let pair = super::SelectedActivationRecordPairV1 {
+            raw: Pubkey::new_unique(),
+            staging: Pubkey::new_unique(),
+            schema: [1; 32],
+            content: Sha256::digest(&body).into(),
+            bumps: [254, 255],
+        };
+        let observed = crate::rpc::RpcAccount {
+            lamports: 1,
+            owner: registry,
+            executable: false,
+            rent_epoch: 0,
+            data: body,
+        };
+        super::validate_live_structured_record_v1(registry, pair, "linked_basis", Some(&observed))
+            .expect("matching Registry-owned raw record is accepted");
     }
 
     #[test]

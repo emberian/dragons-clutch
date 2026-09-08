@@ -2347,7 +2347,15 @@ fn child_rule(
 ) -> Result<AccountRuleWithPrestateInputV2> {
     let (frame, relative) = child_coordinate(action, coordinate)?;
     let role = child_role(frame, relative)?;
-    let privileges = physical_role_privileges(action, role)?;
+    // A child caller authority is a Trading PDA.  The child FrameSpec correctly
+    // calls it a signer because Trading supplies that signer through
+    // `invoke_signed` at the CPI boundary; requiring a transaction signature
+    // here would make every derived PDA an impossible outer signer.
+    let privileges = if role == ChildRoleV3::CallerAuthority {
+        AccountPrivilegesV2::new(false, false, false)
+    } else {
+        physical_role_privileges(action, role)?
+    };
     // Child frames name the normal System builtin with its loader data, while
     // their contract-level data descriptors intentionally carry no payload.
     // Keep the first physical occurrence opaque; later occurrences route-alias
@@ -4272,6 +4280,37 @@ mod tests {
             general_place_order_affine_claims_coordinate_v3(ClaimsFrameRoleV1::AffinePosition(0))
                 .expect("affine maker"),
         );
+    }
+
+    #[test]
+    fn place_order_child_authorities_are_cpi_signers_not_outer_signers() {
+        let action = Action::PlaceOrder;
+        let child_start =
+            crate::general::state_artifacts_v3::general_child_account_start_v3(action);
+        let child_end = general_child_frame_end_v3(action).expect("PlaceOrder child end");
+        let mut authorities = 0_usize;
+        for coordinate in child_start..child_end {
+            let (frame, relative) = child_coordinate(action, coordinate).expect("child coordinate");
+            if child_role(frame, relative).expect("child role") != ChildRoleV3::CallerAuthority {
+                continue;
+            }
+            authorities += 1;
+            assert!(
+                child_privilege_facts(frame, relative)
+                    .expect("child caller authority privilege")
+                    .signer,
+                "the child receives its derived caller PDA through invoke_signed"
+            );
+            assert_eq!(
+                general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                    .expect("outer caller rule")
+                    .rule
+                    .privileges,
+                AccountPrivilegesV2::new(false, false, false),
+                "coordinate {coordinate} is a Trading-derived PDA, never a transaction signer"
+            );
+        }
+        assert_eq!(authorities, 5, "PlaceOrder has five child invocations");
     }
 
     #[test]

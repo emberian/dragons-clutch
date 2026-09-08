@@ -231,6 +231,45 @@ pub(crate) fn merge_selected_manifest_v1(
     base_bytes: &[u8],
     selected: CapabilityEntryV1,
 ) -> Result<(Vec<u8>, u16)> {
+    let (mut entries, selected_manifest_entry_index) =
+        preselection_manifest_position_v1(base_bytes, selected.kind_id().to_bytes())?;
+    // The canonical base is already sorted by kind. No release, config,
+    // descriptor or funding byte can affect this insertion position.
+    entries.insert(usize::from(selected_manifest_entry_index), selected);
+    let entry_count = u16::try_from(entries.len())
+        .map_err(|_| Error::new("selected-capable manifest entry count overflow"))?;
+    let selected_slot = entries
+        .get_mut(usize::from(selected_manifest_entry_index))
+        .ok_or_else(|| Error::new("canonical manifest omitted its selected entry"))?;
+    *selected_slot = selected_entry_with_dependencies_v1(
+        *selected_slot,
+        entry_count,
+        selected_manifest_entry_index,
+    )?;
+    let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&entries, &mut manifest)
+        .map_err(|error| Error::new(format!("selected-capable manifest: {error:?}")))?;
+    Ok((manifest, selected_manifest_entry_index))
+}
+
+/// Derive a selected family's manifest coordinate before its closure exists.
+///
+/// Only the canonical Resolution base and the family's semantic kind determine
+/// this coordinate. The final merge shares this exact ordering owner, so a
+/// compiler can bind its index without inventing a provisional descriptor,
+/// program set or certificate. This makes no account or reservation.
+pub(crate) fn preselection_manifest_entry_index_v1(
+    base_bytes: &[u8],
+    selected_kind: [u8; 32],
+) -> Result<u16> {
+    preselection_manifest_position_v1(base_bytes, selected_kind).map(|(_, index)| index)
+}
+
+fn preselection_manifest_position_v1(
+    base_bytes: &[u8],
+    selected_kind: [u8; 32],
+) -> Result<(Vec<CapabilityEntryV1>, u16)> {
+    capability_content(selected_kind)?;
     let base = CapabilityManifestV1::decode(base_bytes)
         .map_err(|error| Error::new(format!("Resolution capability manifest: {error:?}")))?;
     if base.entry_count() < 3 || base.as_bytes() != base_bytes {
@@ -238,7 +277,6 @@ pub(crate) fn merge_selected_manifest_v1(
             "selected-capability compilation requires a canonical Resolution base with at least three entries",
         ));
     }
-    let selected_kind = selected.kind_id().to_bytes();
     let first_release = base
         .entry(0)
         .map_err(|error| Error::new(format!("Resolution capability entry 0: {error:?}")))?
@@ -256,31 +294,21 @@ pub(crate) fn merge_selected_manifest_v1(
         }
         entries.push(entry);
     }
-    entries.push(selected);
-    entries.sort_by_key(|entry| entry.kind_id().to_bytes());
-    let selected_manifest_entry_index = entries
-        .iter()
-        .position(|entry| entry.kind_id().to_bytes() == selected_kind)
-        .and_then(|index| u16::try_from(index).ok())
-        .ok_or_else(|| Error::new("canonical manifest omitted its selected entry"))?;
-    // THE EDGES ARE ASSIGNED AFTER THE SORT, because a dependency is a manifest
-    // INDEX and no index exists until kind order is settled. Rewriting the
-    // entry cannot move it: `sort_by_key` reads only `kind_id`, which this
-    // does not touch.
-    let entry_count = u16::try_from(entries.len())
-        .map_err(|_| Error::new("selected-capable manifest entry count overflow"))?;
-    let selected_slot = entries
-        .get_mut(usize::from(selected_manifest_entry_index))
-        .ok_or_else(|| Error::new("canonical manifest omitted its selected entry"))?;
-    *selected_slot = selected_entry_with_dependencies_v1(
-        *selected_slot,
-        entry_count,
-        selected_manifest_entry_index,
-    )?;
-    let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
-    CapabilityManifestV1::encode_into(&entries, &mut manifest)
-        .map_err(|error| Error::new(format!("selected-capable manifest: {error:?}")))?;
-    Ok((manifest, selected_manifest_entry_index))
+    let selected_index = u16::try_from(
+        entries
+            .iter()
+            .take_while(|entry| entry.kind_id().to_bytes() < selected_kind)
+            .count(),
+    )
+    .map_err(|_| Error::new("selected manifest index overflow"))?;
+    let entry_count = base
+        .entry_count()
+        .checked_add(1)
+        .ok_or_else(|| Error::new("selected-capable manifest entry count overflow"))?;
+    // Admission of the prospective position includes the same dependency
+    // capacity check that a completed selected entry must pass.
+    selected_entry_dependencies_v1(entry_count, selected_index)?;
+    Ok((entries, selected_index))
 }
 
 /// Validate one selected-capable manifest against the entry its closure
@@ -596,6 +624,45 @@ mod tests {
         // 0x51 sorts after 0x11/0x12/0x13: the selected entry is last.
         assert_eq!(index, 3);
         validate_selected_manifest_v1(&manifest, selected, index).expect("validate");
+    }
+
+    #[test]
+    fn preselection_index_agrees_with_every_insertion_position_without_release_bytes() {
+        let mut between_first_and_second = [0x11; 32];
+        between_first_and_second[31] = 0x12;
+        let mut between_second_and_third = [0x12; 32];
+        between_second_and_third[31] = 0x13;
+        for (expected, kind) in [
+            [0x01; 32],
+            between_first_and_second,
+            between_second_and_third,
+            SELECTED_KIND,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let before = preselection_manifest_entry_index_v1(&base(), kind)
+                .expect("kind alone selects a canonical position");
+            assert_eq!(usize::from(before), expected);
+            for (release, config) in [([0x61; 32], [0x62; 32]), ([0x71; 32], [0x72; 32])] {
+                let selected = entry(kind, release, config);
+                let (manifest, after) = merge_selected_manifest_v1(&base(), selected)
+                    .expect("complete selected closure merges at the predicted position");
+                assert_eq!(before, after);
+                validate_selected_manifest_v1(&manifest, selected, after)
+                    .expect("merged closure preserves its canonical dependencies");
+            }
+        }
+    }
+
+    #[test]
+    fn preselection_index_refuses_a_duplicate_kind_before_compiling_a_closure() {
+        let refusal = preselection_manifest_entry_index_v1(&base(), [0x12; 32])
+            .expect_err("a duplicate kind has no prospective selected position");
+        assert_eq!(
+            refusal.to_string(),
+            "Resolution base must contain same-release controller companions of other kinds than the selected capability"
+        );
     }
 
     /// STAGE FOUR'S CLOSURE COVERS WHAT THE CLOSE FRAME PRESERVES.

@@ -586,6 +586,7 @@ mod tests {
             compute_units_consumed: Some(1_234),
             error: None,
             logs: Vec::new(),
+            instructions: Vec::new(),
         }
     }
 

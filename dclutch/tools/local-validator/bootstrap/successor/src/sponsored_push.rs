@@ -3042,6 +3042,7 @@ mod tests {
             compute_units_consumed: Some(100_000),
             error: None,
             logs: Vec::new(),
+            instructions: Vec::new(),
         });
         report.poststate = vacant_evidence(&instruction);
         assert!(authenticate(&report).is_ok());

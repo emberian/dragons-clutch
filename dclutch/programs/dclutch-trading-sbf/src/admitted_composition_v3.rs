@@ -31,7 +31,7 @@
 
 extern crate alloc;
 
-use alloc::{vec, vec::Vec};
+use alloc::{rc::Rc, vec, vec::Vec};
 
 use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
@@ -642,7 +642,10 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
         let capacity = ADMITTED_ACCELERATOR_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V4
             .checked_add(runtime_accounts.len())
             .ok_or(TradingSbfError::AdmittedTransport)?;
-        let mut metas = Vec::with_capacity(capacity);
+        let mut metas = Vec::new();
+        metas
+            .try_reserve_exact(capacity)
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         metas.extend(
             fixed_cpi_accounts(frame, authority)
                 .enumerate()
@@ -660,12 +663,24 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
                 .iter()
                 .map(|account| AccountMeta::new_readonly(*account.key, false)),
         );
-        let mut infos = Vec::with_capacity(capacity);
-        infos.extend(fixed_cpi_accounts(frame, authority).cloned());
-        if let Some(page) = frame.output_page {
-            infos.push(page.clone());
-        }
-        infos.extend(runtime_accounts.iter().map(|account| (*account).clone()));
+        // The CPI instruction retains EVERY ordered meta above.  Its backing
+        // AccountInfo bank is a different input to the syscall: both the SDK's
+        // `invoke_signed` borrow check and the runtime translator select the
+        // FIRST entry whose key matches an instruction account.  Repeating a
+        // physical account there therefore buys no authority or ordering fact,
+        // but it does clone its two Rc cells into this program's bump heap.
+        //
+        // Do not silently treat same-key representations as interchangeable.
+        // A duplicated top-level account normally reuses the same Rc cells;
+        // when it does not, `deduplicated_admitted_cpi_infos_v4` compares the
+        // complete observable account representation before retaining the
+        // first one.  That keeps a malformed frame from turning a different
+        // owner, body, or privilege into an invisible heap optimization.
+        let infos = deduplicated_admitted_cpi_infos_v4(admitted_cpi_accounts_v4(
+            frame,
+            authority,
+            runtime_accounts,
+        ))?;
         // Fallibly, and at the contract's bound rather than the runtime's: a
         // return wider than this buffer is a refusal `get_return_data_into_v1`
         // makes by name, and an infallible `with_capacity` on an exhausted heap
@@ -676,11 +691,158 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
         Ok(Self {
             accelerator_program: *frame.accelerator_program.key,
             metas,
-            data: vec![0_u8; request_len],
+            data: zeroed_cpi_buffer_v4(request_len)?,
             infos,
             ack,
         })
     }
+}
+
+/// The exact AccountInfo sources supplied to the admitted accelerator CPI.
+///
+/// The companion meta vector has the same logical order and is deliberately
+/// not deduplicated.  This iterator is replayable so the backing bank can be
+/// counted before its one exact heap allocation is made.
+fn admitted_cpi_accounts_v4<'a, 'info>(
+    frame: AdmittedCpiFrameV3<'a, 'info>,
+    authority: &'a AccountInfo<'info>,
+    runtime_accounts: &'a [&'a AccountInfo<'info>],
+) -> impl Iterator<Item = &'a AccountInfo<'info>> + Clone {
+    fixed_cpi_accounts(frame, authority)
+        .chain(frame.output_page)
+        .chain(runtime_accounts.iter().copied())
+}
+
+/// Build the backing account bank once, retaining the first exact physical
+/// representation for each key.
+///
+/// `solana_program::program::invoke_signed` checks the first matching info for
+/// each meta, and Solana's runtime CPI translator uses the same first matching
+/// key to locate the caller account.  The duplicate comparison below is the
+/// extra conjunct this producer needs before it can make that runtime rule save
+/// heap: differing representations of one physical key are an invalid frame,
+/// never an instruction to choose one silently.  A compact reference table is
+/// sorted by `(key, original_index)`, so equal-key validation takes one pass
+/// and the retained backing order remains the original first-match order.
+fn deduplicated_admitted_cpi_infos_v4<'a, 'info, I>(
+    accounts: I,
+) -> Result<Vec<AccountInfo<'info>>, ProgramError>
+where
+    'info: 'a,
+    I: Iterator<Item = &'a AccountInfo<'info>>,
+{
+    struct AccountIndexV4<'a, 'info> {
+        account: &'a AccountInfo<'info>,
+        original_index: u16,
+        retain: bool,
+    }
+
+    let (lower_bound, upper_bound) = accounts.size_hint();
+    let account_count = upper_bound
+        .filter(|upper_bound| *upper_bound == lower_bound)
+        .ok_or(TradingSbfError::AdmittedTransport)?;
+    let mut indexed = Vec::new();
+    indexed
+        .try_reserve_exact(account_count)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    for (original_index, account) in accounts.enumerate() {
+        indexed.push(AccountIndexV4 {
+            account,
+            original_index: u16::try_from(original_index)
+                .map_err(|_| TradingSbfError::AdmittedTransport)?,
+            retain: false,
+        });
+    }
+    if indexed.len() != account_count {
+        return Err(TradingSbfError::AdmittedTransport.into());
+    }
+    hot_heap_mark!("admitted-cpi-index");
+    indexed.sort_unstable_by(|left, right| {
+        left.account
+            .key
+            .cmp(right.account.key)
+            .then(left.original_index.cmp(&right.original_index))
+    });
+
+    let mut group_start = 0_usize;
+    let mut unique_count = 0_usize;
+    for index in 0..indexed.len() {
+        let same_key_as_previous =
+            index > 0 && indexed[index - 1].account.key == indexed[index].account.key;
+        if !same_key_as_previous {
+            indexed[index].retain = true;
+            group_start = index;
+            unique_count = unique_count
+                .checked_add(1)
+                .ok_or(TradingSbfError::AdmittedTransport)?;
+            continue;
+        }
+        let (prior, current) = indexed.split_at_mut(index);
+        require_matching_account_representation_v4(prior[group_start].account, current[0].account)?;
+    }
+
+    // Sorting back by source index preserves the first matching AccountInfo
+    // the installed CPI translator selects for every ordered meta.
+    indexed.sort_unstable_by_key(|entry| entry.original_index);
+    let mut infos: Vec<AccountInfo<'info>> = Vec::new();
+    infos
+        .try_reserve_exact(unique_count)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    for entry in indexed {
+        if entry.retain {
+            infos.push(entry.account.clone());
+        }
+    }
+    Ok(infos)
+}
+
+/// Refuse different observations presented under one physical key before the
+/// CPI backing bank applies Solana's first-match lookup rule.
+fn require_matching_account_representation_v4<'info>(
+    first: &AccountInfo<'info>,
+    duplicate: &AccountInfo<'info>,
+) -> Result<(), ProgramError> {
+    if first.owner != duplicate.owner
+        || first.is_signer != duplicate.is_signer
+        || first.is_writable != duplicate.is_writable
+        || first.executable != duplicate.executable
+    {
+        return Err(TradingSbfError::AdmittedFrame.into());
+    }
+    // The normal duplicate representation shares both cells, so do not scan a
+    // program body merely to prove a clone of the same observation is itself.
+    if Rc::ptr_eq(&first.lamports, &duplicate.lamports) && Rc::ptr_eq(&first.data, &duplicate.data)
+    {
+        return Ok(());
+    }
+    let first_lamports = first
+        .try_borrow_lamports()
+        .map_err(|_| TradingSbfError::AdmittedFrame)?;
+    let duplicate_lamports = duplicate
+        .try_borrow_lamports()
+        .map_err(|_| TradingSbfError::AdmittedFrame)?;
+    if *first_lamports != *duplicate_lamports {
+        return Err(TradingSbfError::AdmittedFrame.into());
+    }
+    let first_data = first
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::AdmittedFrame)?;
+    let duplicate_data = duplicate
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::AdmittedFrame)?;
+    if *first_data != *duplicate_data {
+        return Err(TradingSbfError::AdmittedFrame.into());
+    }
+    Ok(())
+}
+
+/// Allocate a zeroed CPI request buffer through the fallible heap boundary.
+fn zeroed_cpi_buffer_v4(bytes: usize) -> Result<Vec<u8>, ProgramError> {
+    let mut data = Vec::new();
+    data.try_reserve_exact(bytes)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    data.resize(bytes, 0_u8);
+    Ok(data)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -826,7 +988,7 @@ fn invoke_admitted_accelerator_v3<'info>(
 fn fixed_cpi_accounts<'a, 'info>(
     frame: AdmittedCpiFrameV3<'a, 'info>,
     authority: &'a AccountInfo<'info>,
-) -> impl Iterator<Item = &'a AccountInfo<'info>> {
+) -> impl Iterator<Item = &'a AccountInfo<'info>> + Clone {
     core::iter::once(authority)
         .chain(frame.hot_fixed_accounts.iter())
         .chain([
@@ -1252,9 +1414,71 @@ fn content(bytes: &[u8]) -> Result<ContentId, ProgramError> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::boxed::Box;
+
     use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 
     use super::*;
+
+    fn readonly_info(
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+    ) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            false,
+            false,
+            Box::leak(Box::new(lamports)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(owner)),
+            false,
+        )
+    }
+
+    #[test]
+    fn admitted_cpi_backing_deduplicates_only_identical_account_representations() {
+        let repeated_key = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let first = readonly_info(repeated_key, owner, 7, vec![1, 2, 3]);
+        // This is deliberately a separate AccountInfo allocation, rather than
+        // a clone: the control proves equality validation covers a duplicated
+        // serialized representation as well as the usual shared Rc cells.
+        let identical = readonly_info(repeated_key, owner, 7, vec![1, 2, 3]);
+        let distinct = readonly_info(Pubkey::new_unique(), owner, 11, vec![4]);
+        let infos = deduplicated_admitted_cpi_infos_v4([&first, &distinct, &identical].into_iter())
+            .expect("identical duplicate has one backing entry");
+        assert_eq!(infos.len(), 2);
+        assert_eq!(infos[0].key, first.key, "first matching key wins");
+        assert_eq!(infos[1].key, distinct.key);
+
+        let foreign_owner = readonly_info(repeated_key, Pubkey::new_unique(), 7, vec![1, 2, 3]);
+        assert!(
+            matches!(
+                deduplicated_admitted_cpi_infos_v4([&first, &foreign_owner].into_iter()),
+                Err(error) if error == TradingSbfError::AdmittedFrame.into()
+            ),
+            "a same-key foreign owner cannot disappear behind first-match lookup"
+        );
+        let different_body = readonly_info(repeated_key, owner, 7, vec![1, 2, 4]);
+        assert!(
+            matches!(
+                deduplicated_admitted_cpi_infos_v4([&first, &different_body].into_iter()),
+                Err(error) if error == TradingSbfError::AdmittedFrame.into()
+            ),
+            "a same-key divergent body cannot disappear behind first-match lookup"
+        );
+        let mut writable = readonly_info(repeated_key, owner, 7, vec![1, 2, 3]);
+        writable.is_writable = true;
+        assert!(
+            matches!(
+                deduplicated_admitted_cpi_infos_v4([&first, &writable].into_iter()),
+                Err(error) if error == TradingSbfError::AdmittedFrame.into()
+            ),
+            "a same-key divergent privilege cannot disappear behind first-match lookup"
+        );
+    }
 
     #[test]
     fn authenticated_accelerator_v4_frame_is_exact_and_nonoverlapping() {

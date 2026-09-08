@@ -1044,6 +1044,17 @@ pub(crate) struct TransactionEvidence {
     pub(crate) compute_units_consumed: Option<u64>,
     pub(crate) error: Option<serde_json::Value>,
     pub(crate) logs: Vec<String>,
+    /// Top-level and CPI instructions recovered from the finalized packet and
+    /// transaction metadata. `data_hex` is canonical instruction data, and
+    /// `program_id` is the native program address that received it.
+    #[serde(default)]
+    pub(crate) instructions: Vec<InstructionEvidence>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct InstructionEvidence {
+    pub(crate) program_id: String,
+    pub(crate) data_hex: String,
 }
 
 impl TransactionEvidence {
@@ -1158,6 +1169,7 @@ mod refusal_pin_tests {
             compute_units_consumed: Some(1234),
             error,
             logs: Vec::new(),
+            instructions: Vec::new(),
         }
     }
 

@@ -6,12 +6,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use crate::model::{Blocked, BlockedSet, Inventory, Ledger, Outcome, RouteKind};
+use crate::model::{Blocked, BlockedSet, EvidenceLevel, Inventory, Ledger, Outcome, RouteKind};
 
 struct Coverage<'a> {
     executed: BTreeSet<&'a str>,
     refused: BTreeSet<&'a str>,
     refusal_seen: BTreeSet<&'a str>,
+    legacy_by_route: BTreeMap<&'a str, usize>,
     by_route: BTreeMap<&'a str, usize>,
     /// Which campaigns drove each route. A fast lane is additional evidence,
     /// never a substitute, so a reader must be able to see at a glance that a
@@ -23,9 +24,16 @@ fn coverage(ledger: &Ledger) -> Coverage<'_> {
     let mut executed = BTreeSet::new();
     let mut refused = BTreeSet::new();
     let mut refusal_seen = BTreeSet::new();
+    let mut legacy_by_route: BTreeMap<&str, usize> = BTreeMap::new();
     let mut by_route: BTreeMap<&str, usize> = BTreeMap::new();
     let mut campaigns: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for observation in &ledger.observations {
+        if observation.evidence_level == EvidenceLevel::LegacyProgramOnly {
+            *legacy_by_route
+                .entry(observation.route.as_str())
+                .or_default() += 1;
+            continue;
+        }
         *by_route.entry(observation.route.as_str()).or_default() += 1;
         campaigns
             .entry(observation.route.as_str())
@@ -47,6 +55,7 @@ fn coverage(ledger: &Ledger) -> Coverage<'_> {
         executed,
         refused,
         refusal_seen,
+        legacy_by_route,
         by_route,
         campaigns,
     }
@@ -100,8 +109,9 @@ pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (
         out,
         "Static enumeration of every program's public dispatch surface, joined to the\n\
          routes the gauntlet has actually driven on a validator. A route is EXECUTED only\n\
-         when a finalized transaction named it AND the chain's own log messages show that\n\
-         program invoked. NEVER-EXECUTED is not an absence of evidence; it is the evidence."
+         when finalized native instruction bytes select it and the chain's own log messages\n\
+         show its program invoked. Legacy program-only rows are retained but marked\n\
+         LEGACY-UNCORROBORATED and do not count as current coverage."
     );
     let _ = writeln!(out);
     if let Some(revision) = &inventory.source_revision {
@@ -178,21 +188,26 @@ pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (
                     format!("REFUSED-ONLY ({count}x via {campaigns})")
                 } else {
                     totals.routes_never += 1;
-                    match blocked_for(blocked, id) {
-                        Some(entry) => {
-                            totals.routes_never_blocked += 1;
-                            used_blocked.insert(entry.route.as_str());
-                            let held = reasons.iter().position(|(_, r)| r == &entry.reason);
-                            let marker = if let Some(index) = held {
-                                reasons[index].0.clone()
-                            } else {
-                                let next = format!("b{}", reasons.len() + 1);
-                                reasons.push((next.clone(), entry.reason.clone()));
-                                next
-                            };
-                            format!("NEVER-EXECUTED [{}] ({marker})", entry.owner)
+                    match coverage.legacy_by_route.get(id) {
+                        Some(count) => {
+                            format!("LEGACY-UNCORROBORATED ({count}x; refold required)")
                         }
-                        None => "**NEVER-EXECUTED — no stated reason**".to_string(),
+                        None => match blocked_for(blocked, id) {
+                            Some(entry) => {
+                                totals.routes_never_blocked += 1;
+                                used_blocked.insert(entry.route.as_str());
+                                let held = reasons.iter().position(|(_, r)| r == &entry.reason);
+                                let marker = if let Some(index) = held {
+                                    reasons[index].0.clone()
+                                } else {
+                                    let next = format!("b{}", reasons.len() + 1);
+                                    reasons.push((next.clone(), entry.reason.clone()));
+                                    next
+                                };
+                                format!("NEVER-EXECUTED [{}] ({marker})", entry.owner)
+                            }
+                            None => "**NEVER-EXECUTED — no stated reason**".to_string(),
+                        },
                     }
                 };
                 let selectors = if route.selectors.is_empty() {

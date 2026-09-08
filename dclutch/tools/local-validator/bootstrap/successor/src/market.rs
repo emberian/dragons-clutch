@@ -4753,6 +4753,9 @@ pub(crate) struct FutureMarketImmutablePublicationV1 {
     /// M0's Core Market is founded.
     pub(crate) rent_credit: Pubkey,
     pub(crate) project_found: [Pubkey; dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2],
+    /// Source-owner principal-cap projection authenticated while compiling the
+    /// M0 bodies and reused by Series' future-Core receipt.
+    pub(crate) principal_cap_sets: u64,
     /// The finalized Registry pairs in the ordinary ProjectFound frame, with
     /// the exact canonical body the publisher submitted.  Series Prepare
     /// consumes this typed evidence rather than attempting to discover a
@@ -4894,6 +4897,7 @@ pub(crate) fn publish_future_market_immutable_records_v1(
         manifest: records.manifest,
         rent_credit: credit,
         project_found,
+        principal_cap_sets: projection.principal_cap_sets,
         series_prepare_records: records.series_prepare_records.clone(),
         series_prepare_vacancies: records.series_prepare_vacancies.clone(),
     })

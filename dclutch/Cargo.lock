@@ -2390,6 +2390,7 @@ dependencies = [
  "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
+ "solana-transaction-context 3.1.12",
 ]
 
 [[package]]
@@ -2428,6 +2429,7 @@ dependencies = [
  "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
+ "solana-transaction-context 3.1.12",
 ]
 
 [[package]]
@@ -2485,6 +2487,7 @@ dependencies = [
  "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
+ "solana-transaction-context 3.1.12",
 ]
 
 [[package]]
@@ -2813,6 +2816,7 @@ dependencies = [
  "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
+ "solana-transaction-context 3.1.12",
 ]
 
 [[package]]

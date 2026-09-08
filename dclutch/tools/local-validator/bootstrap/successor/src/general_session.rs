@@ -169,9 +169,17 @@ use crate::{
 };
 
 pub(crate) const DEVNET_GENERAL_SESSION_COMMAND_V1: &str = "devnet-general-session";
+/// Read a founded General Market through the owned-local-validator origin rail.
+///
+/// This is the same Market-derived frame and route producer as the acknowledged
+/// devnet command. It differs only in the origin that is allowed to supply its
+/// finalized observations; it does not accept seeded facts or a local frame.
+pub(crate) const LOCAL_GENERAL_SESSION_COMMAND_V1: &str =
+    "local-private-validator-general-session-v1";
 /// The frame report's schema, and the only document `devnet-capability-seal-v1`
 /// will read a frame out of.
 pub(crate) const FRAME_REPORT_SCHEMA_V1: &str = "dclutch-devnet-general-session-frame-report-v1";
+const LOCAL_FRAME_REPORT_SCHEMA_V1: &str = "dclutch-local-general-session-frame-report-v1";
 
 /// The action this command frames. `OpenBatch` is the first act of the General
 /// batch lifecycle, so it is the one whose reachability decides the family's.
@@ -302,9 +310,24 @@ pub(crate) fn usage() -> &'static str {
      release set whose own release-set identity must equal the Market's."
 }
 
+pub(crate) fn local_usage() -> &'static str {
+    "dclutch-local-successor-bootstrap local-private-validator-general-session-v1 \
+     --rpc-url http://127.0.0.1:PORT \
+     --plan ABSOLUTE_JSON --market GENERAL_OPEN_MARKET \
+     --result-domain-record ADDRESS --portfolio-record ADDRESS \
+     --linked-basis-record ADDRESS --payer PUBKEY --output ABSOLUTE_NEW_JSON \
+     [--action ACTION] [--parent-request-digest HEX64] [--rent-credit ADDRESS] \
+     [--emit-route ABSOLUTE_NEW_JSON --lookup-table ADDRESS \
+     --checked-release ABSOLUTE_BIN]\n     \
+     Read-only owned-loopback counterpart of devnet-general-session. It derives \
+     the same complete General frame and optional GeneralSuccessorRouteV1 only \
+     from finalized Market records; no local frame, account, or deployment fact \
+     is accepted as an input."
+}
+
 struct ArgumentsV1 {
     rpc_url: String,
-    acknowledgment: String,
+    acknowledgment: Option<String>,
     plan: PathBuf,
     market: Pubkey,
     result_domain_record: Pubkey,
@@ -345,7 +368,7 @@ struct ArgumentsV1 {
     checked_release: Option<PathBuf>,
 }
 
-fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
+fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<ArgumentsV1> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut plan = None;
@@ -388,8 +411,17 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             return Err(refusal("input/repeated-flag", flag));
         }
     }
+    let command_usage = match expected {
+        ExpectedClusterV1::Devnet => usage(),
+        ExpectedClusterV1::OwnedLoopback => local_usage(),
+    };
     let required = |value: Option<String>, name: &str| {
-        value.ok_or_else(|| refusal("input/missing-flag", format!("{name}; usage: {}", usage())))
+        value.ok_or_else(|| {
+            refusal(
+                "input/missing-flag",
+                format!("{name}; usage: {command_usage}"),
+            )
+        })
     };
     // THE ROUTE FLAGS ARE ALL-OR-NOTHING, AND THE REFUSAL SAYS WHICH IS MISSING.
     //
@@ -418,7 +450,12 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     }
     Ok(ArgumentsV1 {
         rpc_url: required(rpc_url, "--rpc-url")?,
-        acknowledgment: required(acknowledgment, DEVNET_ACKNOWLEDGMENT_FLAG)?,
+        acknowledgment: match expected {
+            ExpectedClusterV1::Devnet => {
+                Some(required(acknowledgment, DEVNET_ACKNOWLEDGMENT_FLAG)?)
+            }
+            ExpectedClusterV1::OwnedLoopback => acknowledgment,
+        },
         plan: PathBuf::from(required(plan, "--plan")?),
         market: pubkey(&required(market, "--market")?)?,
         result_domain_record: pubkey(&required(result_domain_record, "--result-domain-record")?)?,
@@ -668,7 +705,20 @@ const PROBE_WIDTHS_V1: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWi
 
 /// Derive and report the General OpenBatch frame on acknowledged devnet.
 pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_arguments(arguments)?;
+    run(arguments, ExpectedClusterV1::Devnet, FRAME_REPORT_SCHEMA_V1)
+}
+
+/// Derive and report the same General frame on a validator this campaign owns.
+pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run(
+        arguments,
+        ExpectedClusterV1::OwnedLoopback,
+        LOCAL_FRAME_REPORT_SCHEMA_V1,
+    )
+}
+
+fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str) -> Result<()> {
+    let arguments = parse_arguments(arguments, expected)?;
     let session_action = arguments.action;
     if arguments.output.exists() {
         return Err(refusal(
@@ -678,8 +728,8 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     }
     // The origin rail runs before anything is read: it is what makes an
     // accidental mainnet endpoint impossible, and it costs nothing.
-    let origin = ClusterOriginV1::parse(&arguments.rpc_url, Some(&arguments.acknowledgment))?;
-    ExpectedClusterV1::Devnet.authenticate(&origin)?;
+    let origin = ClusterOriginV1::parse(&arguments.rpc_url, arguments.acknowledgment.as_deref())?;
+    expected.authenticate(&origin)?;
     let plan_bytes = std::fs::read(&arguments.plan)
         .map_err(|error| refusal("input/unreadable", format!("plan: {error}")))?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)
@@ -1285,8 +1335,8 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     }
 
     let report = json!({
-        "schema": FRAME_REPORT_SCHEMA_V1,
-        "cluster": "devnet",
+        "schema": report_schema,
+        "cluster": expected.evidence_label(),
         "rpcUrl": origin.redacted_url(),
         "market": arguments.market.to_string(),
         "action": format!("{session_action:?}"),
@@ -2306,6 +2356,42 @@ mod tests {
     const RELEASE_SET: [u8; 32] = [9_u8; 32];
     const MARKET: Pubkey = Pubkey::new_from_array([11_u8; 32]);
     const ROOT: Pubkey = Pubkey::new_from_array([13_u8; 32]);
+
+    fn loopback_session_arguments_v1() -> Vec<String> {
+        vec![
+            "--rpc-url".into(),
+            "http://127.0.0.1:22274".into(),
+            "--plan".into(),
+            "/tmp/general-plan.json".into(),
+            "--market".into(),
+            "11111111111111111111111111111111".into(),
+            "--result-domain-record".into(),
+            "11111111111111111111111111111111".into(),
+            "--portfolio-record".into(),
+            "11111111111111111111111111111111".into(),
+            "--linked-basis-record".into(),
+            "11111111111111111111111111111111".into(),
+            "--payer".into(),
+            "11111111111111111111111111111111".into(),
+            "--output".into(),
+            "/tmp/general-frame.json".into(),
+        ]
+    }
+
+    #[test]
+    fn owned_loopback_session_requires_no_devnet_acknowledgment() {
+        let loopback = parse_arguments(
+            loopback_session_arguments_v1(),
+            ExpectedClusterV1::OwnedLoopback,
+        )
+        .expect("owned loopback accepts its exact origin without a devnet acknowledgment");
+        assert_eq!(loopback.acknowledgment, None);
+
+        match parse_arguments(loopback_session_arguments_v1(), ExpectedClusterV1::Devnet) {
+            Ok(_) => panic!("devnet retains the explicit acknowledgment rail"),
+            Err(error) => assert!(error.to_string().contains(DEVNET_ACKNOWLEDGMENT_FLAG)),
+        }
+    }
 
     /// One synthetic frame whose only job is to be a well-formed route.
     ///

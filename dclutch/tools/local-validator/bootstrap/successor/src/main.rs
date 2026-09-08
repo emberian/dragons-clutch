@@ -51,14 +51,16 @@ mod release_lineage;
 mod series_act_verbs_v1;
 mod series_checked_evidence;
 mod series_consume_campaign;
-mod series_founder;
+mod series_expire_geometry;
 mod series_found_prepare_campaign;
 mod series_found_prepare_driver;
+mod series_found_prepare_input;
+mod series_founder;
 mod series_geometry;
 mod series_lifecycle_campaign;
 mod series_market;
-mod series_source;
 mod series_permit_expiry_campaign;
+mod series_source;
 mod series_terminal_campaign;
 // The journey campaign's conservation engine, shared textually the same way
 // the journey shares this tree's modules back. Its unused-in-this-binary
@@ -292,6 +294,9 @@ fn run() -> Result<()> {
         Some(general_session::DEVNET_GENERAL_SESSION_COMMAND_V1) => {
             general_session::run_devnet(arguments.collect())
         }
+        Some(general_session::LOCAL_GENERAL_SESSION_COMMAND_V1) => {
+            general_session::run_owned_loopback(arguments.collect())
+        }
         Some(command) if command == family_hot_campaign::GENERAL_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::General)
         }
@@ -468,8 +473,14 @@ fn run() -> Result<()> {
         Some(command) if command == general_successor_plan::DEVNET_EXECUTE_COMMAND_V1 => {
             general_successor_plan::run_execute_devnet(arguments.collect())
         }
+        Some(command) if command == general_successor_plan::LOCAL_EXECUTE_COMMAND_V1 => {
+            general_successor_plan::run_execute_owned_loopback(arguments.collect())
+        }
         Some(command) if command == general_successor_plan::DEVNET_LOOKUP_TABLE_COMMAND_V1 => {
             general_successor_plan::run_lookup_table_devnet(arguments.collect())
+        }
+        Some(command) if command == general_successor_plan::LOCAL_LOOKUP_TABLE_COMMAND_V1 => {
+            general_successor_plan::run_lookup_table_owned_loopback(arguments.collect())
         }
         Some(command) if command == general_successor_plan::COMMAND_V1 => {
             general_successor_plan::run(arguments.collect())

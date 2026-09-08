@@ -59,6 +59,8 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-08 | General loopback founding completes with the established campaign-payer fixture grant | — | [accepted founding addendum](docs/evidence/GENERAL_LOOPBACK_FOUNDING_ADDENDUM_2026_09_08.md) |
+| 2026-09-08 | two exact-source all-eight diagnostic builds pass links, frames and artifact checks | — | [strict checkpoints](docs/evidence/STRICT_ALL_EIGHT_CHECKPOINTS_2026_09_08.md) |
 | 2026-09-07 | existing Pages explorer follow-up deployed: navigation races repaired and generated layouts expanded | — | [follow-up publication](docs/evidence/PAGES_EXPLORER_FOLLOWUP_2026_09_07.md) |
 | 2026-09-07 | General's checked compiler and loopback infrastructure execute; full founding sponsorship remains owed | — | [General source-split evidence](docs/evidence/GENERAL_LOOPBACK_SOURCE_SPLIT_2026_09_07.md) |
 | 2026-09-07 | recorded devnet deployer located and verified; current rent quotes establish the funding gap | — | [redeploy inputs](docs/evidence/DEVNET_REDEPLOY_INPUTS_2026_09_07.md) |

@@ -1120,15 +1120,14 @@ pub(crate) fn prepare_local_series_founder_from_market_v1(
 /// this boundary accepts no text-form certificate identity.
 pub(crate) fn build_series_shadow_preselection_v1(
     template_bytes: &[u8],
-    lifecycle_bytes: &[u8],
     fixed_data_lengths: &[u32;
         dclutch_series_shadow_bundle_generator::SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
     children: &dclutch_operator::series_child_bank_v1::SeriesChildBankV1,
-    release_sources: dclutch_series_shadow_bundle_generator::SeriesShadowReleaseSourcesV4<'_>,
+    evidence: &crate::series_checked_evidence::CheckedSeriesShadowEvidenceV1,
 ) -> Result<dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1> {
     use dclutch_series_shadow_bundle_generator::{
         SeriesShadowBundleSourceV4, SeriesShadowDescriptorSemanticsV4,
-        build_series_shadow_preselection_v1 as build,
+        SeriesShadowReleaseSourcesV4, build_series_shadow_preselection_v1 as build,
     };
     use dclutch_trading::series::{
         SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
@@ -1164,10 +1163,23 @@ pub(crate) fn build_series_shadow_preselection_v1(
         root_state_bytes: u32::try_from(SERIES_STATE_BYTES_V3)
             .map_err(|_| Error::new("Series Shadow root state width escaped u32"))?,
     };
+    // Consume is the only first-accelerated action. Its release owner emits
+    // this empty policy directly; it depends on no certificate or parent-root
+    // identity, so it can be derived before first selected publication.
+    let lifecycle = dclutch_trading_sbf::series::release_v5::series_consume_lifecycle_v5()
+        .map_err(|error| Error::new(format!("Series Shadow Consume lifecycle: {error:?}")))?;
     let built = build(SeriesShadowBundleSourceV4 {
         descriptor,
-        release_sources,
-        lifecycle: lifecycle_bytes,
+        release_sources: SeriesShadowReleaseSourcesV4 {
+            semantic_source: include_bytes!(
+                "../../../../../programs/dclutch-trading-sbf/src/series/consume_artifacts_v4.rs"
+            ),
+            compiler_source: &evidence.compiler_manifest,
+            toolchain_manifest: &evidence.toolchain,
+            accelerator_semantic_release: evidence.accelerator_semantic_release,
+            translation_validation: evidence.translation_validation,
+        },
+        lifecycle: &lifecycle,
         fixed_data_lengths,
         child_requests: children.consume_requests(),
         occurrence_count: template.occurrence_count(),
@@ -1179,6 +1191,10 @@ pub(crate) fn build_series_shadow_preselection_v1(
             "Series Shadow preselection certificate hash changed before Registry finalization",
         ));
     }
+    // The generator owns the certificate wire, while the evidence owner owns
+    // every checked source/build join.  Authenticate both before these bytes
+    // can be written as an accelerator include or finalized in Registry.
+    crate::series_checked_evidence::authenticate_series_shadow_generated_v1(evidence, &built)?;
     Ok(built)
 }
 
@@ -1397,6 +1413,7 @@ pub(crate) fn observe_series_prepare_preprofile_geometry_v1(
 pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
     rpc: &mut Rpc,
     mut selection: crate::series_found_prepare_campaign::SeriesFoundPrepareSelectionInputV1<'_>,
+    consume_shadow_certificate_program: ContentId,
     m0: SeriesPrepareM0FrameV1<'_>,
     records: SeriesPrepareHydrationRecordsV1<'_>,
     parent_root_state: SeriesPrepareParentRootStateV1,
@@ -1420,7 +1437,10 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
         .rent
         .minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3);
     selection.geometry = Some(geometry);
-    crate::series_found_prepare_campaign::compile_series_found_prepare_selection_v1(selection)
+    crate::series_found_prepare_campaign::compile_series_found_prepare_selection_v1(
+        selection,
+        consume_shadow_certificate_program,
+    )
 }
 
 /// Hydrate all 111 Series Prepare roles from the decoded semantic-owner child

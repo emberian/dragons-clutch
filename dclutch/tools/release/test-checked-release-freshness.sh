@@ -199,6 +199,19 @@ expect_refusal "a genesis candidate needs no predecessor and reaches the Node ga
     "--node is required for the source-pinned Product handoff gate" \
     "$RUNNER" --work "$SCRATCH/lineage-genesis" --genesis-cohort --diagnostic-builder
 
+expect_refusal "relative Series include refuses before any checked build" \
+    "Series Shadow selected-build inputs must be absolute canonical paths" \
+    "$RUNNER" --work "$SCRATCH/series-relative" --genesis-cohort \
+        --series-shadow-generated-include series_shadow_generated.rs \
+        --series-shadow-source-manifest "$SCRATCH/series-manifest.bin" \
+        --series-shadow-compiler-source "$SCRATCH/series-compiler.bin" \
+        --series-shadow-toolchain-manifest "$SCRATCH/series-toolchain.bin"
+
+expect_refusal "a Series source witness cannot select nothing" \
+    "Series Shadow source witnesses require --series-shadow-generated-include" \
+    "$RUNNER" --work "$SCRATCH/series-witness-alone" --genesis-cohort \
+        --series-shadow-source-manifest "$SCRATCH/series-manifest.bin"
+
 if grep -Fq 'run_tool derive-genesis-infrastructure-profile' "$RUNNER" \
     && grep -Fq 'infrastructure_lineage=genesis' "$RUNNER" \
     && grep -Fq 'infrastructure_lineage=succession' "$RUNNER" \
@@ -284,6 +297,26 @@ if grep -Fq 'rm -f "$link_target/deploy/$stem.so"' "$RUNNER" \
     ok "each gate link binds a newly emitted ELF to exact source/build/frame provenance"
 else
     not_ok "release runner lost its named-link artifact provenance binding"
+fi
+
+if grep -Fq -- '--series-shadow-generated-include PATH' "$RUNNER" \
+    && grep -Fq -- '--series-shadow-source-manifest PATH' "$RUNNER" \
+    && grep -Fq -- '--series-shadow-compiler-source PATH' "$RUNNER" \
+    && grep -Fq -- '--series-shadow-toolchain-manifest PATH' "$RUNNER" \
+    && grep -Fq 'SERIES_SHADOW_STAGED_INCLUDE' "$RUNNER" \
+    && grep -Fq 'SERIES_SHADOW_STAGED_SOURCE_MANIFEST' "$RUNNER" \
+    && grep -Fq 'series_shadow_checked_include' "$RUNNER" \
+    && grep -Fq 'source-pinned Series Shadow include reconstruction' "$RUNNER" \
+    && grep -Fq 'source-pinned-regeneration-byte-compare-passed' "$RUNNER" \
+    && grep -Fq 'series_shadow_source_manifest_sha256=' "$RUNNER" \
+    && grep -Fq 'series_shadow_selected_inputs_provenance_sha256=' "$RUNNER" \
+    && ! grep -Fq 'lacks the canonical generator header' "$RUNNER" \
+    && grep -Fq 'DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE="$SERIES_SHADOW_STAGED_INCLUDE"' "$RUNNER" \
+    && grep -Fq 'series_shadow_release_selected=true' "$RUNNER" \
+    && grep -Fq 'series_shadow_generated_include_sha256=' "$RUNNER"; then
+    ok "selected Series candidate reconstructs and stages one canonical include for ordinary and frame builds"
+else
+    not_ok "release runner lost selected Series include reconstruction/build wiring"
 fi
 
 if [ "$fail" -ne 0 ]; then

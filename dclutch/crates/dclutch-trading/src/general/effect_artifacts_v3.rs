@@ -1353,7 +1353,7 @@ fn build_place<'a>(
     routes[3] = route(
         FixedRole::Claims,
         RouteKindV3::AffineOnce,
-        None,
+        Some(scalar_u16(scalar::CLAIMS_AFFINE_ACTIVE)?),
         None,
         affine_start,
         affine_accounts,
@@ -3656,6 +3656,42 @@ mod tests {
                 u16::try_from(general_hot_item_scalar_stride_v3(action)).expect("item stride")
             );
         }
+    }
+
+    #[test]
+    fn place_order_effect_omits_the_affine_claims_route_for_an_empty_signed_reserve() {
+        let bytes = artifact(Action::PlaceOrder);
+        let program = ProgramV3::decode(&bytes).expect("PlaceOrder effect");
+        let outcomes = 2_u32;
+        let scalar_len = usize::try_from(
+            GENERAL_HOT_COMMON_SCALARS_V3
+                + outcomes * crate::general::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+        )
+        .expect("scalar width");
+        let mut scalars = vec![0_u64; scalar_len];
+        let identities = vec![
+            [0_u8; 32];
+            usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .expect("identity width")
+        ];
+
+        // A Buy owns no claims before the order's escrow Position is admitted.
+        // Suppressing only route three leaves the authenticated Position admit
+        // and custody routes intact, but prevents Claims from receiving the
+        // noncanonical Debit/Credit zero rows its fixed affine tail would hold.
+        assert_eq!(
+            program.invocation_count(3, outcomes, &scalars, &identities),
+            Ok(0),
+            "the Claims affine route is disabled for an empty maker reserve"
+        );
+        scalars[usize::try_from(scalar::CLAIMS_AFFINE_ACTIVE).expect("Claims gate")] = 1;
+        let invocation = program
+            .resolved_invocation(3, 0, outcomes, &scalars, &identities)
+            .expect("an active Claims affine route");
+        assert_eq!(
+            invocation.repeated_item_count, outcomes,
+            "an active affine packet still carries one exact row per Product outcome"
+        );
     }
 
     #[test]

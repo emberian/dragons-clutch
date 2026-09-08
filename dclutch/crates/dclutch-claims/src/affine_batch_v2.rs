@@ -955,6 +955,320 @@ pub fn plan_bytes(position_count: u32, row_count: u32) -> Result<usize> {
         .ok_or(AffineBatchErrorV2::InvalidLength)
 }
 
+/// Canonicalize producer-generated zero transfer rows into a shorter strict plan.
+///
+/// The on-chain [`AffineBatchPlanV2::decode`] path remains strict: a raw
+/// Debit/Credit zero delta is always refused there.  A producer which expands
+/// a fixed-width semantic tail may instead use this helper before it commits a
+/// child packet digest.  It recognizes only a complete, otherwise canonical
+/// Trading transfer row with both endpoint magnitudes zero, removes that row,
+/// and validates the compact result with the strict decoder before returning.
+/// Unknown tags, reserved bytes, malformed geometry, mixed zero/nonzero rows,
+/// and malformed nonzero rows remain refusals. Valid nonzero rows are retained
+/// byte-for-byte for the strict packet.
+///
+/// `input` and `output` are never mutated on error. `output` must be at least
+/// `input.len()` bytes; the returned prefix is the exact strict packet to
+/// authenticate and submit.
+pub fn canonicalize_zero_transfer_rows_into_v2(input: &[u8], output: &mut [u8]) -> Result<usize> {
+    if input.len() < AFFINE_BATCH_PLAN_HEADER_BYTES_V2 || output.len() < input.len() {
+        return Err(AffineBatchErrorV2::InvalidLength);
+    }
+    exact(input, 0, &AFFINE_BATCH_PLAN_MAGIC_V2)?;
+    if u16_at(input, VERSION_OFFSET)? != AFFINE_BATCH_WIRE_VERSION_V2 {
+        return Err(AffineBatchErrorV2::UnsupportedVersion);
+    }
+    require_zero(input, HEADER_RESERVED_OFFSET, 5)?;
+    require_zero(input, HEADER_TAIL_RESERVED_OFFSET, 12)?;
+    // Check all header identities and role before copying any input byte into
+    // the output workspace. The public strict decoder performs the same checks
+    // after compaction, but this keeps a malformed header from becoming a
+    // producer-normalization input at all.
+    let _ = decode_role(byte_at(input, CALLER_ROLE_OFFSET)?)?;
+    for offset in [
+        RELEASE_SET_OFFSET,
+        MARKET_OFFSET,
+        REQUEST_OFFSET,
+        PRODUCT_OFFSET,
+        BASIS_OFFSET,
+        LINKED_BASIS_RECORD_OFFSET,
+    ] {
+        let _: [u8; 32] = nonzero_array(input, offset)?;
+    }
+    let outcome_count = u32_at(input, OUTCOME_COUNT_OFFSET)?;
+    let position_count = u32_at(input, POSITION_COUNT_OFFSET)?;
+    let row_count = u32_at(input, ROW_COUNT_OFFSET)?;
+    let positions_bytes = table_bytes(position_count, AFFINE_BATCH_POSITION_BYTES_V2)?;
+    let rows_bytes = table_bytes(row_count, AFFINE_BATCH_ROW_BYTES_V2)?;
+    let rows_offset = AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+        .checked_add(positions_bytes)
+        .ok_or(AffineBatchErrorV2::InvalidLength)?;
+    let expected = rows_offset
+        .checked_add(rows_bytes)
+        .ok_or(AffineBatchErrorV2::InvalidLength)?;
+    if input.len() != expected {
+        return Err(AffineBatchErrorV2::InvalidLength);
+    }
+    if outcome_count == 0
+        || position_count == 0
+        || row_count == 0
+        || u64_at(input, MARKET_REVISION_OFFSET)? == u64::MAX
+    {
+        return Err(AffineBatchErrorV2::InvalidCount);
+    }
+    for index in 0..position_count {
+        let offset = table_offset(
+            AFFINE_BATCH_PLAN_HEADER_BYTES_V2,
+            usize::try_from(index).map_err(|_| AffineBatchErrorV2::InvalidLength)?,
+            AFFINE_BATCH_POSITION_BYTES_V2,
+        )?;
+        let _ =
+            AffineBatchPositionV2::decode(slice(input, offset, AFFINE_BATCH_POSITION_BYTES_V2)?)?;
+    }
+
+    let mut retained = 0_u32;
+    for index in 0..row_count {
+        let offset = table_offset(
+            rows_offset,
+            usize::try_from(index).map_err(|_| AffineBatchErrorV2::InvalidLength)?,
+            AFFINE_BATCH_ROW_BYTES_V2,
+        )?;
+        let row = slice(input, offset, AFFINE_BATCH_ROW_BYTES_V2)?;
+        if !producer_zero_transfer_row_v2(row, outcome_count, position_count)? {
+            let _ = AffineBatchRowV2::decode(row, outcome_count, position_count)?;
+            retained = retained
+                .checked_add(1)
+                .ok_or(AffineBatchErrorV2::InvalidCount)?;
+        }
+    }
+    let compact_len = plan_bytes(position_count, retained)?;
+    validate_compacted_plan_preimage_v2(
+        input,
+        position_count,
+        row_count,
+        rows_offset,
+        outcome_count,
+    )?;
+    output
+        .get_mut(..rows_offset)
+        .ok_or(AffineBatchErrorV2::InvalidLength)?
+        .copy_from_slice(
+            input
+                .get(..rows_offset)
+                .ok_or(AffineBatchErrorV2::InvalidLength)?,
+        );
+    put(output, ROW_COUNT_OFFSET, &retained.to_le_bytes())?;
+    let mut destination = rows_offset;
+    for index in 0..row_count {
+        let offset = table_offset(
+            rows_offset,
+            usize::try_from(index).map_err(|_| AffineBatchErrorV2::InvalidLength)?,
+            AFFINE_BATCH_ROW_BYTES_V2,
+        )?;
+        let row = slice(input, offset, AFFINE_BATCH_ROW_BYTES_V2)?;
+        if !producer_zero_transfer_row_v2(row, outcome_count, position_count)? {
+            let end = destination
+                .checked_add(AFFINE_BATCH_ROW_BYTES_V2)
+                .ok_or(AffineBatchErrorV2::InvalidLength)?;
+            output
+                .get_mut(destination..end)
+                .ok_or(AffineBatchErrorV2::InvalidLength)?
+                .copy_from_slice(row);
+            destination = end;
+        }
+    }
+    if destination != compact_len {
+        return Err(AffineBatchErrorV2::InvalidLength);
+    }
+    // The preimage validator above proves this exact compact prefix is strict
+    // before the scratch is touched; keep this decode as an internal
+    // equivalence check while the producer boundary remains narrow.
+    AffineBatchPlanV2::decode(
+        output
+            .get(..compact_len)
+            .ok_or(AffineBatchErrorV2::InvalidLength)?,
+    )?;
+    Ok(compact_len)
+}
+
+/// Validate every global strict-plan condition that can survive row omission.
+///
+/// Claims does not impose a table key order; General's next canonicalizer owns
+/// that private ordering. This preserves the table verbatim, while duplicate
+/// owners, an unused Position after an omitted row, and duplicate retained
+/// coordinates all refuse before the caller-owned output scratch changes.
+fn validate_compacted_plan_preimage_v2(
+    input: &[u8],
+    position_count: u32,
+    row_count: u32,
+    rows_offset: usize,
+    outcome_count: u32,
+) -> Result<()> {
+    let mut left = 0_u32;
+    while left < position_count {
+        let left_offset = table_offset(
+            AFFINE_BATCH_PLAN_HEADER_BYTES_V2,
+            usize::try_from(left).map_err(|_| AffineBatchErrorV2::InvalidLength)?,
+            AFFINE_BATCH_POSITION_BYTES_V2,
+        )?;
+        let position = AffineBatchPositionV2::decode(slice(
+            input,
+            left_offset,
+            AFFINE_BATCH_POSITION_BYTES_V2,
+        )?)?;
+        let mut used = false;
+        let mut right = 0_u32;
+        while right < position_count {
+            if left != right {
+                let right_offset = table_offset(
+                    AFFINE_BATCH_PLAN_HEADER_BYTES_V2,
+                    usize::try_from(right).map_err(|_| AffineBatchErrorV2::InvalidLength)?,
+                    AFFINE_BATCH_POSITION_BYTES_V2,
+                )?;
+                if position.owner()
+                    == AffineBatchPositionV2::decode(slice(
+                        input,
+                        right_offset,
+                        AFFINE_BATCH_POSITION_BYTES_V2,
+                    )?)?
+                    .owner()
+                {
+                    return Err(AffineBatchErrorV2::InvalidPositionTable);
+                }
+            }
+            right = right
+                .checked_add(1)
+                .ok_or(AffineBatchErrorV2::InvalidCount)?;
+        }
+        let mut row_index = 0_u32;
+        while row_index < row_count {
+            let row_offset = table_offset(
+                rows_offset,
+                usize::try_from(row_index).map_err(|_| AffineBatchErrorV2::InvalidLength)?,
+                AFFINE_BATCH_ROW_BYTES_V2,
+            )?;
+            let row_bytes = slice(input, row_offset, AFFINE_BATCH_ROW_BYTES_V2)?;
+            if !producer_zero_transfer_row_v2(row_bytes, outcome_count, position_count)? {
+                let row = AffineBatchRowV2::decode(row_bytes, outcome_count, position_count)?;
+                used |= row.source_present() && row.source_position_index() == left;
+                used |= row.destination_present() && row.destination_position_index() == left;
+            }
+            row_index = row_index
+                .checked_add(1)
+                .ok_or(AffineBatchErrorV2::InvalidCount)?;
+        }
+        if !used {
+            return Err(AffineBatchErrorV2::InvalidPositionTable);
+        }
+        left = left
+            .checked_add(1)
+            .ok_or(AffineBatchErrorV2::InvalidCount)?;
+    }
+    let mut left_row = 0_u32;
+    while left_row < row_count {
+        let left_offset = table_offset(
+            rows_offset,
+            usize::try_from(left_row).map_err(|_| AffineBatchErrorV2::InvalidLength)?,
+            AFFINE_BATCH_ROW_BYTES_V2,
+        )?;
+        let left_bytes = slice(input, left_offset, AFFINE_BATCH_ROW_BYTES_V2)?;
+        if !producer_zero_transfer_row_v2(left_bytes, outcome_count, position_count)? {
+            let left_value = AffineBatchRowV2::decode(left_bytes, outcome_count, position_count)?;
+            let mut right_row = 0_u32;
+            while right_row < left_row {
+                let right_offset = table_offset(
+                    rows_offset,
+                    usize::try_from(right_row).map_err(|_| AffineBatchErrorV2::InvalidLength)?,
+                    AFFINE_BATCH_ROW_BYTES_V2,
+                )?;
+                let right_bytes = slice(input, right_offset, AFFINE_BATCH_ROW_BYTES_V2)?;
+                if !producer_zero_transfer_row_v2(right_bytes, outcome_count, position_count)?
+                    && rows_duplicate_coordinate(
+                        left_value,
+                        AffineBatchRowV2::decode(right_bytes, outcome_count, position_count)?,
+                    )
+                {
+                    return Err(AffineBatchErrorV2::DuplicateCoordinate);
+                }
+                right_row = right_row
+                    .checked_add(1)
+                    .ok_or(AffineBatchErrorV2::InvalidCount)?;
+            }
+        }
+        left_row = left_row
+            .checked_add(1)
+            .ok_or(AffineBatchErrorV2::InvalidCount)?;
+    }
+    Ok(())
+}
+
+/// Recognize precisely the raw fixed-tail placeholder a producer may omit.
+///
+/// The row is not an alternative accepted Claims wire: a strict decode of it
+/// still returns [`AffineBatchErrorV2::InvalidDelta`]. Both positions are
+/// present in the producer template, but their Debit/Credit magnitudes are
+/// zero, so the only canonical child representation is to omit the row.
+fn producer_zero_transfer_row_v2(
+    row: &[u8],
+    outcome_count: u32,
+    position_count: u32,
+) -> Result<bool> {
+    if row.len() != AFFINE_BATCH_ROW_BYTES_V2 {
+        return Err(AffineBatchErrorV2::InvalidLength);
+    }
+    require_zero(row, ROW_RESERVED_OFFSET, 2)?;
+    let source_present = bool_at(row, ROW_SOURCE_PRESENT_OFFSET)?;
+    let destination_present = bool_at(row, ROW_DESTINATION_PRESENT_OFFSET)?;
+    let outcome = u32_at(row, ROW_OUTCOME_OFFSET)?;
+    let source_index = u32_at(row, ROW_SOURCE_INDEX_OFFSET)?;
+    let destination_index = u32_at(row, ROW_DESTINATION_INDEX_OFFSET)?;
+    for offset in [
+        ROW_AGGREGATE_DELTA_OFFSET,
+        ROW_SOURCE_DELTA_OFFSET,
+        ROW_DESTINATION_DELTA_OFFSET,
+    ] {
+        require_zero(row, add(offset, DELTA_RESERVED_OFFSET)?, 7)?;
+    }
+    let aggregate_direction = DeltaDirectionV2::decode(byte_at(
+        row,
+        add(ROW_AGGREGATE_DELTA_OFFSET, DELTA_DIRECTION_OFFSET)?,
+    )?)?;
+    let source_direction = DeltaDirectionV2::decode(byte_at(
+        row,
+        add(ROW_SOURCE_DELTA_OFFSET, DELTA_DIRECTION_OFFSET)?,
+    )?)?;
+    let destination_direction = DeltaDirectionV2::decode(byte_at(
+        row,
+        add(ROW_DESTINATION_DELTA_OFFSET, DELTA_DIRECTION_OFFSET)?,
+    )?)?;
+    let aggregate_magnitude = u64_at(
+        row,
+        add(ROW_AGGREGATE_DELTA_OFFSET, DELTA_MAGNITUDE_OFFSET)?,
+    )?;
+    let source_magnitude = u64_at(row, add(ROW_SOURCE_DELTA_OFFSET, DELTA_MAGNITUDE_OFFSET)?)?;
+    let destination_magnitude = u64_at(
+        row,
+        add(ROW_DESTINATION_DELTA_OFFSET, DELTA_MAGNITUDE_OFFSET)?,
+    )?;
+    if source_magnitude != 0 || destination_magnitude != 0 {
+        return Ok(false);
+    }
+    if !source_present
+        || !destination_present
+        || outcome >= outcome_count
+        || source_index >= position_count
+        || destination_index >= position_count
+        || source_index == destination_index
+        || aggregate_direction != DeltaDirectionV2::Neutral
+        || aggregate_magnitude != 0
+        || source_direction != DeltaDirectionV2::Debit
+        || destination_direction != DeltaDirectionV2::Credit
+    {
+        return Err(AffineBatchErrorV2::InvalidDelta);
+    }
+    Ok(true)
+}
+
 fn validate_endpoint(
     present: bool,
     index: u32,
@@ -1356,6 +1670,153 @@ mod tests {
             2,
         );
         assert_eq!(nonconserving, Err(AffineBatchErrorV2::InvalidDelta));
+    }
+
+    #[test]
+    fn producer_zero_transfer_compaction_preserves_strict_decode_and_nonzero_rows() {
+        let positions = [
+            AffineBatchPositionV2::new([7; 32], 1).expect("maker"),
+            AffineBatchPositionV2::new([8; 32], 1).expect("escrow"),
+        ];
+        let rows = [
+            AffineBatchRowV2::new(
+                AffineBatchRowInputV2 {
+                    source_present: true,
+                    destination_present: true,
+                    outcome: 0,
+                    source_position_index: 0,
+                    destination_position_index: 1,
+                    aggregate_delta: neutral(),
+                    source_delta: debit(5),
+                    destination_delta: credit(5),
+                },
+                2,
+                2,
+            )
+            .expect("first row"),
+            AffineBatchRowV2::new(
+                AffineBatchRowInputV2 {
+                    source_present: true,
+                    destination_present: true,
+                    outcome: 1,
+                    source_position_index: 0,
+                    destination_position_index: 1,
+                    aggregate_delta: neutral(),
+                    source_delta: debit(5),
+                    destination_delta: credit(5),
+                },
+                2,
+                2,
+            )
+            .expect("selected row"),
+        ];
+        let mut raw = vec![0_u8; plan_bytes(2, 2).expect("two-row width")];
+        AffineBatchPlanV2::encode_into(header(2), &positions, &rows, &mut raw)
+            .expect("canonical source plan");
+        let first_row = AFFINE_BATCH_PLAN_HEADER_BYTES_V2 + 2 * AFFINE_BATCH_POSITION_BYTES_V2;
+        raw[first_row + ROW_SOURCE_DELTA_OFFSET + DELTA_MAGNITUDE_OFFSET
+            ..first_row + ROW_SOURCE_DELTA_OFFSET + DELTA_MAGNITUDE_OFFSET + 8]
+            .copy_from_slice(&0_u64.to_le_bytes());
+        raw[first_row + ROW_DESTINATION_DELTA_OFFSET + DELTA_MAGNITUDE_OFFSET
+            ..first_row + ROW_DESTINATION_DELTA_OFFSET + DELTA_MAGNITUDE_OFFSET + 8]
+            .copy_from_slice(&0_u64.to_le_bytes());
+
+        assert_eq!(
+            AffineBatchPlanV2::decode(&raw),
+            Err(AffineBatchErrorV2::InvalidDelta),
+            "the public Claims parser remains strict for raw Debit/Credit zero"
+        );
+        let mut compact = vec![0xa5_u8; raw.len()];
+        let compact_len = canonicalize_zero_transfer_rows_into_v2(&raw, &mut compact)
+            .expect("producer compacts only the zero transfer placeholder");
+        assert_eq!(compact_len, plan_bytes(2, 1).expect("one-row width"));
+        let plan = AffineBatchPlanV2::decode(&compact[..compact_len])
+            .expect("compacted packet is strict canonical Claims wire");
+        assert_eq!(plan.row_count(), 1);
+        let retained = plan.row(0).expect("retained row");
+        assert_eq!(retained.outcome(), 1);
+        assert_eq!(retained.source_delta().direction(), DeltaDirectionV2::Debit);
+        assert_eq!(retained.source_delta().magnitude(), 5);
+        assert_eq!(
+            retained.destination_delta().direction(),
+            DeltaDirectionV2::Credit
+        );
+        assert_eq!(retained.destination_delta().magnitude(), 5);
+
+        let mut unknown = raw.clone();
+        unknown[first_row + ROW_SOURCE_DELTA_OFFSET + DELTA_DIRECTION_OFFSET] = 3;
+        assert_eq!(
+            canonicalize_zero_transfer_rows_into_v2(&unknown, &mut compact),
+            Err(AffineBatchErrorV2::UnknownTag),
+            "producer normalization does not admit an unknown zero direction"
+        );
+        let mut reserved = raw.clone();
+        reserved[first_row + ROW_RESERVED_OFFSET] = 1;
+        assert_eq!(
+            canonicalize_zero_transfer_rows_into_v2(&reserved, &mut compact),
+            Err(AffineBatchErrorV2::NonCanonical),
+            "producer normalization does not admit a reserved byte"
+        );
+
+        let mut duplicate_owner = raw.clone();
+        let first_position = AFFINE_BATCH_PLAN_HEADER_BYTES_V2;
+        let second_position = AFFINE_BATCH_PLAN_HEADER_BYTES_V2 + AFFINE_BATCH_POSITION_BYTES_V2;
+        let first_owner = duplicate_owner[first_position..first_position + 32].to_vec();
+        duplicate_owner[second_position..second_position + 32].copy_from_slice(&first_owner);
+        let mut untouched = vec![0x5a_u8; duplicate_owner.len()];
+        let untouched_before = untouched.clone();
+        assert_eq!(
+            canonicalize_zero_transfer_rows_into_v2(&duplicate_owner, &mut untouched),
+            Err(AffineBatchErrorV2::InvalidPositionTable),
+            "dropping a zero row never erases duplicate Position owners"
+        );
+        assert_eq!(
+            untouched, untouched_before,
+            "a late global Position-table refusal leaves producer scratch untouched"
+        );
+
+        let mut all_zero = raw.clone();
+        let second_row = first_row + AFFINE_BATCH_ROW_BYTES_V2;
+        for offset in [
+            AffineBatchRequestLayoutV2::ROW_SOURCE_MAGNITUDE,
+            AffineBatchRequestLayoutV2::ROW_DESTINATION_MAGNITUDE,
+        ] {
+            all_zero[second_row + offset..second_row + offset + 8]
+                .copy_from_slice(&0_u64.to_le_bytes());
+        }
+        assert_eq!(
+            canonicalize_zero_transfer_rows_into_v2(&all_zero, &mut untouched),
+            Err(AffineBatchErrorV2::InvalidCount),
+            "omitting every row cannot leave a Position table without a strict packet"
+        );
+        assert_eq!(
+            untouched, untouched_before,
+            "an omitted-row geometry refusal leaves producer scratch untouched"
+        );
+
+        let mut reversed_positions = raw;
+        let first_position_bytes = reversed_positions
+            [first_position..first_position + AFFINE_BATCH_POSITION_BYTES_V2]
+            .to_vec();
+        let second_position_bytes = reversed_positions
+            [second_position..second_position + AFFINE_BATCH_POSITION_BYTES_V2]
+            .to_vec();
+        reversed_positions[first_position..first_position + AFFINE_BATCH_POSITION_BYTES_V2]
+            .copy_from_slice(&second_position_bytes);
+        reversed_positions[second_position..second_position + AFFINE_BATCH_POSITION_BYTES_V2]
+            .copy_from_slice(&first_position_bytes);
+        let reversed_len =
+            canonicalize_zero_transfer_rows_into_v2(&reversed_positions, &mut compact)
+                .expect("Claims accepts either Position-table order before General key-sorts it");
+        assert_eq!(
+            AffineBatchPlanV2::decode(&compact[..reversed_len])
+                .expect("strict compact packet")
+                .position(0)
+                .expect("first retained Position")
+                .owner(),
+            [8; 32],
+            "producer compaction preserves the table order General owns next"
+        );
     }
 
     #[test]

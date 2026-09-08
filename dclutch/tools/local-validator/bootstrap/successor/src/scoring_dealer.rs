@@ -1987,7 +1987,9 @@ fn plan_signed_delta_window_v1(
     construction
         .encode_into(&mut packet)
         .map_err(|error| Error::new(format!("signed-delta packet: {error:?}")))?;
-    let authority = coordinates.authority(fund_key.to_bytes(), hash(&packet).to_bytes())?;
+    // Claims reads the plan's `request_id` as the caller-authority context.
+    // It is the Fill packet digest (`parent`), not the Dealer fund address.
+    let authority = coordinates.authority(parent, hash(&packet).to_bytes())?;
 
     let spec = SignedDeltaFrameSpecV3::new(2)
         .map_err(|error| Error::new(format!("signed-delta frame: {error:?}")))?;

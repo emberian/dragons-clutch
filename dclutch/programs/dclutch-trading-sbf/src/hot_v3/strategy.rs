@@ -1040,6 +1040,7 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
     request_digest: [u8; 32],
     trusted_environment: TrustedEnvironmentObservationV3,
     authenticated_product_tail_count: u32,
+    authenticated_linked_basis_record_digest: [u8; 32],
     scalar_count: usize,
     identity_count: usize,
 ) -> Result<ProjectedRequestRegistersV3<'region>, ProgramError> {
@@ -1173,6 +1174,9 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
                 .copied()
                 .ok_or(TradingSbfError::Content)
         };
+        let protocol_position = claims_admit(ClaimsFrameRoleV1::ProtocolPosition)?;
+        let protocol_position_admission =
+            claims_admit(ClaimsFrameRoleV1::ProtocolPositionAdmission)?;
         let rent_credit = claims_admit(ClaimsFrameRoleV1::RentCredit)?;
         let rent_program = claims_admit(ClaimsFrameRoleV1::RentProgram)?;
         // The AccountProfile has already authenticated each role's executable
@@ -1195,6 +1199,9 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
                 maker_position_key: maker_position.key(),
                 maker_position_owner: maker_position.owner(),
                 maker_position_data: maker_position.data(),
+                protocol_position_lamports: protocol_position.lamports(),
+                protocol_position_admission_lamports: protocol_position_admission.lamports(),
+                linked_basis_record_digest: authenticated_linked_basis_record_digest,
                 rent_credit_key: rent_credit.key(),
                 rent_credit_owner: rent_credit.owner(),
                 rent_credit_data: rent_credit.data(),
@@ -1205,6 +1212,7 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
                 source_program: source.owner(),
                 source_data: source.data(),
             },
+            &mut current_scalars,
             &mut current_identities,
         )
         .map_err(|error| {

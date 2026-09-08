@@ -285,16 +285,22 @@ impl ProjectedCustodyStateSeedsV2 {
     /// The sole role a projected-Custody state realizes into.
     pub const REALIZED_ROLE: ExecutionRoleV1 = ExecutionRoleV1::Trading;
 
-    /// Project exact state seeds from one request.
-    pub const fn from_request(request: ProjectedCustodyRequestV1) -> Self {
+    /// Construct the projected-state namespace from already authenticated
+    /// future-Market facts before an Initialize request can exist.
+    pub const fn new(market: [u8; 32], release_set: [u8; 32], context_digest: [u8; 32]) -> Self {
         Self {
             replay: crate::CustodyReplaySeedsV1::new(
-                request.market,
-                request.release_set,
+                market,
+                release_set,
                 Self::REALIZED_ROLE,
-                request.context_digest,
+                context_digest,
             ),
         }
+    }
+
+    /// Project exact state seeds from one request.
+    pub const fn from_request(request: ProjectedCustodyRequestV1) -> Self {
+        Self::new(request.market, request.release_set, request.context_digest)
     }
 
     /// Borrow exact ordered seed slices, excluding bump.

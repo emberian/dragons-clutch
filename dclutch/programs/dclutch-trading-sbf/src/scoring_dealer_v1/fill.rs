@@ -707,14 +707,13 @@ fn invoke_claims_fill_delta_v1<'info>(
         .encode_into(&mut packet)
         .map_err(|_| ScoringDealerErrorV1::Claims)?;
     let packet_digest = hash(&packet).to_bytes();
-    let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
-        facts.release_set,
-        fund.market,
-        ExecutionRoleV1::Trading,
-        fund_key.to_bytes(),
-        packet_digest,
-    )
-    .map_err(|_| ScoringDealerErrorV1::Release)?;
+    // Claims authenticates `plan.request_id()` as the caller-authority context.
+    // The plan binds that field to this Fill's exact instruction digest, so the
+    // PDA we sign must use the same digest.  The fund key is a distinct
+    // coordinate: putting it here made every non-null fill fail Claims Release
+    // before any delta could be applied.
+    let authority_seeds =
+        claims_fill_authority_seeds_v1(facts.release_set, fund.market, request_id, packet_digest)?;
     let (authority, bump) = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
     if get(window, 0)?.key != &authority {
         return Err(ScoringDealerErrorV1::Release.into());
@@ -754,6 +753,22 @@ fn invoke_claims_fill_delta_v1<'info>(
     Ok(())
 }
 
+fn claims_fill_authority_seeds_v1(
+    release_set: [u8; 32],
+    market: [u8; 32],
+    fill_request_digest: [u8; 32],
+    packet_digest: [u8; 32],
+) -> Result<CallerAuthoritySeedsV1, ProgramError> {
+    CallerAuthoritySeedsV1::from_bytes(
+        release_set,
+        market,
+        ExecutionRoleV1::Trading,
+        fill_request_digest,
+        packet_digest,
+    )
+    .map_err(|_| ScoringDealerErrorV1::Release.into())
+}
+
 /// Map Dealer and taker semantics onto Claims' required ascending-owner table.
 fn signed_delta_position_indexes_v1(dealer_owner: [u8; 32], taker_owner: [u8; 32]) -> (u32, u32) {
     if dealer_owner < taker_owner {
@@ -791,6 +806,31 @@ mod tests {
         assert_eq!(
             signed_delta_window_accounts_v1(dealer_index),
             (DELTA_DEALER_POSITION_ACCOUNT, DELTA_TAKER_POSITION_ACCOUNT)
+        );
+    }
+
+    #[test]
+    fn claims_authority_context_is_the_fill_request_not_the_fund() {
+        let release_set = [1; 32];
+        let market = [2; 32];
+        let fill_request = [3; 32];
+        let fund = [4; 32];
+        let packet = [5; 32];
+        let program = Pubkey::new_unique();
+        let accepted = claims_fill_authority_seeds_v1(release_set, market, fill_request, packet)
+            .expect("the exact Fill request digest is a caller-authority context");
+        let stale_fund_context = CallerAuthoritySeedsV1::from_bytes(
+            release_set,
+            market,
+            ExecutionRoleV1::Trading,
+            fund,
+            packet,
+        )
+        .expect("the hostile alternative is structurally encodable");
+        assert_ne!(
+            Pubkey::find_program_address(&accepted.as_slices(), &program).0,
+            Pubkey::find_program_address(&stale_fund_context.as_slices(), &program).0,
+            "a fund-context PDA cannot satisfy Claims' request-id authentication"
         );
     }
 

@@ -56,6 +56,7 @@ use dclutch_trading::general::{
         project_general_selection_candidate_in_place_v3,
         project_general_submit_candidate_in_place_v3,
         project_general_verify_candidate_workspace_v3,
+        seed_general_place_order_terms_from_signed_terms_v3,
     },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_manifest::SettlementManifestV2,
@@ -860,6 +861,21 @@ pub fn build_general_action_bundle_v1(
     let corpus = GeneralActionCorpusV1::decode(action, prestate)?;
     let projector =
         |scalars: &mut [u64], identities: &mut [[u8; 32]]| -> Result<(), BuilderError> {
+            // Hot seeds the selected order facts immediately after AccountProfile
+            // has authenticated the signed OrderTerms header.  In particular,
+            // the position-admit request takes its owner from the signed order
+            // identity, never a raw child-frame key.  Mirror that exact step
+            // before materializing the host register bank, or the host derives
+            // a caller authority from an invalid all-zero Position owner.
+            if let GeneralActionCorpusV1::PlaceOrder { terms, .. } = corpus {
+                seed_general_place_order_terms_from_signed_terms_v3(
+                    outcome_count,
+                    terms,
+                    scalars,
+                    identities,
+                )
+                .map_err(|_| BuilderError::Projection("general-place-order-terms"))?;
+            }
             let mut bank = vec![0_u8; bank_len];
             encode_register_bank_into(scalars, identities, &mut bank)
                 .map_err(|_| BuilderError::Projection("general-bank-encode"))?;

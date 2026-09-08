@@ -542,6 +542,11 @@ pub(crate) fn run_engine_with_admitted_candidate(
                     "general-place-order-claims-admit-frame",
                 ))
         };
+        let protocol_position =
+            claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ProtocolPosition)?;
+        let protocol_position_admission = claims_admit(
+            dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ProtocolPositionAdmission,
+        )?;
         let rent_credit =
             claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentCredit)?;
         let rent_program =
@@ -563,6 +568,9 @@ pub(crate) fn run_engine_with_admitted_candidate(
                 maker_position_key: maker_position.key(),
                 maker_position_owner: maker_position.owner(),
                 maker_position_data: maker_position.data(),
+                protocol_position_lamports: protocol_position.lamports(),
+                protocol_position_admission_lamports: protocol_position_admission.lamports(),
+                linked_basis_record_digest: input.content_keys.linked_basis,
                 rent_credit_key: rent_credit.key(),
                 rent_credit_owner: rent_credit.owner(),
                 rent_credit_data: rent_credit.data(),
@@ -573,6 +581,7 @@ pub(crate) fn run_engine_with_admitted_candidate(
                 source_program: source.owner(),
                 source_data: source.data(),
             },
+            &mut current_scalars,
             &mut current_identities,
         )
         .map_err(|error| match error {
