@@ -1,6 +1,6 @@
 //! Typed geometry assembly for the first Series Prepare frame.
 //!
-//! A Prepare Profile has 111 logical coordinates, while only 55 carry a
+//! A Prepare Profile has 115 logical coordinates, while only 59 carry a
 //! physical account after the release-owned alias compression.  This module
 //! makes that distinction explicit: live accounts are observations, immutable
 //! Registry records are canonical bodies, and accounts the first Prepare will
@@ -40,6 +40,7 @@ const ESCROW_LOCK: usize = 14;
 
 const _: () = assert!(
     PREPARE_PREFIX
+        + 4
         + PROJECTED_INITIALIZE
         + PROJECTED_OPEN
         + REPLAY_INITIALIZE
@@ -83,9 +84,10 @@ impl SeriesPrepareWidthV1 {
 
     fn width(&self, coordinate: usize) -> Result<u32> {
         let (role, width) = match self {
-            Self::Observed { role, data_len } | Self::Predicted { role, data_len } => {
-                (*role, *data_len)
-            }
+            Self::Observed { role, data_len } => (*role, *data_len),
+            // A child-created account has zero bytes at outer admission. Its
+            // anticipated layout remains available to the typed owner checks.
+            Self::Predicted { role, .. } => (*role, 0),
             Self::CanonicalRecord { role, body_len } => (
                 *role,
                 u32::try_from(*body_len).map_err(|_| {
@@ -127,15 +129,15 @@ impl SeriesPrepareWidthV1 {
 }
 
 /// The six pre-route representatives.  Their order is protocol-owned by the
-/// Prepare artifact: root, Template, occurrence, Portfolio, Ticket record,
+/// Prepare artifact: root, Template, Product, Portfolio, LinkedBasis,
 /// and the vacant Ticket replay state.
 #[derive(Clone, Debug)]
 pub(crate) struct SeriesPrepareOuterWidthsV1 {
     pub(crate) root: SeriesPrepareWidthV1,
     pub(crate) template: SeriesPrepareWidthV1,
-    pub(crate) occurrence: SeriesPrepareWidthV1,
+    pub(crate) product: SeriesPrepareWidthV1,
     pub(crate) portfolio: SeriesPrepareWidthV1,
-    pub(crate) ticket: SeriesPrepareWidthV1,
+    pub(crate) linked_basis: SeriesPrepareWidthV1,
     pub(crate) ticket_state: SeriesPrepareWidthV1,
 }
 
@@ -144,7 +146,7 @@ pub(crate) struct SeriesPrepareOuterWidthsV1 {
 /// Each array uses the selected child's own account-frame cardinality.  The
 /// source constructor supplies finalized account widths for existing accounts
 /// and [`SeriesPrepareWidthV1::Predicted`] only for fixed layouts created by
-/// this first Prepare.  No raw `[u32; 111]` crosses this boundary.
+/// this first Prepare.  No raw `[u32; 115]` crosses this boundary.
 #[derive(Clone, Debug)]
 pub(crate) struct SeriesPrepareGeometryInputV1 {
     pub(crate) outer: SeriesPrepareOuterWidthsV1,
@@ -153,6 +155,7 @@ pub(crate) struct SeriesPrepareGeometryInputV1 {
     pub(crate) replay_initialize: [SeriesPrepareWidthV1; REPLAY_INITIALIZE],
     pub(crate) escrow_open: [SeriesPrepareWidthV1; ESCROW_OPEN],
     pub(crate) escrow_lock: [SeriesPrepareWidthV1; ESCROW_LOCK],
+    pub(crate) occurrence_evidence: [SeriesPrepareWidthV1; 4],
 }
 
 /// One account role in the pre-Prepare frame, before logical aliases are
@@ -183,10 +186,11 @@ pub(crate) struct SeriesPrepareRoleLayoutV1<'a> {
     pub(crate) replay_initialize: [SeriesPrepareRoleSourceV1<'a>; REPLAY_INITIALIZE],
     pub(crate) escrow_open: [SeriesPrepareRoleSourceV1<'a>; ESCROW_OPEN],
     pub(crate) escrow_lock: [SeriesPrepareRoleSourceV1<'a>; ESCROW_LOCK],
+    pub(crate) occurrence_evidence: [SeriesPrepareRoleSourceV1<'a>; 4],
 }
 
 /// Read the complete current Prepare frame at one finalized slot and derive
-/// its 111 profile widths.  Alias coordinates must name the same physical
+/// its 115 profile widths.  Alias coordinates must name the same physical
 /// address as their representative; this keeps the final account snapshot
 /// below the RPC's 100-key ceiling and turns an accidental alias split into a
 /// source error before an artifact can be emitted.
@@ -269,14 +273,22 @@ pub(crate) fn observe_series_prepare_geometry_v1(
     let replay_initialize = take_array_v1::<REPLAY_INITIALIZE>(&mut widths, "replay initialize")?;
     let escrow_open = take_array_v1::<ESCROW_OPEN>(&mut widths, "escrow open")?;
     let escrow_lock = take_array_v1::<ESCROW_LOCK>(&mut widths, "escrow lock")?;
-    let [root, template, occurrence, portfolio, ticket, ticket_state] = outer;
+    let occurrence_evidence = take_array_v1::<4>(&mut widths, "occurrence evidence")?;
+    let [
+        root,
+        template,
+        product,
+        portfolio,
+        linked_basis,
+        ticket_state,
+    ] = outer;
     build_series_prepare_geometry_v1(&SeriesPrepareGeometryInputV1 {
         outer: SeriesPrepareOuterWidthsV1 {
             root,
             template,
-            occurrence,
+            product,
             portfolio,
-            ticket,
+            linked_basis,
             ticket_state,
         },
         projected_initialize,
@@ -284,6 +296,7 @@ pub(crate) fn observe_series_prepare_geometry_v1(
         replay_initialize,
         escrow_open,
         escrow_lock,
+        occurrence_evidence,
     })
 }
 
@@ -324,6 +337,7 @@ fn prepare_sources_v1<'a>(
         .chain(&layout.replay_initialize)
         .chain(&layout.escrow_open)
         .chain(&layout.escrow_lock)
+        .chain(&layout.occurrence_evidence)
         .cloned()
         .collect()
 }
@@ -422,7 +436,7 @@ fn require_role_alias_addresses_v1(sources: &[SeriesPrepareRoleSourceV1<'_>]) ->
     Ok(())
 }
 
-/// Produce exactly the 111 logical widths consumed by the V5 Prepare profile.
+/// Produce exactly the 115 logical widths consumed by the V5 Prepare profile.
 pub(crate) fn build_series_prepare_geometry_v1(
     input: &SeriesPrepareGeometryInputV1,
 ) -> Result<[u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize]> {
@@ -430,9 +444,9 @@ pub(crate) fn build_series_prepare_geometry_v1(
     for (coordinate, source) in [
         &input.outer.root,
         &input.outer.template,
-        &input.outer.occurrence,
+        &input.outer.product,
         &input.outer.portfolio,
-        &input.outer.ticket,
+        &input.outer.linked_basis,
         &input.outer.ticket_state,
     ]
     .into_iter()
@@ -450,6 +464,9 @@ pub(crate) fn build_series_prepare_geometry_v1(
             .map_err(|_| Error::new("Series Prepare Ticket width escaped u32"))?,
         5,
     )?;
+    // The root exists before Prepare; Ticket alone is created by outer FundingV5.
+    widths[0] = SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5 as u32;
+    widths[5] = dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3 as u32;
     let mut next = PREPARE_PREFIX;
     for route in [
         input.projected_initialize.as_slice(),
@@ -457,6 +474,7 @@ pub(crate) fn build_series_prepare_geometry_v1(
         input.replay_initialize.as_slice(),
         input.escrow_open.as_slice(),
         input.escrow_lock.as_slice(),
+        input.occurrence_evidence.as_slice(),
     ] {
         for source in route {
             widths[next] = source.width(next)?;
@@ -465,7 +483,7 @@ pub(crate) fn build_series_prepare_geometry_v1(
     }
     if next != widths.len() {
         return Err(Error::new(
-            "Series Prepare route geometry did not cover 111 coordinates",
+            "Series Prepare route geometry did not cover 115 coordinates",
         ));
     }
     require_release_aliases_v1(&widths)?;
@@ -567,22 +585,19 @@ mod tests {
         let root = u32::try_from(SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5).unwrap();
         let ticket_state =
             u32::try_from(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3).unwrap();
-        let input = SeriesPrepareGeometryInputV1 {
+        let mut input = SeriesPrepareGeometryInputV1 {
             outer: SeriesPrepareOuterWidthsV1 {
                 root: observed("series-root", root),
                 template: SeriesPrepareWidthV1::canonical_record(
                     "template",
                     &[0; dclutch_trading::series::SERIES_TEMPLATE_BYTES_V3],
                 ),
-                occurrence: SeriesPrepareWidthV1::canonical_record(
-                    "occurrence",
-                    &[0; dclutch_trading::series::SERIES_OCCURRENCE_BYTES_V3],
+                product: SeriesPrepareWidthV1::canonical_record(
+                    "product",
+                    &[0; dclutch_product::admission::PRODUCT_RECORD_BYTES_V2],
                 ),
                 portfolio: SeriesPrepareWidthV1::canonical_record("portfolio", &[0; 96]),
-                ticket: SeriesPrepareWidthV1::canonical_record(
-                    "ticket",
-                    &[0; dclutch_trading::series::SERIES_TICKET_BYTES_V3],
-                ),
+                linked_basis: SeriesPrepareWidthV1::canonical_record("linked-basis", &[0; 96]),
                 ticket_state: predicted("ticket-state", ticket_state),
             },
             projected_initialize: std::array::from_fn(|_| observed("projected-initialize", 4_096)),
@@ -590,9 +605,46 @@ mod tests {
             replay_initialize: std::array::from_fn(|_| observed("replay-initialize", 4_096)),
             escrow_open: std::array::from_fn(|_| observed("escrow-open", 4_096)),
             escrow_lock: std::array::from_fn(|_| observed("escrow-lock", 4_096)),
+            occurrence_evidence: [
+                observed(
+                    "occurrence",
+                    dclutch_trading::series::SERIES_OCCURRENCE_BYTES_V3 as u32,
+                ),
+                observed("occurrence-staging", 0),
+                observed(
+                    "ticket",
+                    dclutch_trading::series::SERIES_TICKET_BYTES_V3 as u32,
+                ),
+                observed("ticket-staging", 0),
+            ],
         };
+        input.projected_initialize[1] = predicted(
+            "projected-state",
+            dclutch_custody::PROJECTED_CUSTODY_STATE_BYTES_V2 as u32,
+        );
+        input.projected_open[7] = predicted(
+            "hoard-vault",
+            dclutch_custody::token_svm::ACCOUNT_BYTES as u32,
+        );
+        input.replay_initialize[8] = predicted(
+            "source-replay",
+            dclutch_custody::CUSTODY_REPLAY_BYTES_V1 as u32,
+        );
+        input.escrow_open[10] = predicted(
+            "escrow-vault",
+            dclutch_custody::token_svm::ACCOUNT_BYTES as u32,
+        );
+        // The later native windows borrow these same initially vacant accounts.
+        input.projected_open[1] = input.projected_initialize[1].clone();
+        input.escrow_open[8] = input.replay_initialize[8].clone();
+        input.escrow_lock[8] = input.replay_initialize[8].clone();
+        input.escrow_lock[11] = input.escrow_open[10].clone();
         let widths = build_series_prepare_geometry_v1(&input).unwrap();
-        assert_eq!(widths.len(), 111);
+        for coordinate in dclutch_trading_sbf::series::prepare_funding_artifacts_v5::SERIES_PREPARE_CHILD_CREATED_COORDINATES_V5 {
+            assert_eq!(widths[coordinate as usize], 0, "initial child-owned vacancy");
+        }
+
+        assert_eq!(widths.len(), 115);
         let artifacts = emit_series_prepare_funding_artifacts_v5(
             SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &widths,
@@ -658,9 +710,9 @@ mod tests {
             outer: SeriesPrepareOuterWidthsV1 {
                 root: SeriesPrepareWidthV1::canonical_record("root-is-not-a-record", &[0; 1]),
                 template: SeriesPrepareWidthV1::canonical_record("template", &[0; 1]),
-                occurrence: SeriesPrepareWidthV1::canonical_record("occurrence", &[0; 1]),
+                product: SeriesPrepareWidthV1::canonical_record("occurrence", &[0; 1]),
                 portfolio: SeriesPrepareWidthV1::canonical_record("portfolio", &[0; 1]),
-                ticket: SeriesPrepareWidthV1::canonical_record("ticket", &[0; 1]),
+                linked_basis: SeriesPrepareWidthV1::canonical_record("ticket", &[0; 1]),
                 ticket_state: observed("ticket-state-must-be-vacant", ticket_state),
             },
             projected_initialize: std::array::from_fn(|_| observed("live", 1)),
@@ -668,6 +720,7 @@ mod tests {
             replay_initialize: std::array::from_fn(|_| observed("live", 1)),
             escrow_open: std::array::from_fn(|_| observed("live", 1)),
             escrow_lock: std::array::from_fn(|_| observed("live", 1)),
+            occurrence_evidence: std::array::from_fn(|_| observed("evidence", 1)),
         };
         let error = build_series_prepare_geometry_v1(&input).unwrap_err();
         assert!(

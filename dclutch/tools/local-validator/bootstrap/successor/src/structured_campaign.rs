@@ -71,6 +71,13 @@ use dclutch_registry::{
     release_set::CapabilityExecutionSelectionV1,
 };
 use dclutch_versioned_message_operator::{Observation, ObservedAccount};
+use dclutch_vm::account_profile::{
+    AccountObservationV1,
+    v2::{
+        AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2,
+        project_dynamic_fixed_spans_atomic,
+    },
+};
 use serde_json::json;
 use sha2::Digest as _;
 use solana_sdk::{
@@ -881,6 +888,7 @@ fn write_structured_frame_capture_v1(
     fee_payer: Pubkey,
     observation: Observation,
     tables: &[ObservedAccount],
+    profile_projection: serde_json::Value,
 ) -> Result<()> {
     let bounded =
         crate::rpc::bounded_instructions(instructions, Some(DIRECT_HOT_HEAP_FRAME_BYTES_V1))?;
@@ -947,6 +955,7 @@ fn write_structured_frame_capture_v1(
             "transactionBase64": BASE64.encode(&packet),
             "instructions": frames,
             "state": state,
+            "profileProjection": profile_projection,
         }))?,
     )?;
     eprintln!(
@@ -954,6 +963,282 @@ fn write_structured_frame_capture_v1(
         path.display()
     );
     Ok(())
+}
+
+/// Replay the exact receipt AccountProfile against one finalized observation
+/// of the logical frame before capture. This is a diagnostic control: the
+/// native interpreter result and every decoded rule travel beside the exact
+/// wire packet instead of being inferred from its coarse Trading refusal.
+fn structured_receipt_profile_projection_v1(
+    rpc: &mut Rpc,
+    frame: &AuthenticatedRationalLifecycleHotFrameV1,
+    claims_child: &solana_sdk::instruction::Instruction,
+    hot_instruction: &solana_sdk::instruction::Instruction,
+    artifacts: &structured_activation::StructuredActivateReceiptArtifactsV1,
+) -> Result<serde_json::Value> {
+    const INJECTED: usize = 5;
+    const TAIL_COUNT: u32 = 0;
+    let profile = AccountProfileV2::decode(&artifacts.bundle.account_profile)
+        .map_err(|error| Error::new(format!("Structured receipt diagnostic profile: {error:?}")))?;
+    let logical_count = profile
+        .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
+        .map_err(|error| {
+            Error::new(format!("Structured receipt diagnostic geometry: {error:?}"))
+        })?;
+    if logical_count != INJECTED + claims_child.accounts.len() {
+        return Err(Error::new(
+            "Structured receipt diagnostic logical width differs from its Claims frame",
+        ));
+    }
+    let injected_fixed = [
+        HOT_ROOT_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_PRODUCT_RAW_ACCOUNT_V3,
+        HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+    ];
+    let mut logical_metas = Vec::with_capacity(logical_count);
+    let mut representatives = Vec::with_capacity(logical_count);
+    let mut ordinals = Vec::with_capacity(logical_count);
+    for coordinate in 0..logical_count {
+        let representative = profile
+            .representative_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+            .map_err(|error| {
+                Error::new(format!(
+                    "Structured receipt diagnostic representative {coordinate}: {error:?}"
+                ))
+            })?;
+        let ordinal = profile
+            .physical_account_ordinal_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+            .map_err(|error| {
+                Error::new(format!(
+                    "Structured receipt diagnostic ordinal {coordinate}: {error:?}"
+                ))
+            })?;
+        let meta = if ordinal < INJECTED {
+            let fixed_coordinate = *injected_fixed.get(ordinal).ok_or_else(|| {
+                Error::new("Structured receipt diagnostic injected ordinal overflow")
+            })?;
+            hot_instruction
+                .accounts
+                .get(fixed_coordinate)
+                .cloned()
+                .ok_or_else(|| Error::new("Structured receipt diagnostic fixed frame overflow"))?
+        } else {
+            let outer_coordinate = frame
+                .fixed_accounts
+                .len()
+                .checked_add(frame.strategy_accounts.len())
+                .and_then(|base| base.checked_add(ordinal - INJECTED))
+                .ok_or_else(|| Error::new("Structured receipt diagnostic outer frame overflow"))?;
+            hot_instruction
+                .accounts
+                .get(outer_coordinate)
+                .cloned()
+                .ok_or_else(|| Error::new("Structured receipt diagnostic packed frame overflow"))?
+        };
+        logical_metas.push(meta);
+        representatives.push(representative);
+        ordinals.push(ordinal);
+    }
+    let addresses = logical_metas
+        .iter()
+        .map(|meta| meta.pubkey)
+        .collect::<Vec<_>>();
+    let (slot, observed) = rpc.finalized_accounts(&addresses, frame.finalized_slot)?;
+    let mut keys = Vec::with_capacity(logical_count);
+    let mut owners = Vec::with_capacity(logical_count);
+    let mut data = Vec::with_capacity(logical_count);
+    let mut lamports = Vec::with_capacity(logical_count);
+    let mut executable = Vec::with_capacity(logical_count);
+    for (coordinate, account) in observed.into_iter().enumerate() {
+        let meta = logical_metas
+            .get(coordinate)
+            .ok_or_else(|| Error::new("Structured receipt diagnostic meta overflow"))?;
+        keys.push(meta.pubkey.to_bytes());
+        match account {
+            Some(account) => {
+                owners.push(account.owner.to_bytes());
+                data.push(account.data);
+                lamports.push(account.lamports);
+                executable.push(account.executable);
+            }
+            None => {
+                owners.push(solana_sdk_ids::system_program::ID.to_bytes());
+                data.push(Vec::new());
+                lamports.push(0);
+                executable.push(false);
+            }
+        }
+    }
+    // These are the same four independently authenticated content identities
+    // `logical_projection_keys_boxed_v3` substitutes on chain.
+    for coordinate in 1..=4 {
+        keys[coordinate] = hash(&data[coordinate]).to_bytes();
+    }
+    let product_digest = hash(&data[2]).to_bytes();
+    let mut observations = Vec::with_capacity(logical_count);
+    for coordinate in 0..logical_count {
+        let rule = profile
+            .rule(
+                false,
+                u16::try_from(coordinate).map_err(|_| {
+                    Error::new("Structured receipt diagnostic rule coordinate overflow")
+                })?,
+            )
+            .map_err(|error| {
+                Error::new(format!(
+                    "Structured receipt diagnostic rule {coordinate}: {error:?}"
+                ))
+            })?;
+        let observation = if matches!(
+            rule.prestate(),
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+        ) {
+            AccountObservationV1::new_adapter_authenticated_variable_data(
+                &keys[coordinate],
+                &owners[coordinate],
+                lamports[coordinate],
+                &data[coordinate],
+                logical_metas[coordinate].is_signer,
+                logical_metas[coordinate].is_writable,
+                executable[coordinate],
+            )
+        } else {
+            let observation = AccountObservationV1::new(
+                &keys[coordinate],
+                &owners[coordinate],
+                lamports[coordinate],
+                &data[coordinate],
+                logical_metas[coordinate].is_signer,
+                logical_metas[coordinate].is_writable,
+                executable[coordinate],
+            );
+            if coordinate == 2 {
+                observation.with_adapter_data_digest(&product_digest)
+            } else {
+                observation
+            }
+        };
+        observations.push(observation);
+    }
+    let scalar_count = usize::from(profile.common_scalar_count());
+    let identity_count = usize::from(profile.common_identity_count());
+    let mut input_scalars = vec![0_u64; scalar_count];
+    let mut input_identities = vec![[0_u8; 32]; identity_count];
+    if let Some(destination) = profile.trusted_current_slot_scalar() {
+        input_scalars[usize::from(destination)] = slot;
+    }
+    if let Some(destination) = profile.trusted_current_executing_program_identity() {
+        input_identities[usize::from(destination)] = hot_instruction.program_id.to_bytes();
+    }
+    if let Some(destination) = profile.trusted_system_program_identity() {
+        input_identities[usize::from(destination)] = solana_sdk_ids::system_program::ID.to_bytes();
+    }
+    let mut scratch_scalars = vec![0_u64; scalar_count];
+    let mut scratch_identities = vec![[0_u8; 32]; identity_count];
+    let mut output_scalars = vec![0_u64; scalar_count];
+    let mut output_identities = vec![[0_u8; 32]; identity_count];
+    let projection = project_dynamic_fixed_spans_atomic(
+        profile,
+        TAIL_COUNT,
+        &[],
+        &observations,
+        ProjectionRegistersV2 {
+            input_scalars: &input_scalars,
+            input_identities: &input_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut output_scalars,
+            output_identities: &mut output_identities,
+        },
+        None,
+    );
+    let mut expected_physical_flags = vec![0_u8; logical_count];
+    for coordinate in 0..logical_count {
+        let rule = profile
+            .rule(
+                false,
+                u16::try_from(coordinate).map_err(|_| {
+                    Error::new("Structured receipt diagnostic rule coordinate overflow")
+                })?,
+            )
+            .map_err(|error| {
+                Error::new(format!("Structured receipt diagnostic rule: {error:?}"))
+            })?;
+        expected_physical_flags[representatives[coordinate]] |= rule.privileges();
+    }
+    let mut rows = Vec::with_capacity(logical_count);
+    let mut mismatches = Vec::new();
+    for coordinate in 0..logical_count {
+        let rule = profile
+            .rule(
+                false,
+                u16::try_from(coordinate).map_err(|_| {
+                    Error::new("Structured receipt diagnostic rule coordinate overflow")
+                })?,
+            )
+            .map_err(|error| {
+                Error::new(format!("Structured receipt diagnostic rule: {error:?}"))
+            })?;
+        let expected_width = u64::from(rule.data_length())
+            .checked_add(u64::from(rule.data_item_stride()) * u64::from(TAIL_COUNT))
+            .ok_or_else(|| Error::new("Structured receipt diagnostic width overflow"))?;
+        let observed_width = u64::try_from(data[coordinate].len())
+            .map_err(|_| Error::new("Structured receipt diagnostic observed width overflow"))?;
+        let width_mismatch = match rule.prestate() {
+            AccountPrestateV2::Exact => observed_width != expected_width,
+            AccountPrestateV2::LifecycleBound => {
+                observed_width != 0 && observed_width != expected_width
+            }
+            _ => false,
+        };
+        let rule_flags = rule.privileges();
+        let observed_flags = u8::from(logical_metas[coordinate].is_signer)
+            | (u8::from(logical_metas[coordinate].is_writable) << 1)
+            | (u8::from(executable[coordinate]) << 2);
+        let expected_flags = expected_physical_flags[representatives[coordinate]];
+        let row = json!({
+            "logicalCoordinate": coordinate,
+            "representative": representatives[coordinate],
+            "physicalOrdinal": ordinals[coordinate],
+            "key": logical_metas[coordinate].pubkey.to_string(),
+            "observedOwner": Pubkey::new_from_array(owners[coordinate]).to_string(),
+            "observedDataLength": observed_width,
+            "observedFlags": observed_flags,
+            "rule": {
+                "privileges": rule_flags,
+                "expectedPhysicalPrivileges": expected_flags,
+                "effectPermissions": rule.effect_permissions(),
+                "aliasKind": format!("{:?}", rule.alias_kind()),
+                "aliasIndex": rule.alias_index(),
+                "prestate": format!("{:?}", rule.prestate()),
+                "dataLength": rule.data_length(),
+                "dataItemStride": rule.data_item_stride(),
+                "expectedDataLength": expected_width,
+            },
+            "widthMismatch": width_mismatch,
+            "privilegeMismatch": observed_flags != expected_flags,
+        });
+        if width_mismatch || observed_flags != expected_flags {
+            mismatches.push(row.clone());
+        }
+        rows.push(row);
+    }
+    let result = json!({
+        "schema": "dclutch-structured-account-profile-projection-v1",
+        "finalizedSlot": slot,
+        "profileSha256": crate::plan::hex(&hash(&artifacts.bundle.account_profile).to_bytes()),
+        "nativeProjectionResult": format!("{projection:?}"),
+        "logicalAccountCount": logical_count,
+        "mismatches": mismatches,
+        "coordinates": rows,
+    });
+    eprintln!(
+        "structured receipt native AccountProfile projection: {}",
+        serde_json::to_string(&result)?
+    );
+    Ok(result)
 }
 
 /// Create the permissionless seal (when vacant) and execute the first real
@@ -1402,6 +1687,13 @@ fn activate_structured_receipt_v1(
         transactions,
     )?;
     if let Some(path) = std::env::var_os("DCLUTCH_STRUCTURED_FRAME_CAPTURE") {
+        let profile_projection = structured_receipt_profile_projection_v1(
+            rpc,
+            &frame,
+            &claims_child,
+            &hot_instruction,
+            artifacts,
+        )?;
         let capture_instructions =
             if std::env::var_os("DCLUTCH_STRUCTURED_CAPTURE_SEAL_ONLY").is_some() {
                 instructions.get(..1).ok_or_else(|| {
@@ -1425,6 +1717,7 @@ fn activate_structured_receipt_v1(
             payer.pubkey(),
             observation,
             &tables,
+            profile_projection,
         )?;
         return Err(Error::new(
             "Structured receipt diagnostic capture written; submission skipped",

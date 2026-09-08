@@ -13,6 +13,12 @@
       "substrate": "local-validator",
       "source_relation": "historical-source-split",
       "note": "Accepted Ensemble Fold and Reclaim from exact source cohort 551ffc1b99abdf01478e7e963a1ac20a99e6c0f6. The retry host was rebuilt later, but invoked the unchanged Resolution ELF aa1efaa57dd24d1e27725df37d32132088fa972f32697e868e3063f416ba129c."
+    },
+    {
+      "path": "docs/evidence/claims-fractional-validator-2026-09-08/ledger.json",
+      "substrate": "local-validator",
+      "source_relation": "historical-source-split",
+      "note": "Accepted Fractional Wrap and WholeUnwrap parent dispatch from host a84f5a197 and retained 551ffc1b9 Claims runtime. Native instruction bytes and finalized poststates are recorded; child action selectors remain uncredited by this ledger."
     }
   ]
 }

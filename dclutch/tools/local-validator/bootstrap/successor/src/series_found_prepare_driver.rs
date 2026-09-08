@@ -1798,7 +1798,7 @@ pub(crate) struct SeriesPrepareHydrationRecordsV1<'a> {
 }
 
 /// Materialize the current source compiler's opaque Prepare child bank into
-/// the full 111-role geometry at one finalized slot.
+/// the full 115-role geometry at one finalized slot.
 ///
 /// This is the production connection between the semantic owners and the
 /// hydrator.  The caller first invokes it with the release-owned predicted
@@ -1938,7 +1938,7 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
     )
 }
 
-/// Hydrate all 111 Series Prepare roles from the decoded semantic-owner child
+/// Hydrate all 115 Series Prepare roles from the decoded semantic-owner child
 /// requests.  This is intentionally a layout constructor, not an RPC reader:
 /// `observe_series_prepare_geometry_v1` performs the one finalized snapshot
 /// after this function has made every address, owner, canonical record body,
@@ -2024,6 +2024,20 @@ pub(crate) fn hydrate_series_prepare_role_layout_v1<'a>(
         replay_initialize,
         escrow_open,
         escrow_lock,
+        occurrence_evidence: [
+            record_raw_v1("Series occurrence", input.registry, input.occurrence)?,
+            SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "Series occurrence staging",
+                address: input.occurrence.staging,
+                fixed_data_len: 0,
+            },
+            record_raw_v1("Series Ticket", input.registry, input.ticket)?,
+            SeriesPrepareRoleSourceV1::PredictedVacancy {
+                role: "Series Ticket staging",
+                address: input.ticket.staging,
+                fixed_data_len: 0,
+            },
+        ],
     })
 }
 
@@ -2099,8 +2113,9 @@ fn record_raw_v1<'a>(
 }
 
 fn ticket_state_address_v1(input: &SeriesPrepareHydratorInputV1<'_>) -> Result<Pubkey> {
-    let ticket = ContentId::new(Sha256::digest(input.ticket.body).into())
-        .map_err(|_| Error::new("Series Prepare Ticket identity was zero"))?;
+    let ticket = dclutch_trading::series::admit_ticket(input.ticket.body)
+        .map_err(|_| Error::new("Series Prepare Ticket record refused"))?
+        .content_id();
     Ok(Pubkey::find_program_address(
         &[
             dclutch_trading::series::replay::SERIES_TICKET_STATE_PDA_DOMAIN_V3,

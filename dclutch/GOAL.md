@@ -59,6 +59,8 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-08 | Fractional Wrap, transfer to an independent holder and WholeUnwrap finalize with exact reserve backing; the native census credits the corroborated parent route | — | [fractional validator evidence](docs/evidence/claims-fractional-validator-2026-09-08/README.md) |
+| 2026-09-08 | existing Pages publishes a converged reference separating checked execution from authored claims, plus Ensemble and Series evidence | — | [execution-reference publication](docs/evidence/PAGES_EXECUTION_REFERENCE_2026_09_08.md) |
 | 2026-09-08 | an isolated exact-source Series native test retains one five-action publication through two occurrences, whole replay poststates, both Ticket retirements and Root close | — | [native recurrence proof and runtime boundaries](docs/evidence/SERIES_NATIVE_RECURRENCE_2026_09_08.md) |
 | 2026-09-08 | retained local-validator Ensemble accepts quorum-three Fold and fourth-seat Reclaim after explicit terminal rent funding; founding capitalization remains under review | — | [accepted Ensemble transactions](docs/evidence/ENSEMBLE_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md) |
 | 2026-09-08 | exact execution census separates five checked local-validator routes and 46 historical devnet routes from 123 authored success claims; missing routes have owners | — | [execution census and replay queue](docs/evidence/EXECUTION_COVERAGE_CENSUS_2026_09_08.md) |

@@ -1,0 +1,7 @@
+staged 40 genesis accounts
+lookup table Eet2j9q4LM97LdXTtkAXDpAxbPZt2D2C2gfkvuhRe5ti carries 32 addresses
+          wrap  accepted=true  {"actor_native_claims":993,"holder_token_amount":70,"reserve_native_claims":7,"shard_mint_supply":70,"sleeper_token_amount":0}
+token-2022-transfer-to-sleeper  accepted=true  {"actor_native_claims":993,"holder_token_amount":30,"reserve_native_claims":7,"shard_mint_supply":70,"sleeper_token_amount":40}
+whole-unwrap-actor-remainder  accepted=true  {"actor_native_claims":996,"holder_token_amount":0,"reserve_native_claims":4,"shard_mint_supply":40,"sleeper_token_amount":40}
+canonical journal sha256 5227dfd9acac0be811896cf19bc549477a0e1734e87734d934fc3fc553a77e4c
+finalized instruction evidence sha256 aa2d8d7c37296d8b3fc9b9c02244edb4c3d83c1a9ceca4bd3e6e0ea75a1f1955

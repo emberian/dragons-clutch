@@ -832,6 +832,9 @@ mod tests {
         assert_eq!(decode_base58("1").unwrap(), vec![0]);
         assert_eq!(decode_base58("1112").unwrap(), vec![0, 0, 0, 1]);
         assert_eq!(decode_base58("2").unwrap(), vec![1]);
-        assert!(decode_base58("0").is_err());
+        assert_eq!(
+            decode_base58("0").unwrap_err().to_string(),
+            "finalized instruction data was not base58"
+        );
     }
 }

@@ -1,0 +1,31 @@
+{
+  "campaign": "claims-fractional-local-validator-v1",
+  "note": "Accepted wrap and WholeUnwrap transactions from one retained fractional lifecycle on solana-test-validator. Each binding was authored after inspecting the finalized native transaction packet, its resolved inner instructions, runtime invoke logs, and exact account poststate.",
+  "bindings": [
+    {
+      "label": "wrap",
+      "routes": [
+        "claims/fractional_atomic_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Accepted DCFREQ02 Wrap CPI: seven native claims became 70 Token-2022 shard atoms. The finalized packet contains one exact Claims CPI matching the request that the caller forwarded."
+    },
+    {
+      "label": "whole-unwrap-actor-remainder",
+      "routes": [
+        "claims/fractional_atomic_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Accepted DCFREQ02 WholeUnwrap CPI after 40 shards moved to an independent sleeper: 30 actor shards burned, three native claims unlocked, and 40 shards plus four reserve claims remained."
+    },
+    {
+      "label": "token-2022-transfer-to-sleeper",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Accepted Token-2022 TransferChecked between the two Claims actions. It is retained because its poststate makes the sleeper liability real, and it claims no first-party protocol route."
+    }
+  ]
+}

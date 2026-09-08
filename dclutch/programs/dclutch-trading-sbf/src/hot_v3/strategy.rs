@@ -268,45 +268,6 @@ pub(super) fn try_projection_bank_v3<T: Clone>(
     Ok(bank)
 }
 
-/// Diagnostic-only boundary around the Trading predicate that rides the Effect
-/// projection. The two samples for one operation isolate the predicate's cost;
-/// the gap from its `after` sample to the next operation's `before` sample is
-/// the kernel's projection plus resolution of the next operation.
-#[cfg(feature = "hot-cu-profile")]
-#[inline(never)]
-fn trace_effect_projection_operation_v1(phase: u64, effect: ResolvedEffectV3) {
-    let (kind, first, second) = match effect {
-        ResolvedEffectV3::Noop => (0, 0, 0),
-        ResolvedEffectV3::TransferLamports {
-            source,
-            destination,
-            ..
-        } => (1, source as u64, destination as u64),
-        ResolvedEffectV3::WriteScalar {
-            account, offset, ..
-        } => (2, account as u64, u64::from(offset)),
-        ResolvedEffectV3::WriteIdentity {
-            account, offset, ..
-        } => (3, account as u64, u64::from(offset)),
-        ResolvedEffectV3::WriteU8 {
-            account, offset, ..
-        } => (4, account as u64, u64::from(offset)),
-        ResolvedEffectV3::WriteU16 {
-            account, offset, ..
-        } => (5, account as u64, u64::from(offset)),
-        ResolvedEffectV3::WriteU32 {
-            account, offset, ..
-        } => (6, account as u64, u64::from(offset)),
-        ResolvedEffectV3::RequireLamportsEq { account, .. } => (7, account as u64, 0),
-        ResolvedEffectV3::WriteRequest { route, offset, .. } => {
-            (8, u64::from(route), offset as u64)
-        }
-    };
-    solana_program::log::sol_log("dclutch-hot-effect:phase/kind/first/second");
-    solana_program::log::sol_log_64(phase, kind, first, second, 0);
-    solana_program::log::sol_log_compute_units();
-}
-
 /// Account candidates and both Effect scratch banks are phase-local. Only the
 /// exact lamport projection and child-request bank survive into preflight/CPI.
 #[inline(never)]
@@ -463,28 +424,21 @@ pub(super) fn project_hot_effects_v3(
             requests: &mut requests,
         },
         &mut write_ranges,
-        &mut |resolved| {
-            #[cfg(feature = "hot-cu-profile")]
-            trace_effect_projection_operation_v1(0, resolved);
-            let result =
-                require_no_funding_local_mutation_v5(effect.funding(), resolved).and_then(|()| {
-                    inspect_local_effect_discipline_v5(
-                        lifecycle_plans,
-                        root_lifecycle_close,
-                        resolved,
-                        aliases,
-                        &mut written,
-                        participation.as_deref_mut(),
-                    )
-                });
-            #[cfg(feature = "hot-cu-profile")]
-            trace_effect_projection_operation_v1(1, resolved);
-            match result {
-                Ok(()) => Ok(()),
-                Err(error) => {
-                    refused = Some(error);
-                    Err(EffectKernelErrorV4::BaseProgram)
-                }
+        &mut |resolved| match require_no_funding_local_mutation_v5(effect.funding(), resolved)
+            .and_then(|()| {
+                inspect_local_effect_discipline_v5(
+                    lifecycle_plans,
+                    root_lifecycle_close,
+                    resolved,
+                    aliases,
+                    &mut written,
+                    participation.as_deref_mut(),
+                )
+            }) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                refused = Some(error);
+                Err(EffectKernelErrorV4::BaseProgram)
             }
         },
     );

@@ -1105,6 +1105,7 @@ mod execute;
 mod frame;
 mod lifecycle;
 mod series_expiry;
+mod series_source;
 mod strategy;
 #[cfg(test)]
 mod tests;

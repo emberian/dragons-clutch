@@ -25,6 +25,7 @@ use dclutch_product::contract::{
 };
 
 mod ensemble_fold_receipt_v1;
+mod ensemble_terminal_capital_v1;
 #[allow(missing_docs)]
 mod generated_ensemble_fold_receipt_v1;
 #[allow(missing_docs)]
@@ -134,6 +135,9 @@ pub use generated_statistic_spec_v1::{
 // asserted. The tail's offset is the width of the eleven fields in front of it
 // now, so the two ends of the record are the same object.
 pub use ensemble_fold_receipt_v1::EnsembleFoldReceiptV1;
+pub use ensemble_terminal_capital_v1::{
+    EnsembleTerminalCapitalErrorV1, EnsembleTerminalCapitalPlanV1,
+};
 pub use generated_ensemble_fold_receipt_v1::{
     ENSEMBLE_EVIDENCE_DOMAIN_V1, ENSEMBLE_FOLD_RECEIPT_PDA_DOMAIN_V1,
     ENSEMBLE_FOLD_RECEIPT_V1_BYTES, ENSEMBLE_FOLD_RECEIPT_V1_MAGIC,

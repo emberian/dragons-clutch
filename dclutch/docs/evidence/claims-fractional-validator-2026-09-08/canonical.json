@@ -1,0 +1,47 @@
+{
+  "entries": [
+    {
+      "accepted": true,
+      "account_frame_sha256": "0e65a7b7bfa5e515b155f0ab5d3cea2843e69db5434a3861da9fb152871c3c5e",
+      "action": "wrap",
+      "instruction_data_sha256": "012cac4ff05cf671973d2287712535c45a80a7d839dd5ff67ee308a9e248a454",
+      "poststate": {
+        "actor_native_claims": 993,
+        "holder_token_amount": 70,
+        "reserve_native_claims": 7,
+        "shard_mint_supply": 70,
+        "sleeper_token_amount": 0
+      },
+      "refusal": null
+    },
+    {
+      "accepted": true,
+      "account_frame_sha256": "7b0ec71f47c871fe09026777de04e0db7c8afa96e4d9ffbc93ab2eb9c3768e57",
+      "action": "token-2022-transfer-to-sleeper",
+      "instruction_data_sha256": "aaba291ce55a7b46150b06de70fa58a53f6834c021a026ea09f6dc043719a460",
+      "poststate": {
+        "actor_native_claims": 993,
+        "holder_token_amount": 30,
+        "reserve_native_claims": 7,
+        "shard_mint_supply": 70,
+        "sleeper_token_amount": 40
+      },
+      "refusal": null
+    },
+    {
+      "accepted": true,
+      "account_frame_sha256": "ddabfd50174b7a232d320216e344fd66129fec7baeb2d23eaeb76c1d344f914e",
+      "action": "whole-unwrap-actor-remainder",
+      "instruction_data_sha256": "2826976e47132d16501b63d7f1a48f52813ed4d8b25c9bfbc544cf644aa66a29",
+      "poststate": {
+        "actor_native_claims": 996,
+        "holder_token_amount": 0,
+        "reserve_native_claims": 4,
+        "shard_mint_supply": 40,
+        "sleeper_token_amount": 40
+      },
+      "refusal": null
+    }
+  ],
+  "schema": "dclutch/fractional-exterior/canonical/v1"
+}

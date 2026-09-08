@@ -122,9 +122,26 @@ pub const SERIES_PREPARE_ROUTE_STARTS_V5: [u16; 5] = [6, 53, 68, 81, 97];
 /// Current child-owned route widths.
 pub const SERIES_PREPARE_ROUTE_COUNTS_V5: [u16; 5] = [47, 15, 13, 16, 14];
 /// Complete logical account width before exact route-alias compaction.
-pub const SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5: u16 = 111;
+pub const SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5: u16 =
+    SERIES_PREPARE_TICKET_STAGING_COORDINATE_V5 + 1;
+/// First appended immutable occurrence record, after the complete child-route bank.
+pub const SERIES_PREPARE_OCCURRENCE_RAW_COORDINATE_V5: u16 =
+    SERIES_PREPARE_ROUTE_STARTS_V5[4] + SERIES_PREPARE_ROUTE_COUNTS_V5[4];
+/// Finalization cursor for the appended occurrence record.
+pub const SERIES_PREPARE_OCCURRENCE_STAGING_COORDINATE_V5: u16 =
+    SERIES_PREPARE_OCCURRENCE_RAW_COORDINATE_V5 + 1;
+/// Appended immutable Ticket record; Hot coordinate four remains LinkedBasis.
+pub const SERIES_PREPARE_TICKET_RAW_COORDINATE_V5: u16 =
+    SERIES_PREPARE_OCCURRENCE_STAGING_COORDINATE_V5 + 1;
+/// Finalization cursor for the appended Ticket record.
+pub const SERIES_PREPARE_TICKET_STAGING_COORDINATE_V5: u16 =
+    SERIES_PREPARE_TICKET_RAW_COORDINATE_V5 + 1;
 /// Complete physical account width after exact route-alias compaction.
-pub const SERIES_PREPARE_PHYSICAL_ACCOUNT_COUNT_V5: u16 = 55;
+pub const SERIES_PREPARE_PHYSICAL_ACCOUNT_COUNT_V5: u16 =
+    SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - ROUTE_ALIASES.len() as u16;
+/// Accounts created by the native child CPIs; their outer prestate is vacant.
+/// The corresponding live widths and rents belong to Custody, not the outer profile.
+pub const SERIES_PREPARE_CHILD_CREATED_COORDINATES_V5: [u16; 4] = [7, 60, 76, 91];
 /// Exact payer representative shared by every creating child route.
 pub const SERIES_PREPARE_PAYER_COORDINATE_V5: u16 = 14;
 /// Distinct immutable surplus-refund destination.
@@ -214,7 +231,7 @@ pub const SERIES_PREPARE_EFFECT_BYTES_V5: usize = EFFECT_HEADER_BYTES_V5
 const _: () = assert!(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 == 5);
 const _: () = assert!(SERIES_PREPARE_ROUTE_STARTS_V5[4] + SERIES_PREPARE_ROUTE_COUNTS_V5[4] == 111);
 const _: () = assert!(ROUTE_ALIASES.len() == 56);
-const _: () = assert!(SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - ROUTE_ALIASES.len() as u16 == 55);
+const _: () = assert!(SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - ROUTE_ALIASES.len() as u16 == 59);
 
 #[derive(Clone, Copy, Debug)]
 /// Exact observed widths used by the physical Prepare profile.
@@ -350,11 +367,26 @@ fn account_rule(
             dclutch_product::PORTFOLIO_COEFFICIENT_BYTES as u32,
             AccountPrestateV2::Exact,
         ),
+        SERIES_PREPARE_OCCURRENCE_RAW_COORDINATE_V5 => (
+            dclutch_trading::series::SERIES_OCCURRENCE_BYTES_V3 as u32,
+            0,
+            AccountPrestateV2::Exact,
+        ),
+        SERIES_PREPARE_TICKET_RAW_COORDINATE_V5 => (
+            dclutch_trading::series::SERIES_TICKET_BYTES_V3 as u32,
+            0,
+            AccountPrestateV2::Exact,
+        ),
+        SERIES_PREPARE_OCCURRENCE_STAGING_COORDINATE_V5
+        | SERIES_PREPARE_TICKET_STAGING_COORDINATE_V5 => (0, 0, AccountPrestateV2::Exact),
         SERIES_PREPARE_TICKET_COORDINATE_V5 => (
             SERIES_TICKET_STATE_BYTES_V3 as u32,
             0,
             AccountPrestateV2::LifecycleBound,
         ),
+        _ if SERIES_PREPARE_CHILD_CREATED_COORDINATES_V5.contains(&coordinate) => {
+            (0, 0, AccountPrestateV2::Exact)
+        }
         _ => (
             *lengths
                 .get(coordinate as usize)
@@ -890,6 +922,107 @@ mod tests {
                 route.fixed_account_count(),
                 SERIES_PREPARE_ROUTE_COUNTS_V5[index as usize]
             );
+        }
+    }
+
+    /// Execute account admission against initial vacancies. The old emitter
+    /// declared child-created accounts live and refused this before any CPI.
+    #[test]
+    fn child_created_vacancies_pass_actual_account_projection() {
+        use dclutch_vm::account_profile::{
+            AccountObservationV1,
+            v2::{ProjectionRegistersV2, project_atomic},
+        };
+        let mut lengths = [0_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
+        for (coordinate, live_bytes) in [
+            (7, dclutch_custody::PROJECTED_CUSTODY_STATE_BYTES_V2),
+            (60, dclutch_custody::token_svm::ACCOUNT_BYTES),
+            (76, dclutch_custody::CUSTODY_REPLAY_BYTES_V1),
+            (91, dclutch_custody::token_svm::ACCOUNT_BYTES),
+        ] {
+            lengths[coordinate] = live_bytes as u32;
+        }
+        let artifacts = emit_series_prepare_funding_artifacts_v5(
+            SeriesPrepareAccountProfileInputV5 {
+                fixed_data_lengths: &lengths,
+            },
+            1,
+        )
+        .expect("canonical profile");
+        let wrapper = AccountProfileV3::decode(&artifacts.account_profile).expect("ProfileV3");
+        let profile = wrapper.base();
+        let count = SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize;
+        let keys: Vec<[u8; 32]> = (0..count)
+            .map(|index| {
+                let mut key = [1_u8; 32];
+                key[..8].copy_from_slice(&(index as u64 + 1).to_le_bytes());
+                key
+            })
+            .collect();
+        let owner = [9_u8; 32];
+        let mut bodies: Vec<Vec<u8>> = (0..count)
+            .map(|index| {
+                let rule = profile.rule(false, index as u16).expect("rule");
+                vec![0_u8; (rule.data_length() + rule.data_item_stride()) as usize]
+            })
+            .collect();
+        bodies[5].clear();
+        for coordinate in SERIES_PREPARE_CHILD_CREATED_COORDINATES_V5 {
+            bodies[coordinate as usize].clear();
+        }
+        bodies[3][PORTFOLIO_COEFFICIENT_COUNT_OFFSET..PORTFOLIO_COEFFICIENT_COUNT_OFFSET + 4]
+            .copy_from_slice(&1_u32.to_le_bytes());
+        let run = |bodies: &[Vec<u8>]| {
+            let observations: Vec<_> = (0..count)
+                .map(|index| {
+                    let representative =
+                        alias_representative(index as u16).map_or(index, usize::from);
+                    let rule = profile
+                        .rule(false, representative as u16)
+                        .expect("representative");
+                    let flags = rule.privileges();
+                    AccountObservationV1::new(
+                        &keys[representative],
+                        &owner,
+                        1,
+                        &bodies[representative],
+                        flags & 1 != 0,
+                        flags & 2 != 0,
+                        flags & 4 != 0,
+                    )
+                })
+                .collect();
+            let scalars = vec![0_u64; SERIES_PREPARE_COMMON_SCALAR_COUNT_V5 as usize];
+            let mut identities = vec![[0_u8; 32]; SERIES_PREPARE_COMMON_IDENTITY_COUNT_V5 as usize];
+            identities[SERIES_PREPARE_TRADING_PROGRAM_IDENTITY_V5 as usize] = owner;
+            let mut scratch_scalars = scalars.clone();
+            let mut output_scalars = scalars.clone();
+            let mut scratch_identities = identities.clone();
+            let mut output_identities = identities.clone();
+            project_atomic(
+                profile,
+                1,
+                &observations,
+                ProjectionRegistersV2 {
+                    input_scalars: &scalars,
+                    input_identities: &identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+                None,
+            )
+        };
+        assert_eq!(run(&bodies), Ok(()));
+        for coordinate in SERIES_PREPARE_CHILD_CREATED_COORDINATES_V5 {
+            bodies[coordinate as usize].resize(lengths[coordinate as usize] as usize, 0);
+            assert_eq!(
+                run(&bodies),
+                Err(ProfileError::DataLengthMismatch),
+                "a premature live child is not this Prepare prestate"
+            );
+            bodies[coordinate as usize].clear();
         }
     }
 

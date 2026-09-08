@@ -1,0 +1,43 @@
+{
+  "schema": "dclutch-gauntlet-execution-ledger-v1",
+  "observations": [
+    {
+      "route": "claims/fractional_atomic_v3::process",
+      "campaign": "claims-fractional-local-validator-v1",
+      "label": "wrap",
+      "signature": "3RtSzWNB3oRfyGL6urbePHYRsmmBBzJh7QevDiAWHARindRWtMyjsCPXruSQT1tbkAvbxTZbxyNRULbgx8YstEsj",
+      "slot": 132,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 139527,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "CRHxBthiwQCHaJGmiV8HAwRvFqZ1pk2aRxdtrEaFGJWU",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "aa2d8d7c37296d8b3fc9b9c02244edb4c3d83c1a9ceca4bd3e6e0ea75a1f1955",
+      "evidence_path": "docs/evidence/claims-fractional-validator-2026-09-08/native-evidence.json"
+    },
+    {
+      "route": "claims/fractional_atomic_v3::process",
+      "campaign": "claims-fractional-local-validator-v1",
+      "label": "whole-unwrap-actor-remainder",
+      "signature": "59KbAa5rSzewCS5KsFZD4RNvyhg5X7GAcJUWWnNwSUEeB8wCPjZyPX75YbVne1h1tKJkYBkdSchCxCe2tPLGxKYN",
+      "slot": 197,
+      "outcome": "executed",
+      "refusal": null,
+      "compute_units": 140471,
+      "programs_invoked": [
+        "ComputeBudget111111111111111111111111111111",
+        "CRHxBthiwQCHaJGmiV8HAwRvFqZ1pk2aRxdtrEaFGJWU",
+        "Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+      ],
+      "evidence_level": "finalized-instruction",
+      "evidence_sha256": "aa2d8d7c37296d8b3fc9b9c02244edb4c3d83c1a9ceca4bd3e6e0ea75a1f1955",
+      "evidence_path": "docs/evidence/claims-fractional-validator-2026-09-08/native-evidence.json"
+    }
+  ]
+}

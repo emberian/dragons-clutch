@@ -24,11 +24,31 @@ The opening Product is the clamped cubic `[0,0,0,0,3,3,3,3]`. At the
 authenticated coordinate `3/2`, its exact weights are `[1/8,3/8,3/8,1/8]` and
 the protocol's one cumulative-floor boundary at scale 11 yields `[1,4,4,2]`.
 The exterior represents coordinate 1 with denominator 10. Seven native claims
-therefore wrap into 70 shard atoms; 20 move to an unrelated holder; and the
-remaining 50 burn during unwrap and unlock five native claims. Exactly 20 shard
-atoms and two reserve claims remain for the sleeper, with every other Product
+therefore wrap into 70 shard atoms; 40 move to an unrelated holder; and the
+remaining 30 burn during unwrap and unlock three native claims. Exactly 40 shard
+atoms and four reserve claims remain for the sleeper, with every other Product
 coordinate unchanged. The matching terminal campaign pays four collateral
 atoms per whole claim at that same coordinate.
+
+## Preterminal evidence contract
+
+The `run` output directory contains:
+
+- `manifest.json`: deterministic fixture identities, width and action order.
+- `canonical.json`: exact instruction-data and ordered account-frame digests,
+  accepted results and five-ledger poststates for the three actions.
+- `native-evidence.json`: cluster-volatile finalized signatures, slots, fees,
+  compute units, runtime logs, poststates and every resolved native instruction.
+  The producer re-reads each packet from finalized transaction history,
+  requires it to be byte-identical to the signed submitted packet, and requires
+  each routed caller action to contain exactly one Claims CPI with the expected
+  request bytes. This document is a complete `census observe` evidence input.
+- `observed.jsonl`: the append-only progress log written during the run.
+- `validator.log`: the private validator's process log.
+
+`verify` checks both canonical JSON documents offline, including exact action
+order, successful finalized metadata, native instruction spelling and the
+five-ledger poststates. It does not contact a validator.
 
 ## Claim-check commands
 

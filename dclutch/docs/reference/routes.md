@@ -36,11 +36,11 @@ outcome split. A refusal record is never counted as accepted execution.
 
 ## Derived coverage partitions
 
-- **historical accepted Agave union: 52 of 164** -- an
+- **historical accepted Agave union: 53 of 164** -- an
   `executed` finalized native observation in a checked census ledger or an
   `executed` corroborated devnet record. A binding cannot enter this set, and
   this count is not final-source acceptance.
-- **historical local-validator accepted: 7 of 164** --
+- **historical local-validator accepted: 8 of 164** --
   checked successful local-validator ledger rows.
 - **historical devnet accepted: 46 of 164** --
   checked successful devnet records. The local and devnet sets can overlap, so
@@ -55,12 +55,12 @@ outcome split. A refusal record is never counted as accepted execution.
 - **refusal-binding-only: 0 of 164** -- an
   authored refusal binding with no checked native row. It is a claim, not an
   observed refusal.
-- **no historical successful claim: 39 of 164** --
+- **no historical successful claim: 38 of 164** --
   no accepted native observation and no `executed` binding. This includes exact
   refusals, refusal claims, blocked rows and wholly unrecorded rows.
 
 `tools/gauntlet/blocked.json` has 44 entries and classifies
-36 otherwise unclaimed routes. Writing a blocker can move a route
+35 otherwise unclaimed routes. Writing a blocker can move a route
 between blocked and unrecorded; it cannot change any acceptance count.
 
 The **phase** column is the route's own guard, not a summary of one. It is
@@ -132,7 +132,7 @@ instead:
 | `claims/claims_conservation_v1::process` | action | predicate `claims_conservation_v1::is_claims_conservation_v1`; length `CLAIMS_CONSERVATION_REQUEST_BYTES_V1`; magic `DCLCNS01` | `market: Open` | SUCCESS-CLAIM-ONLY (program-test claims-fractional-atomic-programtest; no checked native ledger row) | `programs/dclutch-claims-sbf/src/lib.rs:650` |
 | `claims/custody_replay_v1::process` | action | magic `DCLCCR01` | no phase gate | ACCEPTED-AGAVE-HISTORICAL (devnet cohort-13 slot 492,151,322; devnet cohort-14 slot 492,550,558; devnet cohort-16 slot 493,826,534; devnet cohort-17 slot 494,151,055) | `programs/dclutch-claims-sbf/src/lib.rs:544` |
 | `claims/founding_v5::process` | action | magic `DCLFDR05` | `market: Founding` | ACCEPTED-AGAVE-HISTORICAL (devnet cohort-13 slot 491,963,072; local-validator live-structured-control slot 9,789) | `programs/dclutch-claims-sbf/src/lib.rs:536` |
-| `claims/fractional_atomic_v3::process` | entry | magic `DCFREQ02` | no phase gate | blocked by rule `claims/fractional_atomic_v3::process` (unwired): Driven today, and invisible to the census for a wiring reason rather than a protocol one. | `programs/dclutch-claims-sbf/src/lib.rs:469` |
+| `claims/fractional_atomic_v3::process` | entry | magic `DCFREQ02` | no phase gate | ACCEPTED-AGAVE-HISTORICAL (local-validator claims-fractional-local-validator-v1 slot 132; local-validator claims-fractional-local-validator-v1 slot 197) | `programs/dclutch-claims-sbf/src/lib.rs:469` |
 | `claims/fractional_claim_check_v1::process_fractional_compaction` | action | magic `DCLTFCC1` | `market: Terminal, Retiring` | SUCCESS-CLAIM-ONLY (program-test claims-fractional-atomic-programtest; no checked native ledger row) | `programs/dclutch-claims-sbf/src/lib.rs:605` |
 | `claims/fractional_claim_check_v1::process_fractional_redemption` | action | magic `DCLTFCR1` | no phase gate | SUCCESS-CLAIM-ONLY (program-test claims-fractional-atomic-programtest; no checked native ledger row) | `programs/dclutch-claims-sbf/src/lib.rs:617` |
 | `claims/fractional_retirement_v3::process` | entry | magic `DCFRRQ03` | no phase gate | SUCCESS-CLAIM-ONLY (program-test claims-family-programtest; no checked native ledger row) | `programs/dclutch-claims-sbf/src/lib.rs:463` |

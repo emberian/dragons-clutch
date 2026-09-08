@@ -1,0 +1,12 @@
+{
+  "accounts": 40,
+  "actions": [
+    "wrap",
+    "token-2022-transfer-to-sleeper",
+    "whole-unwrap-actor-remainder"
+  ],
+  "actor": "AzXW61LgzhJTXN1so7rBR5auU2oCSzRyNEqFxPkZct3G",
+  "representation_width": 4,
+  "schema": "dclutch/fractional-exterior/manifest/v1",
+  "sleeping_holder": "Gymcte79ALGtFrWybRxqb7M7uRjnbjgaHjGgQf1v4qB8"
+}

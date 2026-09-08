@@ -323,14 +323,25 @@ mod tests {
 
         let mut zero_slot = accepted.clone();
         zero_slot["transactions"][0]["slot"] = json!(0);
-        assert!(verify_native_value(&zero_slot).is_err());
+        assert_eq!(
+            verify_native_value(&zero_slot).unwrap_err().to_string(),
+            "wrap is not a successful finalized transaction"
+        );
 
         let mut malformed_instruction = accepted.clone();
         malformed_instruction["transactions"][1]["instructions"][0]["data_hex"] = json!("0g");
-        assert!(verify_native_value(&malformed_instruction).is_err());
+        assert_eq!(
+            verify_native_value(&malformed_instruction)
+                .unwrap_err()
+                .to_string(),
+            "token-2022-transfer-to-sleeper has malformed finalized instructions"
+        );
 
         let mut wrong_order = accepted;
         wrong_order["transactions"][0]["label"] = json!(EXPECTED_ACTIONS[1].0);
-        assert!(verify_native_value(&wrong_order).is_err());
+        assert_eq!(
+            verify_native_value(&wrong_order).unwrap_err().to_string(),
+            "finalized instruction order refused: expected wrap"
+        );
     }
 }

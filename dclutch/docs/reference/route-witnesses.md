@@ -16,19 +16,19 @@ remains a separate substrate.
 
 | partition | routes | authority |
 | --- | ---: | --- |
-| **historical accepted Agave** | **52** | checked native local-validator ledgers and successful devnet records; not final-source coverage |
+| **historical accepted Agave** | **53** | checked native local-validator ledgers and successful devnet records; not final-source coverage |
 | **checked ProgramTest accepted** | 0 | checked native ProgramTest ledgers; no validator claim |
 | **successful binding only** | 72 | authored `executed` bindings without a checked native row |
 | **checked refused-only** | 1 | finalized native refusal and no native acceptance |
 | **refusal binding only** | 0 | authored `refused` binding without a checked native row |
-| **blocked** | 36 | no evidence or binding; a blocker records why and who owns it |
+| **blocked** | 35 | no evidence or binding; a blocker records why and who owns it |
 | **unrecorded** | 3 | no evidence, binding or reason |
 
-- **historical accepted Agave union: 52 of 164** -- an
+- **historical accepted Agave union: 53 of 164** -- an
   `executed` finalized native observation in a checked census ledger or an
   `executed` corroborated devnet record. A binding cannot enter this set, and
   this count is not final-source acceptance.
-- **historical local-validator accepted: 7 of 164** --
+- **historical local-validator accepted: 8 of 164** --
   checked successful local-validator ledger rows.
 - **historical devnet accepted: 46 of 164** --
   checked successful devnet records. The local and devnet sets can overlap, so
@@ -43,12 +43,12 @@ remains a separate substrate.
 - **refusal-binding-only: 0 of 164** -- an
   authored refusal binding with no checked native row. It is a claim, not an
   observed refusal.
-- **no historical successful claim: 39 of 164** --
+- **no historical successful claim: 38 of 164** --
   no accepted native observation and no `executed` binding. This includes exact
   refusals, refusal claims, blocked rows and wholly unrecorded rows.
 
 `tools/gauntlet/blocked.json` has 44 entries and classifies
-36 otherwise unclaimed routes. Writing a blocker can move a route
+35 otherwise unclaimed routes. Writing a blocker can move a route
 between blocked and unrecorded; it cannot change any acceptance count.
 
 ## Checked native evidence sources
@@ -61,6 +61,7 @@ totals are never edited by hand.
 | --- | --- | --- | --- | --- | --- |
 | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` | local-validator | historical-source-split | 5 | 0 | `f5f1d29961ccf7f4` |
 | `docs/evidence/ensemble-execution-coverage-2026-09-08/ledger.json` | local-validator | historical-source-split | 2 | 0 | `c9683a66e493fe4d` |
+| `docs/evidence/claims-fractional-validator-2026-09-08/ledger.json` | local-validator | historical-source-split | 1 | 0 | `34d071ee22fc9059` |
 
 Existing devnet witness files are also exact native evidence, split by their
 recorded outcome:
@@ -123,6 +124,7 @@ not decide which.
 
 | route | evidence class | blocking rule | reason, first sentence |
 | --- | --- | --- | --- |
+| `claims/fractional_atomic_v3::process` | local-validator accepted (historical) | `claims/fractional_atomic_v3::process` | Driven today, and invisible to the census for a wiring reason rather than a protocol one. |
 | `custody/apply#Apply` | local-validator success claim | `custody/apply#Apply` | GovernanceActV1 -- the governed protocol-parameters record's own act, arrived with build/economics and reached through custody's `protocol_parameters_v1::selects` dispatch. |
 | `custody/credit_route#(UpkeepOperationV1::Credit,Some(credit))` | local-validator success claim | `custody/credit_route#(UpkeepOperationV1::Credit,Some(credit))` | UpkeepOperationV1 -- the upkeep vault's own act, arrived with build/economics, and the one thing nothing has ever executed: the Direct close-maker CPIs into the credit arm with the donation remainder. |
 | `custody/found#(UpkeepOperationV1::Found,None)` | local-validator success claim | `custody/found#(UpkeepOperationV1::Found,None)` | UpkeepOperationV1 -- the upkeep vault's own act, arrived with build/economics, and the one thing nothing has ever executed: the Direct close-maker CPIs into the credit arm with the donation remainder. |
@@ -153,7 +155,7 @@ not decide which.
 | `claims/claims_conservation_v1::process` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/custody_replay_v1::process` | devnet accepted (historical) | devnet `cohort-13` slot 492,151,322 `5JKdUXJurc4j...`; devnet `cohort-14` slot 492,550,558 `4aXbeYtXiVkA...`; devnet `cohort-16` slot 493,826,534 `4LfQK3ReWZKP...`; devnet `cohort-17` slot 494,151,055 `5BKhaEC86PK5...`; binding register: `claims-claim-check-programtest` (executed), `claims-fractional-atomic-programtest` (executed), `claims-rational-representation-v2-programtest` (executed), `claims-rational-representation-v2-programtest` (refused) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `claims/founding_v5::process` | devnet accepted (historical) | devnet `cohort-13` slot 491,963,072 `5Ji1babqGgui...`; local-validator `live-structured-control` slot 9,789 `2U3PJ1SLaQ7Q...`; binding register: `claims-fractional-atomic-programtest` (executed), `claims-fractional-atomic-programtest` (refused), `tier1` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
-| `claims/fractional_atomic_v3::process` | blocked | blocked by rule `claims/fractional_atomic_v3::process` | `tools/gauntlet/blocked.json` |
+| `claims/fractional_atomic_v3::process` | local-validator accepted (historical) | local-validator `claims-fractional-local-validator-v1` slot 132 `3RtSzWNB3oRf...`; local-validator `claims-fractional-local-validator-v1` slot 197 `59KbAa5rSzew...` | `docs/evidence/claims-fractional-validator-2026-09-08/ledger.json` |
 | `claims/fractional_claim_check_v1::process_fractional_compaction` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/fractional_claim_check_v1::process_fractional_redemption` | program-test success claim | `claims-fractional-atomic-programtest` (executed); no checked native ledger row; binding register: `claims-fractional-atomic-programtest` (refused) | `tools/gauntlet/claims-fractional-atomic/bindings.json` |
 | `claims/fractional_retirement_v3::process` | program-test success claim | `claims-family-programtest` (executed); no checked native ledger row; binding register: `claims-family-programtest` (refused) | `tools/gauntlet/claims-custody/claims-bindings.json` |
