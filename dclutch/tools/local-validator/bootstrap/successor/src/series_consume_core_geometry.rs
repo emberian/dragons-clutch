@@ -8,22 +8,15 @@
 //! created by Core Found or Claims remain named PDA predictions with the
 //! layout owned by the program that will create them.
 
-use dclutch_claims::{
-    founding_v5::ClaimsFoundingRequestV5,
-    liability_basis_state_v2::{
-        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-        liability_basis_vector_width_v2,
-    },
-    protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2,
-};
+use dclutch_claims::founding_v5::ClaimsFoundingRequestV5;
 use dclutch_core_contract::ContentId;
 use dclutch_market::{
-    MarketCoreStateSeedsV2, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesCoreActionV1,
-    SeriesCoreRequestV1,
+    MarketCoreStateSeedsV2, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading::series::replay::TicketStateSeedsV3;
 use dclutch_trading_sbf::series::{
+    account_profile_v4::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
     artifacts_v3::{
         SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3, SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3,
     },
@@ -50,7 +43,7 @@ const CORE_FOUND_PREFIX_WIDTH: usize = 48;
 const CORE_FOUND_SUFFIX_WIDTH: usize = 13;
 
 const _: () = assert!(CORE_FOUND_WIDTH == CORE_FOUND_PREFIX_WIDTH + CORE_FOUND_SUFFIX_WIDTH);
-const _: () = assert!(CORE_OPEN_WIDTH == 37);
+const _: () = assert!(CORE_OPEN_WIDTH == 39);
 
 /// Populate Core's two immutable fixed route ranges.  Dynamic FundingState
 /// coordinates are intentionally absent: the V4 profile alone owns their
@@ -58,7 +51,7 @@ const _: () = assert!(CORE_OPEN_WIDTH == 37);
 pub(crate) fn populate_series_consume_core_routes_v1<'a>(
     input: &'a SeriesConsumeGeometryInputV1<'a>,
     children: SeriesConsumeChildRequestsV4<'_>,
-    roles: &mut [Option<SeriesConsumeRoleSourceV1<'a>>; 161],
+    roles: &mut [Option<SeriesConsumeRoleSourceV1<'a>>; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
 ) -> Result<()> {
     let request = SeriesCoreRequestV1::decode(children.core)
         .map_err(|_| Error::new("Series Consume Core request refused decode"))?;
@@ -76,11 +69,8 @@ struct CoreConsumeFactsV1<'a> {
     root: SeriesConsumeRoleSourceV1<'a>,
     ticket_state: Pubkey,
     activation_cache: Pubkey,
-    projected_replay: Pubkey,
     permit: Pubkey,
     founder: Pubkey,
-    aggregate_width: usize,
-    position_width: usize,
 }
 
 impl<'a> CoreConsumeFactsV1<'a> {
@@ -171,11 +161,6 @@ impl<'a> CoreConsumeFactsV1<'a> {
                 "Series Consume projected Lock request did not join Core and Trading",
             ));
         }
-        let projected_replay = Pubkey::find_program_address(
-            &dclutch_custody::ProjectedCustodyStateSeedsV2::from_request(lock).as_slices(),
-            &input.custody,
-        )
-        .0;
         let physical = input.preprofile.physical();
         if claims.release_set() != request.release_set().to_bytes()
             || claims.market() != market.to_bytes()
@@ -195,16 +180,6 @@ impl<'a> CoreConsumeFactsV1<'a> {
                 "Series Consume Claims request did not join Core future physical owners",
             ));
         }
-        let aggregate_width = liability_basis_vector_width_v2(
-            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
-            claims.claim_count(),
-        )
-        .map_err(|_| Error::new("Series Consume Claims aggregate width refused"))?;
-        let position_width = liability_basis_vector_width_v2(
-            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-            claims.claim_count(),
-        )
-        .map_err(|_| Error::new("Series Consume Claims position width refused"))?;
         let activation_cache = Pubkey::find_program_address(
             &[
                 dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
@@ -219,24 +194,21 @@ impl<'a> CoreConsumeFactsV1<'a> {
             root,
             ticket_state,
             activation_cache,
-            projected_replay,
             permit: physical.permit,
             founder,
-            aggregate_width,
-            position_width,
         })
     }
 }
 
 fn populate_found_v1<'a>(
     input: &'a SeriesConsumeGeometryInputV1<'a>,
-    roles: &mut [Option<SeriesConsumeRoleSourceV1<'a>>; 161],
+    roles: &mut [Option<SeriesConsumeRoleSourceV1<'a>>; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
     facts: &CoreConsumeFactsV1<'a>,
 ) -> Result<()> {
     for local in 0..37 {
         let source = match local {
             0 => vacancy_v1("Series Core caller", facts.caller, 0)?,
-            1 => vacancy_v1("future M0 Core Market", facts.market, STATE_BYTES)?,
+            1 => vacancy_v1("future M0 Core Market", facts.market, 0)?,
             28 => final_source_v1("Rent sysvar", sysvar::rent::ID, sysvar::ID, None),
             _ => {
                 let m0_coordinate = if local < 28 { local } else { local - 1 };
@@ -288,37 +260,22 @@ fn populate_found_v1<'a>(
             source,
         )?;
     }
+    // The fixed Core suffix reuses the four Lock accounts.  Consume has two
+    // valid prestate phases: before Prepare those positions are canonical
+    // vacancies, while the post-Prepare frame observes final accounts.  The
+    // already-populated Lock representatives own that distinction, so copy
+    // their complete source form instead of manufacturing a second one here.
+    let projected_state = copied_lock_source_v1(roles, 6)?;
+    let projected_hoard = copied_lock_source_v1(roles, 12)?;
+    let escrow_vault = copied_lock_source_v1(roles, 13)?;
+    let custody_replay = copied_lock_source_v1(roles, 17)?;
     let physical = input.preprofile.physical();
     let suffix = [
-        vacancy_v1(
-            "Series founding permit",
-            facts.permit,
-            SERIES_FOUNDING_PERMIT_BYTES_V1,
-        )?,
-        final_source_v1(
-            "projected Custody state",
-            facts.projected_replay,
-            input.custody,
-            None,
-        ),
-        final_source_v1(
-            "projected Hoard vault",
-            Pubkey::new_from_array(physical.projected.hoard_vault),
-            Pubkey::new_from_array(physical.projected.token_program),
-            None,
-        ),
-        final_source_v1(
-            "SeriesEscrow funding vault",
-            Pubkey::new_from_array(physical.projected.escrow_vault),
-            Pubkey::new_from_array(physical.projected.token_program),
-            None,
-        ),
-        final_source_v1(
-            "normal Custody replay",
-            physical.normal_replay,
-            input.custody,
-            None,
-        ),
+        vacancy_v1("Series founding permit", facts.permit, 0)?,
+        projected_state,
+        projected_hoard,
+        escrow_vault,
+        custody_replay,
         final_source_v1(
             "Claims program",
             input.claims,
@@ -343,21 +300,9 @@ fn populate_found_v1<'a>(
             bpf_loader_upgradeable::ID,
             None,
         ),
-        vacancy_v1(
-            "Claims aggregate",
-            physical.claims.aggregate,
-            facts.aggregate_width,
-        )?,
-        vacancy_v1(
-            "Claims position",
-            physical.claims.position,
-            facts.position_width,
-        )?,
-        vacancy_v1(
-            "Claims admission",
-            physical.claims.admission,
-            PROTOCOL_POSITION_ADMISSION_BYTES_V2,
-        )?,
+        vacancy_v1("Claims aggregate", physical.claims.aggregate, 0)?,
+        vacancy_v1("Claims position", physical.claims.position, 0)?,
+        vacancy_v1("Claims admission", physical.claims.admission, 0)?,
         final_source_v1("Series founder", facts.founder, system_program::ID, None),
     ];
     for (offset, source) in suffix.into_iter().enumerate() {
@@ -370,28 +315,32 @@ fn populate_found_v1<'a>(
     Ok(())
 }
 
+fn copied_lock_source_v1<'a>(
+    roles: &[Option<SeriesConsumeRoleSourceV1<'a>>; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
+    coordinate: usize,
+) -> Result<SeriesConsumeRoleSourceV1<'a>> {
+    roles
+        .get(coordinate)
+        .and_then(Option::as_ref)
+        .cloned()
+        .ok_or_else(|| Error::new("Series Consume Core suffix lacked Lock representative"))
+}
+
 fn populate_open_v1<'a>(
     input: &'a SeriesConsumeGeometryInputV1<'a>,
-    roles: &mut [Option<SeriesConsumeRoleSourceV1<'a>>; 161],
+    roles: &mut [Option<SeriesConsumeRoleSourceV1<'a>>; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
     facts: &CoreConsumeFactsV1<'a>,
 ) -> Result<()> {
-    // The source program currently contains a newer 39-account implementation,
-    // but this selected V4 artifact pins the 37-account route.  Do not silently
-    // widen the source-owned ABI from the host-side mapper.
-    if CORE_OPEN_WIDTH != 37 {
+    if CORE_OPEN_WIDTH != 39 {
         return Err(Error::new(
-            "Series Consume selected Core Open ABI was not 37 accounts",
+            "Series Consume Core Open ABI was not 39 accounts",
         ));
     }
     let physical = input.preprofile.physical();
     let values = [
         vacancy_v1("Series Core caller", facts.caller, 0)?,
-        vacancy_v1("future M0 Core Market", facts.market, STATE_BYTES)?,
-        vacancy_v1(
-            "Series founding permit",
-            facts.permit,
-            SERIES_FOUNDING_PERMIT_BYTES_V1,
-        )?,
+        vacancy_v1("future M0 Core Market", facts.market, 0)?,
+        vacancy_v1("Series founding permit", facts.permit, 0)?,
         m0_source_v1(
             input,
             Pubkey::new_from_array(physical.projected.rent_credit),
@@ -492,23 +441,13 @@ fn populate_open_v1<'a>(
             Pubkey::new_from_array(physical.projected.token_program),
             None,
         ),
-        vacancy_v1(
-            "Claims aggregate",
-            physical.claims.aggregate,
-            facts.aggregate_width,
-        )?,
-        vacancy_v1(
-            "Claims position",
-            physical.claims.position,
-            facts.position_width,
-        )?,
-        vacancy_v1(
-            "Claims admission",
-            physical.claims.admission,
-            PROTOCOL_POSITION_ADMISSION_BYTES_V2,
-        )?,
+        vacancy_v1("Claims aggregate", physical.claims.aggregate, 0)?,
+        vacancy_v1("Claims position", physical.claims.position, 0)?,
+        vacancy_v1("Claims admission", physical.claims.admission, 0)?,
         final_source_v1("Clock sysvar", sysvar::clock::ID, sysvar::ID, None),
         final_source_v1("Rent sysvar", sysvar::rent::ID, sysvar::ID, None),
+        copied_lock_source_v1(roles, 123)?,
+        copied_lock_source_v1(roles, 124)?,
     ];
     if values.len() != CORE_OPEN_WIDTH {
         return Err(Error::new("Series Consume Core Open source frame drifted"));

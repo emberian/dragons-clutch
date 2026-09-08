@@ -2455,6 +2455,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "bincode",
+ "dclutch-chain-bundle-builder",
  "dclutch-claims",
  "dclutch-claims-sbf",
  "dclutch-core-contract",

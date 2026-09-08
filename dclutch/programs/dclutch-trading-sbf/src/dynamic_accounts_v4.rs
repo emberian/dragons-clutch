@@ -225,11 +225,11 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("profile");
         let span_counts = [1_u32];
         let physical = physical_accounts(profile, span_counts[0]);
-        assert_eq!(physical.len(), 69);
+        assert_eq!(physical.len(), 71);
         let view = PhysicalAccountsV4::new(&[], &physical);
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
-        assert_eq!(logical.len(), 162);
+        assert_eq!(logical.len(), 165);
         let logical_at = |coordinate: usize| {
             logical
                 .get(coordinate)

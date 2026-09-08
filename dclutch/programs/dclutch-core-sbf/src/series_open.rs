@@ -6,8 +6,8 @@ use dclutch_claims::founding_v5::ClaimsFoundingReceiptV5;
 use dclutch_market::capability_program::{CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1};
 use dclutch_market::{
     CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase, Readiness, Role,
-    SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, STATE_BYTES, SeriesCoreAckV1, SeriesCoreActionV1,
-    SeriesCoreRequestV1, SeriesFoundingPermitV1,
+    SERIES_OPEN_ACCOUNT_COUNT_V1, SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, STATE_BYTES,
+    SeriesCoreAckV1, SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitV1,
 };
 use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
@@ -55,13 +55,6 @@ use crate::{
 pub const SERIES_OPEN_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
     MarketAdmissionV1::prestates(&[(Phase::Founding, Readiness::Prepaid)]);
 
-/// Exact final-Series-Open account count.
-///
-/// Thirty-nine since the failure escrow was seated at founding (decision 0025
-/// item 2): the Claims founding receipt this stage re-verifies commits to five
-/// Claims accounts rather than three. Both escrow accounts are READ-ONLY here
-/// and are appended after the two sysvars, so every existing index is unmoved.
-pub const SERIES_OPEN_ACCOUNT_COUNT_V1: usize = 39;
 struct SeriesOpenAccounts<'accounts, 'info> {
     caller: &'accounts AccountInfo<'info>,
     market: &'accounts AccountInfo<'info>,

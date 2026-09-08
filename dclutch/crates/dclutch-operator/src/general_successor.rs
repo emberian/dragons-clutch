@@ -19,15 +19,16 @@ use std::{
 };
 
 use crate::general_hot_v3::{
-    CheckedGeneralHotReleaseV3, GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3, GENERAL_HOT_HEAP_FRAME_BYTES_V3,
-    GeneralHotArtifactDigestsV3, GeneralHotStateV3, GeneralObservedAccountMetaV3,
-    GeneralSuccessorInstructionV5, GeneralSuccessorTransactionPlanV0,
-    build_general_successor_instruction_v5, canonical_general_lookup_addresses_v3,
-    compile_general_successor_v0, general_artifact_bytes_from_hot_state_v3,
+    CheckedGeneralHotReleaseV3, GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3, GeneralHotArtifactDigestsV3,
+    GeneralHotStateV3, GeneralObservedAccountMetaV3, GeneralSuccessorInstructionV5,
+    GeneralSuccessorTransactionPlanV0, build_general_successor_instruction_v5,
+    canonical_general_lookup_addresses_v3, compile_general_successor_v0,
+    general_artifact_bytes_from_hot_state_v3,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_market::capability_program::hot_v3::{
-    HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HotExecutionEnvelopeV3,
+    GENERAL_HOT_HEAP_FRAME_BYTES_V3, HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HotExecutionEnvelopeV3,
 };
 use dclutch_market::execution_strategy::shadow_digest_v3::family_request_digest_v3;
 use dclutch_trading::general::artifacts_v3::GeneralArtifactSelectionV3;
@@ -240,6 +241,10 @@ struct GeneralSuccessorRouteWireV1 {
     artifact_selection: ArtifactSelectionWireV1,
     fixed_accounts: Vec<RouteMetaWireV1>,
     strategy_accounts: Vec<RouteMetaWireV1>,
+    /// The accelerator-owned, writable output page under the admitted
+    /// `OutputPageV3` transport.  It is separate from `strategy_accounts` so
+    /// the route grammar cannot accidentally make a caller authority writable.
+    output_page_account: Option<RouteMetaWireV1>,
     runtime_suffix_accounts: Vec<RouteMetaWireV1>,
 }
 
@@ -268,6 +273,7 @@ pub struct GeneralSuccessorRouteV1 {
     artifact_selection: GeneralArtifactSelectionV3,
     fixed_accounts: Vec<RouteMetaV1>,
     strategy_accounts: Vec<RouteMetaV1>,
+    output_page_account: Option<RouteMetaV1>,
     runtime_suffix_accounts: Vec<RouteMetaV1>,
 }
 
@@ -434,6 +440,10 @@ pub fn parse_route_v1(bytes: &[u8]) -> Result<GeneralSuccessorRouteV1> {
         ));
     }
     let strategy_accounts = parse_metas_v1(wire.strategy_accounts, "strategyAccounts", false)?;
+    let output_page_account = wire
+        .output_page_account
+        .map(|value| parse_meta_v1(value, "outputPageAccount", false))
+        .transpose()?;
     // THE RUNTIME SUFFIX IS THE ONE PLACE THE SYSTEM PROGRAM CAN APPEAR.
     //
     // Every General AccountProfile declares a System-program runtime
@@ -488,6 +498,7 @@ pub fn parse_route_v1(bytes: &[u8]) -> Result<GeneralSuccessorRouteV1> {
         artifact_selection,
         fixed_accounts,
         strategy_accounts,
+        output_page_account,
         runtime_suffix_accounts,
     };
     for (index, meta) in route.fixed_accounts.iter().enumerate() {
@@ -506,11 +517,20 @@ pub fn parse_route_v1(bytes: &[u8]) -> Result<GeneralSuccessorRouteV1> {
             "General strategy accounts must all be read-only nonsigners",
         ));
     }
+    if route
+        .output_page_account
+        .is_some_and(|meta| !meta.is_writable || meta.is_signer)
+    {
+        return Err(Error::new(
+            "General output page must be the writable nonsigner strategy tail",
+        ));
+    }
     if route.payer == route.lookup_table
         || route
             .fixed_accounts
             .iter()
             .chain(&route.strategy_accounts)
+            .chain(route.output_page_account.iter())
             .chain(&route.runtime_suffix_accounts)
             .any(|meta| meta.address == route.lookup_table)
     {
@@ -531,18 +551,25 @@ fn parse_metas_v1(
         .into_iter()
         .enumerate()
         .map(|(index, value)| {
-            let field = format!("{field}[{index}].address");
-            Ok(RouteMetaV1 {
-                address: if admits_system_program {
-                    account_address_v1(&value.address, &field)?
-                } else {
-                    address_v1(&value.address, &field)?
-                },
-                is_signer: value.is_signer,
-                is_writable: value.is_writable,
-            })
+            parse_meta_v1(value, &format!("{field}[{index}]"), admits_system_program)
         })
         .collect()
+}
+
+fn parse_meta_v1(
+    value: RouteMetaWireV1,
+    field: &str,
+    admits_system_program: bool,
+) -> Result<RouteMetaV1> {
+    Ok(RouteMetaV1 {
+        address: if admits_system_program {
+            account_address_v1(&value.address, &format!("{field}.address"))?
+        } else {
+            address_v1(&value.address, &format!("{field}.address"))?
+        },
+        is_signer: value.is_signer,
+        is_writable: value.is_writable,
+    })
 }
 
 fn action_v1(value: &str) -> Result<Action> {
@@ -666,6 +693,7 @@ fn snapshot_addresses_v1(route: &GeneralSuccessorRouteV1) -> Result<Vec<Pubkey>>
         .fixed_accounts
         .iter()
         .chain(&route.strategy_accounts)
+        .chain(route.output_page_account.iter())
         .chain(&route.runtime_suffix_accounts)
         .map(|meta| meta.address)
         .chain(core::iter::once(route.lookup_table))
@@ -748,10 +776,14 @@ pub fn acquire_route_v1(
         .get(&route.lookup_table)
         .cloned()
         .ok_or_else(|| Error::new("snapshot omitted the lookup table"))?;
+    let mut strategy_accounts = project(&route.strategy_accounts)?;
+    if let Some(output_page) = route.output_page_account {
+        strategy_accounts.extend(project(core::slice::from_ref(&output_page))?);
+    }
     Ok((
         GeneralHotStateV3 {
             fixed_accounts: project(&route.fixed_accounts)?,
-            strategy_accounts: project(&route.strategy_accounts)?,
+            strategy_accounts,
             runtime_suffix_accounts: project(&route.runtime_suffix_accounts)?,
             release_set: route.release_set,
             generation: route.generation,
@@ -1292,6 +1324,26 @@ mod tests {
                 &serde_json::to_vec(&writable_strategy).expect("writable strategy JSON")
             )
             .is_err()
+        );
+
+        let mut output_page = route_value();
+        output_page["outputPageAccount"] = json!({
+            "address": key(80),
+            "isSigner": false,
+            "isWritable": true,
+        });
+        let parsed =
+            parse_route_v1(&serde_json::to_vec(&output_page).expect("OutputPageV3 route JSON"))
+                .expect("the typed writable OutputPageV3 tail is admitted");
+        assert_eq!(
+            snapshot_addresses_v1(&parsed).expect("snapshot").len(),
+            49,
+            "the page joins the atomic observation rather than becoming an unobserved append"
+        );
+        output_page["outputPageAccount"]["isWritable"] = json!(false);
+        assert!(
+            parse_route_v1(&serde_json::to_vec(&output_page).expect("readonly page JSON")).is_err(),
+            "the OutputPageV3 tail keeps its sole writable privilege"
         );
 
         let mut aliased_lookup = route_value();

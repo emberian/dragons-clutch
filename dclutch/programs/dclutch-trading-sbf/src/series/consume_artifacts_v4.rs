@@ -127,7 +127,7 @@ const _: () = assert!(SERIES_CONSUME_BASE_EFFECT_BYTES_V4 == 3_432);
 // declares only when the proof it borrows exists.
 const _: () = assert!(series_consume_effect_bytes_v4(1) == 3_472);
 const _: () = assert!(series_consume_effect_bytes_v4(2) == 3_504);
-const _: () = assert!(OPEN_ACCOUNT_START + SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3 == 161);
+const _: () = assert!(OPEN_ACCOUNT_START + SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3 == 164);
 
 /// Exact child requests owned by the canonical child codecs.
 ///

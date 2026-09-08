@@ -6,7 +6,7 @@ use dclutch_accelerator_sbf::general::GeneralAcceleratorSbfErrorV3;
 use dclutch_core_contract::ContentId;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_market::capability_program::hot_v3::{
-    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3,
+    GENERAL_HOT_HEAP_FRAME_BYTES_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_INSTRUCTIONS_ACCOUNT_V3, ADMITTED_RUNTIME_ACCOUNTS_START_V3,
@@ -573,13 +573,13 @@ async fn submit(
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     // The accelerator authenticates that the heap it runs in was actually
     // granted, so a transaction that never asks for one is refused with
-    // `InvalidTopLevelInstruction` -- correctly. This file used to send the
+    // `HeapFrameNotRequested` -- correctly. This file used to send the
     // Trading instruction alone and then assert the execution committed, which
     // is two contradictory claims; it grants the heap now, as every real caller
     // and `lifecycle.rs` already did.
     let transaction = Transaction::new_signed_with_payer(
         &[
-            ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+            ComputeBudgetInstruction::request_heap_frame(GENERAL_HOT_HEAP_FRAME_BYTES_V3),
             instruction,
         ],
         Some(&context.payer.pubkey()),

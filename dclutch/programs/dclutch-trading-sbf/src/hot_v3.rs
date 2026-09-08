@@ -749,7 +749,22 @@ fn log_first_data_length_disagreement_v1(
             solana_program::log::sol_log(
                 "dclutch-hot-why:data-length coordinate/expected/observed",
             );
-            solana_program::log::sol_log_64(coordinate as u64, expected, observed, 0, 0);
+            let prestate = match rule.prestate() {
+                AccountPrestateV2::Exact => 0,
+                AccountPrestateV2::LifecycleBound => 1,
+                AccountPrestateV2::AdapterAuthenticatedVariableData => 2,
+                AccountPrestateV2::AdapterAuthenticatedVariableDataAlias => 3,
+                AccountPrestateV2::AuthenticatedRouteAlias => 4,
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData => 5,
+            };
+            let key = account.key_bytes();
+            solana_program::log::sol_log_64(
+                coordinate as u64,
+                expected,
+                observed,
+                prestate,
+                (u64::from(key[0]) << 8) | u64::from(key[1]),
+            );
             return;
         }
     }

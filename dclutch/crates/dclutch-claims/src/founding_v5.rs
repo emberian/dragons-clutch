@@ -9,9 +9,12 @@
 //! source-to-Hoard effect before constructing this allocation-free value.
 //! Custody owns token movement and replay; Claims owns liabilities.
 
+use crate::frame_spec_v1::FramePrivilegesV1;
+
 /// Exact fixed founding request width.
 pub const CLAIMS_FOUNDING_REQUEST_BYTES_V5: usize = 832;
-/// Exact account count of the sole Claims founding physical frame.
+/// Exact account count of the sole Claims founding physical frame in
+/// EffectProgram coordinate units.
 ///
 /// V6 is the frame that SEATS THE FAILURE ESCROW (decision 0025 item 2). It
 /// adds exactly two accounts to V5's thirty-one, both appended so every
@@ -24,7 +27,78 @@ pub const CLAIMS_FOUNDING_REQUEST_BYTES_V5: usize = 832;
 /// categorical founding presents the same two accounts, leaves them vacant,
 /// and produces a byte-identical aggregate, Position, admission, request and
 /// receipt.
-pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_V6: usize = 33;
+pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_U16_V6: u16 = 33;
+/// Exact V6 founding-frame width for slice and account-vector APIs.
+///
+/// The sole narrowing boundary is the owner-defined u16 wire value above.
+/// This widening is lossless in every supported target and lets callers with
+/// usize slice geometry use the same Claims-owned count.
+pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_V6: usize = CLAIMS_FOUNDING_ACCOUNT_COUNT_U16_V6 as usize;
+const _: () = assert!(CLAIMS_FOUNDING_ACCOUNT_COUNT_V6 == 33);
+
+/// Stable refusal from a Founding V6 frame-coordinate lookup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClaimsFoundingFrameErrorV6 {
+    /// The coordinate is outside Founding V6's exact physical frame.
+    InvalidCoordinate,
+}
+
+/// Exact Founding V6 physical-frame privilege metadata.
+///
+/// This is the Claims-owned source for every signer, writable, and executable
+/// bit in the fixed founding frame. Trading may gather a physical account that
+/// an earlier child route needed writable, but must project it back to this
+/// frame before the Claims CPI; its earlier representative privilege never
+/// grants this child a write capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimsFoundingFrameV6;
+
+impl ClaimsFoundingFrameV6 {
+    /// Exact child-frame width, excluding the Claims callee appended by Trading.
+    pub const ACCOUNT_COUNT: usize = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6;
+    /// Trading's derived caller authority.
+    pub const AUTHORITY: usize = 0;
+    /// Core's one-shot founding permit.
+    pub const PERMIT: usize = 1;
+    /// Claims aggregate allocated by founding.
+    pub const AGGREGATE: usize = 2;
+    /// Founder's Claims Position allocated by founding.
+    pub const POSITION: usize = 3;
+    /// Founder's Position admission allocated by founding.
+    pub const ADMISSION: usize = 4;
+    /// Custody source observed after the preceding Lock.
+    pub const FUNDING_SOURCE: usize = 5;
+    /// Custody Hoard observed after the preceding Lock.
+    pub const HOARD: usize = 6;
+    /// Custody replay observed after the preceding Lock.
+    pub const CUSTODY_REPLAY: usize = 7;
+    /// Claims RentCredit consumed by the three primary allocations.
+    pub const RENT_CREDIT: usize = 29;
+    /// Failure escrow Position appended by V6.
+    pub const ESCROW_POSITION: usize = 31;
+    /// Failure escrow Position admission appended by V6.
+    pub const ESCROW_ADMISSION: usize = 32;
+
+    /// Exact privileges at one Founding V6 coordinate.
+    pub const fn privileges(
+        index: usize,
+    ) -> core::result::Result<FramePrivilegesV1, ClaimsFoundingFrameErrorV6> {
+        if index >= Self::ACCOUNT_COUNT {
+            return Err(ClaimsFoundingFrameErrorV6::InvalidCoordinate);
+        }
+        let privileges = match index {
+            Self::AUTHORITY => FramePrivilegesV1::new(true, false, false),
+            Self::AGGREGATE
+            | Self::POSITION
+            | Self::ADMISSION
+            | Self::ESCROW_POSITION
+            | Self::ESCROW_ADMISSION => FramePrivilegesV1::new(false, true, false),
+            16 | 19 | 20 | 22 | 24 | 26 | 30 => FramePrivilegesV1::new(false, false, true),
+            _ => FramePrivilegesV1::new(false, false, false),
+        };
+        Ok(privileges)
+    }
+}
 
 /// How many accounts the failure-escrow seating APPENDED to the founding frame.
 ///
@@ -1175,6 +1249,45 @@ mod tests {
         assert_eq!(
             ClaimsFoundingReceiptV5::decode(&bytes),
             Err(ClaimsFoundingErrorV5::NonCanonical)
+        );
+    }
+
+    #[test]
+    fn founding_v6_frame_owns_exact_child_privileges() {
+        for coordinate in 0..ClaimsFoundingFrameV6::ACCOUNT_COUNT {
+            let privileges = ClaimsFoundingFrameV6::privileges(coordinate)
+                .expect("coordinate is inside Founding V6");
+            let writable = matches!(
+                coordinate,
+                ClaimsFoundingFrameV6::AGGREGATE
+                    | ClaimsFoundingFrameV6::POSITION
+                    | ClaimsFoundingFrameV6::ADMISSION
+                    | ClaimsFoundingFrameV6::ESCROW_POSITION
+                    | ClaimsFoundingFrameV6::ESCROW_ADMISSION
+            );
+            assert_eq!(privileges.writable(), writable, "coordinate {coordinate}");
+            assert_eq!(
+                privileges.signer(),
+                coordinate == ClaimsFoundingFrameV6::AUTHORITY,
+                "coordinate {coordinate}"
+            );
+        }
+        for coordinate in [
+            ClaimsFoundingFrameV6::PERMIT,
+            ClaimsFoundingFrameV6::FUNDING_SOURCE,
+            ClaimsFoundingFrameV6::HOARD,
+            ClaimsFoundingFrameV6::CUSTODY_REPLAY,
+            ClaimsFoundingFrameV6::RENT_CREDIT,
+        ] {
+            assert_eq!(
+                ClaimsFoundingFrameV6::privileges(coordinate),
+                Ok(FramePrivilegesV1::new(false, false, false)),
+                "Claims Founding must only read coordinate {coordinate}"
+            );
+        }
+        assert_eq!(
+            ClaimsFoundingFrameV6::privileges(ClaimsFoundingFrameV6::ACCOUNT_COUNT),
+            Err(ClaimsFoundingFrameErrorV6::InvalidCoordinate)
         );
     }
 }

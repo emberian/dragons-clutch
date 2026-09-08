@@ -47,6 +47,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer as system_transfer};
 
 use crate::TradingSbfError;
+use crate::hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint;
 
 use super::{
     HotFrameV3, HotRoleAuthenticationV3, StaticRegisterOwnershipV5, account,
@@ -85,6 +86,7 @@ pub fn process_capability_seal_v1(
 ) -> Result<(), ProgramError> {
     let request =
         CapabilitySealRequestV1::decode(instruction_data).map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("seal-request");
     if accounts.len() != SEAL_ACCOUNT_COUNT_V1 {
         return Err(TradingSbfError::Content.into());
     }
@@ -98,8 +100,10 @@ pub fn process_capability_seal_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
+    hot_cu_checkpoint!("seal-frame");
     let frame = HotFrameV3::parse_seal(program_id, accounts)?;
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("seal-parsed");
 
     // The Market and the capability root are authenticated exactly as a hot
     // action authenticates them, because the only fact this act needs from them
@@ -119,6 +123,7 @@ pub fn process_capability_seal_v1(
         )
         .map_err(|_| TradingSbfError::Root)?
     };
+    hot_cu_checkpoint!("seal-root-header");
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(instruction_data.len()).map_err(|_| TradingSbfError::Content)?,
         root_header.release_set().to_bytes(),
@@ -135,6 +140,7 @@ pub fn process_capability_seal_v1(
         &market,
         HotRoleAuthenticationV3::ReauthenticateRegistry,
     )?;
+    hot_cu_checkpoint!("seal-root");
 
     let key = CapabilitySealKeyV1::new(
         PROGRAM_SCHEMA_ID_V4,
@@ -159,8 +165,10 @@ pub fn process_capability_seal_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
+    hot_cu_checkpoint!("seal-address");
 
     let rows = validate_descriptor_closure_v1(&frame, key, request.action())?;
+    hot_cu_checkpoint!("seal-closure");
 
     let space = u64::try_from(CAPABILITY_SEAL_BYTES_V1).map_err(|_| TradingSbfError::Commit)?;
     let minimum = rent.minimum_balance(CAPABILITY_SEAL_BYTES_V1);
@@ -578,6 +586,7 @@ fn validate_descriptor_closure_v1<'info>(
     key: CapabilitySealKeyV1,
     action: u32,
 ) -> Result<[SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1], ProgramError> {
+    hot_cu_checkpoint!("seal-closure-start");
     let descriptor_data = borrow_finalized_record(
         *frame,
         frame.descriptor_raw,
@@ -589,6 +598,7 @@ fn validate_descriptor_closure_v1<'info>(
         return Err(TradingSbfError::Content.into());
     }
     let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
+    hot_cu_checkpoint!("seal-descriptor");
 
     let lifecycle_data = borrow_finalized_record(
         *frame,
@@ -609,6 +619,7 @@ fn validate_descriptor_closure_v1<'info>(
         &lifecycle_data,
     )
     .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("seal-lifecycle");
 
     let account_profile_data = borrow_finalized_record(
         *frame,
@@ -653,6 +664,7 @@ fn validate_descriptor_closure_v1<'info>(
             .validate_account_profile_join_for_action(account_profile, action)
             .map_err(|_| TradingSbfError::Content)?;
     }
+    hot_cu_checkpoint!("seal-profile-join");
 
     let request_profile_data = borrow_finalized_record(
         *frame,
@@ -662,6 +674,7 @@ fn validate_descriptor_closure_v1<'info>(
         descriptor.request_profile().program().to_bytes(),
     )?;
     let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
+    hot_cu_checkpoint!("seal-request-profile");
 
     let transition_data = borrow_finalized_record(
         *frame,
@@ -675,6 +688,7 @@ fn validate_descriptor_closure_v1<'info>(
     }
     let transition =
         TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("seal-transition");
 
     let effect_data = borrow_finalized_record(
         *frame,
@@ -686,6 +700,7 @@ fn validate_descriptor_closure_v1<'info>(
     // Decoded for its verdict only; the seal records that this executable
     // accepted these bytes, not the view it built from them.
     let _ = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
+    hot_cu_checkpoint!("seal-effect");
 
     require_static_register_ownership_v5(StaticRegisterOwnershipV5 {
         account_profile,
@@ -694,6 +709,7 @@ fn validate_descriptor_closure_v1<'info>(
         request: request_profile,
         transition,
     })?;
+    hot_cu_checkpoint!("seal-static-ownership");
 
     Ok([
         seal_row_v1(

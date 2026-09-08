@@ -74,6 +74,7 @@
 
 use std::path::PathBuf;
 
+use dclutch_chain_bundle_builder::admitted::admitted_output_page_address_v1;
 use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
@@ -109,8 +110,8 @@ use dclutch_market::execution_strategy::{
     },
     shadow_digest_v3::{AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1},
     v2::{
-        BankTransportV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
-        StrategyDispositionV2, classify_bank_transport_v2,
+        AcceleratorTransportProfileV2, BankTransportV2, ExecutionStrategyCertificateV2,
+        ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
     },
 };
 use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
@@ -1151,11 +1152,51 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
     );
     let invocation_count = admitted_invocation_count_v1(session_action, tail_count)?;
     let strategy_account_count = ADMITTED_STRATEGY_EVIDENCE_COUNT_V3 + invocation_count;
+    let output_page = match transport {
+        AcceleratorTransportProfileV2::OutputPageV3 => {
+            Some(admitted_output_page_address_v1(&accelerator, &root))
+        }
+        AcceleratorTransportProfileV2::ChunkedBankV2
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => None,
+    };
+    // OutputPageV3 is the one writable account between the admitted caller
+    // span and AccountProfile's runtime slice.  It is an accelerator fact
+    // derived by the bundle builder and then observed here; a route never
+    // accepts a page address from a command line or fabricates an empty page.
+    let output_page_floor = rpc.finalized_slot()?;
+    let output_page_observed = output_page
+        .map(|address| {
+            rpc.finalized_accounts(&[address], output_page_floor)
+                .and_then(|(_, accounts)| {
+                    accounts.into_iter().next().flatten().ok_or_else(|| {
+                        refusal(
+                            "session/output-page",
+                            format!("missing finalized accelerator OutputPageV3 {address}"),
+                        )
+                    })
+                })
+                .and_then(|account| {
+                    if account.owner != accelerator || account.executable {
+                        Err(refusal(
+                            "session/output-page",
+                            format!(
+                                "OutputPageV3 {address} is owner {} executable {}; expected nonexecutable accelerator-owned account {accelerator}",
+                                account.owner, account.executable
+                            ),
+                        ))
+                    } else {
+                        Ok((address, account))
+                    }
+                })
+        })
+        .transpose()?;
     let runtime_suffix_count = fixed_count
         .checked_sub(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)
         .ok_or_else(|| Error::new("runtime suffix width".to_string()))?;
-    let top_level_count =
-        HOT_FIXED_ACCOUNT_COUNT_V3 + strategy_account_count + runtime_suffix_count;
+    let top_level_count = HOT_FIXED_ACCOUNT_COUNT_V3
+        + strategy_account_count
+        + usize::from(output_page_observed.is_some())
+        + runtime_suffix_count;
 
     // THE CALLER-AUTHORITY SPAN, DERIVED BEFORE ANYTHING REPORTS ON IT.
     //
@@ -1350,6 +1391,14 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
         "productOutcomeCount": tail_count,
         "transportProfile": format!("{transport:?}"),
         "acceleratorInvocationCount": invocation_count,
+        "outputPage": output_page_observed.as_ref().map(|(address, account)| json!({
+            "address": address.to_string(),
+            "owner": account.owner.to_string(),
+            "bytes": account.data.len(),
+            "lamports": account.lamports,
+            "executable": account.executable,
+            "provenance": "admitted_output_page_address_v1(accelerator, root), then finalized RPC observation",
+        })),
         "callerAuthority": {
             "parentRequestDigest": hex(parent_request_digest.as_bytes()),
             "parentRequestDigestIsProbe": caller_authority_digest_is_probe,
@@ -1389,6 +1438,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
         "frame": {
             "fixedAccounts": HOT_FIXED_ACCOUNT_COUNT_V3,
             "strategyAccounts": strategy_account_count,
+            "outputPageAccounts": usize::from(output_page_observed.is_some()),
             "runtimeSuffixAccounts": runtime_suffix_count,
             "topLevelAccounts": top_level_count,
             "acceleratorCpiAccounts": ADMITTED_RUNTIME_ACCOUNTS_START_V3 + fixed_count,
@@ -1643,6 +1693,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
                 config: entry.config_id().to_bytes(),
                 fixed: fixed.clone(),
                 strategy,
+                output_page: output_page_observed.as_ref().map(|(address, _)| *address),
                 runtime_suffix,
             })?;
             // THE PRODUCER CLOSES ITS OWN LOOP BEFORE IT WRITES.
@@ -2035,6 +2086,9 @@ struct RouteInputV1 {
     fixed: Vec<Pubkey>,
     /// The admitted-AOT evidence records followed by the caller authorities.
     strategy: Vec<Pubkey>,
+    /// The separately typed writable OutputPageV3 tail, if the selected
+    /// transport declares one.
+    output_page: Option<Pubkey>,
     /// The packed AccountProfile representatives after the five injected ones.
     runtime_suffix: Vec<RouteRuntimeAccountV1>,
 }
@@ -2079,6 +2133,7 @@ fn route_document_v1(input: &RouteInputV1) -> Result<Value> {
             .fixed
             .iter()
             .chain(&input.strategy)
+            .chain(input.output_page.iter())
             .chain(input.runtime_suffix.iter().map(|value| &value.address))
             .any(|address| *address == input.lookup_table)
     {
@@ -2122,6 +2177,9 @@ fn route_document_v1(input: &RouteInputV1) -> Result<Value> {
             .iter()
             .map(|address| route_meta_json_v1(*address, false, false))
             .collect::<Vec<_>>(),
+        "outputPageAccount": input
+            .output_page
+            .map(|address| route_meta_json_v1(address, false, true)),
         "runtimeSuffixAccounts": input
             .runtime_suffix
             .iter()
@@ -2424,6 +2482,7 @@ mod tests {
             strategy: (0..12)
                 .map(|index| key(u8::try_from(index).expect("strategy fits a byte") + 100))
                 .collect(),
+            output_page: None,
             runtime_suffix: vec![
                 RouteRuntimeAccountV1 {
                     address: key(150),
@@ -2473,7 +2532,8 @@ mod tests {
     /// that survives both is a document the producer can be handed.
     #[test]
     fn an_emitted_route_round_trips_through_the_parser_and_the_projection() {
-        let input = route_input_v1();
+        let mut input = route_input_v1();
+        input.output_page = Some(Pubkey::new_from_array([199; 32]));
         let document = route_document_v1(&input).expect("emit");
         let encoded = format!(
             "{}\n",
@@ -2483,9 +2543,9 @@ mod tests {
         assert_eq!(route.minimum_finalized_slot(), input.minimum_finalized_slot);
 
         let addresses = route.snapshot_addresses().expect("snapshot addresses");
-        // 39 fixed + 12 strategy + 4 runtime suffix + the lookup table, all
-        // distinct by construction.
-        assert_eq!(addresses.len(), HOT_FIXED_ACCOUNT_COUNT_V3 + 12 + 4 + 1);
+        // 39 fixed + 12 readonly strategy + one typed writable output page +
+        // 4 runtime suffix + lookup table, all distinct by construction.
+        assert_eq!(addresses.len(), HOT_FIXED_ACCOUNT_COUNT_V3 + 12 + 1 + 4 + 1);
         let observed = addresses
             .iter()
             .map(|key| observed_at(*key, input.minimum_finalized_slot))
@@ -2513,8 +2573,13 @@ mod tests {
             assert_eq!(value.is_writable, index == HOT_ROOT_ACCOUNT_V3);
         }
         for (index, value) in state.strategy_accounts.iter().enumerate() {
-            assert_eq!(value.account.key, input.strategy[index]);
-            assert!(!value.is_signer && !value.is_writable);
+            if index == input.strategy.len() {
+                assert_eq!(Some(value.account.key), input.output_page);
+                assert!(!value.is_signer && value.is_writable);
+            } else {
+                assert_eq!(value.account.key, input.strategy[index]);
+                assert!(!value.is_signer && !value.is_writable);
+            }
         }
         for (index, value) in state.runtime_suffix_accounts.iter().enumerate() {
             let expected = input.runtime_suffix[index];

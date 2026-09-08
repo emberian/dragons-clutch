@@ -12,9 +12,13 @@ use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
 use dclutch_market::{
-    Identity, SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
+    FOUND_ACCOUNT_COUNT_V3, Identity, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
+    SERIES_CONSUME_FOUND_SUFFIX_START_V1, SERIES_CORE_REQUEST_MAGIC_V1,
+    SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1, SERIES_OPEN_ACCOUNT_COUNT_V1,
+    SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreAckV1, SeriesCoreActionV1,
-    SeriesCoreRequestV1, SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
+    SeriesCoreFoundAckV2, SeriesCoreRequestV1, SeriesPermitExpiryRequestV1,
+    SeriesUnallocatedPermitExpiryRequestV1,
 };
 #[cfg(test)]
 use dclutch_market::{
@@ -24,6 +28,7 @@ use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading::series::request::{
     SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
 };
+use dclutch_trading::series::{AccountKeyV3, funding_list_id, ticket_content_id};
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3},
@@ -267,17 +272,14 @@ pub(crate) fn execute_core_route_v3<'info>(
             if buffers.producer != *core_program.key {
                 return Err(TradingSbfError::Transition.into());
             }
-            let receipt = SeriesCoreAckV1::decode(&buffers.returned)
-                .map_err(|_| TradingSbfError::ChildReceipt)?;
-            receipt
-                .validate_for(
-                    request,
-                    Identity::new(core_program.key.to_bytes())
-                        .map_err(|_| TradingSbfError::Transition)?,
-                    Identity::new(request_digest).map_err(|_| TradingSbfError::Transition)?,
-                    receipt.post_resource_digest(),
-                )
-                .map_err(|_| TradingSbfError::ChildReceipt)?;
+            validate_series_core_receipt_v2(
+                request,
+                request_digest,
+                core_program.key,
+                &buffers.accounts,
+                &buffers.returned,
+                prior_receipt,
+            )?;
             Ok(CoreRouteExecutionV3::ReturnedReceipt(
                 hashv(&[
                     CORE_EXECUTION_DIGEST_DOMAIN_V3,
@@ -600,7 +602,8 @@ fn prepare<'info>(
     let AuthenticatedCoreRequestV3::Series(request) = authenticated_request else {
         return Err(TradingSbfError::Content.into());
     };
-    let ticket = request.ticket().ok_or(TradingSbfError::Content)?.to_bytes();
+    project_series_core_child_privileges_v1(frame)?;
+    let ticket = ticket_content_id_from_found_frame_v1(frame)?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(parent.release_set).map_err(|_| TradingSbfError::Content)?,
         parent.market,
@@ -624,6 +627,175 @@ fn prepare<'info>(
         authority_seeds,
         bump,
     })
+}
+
+/// Replace the authenticated physical-union view with Core's exact child view.
+///
+/// The outer AccountProfile cannot encode per-route privilege reductions for
+/// an alias: it authenticates one physical representative carrying the union
+/// needed across Lock, Claims, Found, and Open. Core's native parsers reject
+/// that union for their readonly suffixes, so the Core-owned frame contract is
+/// applied after gathering and before child metas are emitted. This can only
+/// remove writable/signer bits; a native writable bit absent from the parent
+/// still refuses before CPI.
+fn project_series_core_child_privileges_v1(
+    frame: &mut [AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let width = frame.len();
+    for (local, account) in frame.iter_mut().enumerate() {
+        let writable = dclutch_market::series_core_child_writable_v1(width, local)
+            .ok_or(TradingSbfError::Content)?;
+        if writable && !account.is_writable {
+            return Err(TradingSbfError::Content.into());
+        }
+        account.is_writable = writable;
+        account.is_signer = false;
+    }
+    Ok(())
+}
+
+/// Derive the caller-PDA context from the finalized Ticket record Core reads.
+///
+/// The request's `ticket` coordinate is the mutable replay PDA.  Core's
+/// `SeriesConsumeAccounts::authenticate_trading_caller` instead derives the
+/// same context from the distinct finalized Ticket raw record at local 45.
+fn ticket_content_id_from_found_frame_v1(
+    frame: &[AccountInfo<'_>],
+) -> Result<[u8; 32], ProgramError> {
+    let ticket_raw = frame
+        .get(FOUND_ACCOUNT_COUNT_V3 + 8)
+        .ok_or(TradingSbfError::Content)?;
+    let bytes = ticket_raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(ticket_content_id(&bytes)
+        .map_err(|_| TradingSbfError::Content)?
+        .to_bytes())
+}
+
+/// Authenticate the action-specific Core return DTO against the child frame.
+///
+/// Consume Found returns the 328-byte V2 receipt.  Its funding span, permit,
+/// and post-resource digest are reconstructed from the post-CPI frame rather
+/// than accepted as receipt mirrors.  Open remains V1 while its native
+/// post-resource preimage is moved into this composition (tracked separately
+/// below); retaining the V1 shape here avoids accepting a Found V2 as Open.
+fn validate_series_core_receipt_v2(
+    request: SeriesCoreRequestV1,
+    request_digest: [u8; 32],
+    core_program: &Pubkey,
+    accounts_with_callee: &[AccountInfo<'_>],
+    returned: &[u8],
+    prior_receipt: Option<&[u8]>,
+) -> Result<(), ProgramError> {
+    let width = accounts_with_callee
+        .len()
+        .checked_sub(1)
+        .ok_or(TradingSbfError::ChildReceipt)?;
+    let accounts = accounts_with_callee
+        .get(..width)
+        .ok_or(TradingSbfError::ChildReceipt)?;
+    let expected_core =
+        Identity::new(core_program.to_bytes()).map_err(|_| TradingSbfError::Transition)?;
+    let expected_request =
+        Identity::new(request_digest).map_err(|_| TradingSbfError::Transition)?;
+    if width == SERIES_OPEN_ACCOUNT_COUNT_V1 {
+        let claims_receipt = prior_receipt.ok_or(TradingSbfError::ChildReceipt)?;
+        let market = accounts.get(1).ok_or(TradingSbfError::ChildReceipt)?;
+        let root = accounts.get(15).ok_or(TradingSbfError::ChildReceipt)?;
+        let ticket = accounts.get(16).ok_or(TradingSbfError::ChildReceipt)?;
+        let market_bytes = market
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::ChildReceipt)?;
+        let root_bytes = root
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::ChildReceipt)?;
+        let ticket_bytes = ticket
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::ChildReceipt)?;
+        let post = hashv(&[
+            SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1,
+            &market_bytes,
+            claims_receipt,
+            &root_bytes,
+            &ticket_bytes,
+        ])
+        .to_bytes();
+        drop(market_bytes);
+        drop(root_bytes);
+        drop(ticket_bytes);
+        let receipt =
+            SeriesCoreAckV1::decode(returned).map_err(|_| TradingSbfError::ChildReceipt)?;
+        receipt
+            .validate_for(
+                request,
+                expected_core,
+                expected_request,
+                Identity::new(post).map_err(|_| TradingSbfError::ChildReceipt)?,
+            )
+            .map_err(|_| TradingSbfError::ChildReceipt)?;
+        return Ok(());
+    }
+
+    let fixed = SERIES_CONSUME_FOUND_SUFFIX_START_V1
+        .checked_add(SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1)
+        .ok_or(TradingSbfError::ChildReceipt)?;
+    let funding_count = width
+        .checked_sub(fixed)
+        .ok_or(TradingSbfError::ChildReceipt)?;
+    if !(dclutch_market::SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1
+        ..=dclutch_market::SERIES_CONSUME_FOUND_MAXIMUM_FUNDING_COUNT_V1)
+        .contains(&funding_count)
+    {
+        return Err(TradingSbfError::ChildReceipt.into());
+    }
+    let permit = accounts
+        .get(SERIES_CONSUME_FOUND_SUFFIX_START_V1 + funding_count)
+        .ok_or(TradingSbfError::ChildReceipt)?;
+    let market = accounts.get(1).ok_or(TradingSbfError::ChildReceipt)?;
+    let mut keys = Vec::new();
+    keys.try_reserve_exact(funding_count)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    for account in accounts
+        .get(
+            SERIES_CONSUME_FOUND_SUFFIX_START_V1
+                ..SERIES_CONSUME_FOUND_SUFFIX_START_V1 + funding_count,
+        )
+        .ok_or(TradingSbfError::ChildReceipt)?
+    {
+        keys.push(
+            AccountKeyV3::new(account.key.to_bytes()).map_err(|_| TradingSbfError::ChildReceipt)?,
+        );
+    }
+    let list = funding_list_id(&keys).map_err(|_| TradingSbfError::ChildReceipt)?;
+    let market_bytes = market
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
+    let permit_bytes = permit
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
+    let post = hashv(&[
+        SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1,
+        &market_bytes,
+        &permit_bytes,
+    ])
+    .to_bytes();
+    drop(market_bytes);
+    drop(permit_bytes);
+    let receipt =
+        SeriesCoreFoundAckV2::decode(returned).map_err(|_| TradingSbfError::ChildReceipt)?;
+    receipt
+        .validate_for(
+            request,
+            expected_core,
+            Identity::new(permit.key.to_bytes()).map_err(|_| TradingSbfError::ChildReceipt)?,
+            expected_request,
+            u8::try_from(funding_count).map_err(|_| TradingSbfError::ChildReceipt)?,
+            Identity::new(list.to_bytes()).map_err(|_| TradingSbfError::ChildReceipt)?,
+            Identity::new(post).map_err(|_| TradingSbfError::ChildReceipt)?,
+        )
+        .map_err(|_| TradingSbfError::ChildReceipt)?;
+    Ok(())
 }
 
 fn authenticate_precommit_caller_v1(
@@ -763,7 +935,7 @@ fn gather_invocation_accounts<'info>(
 mod tests {
     extern crate alloc;
 
-    use alloc::vec;
+    use alloc::{boxed::Box, vec, vec::Vec};
 
     use dclutch_trading::series::request::encode_series_action_header_v3;
     use dclutch_vm::effect::v3::{
@@ -775,6 +947,21 @@ mod tests {
     };
 
     use super::*;
+
+    /// A physical representative arrives from the authenticated outer profile
+    /// with its cross-route union privileges.  Series Core must narrow that
+    /// view before `fill_metas` turns it into a child instruction.
+    fn union_account() -> AccountInfo<'static> {
+        let key = Box::leak(Box::new(Pubkey::new_unique()));
+        let owner = Box::leak(Box::new(Pubkey::new_unique()));
+        let lamports = Box::leak(Box::new(0_u64));
+        let data = Box::leak(Vec::<u8>::new().into_boxed_slice());
+        AccountInfo::new(key, true, true, lamports, data, owner, false)
+    }
+
+    fn union_frame(width: usize) -> Vec<AccountInfo<'static>> {
+        (0..width).map(|_| union_account()).collect()
+    }
 
     fn id(value: u8) -> Identity {
         Identity::new([value; 32]).expect("nonzero identity")
@@ -853,6 +1040,69 @@ mod tests {
         assert_ne!(
             CORE_RECEIPTLESS_EXPIRY_DIGEST_DOMAIN_V3,
             CORE_EXECUTION_DIGEST_DOMAIN_V3
+        );
+    }
+
+    #[test]
+    fn series_found_child_projection_uses_the_native_dynamic_suffix() {
+        let funding_count = dclutch_market::SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1;
+        let width = dclutch_market::SERIES_CONSUME_FOUND_SUFFIX_START_V1
+            + dclutch_market::SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1
+            + funding_count;
+        let permit = dclutch_market::SERIES_CONSUME_FOUND_SUFFIX_START_V1 + funding_count;
+        let mut frame = union_frame(width);
+
+        // Aggregate, position, and admission are writable physical
+        // representatives for Claims Founding, but Core Found only observes
+        // them in its suffix.
+        for suffix_local in 9..=11 {
+            assert!(frame[permit + suffix_local].is_writable);
+        }
+        assert_eq!(project_series_core_child_privileges_v1(&mut frame), Ok(()));
+
+        assert!(frame[permit].is_writable);
+        for local in dclutch_market::SERIES_CONSUME_FOUND_SUFFIX_START_V1..permit {
+            assert!(!frame[local].is_writable, "FundingState local {local}");
+        }
+        for suffix_local in 9..=11 {
+            assert!(!frame[permit + suffix_local].is_writable);
+        }
+        assert!(!frame[0].is_signer);
+
+        let mut buffers = ChildInvocationBuffersV3::new();
+        buffers.accounts = frame;
+        buffers.fill_metas().expect("Core child metas");
+        assert!(buffers.metas[0].is_signer);
+        assert!(buffers.metas[permit].is_writable);
+        for suffix_local in 9..=11 {
+            assert!(!buffers.metas[permit + suffix_local].is_writable);
+        }
+    }
+
+    #[test]
+    fn series_open_child_projection_refuses_missing_parent_write() {
+        let mut accepted = union_frame(dclutch_market::SERIES_OPEN_ACCOUNT_COUNT_V1);
+        assert_eq!(
+            project_series_core_child_privileges_v1(&mut accepted),
+            Ok(())
+        );
+        for (local, account) in accepted.iter().enumerate() {
+            assert_eq!(account.is_writable, matches!(local, 1..=3));
+            assert!(!account.is_signer);
+        }
+        let mut buffers = ChildInvocationBuffersV3::new();
+        buffers.accounts = accepted;
+        buffers.fill_metas().expect("Core child metas");
+        assert!(buffers.metas[0].is_signer);
+        for (local, meta) in buffers.metas.iter().enumerate() {
+            assert_eq!(meta.is_writable, matches!(local, 1..=3));
+        }
+
+        let mut hostile = union_frame(dclutch_market::SERIES_OPEN_ACCOUNT_COUNT_V1);
+        hostile[1].is_writable = false;
+        assert_eq!(
+            project_series_core_child_privileges_v1(&mut hostile),
+            Err(ProgramError::from(TradingSbfError::Content))
         );
     }
 

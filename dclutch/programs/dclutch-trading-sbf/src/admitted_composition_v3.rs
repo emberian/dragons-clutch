@@ -676,11 +676,7 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
         // complete observable account representation before retaining the
         // first one.  That keeps a malformed frame from turning a different
         // owner, body, or privilege into an invisible heap optimization.
-        let infos = deduplicated_admitted_cpi_infos_v4(admitted_cpi_accounts_v4(
-            frame,
-            authority,
-            runtime_accounts,
-        ))?;
+        let infos = deduplicated_admitted_cpi_infos_v5(frame, authority, runtime_accounts)?;
         // Fallibly, and at the contract's bound rather than the runtime's: a
         // return wider than this buffer is a refusal `get_return_data_into_v1`
         // makes by name, and an infallible `with_capacity` on an exhausted heap
@@ -698,21 +694,6 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
     }
 }
 
-/// The exact AccountInfo sources supplied to the admitted accelerator CPI.
-///
-/// The companion meta vector has the same logical order and is deliberately
-/// not deduplicated.  This iterator is replayable so the backing bank can be
-/// counted before its one exact heap allocation is made.
-fn admitted_cpi_accounts_v4<'a, 'info>(
-    frame: AdmittedCpiFrameV3<'a, 'info>,
-    authority: &'a AccountInfo<'info>,
-    runtime_accounts: &'a [&'a AccountInfo<'info>],
-) -> impl Iterator<Item = &'a AccountInfo<'info>> + Clone {
-    fixed_cpi_accounts(frame, authority)
-        .chain(frame.output_page)
-        .chain(runtime_accounts.iter().copied())
-}
-
 /// Build the backing account bank once, retaining the first exact physical
 /// representation for each key.
 ///
@@ -721,58 +702,49 @@ fn admitted_cpi_accounts_v4<'a, 'info>(
 /// key to locate the caller account.  The duplicate comparison below is the
 /// extra conjunct this producer needs before it can make that runtime rule save
 /// heap: differing representations of one physical key are an invalid frame,
-/// never an instruction to choose one silently.  A compact source-reference
-/// table plus sorted `u16` source indices is ordered by `(key, original_index)`,
-/// so equal-key validation takes one pass and the retained backing order
-/// remains the original first-match order.
-fn deduplicated_admitted_cpi_infos_v4<'a, 'info, I>(
-    accounts: I,
+/// never an instruction to choose one silently.  Its source coordinate is
+/// resolved directly against the fixed frame, optional page, and runtime tail;
+/// no source-reference `Vec` is retained in the bump heap. Sorted `usize`
+/// source indices are ordered by `(key, original_index)`, so equal-key
+/// validation takes one pass and the retained backing order remains the
+/// original first-match order.
+fn deduplicated_admitted_cpi_infos_v5<'a, 'info>(
+    frame: AdmittedCpiFrameV3<'a, 'info>,
+    authority: &'a AccountInfo<'info>,
+    runtime_accounts: &'a [&'a AccountInfo<'info>],
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError>
 where
     'info: 'a,
-    I: Iterator<Item = &'a AccountInfo<'info>>,
 {
-    const RETAINED_SOURCE_INDEX_BIT_V4: u16 = 1 << 15;
-    const SOURCE_INDEX_MASK_V4: u16 = !RETAINED_SOURCE_INDEX_BIT_V4;
-
-    let (lower_bound, upper_bound) = accounts.size_hint();
-    let account_count = upper_bound
-        .filter(|upper_bound| *upper_bound == lower_bound)
-        .ok_or(TradingSbfError::AdmittedTransport)?;
-    // Keep one reference per source and sort compact source coordinates rather
-    // than moving a reference, index, and retain flag together for every row.
-    // BumpHeapV1 deliberately never reclaims a dropped Vec, so this reduction
-    // remains material after the table has been consumed.
-    let mut sources = Vec::new();
-    sources
-        .try_reserve_exact(account_count)
-        .map_err(|_| TradingSbfError::HeapExhausted)?;
-    let mut sorted_source_indices = Vec::new();
+    let account_count = admitted_cpi_account_count_v5(frame, runtime_accounts.len())?;
+    let mut sorted_source_indices: Vec<usize> = Vec::new();
     sorted_source_indices
         .try_reserve_exact(account_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
-    for (original_index, account) in accounts.enumerate() {
-        let source_index =
-            u16::try_from(original_index).map_err(|_| TradingSbfError::AdmittedTransport)?;
-        if source_index & RETAINED_SOURCE_INDEX_BIT_V4 != 0 {
-            return Err(TradingSbfError::AdmittedTransport.into());
-        }
-        sources.push(account);
-        sorted_source_indices.push(source_index);
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(account_count)
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
+    retained.resize(account_count, false);
+    for original_index in 0..account_count {
+        sorted_source_indices.push(original_index);
     }
-    if sources.len() != account_count || sorted_source_indices.len() != account_count {
+    if sorted_source_indices.len() != account_count {
         return Err(TradingSbfError::AdmittedTransport.into());
     }
     hot_heap_mark!("admitted-cpi-index");
     sorted_source_indices.sort_unstable_by(|left, right| {
-        let left_index = usize::from(*left & SOURCE_INDEX_MASK_V4);
-        let right_index = usize::from(*right & SOURCE_INDEX_MASK_V4);
-        match (sources.get(left_index), sources.get(right_index)) {
+        let left_index = *left;
+        let right_index = *right;
+        match (
+            admitted_cpi_account_at_v5(frame, authority, runtime_accounts, left_index),
+            admitted_cpi_account_at_v5(frame, authority, runtime_accounts, right_index),
+        ) {
             (Some(left_account), Some(right_account)) => admitted_cpi_key_prefix_v4(left_account)
                 .cmp(&admitted_cpi_key_prefix_v4(right_account))
                 .then_with(|| left_account.key.cmp(right_account.key))
                 .then(left_index.cmp(&right_index)),
-            // Every coordinate came from `sources` above.  Keep the sort total
+            // Every coordinate is below the checked source count above. Keep the sort total
             // even if a future iterator violates that contract; the validation
             // pass below turns the malformed table into AdmittedTransport.
             _ => left_index.cmp(&right_index),
@@ -782,52 +754,111 @@ where
     let mut unique_count = 0_usize;
     let mut group_start = 0_usize;
     for index in 0..sorted_source_indices.len() {
-        let source_index = usize::from(sorted_source_indices[index] & SOURCE_INDEX_MASK_V4);
-        let account = *sources
-            .get(source_index)
+        let source_index = sorted_source_indices[index];
+        let account = admitted_cpi_account_at_v5(frame, authority, runtime_accounts, source_index)
             .ok_or(TradingSbfError::AdmittedTransport)?;
         let same_key_as_previous = if index == 0 {
             false
         } else {
-            let previous_source_index =
-                usize::from(sorted_source_indices[index - 1] & SOURCE_INDEX_MASK_V4);
-            let previous = *sources
-                .get(previous_source_index)
-                .ok_or(TradingSbfError::AdmittedTransport)?;
+            let previous_source_index = sorted_source_indices[index - 1];
+            let previous = admitted_cpi_account_at_v5(
+                frame,
+                authority,
+                runtime_accounts,
+                previous_source_index,
+            )
+            .ok_or(TradingSbfError::AdmittedTransport)?;
             previous.key == account.key
         };
         if !same_key_as_previous {
-            sorted_source_indices[index] |= RETAINED_SOURCE_INDEX_BIT_V4;
+            *retained
+                .get_mut(source_index)
+                .ok_or(TradingSbfError::AdmittedTransport)? = true;
             group_start = index;
             unique_count = unique_count
                 .checked_add(1)
                 .ok_or(TradingSbfError::AdmittedTransport)?;
             continue;
         }
-        let first_source_index =
-            usize::from(sorted_source_indices[group_start] & SOURCE_INDEX_MASK_V4);
-        let first = *sources
-            .get(first_source_index)
-            .ok_or(TradingSbfError::AdmittedTransport)?;
+        let first_source_index = sorted_source_indices[group_start];
+        let first =
+            admitted_cpi_account_at_v5(frame, authority, runtime_accounts, first_source_index)
+                .ok_or(TradingSbfError::AdmittedTransport)?;
         require_matching_account_representation_v4(first, account)?;
     }
 
     // Sorting back by source index preserves the first matching AccountInfo
     // the installed CPI translator selects for every ordered meta.
-    sorted_source_indices.sort_unstable_by_key(|entry| *entry & SOURCE_INDEX_MASK_V4);
+    sorted_source_indices.sort_unstable();
     let mut infos: Vec<AccountInfo<'info>> = Vec::new();
     infos
         .try_reserve_exact(unique_count)
         .map_err(|_| TradingSbfError::HeapExhausted)?;
     for source_index in sorted_source_indices {
-        if source_index & RETAINED_SOURCE_INDEX_BIT_V4 != 0 {
-            let account = *sources
-                .get(usize::from(source_index & SOURCE_INDEX_MASK_V4))
-                .ok_or(TradingSbfError::AdmittedTransport)?;
+        if retained
+            .get(source_index)
+            .copied()
+            .ok_or(TradingSbfError::AdmittedTransport)?
+        {
+            let account =
+                admitted_cpi_account_at_v5(frame, authority, runtime_accounts, source_index)
+                    .ok_or(TradingSbfError::AdmittedTransport)?;
             infos.push(account.clone());
         }
     }
     Ok(infos)
+}
+
+/// Count the CPI sources without materializing an iterator-backed reference bank.
+fn admitted_cpi_account_count_v5(
+    frame: AdmittedCpiFrameV3<'_, '_>,
+    runtime_account_count: usize,
+) -> Result<usize, ProgramError> {
+    1_usize
+        .checked_add(frame.hot_fixed_accounts.len())
+        .and_then(|count| count.checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4))
+        .and_then(|count| count.checked_add(usize::from(frame.output_page.is_some())))
+        .and_then(|count| count.checked_add(runtime_account_count))
+        .ok_or(TradingSbfError::AdmittedTransport.into())
+}
+
+/// Resolve one logical admitted CPI source with no heap-backed source table.
+fn admitted_cpi_account_at_v5<'a, 'info>(
+    frame: AdmittedCpiFrameV3<'a, 'info>,
+    authority: &'a AccountInfo<'info>,
+    runtime_accounts: &'a [&'a AccountInfo<'info>],
+    index: usize,
+) -> Option<&'a AccountInfo<'info>> {
+    if index == 0 {
+        return Some(authority);
+    }
+    let hot_start = 1_usize;
+    let hot_end = hot_start.checked_add(frame.hot_fixed_accounts.len())?;
+    if index < hot_end {
+        return frame.hot_fixed_accounts.get(index.checked_sub(hot_start)?);
+    }
+    let fixed_tail = [
+        frame.certificate_raw,
+        frame.certificate_staging,
+        frame.admission_raw,
+        frame.admission_staging,
+        frame.artifact_raw,
+        frame.artifact_staging,
+        frame.accelerator_program,
+        frame.accelerator_programdata,
+    ];
+    let fixed_tail_end = hot_end.checked_add(fixed_tail.len())?;
+    if index < fixed_tail_end {
+        return fixed_tail.get(index.checked_sub(hot_end)?).copied();
+    }
+    let after_fixed = index.checked_sub(fixed_tail_end)?;
+    if let Some(page) = frame.output_page {
+        if after_fixed == 0 {
+            return Some(page);
+        }
+        return runtime_accounts.get(after_fixed.checked_sub(1)?).copied();
+    }
+    runtime_accounts.get(after_fixed).copied()
 }
 
 /// The first eight canonical key bytes cheaply separate almost every account
@@ -1479,8 +1510,57 @@ mod tests {
         )
     }
 
+    fn assert_production_cpi_source_order_v5<'a, 'info>(
+        frame: AdmittedCpiFrameV3<'a, 'info>,
+        authority: &'a AccountInfo<'info>,
+        runtime_accounts: &'a [&'a AccountInfo<'info>],
+    ) where
+        'info: 'a,
+    {
+        let expected: Vec<Pubkey> = fixed_cpi_accounts(frame, authority)
+            .chain(frame.output_page)
+            .chain(runtime_accounts.iter().copied())
+            .map(|account| *account.key)
+            .collect();
+        assert_eq!(
+            expected.len(),
+            admitted_cpi_account_count_v5(frame, runtime_accounts.len())
+                .expect("canonical CPI source count"),
+            "the direct coordinate resolver and the canonical fixed-frame iterator agree"
+        );
+        for (index, expected_key) in expected.iter().enumerate() {
+            assert_eq!(
+                admitted_cpi_account_at_v5(frame, authority, runtime_accounts, index)
+                    .map(|account| *account.key),
+                Some(*expected_key),
+                "source coordinate {index}"
+            );
+        }
+        assert!(
+            admitted_cpi_account_at_v5(frame, authority, runtime_accounts, expected.len())
+                .is_none(),
+            "the direct resolver has no trailing source"
+        );
+        let mut expected_first_keys = Vec::new();
+        for key in expected {
+            if !expected_first_keys.contains(&key) {
+                expected_first_keys.push(key);
+            }
+        }
+        let actual = deduplicated_admitted_cpi_infos_v5(frame, authority, runtime_accounts)
+            .expect("canonical duplicate representations retain one backing account");
+        assert_eq!(
+            actual
+                .iter()
+                .map(|account| *account.key)
+                .collect::<Vec<_>>(),
+            expected_first_keys,
+            "the backing account order retains each canonical source's first occurrence"
+        );
+    }
+
     #[test]
-    fn admitted_cpi_backing_deduplicates_only_identical_account_representations() {
+    fn admitted_cpi_backing_uses_the_production_frame_resolver_and_refuses_divergence() {
         let repeated_key = Pubkey::new_unique();
         let owner = Pubkey::new_unique();
         let first = readonly_info(repeated_key, owner, 7, vec![1, 2, 3]);
@@ -1488,17 +1568,64 @@ mod tests {
         // a clone: the control proves equality validation covers a duplicated
         // serialized representation as well as the usual shared Rc cells.
         let identical = readonly_info(repeated_key, owner, 7, vec![1, 2, 3]);
-        let distinct = readonly_info(Pubkey::new_unique(), owner, 11, vec![4]);
-        let infos = deduplicated_admitted_cpi_infos_v4([&first, &distinct, &identical].into_iter())
-            .expect("identical duplicate has one backing entry");
-        assert_eq!(infos.len(), 2);
-        assert_eq!(infos[0].key, first.key, "first matching key wins");
-        assert_eq!(infos[1].key, distinct.key);
+        let hot = vec![readonly_info(Pubkey::new_unique(), owner, 11, vec![4])];
+        let tail: Vec<_> = (0..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
+            .map(|index| {
+                let byte = u8::try_from(index).expect("eight evidence coordinates fit u8");
+                readonly_info(Pubkey::new_unique(), owner, u64::from(byte), vec![byte])
+            })
+            .collect();
+        assert_eq!(
+            tail.len(),
+            ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
+            "the fixture's named evidence order is the contract-owned count"
+        );
+        let page = readonly_info(Pubkey::new_unique(), owner, 19, vec![9]);
+        let runtime = readonly_info(Pubkey::new_unique(), owner, 23, vec![8]);
+        let runtime_accounts = [&runtime, &first];
+        let frame_with_page = AdmittedCpiFrameV3 {
+            caller_authorities: &[],
+            hot_fixed_accounts: &hot,
+            activation: &tail[0],
+            registry: &tail[1],
+            rent: &tail[2],
+            instructions: &tail[3],
+            trading_program: &tail[4],
+            trading_programdata: &tail[5],
+            capability_raw: &tail[6],
+            capability_staging: &tail[7],
+            strategy_raw: &tail[0],
+            strategy_staging: &tail[1],
+            certificate_raw: &identical,
+            certificate_staging: &tail[2],
+            admission_raw: &tail[3],
+            admission_staging: &tail[4],
+            artifact_raw: &tail[5],
+            artifact_staging: &tail[6],
+            accelerator_program: &tail[7],
+            accelerator_programdata: &tail[0],
+            output_page: Some(&page),
+        };
+        assert_production_cpi_source_order_v5(frame_with_page, &first, &runtime_accounts);
+
+        let frame_without_page = AdmittedCpiFrameV3 {
+            hot_fixed_accounts: &[],
+            output_page: None,
+            ..frame_with_page
+        };
+        assert_production_cpi_source_order_v5(frame_without_page, &first, &[]);
 
         let foreign_owner = readonly_info(repeated_key, Pubkey::new_unique(), 7, vec![1, 2, 3]);
         assert!(
             matches!(
-                deduplicated_admitted_cpi_infos_v4([&first, &foreign_owner].into_iter()),
+                deduplicated_admitted_cpi_infos_v5(
+                    AdmittedCpiFrameV3 {
+                        certificate_raw: &foreign_owner,
+                        ..frame_with_page
+                    },
+                    &first,
+                    &runtime_accounts,
+                ),
                 Err(error) if error == TradingSbfError::AdmittedFrame.into()
             ),
             "a same-key foreign owner cannot disappear behind first-match lookup"
@@ -1506,7 +1633,14 @@ mod tests {
         let different_body = readonly_info(repeated_key, owner, 7, vec![1, 2, 4]);
         assert!(
             matches!(
-                deduplicated_admitted_cpi_infos_v4([&first, &different_body].into_iter()),
+                deduplicated_admitted_cpi_infos_v5(
+                    AdmittedCpiFrameV3 {
+                        certificate_raw: &different_body,
+                        ..frame_with_page
+                    },
+                    &first,
+                    &runtime_accounts,
+                ),
                 Err(error) if error == TradingSbfError::AdmittedFrame.into()
             ),
             "a same-key divergent body cannot disappear behind first-match lookup"
@@ -1515,7 +1649,14 @@ mod tests {
         writable.is_writable = true;
         assert!(
             matches!(
-                deduplicated_admitted_cpi_infos_v4([&first, &writable].into_iter()),
+                deduplicated_admitted_cpi_infos_v5(
+                    AdmittedCpiFrameV3 {
+                        certificate_raw: &writable,
+                        ..frame_with_page
+                    },
+                    &first,
+                    &runtime_accounts,
+                ),
                 Err(error) if error == TradingSbfError::AdmittedFrame.into()
             ),
             "a same-key divergent privilege cannot disappear behind first-match lookup"

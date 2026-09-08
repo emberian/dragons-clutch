@@ -43,7 +43,8 @@ use dclutch_market::capability_manifest::{
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{
-        DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1, GENERAL_HOT_HEAP_FRAME_BYTES_V3,
+        HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
     },
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::CapabilityProgramV4,
@@ -1376,6 +1377,26 @@ fn built_bytes(account: &BuiltAccountV1) -> &[u8] {
     account.account.data.as_slice()
 }
 
+/// The explicit Hot heap frame this diagnostic asks the runtime to grant.
+///
+/// General's canonical profile is 128 KiB. A test may select the former 64 KiB
+/// profile only to retain the measured named refusal; Direct remains separately
+/// owned at 64 KiB.
+fn general_hot_heap_frame_bytes_v1(action: Action) -> u32 {
+    const DIAGNOSTIC_HEAP_ENV_V1: &str = "DCLUTCH_GENERAL_HOT_DIAGNOSTIC_HEAP_BYTES";
+    if action != Action::PlaceOrder {
+        return GENERAL_HOT_HEAP_FRAME_BYTES_V3;
+    }
+    match env::var(DIAGNOSTIC_HEAP_ENV_V1) {
+        Err(env::VarError::NotPresent) => GENERAL_HOT_HEAP_FRAME_BYTES_V3,
+        Ok(value) => match value.parse::<u32>() {
+            Ok(frame @ (65_536 | GENERAL_HOT_HEAP_FRAME_BYTES_V3)) => frame,
+            _ => panic!("{DIAGNOSTIC_HEAP_ENV_V1} must be 65536 or 131072"),
+        },
+        Err(error) => panic!("cannot read {DIAGNOSTIC_HEAP_ENV_V1}: {error}"),
+    }
+}
+
 /// Build one action's complete admitted bundle against one chain prestate.
 ///
 /// `clock_slot` is the slot this transaction will EXECUTE at, and it is a
@@ -1592,7 +1613,7 @@ fn build_action_case_with_evidence_and_bindings(
         "the lifecycle-derived primary state is not the PDA the {action:?} request names"
     );
     let instructions = vec![
-        ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+        ComputeBudgetInstruction::request_heap_frame(general_hot_heap_frame_bytes_v1(action)),
         ComputeBudgetInstruction::set_compute_unit_limit(
             u32::try_from(waist::COMPUTE_LIMIT).expect("compute limit"),
         ),

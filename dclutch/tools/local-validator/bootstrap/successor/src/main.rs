@@ -51,6 +51,7 @@ mod release_lineage;
 mod series_act_verbs_v1;
 mod series_checked_evidence;
 mod series_consume_campaign;
+mod series_consume_claims_geometry;
 mod series_consume_core_geometry;
 mod series_consume_geometry;
 mod series_consume_projected_geometry;

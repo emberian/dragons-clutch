@@ -615,7 +615,12 @@ pub(super) mod tests {
         output
     }
 
-    fn base_program() -> Vec<u8> {
+    fn base_program_with_claims_geometry(
+        claims_account_count: u16,
+        open_account_start: u16,
+        open_account_count: u16,
+        fixed_accounts: u16,
+    ) -> Vec<u8> {
         let request_bytes = 2 * SERIES_CONSUME_CORE_REQUEST_BYTES_V3
             + 2 * SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3
             + SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3;
@@ -645,14 +650,14 @@ pub(super) mod tests {
             (
                 FixedRole::Claims,
                 CLAIMS_ACCOUNT_START_BEFORE_FUNDING,
-                SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3,
+                claims_account_count,
                 SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3,
                 &SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3[..],
             ),
             (
                 FixedRole::Core,
-                OPEN_ACCOUNT_START_BEFORE_FUNDING,
-                SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3,
+                open_account_start,
+                open_account_count,
                 SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
                 &SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3[..],
             ),
@@ -687,7 +692,7 @@ pub(super) mod tests {
         let mut output = vec![0_u8; width];
         encode_effect_program_v4_atomic(
             EffectGeometryV3 {
-                fixed_accounts: SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4,
+                fixed_accounts,
                 item_account_stride: 0,
                 common_scalars: u16::try_from(SCALARS).expect("scalar count fits in u16"),
                 item_scalar_stride: 0,
@@ -703,6 +708,15 @@ pub(super) mod tests {
         )
         .expect("base program");
         output
+    }
+
+    fn base_program() -> Vec<u8> {
+        base_program_with_claims_geometry(
+            SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3,
+            OPEN_ACCOUNT_START_BEFORE_FUNDING,
+            SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3,
+            SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4,
+        )
     }
 
     /// Four occurrences, because [`request`] carries two siblings.
@@ -744,7 +758,8 @@ pub(super) mod tests {
         let identities = [[0_u8; 32]; IDENTITIES];
         let admitted = SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &identities, 7)
             .expect("global Series program");
-        assert_eq!(admitted.program().account_count(0, &scalars), Ok(168));
+        assert_eq!(SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4, 164);
+        assert_eq!(admitted.program().account_count(0, &scalars), Ok(171));
         assert_eq!(
             admitted.require_window(SeriesConsumeRouteWindowV4::ProjectedPrefix),
             Ok(())
@@ -753,10 +768,10 @@ pub(super) mod tests {
             admitted.require_window(SeriesConsumeRouteWindowV4::LiveMarketContinuation),
             Ok(())
         );
-        assert_eq!(series_consume_logical_account_count_v4(7), Some(168));
+        assert_eq!(series_consume_logical_account_count_v4(7), Some(171));
         assert_eq!(SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4, 67);
         assert_eq!(SERIES_CONSUME_FUNDING_ACCOUNT_START_V4, 67);
-        assert_eq!(SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4, 94);
+        assert_eq!(SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4, 97);
         assert_eq!(
             SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4
                 + 7
@@ -781,11 +796,35 @@ pub(super) mod tests {
         );
         assert_eq!(
             series_consume_route_account_start_v4(ROUTE_OPEN, 7),
-            Some(131)
+            Some(132)
         );
         assert_eq!(
             SERIES_CONSUME_PREFIX_ROUTE_END_V4,
             SERIES_CONSUME_CONTINUATION_ROUTE_START_V4
+        );
+    }
+
+    #[test]
+    fn obsolete_claims32_frame_refuses_with_base_program_error() {
+        let canonical_bytes = base_program();
+        let canonical = ProgramV3::decode(&canonical_bytes).expect("canonical base program");
+        assert_eq!(validate_base(canonical), Ok(()));
+
+        // The superseded Series geometry still routes a 32-account Claims
+        // frame and starts Core Open at 124 with its former 37-account tail.
+        // It cannot be accepted merely
+        // because its total geometry is internally self-consistent: Claims
+        // owns a mandatory 33-account V6 frame.
+        let old_claims32 = base_program_with_claims_geometry(
+            SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3 - 1,
+            OPEN_ACCOUNT_START_BEFORE_FUNDING - 1,
+            37,
+            161,
+        );
+        let legacy = ProgramV3::decode(&old_claims32).expect("well-formed obsolete base");
+        assert_eq!(
+            validate_base(legacy),
+            Err(SeriesConsumeEffectErrorV4::BaseProgram)
         );
     }
 

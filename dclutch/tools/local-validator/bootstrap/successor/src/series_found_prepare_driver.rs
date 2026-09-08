@@ -1843,10 +1843,10 @@ pub(crate) fn observe_series_prepare_preprofile_geometry_v1(
 /// Compile the selected Series closure only after the Prepare profile has been
 /// replaced by a full finalized M0/M1 observation.
 ///
-/// Expire is likewise derived from its semantic child bank and the same
-/// finalized M0/M1 facts. Consume remains deliberately separate here: it has
-/// a 161-coordinate multi-program frame and must gain its own canonical
-/// mapper rather than inherit a guessed post-Prepare observation.
+/// Expire and Consume are likewise derived from their semantic child bank and
+/// the same finalized M0/M1 facts. Consume's phase states whether its
+/// Prepare-created Custody accounts are canonical predictions for selection or
+/// finalized facts after the actual Prepare transaction.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
     rpc: &mut Rpc,
@@ -1856,6 +1856,7 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
     records: SeriesPrepareHydrationRecordsV1<'_>,
     parent_root_state: SeriesPrepareParentRootStateV1,
     parent_root_fact: crate::series_found_prepare_input::SeriesParentRootFactV1,
+    consume_prestate: crate::series_consume_geometry::SeriesConsumePrestateV1,
     minimum_slot: u64,
 ) -> Result<crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1> {
     let mut geometry = selection.geometry.take().ok_or_else(|| {
@@ -1893,6 +1894,24 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
             "Series Prepare root state disagreed with its typed geometry fact",
         ));
     }
+    geometry.consume_fixed_data_lengths =
+        crate::series_consume_geometry::derive_series_consume_fixed_data_lengths_v1(
+            rpc,
+            crate::series_consume_geometry::SeriesConsumeGeometryInputV1 {
+                preprofile: &preprofile,
+                m0,
+                records,
+                parent_root: parent_root_fact,
+                registry: Pubkey::new_from_array(selection.registry_program.to_bytes()),
+                core: selection.material.core,
+                trading: selection.material.trading,
+                custody: selection.material.custody,
+                claims: selection.material.claims,
+                rent_program: selection.material.rent_program,
+                prestate: consume_prestate,
+                minimum_slot,
+            },
+        )?;
     geometry.expire_fixed_data_lengths =
         crate::series_expire_geometry::derive_series_expire_fixed_data_lengths_v1(
             rpc,

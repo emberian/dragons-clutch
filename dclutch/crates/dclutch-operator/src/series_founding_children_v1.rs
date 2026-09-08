@@ -36,6 +36,10 @@ pub struct SeriesFoundingClaimsPhysicalV1 {
     pub linked_basis_record_digest: [u8; 32],
     /// Finalized semantic LiabilityBasis identity.
     pub semantic_basis_id: [u8; 32],
+    /// M0 Portfolio's exact runtime claim-vector width. The Claims V6
+    /// failure-escrow PDA derives from this width even when the categorical
+    /// basis leaves that escrow vacant.
+    pub claim_count: u32,
     /// Canonical Claims aggregate, founder Position and admission accounts.
     pub aggregate: [u8; 32],
     pub position: [u8; 32],
@@ -113,6 +117,11 @@ pub fn derive_series_founding_children_v1(
     let escrow =
         pre_founding_series_escrow(occurrence, ticket, input.product, input.registry_program)
             .map_err(|_| SeriesFoundingChildrenErrorV1::Content)?;
+    // Claims V6 always carries the two failure-escrow coordinates.  The
+    // categorical record may leave them vacant, but its runtime width still
+    // has to derive their canonical identity; the kernel owns that floor.
+    dclutch_product::economic_slice::refunding_failure_index(input.claims.claim_count)
+        .map_err(|_| SeriesFoundingChildrenErrorV1::Claims)?;
     let expiry = occurrence
         .template()
         .retry_through(escrow.occurrence())
@@ -265,7 +274,7 @@ pub fn derive_series_founding_children_v1(
         custody_request_digest: lock_digest,
         custody_receipt_digest: lock_receipt_digest,
         generation: escrow.generation(),
-        claim_count: 1,
+        claim_count: input.claims.claim_count,
         quantity: 1,
         basis_scale: escrow.hoard_principal(),
         pre_source_amount: escrow.hoard_principal(),
@@ -476,6 +485,7 @@ mod tests {
         let claims = SeriesFoundingClaimsPhysicalV1 {
             linked_basis_record_digest: [50; 32],
             semantic_basis_id: [51; 32],
+            claim_count: 3,
             aggregate: [52; 32],
             position: [53; 32],
             admission: [54; 32],
@@ -543,6 +553,16 @@ mod tests {
         assert_eq!(
             derive_series_founding_children_v1(bad_input),
             Err(SeriesFoundingChildrenErrorV1::Projection)
+        );
+        let mut narrow_claims = claims;
+        narrow_claims.claim_count = 1;
+        let narrow_input = SeriesFoundingChildrenInputV1 {
+            claims: narrow_claims,
+            ..input
+        };
+        assert_eq!(
+            derive_series_founding_children_v1(narrow_input),
+            Err(SeriesFoundingChildrenErrorV1::Claims)
         );
     }
 }

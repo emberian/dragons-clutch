@@ -11,7 +11,7 @@ use crate::hot_bump_miner::{
     HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
 use dclutch_market::capability_program::hot_v3::{
-    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+    GENERAL_HOT_HEAP_FRAME_BYTES_V3, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
     HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
     HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
     HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
@@ -29,7 +29,9 @@ use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_STRATEGY_EVIDENCE_START_V3,
 };
 use dclutch_market::execution_strategy::shadow_digest_v3::family_request_digest_v3;
-use dclutch_market::execution_strategy::v2::{BankTransportV2, classify_bank_transport_v2};
+use dclutch_market::execution_strategy::v2::{
+    AcceleratorTransportProfileV2, BankTransportV2, classify_bank_transport_v2,
+};
 use dclutch_trading::general::artifacts_v3::{
     GeneralArtifactBytesV3, GeneralArtifactSelectionV3, GeneralDecodedRequestV3,
     GeneralRequestWireV3, authenticate_general_artifacts_v3, decode_general_request_v3,
@@ -129,15 +131,6 @@ const ADMITTED_ADMISSION_RAW_EXTRA_V3: usize =
     ADMITTED_ADMISSION_RAW_ACCOUNT_V3 - ADMITTED_STRATEGY_EVIDENCE_START_V3;
 const ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3: usize =
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3 - ADMITTED_STRATEGY_EVIDENCE_START_V3;
-
-/// Measured SBF heap frame required by every General successor transaction.
-///
-/// Candidate verification at the accepted N=258 profile carries the complete
-/// Hot bank plus state-last verifier, certificate, and manifest candidates.
-/// The default 32,768-byte frame refuses that real-ELF path; 65,536 bytes is
-/// the existing protocol-wide Hot execution frame and is emitted explicitly
-/// before Trading rather than assumed by the accelerator.
-pub const GENERAL_HOT_HEAP_FRAME_BYTES_V3: u32 = DIRECT_HOT_HEAP_FRAME_BYTES_V1;
 
 /// General Hot cannot execute within Solana's default transaction CU
 /// allocation, and until cohort-16.1 nothing declared otherwise.
@@ -2166,14 +2159,28 @@ fn validate_strategy_geometry(
 ) -> Result<(), GeneralHotOperatorErrorV3> {
     let caller_count = usize::try_from(selected_admitted_invocation_count_v3(bundle)?)
         .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?;
+    let profile = bundle
+        .strategy
+        .transport_profile()
+        .map_err(GeneralHotOperatorErrorV3::ExecutionStrategy)?;
+    let output_page_count = match profile {
+        AcceleratorTransportProfileV2::OutputPageV3 => 1,
+        AcceleratorTransportProfileV2::ChunkedBankV2
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => 0,
+    };
     let expected = ADMITTED_AOT_FIXED_EXTRAS_V3
         .checked_add(caller_count)
+        .and_then(|count| count.checked_add(output_page_count))
         .ok_or(GeneralHotOperatorErrorV3::Arithmetic)?;
     if state.strategy_accounts.len() != expected
         || state
             .strategy_accounts
             .iter()
-            .any(|account| account.is_signer || account.is_writable)
+            .enumerate()
+            .any(|(index, account)| {
+                account.is_signer
+                    || account.is_writable != (output_page_count == 1 && index + 1 == expected)
+            })
         || state
             .strategy_accounts
             .get(ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3)

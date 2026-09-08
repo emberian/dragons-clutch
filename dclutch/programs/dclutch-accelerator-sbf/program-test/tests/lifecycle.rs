@@ -7,7 +7,7 @@ use dclutch_core_contract::ContentId;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
-    hot_v3::{DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3},
+    hot_v3::{GENERAL_HOT_HEAP_FRAME_BYTES_V3, HotExecutionEnvelopeV3},
 };
 use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
@@ -1445,7 +1445,7 @@ enum TopLevelPreludeV3 {
 impl TopLevelPreludeV3 {
     /// Instructions this prelude puts ahead of Trading.
     fn instructions(self, payer: Pubkey) -> Vec<Instruction> {
-        let heap = ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1);
+        let heap = ComputeBudgetInstruction::request_heap_frame(GENERAL_HOT_HEAP_FRAME_BYTES_V3);
         let limit = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
         match self {
             Self::HeapOnly => vec![heap],
@@ -1453,7 +1453,7 @@ impl TopLevelPreludeV3 {
             Self::Nothing => Vec::new(),
             Self::LimitOnly => vec![limit],
             Self::WrongHeap => vec![ComputeBudgetInstruction::request_heap_frame(
-                DIRECT_HOT_HEAP_FRAME_BYTES_V1 - 1024,
+                GENERAL_HOT_HEAP_FRAME_BYTES_V3 - 1024,
             )],
             // A zero-lamport System transfer: it succeeds, so the refusal this
             // row asserts is the accelerator's own and not this instruction's.

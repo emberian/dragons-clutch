@@ -629,6 +629,16 @@ fn borrow_record_against<'a, 'info>(
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
+    #[cfg(feature = "hot-cu-profile")]
+    log_record_refusal_v3(
+        frame.registry.key,
+        raw,
+        staging,
+        digest,
+        &data,
+        expected_raw,
+        expected_staging,
+    );
     if raw.key != &expected_raw
         || raw.owner != frame.registry.key
         || raw.is_signer
@@ -646,6 +656,53 @@ fn borrow_record_against<'a, 'info>(
         return Err(TradingSbfError::Content.into());
     }
     Ok(core::cell::Ref::map(data, |bytes| &**bytes))
+}
+
+/// Name the first raw/staging conjunct that rejects a finalized record.
+#[cfg(feature = "hot-cu-profile")]
+#[inline(never)]
+fn log_record_refusal_v3(
+    registry: &Pubkey,
+    raw: &AccountInfo<'_>,
+    staging: &AccountInfo<'_>,
+    digest: [u8; 32],
+    data: &[u8],
+    expected_raw: Pubkey,
+    expected_staging: Pubkey,
+) {
+    let case = if raw.key != &expected_raw {
+        Some("raw-key")
+    } else if raw.owner != registry {
+        Some("raw-owner")
+    } else if raw.is_signer {
+        Some("raw-signer")
+    } else if raw.is_writable {
+        Some("raw-writable")
+    } else if raw.executable {
+        Some("raw-executable")
+    } else if hash(data).to_bytes() != digest {
+        Some("raw-digest")
+    } else if !funded_rent_persists_v1(raw.lamports()) {
+        Some("raw-rent")
+    } else if staging.key != &expected_staging {
+        Some("staging-key")
+    } else if staging.owner != &system_program::ID {
+        Some("staging-owner")
+    } else if staging.data_len() != 0 {
+        Some("staging-data")
+    } else if staging.is_signer {
+        Some("staging-signer")
+    } else if staging.is_writable {
+        Some("staging-writable")
+    } else if staging.executable {
+        Some("staging-executable")
+    } else {
+        None
+    };
+    if let Some(case) = case {
+        solana_program::log::sol_log("dclutch-hot-why:record");
+        solana_program::log::sol_log(case);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -861,6 +918,8 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
         accounts: &'accounts [AccountInfo<'info>],
     ) -> Result<Self, ProgramError> {
         let value = Self::from_accounts(accounts)?;
+        #[cfg(feature = "hot-cu-profile")]
+        log_seal_frame_refusal_v3(program_id, &value, accounts);
         if value.market.is_signer
             || value.market.is_writable
             || value.market.executable
@@ -941,6 +1000,92 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
         validate_hot_fixed_alias_shape_v3(accounts)?;
         Ok(value)
     }
+}
+
+/// Name the first fixed-frame conjunct that rejects the seal outer.
+///
+/// The wire deliberately carries one `Content` discriminant for this frame;
+/// the profile ELF keeps the precise accusation in the runtime log so a
+/// producer can be repaired from evidence without loosening the conjunction.
+#[cfg(feature = "hot-cu-profile")]
+#[inline(never)]
+fn log_seal_frame_refusal_v3(
+    program_id: &Pubkey,
+    value: &HotFrameV3<'_, '_>,
+    accounts: &[AccountInfo<'_>],
+) {
+    let case = if value.market.is_signer {
+        Some("market-signer")
+    } else if value.market.is_writable {
+        Some("market-writable")
+    } else if value.market.executable {
+        Some("market-executable")
+    } else if value.root.is_signer {
+        Some("root-signer")
+    } else if value.root.is_writable {
+        Some("root-writable")
+    } else if value.root.executable {
+        Some("root-executable")
+    } else if value.trading_program.key != program_id {
+        Some("trading-program-key")
+    } else if !value.trading_program.executable {
+        Some("trading-program-nonexecutable")
+    } else if value.trading_program.is_signer {
+        Some("trading-program-signer")
+    } else if value.trading_program.is_writable {
+        Some("trading-program-writable")
+    } else if !value.core_program.executable {
+        Some("core-program-nonexecutable")
+    } else if value.core_program.is_signer {
+        Some("core-program-signer")
+    } else if value.core_program.is_writable {
+        Some("core-program-writable")
+    } else if !value.registry.executable {
+        Some("registry-nonexecutable")
+    } else if value.registry.is_signer {
+        Some("registry-signer")
+    } else if value.registry.is_writable {
+        Some("registry-writable")
+    } else if value.rent.key != &sysvar::rent::ID {
+        Some("rent-key")
+    } else if value.rent.is_signer {
+        Some("rent-signer")
+    } else if value.rent.is_writable {
+        Some("rent-writable")
+    } else if value.rent.executable {
+        Some("rent-executable")
+    } else if !value.capability_seal.is_writable {
+        Some("seal-readonly")
+    } else if value.capability_seal.is_signer {
+        Some("seal-signer")
+    } else if value.capability_seal.executable {
+        Some("seal-executable")
+    } else {
+        None
+    };
+    if let Some(case) = case {
+        solana_program::log::sol_log("dclutch-hot-why:seal-frame");
+        solana_program::log::sol_log(case);
+        return;
+    }
+    for (left, account) in accounts
+        .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+    {
+        if accounts
+            .get(left.saturating_add(1)..HOT_FIXED_ACCOUNT_COUNT_V3)
+            .unwrap_or(&[])
+            .iter()
+            .any(|other| other.key == account.key)
+        {
+            solana_program::log::sol_log("dclutch-hot-why:seal-frame:duplicate-fixed-account");
+            solana_program::log::sol_log_64(left as u64, account.key.to_bytes()[0] as u64, 0, 0, 0);
+            return;
+        }
+    }
+    solana_program::log::sol_log("dclutch-hot-why:seal-frame:unlocated");
 }
 
 pub(super) fn account<'a, 'info>(

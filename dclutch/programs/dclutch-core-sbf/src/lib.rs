@@ -63,6 +63,7 @@ mod series_permit_expiry;
 mod series_permit_expiry_precommit_v1;
 
 pub use begin_retiring::BEGIN_RETIRING_ACCOUNT_COUNT_V1;
+pub use dclutch_market::SERIES_OPEN_ACCOUNT_COUNT_V1;
 pub use execute_provider_v3::{
     EXECUTE_PROVIDER_ACCOUNT_COUNT_V3, EXECUTE_PROVIDER_PREFIX_BYTES_V3,
 };
@@ -78,7 +79,6 @@ pub use retire_v1::{RETIREMENT_ACCOUNT_COUNT_V1, RETIREMENT_INSTRUCTION_BYTES_V1
 pub use series_consume::{
     SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2,
 };
-pub use series_open::SERIES_OPEN_ACCOUNT_COUNT_V1;
 pub use series_permit_expiry::SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1;
 pub use series_permit_expiry_precommit_v1::SERIES_PERMIT_EXPIRY_PRECOMMIT_ACCOUNT_COUNT_V1;
 

@@ -6,9 +6,10 @@
 //! to observe the resulting finalized facts or canonical vacancies.
 
 use dclutch_custody::{
-    CompartmentV1, CustodyAuthoritySeedsV1, CustodyVaultSeedsV1, ProjectedCallerRoleV1,
-    ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1, ProjectedCustodyRequestV1,
-    ProjectedCustodySourceReplaySeedsV1, ProjectedCustodyStateSeedsV2,
+    CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyVaultSeedsV1,
+    PROJECTED_CUSTODY_STATE_BYTES_V2, ProjectedCallerRoleV1, ProjectedCustodyCallerSeedsV1,
+    ProjectedCustodyOperationV1, ProjectedCustodyRequestV1, ProjectedCustodySourceReplaySeedsV1,
+    ProjectedCustodyStateSeedsV2,
 };
 use dclutch_trading_sbf::series::{
     account_profile_v4::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
@@ -22,8 +23,9 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 use crate::{
     Error, Result,
     series_consume_geometry::{
-        SERIES_CONSUME_REALIZE_START_V1, SeriesConsumeGeometryInputV1, SeriesConsumeRoleSourceV1,
-        final_source_v1, m0_nonrecord_v1, m0_source_v1, put_series_consume_role_v1, vacancy_v1,
+        SERIES_CONSUME_REALIZE_START_V1, SeriesConsumeGeometryInputV1, SeriesConsumePrestateV1,
+        SeriesConsumeRoleSourceV1, final_source_v1, m0_nonrecord_v1, m0_source_v1,
+        prepared_prediction_v1, put_series_consume_role_v1, vacancy_v1,
     },
     series_found_prepare_input::SeriesParentRootFactV1,
 };
@@ -134,12 +136,7 @@ fn projected_common_v1<'a>(
     .0;
     Ok([
         vacancy_v1("projected Custody caller", caller, 0)?,
-        final_source_v1(
-            "prepared projected Custody state",
-            state,
-            input.custody,
-            None,
-        ),
+        projected_state_source_v1(input, state)?,
         final_source_v1("activation cache", cache, input.registry, None),
         final_source_v1(
             "Registry program",
@@ -203,12 +200,7 @@ fn populate_lock_v1<'a>(
         authority,
         m0_nonrecord_v1(input, Pubkey::new_from_array(request.mint))?,
         m0_nonrecord_v1(input, Pubkey::new_from_array(request.token_program))?,
-        final_source_v1(
-            "prepared SeriesEscrow replay",
-            source_replay,
-            input.custody,
-            None,
-        ),
+        source_replay_source_v1(input, source_replay)?,
         m0_source_v1(input, Pubkey::new_from_array(request.market))?,
     ]);
     put_route_v1(roles, LOCK_START, values, "Lock")
@@ -258,12 +250,55 @@ fn canonical_vault_v1<'a>(
             "Series Consume projected Custody vault differed from canonical seeds",
         ));
     }
-    Ok(final_source_v1(
-        role,
-        address,
-        Pubkey::new_from_array(request.token_program),
-        None,
-    ))
+    match input.prestate {
+        SeriesConsumePrestateV1::PreparedPrediction => {
+            prepared_prediction_v1(role, address, dclutch_custody::token_svm::ACCOUNT_BYTES)
+        }
+        SeriesConsumePrestateV1::ObservedPrepared => Ok(final_source_v1(
+            role,
+            address,
+            Pubkey::new_from_array(request.token_program),
+            None,
+        )),
+    }
+}
+
+fn projected_state_source_v1<'a>(
+    input: &'a SeriesConsumeGeometryInputV1<'a>,
+    state: Pubkey,
+) -> Result<SeriesConsumeRoleSourceV1<'a>> {
+    match input.prestate {
+        SeriesConsumePrestateV1::PreparedPrediction => prepared_prediction_v1(
+            "prepared projected Custody state",
+            state,
+            PROJECTED_CUSTODY_STATE_BYTES_V2,
+        ),
+        SeriesConsumePrestateV1::ObservedPrepared => Ok(final_source_v1(
+            "prepared projected Custody state",
+            state,
+            input.custody,
+            None,
+        )),
+    }
+}
+
+fn source_replay_source_v1<'a>(
+    input: &'a SeriesConsumeGeometryInputV1<'a>,
+    replay: Pubkey,
+) -> Result<SeriesConsumeRoleSourceV1<'a>> {
+    match input.prestate {
+        SeriesConsumePrestateV1::PreparedPrediction => prepared_prediction_v1(
+            "prepared SeriesEscrow replay",
+            replay,
+            CUSTODY_REPLAY_BYTES_V1,
+        ),
+        SeriesConsumePrestateV1::ObservedPrepared => Ok(final_source_v1(
+            "prepared SeriesEscrow replay",
+            replay,
+            input.custody,
+            None,
+        )),
+    }
 }
 
 fn custody_authority_v1<'a>(

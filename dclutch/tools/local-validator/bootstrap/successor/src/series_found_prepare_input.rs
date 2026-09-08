@@ -423,6 +423,7 @@ pub(crate) fn build_series_found_prepare_selection_input_v1<'a>(
             "Basis",
         )?),
         semantic_basis_id: portfolio.liability_basis_id().to_bytes(),
+        claim_count: count,
         claims_rent_principals,
         permit_bump,
         projected_bump,

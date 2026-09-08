@@ -189,6 +189,11 @@ struct TerminalTransactionEvidenceV1 {
     compute_units_consumed: NullableV1<u64>,
     error: Value,
     logs: Vec<String>,
+    /// Finalized packet instruction evidence was added to the admission report
+    /// after the founding campaign reader. It is physical transcript detail;
+    /// keep accepting older founding reports that did not emit it.
+    #[serde(default)]
+    instructions: Vec<crate::model::InstructionEvidence>,
 }
 
 /// Required JSON field whose value may itself be null.
@@ -539,6 +544,7 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
             &transaction.fee_only_balance_change.0,
             &transaction.compute_units_consumed.0,
             &transaction.error,
+            &transaction.instructions,
         );
     }
     let market = execution
@@ -5967,6 +5973,7 @@ mod tests {
             compute_units_consumed: NullableV1(Some(88_000)),
             error: Value::Null,
             logs: Vec::new(),
+            instructions: Vec::new(),
         };
         let account = |address: Pubkey| CampaignAccountEvidenceV1 {
             address: address.to_string(),
@@ -6077,6 +6084,7 @@ mod tests {
             compute_units_consumed: NullableV1(Some(receipt.compute_units_consumed)),
             error: Value::Null,
             logs: Vec::new(),
+            instructions: Vec::new(),
         }
     }
 
@@ -6324,6 +6332,29 @@ mod tests {
                 },
             },
         })
+    }
+
+    #[test]
+    fn terminal_campaign_reader_accepts_current_instruction_evidence_and_old_reports() {
+        let path = std::env::temp_dir().join("dclutch-campaign-instructions.json");
+        let old = terminal_consumable_report(&path, checkpoint_value());
+        parse_campaign_terminal_evidence_v1(&serde_json::to_vec(&old).expect("old report JSON"))
+            .expect("older report without instruction evidence remains consumable");
+        let mut current = old;
+        current["execution"]["transactions"] = json!([{
+            "label": "admission",
+            "signature": Keypair::new().sign_message(b"admission").to_string(),
+            "slot": 1,
+            "transaction_metadata_available": true,
+            "fee_lamports": 1,
+            "fee_only_balance_change": false,
+            "compute_units_consumed": 1,
+            "error": null,
+            "logs": [],
+            "instructions": [{"program_id": Pubkey::new_unique().to_string(), "data_hex": ""}],
+        }]);
+        parse_campaign_terminal_evidence_v1(&serde_json::to_vec(&current).expect("current report JSON"))
+            .expect("current admission instruction evidence is accepted");
     }
 
     #[test]

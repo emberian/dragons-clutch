@@ -32,9 +32,9 @@ use dclutch_claims::{
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2, AffineBatchReceiptV2},
     composition_v3::ClaimsCompositionV3,
     founding_v5::{
-        CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6,
-        CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, CLAIMS_FOUNDING_REQUEST_MAGIC_V5,
-        ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
+        CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
+        CLAIMS_FOUNDING_REQUEST_MAGIC_V5, ClaimsFoundingFrameV6, ClaimsFoundingReceiptV5,
+        ClaimsFoundingRequestV5,
     },
     fractional_claim_check_compaction_receipt_v1::{
         FRACTIONAL_CLAIM_CHECK_COMPACT_RECEIPT_BYTES_V1, FractionalClaimCheckCompactionReceiptV1,
@@ -192,6 +192,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
         return Err(TradingSbfError::Content.into());
     }
     let (authority_seeds, receipt_kind) = route_authority(request, invocation.kind)?;
+    project_claims_child_privileges_v6(receipt_kind, &mut buffers.accounts)?;
     let (expected_authority, bump) = child_caller_authority_v4(&authority_seeds, program_id, hint)?;
     if buffers
         .accounts
@@ -682,6 +683,39 @@ fn gather_invocation_accounts<'info>(
         }
     } else if invocation.item_account_count != 0 || invocation.repeated_item_count != 0 {
         return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
+}
+
+/// Project an inherited physical account union to the exact Claims child frame.
+///
+/// Founding follows Lock and Core routes that may legitimately have needed the
+/// same physical Custody or permit account writable. That earlier capability is
+/// not part of Founding: Claims owns the fixed frame metadata and this is the
+/// sole production projection before `fill_metas` forms the CPI instruction.
+fn project_claims_child_privileges_v6(
+    receipt_kind: ReceiptKindV3,
+    accounts: &mut [AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    if !matches!(
+        receipt_kind,
+        ReceiptKindV3::Founding | ReceiptKindV3::SeriesFounding
+    ) {
+        return Ok(());
+    }
+    if accounts.len() != ClaimsFoundingFrameV6::ACCOUNT_COUNT {
+        return Err(TradingSbfError::Content.into());
+    }
+    for (coordinate, account) in accounts.iter_mut().enumerate() {
+        let expected =
+            ClaimsFoundingFrameV6::privileges(coordinate).map_err(|_| TradingSbfError::Content)?;
+        if account.executable != expected.executable()
+            || (expected.writable() && !account.is_writable)
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        account.is_signer = expected.signer();
+        account.is_writable = expected.writable();
     }
     Ok(())
 }
@@ -1756,33 +1790,27 @@ fn founding_post_resource_digests(
         return Err(TradingSbfError::Content.into());
     }
     let aggregate_data = child_accounts
-        .get(2)
+        .get(ClaimsFoundingFrameV6::AGGREGATE)
         .ok_or(TradingSbfError::Content)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
     let position_data = child_accounts
-        .get(3)
+        .get(ClaimsFoundingFrameV6::POSITION)
         .ok_or(TradingSbfError::Content)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
     let admission_data = child_accounts
-        .get(4)
+        .get(ClaimsFoundingFrameV6::ADMISSION)
         .ok_or(TradingSbfError::Content)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
-    let escrow_position_coordinate = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
-        .checked_sub(CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6)
-        .ok_or(TradingSbfError::Content)?;
-    let escrow_admission_coordinate = escrow_position_coordinate
-        .checked_add(1)
-        .ok_or(TradingSbfError::Content)?;
     let escrow_position_data = child_accounts
-        .get(escrow_position_coordinate)
+        .get(ClaimsFoundingFrameV6::ESCROW_POSITION)
         .ok_or(TradingSbfError::Content)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
     let escrow_admission_data = child_accounts
-        .get(escrow_admission_coordinate)
+        .get(ClaimsFoundingFrameV6::ESCROW_ADMISSION)
         .ok_or(TradingSbfError::Content)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
@@ -1849,6 +1877,95 @@ mod tests {
         let lamports = Box::leak(Box::new(0_u64));
         let data = Box::leak(data.into_boxed_slice());
         AccountInfo::new(key, signer, writable, lamports, data, owner, false)
+    }
+
+    fn founding_invocation_v6() -> ResolvedInvocationV3 {
+        ResolvedInvocationV3 {
+            role: FixedRole::Claims,
+            kind: RouteKindV3::Once,
+            item: None,
+            fixed_account_start: 0,
+            fixed_account_count: u16::try_from(ClaimsFoundingFrameV6::ACCOUNT_COUNT)
+                .expect("Founding V6 count fits u16"),
+            item_account_start: 0,
+            item_account_count: 0,
+            item_account_stride: 0,
+            repeated_item_count: 0,
+            request_offset: 0,
+            request_len: 0,
+            borrowed_witness: None,
+            receipt_dependencies: dclutch_vm::effect::v3::ResolvedReceiptDependenciesV3::empty(),
+            receipt_dependency: None,
+        }
+    }
+
+    #[test]
+    fn founding_privilege_projection_lowers_the_production_gathered_union() {
+        let mut physical: Vec<_> = (0..ClaimsFoundingFrameV6::ACCOUNT_COUNT)
+            .map(|_| account_info(false, false))
+            .collect();
+        for coordinate in [16_usize, 19, 20, 22, 24, 26, 30] {
+            physical
+                .get_mut(coordinate)
+                .expect("Founding executable coordinate")
+                .executable = true;
+        }
+        let logical: Vec<_> = physical.iter().collect();
+        // The physical representative union carries both bits from preceding
+        // Lock/Core routes. The production gather must not forward either one
+        // to Founding merely because an alias reused the same account.
+        let declared = vec![3_u8; ClaimsFoundingFrameV6::ACCOUNT_COUNT];
+        let effect_accounts = crate::hot_v3::downgraded_effect_accounts_v3(&logical, &declared)
+            .expect("production child views");
+        let mut gathered = Vec::new();
+        gather_invocation_accounts(&mut gathered, founding_invocation_v6(), effect_accounts)
+            .expect("production Founding gather");
+        project_claims_child_privileges_v6(ReceiptKindV3::Founding, &mut gathered)
+            .expect("Claims-owned Founding projection");
+
+        for (coordinate, account) in gathered.iter().enumerate() {
+            let expected = ClaimsFoundingFrameV6::privileges(coordinate)
+                .expect("gathered coordinate is Founding-owned");
+            assert_eq!(
+                account.is_signer,
+                expected.signer(),
+                "coordinate {coordinate}"
+            );
+            assert_eq!(
+                account.is_writable,
+                expected.writable(),
+                "coordinate {coordinate}"
+            );
+            assert_eq!(
+                account.executable,
+                expected.executable(),
+                "coordinate {coordinate}"
+            );
+        }
+        for coordinate in [
+            ClaimsFoundingFrameV6::PERMIT,
+            ClaimsFoundingFrameV6::FUNDING_SOURCE,
+            ClaimsFoundingFrameV6::HOARD,
+            ClaimsFoundingFrameV6::CUSTODY_REPLAY,
+            ClaimsFoundingFrameV6::RENT_CREDIT,
+        ] {
+            assert!(!gathered[coordinate].is_writable, "coordinate {coordinate}");
+            assert!(!gathered[coordinate].is_signer, "coordinate {coordinate}");
+        }
+
+        let mut missing_parent_write = gathered.clone();
+        missing_parent_write[ClaimsFoundingFrameV6::AGGREGATE].is_writable = false;
+        assert_eq!(
+            project_claims_child_privileges_v6(ReceiptKindV3::Founding, &mut missing_parent_write),
+            Err(ProgramError::Custom(TradingSbfError::Content as u32))
+        );
+
+        let mut hostile = gathered.clone();
+        hostile[19].executable = false;
+        assert_eq!(
+            project_claims_child_privileges_v6(ReceiptKindV3::Founding, &mut hostile),
+            Err(ProgramError::Custom(TradingSbfError::Content as u32))
+        );
     }
 
     fn fractional_root_info(
@@ -3199,12 +3316,8 @@ mod tests {
         let child_and_callee = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
             .checked_add(1)
             .expect("Founding child and callee count");
-        let escrow_position_coordinate = CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
-            .checked_sub(CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6)
-            .expect("Founding escrow starts within child frame");
-        let escrow_admission_coordinate = escrow_position_coordinate
-            .checked_add(1)
-            .expect("Founding escrow admission follows Position");
+        let escrow_position_coordinate = ClaimsFoundingFrameV6::ESCROW_POSITION;
+        let escrow_admission_coordinate = ClaimsFoundingFrameV6::ESCROW_ADMISSION;
 
         let accounts = |escrow_position: Vec<u8>, escrow_admission: Vec<u8>| {
             let mut accounts: Vec<_> = (0..child_and_callee)

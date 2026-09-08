@@ -58,6 +58,9 @@ pub(crate) struct SeriesFoundPrepareSelectionInputV1<'a> {
     pub(crate) principal_cap_sets: u64,
     pub(crate) linked_basis_record_digest: [u8; 32],
     pub(crate) semantic_basis_id: [u8; 32],
+    /// Exact M0 Portfolio coefficient count, carried to the Claims V6 child
+    /// because its appended failure escrow derives from the runtime width.
+    pub(crate) claim_count: u32,
     pub(crate) claims_rent_principals: [u64; 3],
     pub(crate) permit_bump: u8,
     pub(crate) projected_bump: u8,
@@ -332,6 +335,7 @@ pub(crate) fn derive_series_found_prepare_preprofile_v1(
     let claims = SeriesFoundingClaimsPhysicalV1 {
         linked_basis_record_digest: input.linked_basis_record_digest,
         semantic_basis_id: input.semantic_basis_id,
+        claim_count: input.claim_count,
         aggregate: physical.claims.aggregate.to_bytes(),
         position: physical.claims.position.to_bytes(),
         admission: physical.claims.admission.to_bytes(),
@@ -718,7 +722,7 @@ pub(crate) fn materialize_series_found_prepare_v1(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use dclutch_claims::{
@@ -769,7 +773,7 @@ mod tests {
             .expect("nonzero content identity")
     }
 
-    fn prepared_founder() -> PreparedSeriesFounderV1 {
+    pub(crate) fn prepared_founder() -> PreparedSeriesFounderV1 {
         let (plan, input, mint, founder, refund_owner) =
             crate::market::tests::selected_family_compiler_fixture_v1();
         let id = |byte| ContentId::new([byte; 32]).expect("authored policy identity");
@@ -808,7 +812,7 @@ mod tests {
         .expect("canonical Market preview produces admitted Series leaves")
     }
 
-    fn compiler_input<'a>(
+    pub(crate) fn compiler_input<'a>(
         prepared: &'a PreparedSeriesFounderV1,
         parent_root: Pubkey,
         ticket_bytes: &'a [u8],
@@ -950,6 +954,9 @@ mod tests {
             principal_cap_sets: 1,
             linked_basis_record_digest: record_identity(&prepared.publication.basis),
             semantic_basis_id: content(&prepared.facts.occurrences[0].liability_basis).to_bytes(),
+            claim_count: dclutch_product::PortfolioV2::decode(&prepared.publication.portfolio)
+                .expect("canonical M0 Portfolio")
+                .coefficient_count(),
             claims_rent_principals: [1, 1, 1],
             permit_bump,
             projected_bump: 1,

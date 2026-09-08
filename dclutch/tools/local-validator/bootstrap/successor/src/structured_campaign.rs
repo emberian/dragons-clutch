@@ -6,7 +6,7 @@
 //! boundary for the seven immutable Structured records; the Journey owns the
 //! surrounding checked substrate and founding sequence.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_claims::{
@@ -55,6 +55,7 @@ use dclutch_registry::{
     record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId},
     release_set::CapabilityExecutionSelectionV1,
 };
+use dclutch_versioned_message_operator::{Observation, ObservedAccount};
 use serde_json::json;
 use sha2::Digest as _;
 use solana_sdk::{
@@ -83,6 +84,7 @@ use crate::{
         // admission; the compiler's in-memory bytes are not evidence.
         hydrate_structured_publication_input_same_slot_v1,
         publish_structured_publication_closure_v1,
+        record_coordinates_v1,
     },
     structured_composition_admission::hydrate_structured_composition_admission_v1,
     structured_physical_frame::{
@@ -276,16 +278,26 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         None
     };
     let published = if arguments.execute {
-        Some(publish_structured_publication_closure_v1(
-            &mut rpc,
-            registry,
-            payer
-                .as_ref()
-                .ok_or_else(|| Error::new("Structured campaign omitted payer"))?,
-            &closure,
-            input_release_slot(&artifacts, activation_slot),
-            &mut transactions,
-        )?)
+        let payer = payer
+            .as_ref()
+            .ok_or_else(|| Error::new("Structured campaign omitted payer"))?;
+        if std::env::var_os("DCLUTCH_STRUCTURED_REUSE_CLOSURE").is_some() {
+            Some(reuse_structured_publication_closure_v1(
+                &mut rpc,
+                registry,
+                &closure,
+                activation_slot,
+            )?)
+        } else {
+            Some(publish_structured_publication_closure_v1(
+                &mut rpc,
+                registry,
+                payer,
+                &closure,
+                input_release_slot(&artifacts, activation_slot),
+                &mut transactions,
+            )?)
+        }
     } else {
         None
     };
@@ -751,6 +763,175 @@ fn authenticate_receipt_descriptor_publication_v1(
     Ok(expected)
 }
 
+/// Reacquire an already-published Structured closure for a diagnostic
+/// continuation.  The bytes still come from the compiler's authenticated
+/// closure, while this snapshot proves every raw record and vacant cursor is
+/// the exact finalized target before a Hot frame is assembled.
+fn reuse_structured_publication_closure_v1(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    closure: &crate::structured_claims_producer::StructuredPublicationClosureV1,
+    minimum_slot: u64,
+) -> Result<crate::structured_claims_producer::PublishedStructuredClosureV1> {
+    let targets = closure.publication_targets();
+    let addresses = targets
+        .iter()
+        .flat_map(|target| {
+            record_coordinates_v1(
+                registry,
+                target.schema_id,
+                sha2::Sha256::digest(target.bytes).into(),
+            )
+            .ok()
+            .into_iter()
+            .flat_map(|(raw, staging)| [raw, staging])
+        })
+        .collect::<Vec<_>>();
+    if addresses.len() != targets.len().saturating_mul(2) {
+        return Err(Error::new(
+            "Structured diagnostic closure coordinate count differed from seven targets",
+        ));
+    }
+    let (slot_observation, observed) =
+        rpc.finalized_observed_accounts_admitting_vacant(&addresses, minimum_slot)?;
+    let mut records = Vec::with_capacity(targets.len());
+    for (index, target) in targets.iter().enumerate() {
+        let raw = observed
+            .get(index.saturating_mul(2))
+            .ok_or_else(|| Error::new("Structured diagnostic closure raw record is absent"))?;
+        let staging = observed
+            .get(index.saturating_mul(2).saturating_add(1))
+            .ok_or_else(|| Error::new("Structured diagnostic closure staging cursor is absent"))?;
+        let digest: [u8; 32] = sha2::Sha256::digest(target.bytes).into();
+        let (expected_raw, expected_staging) =
+            record_coordinates_v1(registry, target.schema_id, digest)?;
+        if raw.key != expected_raw
+            || staging.key != expected_staging
+            || raw.owner != registry
+            || raw.data != target.bytes
+            || staging.owner != solana_sdk_ids::system_program::ID
+            || !staging.data.is_empty()
+        {
+            return Err(Error::new(format!(
+                "Structured diagnostic closure target {index} differs from finalized Registry state"
+            )));
+        }
+        dclutch_operator::observation::authenticate_finalized_record(
+            registry,
+            raw,
+            &dclutch_operator::observation::FinalizedRecordProof {
+                schema_release_id: target.schema_id,
+                staging_cursor: staging.clone(),
+            },
+        )
+        .map_err(|error| {
+            Error::new(format!(
+                "Structured diagnostic closure target {index} refused: {error:?}"
+            ))
+        })?;
+        records.push(crate::runtime::PublishedRecord {
+            schema: target.schema_id,
+            digest,
+            raw: expected_raw,
+            staging: expected_staging,
+        });
+    }
+    let records: [crate::runtime::PublishedRecord; 7] = records.try_into().map_err(|_| {
+        Error::new("Structured diagnostic closure target count differed from seven")
+    })?;
+    Ok(
+        crate::structured_claims_producer::PublishedStructuredClosureV1 {
+            slot: slot_observation.slot,
+            records,
+        },
+    )
+}
+
+/// Save the exact routed Hot packet and its finalized account image before a
+/// diagnostic run submits it.  The replay tool can replace only Trading's
+/// ELF tail, preserving this frame's release-pinned Loader header.
+fn write_structured_frame_capture_v1(
+    rpc: &mut Rpc,
+    path: &Path,
+    instructions: &[solana_sdk::instruction::Instruction],
+    fee_payer: Pubkey,
+    observation: Observation,
+    tables: &[ObservedAccount],
+) -> Result<()> {
+    let bounded =
+        crate::rpc::bounded_instructions(instructions, Some(DIRECT_HOT_HEAP_FRAME_BYTES_V1))?;
+    let (blockhash, _) = rpc.recent_blockhash_with_height_v1()?;
+    let plan = dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
+        fee_payer,
+        &bounded,
+        solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+        observation,
+        tables,
+    )
+    .map_err(|error| Error::new(format!("Structured receipt capture message: {error:?}")))?;
+    let transaction = solana_sdk::transaction::VersionedTransaction {
+        signatures: vec![
+            solana_sdk::signature::Signature::default();
+            usize::from(plan.required_signatures.max(1))
+        ],
+        message: plan.message,
+    };
+    let packet = bincode::serialize(&transaction)
+        .map_err(|error| Error::new(format!("Structured receipt capture packet: {error}")))?;
+    let mut addresses = std::collections::BTreeSet::new();
+    addresses.insert(fee_payer);
+    for instruction in &bounded {
+        addresses.insert(instruction.program_id);
+        addresses.extend(instruction.accounts.iter().map(|meta| meta.pubkey));
+    }
+    for table in tables {
+        addresses.insert(table.key);
+    }
+    let mut state = serde_json::Map::new();
+    for address in addresses {
+        if let Some(account) = rpc.account(address)? {
+            state.insert(
+                address.to_string(),
+                json!({
+                    "lamports": account.lamports,
+                    "owner": account.owner.to_string(),
+                    "executable": account.executable,
+                    "rentEpoch": account.rent_epoch,
+                    "dataBase64": BASE64.encode(&account.data),
+                }),
+            );
+        }
+    }
+    let frames = bounded
+        .iter()
+        .map(|instruction| {
+            json!({
+                "programId": instruction.program_id.to_string(),
+                "accounts": instruction.accounts.iter().map(|meta| meta.pubkey.to_string()).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&json!({
+            "schema": "dclutch-devnet-frame-capture-v1",
+            "label": "structured-receipt-diagnostic",
+            "warpSlot": rpc.finalized_slot()?,
+            "transactionBase64": BASE64.encode(&packet),
+            "instructions": frames,
+            "state": state,
+        }))?,
+    )?;
+    eprintln!(
+        "structured receipt diagnostic capture written to {}",
+        path.display()
+    );
+    Ok(())
+}
+
 /// Create the permissionless seal (when vacant) and execute the first real
 /// Structured lifecycle action in one routed, atomic transaction.  Every
 /// coordinate is recovered from finalized records or the root just accepted;
@@ -819,7 +1000,7 @@ fn activate_structured_receipt_v1(
             "Structured receipt publication descriptor finalized bytes differ",
         ));
     }
-    let descriptor = selected_pair_v1(
+    let representation_descriptor_record = selected_pair_v1(
         registry,
         dclutch_claims::rational_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
         receipt_descriptor,
@@ -829,6 +1010,7 @@ fn activate_structured_receipt_v1(
         let value = &artifacts.bundle_records[index];
         selected_pair_v1(registry, value.schema, &value.body)
     };
+    let capability_descriptor = pair(0)?;
     let profile = pair(1)?;
     let request = pair(2)?;
     let lifecycle = pair(3)?;
@@ -919,7 +1101,7 @@ fn activate_structured_receipt_v1(
     for (index, record) in [
         (HOT_MANIFEST_RAW_ACCOUNT_V3, manifest),
         (HOT_PROGRAM_SET_RAW_ACCOUNT_V3, program_set),
-        (HOT_DESCRIPTOR_RAW_ACCOUNT_V3, descriptor),
+        (HOT_DESCRIPTOR_RAW_ACCOUNT_V3, capability_descriptor),
         (HOT_CONFIG_RAW_ACCOUNT_V3, config),
         (HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, profile),
         (HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, request),
@@ -1030,8 +1212,8 @@ fn activate_structured_receipt_v1(
             claims_programdata: pubkey(&plan.claims.programdata_id)?,
             registry,
             activation_cache: pubkey(&plan.activation)?,
-            descriptor_raw: descriptor.raw,
-            descriptor_staging: descriptor.staging,
+            descriptor_raw: representation_descriptor_record.raw,
+            descriptor_staging: representation_descriptor_record.staging,
             representation_authority,
             receipt_mint,
             rent_credit,
@@ -1103,7 +1285,7 @@ fn activate_structured_receipt_v1(
     };
     let seal_key = dclutch_vm::capability_seal::CapabilitySealKeyV1::new(
         dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
-        descriptor_id,
+        capability_descriptor.content,
         STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1,
         activated
             .role(ExecutionRoleV1::Trading)
@@ -1147,9 +1329,8 @@ fn activate_structured_receipt_v1(
         core_state.identity.realm_id.to_bytes(),
     )?;
     let seal_before = rpc.account(fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3])?;
-    let mut instructions = Vec::new();
-    if seal_before.is_none() {
-        instructions.push(
+    let seal_instruction = if seal_before.is_none() {
+        Some(
             capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
                 trading_program: trading,
                 registry_program: registry,
@@ -1158,16 +1339,29 @@ fn activate_structured_receipt_v1(
                     .release()
                     .semantic_release_id()
                     .to_bytes(),
-                descriptor_digest: descriptor_id,
+                descriptor_digest: capability_descriptor.content,
                 action: STRUCTURED_ACTIVATE_RECEIPT_SELECTOR_V1,
                 fixed_frame: &fixed,
                 payer: payer.pubkey(),
             })
             .map_err(|error| Error::new(format!("Structured receipt seal builder: {error:?}")))?
             .instruction,
-        );
+        )
+    } else {
+        None
+    };
+    let hot_instruction = hot.instruction;
+    // The root is read-only to the permissionless seal outer, while Hot owns
+    // its writable root frame. Solana merges account privileges across one
+    // message, so putting both instructions in one transaction upgrades the
+    // seal's root meta and makes Trading refuse its exact frame conjunction.
+    // Publish one table for both packets, then submit the seal in its own
+    // transaction before the Hot action.
+    let mut instructions = Vec::new();
+    if let Some(seal) = seal_instruction.as_ref() {
+        instructions.push(seal.clone());
     }
-    instructions.push(hot.instruction);
+    instructions.push(hot_instruction.clone());
     let mut routing_addresses = std::collections::BTreeSet::new();
     for instruction in &instructions {
         routing_addresses.insert(instruction.program_id);
@@ -1181,9 +1375,54 @@ fn activate_structured_receipt_v1(
         &routing_addresses,
         transactions,
     )?;
+    if let Some(path) = std::env::var_os("DCLUTCH_STRUCTURED_FRAME_CAPTURE") {
+        let capture_instructions =
+            if std::env::var_os("DCLUTCH_STRUCTURED_CAPTURE_SEAL_ONLY").is_some() {
+                instructions.get(..1).ok_or_else(|| {
+                    Error::new("Structured receipt capture omitted seal instruction")
+                })?
+            } else if std::env::var_os("DCLUTCH_STRUCTURED_CAPTURE_HOT_ONLY").is_some() {
+                if seal_instruction.is_some() {
+                    instructions.get(1..).ok_or_else(|| {
+                        Error::new("Structured receipt capture omitted Hot instruction")
+                    })?
+                } else {
+                    instructions.as_slice()
+                }
+            } else {
+                instructions.as_slice()
+            };
+        write_structured_frame_capture_v1(
+            rpc,
+            Path::new(&path),
+            capture_instructions,
+            payer.pubkey(),
+            observation,
+            &tables,
+        )?;
+        return Err(Error::new(
+            "Structured receipt diagnostic capture written; submission skipped",
+        ));
+    }
+    if let Some(seal) = seal_instruction.as_ref() {
+        let seal_sent = rpc.send_v0_on_heap(
+            "materialize Structured receipt capability seal",
+            std::slice::from_ref(seal),
+            payer,
+            observation,
+            &tables,
+            DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+        )?;
+        if let Some(error) = seal_sent.error.as_ref() {
+            return Err(Error::new(format!(
+                "Structured receipt seal refused on chain: {error}"
+            )));
+        }
+        transactions.push(seal_sent);
+    }
     let sent = rpc.send_v0_on_heap(
         "activate Structured receipt",
-        &instructions,
+        std::slice::from_ref(&hot_instruction),
         payer,
         observation,
         &tables,

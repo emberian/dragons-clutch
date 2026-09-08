@@ -322,6 +322,7 @@ pub fn plan_provider_resolution_v3(
     finish_plan(
         request_bytes,
         &request,
+        source_records.provider_release_id.to_bytes(),
         resolved.next_source,
         provider_evidence,
         update_digest,
@@ -643,6 +644,7 @@ fn select_rung<'a>(
 fn finish_plan(
     request_bytes: &[u8],
     request: &ProviderExecutionRequestV3,
+    certificate_route: [u8; 32],
     next_source: SourceResolutionStateV2,
     provider_evidence: [u8; 32],
     update_digest: [u8; 32],
@@ -660,7 +662,11 @@ fn finish_plan(
     let certificate = ResolutionCertificateV2 {
         kind: ResolutionCertificateKindV2::ResolutionSuccess,
         market: request.market,
-        route: request.provider_release,
+        // The request's provider release is the Pyth deployment that
+        // authenticated this update.  A certificate route instead names the
+        // SourceSpec's ProviderRelease record, which is the immutable route
+        // an ensemble fold authenticates for each member.
+        route: certificate_route,
         source_material: request.source_material,
         product_record_digest,
         provider_evidence,
@@ -917,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ensemble_fragment_names_its_resolver_as_captor() {
+    fn an_ensemble_fragment_names_its_resolver_and_source_provider_route() {
         let source = SourceResolutionStateV2::fresh([14; 32], 7, source_id(15), [16; 32], 1, 0, 0)
             .expect("primary source")
             .state();
@@ -925,6 +931,7 @@ mod tests {
         let plan = finish_plan(
             b"ensemble-member-capture",
             &request,
+            [20; 32],
             source,
             [17; 32],
             [18; 32],
@@ -939,6 +946,9 @@ mod tests {
         )
         .expect("fragment certificate");
         assert_eq!(plan.certificate.receipt_account, request.resolver);
+        assert_eq!(plan.certificate.route, [20; 32]);
+        assert_eq!(plan.receipt.provider_release, request.provider_release);
+        assert_ne!(plan.certificate.route, plan.receipt.provider_release);
         assert_eq!(plan.certificate.attempt_index, 2);
         assert_eq!(plan.capture, ProviderCaptureV3::Member(2));
     }

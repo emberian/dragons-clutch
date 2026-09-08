@@ -19,7 +19,8 @@ mod generated_series_found_ack_v2;
 pub use generated_series_found_ack_v2::*;
 
 use crate::{
-    CoreState, Error, Identity, MarketIdentity, Phase, Product, Realm, ReleaseSet, Role,
+    CoreState, Error, FOUND_ACCOUNT_COUNT_V3, FOUND_ACCOUNT_ROLES_V3, Identity, MarketIdentity,
+    Phase, Product, Realm, ReleaseSet, Role,
     generated_physical::{
         ACK_ACTION_OFFSET, ACK_CONTEXT_OFFSET, ACK_EFFECT_DIGEST_OFFSET, ACK_MAGIC_OFFSET,
         ACK_MARKET_OFFSET, ACK_POST_RESOURCE_A_REVISION_OFFSET,
@@ -1719,5 +1720,157 @@ fn decode_role(tag: u8) -> Result<Role, Error> {
         3 => Ok(Role::Resolution),
         4 => Ok(Role::Custody),
         _ => Err(Error::InvalidTag),
+    }
+}
+/// Exact physical account width of the final recurring-Series Open frame.
+///
+/// The Core adapter parses this contract directly. The two failure-escrow
+/// accounts are appended at locals 37 and 38 after Clock and Rent.
+pub const SERIES_OPEN_ACCOUNT_COUNT_U16_V1: u16 = 39;
+/// Exact physical account width for Core slice APIs.
+pub const SERIES_OPEN_ACCOUNT_COUNT_V1: usize = SERIES_OPEN_ACCOUNT_COUNT_U16_V1 as usize;
+
+/// First local coordinate of the Series Found suffix after Core's generated
+/// 37-account Found frame and the eleven Series evidence accounts.
+pub const SERIES_CONSUME_FOUND_SUFFIX_START_V1: usize = FOUND_ACCOUNT_COUNT_V3 + 11;
+/// Exact local count of the Series Found suffix.
+pub const SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 13;
+/// Minimum ordered FundingState count in a Series Found child frame.
+pub const SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1: usize = 1;
+/// Maximum ordered FundingState count in a Series Found child frame.
+pub const SERIES_CONSUME_FOUND_MAXIMUM_FUNDING_COUNT_V1: usize = 16;
+
+/// Project the exact writable bit for one Core-owned Series child coordinate.
+///
+/// The authenticated outer profile owns the physical union. This projection
+/// owns the narrower Core CPI view, and may only remove a writable bit that
+/// the parent already carried. Coordinate zero is signed by Trading only
+/// inside the CPI; no caller-provided signer survives this projection.
+pub const fn series_core_child_writable_v1(
+    frame_account_count: usize,
+    local_coordinate: usize,
+) -> Option<bool> {
+    if frame_account_count == SERIES_OPEN_ACCOUNT_COUNT_V1 {
+        return if local_coordinate < SERIES_OPEN_ACCOUNT_COUNT_V1 {
+            Some(matches!(local_coordinate, 1..=3))
+        } else {
+            None
+        };
+    }
+    let fixed = SERIES_CONSUME_FOUND_SUFFIX_START_V1 + SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1;
+    let Some(funding_count) = frame_account_count.checked_sub(fixed) else {
+        return None;
+    };
+    if local_coordinate >= frame_account_count
+        || funding_count < SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1
+        || funding_count > SERIES_CONSUME_FOUND_MAXIMUM_FUNDING_COUNT_V1
+    {
+        return None;
+    }
+    if local_coordinate < FOUND_ACCOUNT_COUNT_V3 {
+        return Some(FOUND_ACCOUNT_ROLES_V3[local_coordinate].0);
+    }
+    Some(local_coordinate == SERIES_CONSUME_FOUND_SUFFIX_START_V1 + funding_count)
+}
+
+#[cfg(test)]
+mod series_core_child_privilege_tests {
+    use super::*;
+
+    #[test]
+    fn found_suffix_drops_claims_writable_union() {
+        let found_width = SERIES_CONSUME_FOUND_SUFFIX_START_V1
+            + SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1
+            + SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1;
+        assert_eq!(
+            series_core_child_writable_v1(
+                found_width,
+                SERIES_CONSUME_FOUND_SUFFIX_START_V1
+                    + SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1
+            ),
+            Some(true)
+        );
+        for local in 9..=11 {
+            assert_eq!(
+                series_core_child_writable_v1(
+                    found_width,
+                    SERIES_CONSUME_FOUND_SUFFIX_START_V1
+                        + SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1
+                        + local
+                ),
+                Some(false)
+            );
+        }
+    }
+
+    #[test]
+    fn open_drops_all_claims_and_custody_union_writes() {
+        for local in 0..SERIES_OPEN_ACCOUNT_COUNT_V1 {
+            let expected = matches!(local, 1..=3);
+            assert_eq!(
+                series_core_child_writable_v1(SERIES_OPEN_ACCOUNT_COUNT_V1, local),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            series_core_child_writable_v1(SERIES_OPEN_ACCOUNT_COUNT_V1, 39),
+            None
+        );
+    }
+
+    #[test]
+    fn found_funding_bounds_and_permit_shift_are_exact() {
+        let fixed =
+            SERIES_CONSUME_FOUND_SUFFIX_START_V1 + SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1;
+        assert_eq!(series_core_child_writable_v1(fixed, 0), None);
+        assert_eq!(
+            series_core_child_writable_v1(
+                fixed + SERIES_CONSUME_FOUND_MAXIMUM_FUNDING_COUNT_V1 + 1,
+                0
+            ),
+            None
+        );
+        let width = fixed + SERIES_CONSUME_FOUND_MAXIMUM_FUNDING_COUNT_V1;
+        assert_eq!(
+            series_core_child_writable_v1(
+                width,
+                SERIES_CONSUME_FOUND_SUFFIX_START_V1
+                    + SERIES_CONSUME_FOUND_MAXIMUM_FUNDING_COUNT_V1
+            ),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn native_core_parser_writable_sets_match_every_legal_local() {
+        // `series_consume.rs` composes FoundAccounts::parse (locals 0 and 1
+        // writable), a readonly 11-account evidence prefix, readonly funding
+        // entries, and SeriesFoundSuffix::parse (only its permit writable).
+        for funding_count in [
+            SERIES_CONSUME_FOUND_MINIMUM_FUNDING_COUNT_V1,
+            SERIES_CONSUME_FOUND_MAXIMUM_FUNDING_COUNT_V1,
+        ] {
+            let width = SERIES_CONSUME_FOUND_SUFFIX_START_V1
+                + SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1
+                + funding_count;
+            let permit = SERIES_CONSUME_FOUND_SUFFIX_START_V1 + funding_count;
+            for local in 0..width {
+                assert_eq!(
+                    series_core_child_writable_v1(width, local),
+                    Some(matches!(local, 0 | 1) || local == permit),
+                    "Found local {local} with {funding_count} FundingState entries"
+                );
+            }
+        }
+
+        // `series_open.rs` admits only Market, permit, and rent credit as
+        // writable. The CPI builder separately restores its PDA signer at 0.
+        for local in 0..SERIES_OPEN_ACCOUNT_COUNT_V1 {
+            assert_eq!(
+                series_core_child_writable_v1(SERIES_OPEN_ACCOUNT_COUNT_V1, local),
+                Some(matches!(local, 1..=3)),
+                "Open local {local}"
+            );
+        }
     }
 }

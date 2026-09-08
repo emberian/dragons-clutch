@@ -767,6 +767,364 @@ fn require_alias_addresses_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::market::{FutureMarketFinalizedRecordV1, FutureMarketImmutablePublicationV1};
+    use crate::series_found_prepare_campaign::derive_series_found_prepare_preprofile_v1;
+    use crate::series_found_prepare_campaign::tests::{compiler_input, prepared_founder};
+    use crate::series_found_prepare_driver::{
+        SeriesPrepareFinalizedAccountV1, SeriesPrepareFinalizedRecordV1,
+        series_prepare_m0_frame_from_publication_v1, series_prepare_records_from_m0_publication_v1,
+    };
+    use crate::series_found_prepare_input::{SeriesParentRootFactV1, SeriesPredictedParentRootV1};
+    use dclutch_market::{
+        capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        realm::REALM_SCHEMA_RELEASE_ID_V1,
+    };
+    use dclutch_product::{
+        admission::{
+            PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+        },
+        payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    };
+    use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_source::{
+        PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1,
+    };
+    use dclutch_trading::series::{
+        SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+        SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+    };
+    use solana_program::hash::hash;
+    use solana_sdk::pubkey::Pubkey;
+    use solana_sdk_ids::bpf_loader_upgradeable;
+
+    fn published_record(
+        registry: Pubkey,
+        schema: [u8; 32],
+        body: &[u8],
+    ) -> crate::runtime::PublishedRecord {
+        let digest = hash(body).to_bytes();
+        crate::runtime::PublishedRecord {
+            schema,
+            digest,
+            raw: Pubkey::find_program_address(
+                &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+                &registry,
+            )
+            .0,
+            staging: Pubkey::find_program_address(
+                &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+                &registry,
+            )
+            .0,
+        }
+    }
+
+    /// Build the same M0 record closure shape that the publisher hands to
+    /// Prepare.  Bodies are the canonical Market compiler output; only the
+    /// non-record ProjectFound accounts use deterministic test identities.
+    fn canonical_m0_publication(
+        prepared: &crate::series_founder::PreparedSeriesFounderV1,
+        registry: Pubkey,
+        market: Pubkey,
+        source_spec_body: &[u8],
+        source_capacity_body: &[u8],
+    ) -> FutureMarketImmutablePublicationV1 {
+        let realm = published_record(
+            registry,
+            REALM_SCHEMA_RELEASE_ID_V1,
+            &prepared.publication.realm,
+        );
+        let product = published_record(
+            registry,
+            PRODUCT_RECORD_SCHEMA_ID_V2,
+            &prepared.publication.product,
+        );
+        let domain = published_record(
+            registry,
+            RESULT_DOMAIN_SCHEMA_ID_V2,
+            &prepared.publication.domain,
+        );
+        let portfolio = published_record(
+            registry,
+            PORTFOLIO_SCHEMA_ID_V2,
+            &prepared.publication.portfolio,
+        );
+        let basis = published_record(
+            registry,
+            GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+            &prepared.publication.basis,
+        );
+        let source = published_record(
+            registry,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+            &prepared.publication.source,
+        );
+        let source_spec = published_record(registry, SOURCE_SPEC_SCHEMA_ID_V1, source_spec_body);
+        let source_capacity = published_record(
+            registry,
+            SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+            source_capacity_body,
+        );
+        let manifest = published_record(
+            registry,
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            &prepared.publication.manifest,
+        );
+        let key = |byte| Pubkey::new_from_array([byte; 32]);
+        let credit = key(2);
+        let rent_program = key(3);
+        let activation = key(4);
+        let core = key(5);
+        let core_programdata = key(6);
+        let infrastructure = key(7);
+        let registry_programdata = key(8);
+        let rent_artifact =
+            published_record(registry, PROVIDER_RELEASE_SCHEMA_ID_V1, b"rent artifact");
+        let registry_artifact = published_record(
+            registry,
+            PROVIDER_RELEASE_SCHEMA_ID_V1,
+            b"registry artifact",
+        );
+        let rent_programdata = key(9);
+        let system = solana_sdk_ids::system_program::ID;
+        let project_found = [
+            key(10),
+            market,
+            credit,
+            rent_program,
+            realm.raw,
+            realm.staging,
+            product.raw,
+            product.staging,
+            domain.raw,
+            domain.staging,
+            portfolio.raw,
+            portfolio.staging,
+            basis.raw,
+            basis.staging,
+            source.raw,
+            source.staging,
+            source_spec.raw,
+            source_spec.staging,
+            source_capacity.raw,
+            source_capacity.staging,
+            key(11),
+            key(12),
+            manifest.raw,
+            manifest.staging,
+            activation,
+            core,
+            core_programdata,
+            registry,
+            system,
+            infrastructure,
+            registry_artifact.raw,
+            registry_artifact.staging,
+            registry_programdata,
+            rent_artifact.raw,
+            rent_artifact.staging,
+            rent_programdata,
+        ];
+        let series_prepare_records = [
+            (realm, prepared.publication.realm.as_slice()),
+            (product, prepared.publication.product.as_slice()),
+            (domain, prepared.publication.domain.as_slice()),
+            (portfolio, prepared.publication.portfolio.as_slice()),
+            (basis, prepared.publication.basis.as_slice()),
+            (source, prepared.publication.source.as_slice()),
+            (source_spec, source_spec_body),
+            (source_capacity, source_capacity_body),
+            (manifest, prepared.publication.manifest.as_slice()),
+        ]
+        .into_iter()
+        .map(|(published, body)| FutureMarketFinalizedRecordV1 {
+            published,
+            body: body.to_vec(),
+        })
+        .collect();
+        FutureMarketImmutablePublicationV1 {
+            realm,
+            product,
+            domain,
+            portfolio,
+            manifest,
+            rent_credit: credit,
+            project_found,
+            principal_cap_sets: 1,
+            series_prepare_records,
+            series_prepare_vacancies: vec![key(11), key(12)],
+        }
+    }
+
+    fn finalized(address: Pubkey) -> SeriesPrepareFinalizedAccountV1 {
+        SeriesPrepareFinalizedAccountV1 {
+            address,
+            expected_owner: bpf_loader_upgradeable::ID,
+        }
+    }
+
+    #[test]
+    fn derive_roles_accepts_canonical_m0_and_refuses_root_basis_and_alias_substitutions() {
+        let prepared = prepared_founder();
+        let parent_root = Pubkey::new_from_array([0x55; 32]);
+        let mut selection = compiler_input(&prepared, parent_root, &prepared.admitted.tickets()[0]);
+        selection.geometry = None;
+        let preprofile = derive_series_found_prepare_preprofile_v1(&mut selection)
+            .expect("canonical founder child bank");
+        let registry = Pubkey::new_from_array(selection.registry_program.to_bytes());
+        let (_, market_input, _, _, _) =
+            crate::market::tests::selected_family_compiler_fixture_v1();
+        let source_spec_body = crate::runtime::decode_hex(&market_input.source_spec_hex)
+            .expect("canonical source spec body");
+        let source_capacity_body =
+            crate::runtime::decode_hex(&market_input.source_capacity_profile_hex)
+                .expect("canonical source capacity body");
+        let publication = canonical_m0_publication(
+            &prepared,
+            registry,
+            selection.material.market,
+            &source_spec_body,
+            &source_capacity_body,
+        );
+        let m0_records = series_prepare_records_from_m0_publication_v1(&publication);
+        let mut finalized_accounts = publication
+            .project_found
+            .iter()
+            .copied()
+            .filter(|address| {
+                !m0_records
+                    .iter()
+                    .any(|record| record.raw == *address || record.staging == *address)
+                    && !publication.series_prepare_vacancies.contains(address)
+                    && *address != publication.project_found[1]
+            })
+            .map(finalized)
+            .collect::<Vec<_>>();
+        let physical = preprofile.physical();
+        finalized_accounts.extend(
+            [
+                selection.material.mint,
+                selection.material.token_program,
+                selection.material.refund_owner,
+                selection.material.rent_credit,
+                Pubkey::new_from_array(physical.expire.escrow_vault),
+                Pubkey::new_from_array(physical.expire.hoard_vault),
+                physical.custody_authority,
+                selection.material.trading,
+                selection.material.custody,
+                selection.material.core,
+                selection.material.rent_program,
+                selection.material.claims,
+            ]
+            .into_iter()
+            .map(finalized),
+        );
+        let m0 = series_prepare_m0_frame_from_publication_v1(
+            &publication,
+            &m0_records,
+            &finalized_accounts,
+        );
+        let founder_record = |schema, body| {
+            let published = published_record(registry, schema, body);
+            SeriesPrepareFinalizedRecordV1 {
+                schema,
+                body,
+                raw: published.raw,
+                staging: published.staging,
+            }
+        };
+        let portfolio = m0_records
+            .iter()
+            .copied()
+            .find(|record| record.raw == publication.portfolio.raw)
+            .expect("M0 portfolio record");
+        let records = SeriesPrepareHydrationRecordsV1 {
+            template: founder_record(
+                SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+                prepared.admitted.template(),
+            ),
+            occurrence: founder_record(
+                SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+                &prepared.admitted.occurrences()[0],
+            ),
+            ticket: founder_record(
+                SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+                &prepared.admitted.tickets()[0],
+            ),
+            portfolio,
+        };
+        let root_fact = SeriesParentRootFactV1::Predicted(SeriesPredictedParentRootV1 {
+            root: parent_root,
+            data_len: dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
+        });
+        let input = SeriesExpireGeometryInputV1 {
+            preprofile: &preprofile,
+            m0,
+            records,
+            parent_root: root_fact,
+            registry,
+            trading: selection.material.trading,
+            custody: selection.material.custody,
+            minimum_slot: 1,
+        };
+        let roles = derive_roles_v1(&input).expect("canonical M0 Expire role constructor");
+        assert_eq!(roles.len(), SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize);
+        require_alias_addresses_v1(&roles).expect("canonical alias representatives");
+
+        let bad_root = SeriesExpireGeometryInputV1 {
+            preprofile: input.preprofile,
+            m0: input.m0,
+            records: input.records,
+            parent_root: SeriesParentRootFactV1::Predicted(SeriesPredictedParentRootV1 {
+                root: parent_root,
+                data_len: 0,
+            }),
+            registry: input.registry,
+            trading: input.trading,
+            custody: input.custody,
+            minimum_slot: input.minimum_slot,
+        };
+        assert!(
+            derive_roles_v1(&bad_root)
+                .expect_err("wrong root width must refuse")
+                .to_string()
+                .contains("root width")
+        );
+
+        let mut bad_m0 = input.m0;
+        bad_m0.project_found[12] = Pubkey::new_unique();
+        let bad_basis = SeriesExpireGeometryInputV1 {
+            preprofile: input.preprofile,
+            m0: bad_m0,
+            records: input.records,
+            parent_root: input.parent_root,
+            registry: input.registry,
+            trading: input.trading,
+            custody: input.custody,
+            minimum_slot: input.minimum_slot,
+        };
+        assert!(
+            derive_roles_v1(&bad_basis)
+                .expect_err("substituted M0 basis must refuse")
+                .to_string()
+                .contains("M0")
+        );
+
+        let mut bad_aliases = roles;
+        let (alias, _) = SERIES_EXPIRE_ROUTE_ALIASES_V5[0];
+        bad_aliases[usize::from(alias)] = Source::Vacancy {
+            role: "substituted alias",
+            address: Pubkey::new_unique(),
+            width: 0,
+        };
+        assert!(
+            require_alias_addresses_v1(&bad_aliases)
+                .expect_err("substituted alias must refuse")
+                .to_string()
+                .contains("alias")
+        );
+    }
 
     #[test]
     fn generated_aliases_accept_one_canonical_physical_role() {

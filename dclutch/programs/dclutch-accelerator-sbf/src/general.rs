@@ -10,7 +10,7 @@ use alloc::vec;
 
 use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::hot_v3::{
-    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_RUNTIME_CONFIG_COORDINATE_V3,
+    GENERAL_HOT_HEAP_FRAME_BYTES_V3, HOT_RUNTIME_CONFIG_COORDINATE_V3,
     HOT_RUNTIME_PRODUCT_COORDINATE_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_market::capability_program::{
@@ -163,7 +163,7 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     /// The declared heap frame could not be installed as this program's ceiling.
     ///
     /// Unreachable by construction and refused by name anyway. The only value
-    /// ever offered is `DIRECT_HOT_HEAP_FRAME_BYTES_V1`, a compile-time
+    /// ever offered is `GENERAL_HOT_HEAP_FRAME_BYTES_V3`, a compile-time
     /// constant the assertion beside this enum pins inside the allocator's
     /// accepted range and on its 1,024-byte granularity, and the ceiling starts
     /// at the protocol default which is below it. A refusal here would mean one
@@ -231,7 +231,7 @@ dclutch_refusal_registry::pin_refusal_band!(
     not(feature = "no-entrypoint")
 ))]
 #[allow(clippy::cast_possible_truncation)]
-const DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE: usize = DIRECT_HOT_HEAP_FRAME_BYTES_V1 as usize;
+const GENERAL_HOT_HEAP_FRAME_BYTES_V3_USIZE: usize = GENERAL_HOT_HEAP_FRAME_BYTES_V3 as usize;
 
 // What makes `HeapCeilingNotLifted` unreachable rather than merely unlikely.
 // `lift_ceiling` refuses a value below the protocol default, above the runtime
@@ -246,15 +246,15 @@ const DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE: usize = DIRECT_HOT_HEAP_FRAME_BYTES_
 ))]
 const _: () = {
     assert!(
-        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE >= dclutch_sbf_runtime::DEFAULT_HEAP_BYTES_V1,
+        GENERAL_HOT_HEAP_FRAME_BYTES_V3_USIZE >= dclutch_sbf_runtime::DEFAULT_HEAP_BYTES_V1,
         "the declared heap frame is below the protocol default the allocator starts at"
     );
     assert!(
-        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE <= dclutch_sbf_runtime::MAX_HEAP_BYTES_V1,
+        GENERAL_HOT_HEAP_FRAME_BYTES_V3_USIZE <= dclutch_sbf_runtime::MAX_HEAP_BYTES_V1,
         "the declared heap frame is above the largest frame the runtime will grant"
     );
     assert!(
-        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE
+        GENERAL_HOT_HEAP_FRAME_BYTES_V3_USIZE
             .is_multiple_of(dclutch_sbf_runtime::HEAP_FRAME_GRANULARITY_BYTES_V1),
         "the declared heap frame is not on the granularity the runtime sanitizes requests to"
     );
@@ -281,7 +281,7 @@ fn heap_mark(label: &str) {
         solana_program::log::sol_log_64(
             u64::try_from(crate::PROGRAM_HEAP_V1.bytes_used()).unwrap_or(u64::MAX),
             u64::try_from(crate::PROGRAM_HEAP_V1.bytes_capacity()).unwrap_or(u64::MAX),
-            u64::from(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+            u64::from(GENERAL_HOT_HEAP_FRAME_BYTES_V3),
             0,
             0,
         );
@@ -300,7 +300,7 @@ fn heap_mark(label: &str) {
         solana_program::log::sol_log_64(
             u64::try_from(used).unwrap_or(u64::MAX),
             u64::try_from(solana_program::entrypoint::HEAP_LENGTH).unwrap_or(u64::MAX),
-            u64::from(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+            u64::from(GENERAL_HOT_HEAP_FRAME_BYTES_V3),
             0,
             0,
         );
@@ -687,7 +687,7 @@ fn validate_frame(
 ))]
 fn lift_declared_heap_frame_v1() -> ProgramResult {
     crate::PROGRAM_HEAP_V1
-        .lift_ceiling(DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE)
+        .lift_ceiling(GENERAL_HOT_HEAP_FRAME_BYTES_V3_USIZE)
         .map(|_| ())
         .map_err(|_| GeneralAcceleratorSbfErrorV3::HeapCeilingNotLifted.into())
 }
@@ -741,7 +741,8 @@ fn authenticate_top_level(
         if earlier.program_id != compute_budget::ID {
             return Err(GeneralAcceleratorSbfErrorV3::ForeignInstructionBeforeTrading.into());
         }
-        if earlier == ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1) {
+        if earlier == ComputeBudgetInstruction::request_heap_frame(GENERAL_HOT_HEAP_FRAME_BYTES_V3)
+        {
             heap_frame_requested = true;
         }
         earlier_index = earlier_index

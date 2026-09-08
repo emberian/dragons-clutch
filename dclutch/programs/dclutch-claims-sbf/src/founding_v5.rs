@@ -15,7 +15,7 @@ use dclutch_claims::founder_bond_v1::{founded_v1, founding_bond_size_v1};
 use dclutch_claims::{
     founding_v5::{
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingAggregateSeedsV5,
-        ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
+        ClaimsFoundingFrameV6, ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
     },
     protocol_position_v2::{
         PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
@@ -402,6 +402,7 @@ impl<'accounts, 'info> FoundingAccounts<'accounts, 'info> {
         if accounts.len() != CLAIMS_FOUNDING_ACCOUNT_COUNT_V6 {
             return Err(ClaimsFoundingSbfErrorV5::Accounts.into());
         }
+        authenticate_founding_frame_privileges_v6(accounts)?;
         Ok(Self {
             authority: account(accounts, AUTHORITY)?,
             permit: account(accounts, PERMIT)?,
@@ -438,6 +439,25 @@ impl<'accounts, 'info> FoundingAccounts<'accounts, 'info> {
             escrow_admission: account(accounts, ESCROW_ADMISSION)?,
         })
     }
+}
+
+/// Consume the Claims-owned Founding V6 privilege truth before this adapter
+/// reads identities or bodies. Trading may lower a physical union to this
+/// child frame; a direct caller must already present precisely the same frame.
+fn authenticate_founding_frame_privileges_v6(
+    accounts: &[AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    for (coordinate, account) in accounts.iter().enumerate() {
+        let expected = ClaimsFoundingFrameV6::privileges(coordinate)
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
+        if account.is_signer != expected.signer()
+            || account.is_writable != expected.writable()
+            || account.executable != expected.executable()
+        {
+            return Err(ClaimsFoundingSbfErrorV5::Accounts.into());
+        }
+    }
+    Ok(())
 }
 
 /// Execute one exact atomic Claims founding request.
@@ -728,66 +748,12 @@ fn authenticate_privileges(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
 ) -> Result<(), ProgramError> {
-    if !accounts.authority.is_signer
-        || accounts.authority.is_writable
-        || accounts.authority.executable
-        || accounts.permit.is_signer
-        || accounts.permit.is_writable
-        || accounts.permit.executable
-        || !accounts.aggregate.is_writable
-        || !accounts.position.is_writable
-        || !accounts.admission.is_writable
-        // Writable on EVERY founding, including a categorical one that will
-        // never touch them. The frame is fixed, so a caller cannot signal the
-        // market's shape by which accounts it marks; the record does that.
-        || !accounts.escrow_position.is_writable
-        || !accounts.escrow_admission.is_writable
-        || accounts.claims_program.key != program_id
+    if accounts.claims_program.key != program_id
         || accounts.claims_program.key.to_bytes() != request.claims_program()
         || accounts.trading_program.key.to_bytes() != request.trading_program()
-        || !accounts.claims_program.executable
-        || !accounts.core_program.executable
-        || !accounts.trading_program.executable
-        || !accounts.custody_program.executable
-        || !accounts.registry.executable
-        || !accounts.rent_program.executable
         || accounts.system.key != &system_program::ID
-        || !accounts.system.executable
     {
         return Err(ClaimsFoundingSbfErrorV5::Accounts.into());
-    }
-    for readonly in [
-        accounts.permit,
-        accounts.funding_source,
-        accounts.hoard,
-        accounts.custody_replay,
-        accounts.basis_record,
-        accounts.basis_staging,
-        accounts.product_record,
-        accounts.product_staging,
-        accounts.result_record,
-        accounts.result_staging,
-        accounts.portfolio_record,
-        accounts.portfolio_staging,
-        accounts.system,
-        accounts.core_market,
-        accounts.cache,
-        accounts.registry,
-        accounts.claims_program,
-        accounts.claims_programdata,
-        accounts.core_program,
-        accounts.core_programdata,
-        accounts.trading_program,
-        accounts.trading_programdata,
-        accounts.custody_program,
-        accounts.custody_programdata,
-        accounts.founder,
-        accounts.rent_credit,
-        accounts.rent_program,
-    ] {
-        if readonly.is_signer || readonly.is_writable {
-            return Err(ClaimsFoundingSbfErrorV5::Accounts.into());
-        }
     }
     require_distinct(&[
         accounts.authority,
@@ -847,12 +813,7 @@ fn authenticate_series_transport_authority(
     transport: &SeriesClaimsFoundingTransportV1,
     transport_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
-    if !accounts.authority.is_signer
-        || accounts.authority.is_writable
-        || accounts.authority.executable
-        || accounts.trading_program.key.to_bytes() != transport.trading_program()
-        || !accounts.trading_program.executable
-    {
+    if accounts.trading_program.key.to_bytes() != transport.trading_program() {
         return Err(refuse(
             ClaimsFoundingSbfErrorV5::CallerAuthority,
             "transport authority privileges, or the trading program it names",

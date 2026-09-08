@@ -90,7 +90,7 @@ pub const SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4: usize = DYNAMIC_FIXED_SPAN_HE
 
 /// Exact finalized account widths used to specialize the physical profile.
 ///
-/// Coordinates are the 161 fixed base coordinates before insertion of the
+/// Coordinates are the 164 fixed base coordinates before insertion of the
 /// opaque FundingState span. Aliases must repeat their representative's exact
 /// pre-execution width; no parallel account-layout authority is accepted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,7 +117,7 @@ pub fn encode_series_consume_account_profile_v4_atomic(
     if scratch.len() != SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4
         || output.len() != SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4
         || SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4 != 67
-        || SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4 != 94
+        || SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4 != 97
     {
         return Err(SeriesConsumeAccountProfileErrorV4::Geometry);
     }
@@ -379,6 +379,7 @@ const WRITABLE_COORDINATES: &[usize] = &[
     6, 11, 12, 13, 17, // Projected Lock.
     18, 19, 67, // Shared Market representative, Core payer, permit.
     76, 77, 78, // Claims aggregate, Position, admission representatives.
+    123, 124, // Claims V6 failure-escrow Position and admission vacancies.
 ];
 
 const EXECUTABLE_COORDINATES: &[usize] = &[
@@ -434,59 +435,60 @@ pub const SERIES_CONSUME_ROUTE_ALIASES_V4: &[(usize, usize)] = &[
     (105, 28),
     (106, 3),
     (107, 30),
-    (108, 47),
-    (109, 48),
-    (110, 18),
-    (111, 7),
-    (112, 8),
-    (113, 72),
-    (114, 73),
-    (115, 44),
-    (116, 45),
-    (117, 9),
-    (118, 10),
-    (119, 74),
-    (120, 75),
-    (121, 79),
-    (122, 11),
-    (123, 22),
-    (124, 19),
-    (125, 18),
-    (126, 67),
-    (127, 11),
-    (128, 22),
-    (129, 7),
-    (130, 8),
-    (131, 9),
-    (132, 10),
-    (133, 72),
-    (134, 73),
-    (135, 74),
-    (136, 75),
-    (137, 44),
-    (138, 45),
-    (139, 0),
-    (140, 59),
-    (141, 60),
-    (142, 61),
-    (143, 62),
-    (144, 63),
-    (145, 64),
-    (146, 65),
-    (147, 2),
-    (148, 26),
-    (149, 27),
-    (150, 28),
-    (151, 3),
-    (152, 30),
-    (153, 6),
-    (154, 12),
-    (155, 13),
-    (156, 76),
-    (157, 77),
-    (158, 78),
-    (159, 66),
-    (160, 47),
+    (108, 48),
+    (109, 18),
+    (110, 7),
+    (111, 8),
+    (112, 72),
+    (113, 73),
+    (114, 44),
+    (115, 45),
+    (116, 9),
+    (117, 10),
+    (118, 74),
+    (119, 75),
+    (120, 79),
+    (121, 11),
+    (122, 22),
+    (125, 19),
+    (126, 18),
+    (127, 67),
+    (128, 11),
+    (129, 22),
+    (130, 7),
+    (131, 8),
+    (132, 9),
+    (133, 10),
+    (134, 72),
+    (135, 73),
+    (136, 74),
+    (137, 75),
+    (138, 44),
+    (139, 45),
+    (140, 0),
+    (141, 59),
+    (142, 60),
+    (143, 61),
+    (144, 62),
+    (145, 63),
+    (146, 64),
+    (147, 65),
+    (148, 2),
+    (149, 26),
+    (150, 27),
+    (151, 28),
+    (152, 3),
+    (153, 30),
+    (154, 6),
+    (155, 12),
+    (156, 13),
+    (157, 76),
+    (158, 77),
+    (159, 78),
+    (160, 66),
+    (161, 47),
+    (162, 123),
+    (163, 124),
 ];
 
 #[cfg(test)]
@@ -533,19 +535,19 @@ mod tests {
         assert_eq!(span.step(), 1);
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(0, &[1]),
-            Ok(162)
+            Ok(165)
         );
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(0, &[16]),
-            Ok(177)
+            Ok(180)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(0, &[1]),
-            Ok(69)
+            Ok(71)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(0, &[16]),
-            Ok(84)
+            Ok(86)
         );
         assert_eq!(
             profile.representative_with_dynamic_spans(0, &[7], 67),
@@ -565,6 +567,42 @@ mod tests {
             profile.representative_with_dynamic_spans(0, &[7], 88),
             Ok(6)
         );
+    }
+
+    #[test]
+    fn claims_v6_aliases_remove_stale_rent_and_seat_escrow_vacancies() {
+        let bytes = encoded_profile();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile");
+
+        // Claims owns System at local 16 (global 108).  The obsolete Series
+        // frame placed a Rent sysvar there and aliased it to 47; the canonical
+        // V6 frame aliases System to its physical representative 48 instead.
+        assert!(
+            SERIES_CONSUME_ROUTE_ALIASES_V4.contains(&(108, 48)),
+            "Claims local16 is System"
+        );
+        assert!(
+            !SERIES_CONSUME_ROUTE_ALIASES_V4.contains(&(108, 47)),
+            "stale Claims Rent-sysvar alias is absent"
+        );
+        assert!(
+            !SERIES_CONSUME_ROUTE_ALIASES_V4
+                .iter()
+                .any(|(coordinate, _)| *coordinate == 123 || *coordinate == 124),
+            "Claims V6 escrow accounts are fresh physical vacancies"
+        );
+        assert!(
+            SERIES_CONSUME_ROUTE_ALIASES_V4.contains(&(162, 123))
+                && SERIES_CONSUME_ROUTE_ALIASES_V4.contains(&(163, 124)),
+            "Core Open reuses Claims V6 escrow accounts"
+        );
+        for coordinate in [123_u16, 124] {
+            let rule = profile
+                .rule(false, coordinate)
+                .expect("escrow vacancy rule");
+            assert_eq!(rule.effect_permissions(), 0);
+            assert_eq!(rule.privileges(), 2, "escrow vacancy is writable");
+        }
     }
 
     #[test]
@@ -653,8 +691,8 @@ mod tests {
         // Both role programs sit past the FundingState span's insertion
         // coordinate, so each base coordinate shifts by the funding width.
         for (role, base, aliases) in [
-            ("Claims", 72_usize, [113_usize, 133]),
-            ("Custody", 74_usize, [119_usize, 135]),
+            ("Claims", 72_usize, [112_usize, 134]),
+            ("Custody", 74_usize, [118_usize, 136]),
         ] {
             let representative = base + shift;
             let mut carriers = vec![];

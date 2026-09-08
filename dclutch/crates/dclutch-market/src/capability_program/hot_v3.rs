@@ -36,6 +36,17 @@ pub const HOT_EXECUTION_MAGIC_V3: [u8; 8] = *b"DCLTHOT3";
 /// stay a multiple of 1,024 and at most 262,144 for the runtime to honour it.
 /// See `docs/evidence/` for the measurement and the margin it leaves.
 pub const DIRECT_HOT_HEAP_FRAME_BYTES_V1: u32 = 65_536;
+
+/// Measured heap frame for a top-level General successor submission, in bytes.
+///
+/// This is distinct from the Direct profile above. The accepted nonempty
+/// General `PlaceOrder` path exhausted the old 65,536-byte General profile
+/// before its accelerator CPI, while the same source and packet at 131,072
+/// bytes reached that authenticated child boundary. The General accelerator
+/// and canonical operator both authenticate this exact profile. It remains a
+/// runtime-supported, 1,024-byte-aligned frame; Direct retains its independent
+/// 65,536-byte profile.
+pub const GENERAL_HOT_HEAP_FRAME_BYTES_V3: u32 = 131_072;
 /// Canonical hot instruction schema version.
 pub const HOT_EXECUTION_VERSION_V3: u16 = 3;
 /// Canonical family-neutral hot instruction physical profile.

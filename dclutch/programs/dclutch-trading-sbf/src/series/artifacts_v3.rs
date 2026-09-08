@@ -110,10 +110,18 @@ pub const SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3: u16 = 14;
 pub const SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3: u16 = 61;
 /// Exact Projected Custody Realize child frame.
 pub const SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3: u16 = 12;
-/// Exact Claims Founding V5 child frame.
-pub const SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3: u16 = 32;
-/// Exact final Core Open frame; funding was consumed by the earlier Found route.
-pub const SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3: u16 = 37;
+/// Exact Claims Founding V5 child frame, derived from the Claims-owned V6
+/// physical-frame contract.
+///
+/// Claims founding's request wire remains V5, while its sole executable
+/// account frame is V6: System is local 16 and the two failure-escrow
+/// vacancies occupy locals 31 and 32.  Series must consume that owner-owned
+/// width rather than retaining a parallel route literal.
+pub const SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3: u16 =
+    dclutch_claims::founding_v5::CLAIMS_FOUNDING_ACCOUNT_COUNT_U16_V6;
+/// Exact final Core Open frame, derived from Core's physical-frame contract.
+pub const SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3: u16 =
+    dclutch_market::SERIES_OPEN_ACCOUNT_COUNT_U16_V1;
 /// Mathematical protocol bound on one occurrence's segregated funding list.
 pub const SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3: u16 = 16;
 /// Exact normal Custody request width for the prepared SeriesEscrow lifecycle.

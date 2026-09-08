@@ -24,7 +24,9 @@ use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
 };
-use dclutch_market::capability_program::v4::CapabilityProgramV4;
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, v4::CapabilityProgramV4,
+};
 use solana_program::hash::hash;
 
 /// Canonical action order for the only two creation transitions.
@@ -206,6 +208,13 @@ fn compile(
     );
     let mut lengths = vec![0_u32; logical];
     *lengths
+        .get_mut(0)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+        u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .ok()
+            .and_then(|header| header.checked_add(input.root_state_bytes))
+            .ok_or(StructuredLifecycleSelectedErrorV1::Input)?;
+    *lengths
         .get_mut(1)
         .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
         u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2)
@@ -307,6 +316,19 @@ mod tests {
         assert_eq!(first.bundle(LifecycleActionV2::RetireCoordinate), None);
         assert_eq!(first.bundle(LifecycleActionV2::RetireReceipt), None);
         assert_ne!(first.activation_id(), [0; 32]);
+        let profile = dclutch_vm::account_profile::v2::AccountProfileV2::decode(
+            &first.activate_receipt.account_profile,
+        )
+        .expect("ActivateReceipt profile");
+        assert_eq!(
+            profile
+                .rule(false, 0)
+                .expect("root coordinate")
+                .data_length(),
+            u32::try_from(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1)
+                .expect("root header")
+                + input(&basis).root_state_bytes
+        );
     }
 
     #[test]

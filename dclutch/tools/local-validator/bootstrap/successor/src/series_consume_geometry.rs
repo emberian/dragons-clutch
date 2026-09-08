@@ -9,7 +9,10 @@ use std::collections::BTreeMap;
 use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_trading_sbf::series::{
     account_profile_v4::{SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4, SERIES_CONSUME_ROUTE_ALIASES_V4},
-    artifacts_v3::{SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3, SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3},
+    artifacts_v3::{
+        SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3, SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3,
+        SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3, SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3,
+    },
     effect_v4::{
         SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4,
         SERIES_CONSUME_CORE_FOUND_SUFFIX_ACCOUNT_COUNT_V4,
@@ -38,10 +41,27 @@ pub(crate) const SERIES_CONSUME_REALIZE_START_V1: usize = SERIES_CONSUME_CORE_FO
         + SERIES_CONSUME_CORE_FOUND_SUFFIX_ACCOUNT_COUNT_V4) as usize;
 pub(crate) const SERIES_CONSUME_CLAIMS_START_V1: usize =
     SERIES_CONSUME_REALIZE_START_V1 + SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3 as usize;
-pub(crate) const SERIES_CONSUME_CORE_OPEN_START_V1: usize = SERIES_CONSUME_CLAIMS_START_V1 + 32;
+pub(crate) const SERIES_CONSUME_CORE_OPEN_START_V1: usize =
+    SERIES_CONSUME_CLAIMS_START_V1 + SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3 as usize;
 
-const _: () = assert!(SERIES_CONSUME_CORE_OPEN_START_V1 == 124);
-const _: () = assert!(SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4 == 161);
+const _: () = assert!(SERIES_CONSUME_CORE_OPEN_START_V1 == 125);
+const _: () = assert!(
+    SERIES_CONSUME_CORE_OPEN_START_V1 + SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3 as usize
+        == SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4
+);
+
+/// Whether the frame feeds the pre-Prepare selected compiler or validates the
+/// actual Consume prestate after Prepare. This is deliberately independent of
+/// the parent-root fact: a finalized parent can still need canonical future
+/// Custody predictions before the first Prepare transaction has created them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SeriesConsumePrestateV1 {
+    /// The source compiler runs before Prepare. It may predict only the
+    /// Prepare-created resources' canonical address and layout.
+    PreparedPrediction,
+    /// Prepare has finalized; every resource it created must be observed.
+    ObservedPrepared,
+}
 
 /// Finalized identities shared by each Consume route. The preprofile is the
 /// only child-bank producer; M0 bodies and non-record accounts remain owned
@@ -57,10 +77,14 @@ pub(crate) struct SeriesConsumeGeometryInputV1<'a> {
     pub(crate) custody: Pubkey,
     pub(crate) claims: Pubkey,
     pub(crate) rent_program: Pubkey,
+    pub(crate) prestate: SeriesConsumePrestateV1,
     pub(crate) minimum_slot: u64,
 }
 
-/// One named physical source for one fixed Consume coordinate.
+/// One named physical source for one fixed Consume coordinate.  The two
+/// prediction forms are intentionally distinct: Prepare-owned accounts have
+/// a canonical eventual layout before Prepare has materialized them, whereas
+/// Consume-owned accounts must begin as zero-width vacancies.
 #[derive(Clone, Debug)]
 pub(crate) enum SeriesConsumeRoleSourceV1<'a> {
     Finalized {
@@ -69,7 +93,12 @@ pub(crate) enum SeriesConsumeRoleSourceV1<'a> {
         expected_owner: Pubkey,
         canonical_body: Option<&'a [u8]>,
     },
-    PredictedVacancy {
+    PreparedPrediction {
+        role: &'static str,
+        address: Pubkey,
+        fixed_data_len: u32,
+    },
+    ConsumeVacancy {
         role: &'static str,
         address: Pubkey,
         fixed_data_len: u32,
@@ -79,7 +108,9 @@ pub(crate) enum SeriesConsumeRoleSourceV1<'a> {
 impl SeriesConsumeRoleSourceV1<'_> {
     pub(crate) fn address(&self) -> Pubkey {
         match self {
-            Self::Finalized { address, .. } | Self::PredictedVacancy { address, .. } => *address,
+            Self::Finalized { address, .. }
+            | Self::PreparedPrediction { address, .. }
+            | Self::ConsumeVacancy { address, .. } => *address,
         }
     }
 }
@@ -103,11 +134,37 @@ pub(crate) fn vacancy_v1(
     address: Pubkey,
     fixed_data_len: usize,
 ) -> Result<SeriesConsumeRoleSourceV1<'static>> {
-    Ok(SeriesConsumeRoleSourceV1::PredictedVacancy {
+    if fixed_data_len != 0 {
+        return Err(Error::new(
+            "Series Consume-created vacancy carried a nonzero initial width",
+        ));
+    }
+    Ok(SeriesConsumeRoleSourceV1::ConsumeVacancy {
         role,
         address,
         fixed_data_len: u32::try_from(fixed_data_len)
             .map_err(|_| Error::new("Series Consume fixed role width escaped u32"))?,
+    })
+}
+
+/// Name an account which Prepare will create before Consume.  This is only
+/// legal during the compiler's pre-Prepare normalization pass; the observed
+/// post-Prepare pass must replace it with a finalized source.
+pub(crate) fn prepared_prediction_v1(
+    role: &'static str,
+    address: Pubkey,
+    fixed_data_len: usize,
+) -> Result<SeriesConsumeRoleSourceV1<'static>> {
+    if fixed_data_len == 0 {
+        return Err(Error::new(
+            "Series Prepare prediction omitted its canonical account layout",
+        ));
+    }
+    Ok(SeriesConsumeRoleSourceV1::PreparedPrediction {
+        role,
+        address,
+        fixed_data_len: u32::try_from(fixed_data_len)
+            .map_err(|_| Error::new("Series Prepare predicted width escaped u32"))?,
     })
 }
 
@@ -213,7 +270,7 @@ pub(crate) fn record_source_v1<'a>(
     ))
 }
 
-fn m0_record_by_schema_v1<'a>(
+pub(crate) fn m0_record_by_schema_v1<'a>(
     input: &'a SeriesConsumeGeometryInputV1<'a>,
     schema: [u8; 32],
     label: &str,
@@ -251,7 +308,7 @@ pub(crate) fn populate_series_consume_prefix_v1<'a>(
                     "Series Consume predicted root width differed from the release layout",
                 ));
             }
-            vacancy_v1(
+            prepared_prediction_v1(
                 "predicted Series root",
                 prediction.root,
                 prediction.data_len,
@@ -326,6 +383,63 @@ pub(crate) fn populate_series_consume_pre_core_v1<'a>(
         input.preprofile.prepare_children.consume_requests(),
         roles,
     )
+}
+
+/// Derive every fixed Consume coordinate from the admitted child bank before
+/// any RPC observation.  This is the single semantic constructor used for
+/// both the pre-Prepare prediction and the post-Prepare finalized pass.
+pub(crate) fn derive_series_consume_role_sources_v1<'a>(
+    input: &'a SeriesConsumeGeometryInputV1<'a>,
+) -> Result<[SeriesConsumeRoleSourceV1<'a>; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4]> {
+    let mut pending = std::array::from_fn(|_| None);
+    populate_series_consume_pre_core_v1(input, &mut pending)?;
+    let children = input.preprofile.prepare_children.consume_requests();
+    crate::series_consume_claims_geometry::populate_series_consume_claims_route_v1(
+        input,
+        children,
+        &mut pending,
+    )?;
+    crate::series_consume_core_geometry::populate_series_consume_core_routes_v1(
+        input,
+        children,
+        &mut pending,
+    )?;
+    resolve_series_consume_aliases_v1(&mut pending)?;
+    let roles: [SeriesConsumeRoleSourceV1<'_>; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4] = pending
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| Error::new("Series Consume semantic mapper left a coordinate unowned"))?
+        .try_into()
+        .map_err(|_| Error::new("Series Consume fixed frame cardinality drifted"))?;
+    crate::series_consume_claims_geometry::validate_series_consume_claims_roles_v1(input, &roles)?;
+    Ok(roles)
+}
+
+/// Derive every fixed Consume coordinate from the admitted child bank, then
+/// observe the complete post-Prepare prestate at one finalized slot.  The
+/// dynamic FundingState span is owned by the release AccountProfile and is
+/// intentionally absent from this fixed frame.
+pub(crate) fn derive_series_consume_fixed_data_lengths_v1(
+    rpc: &mut Rpc,
+    input: SeriesConsumeGeometryInputV1<'_>,
+) -> Result<[u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4]> {
+    let roles = derive_series_consume_role_sources_v1(&input)?;
+    observe_series_consume_roles_v1(rpc, &roles, input.minimum_slot)
+}
+
+/// The selected pre-Prepare profile may predict only Prepare-created layouts.
+/// Once Prepare is finalized, re-observation must produce precisely the same
+/// fixed profile widths before its Certificate/include can be retained.
+pub(crate) fn require_series_consume_prestate_invariance_v1(
+    predicted: &[u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
+    observed: &[u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
+) -> Result<()> {
+    if predicted != observed {
+        return Err(Error::new(
+            "Series Consume observed prestate changed the selected fixed profile",
+        ));
+    }
+    Ok(())
 }
 
 /// Close the generated physical-alias relation after every semantic route has
@@ -410,11 +524,28 @@ pub(crate) fn observe_series_consume_roles_v1(
                 u32::try_from(account.data.len())
                     .map_err(|_| Error::new("Series Consume observed width escaped u32"))?
             }
-            SeriesConsumeRoleSourceV1::PredictedVacancy {
+            SeriesConsumeRoleSourceV1::PreparedPrediction {
                 role,
                 fixed_data_len,
                 ..
             } => {
+                if account.is_some() {
+                    return Err(Error::new(format!(
+                        "Series Prepare-predicted {role} already exists"
+                    )));
+                }
+                *fixed_data_len
+            }
+            SeriesConsumeRoleSourceV1::ConsumeVacancy {
+                role,
+                fixed_data_len,
+                ..
+            } => {
+                if *fixed_data_len != 0 {
+                    return Err(Error::new(
+                        "Series Consume-created role carried a nonzero initial width",
+                    ));
+                }
                 if account.is_some() {
                     return Err(Error::new(format!(
                         "Series Consume predicted {role} already exists"
@@ -450,12 +581,59 @@ fn require_series_consume_alias_addresses_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_trading_sbf::series::account_profile_v4::{
+        SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SeriesConsumeAccountProfileInputV4,
+        encode_series_consume_account_profile_v4_atomic,
+    };
+
+    use crate::series_found_prepare_campaign::{
+        derive_series_found_prepare_preprofile_v1,
+        tests::{compiler_input, prepared_founder},
+    };
+    use crate::series_found_prepare_driver::SeriesPrepareFinalizedRecordV1;
+
+    fn pair<'a>(
+        registry: Pubkey,
+        schema: [u8; 32],
+        body: &'a [u8],
+    ) -> SeriesPrepareFinalizedRecordV1<'a> {
+        let key = RecordKeyV1::new(
+            SchemaReleaseId::new(schema).expect("fixture schema"),
+            ContentDigest::new(Sha256::digest(body).into()).expect("fixture digest"),
+        );
+        let raw = Pubkey::find_program_address(
+            &[
+                key.raw_record_pda_seeds().domain(),
+                key.raw_record_pda_seeds().schema_release_id().as_bytes(),
+                key.raw_record_pda_seeds().expected_digest().as_bytes(),
+            ],
+            &registry,
+        )
+        .0;
+        let staging = Pubkey::find_program_address(
+            &[
+                key.staging_cursor_pda_seeds().domain(),
+                key.staging_cursor_pda_seeds()
+                    .schema_release_id()
+                    .as_bytes(),
+                key.staging_cursor_pda_seeds().expected_digest().as_bytes(),
+            ],
+            &registry,
+        )
+        .0;
+        SeriesPrepareFinalizedRecordV1 {
+            schema,
+            body,
+            raw,
+            staging,
+        }
+    }
 
     fn source(address: Pubkey) -> SeriesConsumeRoleSourceV1<'static> {
-        SeriesConsumeRoleSourceV1::PredictedVacancy {
+        SeriesConsumeRoleSourceV1::ConsumeVacancy {
             role: "canonical future role",
             address,
-            fixed_data_len: 9,
+            fixed_data_len: 0,
         }
     }
 
@@ -478,5 +656,194 @@ mod tests {
         roles[alias] = Some(source(Pubkey::new_unique()));
         let error = resolve_series_consume_aliases_v1(&mut roles).expect_err("alias substitution");
         assert!(error.to_string().contains("alias"), "{error}");
+    }
+
+    #[test]
+    fn observed_prestate_cannot_change_the_selected_profile() {
+        let predicted = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
+        require_series_consume_prestate_invariance_v1(&predicted, &predicted)
+            .expect("identical prestate widths");
+        let mut observed = predicted;
+        observed[6] = 1;
+        assert!(
+            require_series_consume_prestate_invariance_v1(&predicted, &observed)
+                .expect_err("profile substitution")
+                .to_string()
+                .contains("changed")
+        );
+    }
+
+    #[test]
+    fn full_constructor_compiles_initial_consume_profile_from_the_child_bank() {
+        let prepared = prepared_founder();
+        let parent_root = Pubkey::new_unique();
+        let mut selection = compiler_input(&prepared, parent_root, &prepared.admitted.tickets()[0]);
+        selection.geometry = None;
+        let registry = Pubkey::new_from_array(selection.registry_program.to_bytes());
+        let preprofile = derive_series_found_prepare_preprofile_v1(&mut selection)
+            .expect("canonical campaign child bank");
+        let portfolio = dclutch_product::PortfolioV2::decode(&prepared.publication.portfolio)
+            .expect("canonical M0 Portfolio");
+        let claims = dclutch_claims::founding_v5::ClaimsFoundingRequestV5::decode(
+            preprofile.prepare_children.consume_requests().claims,
+        )
+        .expect("canonical Claims child");
+        assert_eq!(
+            claims.claim_count(),
+            portfolio.coefficient_count(),
+            "the Claims V6 runtime width comes from M0 Portfolio, never a fixture literal",
+        );
+        dclutch_product::economic_slice::refunding_failure_index(claims.claim_count())
+            .expect("every Series founding names a derivable V6 failure escrow");
+
+        let product = pair(
+            registry,
+            dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
+            &prepared.publication.product,
+        );
+        let basis = pair(
+            registry,
+            dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+            &prepared.publication.basis,
+        );
+        let portfolio = pair(
+            registry,
+            dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2,
+            &prepared.publication.portfolio,
+        );
+        let template = pair(
+            registry,
+            dclutch_trading::series::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+            prepared.admitted.template(),
+        );
+        let occurrence = pair(
+            registry,
+            dclutch_trading::series::SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+            &prepared.admitted.occurrences()[0],
+        );
+        let ticket = pair(
+            registry,
+            dclutch_trading::series::SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+            &prepared.admitted.tickets()[0],
+        );
+        let records = [product, basis, portfolio];
+        let mut project_found = std::array::from_fn(|_| Pubkey::new_unique());
+        project_found[0] = selection.material.payer;
+        project_found[1] = selection.material.market;
+        project_found[2] = selection.material.rent_credit;
+        project_found[3] = selection.material.rent_program;
+        project_found[6] = product.raw;
+        project_found[7] = product.staging;
+        project_found[10] = portfolio.raw;
+        project_found[11] = portfolio.staging;
+        project_found[12] = basis.raw;
+        project_found[13] = basis.staging;
+        let mut finalized_accounts = project_found
+            .iter()
+            .copied()
+            .filter(|address| *address != selection.material.market)
+            .map(|address| SeriesPrepareFinalizedAccountV1 {
+                address,
+                expected_owner: Pubkey::new_unique(),
+            })
+            .collect::<Vec<_>>();
+        finalized_accounts.extend([
+            SeriesPrepareFinalizedAccountV1 {
+                address: selection.material.mint,
+                expected_owner: Pubkey::new_unique(),
+            },
+            SeriesPrepareFinalizedAccountV1 {
+                address: selection.material.token_program,
+                expected_owner: Pubkey::new_unique(),
+            },
+        ]);
+        let m0 = SeriesPrepareM0FrameV1 {
+            project_found,
+            records: &records,
+            vacancies: &[],
+            finalized_accounts: &finalized_accounts,
+        };
+        let hydration = SeriesPrepareHydrationRecordsV1 {
+            template,
+            occurrence,
+            ticket,
+            portfolio,
+        };
+        let input = SeriesConsumeGeometryInputV1 {
+            preprofile: &preprofile,
+            m0,
+            records: hydration,
+            parent_root: SeriesParentRootFactV1::Finalized {
+                root: parent_root,
+                observed_data_len: dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
+                observed_lamports: 1,
+            },
+            registry,
+            core: selection.material.core,
+            trading: selection.material.trading,
+            custody: selection.material.custody,
+            claims: selection.material.claims,
+            rent_program: selection.material.rent_program,
+            prestate: SeriesConsumePrestateV1::PreparedPrediction,
+            minimum_slot: 1,
+        };
+        let roles = derive_series_consume_role_sources_v1(&input)
+            .expect("all prefix, Custody, Claims, and Core routes derive");
+        assert!(matches!(
+            roles[SERIES_CONSUME_CLAIMS_START_V1 + 31],
+            SeriesConsumeRoleSourceV1::ConsumeVacancy {
+                fixed_data_len: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            roles[67],
+            SeriesConsumeRoleSourceV1::ConsumeVacancy {
+                fixed_data_len: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            roles[6],
+            SeriesConsumeRoleSourceV1::PreparedPrediction { .. }
+        ));
+
+        let mut widths = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
+        for (coordinate, role) in roles.iter().enumerate() {
+            widths[coordinate] = match role {
+                SeriesConsumeRoleSourceV1::Finalized { .. } => 1,
+                SeriesConsumeRoleSourceV1::PreparedPrediction { fixed_data_len, .. } => {
+                    *fixed_data_len
+                }
+                SeriesConsumeRoleSourceV1::ConsumeVacancy { fixed_data_len, .. } => *fixed_data_len,
+            };
+        }
+        for &(alias, representative) in SERIES_CONSUME_ROUTE_ALIASES_V4 {
+            widths[alias] = widths[representative];
+        }
+        let mut scratch = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+        let mut output = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+        encode_series_consume_account_profile_v4_atomic(
+            SeriesConsumeAccountProfileInputV4 {
+                fixed_data_lengths: &widths,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("initial Consume prestate compiles into Profile13");
+
+        let mut substituted_project_found = project_found;
+        substituted_project_found[1] = Pubkey::new_unique();
+        let substituted_m0 = SeriesPrepareM0FrameV1 {
+            project_found: substituted_project_found,
+            ..m0
+        };
+        let substituted = SeriesConsumeGeometryInputV1 {
+            m0: substituted_m0,
+            ..input
+        };
+        let error = derive_series_consume_role_sources_v1(&substituted)
+            .expect_err("Claims child must reject a substituted M0 Market");
+        assert!(error.to_string().contains("did not join"), "{error}");
     }
 }

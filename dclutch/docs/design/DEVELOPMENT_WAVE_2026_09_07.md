@@ -86,10 +86,19 @@ operator whose continued presence is required for holders to get paid.
   runner reconstructs the complete generated include from the pinned source
   manifest before SBF compilation. The live input constructor now derives
   Basis, Trading-owned Ticket and principal-cap facts from their owners.
-  Non-Prepare geometry and the provisional-to-final parent-root boundary
-  still need canonical producers before the Found/Prepare command can run. The complete
-  two-occurrence validator campaign has not run; the unselected accelerator
-  build does not establish that path.
+  Consume geometry now follows the native Claims V6 frame (33 accounts) and
+  Core Open frame (39 accounts): 164 fixed logical coordinates plus the ordered
+  FundingState insertion. The former 161-coordinate shape was stale. The host
+  distinguishes predicted Prepare state, observed Prepare state, and accounts
+  created during Consume; the last category starts with zero data width.
+  Full constructor controls are exposing producer defects, including a Claims
+  count hardcoded to one instead of the M0 Portfolio's coefficient count.
+  Core's child CPI now narrows the physical account union to native permissions.
+  Claims needs the same projection, and the projected Custody dispatcher still
+  needs executable Lock/Realize receipt contracts beyond its existing cleanup
+  operation. These are implementation gaps, not tests to waive. Complete
+  constructor execution, pre/post-Prepare certificate/include invariance, a
+  selected accelerator build, and two validator occurrences remain owed.
 - General's accepted nonempty path is being run after repairing action-scoped
   lifecycle funding and the semantic outer frame / key-sorted Claims child
   boundary. Its next repair authenticates the actual Core, Realm, Claims
@@ -106,11 +115,23 @@ operator whose continued presence is required for holders to get paid.
   protocol transactions. It is test setup, not a protocol cost estimate or a
   devnet funding policy. The dated authority is
   `docs/evidence/GENERAL_LOOPBACK_FOUNDING_ADDENDUM_2026_09_08.md`.
-  Separately, the serial General PlaceOrder ProgramTest reproduces an actual
-  allocation failure on both the old and fresh `68153eefc` Trading ELF, before
-  accelerator invocation. Profile checkpoints locate CPI backing-buffer
-  allocation as the next repair; heap and compute limits are unchanged.
-  General's nonempty accepted trade remains owed. Dealer's
+  The preserved local validator also accepts OpenBatch after its producer uses
+  the semantic Product identity for occurrence and Batch derivation; see
+  `docs/evidence/GENERAL_OPENBATCH_PRODUCT_ID_LOOPBACK_2026_09_08.md`.
+  Separately, serial General PlaceOrder ProgramTests reproduced an allocation
+  failure on both the old and fresh `68153eefc` Trading ELF. Deduplicating CPI
+  backing accounts exposed a compute failure. Commit `d70575d62` reuses the
+  authenticated funded seal's immutable profile join, with same-wrapper and
+  same-policy controls, instead of validating that join a second time.
+  Subsequent runs reach the next allocation boundary within the compute limit.
+  The larger-heap diagnostic reaches the accelerator, whose inherited guard
+  accepts only the exact 64 KiB request. The canonical General heap profile,
+  allocator ceiling, guard, and host request must agree before that comparison
+  can measure the rest of PlaceOrder. This is a measured project profile,
+  separate from Solana's heap maximum and the historical CU regression table.
+  The existing session now transports its admitted output page; its complete
+  PlaceOrder child-authority projection and a nonempty accepted trade remain
+  owed. Dealer's
   first RentCredit repair exposed a second false assumption: its sponsor need
   not be the immutable Market credit's refund beneficiary. Finalized account
   bytes located that exact mismatch; the repair retains the canonical credit
@@ -118,8 +139,9 @@ operator whose continued presence is required for holders to get paid.
   digest now reaches accepted Dealer Found and Quote. Fill next exposed a
   signed-delta position table whose host and runtime disagreed about semantic
   owner order versus Position PDA order. Both now use the Claims semantic
-  owner order; the sealed `687431e0e` runtime is executing the fresh campaign.
-  A nonzero Dealer fill is still unexecuted.
+  owner order. The next runtime repair (`7d5f920a4`) binds Claims' signed-delta
+  request identity to the actual Fill digest. That checked runtime is under
+  campaign execution; a nonzero Dealer fill remains owed.
 - Ensemble fold/reclaim has accepted real-ELF poststates. Its direct Pyth member
   producer is being executed separately so pre-captured fragment fixtures do
   not stand in for capture evidence. The two-member compiler and first-member
@@ -134,8 +156,14 @@ operator whose continued presence is required for holders to get paid.
   three-row control. Foundable Ensemble quorum is canonically odd. The Journey
   campaign now uses four members, three fresh Pyth captures, quorum-three fold
   and reclaim of the unused fourth member. It validates this shape before
-  infrastructure publication; its fresh `687431e0e` validator run is in progress.
-  Full local-validator capture/fold/reclaim remains owed.
+  infrastructure publication. A local-validator run now accepts all three
+  captures, then refuses the fold because their certificates name the Pyth
+  deployment release where the Ensemble policy requires the Source's provider
+  release. The Resolution producer repair in `d448a2772` carries the already
+  authenticated Source provider identity into the certificate while retaining
+  the Pyth deployment identity in its request and receipt. A focused control
+  explicitly distinguishes both identities. A fresh Resolution runtime and
+  successful capture/fold/reclaim execution remain owed.
   Recovery exhaustion reached terminal
   admission and all three refund payouts, recorded in
   `docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md`. Capture's prior
@@ -170,7 +198,10 @@ operator whose continued presence is required for holders to get paid.
   its receipt constructor next refused a missing child-authority signer flag.
   The producer now preserves that child fact while outer transaction compaction
   retains its own signer rules. The native control is red before this repair
-  and green after it. A fresh actual receipt poststate remains owed.
+  and green after it. Further seal instrumentation located producer/frame
+  defects; the selected lifecycle profile now gives its existing root the
+  canonical header plus state width (`d64cd316b`). Those repairs still require
+  a fresh actual receipt, representation and retirement poststate.
 - Browser joining now carries the linked-basis binding, requires finalized
   confirmation and authenticated poststate, and resumes its transaction journal.
   Generated reference/client mirrors and the capability graph have converged.
@@ -188,7 +219,10 @@ operator whose continued presence is required for holders to get paid.
   eight compute-budget rows remain red, compared with thirteen in the older
   run. Its native checks, runtime hashes, witnesses and limited route coverage
   are recorded in `docs/evidence/INFRASTRUCTURE_FLOOR_88AEC17E8_2026_09_07.md`.
-  Budgets have not been widened. Complete protocol
+  These rows are inherited performance baselines in
+  `tools/gauntlet/CU_BUDGETS.json`, not transaction compute grants. Their red
+  comparisons are distinct from a transaction exhausting its requested compute
+  or heap. Complete protocol
   route coverage, final release gates, devnet redeployment and a running public
   aquarium remain open deliverables.
 
@@ -217,6 +251,8 @@ export, renderer, cut and Pages workflow. The first publication is recorded in
 `docs/evidence/PAGES_RENOVATION_2026_09_07.md`; the subsequent navigation and
 layout fixes are recorded in `docs/evidence/PAGES_EXPLORER_FOLLOWUP_2026_09_07.md`.
 Both name exact source, publication SHA, workflow result and validation limits.
+The subsequent checkpoint documentation refresh also passed the same existing
+workflow, recorded in `docs/evidence/PAGES_CHECKPOINT_REFRESH_2026_09_08.md`.
 Runtime execution and the new devnet cohort remain outstanding.
 
 ## Execution order and completion evidence
