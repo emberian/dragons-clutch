@@ -174,6 +174,12 @@ outside the kernel in named adapters.
   directory a `test -d` guard then skips (use `rsync -a --delete`); a suite
   runner under `set -e` stops at its first failure and reports one number.
   Run every row, report every row, keep "failed" distinct from "never ran".
+- **A clean checkout needs its own Cargo target.** Never share
+  `CARGO_TARGET_DIR` between live and detached source checkouts: Cargo can reuse
+  the other tree's dependency metadata or report success without checking the
+  new source. Keep one workspace-root target per checkout; heavy validation
+  still goes to hbox. The controlled reproduction is
+  `docs/evidence/CARGO_CROSS_CHECKOUT_TARGET_2026_09_08.md`.
 - **Program logs from one test binary interleave.** Re-run with a name filter
   and `--test-threads=1` before believing which test refused, or any width,
   ordering or count read from interleaved output.

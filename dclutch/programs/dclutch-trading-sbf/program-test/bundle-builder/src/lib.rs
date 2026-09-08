@@ -181,6 +181,8 @@ pub enum BuilderError {
     UnsupportedRoute(u32),
     /// Arithmetic or width joins failed.
     Arithmetic,
+    /// A supplied accelerator scratch page cannot serve the selected transport.
+    OutputPage(admitted::OutputPageErrorV1),
 }
 
 /// Externally installed release-waist and deployment identities.

@@ -199,6 +199,14 @@ fn compile(
     lifecycle: &[u8],
     action: LifecycleActionV2,
 ) -> Result<RationalLifecycleSelectedBundleV6> {
+    let product_basis =
+        dclutch_product::payoff::runtime_v3::ProductBasisV3::decode(input.product_basis)
+            .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    let portfolio_bytes = dclutch_product::portfolio_record_bytes(
+        usize::try_from(product_basis.basis_width())
+            .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?,
+    )
+    .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
     let logical = usize::from(
         lifecycle_logical_account_count_v3(
             action,
@@ -219,6 +227,15 @@ fn compile(
         .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
         u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2)
             .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    *lengths
+        .get_mut(2)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+        u32::try_from(dclutch_product::admission::PRODUCT_RECORD_BYTES_V2)
+            .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    *lengths
+        .get_mut(3)
+        .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
+        u32::try_from(portfolio_bytes).map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
     *lengths
         .get_mut(4)
         .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
@@ -328,6 +345,22 @@ mod tests {
             u32::try_from(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1)
                 .expect("root header")
                 + input(&basis).root_state_bytes
+        );
+        assert_eq!(
+            profile
+                .rule(false, 2)
+                .expect("Product coordinate")
+                .data_length(),
+            u32::try_from(dclutch_product::admission::PRODUCT_RECORD_BYTES_V2)
+                .expect("Product width")
+        );
+        assert_eq!(
+            profile
+                .rule(false, 3)
+                .expect("Portfolio coordinate")
+                .data_length(),
+            u32::try_from(dclutch_product::portfolio_record_bytes(258).expect("Portfolio width"))
+                .expect("Portfolio width u32")
         );
     }
 

@@ -1798,6 +1798,7 @@ dependencies = [
  "solana-account 4.6.0",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
 ]
 
 [[package]]
@@ -2350,6 +2351,7 @@ dependencies = [
  "solana-program-test",
  "solana-sdk",
  "solana-sdk-ids",
+ "solana-transaction 4.2.0",
  "tokio",
 ]
 
@@ -2792,6 +2794,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "bincode",
+ "dclutch-chain-bundle-builder",
  "dclutch-claims",
  "dclutch-core-contract",
  "dclutch-custody",
@@ -2812,6 +2815,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "solana-account 4.6.0",
  "solana-address-lookup-table-interface",
  "solana-compute-budget-interface",
  "solana-hash 4.6.0",

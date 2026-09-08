@@ -54,9 +54,24 @@ mod direct_market;
 #[path = "../../../local-validator/bootstrap/successor/src/funding_readiness.rs"]
 #[allow(dead_code)]
 mod funding_readiness;
+#[path = "../../../local-validator/bootstrap/successor/src/general_capability_activation.rs"]
+#[allow(dead_code)]
+mod general_capability_activation;
+#[path = "../../../local-validator/bootstrap/successor/src/general_devnet_market.rs"]
+#[allow(dead_code)]
+mod general_devnet_market;
+#[path = "../../../local-validator/bootstrap/successor/src/general_local_market.rs"]
+#[allow(dead_code)]
+mod general_local_market;
 #[path = "../../../local-validator/bootstrap/successor/src/general_market.rs"]
 #[allow(dead_code)]
 mod general_market;
+#[path = "../../../local-validator/bootstrap/successor/src/general_session.rs"]
+#[allow(dead_code)]
+mod general_session;
+#[path = "../../../local-validator/bootstrap/successor/src/general_successor_plan.rs"]
+#[allow(dead_code)]
+mod general_successor_plan;
 #[path = "../../../local-validator/bootstrap/successor/src/infrastructure_succession.rs"]
 #[allow(dead_code)]
 mod infrastructure_succession;
@@ -66,9 +81,6 @@ mod local_mutable;
 #[path = "../../../local-validator/bootstrap/successor/src/market.rs"]
 #[allow(dead_code)]
 mod market;
-#[path = "../../../local-validator/bootstrap/successor/src/series_founder.rs"]
-#[allow(dead_code)]
-mod series_founder;
 #[path = "../../../local-validator/bootstrap/successor/src/model.rs"]
 #[allow(dead_code)]
 mod model;
@@ -87,24 +99,27 @@ mod release_identity;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
+#[path = "../../../local-validator/bootstrap/successor/src/series_founder.rs"]
+#[allow(dead_code)]
+mod series_founder;
 // `local_mutable.rs` grew a fourth capability branch and calls
 // `crate::structured_market` from it. This tier compiles the producer's files
 // verbatim rather than forking them, so a call site the subset does not link
 // is a build break -- the intended tripwire, and it went off silently because
 // nothing in CI builds this tier. Linking the module is the fix; guarding the
 // call site would fork a file whose whole point is that it is not forked.
-#[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
-#[allow(dead_code)]
-mod structured_market;
-#[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
-#[allow(dead_code)]
-mod selected_capability;
 #[path = "../../../local-validator/bootstrap/successor/src/runtime.rs"]
 #[allow(dead_code)]
 mod runtime;
 #[path = "../../../local-validator/bootstrap/successor/src/seed.rs"]
 #[allow(dead_code)]
 mod seed;
+#[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
+#[allow(dead_code)]
+mod selected_capability;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
+#[allow(dead_code)]
+mod structured_market;
 #[path = "../../../local-validator/bootstrap/successor/src/upgrade.rs"]
 #[allow(dead_code)]
 mod upgrade;
@@ -117,6 +132,8 @@ mod ledger;
 // ------------------------------------------------------------- this campaign
 #[allow(dead_code)]
 mod daemon;
+#[allow(dead_code)]
+mod general_vertical;
 #[allow(dead_code)]
 mod input;
 #[allow(dead_code)]
@@ -177,6 +194,7 @@ fn run() -> Result<()> {
     let _program = arguments.next();
     match arguments.next().as_deref() {
         Some("run") => run_vertical(arguments.collect()),
+        Some("general-openbatch") => run_general_openbatch(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -223,7 +241,11 @@ fn run_vertical(arguments: Vec<String>) -> Result<()> {
     let walk = match required(&values, "--walk")? {
         "success" => vertical::WalkV1::Success,
         "failure" => vertical::WalkV1::Failure,
-        other => return Err(Error::new(format!("--walk must be success or failure: {other}"))),
+        other => {
+            return Err(Error::new(format!(
+                "--walk must be success or failure: {other}"
+            )));
+        }
     };
     let rpc_port: u16 = required(&values, "--rpc-port")?
         .parse()
@@ -246,9 +268,73 @@ fn run_vertical(arguments: Vec<String>) -> Result<()> {
     vertical::execute(request).map(|_| ())
 }
 
+/// General's persistent owned-loopback vertical.  Its only launcher is the
+/// checked substrate; the supplied bootstrap table is replaced by a frozen
+/// table derived from the emitted route before OpenBatch is signed.
+fn run_general_openbatch(arguments: Vec<String>) -> Result<()> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(flag) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(Error::new(format!("{flag} was given twice")));
+        }
+    }
+    let rpc_port: u16 = required(&values, "--rpc-port")?
+        .parse()
+        .map_err(|_| Error::new("--rpc-port must be a port number"))?;
+    let bootstrap_lookup_table = required(&values, "--bootstrap-lookup-table")?
+        .parse()
+        .map_err(|_| Error::new("--bootstrap-lookup-table must be a base58 Pubkey"))?;
+    let request = general_vertical::RequestV1 {
+        work: absolute(required(&values, "--work")?, "--work")?,
+        rpc_port,
+        checked_release_gate: absolute(
+            required(&values, "--checked-release-gate")?,
+            "--checked-release-gate",
+        )?,
+        expected_gate_sha256: required(&values, "--expected-gate-sha256")?.to_owned(),
+        expected_source_revision: required(&values, "--expected-source-revision")?.to_owned(),
+        expected_source_tree_sha256: required(&values, "--expected-source-tree-sha256")?.to_owned(),
+        seed: required(&values, "--seed")?.to_owned(),
+        policy: absolute(required(&values, "--general-policy")?, "--general-policy")?,
+        compiler_release: absolute(
+            required(&values, "--general-compiler-release")?,
+            "--general-compiler-release",
+        )?,
+        toolchain: absolute(
+            required(&values, "--general-toolchain")?,
+            "--general-toolchain",
+        )?,
+        translation_validation: absolute(
+            required(&values, "--general-translation-validation")?,
+            "--general-translation-validation",
+        )?,
+        selection_policy: absolute(
+            required(&values, "--general-selection-policy")?,
+            "--general-selection-policy",
+        )?,
+        quote_surplus_beneficiary: required(&values, "--general-quote-surplus-beneficiary")?
+            .parse()
+            .map_err(|_| {
+                Error::new("--general-quote-surplus-beneficiary must be a base58 Pubkey")
+            })?,
+        bootstrap_lookup_table,
+    };
+    general_vertical::execute(request)
+}
+
 fn usage() {
     println!(
-        "Usage:\n  dclutch-relayed-vertical-campaign run --walk success|failure \\\n      \
+        "Usage:\n  dclutch-relayed-vertical-campaign general-openbatch --work ABSOLUTE_NEW_DIR --rpc-port PORT \
+      --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON --expected-gate-sha256 HEX64 \
+      --expected-source-revision HEX40 --expected-source-tree-sha256 HEX64 --seed HEX64 \
+      --general-policy ABSOLUTE_JSON --general-compiler-release ABSOLUTE_FILE \
+      --general-toolchain ABSOLUTE_FILE --general-translation-validation ABSOLUTE_FILE \
+      --general-selection-policy ABSOLUTE_FILE --general-quote-surplus-beneficiary PUBKEY \
+      --bootstrap-lookup-table PUBKEY\n\n  dclutch-relayed-vertical-campaign run --walk success|failure \\\n      \
          --transcript ABSOLUTE_NEW_JSON --relayer-bin ABSOLUTE_DCLUTCH_RELAYER \\\n      \
          --work ABSOLUTE_DIR --rpc-port PORT \\\n      \
          --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \

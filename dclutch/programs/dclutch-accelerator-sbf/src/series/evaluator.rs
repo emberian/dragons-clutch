@@ -22,6 +22,12 @@ use dclutch_trading::series::{
     shadow::{SeriesShadowInputV3, SeriesShadowObservationsV3, evaluate_series_shadow_v3},
     template_content_id,
 };
+use dclutch_trading_sbf::series::{
+    consume_artifacts_v4::{
+        SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4, SERIES_CONSUME_COMMON_SCALAR_COUNT_V4,
+    },
+    effect_v4::{SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4, SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4},
+};
 use dclutch_vm::account_profile::{
     AccountObservationV1,
     v2::{
@@ -45,35 +51,26 @@ use dclutch_vm::v3::{
 };
 
 /// Exact fixed scalar width of the Series Consume artifact family.
-pub const SERIES_SHADOW_SCALAR_COUNT_V4: usize = 5;
+pub const SERIES_SHADOW_SCALAR_COUNT_V4: usize = SERIES_CONSUME_COMMON_SCALAR_COUNT_V4 as usize;
 /// Exact fixed identity width of the Series Consume artifact family.
-pub const SERIES_SHADOW_IDENTITY_COUNT_V4: usize = 1;
+pub const SERIES_SHADOW_IDENTITY_COUNT_V4: usize = SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4 as usize;
 const SERIES_SHADOW_INJECTED_ACCOUNT_COUNT_V4: usize = 5;
 const SERIES_SHADOW_LOCK_ACCOUNT_COUNT_V4: usize = 14;
-const SERIES_SHADOW_CORE_FOUND_ACCOUNT_COUNT_V4: usize = 61;
-const SERIES_SHADOW_REALIZE_ACCOUNT_COUNT_V4: usize = 12;
-const SERIES_SHADOW_CLAIMS_ACCOUNT_COUNT_V4: usize =
-    dclutch_trading_sbf::series::artifacts_v3::SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3 as usize;
-const SERIES_SHADOW_CORE_OPEN_ACCOUNT_COUNT_V4: usize =
-    dclutch_trading_sbf::series::artifacts_v3::SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3 as usize;
 const SERIES_SHADOW_FOUND_ACCOUNT_START_V4: usize =
     SERIES_SHADOW_INJECTED_ACCOUNT_COUNT_V4 + SERIES_SHADOW_LOCK_ACCOUNT_COUNT_V4;
 const SERIES_SHADOW_CURRENT_FOUND_ACCOUNT_COUNT_V4: usize = 37;
 const SERIES_SHADOW_FOUND_SERIES_TAIL_START_V4: usize =
     SERIES_SHADOW_FOUND_ACCOUNT_START_V4 + SERIES_SHADOW_CURRENT_FOUND_ACCOUNT_COUNT_V4;
 /// Fixed logical account width before the ordered FundingState span.
-pub const SERIES_SHADOW_LOGICAL_ACCOUNT_BASE_V4: usize = SERIES_SHADOW_INJECTED_ACCOUNT_COUNT_V4
-    + SERIES_SHADOW_LOCK_ACCOUNT_COUNT_V4
-    + SERIES_SHADOW_CORE_FOUND_ACCOUNT_COUNT_V4
-    + SERIES_SHADOW_REALIZE_ACCOUNT_COUNT_V4
-    + SERIES_SHADOW_CLAIMS_ACCOUNT_COUNT_V4
-    + SERIES_SHADOW_CORE_OPEN_ACCOUNT_COUNT_V4;
+pub const SERIES_SHADOW_LOGICAL_ACCOUNT_BASE_V4: usize =
+    SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 as usize;
 /// Minimum and maximum admitted ordered FundingState count.
 pub const SERIES_SHADOW_MINIMUM_FUNDING_COUNT_V4: usize = 1;
 /// Maximum admitted ordered FundingState count.
 pub const SERIES_SHADOW_MAXIMUM_FUNDING_COUNT_V4: usize = 16;
 /// Common scalar containing the bounded FundingState count.
-pub const SERIES_SHADOW_FUNDING_COUNT_SCALAR_V4: usize = 4;
+pub const SERIES_SHADOW_FUNDING_COUNT_SCALAR_V4: usize =
+    SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4 as usize;
 
 const SERIES_ROOT_COORDINATE_V4: usize = 0;
 const SERIES_CONFIG_COORDINATE_V4: usize = 1;
@@ -219,7 +216,8 @@ pub fn evaluate_series_shadow_aot_v4(input: SeriesShadowEvaluationV4<'_>) -> Res
     let mut account_input_scalars = [0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
     account_input_scalars[SERIES_SHADOW_FUNDING_COUNT_SCALAR_V4] =
         u64::try_from(funding_count).map_err(|_| SeriesShadowAotErrorV4::Runtime)?;
-    let account_input_identities = [shadow.trading_program.to_bytes()];
+    let mut account_input_identities = [[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
+    account_input_identities[0] = shadow.trading_program.to_bytes();
     project_dynamic_fixed_spans_atomic(
         profile,
         shadow.shape.tail_count,

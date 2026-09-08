@@ -146,11 +146,14 @@ operator whose continued presence is required for holders to get paid.
   from the inherited historical performance comparisons.
 
   One Sol owner now owns the complete General compiler, host and executable
-  campaign integration with the existing OutputPage transport. It computes one
-  candidate per invocation. Source review also found that the fixture's hashed
-  output-page address had no real creation signer. The producer is being
-  replaced with actual caller-funded System creation and a supplied, observed
-  accelerator-owned page; native controls check ownership, width and rent.
+  campaign integration with the existing OutputPage transport. The committed
+  compiler selects one candidate invocation. Source review also found that the
+  fixture's hashed output-page address had no real creation signer. The committed
+  producer now constructs signed, caller-funded System creation and supplies the
+  observed accelerator-owned page; native controls check ownership, width and
+  rent. Runtime execution of that producer remains owed. Integration review
+  also found the host session still counting callers with the old chunk
+  classifier; that consumer must derive its geometry from the selected transport.
   The account is reusable scratch, and the accelerator currently has no close
   route, so rent recovery remains an explicit resource-lifecycle obligation.
   Accepted nonempty ProgramTest and local-validator poststates remain owed.
@@ -163,8 +166,14 @@ operator whose continued presence is required for holders to get paid.
   signed-delta position table whose host and runtime disagreed about semantic
   owner order versus Position PDA order. Both now use the Claims semantic
   owner order. The next runtime repair (`7d5f920a4`) binds Claims' signed-delta
-  request identity to the actual Fill digest. That checked runtime is under
-  campaign execution; a nonzero Dealer fill remains owed.
+  request identity to the actual Fill digest. The sealed runtime now completes
+  a local-validator campaign using committed host `c04d95a0c`: Found, Quote,
+  a nonzero Fill, and Withdraw. Read-back verifies 27 additional Hoard atoms,
+  supplied by 9 taker atoms and 18 Dealer atoms, and the corresponding claim
+  balances; the subsequent withdrawal transfers 3 atoms. The dated authority is
+  `docs/evidence/DEALER_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md`. This closes the
+  null-fill defect for that accepted route; final-source replay, remaining Dealer
+  routes, and full retirement are still owed.
 - Ensemble fold/reclaim has accepted real-ELF poststates. Its direct Pyth member
   producer is being executed separately so pre-captured fragment fixtures do
   not stand in for capture evidence. The two-member compiler and first-member
@@ -185,8 +194,12 @@ operator whose continued presence is required for holders to get paid.
   release. The Resolution producer repair in `d448a2772` carries the already
   authenticated Source provider identity into the certificate while retaining
   the Pyth deployment identity in its request and receipt. A focused control
-  explicitly distinguishes both identities. A fresh Resolution runtime and
-  successful capture/fold/reclaim execution remain owed.
+  explicitly distinguishes both identities. The corrected host and sealed
+  `551ffc1b` runtime accept all three captures on a fresh local validator, then
+  fold refuses with Resolution's Transition error. The retained account bytes
+  and failed transaction's Clock are being replayed through the native Source
+  owner to locate that refusal. Successful producer-backed fold and reclaim
+  remain owed.
   Recovery exhaustion reached terminal
   admission and all three refund payouts, recorded in
   `docs/evidence/RECOVERY_EXHAUST_LOCAL_VALIDATOR_2026_09_07.md`. Capture's prior

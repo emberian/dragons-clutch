@@ -76,7 +76,7 @@ use std::path::PathBuf;
 
 use dclutch_chain_bundle_builder::{
     WaistFactsV1,
-    admitted::{AdmittedAotInputV1, admitted_output_page_address_v1},
+    admitted::{AdmittedAotInputV1, validate_admitted_output_page_v1},
     artifacts::{ArtifactSetV1, derive_record},
     bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1},
     frame::{BuiltAccountV1, vacant},
@@ -124,13 +124,14 @@ use dclutch_market::execution_strategy::{
     },
     shadow_digest_v3::{AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1},
     v2::{
-        AcceleratorTransportProfileV2, BankTransportV2, ExecutionStrategyCertificateV2,
-        ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
+        AcceleratorTransportProfileV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
+        StrategyDispositionV2,
     },
 };
 use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use dclutch_market::{CoreState, Phase as CorePhase};
+use dclutch_operator::general_hot_v3::general_admitted_invocation_count_for_transport_v3;
 use dclutch_operator::general_session_v1::{
     GeneralChildChainV1, GeneralEscrowChildrenV1, GeneralEscrowPartyV1, GeneralEvidenceAddressV1,
     GeneralFrameInputsV1, GeneralSubjectV1, general_runtime_suffix_v1, general_subject_states_v1,
@@ -310,7 +311,7 @@ pub(crate) fn usage() -> &'static str {
      --linked-basis-record ADDRESS \
      --payer PUBKEY --output ABSOLUTE_NEW_JSON \
      [--action ACTION] [--order-terms-record ADDRESS --maker-token-account ADDRESS] \
-     [--parent-request-digest HEX64] [--rent-credit ADDRESS] \
+     [--parent-request-digest HEX64] [--rent-credit ADDRESS] [--output-page ADDRESS] \
      [--emit-route ABSOLUTE_NEW_JSON --lookup-table ADDRESS \
      --checked-release ABSOLUTE_BIN]\n     \
      Read-only. Derives the complete General hot frame for --action (default \
@@ -340,7 +341,7 @@ pub(crate) fn local_usage() -> &'static str {
      --result-domain-record ADDRESS --portfolio-record ADDRESS \
      --linked-basis-record ADDRESS --payer PUBKEY --output ABSOLUTE_NEW_JSON \
      [--action ACTION] [--order-terms-record ADDRESS --maker-token-account ADDRESS] \
-     [--parent-request-digest HEX64] [--rent-credit ADDRESS] \
+     [--parent-request-digest HEX64] [--rent-credit ADDRESS] [--output-page ADDRESS] \
      [--emit-route ABSOLUTE_NEW_JSON --lookup-table ADDRESS \
      --checked-release ABSOLUTE_BIN]\n     \
      Read-only owned-loopback counterpart of devnet-general-session. It derives \
@@ -388,6 +389,11 @@ struct ArgumentsV1 {
     /// The frame report says of it that "nothing on chain names it", which is
     /// exactly why a route has to be told.
     rent_credit: Option<Pubkey>,
+    /// The actual provisioned OutputPageV3.  This is a routing hint, not a
+    /// derivation: the caller's saved page signer creates it and this session
+    /// re-reads its finalized accelerator-owned bytes before it enters the
+    /// frame.
+    output_page: Option<Pubkey>,
     action: Action,
     /// The cohort's `CheckedExecutionReleaseSetV1` bytes. Its own release-set
     /// identity is required to equal the Market's `selected_release_set`, so
@@ -412,6 +418,7 @@ fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Resul
     let mut emit_route = None;
     let mut lookup_table = None;
     let mut rent_credit = None;
+    let mut output_page = None;
     let mut action = None;
     let mut checked_release = None;
     let mut iterator = arguments.into_iter();
@@ -435,6 +442,7 @@ fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Resul
             "--emit-route" => &mut emit_route,
             "--lookup-table" => &mut lookup_table,
             "--rent-credit" => &mut rent_credit,
+            "--output-page" => &mut output_page,
             "--action" => &mut action,
             "--checked-release" => &mut checked_release,
             other => return Err(refusal("input/unknown-flag", other)),
@@ -523,6 +531,7 @@ fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Resul
         emit_route: emit_route.map(PathBuf::from),
         lookup_table: lookup_table.as_deref().map(pubkey).transpose()?,
         rent_credit: rent_credit.as_deref().map(pubkey).transpose()?,
+        output_page: output_page.as_deref().map(pubkey).transpose()?,
         action,
         checked_release: checked_release.map(PathBuf::from),
     })
@@ -1207,19 +1216,33 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
         general_account_profile_fixed_count_v3(session_action)
             .map_err(|error| Error::new(format!("General account geometry: {error:?}")))?,
     );
-    let invocation_count = admitted_invocation_count_v1(session_action, tail_count)?;
+    let invocation_count = admitted_invocation_count_v1(transport)?;
     let strategy_account_count = ADMITTED_STRATEGY_EVIDENCE_COUNT_V3 + invocation_count;
+    // OutputPageV3 is the one writable account between the admitted caller
+    // span and AccountProfile's runtime slice.  Its address comes from the
+    // provisioner that retained the new-account signer; raw hashing cannot
+    // create a System account.  The route accepts that address only as a
+    // routing hint and immediately authenticates its finalized chain body.
     let output_page = match transport {
         AcceleratorTransportProfileV2::OutputPageV3 => {
-            Some(admitted_output_page_address_v1(&accelerator, &root))
+            Some(arguments.output_page.ok_or_else(|| {
+                refusal(
+                    "session/output-page",
+                    "OutputPageV3 requires --output-page from the canonical provisioner",
+                )
+            })?)
         }
         AcceleratorTransportProfileV2::ChunkedBankV2
-        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => None,
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => {
+            if arguments.output_page.is_some() {
+                return Err(refusal(
+                    "session/output-page",
+                    "--output-page was supplied for a transport with no OutputPageV3",
+                ));
+            }
+            None
+        }
     };
-    // OutputPageV3 is the one writable account between the admitted caller
-    // span and AccountProfile's runtime slice.  It is an accelerator fact
-    // derived by the bundle builder and then observed here; a route never
-    // accepts a page address from a command line or fabricates an empty page.
     let output_page_floor = rpc.finalized_slot()?;
     let output_page_observed = output_page
         .map(|address| {
@@ -1228,7 +1251,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
                     accounts.into_iter().next().flatten().ok_or_else(|| {
                         refusal(
                             "session/output-page",
-                            format!("missing finalized accelerator OutputPageV3 {address}"),
+                            format!("missing finalized provisioned OutputPageV3 {address}"),
                         )
                     })
                 })
@@ -1247,6 +1270,17 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
                 })
         })
         .transpose()?;
+    if let Some((address, account)) = output_page_observed.as_ref() {
+        let rent_account = rpc.required_account(sysvar::rent::ID, "Rent sysvar")?;
+        let rent: Rent = bincode::deserialize(&rent_account.data)
+            .map_err(|error| Error::new(format!("Rent sysvar: {error}")))?;
+        let page = built_account_v1(*address, Some(account.clone()));
+        let bank_bytes = general_hot_candidate_bank_len_v3(session_action, tail_count)
+            .map_err(|error| Error::new(format!("output page bank width: {error:?}")))?;
+        validate_admitted_output_page_v1(&page, &accelerator, bank_bytes, &rent)
+            .map_err(|error| refusal("session/output-page", format!("{error:?}")))?;
+    }
+
     let runtime_suffix_count = fixed_count
         .checked_sub(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)
         .ok_or_else(|| Error::new("runtime suffix width".to_string()))?;
@@ -1454,7 +1488,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
             "bytes": account.data.len(),
             "lamports": account.lamports,
             "executable": account.executable,
-            "provenance": "admitted_output_page_address_v1(accelerator, root), then finalized RPC observation",
+            "provenance": "canonical provisioner routing hint, then finalized RPC observation",
         })),
         "callerAuthority": {
             "parentRequestDigest": hex(parent_request_digest.as_bytes()),
@@ -1499,7 +1533,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
             "runtimeSuffixAccounts": runtime_suffix_count,
             "topLevelAccounts": top_level_count,
             "acceleratorCpiAccounts": ADMITTED_RUNTIME_ACCOUNTS_START_V3 + fixed_count,
-            "inlineBankBytes": general_hot_candidate_bank_len_v3(session_action, tail_count)
+            "outputPageRequiredBytes": general_hot_candidate_bank_len_v3(session_action, tail_count)
                 .map_err(|error| Error::new(format!("bank width: {error:?}")))?,
             "scalarCount": general_hot_scalar_count_v3(session_action, tail_count)
                 .map_err(|error| Error::new(format!("scalar count: {error:?}")))?,
@@ -1919,6 +1953,9 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
                         "General accelerator ProgramData",
                     )?),
                 );
+                let output_page = output_page_observed
+                    .as_ref()
+                    .map(|(address, account)| built_account_v1(*address, Some(account.clone())));
                 inputs.child_callers = projected_place_order_callers_v1(
                     &bundle_input,
                     AdmittedAotInputV1 {
@@ -1927,6 +1964,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
                         artifact_release: Some(&artifact_release_body),
                         accelerator_program: Some(&accelerator_program),
                         accelerator_programdata: Some(&accelerator_data),
+                        output_page: output_page.as_ref(),
                     },
                     GeneralActionPrestateV1 {
                         primary_state_account: Some(&primary.data),
@@ -2780,27 +2818,10 @@ fn write_new_route_v1(path: &std::path::Path, document: &Value) -> Result<()> {
     .map_err(|error| Error::new(format!("route document: {error}")))
 }
 
-/// The accelerator invocation count the published effect selects.
-///
-/// One caller authority per invocation, which is what makes the count part of
-/// the top-level account list rather than an internal detail.
-fn admitted_invocation_count_v1(session_action: Action, tail_count: u32) -> Result<usize> {
-    let scalar_count = general_hot_scalar_count_v3(session_action, tail_count)
-        .map_err(|error| Error::new(format!("scalar count: {error:?}")))?;
-    let transport = classify_bank_transport_v2(scalar_count, GENERAL_HOT_COMMON_IDENTITIES_V3)
-        .map_err(|error| Error::new(format!("bank transport: {error:?}")))?;
-    let count = match transport {
-        BankTransportV2::InlineReturnData { bank_bytes } if bank_bytes != 0 => 1,
-        BankTransportV2::AuthenticatedScratchPages { page_count, .. } if page_count != 0 => {
-            page_count
-        }
-        _ => {
-            return Err(refusal(
-                "session/bank-transport",
-                "the published bank classifies to no invocation count",
-            ));
-        }
-    };
+/// The accelerator invocation count selected by the authenticated transport.
+fn admitted_invocation_count_v1(transport: AcceleratorTransportProfileV2) -> Result<usize> {
+    let count = general_admitted_invocation_count_for_transport_v3(transport)
+        .map_err(|error| Error::new(format!("General admitted transport: {error:?}")))?;
     usize::try_from(count).map_err(|_| Error::new("invocation count".to_string()))
 }
 
@@ -2916,6 +2937,41 @@ mod tests {
     const RELEASE_SET: [u8; 32] = [9_u8; 32];
     const MARKET: Pubkey = Pubkey::new_from_array([11_u8; 32]);
     const ROOT: Pubkey = Pubkey::new_from_array([13_u8; 32]);
+
+    #[test]
+    fn output_page_session_geometry_has_one_caller_at_the_largest_action_width() {
+        let scalar_count = general_hot_scalar_count_v3(Action::InitializeSettlement, 258)
+            .expect("canonical scalar count");
+        let former_bank_geometry =
+            dclutch_market::execution_strategy::v2::classify_bank_transport_v2(
+                scalar_count,
+                GENERAL_HOT_COMMON_IDENTITIES_V3,
+            )
+            .expect("former bank classification");
+        assert!(matches!(
+            former_bank_geometry,
+            dclutch_market::execution_strategy::v2::BankTransportV2::AuthenticatedScratchPages {
+                page_count,
+                ..
+            } if page_count > 1
+        ));
+
+        assert_eq!(
+            admitted_invocation_count_v1(AcceleratorTransportProfileV2::OutputPageV3)
+                .expect("OutputPageV3 session geometry"),
+            1
+        );
+        for retired in [
+            AcceleratorTransportProfileV2::ChunkedBankV2,
+            AcceleratorTransportProfileV2::ShadowTranscriptV3,
+        ] {
+            assert_eq!(
+                general_admitted_invocation_count_for_transport_v3(retired),
+                Err(dclutch_operator::general_hot_v3::GeneralHotOperatorErrorV3::StrategyGeometry),
+                "retired General transport {retired:?} must receive the exact geometry refusal"
+            );
+        }
+    }
 
     fn loopback_session_arguments_v1() -> Vec<String> {
         vec![

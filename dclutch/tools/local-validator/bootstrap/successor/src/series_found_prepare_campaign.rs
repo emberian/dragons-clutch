@@ -826,12 +826,21 @@ pub(crate) mod tests {
         parent_root: Pubkey,
         ticket_bytes: &'a [u8],
     ) -> SeriesFoundPrepareSelectionInputV1<'a> {
+        compiler_input_at_occurrence(prepared, parent_root, ticket_bytes, 0)
+    }
+
+    pub(crate) fn compiler_input_at_occurrence<'a>(
+        prepared: &'a PreparedSeriesFounderV1,
+        parent_root: Pubkey,
+        ticket_bytes: &'a [u8],
+        occurrence_index: usize,
+    ) -> SeriesFoundPrepareSelectionInputV1<'a> {
         let registry = pubkey(&prepared.facts.registry_program).expect("Registry program");
         let core = pubkey(&prepared.facts.core_program).expect("Core program");
         let occurrence = admit_occurrence(
             prepared.admitted.template(),
-            &prepared.admitted.occurrences()[0],
-            &prepared.admitted.siblings()[0],
+            &prepared.admitted.occurrences()[occurrence_index],
+            &prepared.admitted.siblings()[occurrence_index],
         )
         .expect("first canonical occurrence");
         let ticket = admit_ticket(ticket_bytes).expect("canonical ticket");
@@ -893,9 +902,9 @@ pub(crate) mod tests {
             series: SeriesStateV3::new(template.close_rent()),
             now_slot: 100,
             current: Some(SeriesCurrentOccurrenceV3 {
-                occurrence_bytes: &prepared.admitted.occurrences()[0],
+                occurrence_bytes: &prepared.admitted.occurrences()[occurrence_index],
                 ticket_bytes,
-                siblings: &prepared.admitted.siblings()[0],
+                siblings: &prepared.admitted.siblings()[occurrence_index],
                 ticket_state: None,
             }),
             terminal_ticket: None,
@@ -962,7 +971,10 @@ pub(crate) mod tests {
             core_walk: CoreProductGraphWalkV1::ProjectedFounding,
             principal_cap_sets: 1,
             linked_basis_record_digest: record_identity(&prepared.publication.basis),
-            semantic_basis_id: content(&prepared.facts.occurrences[0].liability_basis).to_bytes(),
+            semantic_basis_id: content(
+                &prepared.facts.occurrences[occurrence_index].liability_basis,
+            )
+            .to_bytes(),
             claim_count: dclutch_product::PortfolioV2::decode(&prepared.publication.portfolio)
                 .expect("canonical M0 Portfolio")
                 .coefficient_count(),
@@ -1256,3 +1268,7 @@ pub(crate) mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "series_recurrence_tests.rs"]
+mod recurrence_tests;

@@ -59,6 +59,9 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-08 | Cargo cross-checkout target reuse reproduces silent success and foreign dependency metadata; committed-source checks require isolated targets | — | [instrument evidence](docs/evidence/CARGO_CROSS_CHECKOUT_TARGET_2026_09_08.md) |
+| 2026-09-08 | a fresh local-validator Dealer campaign accepts Found, Quote, a nonzero 9-unit Fill, and a one-unit Withdraw against the sealed 7d runtime | — | [Dealer campaign evidence](docs/evidence/DEALER_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md) |
+| 2026-09-08 | existing Pages publishes corrected cohort and compute explanations plus the Series recurrence repair scope | — | [correctness checkpoint publication](docs/evidence/PAGES_CORRECTNESS_CHECKPOINT_2026_09_08.md) |
 | 2026-09-08 | existing Pages publishes source 551ffc1b9 through its established app and docs workflow | — | [runtime checkpoint publication](docs/evidence/PAGES_RUNTIME_CHECKPOINT_2026_09_08.md) |
 | 2026-09-08 | all eight programs at 551ffc1b9 pass the checked build; integration verifies 52 referenced artifacts | — | [strict runtime checkpoint](docs/evidence/STRICT_ALL_EIGHT_551_CHECKPOINT_2026_09_08.md) |
 | 2026-09-08 | full Series Consume and Expire constructors execute and expose M0 identity and physical-alias joins; both remain red | — | [constructor execution](docs/evidence/SERIES_CONSTRUCTOR_EXECUTION_2026_09_08.md) |

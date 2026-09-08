@@ -31,7 +31,7 @@ use dclutch_registry::{
     require_slot_pinned_release_v1,
 };
 use sha2::{Digest, Sha256};
-use solana_program::{hash::hash, pubkey::Pubkey};
+use solana_program::{hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent};
 use solana_sdk_ids::bpf_loader_upgradeable;
 
 use crate::{
@@ -56,6 +56,9 @@ pub struct AdmittedAotInputV1<'a> {
     pub accelerator_program: Option<&'a BuiltAccountV1>,
     /// Current Loader ProgramData account, including the complete ELF tail.
     pub accelerator_programdata: Option<&'a BuiltAccountV1>,
+    /// Caller-provisioned scratch page read from the chain, required only for
+    /// OutputPageV3. Its address is a routing hint, not a protocol identity.
+    pub output_page: Option<&'a BuiltAccountV1>,
 }
 
 /// The authenticated eight-account evidence suffix.
@@ -71,6 +74,9 @@ pub struct DerivedAdmittedEvidenceV1 {
     pub accelerator_program: BuiltAccountV1,
     /// Exact current accelerator ProgramData observation.
     pub accelerator_programdata: BuiltAccountV1,
+    /// Observed caller-provisioned scratch page. The bundle checks its owner,
+    /// capacity and rent against the actual candidate bank before use.
+    pub output_page: Option<BuiltAccountV1>,
 }
 
 /// Inputs whose sole output is the canonical accelerator request sequence and
@@ -105,6 +111,8 @@ pub struct AdmittedAuthorityInputV1<'a> {
     pub profile: AcceleratorTransportProfileV2,
     /// Immutable admitted accelerator program, which owns any output page.
     pub accelerator_program: Pubkey,
+    /// Explicit observed output-page address; never invented by this builder.
+    pub output_page: Option<Pubkey>,
     /// Product-authoritative runtime tail count.
     pub tail_count: u32,
     /// Exact pre-transition scalar bank.
@@ -218,6 +226,7 @@ pub fn derive_admitted_evidence_v1(
         ),
         accelerator_program: accelerator_program.clone(),
         accelerator_programdata: accelerator_programdata.clone(),
+        output_page: input.output_page.cloned(),
     })
 }
 
@@ -264,12 +273,16 @@ pub fn derive_admitted_authorities_v1(
         accelerator_invocation_count_v2(input.profile, scalar_count, identity_count)
             .map_err(|_| BuilderError::Arithmetic)?;
     let output_page = match input.profile {
-        AcceleratorTransportProfileV2::OutputPageV3 => Some(admitted_output_page_address_v1(
-            &input.accelerator_program,
-            &input.root,
-        )),
+        AcceleratorTransportProfileV2::OutputPageV3 => Some(
+            input
+                .output_page
+                .ok_or(BuilderError::OutputPage(OutputPageErrorV1::Missing))?,
+        ),
         AcceleratorTransportProfileV2::ChunkedBankV2
         | AcceleratorTransportProfileV2::ShadowTranscriptV3 => {
+            if input.output_page.is_some() {
+                return Err(BuilderError::OutputPage(OutputPageErrorV1::Unexpected));
+            }
             if invocation_count != chunk_count {
                 return Err(BuilderError::Artifact);
             }
@@ -361,30 +374,94 @@ pub fn derive_admitted_authorities_v1(
     })
 }
 
-/// Domain for the address a test or client provisions as an accelerator page.
-///
-/// NOT A PDA, and it cannot be one: a program-derived address can only be
-/// created by its own program, and this account is created by whoever is
-/// willing to pay its rent, with a plain `SystemProgram::CreateAccount` that
-/// assigns it to the accelerator. What it is instead is a DETERMINISTIC address
-/// this harness and its genesis installer both derive the same way, so the page
-/// a bundle names and the page a fixture installs cannot drift apart.
-pub const ADMITTED_OUTPUT_PAGE_ADDRESS_DOMAIN_V1: &[u8] =
-    b"dclutch:test-accelerator-output-page:v3";
+/// Located host refusal for output-page provisioning and observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputPageErrorV1 {
+    /// The selected transport requires a page, but none was observed.
+    Missing,
+    /// A non-page transport was supplied a page.
+    Unexpected,
+    /// A page aliases the payer, a program, or another invocation account.
+    Alias,
+    /// The requested width is zero, exceeds the chain limit, or does not fit.
+    Width,
+    /// The page is not owned by the selected accelerator.
+    Owner,
+    /// The supplied page is executable.
+    Executable,
+    /// The page does not carry rent for its actual allocated width.
+    Rent,
+}
 
-/// Derive the deterministic per-root output-page address for this harness.
-pub fn admitted_output_page_address_v1(accelerator_program: &Pubkey, root: &Pubkey) -> Pubkey {
-    Pubkey::new_from_array(
-        hash(
-            &[
-                ADMITTED_OUTPUT_PAGE_ADDRESS_DOMAIN_V1,
-                accelerator_program.as_ref(),
-                root.as_ref(),
-            ]
-            .concat(),
-        )
-        .to_bytes(),
-    )
+/// Build the real System creation instruction for a reusable scratch page.
+///
+/// Both `payer` and `page` must sign. The caller supplies a new keypair's public
+/// key, retains its transaction journal, and reads the finalized account before
+/// building a Hot action. A hash-only public key has no such creation signer.
+/// The accelerator owns this reusable account after creation and currently has
+/// no close instruction; this rent is an explicit caller expense, never Hoard
+/// principal or a promise of later protocol reimbursement.
+pub fn create_admitted_output_page_v1(
+    payer: &Pubkey,
+    page: &Pubkey,
+    accelerator_program: &Pubkey,
+    bank_bytes: usize,
+    rent: &Rent,
+) -> Result<Instruction, BuilderError> {
+    let bytes = checked_output_page_width(bank_bytes)?;
+    if payer == page
+        || page == accelerator_program
+        || payer == accelerator_program
+        || *page == Pubkey::default()
+        || *accelerator_program == Pubkey::default()
+    {
+        return Err(BuilderError::OutputPage(OutputPageErrorV1::Alias));
+    }
+    Ok(solana_system_interface::instruction::create_account(
+        payer,
+        page,
+        rent.minimum_balance(bank_bytes),
+        bytes,
+        accelerator_program,
+    ))
+}
+
+fn checked_output_page_width(bank_bytes: usize) -> Result<u64, BuilderError> {
+    let bytes = u64::try_from(bank_bytes)
+        .map_err(|_| BuilderError::OutputPage(OutputPageErrorV1::Width))?;
+    if bytes == 0 || bytes > solana_system_interface::MAX_PERMITTED_DATA_LENGTH {
+        return Err(BuilderError::OutputPage(OutputPageErrorV1::Width));
+    }
+    Ok(bytes)
+}
+
+/// Validate the actual chain view without replacing its data or rent balance.
+/// The full bundle separately refuses aliasing with any invocation account.
+pub fn validate_admitted_output_page_v1(
+    page: &BuiltAccountV1,
+    accelerator_program: &Pubkey,
+    bank_bytes: usize,
+    rent: &Rent,
+) -> Result<(), BuilderError> {
+    checked_output_page_width(bank_bytes)?;
+    let account = page.chain_view();
+    checked_output_page_width(account.data.len())?;
+    if page.key == *accelerator_program || page.key == Pubkey::default() {
+        return Err(BuilderError::OutputPage(OutputPageErrorV1::Alias));
+    }
+    if account.owner != *accelerator_program {
+        return Err(BuilderError::OutputPage(OutputPageErrorV1::Owner));
+    }
+    if account.executable {
+        return Err(BuilderError::OutputPage(OutputPageErrorV1::Executable));
+    }
+    if account.data.len() < bank_bytes {
+        return Err(BuilderError::OutputPage(OutputPageErrorV1::Width));
+    }
+    if !rent.is_exempt(account.lamports, account.data.len()) {
+        return Err(BuilderError::OutputPage(OutputPageErrorV1::Rent));
+    }
+    Ok(())
 }
 
 /// Require an observed authority slice to equal the derived request sequence.
@@ -550,6 +627,7 @@ mod tests {
                 artifact_release: Some(&self.artifact_release),
                 accelerator_program: Some(&self.program),
                 accelerator_programdata: Some(&self.programdata),
+                output_page: None,
             }
         }
     }
@@ -762,6 +840,95 @@ mod tests {
     }
 
     #[test]
+    fn output_page_observation_checks_real_owner_capacity_and_funding() {
+        let rent = Rent::default();
+        let accelerator = Pubkey::new_unique();
+        let key = Pubkey::new_unique();
+        let page = crate::frame::data_account(&rent, key, accelerator, vec![0xA5; 4096]);
+        assert_eq!(
+            validate_admitted_output_page_v1(&page, &accelerator, 2048, &rent),
+            Ok(())
+        );
+        assert_eq!(page.chain_view().data, vec![0xA5; 4096]);
+        let cases = [
+            (OutputPageErrorV1::Owner, {
+                let mut changed = page.clone();
+                changed.account.owner = Pubkey::new_unique();
+                changed
+            }),
+            (OutputPageErrorV1::Executable, {
+                let mut changed = page.clone();
+                changed.account.executable = true;
+                changed
+            }),
+            (OutputPageErrorV1::Width, {
+                let mut changed = page.clone();
+                changed.account.data.truncate(2047);
+                changed
+            }),
+            (OutputPageErrorV1::Rent, {
+                let mut changed = page.clone();
+                changed.account.lamports = rent.minimum_balance(4096) - 1;
+                changed
+            }),
+            (OutputPageErrorV1::Alias, {
+                let mut changed = page.clone();
+                changed.key = accelerator;
+                changed
+            }),
+        ];
+        for (error, changed) in cases {
+            assert_eq!(
+                validate_admitted_output_page_v1(&changed, &accelerator, 2048, &rent),
+                Err(BuilderError::OutputPage(error)),
+            );
+        }
+        let mut installed = crate::frame::vacant(key);
+        installed.observed = Some(page.account.clone());
+        assert_eq!(
+            validate_admitted_output_page_v1(&installed, &accelerator, 2048, &rent),
+            Ok(())
+        );
+        assert_eq!(
+            validate_admitted_output_page_v1(&page, &accelerator, 4097, &rent),
+            Err(BuilderError::OutputPage(OutputPageErrorV1::Width)),
+        );
+    }
+
+    #[test]
+    fn output_page_creation_requires_both_real_signers_and_chain_bounded_width() {
+        let rent = Rent::default();
+        let payer = Pubkey::new_unique();
+        let page = Pubkey::new_unique();
+        let accelerator = Pubkey::new_unique();
+        let instruction = create_admitted_output_page_v1(&payer, &page, &accelerator, 4096, &rent)
+            .expect("caller-funded creation");
+        assert_eq!(instruction.program_id, solana_sdk_ids::system_program::ID);
+        assert_eq!(
+            instruction.accounts,
+            vec![
+                solana_program::instruction::AccountMeta::new(payer, true),
+                solana_program::instruction::AccountMeta::new(page, true),
+            ]
+        );
+        for bytes in [
+            0,
+            usize::try_from(solana_system_interface::MAX_PERMITTED_DATA_LENGTH)
+                .expect("chain width")
+                + 1,
+        ] {
+            assert_eq!(
+                create_admitted_output_page_v1(&payer, &page, &accelerator, bytes, &rent),
+                Err(BuilderError::OutputPage(OutputPageErrorV1::Width))
+            );
+        }
+        assert_eq!(
+            create_admitted_output_page_v1(&payer, &payer, &accelerator, 4096, &rent),
+            Err(BuilderError::OutputPage(OutputPageErrorV1::Alias))
+        );
+    }
+
+    #[test]
     fn multi_page_requests_derive_one_exact_authority_each() {
         let scalars = vec![7_u64; 120];
         let identities = vec![[8_u8; 32]; 2];
@@ -778,6 +945,7 @@ mod tests {
             transport: RequestTransportV2::ScratchPages,
             profile: AcceleratorTransportProfileV2::ChunkedBankV2,
             accelerator_program: Pubkey::new_from_array([0x59; 32]),
+            output_page: None,
             tail_count: 258,
             scalars: &scalars,
             identities: &identities,
@@ -843,6 +1011,7 @@ mod tests {
                 transport: RequestTransportV2::Inline,
                 profile: AcceleratorTransportProfileV2::ChunkedBankV2,
                 accelerator_program: Pubkey::new_from_array([0x59; 32]),
+                output_page: None,
                 tail_count: 258,
                 scalars: &scalars,
                 identities: &identities,
@@ -898,6 +1067,7 @@ mod tests {
             transport: RequestTransportV2::Inline,
             profile: AcceleratorTransportProfileV2::ChunkedBankV2,
             accelerator_program: Pubkey::new_from_array([0x59; 32]),
+            output_page: None,
             tail_count: 258,
             scalars: &vec![7_u64; 151],
             identities: &identities,
@@ -917,6 +1087,7 @@ mod tests {
         let identities = vec![[8_u8; 32]; 2];
         let accelerator_program = Pubkey::new_from_array([0x59; 32]);
         let root = Pubkey::new_from_array([0x54; 32]);
+        let page = Pubkey::new_from_array([0x60; 32]);
         let derived = derive_admitted_authorities_v1(AdmittedAuthorityInputV1 {
             trading_program: Pubkey::new_from_array([0x51; 32]),
             release_set: id(0x52),
@@ -930,16 +1101,14 @@ mod tests {
             transport: RequestTransportV2::ScratchPages,
             profile: AcceleratorTransportProfileV2::OutputPageV3,
             accelerator_program,
+            output_page: Some(page),
             tail_count: 258,
             scalars: &scalars,
             identities: &identities,
         })
         .expect("output-page authorities");
         assert_eq!(derived.entries.len(), 1);
-        assert_eq!(
-            derived.output_page,
-            Some(admitted_output_page_address_v1(&accelerator_program, &root))
-        );
+        assert_eq!(derived.output_page, Some(page));
         let entry = derived.entries.first().expect("the one entry");
         assert_eq!(entry.chunk_index, 0);
         let request =

@@ -29,9 +29,7 @@ use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_STRATEGY_EVIDENCE_START_V3,
 };
 use dclutch_market::execution_strategy::shadow_digest_v3::family_request_digest_v3;
-use dclutch_market::execution_strategy::v2::{
-    AcceleratorTransportProfileV2, BankTransportV2, classify_bank_transport_v2,
-};
+use dclutch_market::execution_strategy::v2::AcceleratorTransportProfileV2;
 use dclutch_trading::general::artifacts_v3::{
     GeneralArtifactBytesV3, GeneralArtifactSelectionV3, GeneralDecodedRequestV3,
     GeneralRequestWireV3, authenticate_general_artifacts_v3, decode_general_request_v3,
@@ -467,11 +465,8 @@ pub struct GeneralSuccessorInstructionV5 {
     pub outcome_count: u32,
     /// Accelerator invocations the selected bank geometry costs.
     ///
-    /// This was named for the input scratch pages because their count was the
-    /// same number: both came from `classify_bank_transport_v2`, which answers
-    /// the RETURN-DATA question. The input bank is inline now and pages none of
-    /// itself; what remains is the output invocation count, which is also the
-    /// caller-authority span length, and that is what this always computed.
+    /// General's selected OutputPageV3 transport has one invocation and one
+    /// caller authority for the complete input bank.
     pub admitted_invocation_count: u32,
     /// Exact action-specific DCE5 child route and receipt order.
     pub child_routes: Vec<GeneralChildRouteV5>,
@@ -2194,28 +2189,28 @@ fn validate_strategy_geometry(
 fn selected_admitted_invocation_count_v3(
     bundle: dclutch_trading::general::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<u32, GeneralHotOperatorErrorV3> {
-    let scalar_count = bundle
-        .effect
-        .scalar_count(bundle.tail_count)
-        .map_err(GeneralHotOperatorErrorV3::Effect)?;
-    let identity_count = bundle
-        .effect
-        .identity_count(bundle.tail_count)
-        .map_err(GeneralHotOperatorErrorV3::Effect)?;
-    match classify_bank_transport_v2(
-        u32::try_from(scalar_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
-        u32::try_from(identity_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
+    general_admitted_invocation_count_for_transport_v3(
+        bundle
+            .strategy
+            .transport_profile()
+            .map_err(GeneralHotOperatorErrorV3::ExecutionStrategy)?,
     )
-    .map_err(GeneralHotOperatorErrorV3::ExecutionStrategy)?
-    {
-        BankTransportV2::InlineReturnData { bank_bytes } if bank_bytes != 0 => Ok(1),
-        BankTransportV2::AuthenticatedScratchPages { page_count, .. } if page_count != 0 => {
-            Ok(page_count)
-        }
-        BankTransportV2::InlineReturnData { .. } => {
-            Err(GeneralHotOperatorErrorV3::StrategyGeometry)
-        }
-        BankTransportV2::AuthenticatedScratchPages { .. } => {
+}
+
+/// Return General's admitted caller count for the authenticated strategy transport.
+///
+/// The host and operator share this owner so the transaction frame cannot drift
+/// back to a bank-width-derived chunk count after selecting `OutputPageV3`.
+pub fn general_admitted_invocation_count_for_transport_v3(
+    profile: AcceleratorTransportProfileV2,
+) -> Result<u32, GeneralHotOperatorErrorV3> {
+    // General's selected compiler emits OutputPageV3. The one page owns the
+    // full candidate acknowledgement, so neither bank width nor the former
+    // return-data chunk classifier may create additional callers.
+    match profile {
+        AcceleratorTransportProfileV2::OutputPageV3 => Ok(1),
+        AcceleratorTransportProfileV2::ChunkedBankV2
+        | AcceleratorTransportProfileV2::ShadowTranscriptV3 => {
             Err(GeneralHotOperatorErrorV3::StrategyGeometry)
         }
     }
@@ -3045,9 +3040,6 @@ mod tests {
         GeneralBatchOpeningV1, GeneralOrderHeaderV2, GeneralOrderStateV1, MakerFundingV1,
         general_batch_len_v2, general_order_len_v2, general_signed_order_terms_len_v2,
     };
-    use dclutch_trading::general::hot_candidate_v3::{
-        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_scalar_count_v3,
-    };
     use dclutch_trading::general::release_v3::GENERAL_ACTIONS_V3;
     use dclutch_trading::general::runtime_verify::OrderSideV2;
     use dclutch_trading::general::runtime_width::{
@@ -3142,8 +3134,8 @@ mod tests {
     /// No count here is copied from a campaign table. The fixed frame is
     /// `HOT_FIXED_ACCOUNT_COUNT_V3` with exactly one writable account (the
     /// composite root, per `validate_fixed_frame`); the strategy extras are
-    /// this module's own admitted-AOT constants plus the transport
-    /// `classify_bank_transport_v2` selects for General's own bank width; and
+    /// this module's own admitted-AOT constants plus one caller and output
+    /// page from General's selected OutputPage route; and
     /// every runtime account, alias and privilege comes from General's own
     /// `general_account_profile_rule_v3`.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3196,22 +3188,10 @@ mod tests {
             .expect("privilege tuple is one of eight")
     }
 
-    /// Accelerator invocations, which is the caller-authority span length.
-    ///
-    /// Still `classify_bank_transport_v2`, because that is the OUTPUT question
-    /// and the output still rides return data under `ChunkedBankV2`. It no
-    /// longer counts input pages: there are none.
-    fn general_admitted_invocations_v3(action: Action, outcome_count: u32) -> usize {
-        let scalars =
-            general_hot_scalar_count_v3(action, outcome_count).expect("General scalar count");
-        match classify_bank_transport_v2(scalars, GENERAL_HOT_COMMON_IDENTITIES_V3)
-            .expect("bank transport")
-        {
-            BankTransportV2::AuthenticatedScratchPages { page_count, .. } => {
-                usize::try_from(page_count).expect("bounded page count")
-            }
-            BankTransportV2::InlineReturnData { .. } => 1,
-        }
+    /// OutputPageV3 has exactly one accelerator invocation for every General
+    /// bank. Its width changes page bytes, not caller count.
+    fn general_admitted_invocations_v3(_action: Action, _outcome_count: u32) -> usize {
+        1
     }
 
     fn general_frame_geometry_v3(action: Action, outcome_count: u32) -> GeneralFrameGeometryV3 {
@@ -3238,15 +3218,16 @@ mod tests {
             writable += usize::from(is_writable);
             signers += usize::from(signer);
         }
-        // No page accounts to add to the runtime suffix, and none to grant
-        // privileges to. The caller-authority span is still one account per
-        // invocation and it sits in the strategy extras below.
+        // The selected OutputPageV3 appends one accelerator-owned writable
+        // page after its one caller authority. It is neither a logical runtime
+        // observation nor a General lifecycle account.
         GeneralFrameGeometryV3 {
             accounts: HOT_FIXED_ACCOUNT_COUNT_V3
                 + ADMITTED_AOT_FIXED_EXTRAS_V3
                 + invocations
+                + 1
                 + (physical_runtime - HOT_RUNTIME_LOGICAL_PREFIX_V3),
-            writable,
+            writable: writable + 1,
             signers,
             admitted_invocations: invocations,
             physical_runtime,
@@ -3287,6 +3268,7 @@ mod tests {
         for _ in 0..strategy {
             accounts.push(AccountMeta::new_readonly(fresh(), false));
         }
+        accounts.push(AccountMeta::new(fresh(), false));
         let mut signers = geometry.signers;
         let mut writable = geometry.writable - 1;
         for _ in 0..(geometry.physical_runtime - HOT_RUNTIME_LOGICAL_PREFIX_V3) {
@@ -4907,8 +4889,8 @@ mod tests {
     /// geometry.
     ///
     /// This runs the real thing. Every account count, privilege and alias comes
-    /// from General's own `general_account_profile_rule_v3` and the transport
-    /// `classify_bank_transport_v2` selects; the instruction data is the exact
+    /// from General's own `general_account_profile_rule_v3` and the selected
+    /// OutputPageV3 transport; the instruction data is the exact
     /// hot envelope plus the exact 64-byte controller request. The recorded
     /// numbers are the wire this operator would actually submit.
     ///
@@ -4916,13 +4898,11 @@ mod tests {
     /// to 151/45 scalar/identity coordinates. The counts and wires below were
     /// re-measured against the widened real-ELF campaign.
     ///
-    /// MINUS EIGHTEEN ACCOUNTS AND THIRTY-SIX WIRE BYTES ON EVERY ROW, from the
-    /// input bank going inline. At N=258 the bank was eighteen scratch pages;
-    /// it is now eighteen fewer accounts and, at two wire bytes for each
-    /// ALT-backed readonly account, thirty-six fewer bytes. The caller-authority
-    /// span did not move -- it counts accelerator invocations, which the output
-    /// still chunks -- so the delta is uniform across all seven actions, and
-    /// that uniformity is what says this removed a count and nothing else.
+    /// OutputPageV3 contributes exactly two accounts at every width: one caller
+    /// authority and one writable page. The table below is measured from each
+    /// action's real profile at N=258; the page removes the former bank-width
+    /// dependence from the strategy suffix while preserving each action's
+    /// distinct runtime geometry.
     #[test]
     fn every_action_is_alt_packet_safe_at_the_canonical_runtime_width() {
         let payer = key(250);
@@ -4947,23 +4927,29 @@ mod tests {
         // data length and five data bytes. Uniform across all seven, and no
         // account count moves, which is what says a compute-budget declaration
         // was added and nothing about the frame changed.
-        for (action, accounts, wire) in [
-            (Action::Consider, 71, 682),
-            (Action::Freeze, 70, 680),
-            (Action::InitializeSettlement, 105, 940),
-            (Action::Collect, 99, 833),
-            (Action::Materialize, 97, 829),
-            (Action::Distribute, 99, 833),
-            (Action::Close, 98, 831),
-        ] {
+        let expected = [
+            (Action::Consider, 55, 650),
+            (Action::Freeze, 54, 648),
+            (Action::InitializeSettlement, 90, 815),
+            (Action::Collect, 84, 708),
+            (Action::Materialize, 82, 704),
+            (Action::Distribute, 84, 708),
+            (Action::Close, 84, 708),
+        ];
+        let mut observed = Vec::new();
+        for (action, _, _) in expected {
             let report = real_frame_report(action, 258);
-            assert_eq!(report.instruction.accounts.len(), accounts, "{action:?}");
             let plan = compile_general_hot_v0(&report, payer, blockhash, &lookup(&report, payer))
                 .expect("packet-safe General action at the canonical width");
-            assert_eq!(plan.message.wire_bytes, wire, "{action:?}");
             assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
             assert!(plan.message.loaded_addresses > 0);
+            observed.push((
+                action,
+                report.instruction.accounts.len(),
+                plan.message.wire_bytes,
+            ));
         }
+        assert_eq!(observed.as_slice(), expected.as_slice());
     }
 
     /// The lookup table is what buys the margin, and the legacy wire is what

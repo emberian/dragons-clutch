@@ -6,7 +6,7 @@ use std::{env, fs, path::PathBuf};
 
 use dclutch_chain_bundle_builder::{
     WaistFactsV1,
-    admitted::AdmittedAotInputV1,
+    admitted::{AdmittedAotInputV1, create_admitted_output_page_v1},
     artifacts::{ArtifactSetV1, DerivedRecordV1, derive_record, digest},
     bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1},
     frame::{
@@ -48,6 +48,9 @@ use dclutch_market::capability_program::{
     },
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::CapabilityProgramV4,
+};
+use dclutch_market::execution_strategy::v2::{
+    AcceleratorTransportProfileV2, ExecutionStrategyProgramV2,
 };
 use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -99,6 +102,7 @@ use dclutch_trading::general::{
         GeneralOrderPhaseV1, GeneralOrderStateV1, GeneralOrderV2, authenticate_batch_candidate_v1,
         general_order_len_v2, general_signed_order_terms_len_v2,
     },
+    hot_candidate_v3::general_hot_candidate_bank_len_v3,
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_verify::OrderSideV2,
     runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len},
@@ -118,6 +122,7 @@ use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_transaction::Transaction;
 
 const ACCELERATOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xa1; 32]);
 /// `TradingSbfError::Root`, derived from its REGISTERED BAND.
@@ -380,6 +385,14 @@ fn every_general_action_joins_its_own_funding_profile() {
         {
             failures.push(format!("{:?}: {cause:?}", bundle.action));
         }
+        let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy).unwrap();
+        if strategy.transport_profile() != Ok(AcceleratorTransportProfileV2::OutputPageV3) {
+            failures.push(format!(
+                "{:?}: General must select OutputPageV3, got {:?}",
+                bundle.action,
+                strategy.transport_profile(),
+            ));
+        }
     }
     assert!(
         failures.is_empty(),
@@ -620,6 +633,9 @@ struct ChainPrestateV1 {
     /// `0x4018 AdmittedTransport` naming no coordinate. The frame control found
     /// it by name on the first two-action run.
     payer: BuiltAccountV1,
+    /// The one caller-funded accelerator page, read back from the bank before
+    /// each action and reused for the whole market session.
+    output_page: BuiltAccountV1,
     /// The live primary state this action operates on, or `None` where this
     /// execution is the one that creates it.
     primary_state: Option<BuiltAccountV1>,
@@ -827,7 +843,27 @@ fn build_campaign_with_entry(
 }
 
 /// The founding's own prestate: what the bank holds before any action runs.
-fn genesis_prestate(campaign: &CampaignV1) -> ChainPrestateV1 {
+fn output_page_width(campaign: &CampaignV1) -> usize {
+    dclutch_trading::general::release_v3::GENERAL_ACTIONS_V3
+        .into_iter()
+        .map(|action| {
+            general_hot_candidate_bank_len_v3(action, campaign.outcome_count)
+                .expect("General output-page width")
+        })
+        .max()
+        .expect("General has actions")
+}
+
+fn expected_output_page(campaign: &CampaignV1, key: Pubkey) -> BuiltAccountV1 {
+    data_account(
+        &campaign.rent,
+        key,
+        ACCELERATOR_PROGRAM,
+        vec![0; output_page_width(campaign)],
+    )
+}
+
+fn genesis_prestate(campaign: &CampaignV1, output_page: Pubkey) -> ChainPrestateV1 {
     ChainPrestateV1 {
         market: campaign.state.market.clone(),
         root: campaign.state.root.clone(),
@@ -839,6 +875,7 @@ fn genesis_prestate(campaign: &CampaignV1) -> ChainPrestateV1 {
             executable: false,
             rent_epoch: 0,
         }),
+        output_page: expected_output_page(campaign, output_page),
         primary_state: None,
     }
 }
@@ -1582,6 +1619,7 @@ fn build_action_case_with_evidence_and_bindings(
             artifact_release: Some(&campaign.accelerator_artifact),
             accelerator_program: Some(&campaign.accelerator_program),
             accelerator_programdata: Some(&campaign.accelerator_programdata_account),
+            output_page: Some(&chain.output_page),
         },
         GeneralActionPrestateV1 {
             primary_state_account: chain
@@ -1671,6 +1709,52 @@ async fn observed_binding(
         account: chain_account(context, key).await,
         observed: None,
     }
+}
+
+/// Create the page through the same signed System instruction a real caller
+/// uses, then return the bank's account body. The bundle never installs this
+/// account as a fixture.
+async fn provision_output_page(
+    context: &mut solana_program_test::ProgramTestContext,
+    campaign: &CampaignV1,
+    payer: &Keypair,
+    fee_payer: &Keypair,
+    page: &Keypair,
+) -> BuiltAccountV1 {
+    let instruction = create_admitted_output_page_v1(
+        &payer.pubkey(),
+        &page.pubkey(),
+        &ACCELERATOR_PROGRAM,
+        output_page_width(campaign),
+        &campaign.rent,
+    )
+    .expect("real caller-funded output-page creation instruction");
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("output-page creation blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&fee_payer.pubkey()),
+        &[fee_payer, payer, page],
+        blockhash,
+    );
+    context
+        .banks_client
+        .process_transaction(transaction)
+        .await
+        .expect("System created the reusable accelerator output page");
+    let observed = observed_binding(context, page.pubkey()).await;
+    assert_eq!(observed.account.owner, ACCELERATOR_PROGRAM);
+    assert!(!observed.account.executable);
+    assert_eq!(observed.account.data.len(), output_page_width(campaign));
+    assert_eq!(
+        observed.account.lamports,
+        campaign.rent.minimum_balance(output_page_width(campaign)),
+        "the caller pays exactly the page's reusable scratch rent"
+    );
+    observed
 }
 
 /// THE FRAME CONTROL, and the reason it is an assertion rather than a
@@ -1763,12 +1847,14 @@ fn add_case_accounts(
     payer: &Keypair,
     fee_payer: &Keypair,
 ) {
+    let output_page = case.built.admitted_authorities.output_page;
     for install in &case.built.bundle.accounts {
         if !case
             .built
             .bundle
             .externally_installed_keys
             .contains(&install.key)
+            && Some(install.key) != output_page
         {
             test.add_account(install.key, install.account.clone());
         }
@@ -1816,6 +1902,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
     // Each case runs in its own bank, so nothing collides.
     let payer = Keypair::new_from_array([0x11; 32]);
     let fee_payer = Keypair::new_from_array([0x12; 32]);
+    let output_page_signer = Keypair::new_from_array([0x13; 32]);
     let mut test = waist::program_test_without_forced_budget(&elves);
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
@@ -1834,42 +1921,63 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         releases,
         &accelerator_elf,
     );
-    let case = build_action_case(
+    let mut chain = genesis_prestate(&campaign, output_page_signer.pubkey());
+    let fixture_case = build_action_case(
         &campaign,
         Action::OpenBatch,
-        &genesis_prestate(&campaign),
+        &chain,
         substrate.bank_slot(),
         fee_payer.pubkey(),
     );
-    // THE TWO COUNTS HAVE COME APART, which is the whole change. The
-    // caller-authority span is still one account per accelerator invocation --
-    // the output still chunks under `ChunkedBankV2` -- and the input page span
-    // is empty. They were the same number, from the same return-data bound, and
-    // reading one for the other is what made the input transport unbuildable.
-    assert!(case.built.bundle.span_counts.is_empty());
-    assert!(!case.built.admitted_authorities.entries.is_empty());
+    // General selects one accelerator-owned output page for its complete
+    // authenticated bank. The page route has one caller authority whatever the
+    // bank width, while input remains inline and owns no transport span.
+    assert!(fixture_case.built.bundle.span_counts.is_empty());
+    assert_eq!(fixture_case.built.admitted_authorities.entries.len(), 1);
+    let output_page = fixture_case
+        .built
+        .admitted_authorities
+        .output_page
+        .expect("the selected OutputPageV3 strategy derives one page");
     assert!(
-        case.built.bundle.hot_instruction.accounts.len() <= 100,
+        fixture_case.built.bundle.hot_instruction.accounts.len() <= 100,
         "the exact ALT route stays under the v0 account ceiling"
     );
     eprintln!(
-        "general-open-batch geometry N={outcome_count} instruction_accounts={} logical={} span_counts={:?} chunk_authorities={} runtime_start={}",
-        case.built.bundle.hot_instruction.accounts.len(),
-        case.built.bundle.logical.len(),
-        case.built.bundle.span_counts,
-        case.built.admitted_authorities.entries.len(),
-        47 + case.built.admitted_authorities.entries.len(),
+        "general-open-batch geometry N={outcome_count} instruction_accounts={} logical={} span_counts={:?} page_authorities={} output_page={} runtime_start={}",
+        fixture_case.built.bundle.hot_instruction.accounts.len(),
+        fixture_case.built.bundle.logical.len(),
+        fixture_case.built.bundle.span_counts,
+        fixture_case.built.admitted_authorities.entries.len(),
+        output_page,
+        47 + fixture_case.built.admitted_authorities.entries.len() + 1,
     );
     eprintln!(
         "general-open-batch registers N={outcome_count} scalars={} identities={}",
-        case.built.bundle.engine.input_scalars.len(),
-        case.built.bundle.engine.input_identities.len(),
+        fixture_case.built.bundle.engine.input_scalars.len(),
+        fixture_case.built.bundle.engine.input_identities.len(),
     );
-    add_case_accounts(&mut test, &case, &payer, &fee_payer);
-    let instructions = case.instructions.clone();
-    let lookup_addresses = case.lookup_addresses.clone();
+    add_case_accounts(&mut test, &fixture_case, &payer, &fee_payer);
+    let lookup_addresses = fixture_case.lookup_addresses.clone();
     waist::add_lookup_table(&mut test, &lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
+    chain.output_page = provision_output_page(
+        &mut context,
+        &campaign,
+        &payer,
+        &fee_payer,
+        &output_page_signer,
+    )
+    .await;
+    chain.payer = observed_binding(&mut context, payer.pubkey()).await;
+    let case = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &chain,
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
+    );
+    let instructions = case.instructions.clone();
     // THE ONLY DIFFERENCE BETWEEN THE TWO RUNS THIS FUNCTION SERVES. Everything
     // above is byte-identical between them, including
     // `case.built.bundle.hot_instruction`, because the host derives the frame
@@ -1884,6 +1992,9 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         .expect("clock sysvar")
         .slot;
     assert_frame_control(&mut context, &case).await;
+    let page_before = chain_account(&mut context, output_page).await;
+    assert_eq!(page_before.owner, ACCELERATOR_PROGRAM);
+    assert!(!page_before.executable);
     let payer_before = context
         .banks_client
         .get_account(payer.pubkey())
@@ -1925,6 +2036,21 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
             .iter()
             .any(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke"))),
         "the success log proves the real accelerator CPI ran"
+    );
+    assert_eq!(
+        execution
+            .logs
+            .iter()
+            .filter(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke")))
+            .count(),
+        1,
+        "OutputPageV3 invokes the accelerator once for the whole bank"
+    );
+    let page_after = chain_account(&mut context, output_page).await;
+    assert_eq!(page_after.owner, ACCELERATOR_PROGRAM);
+    assert_eq!(
+        page_after.lamports, page_before.lamports,
+        "OpenBatch writes its accelerator page without lifecycle funding"
     );
     let root_after = context
         .banks_client
@@ -2085,6 +2211,7 @@ async fn a_general_descriptor_seals_through_the_family_neutral_producer() {
     let payer = Keypair::new();
     let fee_payer = Keypair::new();
     let seal_payer = Keypair::new();
+    let output_page_signer = Keypair::new();
     let mut test = waist::program_test_without_forced_budget(&elves);
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
@@ -2106,7 +2233,7 @@ async fn a_general_descriptor_seals_through_the_family_neutral_producer() {
     let case = build_action_case(
         &campaign,
         Action::OpenBatch,
-        &genesis_prestate(&campaign),
+        &genesis_prestate(&campaign, output_page_signer.pubkey()),
         substrate.bank_slot(),
         fee_payer.pubkey(),
     );
@@ -2564,6 +2691,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // keypair makes the two answers different values, so this execution
     // distinguishes `Payer` from `Credit` instead of agreeing with both.
     let solver = Keypair::new_from_array([0x14; 32]);
+    let output_page_signer = Keypair::new_from_array([0x15; 32]);
     let mut test = waist::program_test_without_forced_budget(&elves);
     waist::add_program_v2(
         &mut test,
@@ -2596,14 +2724,21 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         releases,
         &accelerator_elf,
     );
-    let open = build_action_case(
+    let mut opening_chain = genesis_prestate(&campaign, output_page_signer.pubkey());
+    let fixture_open = build_action_case(
         &campaign,
         Action::OpenBatch,
-        &genesis_prestate(&campaign),
+        &opening_chain,
         substrate.bank_slot(),
         fee_payer.pubkey(),
     );
-    add_case_accounts(&mut test, &open, &payer, &fee_payer);
+    let output_page = fixture_open
+        .built
+        .admitted_authorities
+        .output_page
+        .expect("General's selected OutputPageV3 strategy derives its one page");
+    assert_eq!(fixture_open.built.admitted_authorities.entries.len(), 1);
+    add_case_accounts(&mut test, &fixture_open, &payer, &fee_payer);
     for funded in [&seal_payer, &solver] {
         test.add_account(
             funded.pubkey(),
@@ -2616,8 +2751,31 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
             },
         );
     }
-    waist::add_lookup_table(&mut test, &open.lookup_addresses);
+    waist::add_lookup_table(&mut test, &fixture_open.lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
+    opening_chain.output_page = provision_output_page(
+        &mut context,
+        &campaign,
+        &payer,
+        &fee_payer,
+        &output_page_signer,
+    )
+    .await;
+    opening_chain.payer = observed_binding(&mut context, payer.pubkey()).await;
+    let open = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &opening_chain,
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
+    );
+    assert_eq!(
+        open.lookup_addresses, fixture_open.lookup_addresses,
+        "finalized page observation must not change the routed account set"
+    );
+    let output_page_before_open = chain_account(&mut context, output_page).await;
+    assert_eq!(output_page_before_open.owner, ACCELERATOR_PROGRAM);
+    assert!(!output_page_before_open.executable);
 
     // ---- ACTION ONE: OpenBatch ------------------------------------------
     assert_frame_control(&mut context, &open).await;
@@ -2631,6 +2789,21 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     )
     .await
     .expect("real Trading -> General accelerator OpenBatch");
+    assert_eq!(
+        open_execution
+            .logs
+            .iter()
+            .filter(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke")))
+            .count(),
+        1,
+        "OpenBatch sends its complete bank to the one selected output page"
+    );
+    let output_page_after_open = chain_account(&mut context, output_page).await;
+    assert_eq!(output_page_after_open.owner, ACCELERATOR_PROGRAM);
+    assert_eq!(
+        output_page_after_open.lamports, output_page_before_open.lamports,
+        "OpenBatch neither funds nor closes the durable accelerator page"
+    );
     let opened_root = root_tail_of(&chain_account(&mut context, open.root).await);
     assert_eq!(opened_root.revision(), 2);
     assert_eq!(opened_root.open_batches(), 1);
@@ -2649,6 +2822,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         root: observed_binding(&mut context, open.root).await,
         rent_credit: observed_binding(&mut context, open.rent_credit).await,
         payer: observed_binding(&mut context, payer.pubkey()).await,
+        output_page: observed_binding(&mut context, output_page).await,
         primary_state: Some(observed_binding(&mut context, open.primary_state).await),
     };
 
@@ -2804,6 +2978,12 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         &place_bindings,
     )
     .expect("PlaceOrder assembles against its Claims and Custody corpus");
+    assert_eq!(
+        place.built.admitted_authorities.output_page,
+        Some(output_page),
+        "PlaceOrder reuses the founded market's accelerator page"
+    );
+    assert_eq!(place.built.admitted_authorities.entries.len(), 1);
     let place_installed =
         install_absent(&mut context, &place, &[place.built.bundle.artifacts.seal]).await;
     let (place_seal, place_seal_cu) =
@@ -2826,6 +3006,21 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
             .iter()
             .any(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke"))),
         "the real accelerator CPI ran for PlaceOrder"
+    );
+    assert_eq!(
+        place_execution
+            .logs
+            .iter()
+            .filter(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke")))
+            .count(),
+        1,
+        "PlaceOrder invokes the accelerator once for its whole bank"
+    );
+    let output_page_after_place = chain_account(&mut context, output_page).await;
+    assert_eq!(output_page_after_place.owner, ACCELERATOR_PROGRAM);
+    assert_eq!(
+        output_page_after_place.lamports, output_page_before_open.lamports,
+        "PlaceOrder writes the existing page without charging its lifecycle credit"
     );
     let placed_batch_account = chain_account(&mut context, open.primary_state).await;
     let (_, placed_batch) = decode_batch(&placed_batch_account);
@@ -2865,6 +3060,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         root: observed_binding(&mut context, open.root).await,
         rent_credit: observed_binding(&mut context, open.rent_credit).await,
         payer: observed_binding(&mut context, payer.pubkey()).await,
+        output_page: observed_binding(&mut context, output_page).await,
         primary_state: Some(observed_binding(&mut context, open.primary_state).await),
     };
 
@@ -2902,6 +3098,12 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         close.built.bundle.artifacts.seal, open.built.bundle.artifacts.seal,
         "a capability seal is keyed by action; two actions cannot share one"
     );
+    assert_eq!(
+        close.built.admitted_authorities.output_page,
+        Some(output_page),
+        "CloseBatch uses the same durable accelerator page"
+    );
+    assert_eq!(close.built.admitted_authorities.entries.len(), 1);
     let installed =
         install_absent(&mut context, &close, &[close.built.bundle.artifacts.seal]).await;
     let (seal, seal_cu) = produce_seal(&mut context, &close, &seal_payer, &fee_payer).await;
@@ -2925,6 +3127,21 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
             .iter()
             .any(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke"))),
         "the success log proves the real accelerator CPI ran for the SECOND action"
+    );
+    assert_eq!(
+        close_execution
+            .logs
+            .iter()
+            .filter(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke")))
+            .count(),
+        1,
+        "CloseBatch invokes the accelerator once for its whole bank"
+    );
+    let output_page_after_close = chain_account(&mut context, output_page).await;
+    assert_eq!(output_page_after_close.owner, ACCELERATOR_PROGRAM);
+    assert_eq!(
+        output_page_after_close.lamports, output_page_before_open.lamports,
+        "CloseBatch neither refunds nor closes the durable accelerator page"
     );
 
     // ---- THE TERMINAL STATE ---------------------------------------------
@@ -3065,6 +3282,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         root: observed_binding(&mut context, open.root).await,
         rent_credit: observed_binding(&mut context, open.rent_credit).await,
         payer: observed_binding(&mut context, payer.pubkey()).await,
+        output_page: observed_binding(&mut context, output_page).await,
         primary_state: None,
     };
     let second_open = build_action_case(
@@ -3255,6 +3473,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         // binding, so an action whose state belongs to one participant binds
         // that participant here.
         payer: observed_binding(&mut context, solver.pubkey()).await,
+        output_page: observed_binding(&mut context, output_page).await,
         primary_state: None,
     };
 
@@ -3439,6 +3658,7 @@ async fn a_market_founded_on_a_foreign_entry_refuses_its_first_action_by_name() 
     let rent = Rent::default();
     let payer = Keypair::new_from_array([0x11; 32]);
     let fee_payer = Keypair::new_from_array([0x12; 32]);
+    let output_page_signer = Keypair::new();
     let mut test = waist::program_test_without_forced_budget(&elves);
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
@@ -3493,16 +3713,33 @@ async fn a_market_founded_on_a_foreign_entry_refuses_its_first_action_by_name() 
         Some(foreign_entry),
         None,
     );
-    let case = build_action_case(
+    let mut chain = genesis_prestate(&campaign, output_page_signer.pubkey());
+    let fixture_case = build_action_case(
         &campaign,
         Action::OpenBatch,
-        &genesis_prestate(&campaign),
+        &chain,
         substrate.bank_slot(),
         fee_payer.pubkey(),
     );
-    add_case_accounts(&mut test, &case, &payer, &fee_payer);
-    waist::add_lookup_table(&mut test, &case.lookup_addresses);
+    add_case_accounts(&mut test, &fixture_case, &payer, &fee_payer);
+    waist::add_lookup_table(&mut test, &fixture_case.lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
+    chain.output_page = provision_output_page(
+        &mut context,
+        &campaign,
+        &payer,
+        &fee_payer,
+        &output_page_signer,
+    )
+    .await;
+    chain.payer = observed_binding(&mut context, payer.pubkey()).await;
+    let case = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &chain,
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
+    );
     assert_frame_control(&mut context, &case).await;
     let refused = match waist::submit_v0_observed(
         &mut context,
@@ -3572,6 +3809,7 @@ async fn a_config_bound_to_the_portfolios_claim_basis_refuses_the_accelerators_m
     let rent = Rent::default();
     let payer = Keypair::new_from_array([0x11; 32]);
     let fee_payer = Keypair::new_from_array([0x12; 32]);
+    let output_page_signer = Keypair::new();
     let mut test = waist::program_test_without_forced_budget(&elves);
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
@@ -3599,16 +3837,33 @@ async fn a_config_bound_to_the_portfolios_claim_basis_refuses_the_accelerators_m
         None,
         Some(CLAIM_BASIS),
     );
-    let case = build_action_case(
+    let mut chain = genesis_prestate(&campaign, output_page_signer.pubkey());
+    let fixture_case = build_action_case(
         &campaign,
         Action::OpenBatch,
-        &genesis_prestate(&campaign),
+        &chain,
         substrate.bank_slot(),
         fee_payer.pubkey(),
     );
-    add_case_accounts(&mut test, &case, &payer, &fee_payer);
-    waist::add_lookup_table(&mut test, &case.lookup_addresses);
+    add_case_accounts(&mut test, &fixture_case, &payer, &fee_payer);
+    waist::add_lookup_table(&mut test, &fixture_case.lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
+    chain.output_page = provision_output_page(
+        &mut context,
+        &campaign,
+        &payer,
+        &fee_payer,
+        &output_page_signer,
+    )
+    .await;
+    chain.payer = observed_binding(&mut context, payer.pubkey()).await;
+    let case = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &chain,
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
+    );
     assert_frame_control(&mut context, &case).await;
     let refused = match waist::submit_v0_observed(
         &mut context,

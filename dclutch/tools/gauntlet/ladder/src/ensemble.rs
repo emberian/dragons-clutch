@@ -20,6 +20,7 @@ use dclutch_source::{
     },
 };
 use solana_sdk::{
+    clock::Clock,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::{Keypair, Signer},
@@ -653,6 +654,47 @@ fn ensemble_fold_instruction_v1(
     ))
 }
 
+/// Wait for the exact strict clock predicate Source applies to an Ensemble
+/// fold.  Block time is a historical slot projection; the `Clock` account in
+/// the transaction frame is the fact the Source transition actually reads.
+fn await_ensemble_fold_deadline_v1(rpc: &mut Rpc, addresses: &ResolutionAddressesV1) -> Result<()> {
+    let material = SourceMaterialV3::decode(
+        &rpc.required_account(
+            addresses.source_material.raw,
+            "Ensemble material before fold",
+        )?
+        .data,
+    )
+    .map_err(|error| Error::new(format!("Ensemble fold SourceMaterialV3: {error:?}")))?;
+    let window = dclutch_source::WindowSpecV1::decode(
+        &rpc.required_account(addresses.window_spec.raw, "Ensemble window before fold")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("Ensemble fold WindowSpecV1: {error:?}")))?;
+    let window_id =
+        dclutch_source::ContentId::new(solana_sdk::hash::hash(&window.to_bytes()).to_bytes())
+            .map_err(|error| Error::new(format!("Ensemble fold window identity: {error:?}")))?;
+    if material.window_spec() != window_id {
+        return Err(Error::new(
+            "Ensemble material and authenticated window records disagree before fold",
+        ));
+    }
+    let deadline = window
+        .end_unix_seconds()
+        .checked_add(i64::from(window.max_age_seconds()))
+        .ok_or_else(|| Error::new("Ensemble fold window deadline overflow"))?;
+    loop {
+        let clock_account =
+            rpc.required_account(sysvar::clock::ID, "Ensemble fold Clock sysvar")?;
+        let clock = bincode::deserialize::<Clock>(&clock_account.data)
+            .map_err(|error| Error::new(format!("Ensemble fold Clock sysvar: {error}")))?;
+        if clock.unix_timestamp > deadline {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+}
+
 /// Reclaim only the still-System-owned member seat after a successful fold.
 fn reclaim_member_seat_instruction_v1(
     payer: Pubkey,
@@ -926,6 +968,7 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
             "third direct member capture did not create a Resolution-owned fragment",
         ));
     }
+    await_ensemble_fold_deadline_v1(&mut rpc, &addresses)?;
     let (fold, receipt, seats) = ensemble_fold_instruction_v1(
         &mut rpc,
         payer.pubkey(),
@@ -1048,7 +1091,65 @@ pub(crate) fn execute(request: EnsembleRequestV1) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_source::{ContentId, WindowKind, WindowSpecV1};
+    use std::collections::BTreeMap;
+
+    use dclutch_product::ResultDomainV2;
+    use dclutch_source::{
+        ContentId, ENSEMBLE_EVIDENCE_DOMAIN_V1, Error as SourceError, SourceMaterialV3,
+        SourceResolutionPhaseV1, SourceResolutionStateV2, StatisticSpecV1, WindowKind,
+        WindowSpecV1,
+        resolution::{ResolutionCertificateKindV2, ResolutionCertificateV2},
+    };
+    use serde::Deserialize;
+    use sha2::{Digest, Sha256};
+    use solana_sdk::hash::hashv;
+
+    #[derive(Deserialize)]
+    struct PreservedFoldReplayV1 {
+        metadata: PreservedFoldMetadataV1,
+        records: BTreeMap<String, PreservedFoldRecordV1>,
+    }
+
+    #[derive(Deserialize)]
+    struct PreservedFoldMetadataV1 {
+        expected_sha256: BTreeMap<String, String>,
+        failed_fold_clock_unix_seconds: i64,
+        failed_fold_terminal_sequence: u64,
+        fragments: Vec<String>,
+        result_domain: String,
+        source_material: String,
+        source_state: String,
+        statistic_spec: String,
+        window_spec: String,
+    }
+
+    #[derive(Deserialize)]
+    struct PreservedFoldRecordV1 {
+        data_hex: String,
+        sha256: String,
+    }
+
+    fn decode_hex_v1(input: &str) -> Vec<u8> {
+        assert_eq!(input.len() % 2, 0, "fixture hex must have whole bytes");
+        (0..input.len())
+            .step_by(2)
+            .map(|offset| u8::from_str_radix(&input[offset..offset + 2], 16).expect("hex byte"))
+            .collect()
+    }
+
+    fn fixture_bytes_v1<'a>(fixture: &'a PreservedFoldReplayV1, address: &str) -> Vec<u8> {
+        let record = fixture
+            .records
+            .get(address)
+            .expect("observed account record");
+        let bytes = decode_hex_v1(&record.data_hex);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&bytes)),
+            record.sha256,
+            "fixture account bytes changed for {address}",
+        );
+        bytes
+    }
 
     #[test]
     fn member_vaas_keep_the_market_period_while_sequences_remain_distinct() {
@@ -1086,5 +1187,154 @@ mod tests {
                 .expect("terminal admission"),
             "the observed old block-time construction is late and must refuse"
         );
+    }
+
+    #[test]
+    fn retained_rpc43320_fold_replays_deadline_refusal_then_accepts_after_deadline() {
+        // These are exact public account bytes read with `agave-ledger-tool
+        // accounts` from the retained rpc43320 ledger after three accepted
+        // captures and the failed fold simulation.  The validator itself had
+        // stopped before this diagnosis, so the fixture preserves the only
+        // finalized Source inputs rather than rebuilding a market-shaped
+        // substitute.
+        let fixture: PreservedFoldReplayV1 = serde_json::from_str(include_str!(
+            "../testdata/ensemble_fold_rpc43320_20260908.json"
+        ))
+        .expect("preserved public ledger snapshot");
+        let source_bytes = fixture_bytes_v1(&fixture, &fixture.metadata.source_state);
+        let material_bytes = fixture_bytes_v1(&fixture, &fixture.metadata.source_material);
+        let window_bytes = fixture_bytes_v1(&fixture, &fixture.metadata.window_spec);
+        let statistic_bytes = fixture_bytes_v1(&fixture, &fixture.metadata.statistic_spec);
+        let domain_bytes = fixture_bytes_v1(&fixture, &fixture.metadata.result_domain);
+
+        for (evidence_key, address) in [
+            (
+                "resolution_source_state",
+                fixture.metadata.source_state.as_str(),
+            ),
+            (
+                "source_material_record",
+                fixture.metadata.source_material.as_str(),
+            ),
+            ("window_spec_record", fixture.metadata.window_spec.as_str()),
+            (
+                "statistic_spec_record",
+                fixture.metadata.statistic_spec.as_str(),
+            ),
+            (
+                "result_domain_record",
+                fixture.metadata.result_domain.as_str(),
+            ),
+        ] {
+            let expected = fixture
+                .metadata
+                .expected_sha256
+                .get(evidence_key)
+                .expect("founding evidence digest");
+            assert_eq!(
+                fixture
+                    .records
+                    .get(address)
+                    .expect("observed account")
+                    .sha256,
+                *expected,
+                "ledger replay account disagrees with founding evidence: {evidence_key}",
+            );
+        }
+
+        let source = SourceResolutionStateV2::decode(&source_bytes).expect("Source state");
+        let material = SourceMaterialV3::decode(&material_bytes).expect("Source material");
+        let window = WindowSpecV1::decode(&window_bytes).expect("Window specification");
+        let statistic = StatisticSpecV1::decode(&statistic_bytes).expect("Statistic specification");
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("Result domain");
+        assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
+        // The retained state is the second Source generation: its exact
+        // generation must join all three finalized certificates below.
+        assert_eq!(source.generation(), 2);
+        assert_eq!(material.ensemble().members(), 4);
+        assert_eq!(material.ensemble().quorum(), 3);
+        assert_eq!(fixture.metadata.fragments.len(), 3);
+
+        let certificates = fixture
+            .metadata
+            .fragments
+            .iter()
+            .map(|address| {
+                ResolutionCertificateV2::decode(&fixture_bytes_v1(&fixture, address))
+                    .expect("captured fragment certificate")
+            })
+            .collect::<Vec<_>>();
+        for certificate in &certificates {
+            assert_eq!(
+                certificate.kind,
+                ResolutionCertificateKindV2::ResolutionSuccess
+            );
+            assert_eq!(certificate.generation, source.generation());
+            assert_eq!(certificate.source_material, source.material_id().to_bytes());
+        }
+        let readings = certificates
+            .iter()
+            .map(|certificate| certificate.result_numerator)
+            .collect::<Vec<_>>();
+        assert_eq!(readings, vec![100_000_000; 3]);
+
+        let count = [u8::try_from(certificates.len()).expect("three certificates")];
+        let mut evidence_parts = Vec::with_capacity(2 + certificates.len());
+        evidence_parts.push(ENSEMBLE_EVIDENCE_DOMAIN_V1);
+        evidence_parts.push(&count);
+        for certificate in &certificates {
+            evidence_parts.push(&certificate.provider_evidence);
+        }
+        let evidence = ContentId::new(hashv(&evidence_parts).to_bytes()).expect("fold evidence");
+        let deadline = window
+            .end_unix_seconds()
+            .checked_add(i64::from(window.max_age_seconds()))
+            .expect("window deadline");
+        assert_eq!(deadline, 1_788_852_527);
+        assert!(
+            fixture.metadata.failed_fold_clock_unix_seconds < deadline,
+            "the failed bank clock must remain before the authenticated deadline",
+        );
+
+        let mut replay = source;
+        assert_eq!(
+            replay.fold_ensemble_from_authenticated_domain(
+                source.material_id(),
+                material,
+                material.window_spec(),
+                window,
+                material.product_record_digest(),
+                domain,
+                evidence,
+                &readings,
+                statistic.source_scale_exponent(),
+                source.generation(),
+                fixture.metadata.failed_fold_clock_unix_seconds,
+                fixture.metadata.failed_fold_terminal_sequence,
+            ),
+            Err(SourceError::DeadlineNotReached),
+            "the exact failed fold call must name the public Source refusal",
+        );
+
+        let mut after_deadline = source;
+        let accepted = after_deadline
+            .fold_ensemble_from_authenticated_domain(
+                source.material_id(),
+                material,
+                material.window_spec(),
+                window,
+                material.product_record_digest(),
+                domain,
+                evidence,
+                &readings,
+                statistic.source_scale_exponent(),
+                source.generation(),
+                deadline.checked_add(1).expect("post-deadline clock"),
+                fixture.metadata.failed_fold_terminal_sequence,
+            )
+            .expect("the exact captured quorum is otherwise admissible after its deadline");
+        assert_eq!(accepted.consumed, 3);
+        assert_eq!(accepted.median, 100_000_000);
+        assert_eq!(after_deadline.phase(), SourceResolutionPhaseV1::Resolved);
     }
 }

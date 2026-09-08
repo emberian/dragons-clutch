@@ -43,7 +43,8 @@ use crate::{
     BuilderError, WaistFactsV1,
     admitted::{
         AdmittedAotInputV1, AdmittedAuthorityInputV1, DerivedAdmittedAuthoritiesV1,
-        DerivedAdmittedEvidenceV1, derive_admitted_authorities_v1, derive_admitted_evidence_v1,
+        DerivedAdmittedEvidenceV1, OutputPageErrorV1, derive_admitted_authorities_v1,
+        derive_admitted_evidence_v1, validate_admitted_output_page_v1,
     },
     artifacts::{ArtifactSetV1, DerivedArtifactsV1, DerivedRecordV1, derive_artifact_facts},
     frame::{BuiltAccountV1, LogicalFrameV1, data_account, external, pack_frame, program, vacant},
@@ -692,6 +693,7 @@ fn finish_admitted_bundle(
         )
         .map_err(|_| BuilderError::Artifact)?,
         accelerator_program: evidence.accelerator_program.key,
+        output_page: evidence.output_page.as_ref().map(|page| page.key),
         tail_count,
         scalars: &bundle.engine.input_scalars,
         identities: &bundle.engine.input_identities,
@@ -994,26 +996,30 @@ fn insert_admitted_suffix(
             .iter()
             .map(|entry| vacant(entry.authority)),
     );
-    // The output page, if this transport has one, and it is the ONLY writable
-    // account this suffix carries. It is provisioned here the way a client
-    // provisions one on a live chain -- an account owned by the accelerator,
-    // wide enough for the bank, created once and reused -- and its data is
-    // left as whatever the last transaction wrote, because a page that is not
-    // zeroed between runs is exactly the case the digest has to bind.
+    // The output page is the only writable suffix account. Preserve its actual
+    // observed bytes, width and funding; creation belongs to the signed System
+    // transaction, not to the bundle's fixture installer.
     let page_index = extras.len();
     if let Some(page) = authorities.output_page {
+        let observed = evidence
+            .output_page
+            .as_ref()
+            .ok_or(BuilderError::OutputPage(OutputPageErrorV1::Missing))?;
+        if observed.key != page
+            || extras.iter().any(|account| account.key == page)
+            || bundle.accounts.iter().any(|account| account.key == page)
+        {
+            return Err(BuilderError::OutputPage(OutputPageErrorV1::Alias));
+        }
+        validate_admitted_output_page_v1(
+            observed,
+            &evidence.accelerator_program.key,
+            authorities.input_bank.len(),
+            input.rent,
+        )?;
         extras.push(BuiltAccountV1 {
             key: page,
-            account: Account {
-                lamports: input
-                    .rent
-                    .minimum_balance(authorities.input_bank.len())
-                    .max(1),
-                data: vec![0_u8; authorities.input_bank.len()],
-                owner: evidence.accelerator_program.key,
-                executable: false,
-                rent_epoch: 0,
-            },
+            account: observed.chain_view().clone(),
             observed: None,
         });
     }

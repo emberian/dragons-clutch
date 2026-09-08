@@ -3244,11 +3244,9 @@ mod tests {
 
     #[test]
     fn committed_live_v0_fixture_passes_the_finalized_decoder_and_resolves_claims_cpi() {
-        let response: Value = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../../docs/evidence/census-route-binding-2026-09-08/\
-rpc-getTransaction-base64.json"
-        )))
+        let response: Value = serde_json::from_str(include_str!(
+            "../../../../../docs/evidence/census-route-binding-2026-09-08/rpc-getTransaction-base64.json"
+        ))
         .expect("committed live getTransaction response");
         let transaction = response
             .get("result")

@@ -33,6 +33,8 @@ pub mod consume_artifacts_v4;
 /// Complete Core/Custody/replay physical plans behind authenticated actions.
 /// Canonical SeriesEscrow projection into the sole Custody writer.
 pub mod custody_v3;
+/// Authenticated per-occurrence Prepare child request derivation.
+pub mod derived_prepare_v1;
 /// Global five-route Consume Effect V4 topology and route-window admission.
 pub mod effect_v4;
 /// Canonical current-source Expire ProfileV3/EffectV5 artifacts.

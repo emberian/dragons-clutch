@@ -81,7 +81,7 @@ use dclutch_market::capability_program::{
     },
 };
 use dclutch_market::execution_strategy::v2::{
-    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+    ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_ID_V3, ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_ID_V3,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
@@ -1199,8 +1199,12 @@ fn compile_bundle(
         Some(content(digest(&certificate))?),
         content(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2)?,
         Some(content(digest(&admission))?),
-        content(ACCELERATOR_REQUEST_SCHEMA_ID_V2)?,
-        content(ACCELERATOR_ACK_SCHEMA_ID_V2)?,
+        // A General candidate is one authenticated whole bank.  Its selected
+        // accelerator owns one durable output page, so the release must name
+        // the page request/ack pair rather than make the caller replay each
+        // 880-byte acknowledgement as a separate chunked invocation.
+        content(ACCELERATOR_OUTPUT_PAGE_REQUEST_SCHEMA_ID_V3)?,
+        content(ACCELERATOR_OUTPUT_PAGE_ACK_SCHEMA_ID_V3)?,
     )
     .map_err(GeneralSelectedReleaseErrorV1::ExecutionStrategy)?
     .to_bytes()

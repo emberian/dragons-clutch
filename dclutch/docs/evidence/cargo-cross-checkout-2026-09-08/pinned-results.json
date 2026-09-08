@@ -1,0 +1,30 @@
+[
+  {
+    "source": "a",
+    "target": "shared-pinned-target",
+    "forced_caller": false,
+    "status": 0,
+    "stderr": "    Checking isolation-dep v0.1.0 (/private/tmp/dclutch-cargo-isolation-yva3gwxw/a/dep)\n    Checking isolation-probe v0.1.0 (/private/tmp/dclutch-cargo-isolation-yva3gwxw/a)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s\n"
+  },
+  {
+    "source": "b",
+    "target": "shared-pinned-target",
+    "forced_caller": false,
+    "status": 0,
+    "stderr": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s\n"
+  },
+  {
+    "source": "b",
+    "target": "shared-pinned-target",
+    "forced_caller": true,
+    "status": 101,
+    "stderr": "    Checking isolation-probe v0.1.0 (/private/tmp/dclutch-cargo-isolation-yva3gwxw/b)\nerror[E0061]: this function takes 3 arguments but 2 arguments were supplied\n --> src/main.rs:1:12\n  |\n1 | fn main() {isolation_dep::f(0,0);}\n  |            ^^^^^^^^^^^^^^^^----- argument #3 of type `u8` is missing\n  |\nnote: function defined here\n --> dep/src/lib.rs:1:7\nhelp: provide the argument\n  |\n1 - fn main() {isolation_dep::f(0,0);}\n1 + fn main() {isolation_dep::f(0, 0, /* u8 */);}\n  |\n\nFor more information about this error, try `rustc --explain E0061`.\nerror: could not compile `isolation-probe` (bin \"isolation-probe\") due to 1 previous error\n"
+  },
+  {
+    "source": "b",
+    "target": "isolated-pinned-b-target",
+    "forced_caller": false,
+    "status": 0,
+    "stderr": "    Checking isolation-dep v0.1.0 (/private/tmp/dclutch-cargo-isolation-yva3gwxw/b/dep)\n    Checking isolation-probe v0.1.0 (/private/tmp/dclutch-cargo-isolation-yva3gwxw/b)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s\n"
+  }
+]

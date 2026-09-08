@@ -526,16 +526,18 @@ mod tests {
             },
             shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
                 tail_count: 0,
-                account_count: 162,
-                scalar_count: 5,
-                identity_count: 1,
+                account_count: 165,
+                scalar_count: u32::try_from(evaluator::SERIES_SHADOW_SCALAR_COUNT_V4)
+                    .expect("canonical scalar width"),
+                identity_count: u32::try_from(evaluator::SERIES_SHADOW_IDENTITY_COUNT_V4)
+                    .expect("canonical identity width"),
             },
             family_request: &family,
         };
         assert_eq!(funding_count(request), Ok(1));
         let underflow = ShadowRequestV3 {
             shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
-                account_count: 160,
+                account_count: 163,
                 ..request.shape
             },
             ..request
@@ -546,7 +548,7 @@ mod tests {
         );
         let zero_funding = ShadowRequestV3 {
             shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
-                account_count: 161,
+                account_count: 164,
                 ..request.shape
             },
             ..request
@@ -557,7 +559,7 @@ mod tests {
         );
         let too_large = ShadowRequestV3 {
             shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
-                account_count: 178,
+                account_count: 181,
                 ..request.shape
             },
             ..request

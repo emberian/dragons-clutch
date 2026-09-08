@@ -12,7 +12,22 @@ use dclutch_trading::series::{
     request::{SeriesActionV3, encode_series_action_header_v3},
     template_content_id, ticket_content_id,
 };
+use dclutch_trading_sbf::series::{
+    account_profile_v4::{
+        SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
+        SeriesConsumeAccountProfileInputV4, encode_series_consume_account_profile_v4_atomic,
+    },
+    consume_artifacts_v4::{
+        SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4, SERIES_CONSUME_TRANSITION_BYTES_V4,
+        encode_series_consume_request_profile_v4_atomic,
+        encode_series_consume_transition_v4_atomic,
+    },
+};
 use dclutch_vm::account_profile::AccountObservationV1;
+use dclutch_vm::{
+    account_profile::v2::AccountProfileV2, request_profile::RequestProfileV1,
+    v3::ProgramV3 as TransitionProgramV3,
+};
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -250,9 +265,11 @@ impl SemanticFixture {
             },
             shape: ShadowRuntimeShapeV3 {
                 tail_count: 3,
-                account_count: 162,
-                scalar_count: 5,
-                identity_count: 1,
+                account_count: 165,
+                scalar_count: u32::try_from(SERIES_SHADOW_SCALAR_COUNT_V4)
+                    .expect("canonical scalar width"),
+                identity_count: u32::try_from(SERIES_SHADOW_IDENTITY_COUNT_V4)
+                    .expect("canonical identity width"),
             },
             family_request: &self.request,
         }
@@ -413,6 +430,79 @@ impl SemanticFixture {
             ),
         }
     }
+}
+
+#[test]
+fn evaluator_geometry_is_derived_from_canonical_consume_emitters() {
+    let lengths = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
+    let mut account_scratch = [0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+    let mut account_profile = [0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+    encode_series_consume_account_profile_v4_atomic(
+        SeriesConsumeAccountProfileInputV4 {
+            fixed_data_lengths: &lengths,
+        },
+        &mut account_scratch,
+        &mut account_profile,
+    )
+    .expect("canonical Consume AccountProfile");
+    let account = AccountProfileV2::decode(&account_profile).expect("AccountProfile decodes");
+
+    let mut request_scratch = [0_u8; SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4];
+    let mut request_profile = [0_u8; SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4];
+    encode_series_consume_request_profile_v4_atomic(&mut request_scratch, &mut request_profile)
+        .expect("canonical Consume RequestProfile");
+    let request = RequestProfileV1::decode(&request_profile).expect("RequestProfile decodes");
+
+    let mut transition_scratch = [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4];
+    let mut transition = [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4];
+    encode_series_consume_transition_v4_atomic(&mut transition_scratch, &mut transition)
+        .expect("canonical Consume transition");
+    let transition = TransitionProgramV3::decode(&transition).expect("transition decodes");
+
+    for (scalar_count, identity_count) in [
+        (
+            account.common_scalar_count(),
+            account.common_identity_count(),
+        ),
+        (
+            request.common_scalar_count(),
+            request.common_identity_count(),
+        ),
+        (
+            transition.common_scalar_count(),
+            transition.common_identity_count(),
+        ),
+    ] {
+        assert_eq!(usize::from(scalar_count), SERIES_SHADOW_SCALAR_COUNT_V4);
+        assert_eq!(usize::from(identity_count), SERIES_SHADOW_IDENTITY_COUNT_V4);
+    }
+
+    let fixture = SemanticFixture::new();
+    let canonical = fixture.shadow();
+    assert_eq!(funding_count(canonical), Ok(1));
+
+    let stale_scalar_bank = ShadowRequestV3 {
+        shape: ShadowRuntimeShapeV3 {
+            scalar_count: 5,
+            ..canonical.shape
+        },
+        ..canonical
+    };
+    assert_eq!(
+        funding_count(stale_scalar_bank),
+        Err(SeriesShadowAotErrorV4::Runtime)
+    );
+    let stale_identity_bank = ShadowRequestV3 {
+        shape: ShadowRuntimeShapeV3 {
+            identity_count: 1,
+            ..canonical.shape
+        },
+        ..canonical
+    };
+    assert_eq!(
+        funding_count(stale_identity_bank),
+        Err(SeriesShadowAotErrorV4::Runtime)
+    );
 }
 
 #[test]

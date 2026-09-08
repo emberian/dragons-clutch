@@ -10,19 +10,16 @@
 
 use dclutch_claims::founding_v5::ClaimsFoundingRequestV5;
 use dclutch_core_contract::ContentId;
-use dclutch_market::{
-    MarketCoreStateSeedsV2, SeriesCoreActionV1, SeriesCoreRequestV1,
-};
+use dclutch_market::{MarketCoreStateSeedsV2, SeriesCoreActionV1, SeriesCoreRequestV1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_trading::series::replay::TicketStateSeedsV3;
+use dclutch_trading::series::{replay::TicketStateSeedsV3, template_content_id, ticket_content_id};
 use dclutch_trading_sbf::series::{
-    account_profile_v4::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
+    account_profile_v4::{SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4, SERIES_CONSUME_ROUTE_ALIASES_V4},
     artifacts_v3::{
         SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3, SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3,
     },
     consume_artifacts_v4::SeriesConsumeChildRequestsV4,
 };
-use sha2::{Digest as _, Sha256};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
@@ -97,10 +94,10 @@ impl<'a> CoreConsumeFactsV1<'a> {
                 .ok_or_else(|| Error::new("Series Consume Core request omitted founder"))?
                 .to_bytes(),
         );
-        let template = ContentId::new(Sha256::digest(input.records.template.body).into())
-            .map_err(|_| Error::new("Series Consume Template identity was zero"))?;
-        let ticket_context = ContentId::new(Sha256::digest(input.records.ticket.body).into())
-            .map_err(|_| Error::new("Series Consume Ticket identity was zero"))?;
+        let template = template_content_id(input.records.template.body)
+            .map_err(|_| Error::new("Series Consume Template identity was not canonical"))?;
+        let ticket_context = ticket_content_id(input.records.ticket.body)
+            .map_err(|_| Error::new("Series Consume Ticket identity was not canonical"))?;
         if request.template().to_bytes() != template.to_bytes()
             || market != input.m0.project_found[1]
             || request.release_set().to_bytes()
@@ -453,7 +450,18 @@ fn populate_open_v1<'a>(
         return Err(Error::new("Series Consume Core Open source frame drifted"));
     }
     for (offset, source) in values.into_iter().enumerate() {
-        put_series_consume_role_v1(roles, SERIES_CONSUME_CORE_OPEN_START_V1 + offset, source)?;
+        let coordinate = SERIES_CONSUME_CORE_OPEN_START_V1 + offset;
+        if SERIES_CONSUME_ROUTE_ALIASES_V4
+            .iter()
+            .any(|(alias, _)| *alias == coordinate)
+        {
+            // Generated aliases are filled from their native representative
+            // after every route has named only canonical coordinates. This
+            // prevents a second hand-derived address from diverging from the
+            // representative's physical account.
+            continue;
+        }
+        put_series_consume_role_v1(roles, coordinate, source)?;
     }
     Ok(())
 }

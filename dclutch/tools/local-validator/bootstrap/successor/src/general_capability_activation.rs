@@ -103,7 +103,7 @@ use sha2::{Digest as _, Sha256};
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
-    signature::Signer as _,
+    signature::{Keypair, Signer as _},
 };
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -947,10 +947,10 @@ fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> R
     }
 
     // ------------------------------------------------------------- execute
-    let payer = crate::direct_trade_producer::read_keypair_v1(
+    let payer = Keypair::new_from_array(campaign::read_keypair_file(
         &arguments.payer_keypair,
         "activation payer",
-    )?;
+    )?);
     let mut transactions = Vec::new();
     let (observation, tables) = crate::market::publish_routing_table(
         &mut rpc,
