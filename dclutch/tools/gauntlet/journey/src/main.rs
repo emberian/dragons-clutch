@@ -222,15 +222,24 @@ mod selected_capability_activation;
 #[path = "../../../local-validator/bootstrap/successor/src/series_consume_campaign.rs"]
 #[allow(dead_code)]
 mod series_consume_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/series_found_prepare_campaign.rs"]
+#[allow(dead_code)]
+mod series_found_prepare_campaign;
 #[path = "../../../local-validator/bootstrap/successor/src/series_founder.rs"]
 #[allow(dead_code)]
 mod series_founder;
 #[path = "../../../local-validator/bootstrap/successor/src/series_lifecycle_campaign.rs"]
 #[allow(dead_code)]
 mod series_lifecycle_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/series_market.rs"]
+#[allow(dead_code)]
+mod series_market;
 #[path = "../../../local-validator/bootstrap/successor/src/series_permit_expiry_campaign.rs"]
 #[allow(dead_code)]
 mod series_permit_expiry_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/series_source.rs"]
+#[allow(dead_code)]
+mod series_source;
 #[path = "../../../local-validator/bootstrap/successor/src/series_terminal_campaign.rs"]
 #[allow(dead_code)]
 mod series_terminal_campaign;

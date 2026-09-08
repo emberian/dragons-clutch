@@ -66,6 +66,9 @@ mod local_mutable;
 #[path = "../../../local-validator/bootstrap/successor/src/market.rs"]
 #[allow(dead_code)]
 mod market;
+#[path = "../../../local-validator/bootstrap/successor/src/series_founder.rs"]
+#[allow(dead_code)]
+mod series_founder;
 #[path = "../../../local-validator/bootstrap/successor/src/model.rs"]
 #[allow(dead_code)]
 mod model;

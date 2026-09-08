@@ -87,6 +87,12 @@ pub(crate) struct StructuredPublicationInputV1 {
     pub(crate) product_coordinates: Vec<u32>,
     /// Shard atoms backing one whole native claim.
     pub(crate) denominator: u64,
+    /// Canonical Portfolio denominator used by the composition root.  This is
+    /// distinct from the Structured shard denominator: the latter may scale a
+    /// whole-number Portfolio up to the minimum fractional shard unit.
+    pub(crate) composition_denominator: u64,
+    /// Canonical nonzero Portfolio numerators in the same sparse order.
+    pub(crate) composition_coefficients: Vec<u64>,
     /// Receipt recipe coefficients in the same order as `product_coordinates`.
     pub(crate) coefficients: Vec<u64>,
 }
@@ -154,6 +160,8 @@ pub(crate) fn structured_publication_input_from_finalized_v1(
     founding: StructuredFoundingBodiesV1,
     product_coordinates: Vec<u32>,
     denominator: u64,
+    composition_denominator: u64,
+    composition_coefficients: Vec<u64>,
     coefficients: Vec<u64>,
 ) -> Result<StructuredPublicationInputV1> {
     if artifacts.slot != founding.slot {
@@ -173,6 +181,8 @@ pub(crate) fn structured_publication_input_from_finalized_v1(
         token_behavior_body: artifacts.config.body.clone(),
         product_coordinates,
         denominator,
+        composition_denominator,
+        composition_coefficients,
         coefficients,
     })
 }
@@ -195,6 +205,7 @@ pub(crate) fn compile_structured_publication_closure_v1(
     }
     if !(1..=3).contains(&width)
         || input.product_coordinates.len() != input.coefficients.len()
+        || input.composition_coefficients.len() != input.coefficients.len()
         || input.denominator <= 1
         || input.coefficients.iter().any(|value| *value == 0)
     {
@@ -242,9 +253,9 @@ pub(crate) fn compile_structured_publication_closure_v1(
     let product_basis = hash(&input.product_basis_body).to_bytes();
     let representation_basis = native.representation_basis();
     let token_behavior = hash(&input.token_behavior_body).to_bytes();
-    let denominator = input.denominator.to_le_bytes();
+    let denominator = input.composition_denominator.to_le_bytes();
     let coordinates = coordinates_bytes(&input.product_coordinates);
-    let coefficients = coefficients_bytes(&input.coefficients);
+    let coefficients = coefficients_bytes(&input.composition_coefficients);
     let graph_id = hashv(&[
         GRAPH_DOMAIN_V1,
         &market,
@@ -287,8 +298,8 @@ pub(crate) fn compile_structured_publication_closure_v1(
         term_count: width,
         kind: CompositionNodeKindV3::Compose,
         native_outcome: 0,
-        recipe_divisor: input.denominator,
-        flattened_denominator: input.denominator,
+        recipe_divisor: input.composition_denominator,
+        flattened_denominator: input.composition_denominator,
     });
     let mut edges = Vec::with_capacity(leaves.len());
     for (index, id) in leaves.iter().enumerate() {
@@ -311,7 +322,7 @@ pub(crate) fn compile_structured_publication_closure_v1(
         .collect::<Vec<_>>();
     terms.extend(
         input
-            .coefficients
+            .composition_coefficients
             .iter()
             .enumerate()
             .map(|(index, numerator)| SparseTermV3 {
@@ -351,7 +362,7 @@ pub(crate) fn compile_structured_publication_closure_v1(
             graph_id,
             root_id,
             outcome_count: width,
-            denominator: input.denominator,
+            denominator: input.composition_denominator,
             terms: &terms[usize::try_from(width)
                 .map_err(|_| Error::new("Structured width conversion failed"))?..],
         },
@@ -378,7 +389,7 @@ pub(crate) fn compile_structured_publication_closure_v1(
             edge_count: width,
             term_count: u32::try_from(terms.len())
                 .map_err(|_| Error::new("Structured graph term count overflow"))?,
-            root_denominator: input.denominator,
+            root_denominator: input.composition_denominator,
         },
         &mut descriptor_scratch,
         &mut composition_descriptor,
@@ -695,6 +706,8 @@ pub(crate) fn hydrate_structured_publication_input_same_slot_v1(
     claims_program: Pubkey,
     product_coordinates: Vec<u32>,
     denominator: u64,
+    composition_denominator: u64,
+    composition_coefficients: Vec<u64>,
     coefficients: Vec<u64>,
 ) -> Result<StructuredPublicationInputV1> {
     let selected = crate::structured_activation::selected_activate_receipt_record_expectations_v1(
@@ -746,6 +759,8 @@ pub(crate) fn hydrate_structured_publication_input_same_slot_v1(
         founding_bodies,
         product_coordinates,
         denominator,
+        composition_denominator,
+        composition_coefficients,
         coefficients,
     )
 }
@@ -1026,6 +1041,8 @@ mod tests {
             token_behavior_body: vec![1],
             product_coordinates: vec![0],
             denominator: 2,
+            composition_denominator: 1,
+            composition_coefficients: vec![1],
             coefficients: vec![1],
         };
         let error = compile_structured_publication_closure_v1(&input)

@@ -58,7 +58,7 @@ impl PreMarketFundingRequestV1 {
         self.project_found
             .encode()
             .map_err(|_| Error::InvalidPreMarketFunding)?;
-        if self.selected_mask.count_ones() != 3
+        if self.selected_mask == 0
             || [
                 self.manifest,
                 self.funding_source,
@@ -154,7 +154,7 @@ impl PreMarketFundingRequestV2 {
         self.project_found
             .encode()
             .map_err(|_| Error::InvalidPreMarketFunding)?;
-        if self.selected_mask.count_ones() != 3
+        if self.selected_mask == 0
             || [
                 self.manifest,
                 self.funding_source,
@@ -267,7 +267,7 @@ impl PreMarketFundingReceiptV1 {
     /// Encode the sole canonical receipt bytes.
     pub fn encode(self) -> Result<[u8; PRE_MARKET_FUNDING_RECEIPT_BYTES_V1], Error> {
         if self.generation == 0
-            || self.selected_mask.count_ones() != 3
+            || self.selected_mask == 0
             || [
                 self.market,
                 self.manifest,
@@ -375,7 +375,7 @@ pub struct PreMarketFundingReceiptV2 {
 impl PreMarketFundingReceiptV2 {
     fn validate(self) -> Result<Self, Error> {
         if self.generation == 0
-            || self.selected_mask.count_ones() != 3
+            || self.selected_mask == 0
             || self.exact_rent_lamports == 0
             || [
                 self.market,
@@ -595,9 +595,15 @@ mod tests {
         let mut reserved = bytes;
         reserved[10] = 1;
         assert!(PreMarketFundingRequestV1::decode(&reserved).is_err());
-        let mut partial_mask = exact;
-        partial_mask.selected_mask = 0b11;
-        assert!(partial_mask.encode().is_err());
+        let mut four_row_mask = exact;
+        four_row_mask.selected_mask = 0b1111;
+        assert_eq!(
+            PreMarketFundingRequestV1::decode(&four_row_mask.encode().expect("four-row request")),
+            Ok(four_row_mask)
+        );
+        let mut empty_mask = exact;
+        empty_mask.selected_mask = 0;
+        assert!(empty_mask.encode().is_err());
     }
 
     #[test]

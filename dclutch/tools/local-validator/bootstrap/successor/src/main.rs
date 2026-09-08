@@ -50,6 +50,7 @@ mod release_lineage;
 mod series_act_verbs_v1;
 mod series_consume_campaign;
 mod series_founder;
+mod series_found_prepare_campaign;
 mod series_lifecycle_campaign;
 mod series_market;
 mod series_source;

@@ -38,7 +38,7 @@ pub struct PreMarketFundingAbortRequestV1 {
     pub manifest: [u8; 32],
     /// Ordered two-controller funding-list identity.
     pub funding_list: [u8; 32],
-    /// Exact three-row Resolution subset.
+    /// Canonical nonempty Resolution subset; semantic admission derives its exact width from the founded material and policy.
     pub selected_mask: u16,
     /// Resolution-owned funding-ledger PDA.
     pub ledger: [u8; 32],
@@ -57,7 +57,7 @@ impl PreMarketFundingAbortRequestV1 {
         if !valid_phase_revision(self.checkpoint_phase, self.checkpoint_revision)
             || self.generation == 0
             || self.expiry_slot == 0
-            || self.selected_mask.count_ones() != 3
+            || self.selected_mask == 0
             || self.funding_source == self.rent_credit
             || required_ids(self).iter().any(is_zero)
         {
@@ -151,7 +151,7 @@ pub struct PreMarketFundingAbortReceiptV1 {
     pub manifest: [u8; 32],
     /// Ordered two-controller funding-list identity.
     pub funding_list: [u8; 32],
-    /// Exact three-row Resolution subset.
+    /// Canonical nonempty Resolution subset; semantic admission derives its exact width from the founded material and policy.
     pub selected_mask: u16,
     /// Closed Resolution funding-ledger PDA.
     pub ledger: [u8; 32],
@@ -184,7 +184,7 @@ impl PreMarketFundingAbortReceiptV1 {
         if !valid_phase_revision(self.checkpoint_phase, self.checkpoint_revision)
             || self.generation == 0
             || self.expiry_slot == 0
-            || self.selected_mask.count_ones() != 3
+            || self.selected_mask == 0
             || self.rent_refund_lamports == 0
             || total != self.total_refund_lamports
             || self.funding_source == self.rent_credit

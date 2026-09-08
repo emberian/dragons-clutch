@@ -72,7 +72,15 @@ use crate::{Error, Result};
 /// which is the only axis two Pyth sources of one feed can differ on: a market
 /// whose first choice went silent has a reason to demand a better-conditioned
 /// reading from its second.
-pub(crate) const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:120";
+///
+/// 900 seconds is this capture walk's measured local-validator profile.  The
+/// 2026-09-07 capture reached Core's provider execute at `1788824350`; its
+/// finalized WindowSpec ended at `1788823517`, so the former 120-second rung
+/// had expired before execute and the Source kernel correctly returned
+/// `DeadlineElapsed`.  The resulting 67-second headroom is a measured
+/// profile, not a protocol bound; remeasure it when this walk's transaction
+/// profile changes.
+pub(crate) const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:900";
 
 /// How long a bounded wait for a leg's deadline may sleep.
 ///

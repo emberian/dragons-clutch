@@ -1,0 +1,653 @@
+//! Physical materialization for the bounded Series Found -> Prepare campaign.
+//!
+//! This adapter derives addresses only from the selected programs, admitted
+//! Series identities and the chain's current Rent quote.  It deliberately
+//! does not create or preseed a future child account.  The caller observes
+//! each derived vacant coordinate before giving these facts to the canonical
+//! Series/Custody/Claims projection owners.
+
+use dclutch_claims::{
+    founding_v5::ClaimsFoundingAggregateSeedsV5,
+    protocol_position_v2::{ProtocolPositionAdmissionSeedsV2, ProtocolPositionSeedsV2},
+};
+use dclutch_custody::{
+    CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+};
+use dclutch_market::{Action, ProjectFoundReceiptV2, Request};
+use dclutch_market::{Identity, SeriesFoundingPermitSeedsV1};
+use dclutch_operator::series_lifecycle_v3::{
+    SeriesLifecycleSnapshotV3, SeriesNextActV3, inspect_series_lifecycle_v3,
+};
+use dclutch_operator::{
+    series_child_bank_v1::{SeriesChildBankInputV1, SeriesChildBankV1, SeriesClaimsPhysicalV1},
+    series_founding_children_v1::{
+        SeriesFoundingChildrenInputV1, SeriesFoundingClaimsPhysicalV1,
+        SeriesProjectedCustodyPhysicalInputV1, derive_series_founding_children_v1,
+    },
+};
+use dclutch_trading::series::replay::TicketStateV3;
+use dclutch_trading::series::{
+    AccountKeyV3, AuthenticatedProductProjectionV2, TemplateV3, admit_occurrence, admit_ticket,
+    pre_founding_series_escrow,
+};
+use dclutch_trading_sbf::series::{
+    custody_v3::SeriesCustodyPhysicalV3,
+    operator::{SeriesOccurrenceSnapshotV3, build_expire_v3},
+    projected_custody_v3::SeriesProjectedCustodyPhysicalV3,
+};
+use sha2::{Digest, Sha256};
+use solana_program::rent::Rent;
+use solana_sdk::pubkey::Pubkey;
+
+use crate::{Error, Result};
+
+/// Inputs whose coordinates are observed before the child Market exists.  The
+/// selected capability compiler projects the missing Core/Custody state from
+/// these facts; no member is an asserted future account state.
+pub(crate) struct SeriesFoundPrepareSelectionInputV1<'a> {
+    pub(crate) lifecycle: SeriesLifecycleSnapshotV3<'a>,
+    pub(crate) product: AuthenticatedProductProjectionV2,
+    pub(crate) registry_program: AccountKeyV3,
+    pub(crate) material: SeriesPhysicalMaterialInputV1,
+    pub(crate) core_product_graph: [([u8; 32], [u8; 32]); 4],
+    pub(crate) core_projection: crate::core_bump_projection::CoreProductGraphProjectionV1,
+    pub(crate) core_walk: crate::market::CoreProductGraphWalkV1,
+    pub(crate) linked_basis_record_digest: [u8; 32],
+    pub(crate) semantic_basis_id: [u8; 32],
+    pub(crate) claims_rent_principals: [u64; 3],
+    pub(crate) permit_bump: u8,
+    pub(crate) projected_bump: u8,
+    /// Same-snapshot amount in the founder-owned collateral source.  The
+    /// compiler derives every Custody receipt commitment from this observation
+    /// and the canonical request transitions.
+    pub(crate) founder_source_amount: u64,
+    pub(crate) geometry: crate::series_source::SeriesObservedGeometryV1,
+    pub(crate) consume_shadow_certificate_program: dclutch_core_contract::ContentId,
+    pub(crate) selected_release: dclutch_core_contract::ContentId,
+    pub(crate) funding_ledger_slot_count: u16,
+    pub(crate) activation_deadline_slot: u64,
+    pub(crate) selected_manifest_entry_index: u16,
+    pub(crate) ticket_state_account: AccountKeyV3,
+}
+
+/// Complete selected payload and the exact parent request bank it binds.
+pub(crate) struct CompiledSeriesFoundPrepareSelectionV1 {
+    pub(crate) parents: SeriesPrepareParentsV1,
+    pub(crate) predicted_core: dclutch_market::CoreState,
+    pub(crate) selected: crate::model::SelectedCapabilityV1,
+}
+
+/// Require the normalization boundary promised by the Series release owner:
+/// changing the provisional parent root may change runtime authorities, but it
+/// may not alter any immutable release byte that Registry will publish.
+pub(crate) fn require_series_selection_invariance_v1(
+    provisional: &CompiledSeriesFoundPrepareSelectionV1,
+    actual: &CompiledSeriesFoundPrepareSelectionV1,
+) -> Result<()> {
+    let left = &provisional.selected;
+    let right = &actual.selected;
+    if left.program_set_hex != right.program_set_hex
+        || left.selected_descriptor_hex != right.selected_descriptor_hex
+        || left.config_hex != right.config_hex
+        || left.publication_hex != right.publication_hex
+        || left.records.len() != right.records.len()
+    {
+        return Err(Error::new(
+            "Series normalized parent root changed immutable selection bytes",
+        ));
+    }
+    for (first, second) in left.records.iter().zip(&right.records) {
+        if first.label != second.label
+            || first.schema_hex != second.schema_hex
+            || first.body_hex != second.body_hex
+        {
+            return Err(Error::new(
+                "Series normalized parent root changed an immutable publication record",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Compile a Series-selected capability from admitted two-occurrence facts.
+///
+/// The function deliberately projects only the first occurrence.  The
+/// immutable Template still commits both occurrence records, and the release
+/// compiler owns the bounded bank for every action of that Template.
+pub(crate) fn compile_series_found_prepare_selection_v1(
+    mut input: SeriesFoundPrepareSelectionInputV1<'_>,
+) -> Result<CompiledSeriesFoundPrepareSelectionV1> {
+    let parents = derive_series_prepare_parents_v1(input.lifecycle)?;
+    input.material.prepare_parent_digest = parents.prepare_digest;
+    input.material.expire_parent_digest = parents.expire_digest;
+    let current = input
+        .lifecycle
+        .current
+        .ok_or_else(|| Error::new("Series selection compiler omitted first occurrence evidence"))?;
+    let occurrence = admit_occurrence(
+        input.lifecycle.template_bytes,
+        current.occurrence_bytes,
+        current.siblings,
+    )
+    .map_err(|_| Error::new("Series selection occurrence refused re-admission"))?;
+    let ticket = admit_ticket(current.ticket_bytes)
+        .map_err(|_| Error::new("Series selection Ticket refused re-admission"))?;
+    let escrow =
+        pre_founding_series_escrow(occurrence, ticket, input.product, input.registry_program)
+            .map_err(|_| Error::new("Series selection future Market projection refused"))?;
+    let identity = escrow.future_market().identity();
+    let found = Request::administrative(Action::Found, escrow.generation(), identity.market_id)
+        .encode()
+        .map_err(|error| Error::new(format!("Series Core Found request: {error:?}")))?;
+    let receipt = ProjectFoundReceiptV2::new(
+        identity.market_id,
+        escrow.generation(),
+        identity.realm_id,
+        Identity::new(input.material.mint.to_bytes())
+            .map_err(|_| Error::new("Series collateral mint identity"))?,
+        Identity::new(input.material.token_program.to_bytes())
+            .map_err(|_| Error::new("Series token program identity"))?,
+        input.material.collateral_release,
+        identity.product_record,
+        identity.product_id,
+        identity.resolution_policy,
+        identity.selected_release_set,
+        Identity::new(input.material.rent_program.to_bytes())
+            .map_err(|_| Error::new("Series Rent program identity"))?,
+        1,
+        Sha256::digest(found).into(),
+    )
+    .map_err(|error| Error::new(format!("Series ProjectFound receipt: {error:?}")))?;
+    let receipt_digest: [u8; 32] =
+        Sha256::digest(receipt.encode().map_err(|error| {
+            Error::new(format!("Series ProjectFound receipt encoding: {error:?}"))
+        })?)
+        .into();
+    input.material.projection_receipt_digest = receipt_digest;
+    let predicted_core =
+        crate::market::predict_core_state_v1(crate::market::PredictedCoreStateInputV1 {
+            core: input.material.core,
+            registry: Pubkey::new_from_array(input.registry_program.to_bytes()),
+            identity,
+            product_graph: input.core_product_graph,
+            projection: input.core_projection,
+            walk: input.core_walk,
+            principal_cap_sets: 1,
+            rent_beneficiary: Identity::new(input.material.rent_credit.to_bytes())
+                .map_err(|_| Error::new("Series RentCredit identity"))?,
+        })?;
+    let physical = materialize_series_found_prepare_v1(input.material.clone())?;
+    let expiry = occurrence
+        .template()
+        .retry_through(escrow.occurrence())
+        .map_err(|_| Error::new("Series expiry schedule refused"))?;
+    let initialize =
+        dclutch_trading_sbf::series::projected_custody_v3::project_prepare_initialize_v3(
+            escrow,
+            expiry,
+            physical.projected,
+        )
+        .map_err(|_| Error::new("Series projected initialize refused"))?;
+    let init_digest: [u8; 32] = Sha256::digest(
+        initialize
+            .encode()
+            .map_err(|_| Error::new("Series projected initialize encoding"))?,
+    )
+    .into();
+    let projected = dclutch_custody::ProjectedCustodyStateV2::initialize(
+        initialize,
+        receipt,
+        input.material.core.to_bytes(),
+        receipt_digest,
+        init_digest,
+        input.lifecycle.now_slot,
+        true,
+        input.projected_bump,
+    )
+    .map_err(|_| Error::new("Series projected initialize state refused"))?;
+    let open = dclutch_trading_sbf::series::projected_custody_v3::project_prepare_open_hoard_v3(
+        escrow,
+        expiry,
+        physical.projected,
+    )
+    .map_err(|_| Error::new("Series projected open refused"))?;
+    let open_digest: [u8; 32] = Sha256::digest(
+        open.encode()
+            .map_err(|_| Error::new("Series projected open encoding"))?,
+    )
+    .into();
+    let projected = projected
+        .open_hoard(open, open_digest, 0, true)
+        .map_err(|_| Error::new("Series projected HoardOpen state refused"))?;
+    let [normal_initialize, normal_open, normal_lock] =
+        dclutch_trading_sbf::series::custody_v3::project_prepare_custody_v3(
+            dclutch_trading::series::escrow::prepare_series_escrow_v3(escrow),
+            physical.prepare,
+        )
+        .map_err(|_| Error::new("Series normal Prepare projection refused"))?;
+    let init_request_digest = solana_program::hash::hash(
+        &normal_initialize
+            .to_bytes()
+            .map_err(|_| Error::new("Series normal Initialize encoding"))?,
+    )
+    .to_bytes();
+    let init_poststate = dclutch_custody::custody_poststate_commitment_v1(
+        dclutch_custody::CustodyPoststateProjectionV1 {
+            request_digest: init_request_digest,
+            source: physical.normal_replay.to_bytes(),
+            destination: physical.normal_replay.to_bytes(),
+            source_before: 0,
+            source_after: 0,
+            destination_before: 0,
+            destination_after: 0,
+            rent_lamports: physical.prepare.replay_rent_lamports,
+        },
+    );
+    let open_request_digest = solana_program::hash::hash(
+        &normal_open
+            .to_bytes()
+            .map_err(|_| Error::new("Series normal Open encoding"))?,
+    )
+    .to_bytes();
+    let open_poststate = dclutch_custody::custody_poststate_commitment_v1(
+        dclutch_custody::CustodyPoststateProjectionV1 {
+            request_digest: open_request_digest,
+            source: physical.prepare.escrow_vault,
+            destination: physical.prepare.escrow_vault,
+            source_before: 0,
+            source_after: 0,
+            destination_before: 0,
+            destination_after: 0,
+            rent_lamports: physical.prepare.vault_rent_lamports,
+        },
+    );
+    let source_after = input
+        .founder_source_amount
+        .checked_sub(escrow.hoard_principal())
+        .ok_or_else(|| Error::new("Series founder collateral source was underfunded"))?;
+    let lock_request_digest = solana_program::hash::hash(
+        &normal_lock
+            .to_bytes()
+            .map_err(|_| Error::new("Series normal Lock encoding"))?,
+    )
+    .to_bytes();
+    let lock_poststate = dclutch_custody::custody_poststate_commitment_v1(
+        dclutch_custody::CustodyPoststateProjectionV1 {
+            request_digest: lock_request_digest,
+            source: input.material.founder_source.to_bytes(),
+            destination: physical.prepare.escrow_vault,
+            source_before: input.founder_source_amount,
+            source_after,
+            destination_before: 0,
+            destination_after: escrow.hoard_principal(),
+            rent_lamports: 0,
+        },
+    );
+    let replay = dclutch_custody::CustodyReplayV1::initialize(
+        normal_initialize,
+        init_request_digest,
+        init_poststate,
+    )
+    .and_then(|state| state.advance(normal_open, open_request_digest, open_poststate))
+    .and_then(|state| state.advance(normal_lock, lock_request_digest, lock_poststate))
+    .map_err(|_| Error::new("Series normal Custody replay projection refused"))?;
+    let claims = SeriesFoundingClaimsPhysicalV1 {
+        linked_basis_record_digest: input.linked_basis_record_digest,
+        semantic_basis_id: input.semantic_basis_id,
+        aggregate: physical.claims.aggregate.to_bytes(),
+        position: physical.claims.position.to_bytes(),
+        admission: physical.claims.admission.to_bytes(),
+        claims_program: input.material.claims.to_bytes(),
+        aggregate_rent_principal: input.claims_rent_principals[0],
+        position_rent_principal: input.claims_rent_principals[1],
+        admission_rent_principal: input.claims_rent_principals[2],
+        observed_aggregate_lamports: physical.claims.aggregate_lamports,
+        observed_position_lamports: physical.claims.position_lamports,
+        observed_admission_lamports: physical.claims.admission_lamports,
+        permit_bump: input.permit_bump,
+        normal_replay_revision: replay.next_revision,
+    };
+    let children = derive_series_founding_children_v1(SeriesFoundingChildrenInputV1 {
+        template: input.lifecycle.template_bytes,
+        occurrence: current.occurrence_bytes,
+        siblings: current.siblings,
+        ticket: current.ticket_bytes,
+        product: input.product,
+        registry_program: input.registry_program,
+        projected: SeriesProjectedCustodyPhysicalInputV1 {
+            physical: physical.projected,
+        },
+        project_found_receipt: receipt,
+        projected_state: projected,
+        source_replay: replay,
+        source_replay_account: physical.normal_replay.to_bytes(),
+        predicted_core_state: &predicted_core,
+        parent_root: input.material.parent_root.to_bytes(),
+        trading_program: input.material.trading.to_bytes(),
+        rent_program: input.material.rent_program.to_bytes(),
+        claims,
+    })
+    .map_err(|error| Error::new(format!("Series founding children refused: {error:?}")))?;
+    let bank = SeriesChildBankV1::produce(SeriesChildBankInputV1 {
+        template: input.lifecycle.template_bytes,
+        occurrence: current.occurrence_bytes,
+        siblings: current.siblings,
+        ticket: current.ticket_bytes,
+        product: input.product,
+        registry_program: input.registry_program,
+        prepare_custody: physical.prepare,
+        expire_custody: physical.expire,
+        projected_custody: children.projected_physical,
+        claims_physical: SeriesClaimsPhysicalV1 {
+            claims_program: input.material.claims.to_bytes(),
+            custody_replay: physical.normal_replay.to_bytes(),
+        },
+        claims: children.claims,
+        permit_expiry: children.permit_expiry,
+        ticket_state_account: input.ticket_state_account,
+        expected_series_revision: input.lifecycle.series.revision(),
+        expected_ticket_revision: 0,
+    })
+    .map_err(|error| Error::new(format!("Series child bank refused: {error:?}")))?;
+    let assembled = crate::series_source::assemble_series_selected_source_v1(
+        crate::series_source::SeriesSourceAssemblyV1 {
+            lifecycle: input.lifecycle,
+            product: input.product,
+            registry_program: input.registry_program,
+            custody: physical.prepare,
+            projected_custody: children.projected_physical,
+            children: bank,
+            geometry: input.geometry,
+            consume_shadow_certificate_program: input.consume_shadow_certificate_program,
+            selected_release: input.selected_release,
+            funding_ledger_slot_count: input.funding_ledger_slot_count,
+            activation_deadline_slot: input.activation_deadline_slot,
+            selected_manifest_entry_index: input.selected_manifest_entry_index,
+        },
+    )?;
+    Ok(CompiledSeriesFoundPrepareSelectionV1 {
+        parents,
+        predicted_core,
+        selected: assembled.selected,
+    })
+}
+
+/// Exact parent family requests for the first Series Prepare and its only
+/// possible terminal counterpart.  These bytes come from the lifecycle owner;
+/// their digests are the values Custody binds into each child request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SeriesPrepareParentsV1 {
+    pub(crate) prepare_request: Vec<u8>,
+    pub(crate) prepare_digest: [u8; 32],
+    pub(crate) expire_request: Vec<u8>,
+    pub(crate) expire_digest: [u8; 32],
+}
+
+/// Derive both parent request digests from immutable Series evidence and the
+/// canonical replay kernel.  The Expire request is projected only after the
+/// Prepare transition; it is not presented as an observed account state.
+pub(crate) fn derive_series_prepare_parents_v1(
+    lifecycle: SeriesLifecycleSnapshotV3<'_>,
+) -> Result<SeriesPrepareParentsV1> {
+    let report = inspect_series_lifecycle_v3(lifecycle)
+        .map_err(|error| Error::new(format!("Series Prepare lifecycle refused: {error:?}")))?;
+    let SeriesNextActV3::Ready(prepare) = report.next() else {
+        return Err(Error::new("Series lifecycle did not select Prepare"));
+    };
+    if prepare.action() != dclutch_trading_sbf::series::instruction::SeriesActionV3::Prepare {
+        return Err(Error::new("Series lifecycle selected a non-Prepare action"));
+    }
+    let current = lifecycle
+        .current
+        .ok_or_else(|| Error::new("Series Prepare omitted current immutable evidence"))?;
+    let occurrence = admit_occurrence(
+        lifecycle.template_bytes,
+        current.occurrence_bytes,
+        current.siblings,
+    )
+    .map_err(|_| Error::new("Series Prepare occurrence refused re-admission"))?;
+    let ticket = admit_ticket(current.ticket_bytes)
+        .map_err(|_| Error::new("Series Prepare Ticket refused re-admission"))?;
+    occurrence
+        .require_ticket(ticket.ticket())
+        .map_err(|_| Error::new("Series Prepare occurrence/Ticket join refused"))?;
+    let template = TemplateV3::decode(lifecycle.template_bytes)
+        .map_err(|_| Error::new("Series Prepare Template refused hostile decode"))?;
+    let retry_slot = template
+        .retry_through(occurrence.occurrence().occurrence())
+        .map_err(|_| Error::new("Series Prepare retry schedule refused"))?
+        .checked_add(1)
+        .ok_or_else(|| Error::new("Series Prepare retry schedule cannot express Expire"))?;
+    let after_prepare = lifecycle
+        .series
+        .prepare_ticket(lifecycle.series.revision())
+        .map_err(|_| Error::new("Series Prepare replay transition refused"))?;
+    let prepared_ticket = TicketStateV3::prepared(ticket.content_id());
+    let expire = build_expire_v3(SeriesOccurrenceSnapshotV3 {
+        template_bytes: lifecycle.template_bytes,
+        occurrence_bytes: current.occurrence_bytes,
+        ticket_bytes: current.ticket_bytes,
+        siblings: current.siblings,
+        series: after_prepare,
+        ticket_state: Some(prepared_ticket),
+        now_slot: retry_slot,
+    })
+    .map_err(|error| Error::new(format!("Series Expire projection refused: {error:?}")))?;
+    let prepare_request = prepare.request().as_bytes().to_vec();
+    let expire_request = expire.as_bytes().to_vec();
+    // Custody's parent field is the SHA-256 of the complete family request,
+    // as its physical adapter specifies; it is intentionally distinct from
+    // Hot's domain-separated accelerator transcript digest.
+    let prepare_digest = solana_program::hash::hash(&prepare_request).to_bytes();
+    let expire_digest = solana_program::hash::hash(&expire_request).to_bytes();
+    Ok(SeriesPrepareParentsV1 {
+        prepare_request,
+        prepare_digest,
+        expire_request,
+        expire_digest,
+    })
+}
+
+/// Canonical vacant Claims coordinates plus their same-snapshot observations.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SeriesClaimsVacancyV1 {
+    pub(crate) aggregate: Pubkey,
+    pub(crate) position: Pubkey,
+    pub(crate) admission: Pubkey,
+    pub(crate) aggregate_lamports: u64,
+    pub(crate) position_lamports: u64,
+    pub(crate) admission_lamports: u64,
+}
+
+/// Inputs which are either immutable admitted identities or direct chain
+/// observations.  A caller cannot choose a PDA or a rent value here.
+#[derive(Clone, Debug)]
+pub(crate) struct SeriesPhysicalMaterialInputV1 {
+    pub(crate) trading: Pubkey,
+    pub(crate) core: Pubkey,
+    pub(crate) custody: Pubkey,
+    pub(crate) claims: Pubkey,
+    pub(crate) rent_program: Pubkey,
+    pub(crate) market: Pubkey,
+    pub(crate) release_set: Identity,
+    pub(crate) ticket: Identity,
+    pub(crate) parent_root: Pubkey,
+    pub(crate) payer: Pubkey,
+    pub(crate) founder: Pubkey,
+    pub(crate) refund_owner: Pubkey,
+    pub(crate) founder_source: Pubkey,
+    pub(crate) rent_credit: Pubkey,
+    pub(crate) mint: Pubkey,
+    pub(crate) token_program: Pubkey,
+    pub(crate) collateral_release: Identity,
+    pub(crate) projection_receipt_digest: [u8; 32],
+    pub(crate) prepare_parent_digest: [u8; 32],
+    pub(crate) expire_parent_digest: [u8; 32],
+    pub(crate) claims_vacancy: SeriesClaimsVacancyV1,
+    pub(crate) rent: Rent,
+}
+
+/// Derived coordinates and exact Rent minima for one future Series Market.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SeriesPhysicalMaterialV1 {
+    pub(crate) prepare: SeriesCustodyPhysicalV3,
+    pub(crate) expire: SeriesCustodyPhysicalV3,
+    pub(crate) projected: SeriesProjectedCustodyPhysicalV3,
+    pub(crate) permit: Pubkey,
+    pub(crate) custody_authority: Pubkey,
+    /// The normal-Custody SeriesEscrow replay account. This is distinct from
+    /// the Custody signing authority and is consumed by projected Lock.
+    pub(crate) normal_replay: Pubkey,
+    pub(crate) claims: SeriesClaimsVacancyV1,
+}
+
+/// Derive every physical coordinate whose PDA namespace is already fixed by
+/// the admitted future Market.  This is a pure projection; callers must
+/// verify the returned Claims coordinates are the observed vacant accounts.
+pub(crate) fn materialize_series_found_prepare_v1(
+    input: SeriesPhysicalMaterialInputV1,
+) -> Result<SeriesPhysicalMaterialV1> {
+    let market = input.market.to_bytes();
+    let release_set = input.release_set.to_bytes();
+    let ticket = input.ticket.to_bytes();
+    for (label, key) in [
+        ("parent Series root", input.parent_root),
+        ("Series payer", input.payer),
+        ("Series founder", input.founder),
+        ("Series refund owner", input.refund_owner),
+        ("Series founder source", input.founder_source),
+        ("future lifecycle credit", input.rent_credit),
+        ("future collateral mint", input.mint),
+        ("future token program", input.token_program),
+    ] {
+        if key == Pubkey::default() {
+            return Err(Error::new(format!("materialized {label} was default")));
+        }
+    }
+    if input.projection_receipt_digest == [0; 32]
+        || input.prepare_parent_digest == [0; 32]
+        || input.expire_parent_digest == [0; 32]
+    {
+        return Err(Error::new(
+            "Series physical material omitted canonical parent digest",
+        ));
+    }
+
+    let escrow_vault = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(market, release_set, ticket, CompartmentV1::SeriesEscrow)
+            .as_slices(),
+        &input.custody,
+    )
+    .0;
+    let context_digest =
+        solana_program::hash::hashv(&[dclutch_custody::PROJECTED_HOARD_CONTEXT_DOMAIN_V1, &ticket])
+            .to_bytes();
+    let hoard_vault = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            market,
+            release_set,
+            context_digest,
+            CompartmentV1::HoardPrincipal,
+        )
+        .as_slices(),
+        &input.custody,
+    )
+    .0;
+    let custody_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(market, release_set).as_slices(),
+        &input.custody,
+    )
+    .0;
+    let normal_replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::new(market, release_set, CallerRoleV1::Trading, ticket).as_slices(),
+        &input.custody,
+    )
+    .0;
+    let permit = Pubkey::find_program_address(
+        &SeriesFoundingPermitSeedsV1::new(
+            input.release_set,
+            Identity::new(market).map_err(|_| Error::new("future Market identity"))?,
+            input.ticket,
+        )
+        .as_slices(),
+        &input.core,
+    )
+    .0;
+    let aggregate = Pubkey::find_program_address(
+        &ClaimsFoundingAggregateSeedsV5::new(market)
+            .map_err(|_| Error::new("Series Claims aggregate seeds"))?
+            .as_slices(),
+        &input.claims,
+    )
+    .0;
+    let position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), input.founder.to_bytes())
+            .map_err(|_| Error::new("Series Claims position seeds"))?
+            .as_slices(),
+        &input.claims,
+    )
+    .0;
+    let admission = Pubkey::find_program_address(
+        &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), input.founder.to_bytes())
+            .map_err(|_| Error::new("Series Claims admission seeds"))?
+            .as_slices(),
+        &input.claims,
+    )
+    .0;
+    if input.claims_vacancy.aggregate != aggregate
+        || input.claims_vacancy.position != position
+        || input.claims_vacancy.admission != admission
+    {
+        return Err(Error::new(
+            "Series Claims vacancy observation was noncanonical",
+        ));
+    }
+    let replay_rent = input
+        .rent
+        .minimum_balance(dclutch_custody::CUSTODY_REPLAY_BYTES_V1);
+    let vault_rent = input
+        .rent
+        .minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES);
+    let normal = |parent_request_digest| SeriesCustodyPhysicalV3 {
+        caller_program: input.trading.to_bytes(),
+        parent_request_digest,
+        payer: input.payer.to_bytes(),
+        mint: input.mint.to_bytes(),
+        token_program: input.token_program.to_bytes(),
+        founder_source: input.founder_source.to_bytes(),
+        escrow_vault: escrow_vault.to_bytes(),
+        hoard_vault: hoard_vault.to_bytes(),
+        refund_destination: input.refund_owner.to_bytes(),
+        rent_credit: input.rent_credit.to_bytes(),
+        replay_rent_lamports: replay_rent,
+        vault_rent_lamports: vault_rent,
+    };
+    Ok(SeriesPhysicalMaterialV1 {
+        prepare: normal(input.prepare_parent_digest),
+        expire: normal(input.expire_parent_digest),
+        projected: SeriesProjectedCustodyPhysicalV3 {
+            caller_program: input.trading.to_bytes(),
+            core_program: input.core.to_bytes(),
+            rent_program: input.rent_program.to_bytes(),
+            parent_capability_root: input.parent_root.to_bytes(),
+            projection_receipt_digest: input.projection_receipt_digest,
+            payer: input.payer.to_bytes(),
+            rent_credit: input.rent_credit.to_bytes(),
+            hoard_vault: hoard_vault.to_bytes(),
+            escrow_vault: escrow_vault.to_bytes(),
+            mint: input.mint.to_bytes(),
+            token_program: input.token_program.to_bytes(),
+            collateral_release: input.collateral_release.to_bytes(),
+            projected_state_rent_lamports: input
+                .rent
+                .minimum_balance(dclutch_custody::PROJECTED_CUSTODY_STATE_BYTES_V2),
+            hoard_vault_rent_lamports: vault_rent,
+            escrow_replay_rent_lamports: replay_rent,
+            escrow_vault_rent_lamports: vault_rent,
+        },
+        permit,
+        custody_authority,
+        normal_replay,
+        claims: input.claims_vacancy,
+    })
+}

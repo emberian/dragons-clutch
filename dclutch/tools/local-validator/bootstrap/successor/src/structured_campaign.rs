@@ -46,6 +46,7 @@ use dclutch_operator::{
         NativeBasisCompositionInputV1, compile_native_basis_composition_v1,
     },
 };
+use dclutch_product::PortfolioV2;
 use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use serde_json::json;
 use sha2::Digest as _;
@@ -149,13 +150,14 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         claims,
         Vec::new(),
         2,
+        1,
+        Vec::new(),
         Vec::new(),
     )?;
-    // The shape is authored from the finalized Product width, never from a
-    // request flag.  The selected release's RequestProfile bounds K at three;
-    // this producer uses the first K canonical Product coordinates and unit
-    // coefficients over a denominator of two.  The compiled closure remains
-    // the authority for every derived graph, exposure, and receipt identity.
+    // The Structured recipe is the finalized Portfolio with its zero-weight
+    // Product coordinates removed. Product N remains the native composition
+    // width; only the Structured child K is sparse and bounded by the selected
+    // RequestProfile. No request flag may choose either coordinate or weight.
     let native = compile_native_basis_composition_v1(NativeBasisCompositionInputV1 {
         market: activation.market.to_bytes(),
         release_set: artifacts.token_behavior_selection.release_set(),
@@ -170,17 +172,50 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             "Structured campaign Product composition: {error:?}"
         ))
     })?;
-    let width = native.width().min(3);
-    if width == 0 {
-        return Err(Error::new("Structured campaign Product width is zero"));
+    let portfolio = PortfolioV2::decode(&provisional.portfolio_body)
+        .map_err(|error| Error::new(format!("Structured campaign Portfolio: {error:?}")))?;
+    if portfolio.coefficient_count() != native.width() {
+        return Err(Error::new(
+            "Structured campaign Portfolio width differs from native Product width",
+        ));
     }
-    let coordinates = (0..width).collect::<Vec<_>>();
-    let coefficients = vec![
-        1_u64;
-        usize::try_from(width).map_err(|_| Error::new(
-            "Structured campaign width overflows host"
-        ))?
-    ];
+    let portfolio_denominator = portfolio.denominator();
+    let denominator = if portfolio_denominator >= 2 {
+        portfolio_denominator
+    } else {
+        portfolio_denominator
+            .checked_mul(2)
+            .ok_or_else(|| Error::new("Structured campaign shard denominator overflows"))?
+    };
+    // The composition encoder owns a fractional graph root, so its canonical
+    // denominator is the same selected Structured denominator.  The Portfolio
+    // supplies sparse coordinates and ratios; it does not authorize a
+    // denominator-one graph root.
+    let composition_denominator = denominator;
+    let scale = 1_u64;
+    let mut coordinates = Vec::new();
+    let mut composition_coefficients = Vec::new();
+    let mut coefficients = Vec::new();
+    for (coordinate, coefficient) in portfolio.coefficients().enumerate() {
+        if coefficient == 0 {
+            continue;
+        }
+        coordinates.push(
+            u32::try_from(coordinate)
+                .map_err(|_| Error::new("Structured campaign Product coordinate overflows"))?,
+        );
+        composition_coefficients.push(coefficient);
+        coefficients.push(
+            coefficient
+                .checked_mul(scale)
+                .ok_or_else(|| Error::new("Structured campaign coefficient overflows"))?,
+        );
+    }
+    if coordinates.is_empty() || coordinates.len() > 3 {
+        return Err(Error::new(
+            "Structured campaign Portfolio nonzero coordinate count exceeds selected K=3",
+        ));
+    }
     // Redo the same-slot join with the explicit canonical recipe after the
     // width is authenticated.  This is intentionally not a mutation of the
     // provisional value above: it proves recipe input cannot sneak through a
@@ -194,7 +229,9 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         activation.market,
         claims,
         coordinates.clone(),
-        2,
+        denominator,
+        composition_denominator,
+        composition_coefficients,
         coefficients.clone(),
     )?;
     let closure = compile_structured_publication_closure_v1(&input)?;

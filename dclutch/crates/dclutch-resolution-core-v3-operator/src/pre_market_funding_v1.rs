@@ -453,7 +453,7 @@ fn resolution_mask(
             mask |= 1_u16 << entry_index;
         }
     }
-    if mask.count_ones() != 3 {
+    if manifest.entry_count() < 2 || mask.count_ones() != u32::from(manifest.entry_count() - 1) {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     Ok(mask)

@@ -26,11 +26,18 @@ const TRANSCRIPT_SCHEMA_V1: &str = "dclutch-journey-transcript-v1";
 
 /// The rung this campaign's Market buys, in the SHIPPED flag's spelling.
 ///
-/// The same string `tools/gauntlet/ladder/` founds with: one rung, a TWO-source
-/// market, at a 2,500-bp confidence bound tighter than the lab's 10,000-bp
+/// One rung, at a 2,500-bp confidence bound tighter than the lab's 10,000-bp
 /// ceiling -- a market whose first choice went silent has a reason to demand a
 /// better-conditioned reading from its second.
-const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:120";
+///
+/// The 900-second interval is a measured local-validator profile for this
+/// journey, not a protocol bound.  The 2026-09-07 recovery capture reached
+/// Core's provider execute 833 seconds after the primary window ended: the
+/// former 120-second interval had expired before the real Pyth transport began
+/// and the kernel correctly refused `DeadlineElapsed`.  This preserves at
+/// least 67 seconds of execution headroom on that measured path; remeasure it
+/// when the provider route's transaction profile changes.
+const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:900";
 
 /// One account the chain was read at, at the instant a stage refused.
 ///

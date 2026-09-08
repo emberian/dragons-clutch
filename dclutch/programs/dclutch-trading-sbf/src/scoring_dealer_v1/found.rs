@@ -435,16 +435,18 @@ const fn semantic_v1(parent: [u8; 32], facts: MarketFactsV1, transfer_index: u16
 /// Hold the Custody refund destination to the one lifecycle credit whose
 /// Claims Admit frame will also carry into its child request.
 ///
-/// The credit itself commits the sponsor, Market lifecycle, and its canonical
-/// PDA bump.  Keeping this free of account borrows makes each binding
-/// independently testable before this route sends either Custody CPI.
+/// Core commits this address at Market founding. Its refund wallet is the
+/// Market lifecycle's immutable beneficiary; this route's sponsor pays for a
+/// Dealer record and may differ. Keeping the remaining binding free of
+/// account borrows makes each one independently testable before either
+/// Custody CPI.
 #[allow(clippy::too_many_arguments)]
 fn authenticate_rent_credit_v1(
     rent_credit: Pubkey,
     rent_credit_owner: Pubkey,
     rent_program: Pubkey,
     credit: LifecycleRentCreditV2,
-    sponsor: Pubkey,
+    _sponsor: Pubkey,
     market: [u8; 32],
     release_set: [u8; 32],
     generation: u64,
@@ -452,7 +454,6 @@ fn authenticate_rent_credit_v1(
 ) -> Result<(), ProgramError> {
     if rent_credit_owner != rent_program
         || rent_credit.to_bytes() != core_rent_beneficiary
-        || credit.refund_wallet().to_bytes() != sponsor.to_bytes()
         || credit.market().to_bytes() != market
         || credit.release_set().to_bytes() != release_set
         || credit.generation() != generation
@@ -840,8 +841,9 @@ mod tests {
     }
 
     /// Custody receives rent only at the Market lifecycle's canonical
-    /// RentCredit.  Each control changes one authenticated coordinate and
-    /// must name DealerFound's exact Custody refusal.
+    /// RentCredit. Its immutable beneficiary need not be the Dealer sponsor;
+    /// each authenticated-coordinate control names DealerFound's exact
+    /// Custody refusal.
     #[test]
     fn founding_rent_credit_binds_every_lifecycle_coordinate() {
         let sponsor = Pubkey::new_from_array([1; 32]);
@@ -857,7 +859,13 @@ mod tests {
             ],
             &rent_program,
         );
-        let canonical = rent_credit(sponsor, market, release_set, generation, bump);
+        let canonical = rent_credit(
+            Pubkey::new_from_array([12; 32]),
+            market,
+            release_set,
+            generation,
+            bump,
+        );
         assert_eq!(
             authenticate_rent_credit_v1(
                 rent_credit_key,
@@ -871,7 +879,7 @@ mod tests {
                 rent_credit_key.to_bytes(),
             ),
             Ok(()),
-            "canonical Core/Claims RentCredit reaches Custody"
+            "the Market beneficiary may differ from the Dealer sponsor"
         );
 
         let custody = Err(ScoringDealerErrorV1::Custody.into());
@@ -906,26 +914,6 @@ mod tests {
                     Pubkey::new_from_array([6; 32]),
                     rent_program,
                     canonical,
-                    sponsor,
-                    market,
-                    release_set,
-                    generation,
-                    rent_credit_key.to_bytes(),
-                ),
-            ),
-            (
-                "beneficiary",
-                authenticate_rent_credit_v1(
-                    rent_credit_key,
-                    rent_program,
-                    rent_program,
-                    rent_credit(
-                        Pubkey::new_from_array([7; 32]),
-                        market,
-                        release_set,
-                        generation,
-                        bump,
-                    ),
                     sponsor,
                     market,
                     release_set,

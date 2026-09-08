@@ -683,6 +683,15 @@ pub(crate) fn resolve_through_pyth(
     submitted += transactions.len().saturating_sub(before_execute_tables);
     fees = fees.saturating_add(fees_since(transactions, before_execute_tables));
     table_lamports = table_lamports.saturating_add(table_rent(&execute_tables));
+    write_frame_capture_v1(
+        rpc,
+        &capture_dir.join("provider-execute.capture.json"),
+        "journey: Core composes the provider execution that mints the terminal certificate",
+        std::slice::from_ref(&execute.instruction),
+        payer.pubkey(),
+        execute_routing,
+        &execute_tables,
+    )?;
     // THE LABEL NAMES THE ROUTE IT DRIVES. This transaction was labelled
     // "Core admits the terminal state" for the life of the tier, and its own
     // binding row names `core/execute_provider_v3::process#ExecuteProvider` --

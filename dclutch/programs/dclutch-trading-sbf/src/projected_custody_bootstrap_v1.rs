@@ -2116,7 +2116,9 @@ fn controller_masks(
             .checked_shl(u32::from(entry_index))
             .ok_or(TradingSbfError::Content)?;
     }
-    if manifest.entry_count() != 4 || resolution_mask.count_ones() != 3 {
+    if manifest.entry_count() < 2
+        || resolution_mask.count_ones() != u32::from(manifest.entry_count() - 1)
+    {
         return Err(TradingSbfError::Content.into());
     }
     Ok([resolution_mask, trading_mask])

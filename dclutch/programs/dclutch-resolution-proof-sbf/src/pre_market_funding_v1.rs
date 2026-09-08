@@ -395,7 +395,7 @@ fn resolution_funding_plan(
             mask |= 1_u16 << entry_index;
         }
     }
-    if mask.count_ones() != 3 {
+    if manifest.entry_count() < 2 || mask.count_ones() != u32::from(manifest.entry_count() - 1) {
         return Err(ResolutionError::Funding.into());
     }
     Ok((mask, native_principal))

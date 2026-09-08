@@ -4831,6 +4831,7 @@ mod tests {
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_market::{MarketIdentity, StateBumpsV1};
+    use dclutch_source::{EnsembleSpecV1, RecoveryAttemptV2};
     use solana_program::{rent::Rent, sysvar::SysvarSerialize};
     use solana_sdk_ids::sysvar;
 
@@ -4873,6 +4874,70 @@ mod tests {
             readiness_quote(),
         )
         .expect("readiness manifest entry")
+    }
+
+    fn trading_entry(kind: u8) -> CapabilityEntryV1 {
+        CapabilityEntryV1::new(
+            capability_id([kind; 32]),
+            capability_id([0x90; 32]),
+            capability_id([0x91; 32]),
+            capability_id([0x92; 32]),
+            capability_id([0x93; 32]),
+            capability_id([0x94; 32]),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            readiness_quote(),
+        )
+        .expect("Trading manifest entry")
+    }
+
+    fn funding_manifest(entries: &[CapabilityEntryV1]) -> Vec<u8> {
+        let mut bytes = vec![0; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(entries, &mut bytes).expect("canonical manifest");
+        bytes
+    }
+
+    fn ensemble_funding_fixture(members: u8) -> (SourceMaterialV3, RecoveryPolicyV2) {
+        assert!(matches!(members, 1 | 2), "fixture has one or two members");
+        let first = RecoveryAttemptV2::new(
+            source_id(0x41),
+            source_id(0x42),
+            1_900_000_000,
+            source_id(0x43),
+        )
+        .expect("first member attempt");
+        let second = RecoveryAttemptV2::new(
+            source_id(0x44),
+            source_id(0x45),
+            1_900_000_001,
+            source_id(0x46),
+        )
+        .expect("second member attempt");
+        let policy = RecoveryPolicyV2::new(
+            source_id(0x40),
+            [Some(first), (members == 2).then_some(second), None, None],
+            members,
+        )
+        .expect("member policy");
+        let ensemble = match members {
+            1 => EnsembleSpecV1::new(2, 1),
+            2 => EnsembleSpecV1::new(3, 3),
+            _ => unreachable!("fixture asserted the supported member count"),
+        }
+        .expect("ensemble");
+        let material = SourceMaterialV3::explicitly_unbounded(
+            source_id(0x31),
+            source_id(0x32),
+            source_id(0x33),
+            source_id(0x34),
+            Some(source_id(0x35)),
+            source_id(0x36),
+        )
+        .with_ensemble(ensemble, 0)
+        .expect("member material");
+        (material, policy)
     }
 
     fn readiness_material() -> Vec<u8> {
@@ -5438,6 +5503,154 @@ mod tests {
             encode_funding_role_request(role, 0b1001),
             Err(ResolutionCoreOperatorErrorV3::Funding),
             "an operator cannot omit a compact role from the physical header",
+        );
+    }
+
+    #[test]
+    fn two_member_ensemble_selects_four_resolution_rows_and_one_trading_row() {
+        let (material, policy) = ensemble_funding_fixture(2);
+        let failure = hash(&material.to_bytes()).to_bytes();
+        let policy_id = material
+            .recovery_policy()
+            .expect("material names policy")
+            .to_bytes();
+        let entries = [
+            readiness_entry(
+                1,
+                policy
+                    .attempt(0)
+                    .expect("first member")
+                    .funding_allocation_id()
+                    .to_bytes(),
+            ),
+            readiness_entry(
+                2,
+                policy
+                    .attempt(1)
+                    .expect("second member")
+                    .funding_allocation_id()
+                    .to_bytes(),
+            ),
+            readiness_entry(3, policy_id),
+            readiness_entry(4, failure),
+            trading_entry(5),
+        ];
+        let manifest_bytes = funding_manifest(&entries);
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decodes");
+
+        assert_eq!(manifest.entry_count(), 5, "four Resolution and one Trading");
+        assert_eq!(
+            select_resolution_funding_entries_v3(material, Some(policy), manifest),
+            Ok([0, 2, 3]),
+            "the request carries compact semantic anchors",
+        );
+        assert_eq!(
+            select_resolution_funding_mask_v3(material, Some(policy), manifest),
+            Ok(0b1111),
+            "the physical ledger also funds the second member at index one",
+        );
+    }
+
+    #[test]
+    fn two_member_ensemble_names_missing_extra_and_foreign_run_rows() {
+        let (material, policy) = ensemble_funding_fixture(2);
+        let failure = hash(&material.to_bytes()).to_bytes();
+        let policy_id = material
+            .recovery_policy()
+            .expect("material names policy")
+            .to_bytes();
+        let first = policy
+            .attempt(0)
+            .expect("first member")
+            .funding_allocation_id()
+            .to_bytes();
+        let second = policy
+            .attempt(1)
+            .expect("second member")
+            .funding_allocation_id()
+            .to_bytes();
+        let select = |entries: &[CapabilityEntryV1]| {
+            let manifest_bytes = funding_manifest(entries);
+            let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decodes");
+            select_resolution_funding_mask_v3(material, Some(policy), manifest)
+        };
+
+        assert_eq!(
+            select(&[
+                readiness_entry(1, first),
+                readiness_entry(2, policy_id),
+                readiness_entry(3, failure),
+                trading_entry(4),
+            ]),
+            Err(ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::CompartmentsNotDistinct { entries: [0, 1, 2] },
+            )),
+            "a missing second member makes the exhaustion anchor occupy its required slot",
+        );
+        assert_eq!(
+            select(&[
+                readiness_entry(1, first),
+                readiness_entry(2, source_id(0x47).to_bytes()),
+                readiness_entry(3, policy_id),
+                readiness_entry(4, failure),
+                trading_entry(5),
+            ]),
+            Err(ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::CompartmentsNotDistinct { entries: [0, 2, 3] },
+            )),
+            "an extra Resolution row cannot displace the policy's second member",
+        );
+        assert_eq!(
+            select(&[
+                readiness_entry(1, first),
+                trading_entry(2),
+                readiness_entry(3, policy_id),
+                readiness_entry(4, failure),
+            ]),
+            Err(ResolutionCoreOperatorErrorV3::FundingConjunct(
+                ResolutionFundingCauseV3::CompartmentsNotDistinct { entries: [0, 2, 3] },
+            )),
+            "a foreign release cannot occupy a member's funded Resolution slot",
+        );
+
+        assert_ne!(
+            first, second,
+            "the policy independently names each member allocation"
+        );
+    }
+
+    #[test]
+    fn one_member_ensemble_control_selects_three_resolution_rows() {
+        let (material, policy) = ensemble_funding_fixture(1);
+        let failure = hash(&material.to_bytes()).to_bytes();
+        let policy_id = material
+            .recovery_policy()
+            .expect("material names policy")
+            .to_bytes();
+        let entries = [
+            readiness_entry(
+                1,
+                policy
+                    .attempt(0)
+                    .expect("only member")
+                    .funding_allocation_id()
+                    .to_bytes(),
+            ),
+            readiness_entry(2, policy_id),
+            readiness_entry(3, failure),
+            trading_entry(4),
+        ];
+        let manifest_bytes = funding_manifest(&entries);
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decodes");
+
+        assert_eq!(
+            select_resolution_funding_entries_v3(material, Some(policy), manifest),
+            Ok([0, 1, 2]),
+        );
+        assert_eq!(
+            select_resolution_funding_mask_v3(material, Some(policy), manifest),
+            Ok(0b0111),
+            "the one-member control retains the three-row selection",
         );
     }
 
