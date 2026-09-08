@@ -54,6 +54,7 @@ use crate::provider_instruction_v3::authenticate_record;
 use crate::relay_transport_v1::{
     MarketFacts, account, authenticate_market, authenticate_source_state_account,
     boxed_product_runtime, initialize_certificate_at_kind, require_system,
+    terminal_output_funding_for_material,
 };
 use crate::{ResolutionError, authenticate_clock, authenticate_rent};
 
@@ -189,6 +190,7 @@ pub(crate) fn process_derived_settle_v1(
             .to_bytes()
             .map_err(|_| ResolutionError::Transition)?,
     );
+    let terminal_output_funding = terminal_output_funding_for_material(records.material);
     drop(source_data);
     drop(domain_data);
     commit_settlement(
@@ -198,6 +200,7 @@ pub(crate) fn process_derived_settle_v1(
         certificate_account,
         system,
         &rent,
+        terminal_output_funding,
         &next_source,
         &certificate,
     )
@@ -533,6 +536,7 @@ fn commit_settlement<'info>(
     certificate: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     rent: &Rent,
+    terminal_output_funding: crate::relay_transport_v1::TerminalOutputFundingV1,
     next_source: &[u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
     next_certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES_V2],
 ) -> ProgramResult {
@@ -544,6 +548,7 @@ fn commit_settlement<'info>(
         certificate,
         system,
         rent,
+        terminal_output_funding,
     )?;
     let mut state_output = source_state
         .try_borrow_mut_data()

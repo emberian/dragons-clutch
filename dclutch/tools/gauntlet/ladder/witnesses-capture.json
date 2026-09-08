@@ -12,7 +12,7 @@
     {
       "id": "the-rung-was-answered-by-the-source-it-paid-for",
       "kind": "plan-jq",
-      "query": "if (.capture != null and .capture.route == \"Recovery\" and .capture.attemptIndex == 1) then \"answered-on-the-rung\" else (\"answered-on-\" + ((.capture.route // \"nothing\") | tostring) + \":\" + ((.capture.attemptIndex // \"none\") | tostring)) end",
+      "query": "if (.capture != null and .capture.route == \"Recovery\" and .capture.attemptIndex == .expected_capture_attempt_index and .expected_capture_attempt_index > 0) then \"answered-on-the-rung\" else (\"answered-on-\" + ((.capture.route // \"nothing\") | tostring) + \":\" + ((.capture.attemptIndex // \"none\") | tostring)) end",
       "expect": "answered-on-the-rung",
       "provenance": "THE WHOLE SUBJECT OF THE CAPTURE WALK, read off the chain rather than off the campaign's intention. `route` is the Source's own terminal projection and `attemptIndex` is the field the Resolution program wrote into the certificate, and the two together are the entire difference between a market whose FIRST choice answered and a market whose funded alternative did. A capture walk that resolved on the primary reports `answered-on-Primary:0` and is a run whose rung nobody walked. The capture stage additionally refuses to proceed unless the same builder, handed the primary-shaped request against this same Source, refuses it by name -- so `Recovery` here is a leg that was ANSWERED, not merely one that was accepted. It is no longer disjoined over the walk: this file is evaluated against the capture arm's own transcript, which `this-transcript-is-the-capture-arm` pins, so a run whose capture arm did not happen is red here instead of green."
     },
@@ -22,6 +22,27 @@
       "query": "if ([.stages[] | select(.stage == \"capture before the rung is due\") | .outcome] == [\"refused-by-name\"]) then \"refused-by-name\" else ([.stages[] | select(.stage == \"capture before the rung is due\") | .outcome] | join(\",\")) end",
       "expect": "refused-by-name",
       "provenance": "A LADDER IS NOT A FREE CHOICE. Before the crank advances anything, the capture walk asks the chain-derived operator to build the capture that answers the rung and requires it to REFUSE -- off chain, with no key open and nothing sent. `dclutch-provider-transport-v3-operator` derives a request's `source_index` from the Source's own phase and active attempt, so an operator that could build this one could answer a market on a leg its holders paid for and nobody walked. The refusal's own sentence is recorded verbatim in the stage note rather than asserted as a discriminant, because more than one of the builder's ordered conjuncts is false at that instant; the outcome word is what this witness holds, and `built-a-capture` is the failing value -- a finding rather than a crash, so the transcript carries it and the walk goes on. It is no longer disjoined over the walk, for the reason `this-transcript-is-the-capture-arm` states; and an arm that never reached the stage at all reports the empty join, which is red rather than green."
+    },
+    {
+      "id": "durable-frame49-reaches-complete-and-restarts-unchanged",
+      "kind": "plan-jq",
+      "query": "if (.capture.durable.executePlan.action.accounts | length) == 49 and .capture.durable.checkpoint.verifiedTerminal == true and .capture.durable.restartCompleteUnchanged == true and [.capture.durable.receipts[].stage] == [\"submit\", \"resolution-provider-execute-v1\", \"core-terminal-accept-v1\", \"reclaim\"] then \"durable-complete\" else \"durable-incomplete\" end",
+      "expect": "durable-complete",
+      "provenance": "The shipped CLI writes the exact preflight frame and authenticates each finalized stage before admitting its receipt. The campaign invokes the stages in fresh processes and reruns Complete without keys, requiring the accepted checkpoint to remain byte-identical. This row cannot pass on the former journey-only capture."
+    },
+    {
+      "id": "primary-frame-refuses-on-the-same-submitted-recovery-source",
+      "kind": "plan-jq",
+      "query": "if .capture.durable.primaryCountercontrol.refusal == \"provider execute builder: State\" and .capture.durable.primaryCountercontrol.preflightUnchanged == true and (.capture.durable.primaryCountercontrol.accounts | length) == 6 then \"primary-refused\" else \"primary-not-proven\" end",
+      "expect": "primary-refused",
+      "provenance": "After durable Submit, the campaign removes only recovery selection and asks the same shipped builder for the primary frame. It requires the exact ProviderTransportOperatorErrorV3::State refusal and rereads the Source, Market, update, lifecycle, funding ledger and certificate with unchanged owner, lamports, executable bit and data digest. This is an offchain preflight refusal, distinct from transaction rollback."
+    },
+    {
+      "id": "successful-recovery-pays-and-discharges-founder-holdings",
+      "kind": "plan-jq",
+      "query": "if .capture.payout.hoardDrained == true and .capture.payout.hoardAfter == 0 and .capture.payout.hoardBefore == .capture.payout.paidTotal and .capture.payout.recipientAfter == .capture.payout.paidTotal and (.capture.payout.refunds | length) > 0 and all(.capture.payout.refunds[]; .restartUnchanged == true and .finalizedPackets > 0) then \"paid-and-reauthenticated\" else \"payout-incomplete\" end",
+      "expect": "paid-and-reauthenticated",
+      "provenance": "After the durable capture census, the same native Claims payout continuation used by the failure arm settles every ordinary founder holding. Each completed driver is re-entered and must preserve its evidence bytes; every signed journal packet is independently reread from finalized history. The Hoard and recipient token balances must agree exactly with the sum of the authenticated payouts. No runtime success is claimed until this row is evaluated against an actual capture transcript."
     }
   ]
 }

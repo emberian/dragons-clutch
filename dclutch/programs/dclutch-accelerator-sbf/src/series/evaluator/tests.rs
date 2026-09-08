@@ -461,6 +461,7 @@ impl SemanticFixture {
                     .try_into()
                     .expect("slot width"),
             ),
+            derived_scalars: vec![0; SERIES_SHADOW_SCALAR_COUNT_V4],
         }
     }
 }
@@ -643,6 +644,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
             fixture.product.result_domain(),
         ),
         now_slot: fixture.facts().now_slot,
+        derived_scalars: vec![0; SERIES_SHADOW_SCALAR_COUNT_V4],
     };
     assert_eq!(
         evaluate_semantic_core_request(shadow, &observations, hostile_product),

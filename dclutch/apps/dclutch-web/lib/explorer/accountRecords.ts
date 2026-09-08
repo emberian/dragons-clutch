@@ -35,6 +35,7 @@ import {
   QUOTE_REQUEST_MAGIC,
   FILL_REQUEST_MAGIC,
   WITHDRAW_REQUEST_MAGIC,
+  REDEEM_REQUEST_MAGIC,
   RECEIPT_MAGIC,
   FILL_WITNESS_MAGIC,
 } from '@dclutch/sdk/generated/scoringRuleV1';
@@ -1206,6 +1207,21 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     note: null,
   },
   {
+    magic: REDEEM_REQUEST_MAGIC,
+    name: 'Scoring Dealer redemption request',
+    family: 'Trading',
+    summary: 'Redeems the fund’s terminal claims into its own collateral vault.',
+    width: { kind: 'header-only', headerBytes: SCORING.REDEEM_REQUEST_BYTES, note: 'Claims owns the following terminal settlement request' },
+    fields: [
+      field('Schema version', SCORING.REDEEM_REQUEST_VERSION_OFFSET, 'u16'),
+      field('Reserved', SCORING.REDEEM_REQUEST_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.REDEEM_REQUEST_MARKET_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.REDEEM_REQUEST_DEALER_ID_OFFSET, 'identity'),
+      field('Expected fund revision', SCORING.REDEEM_REQUEST_EXPECTED_FUND_REVISION_OFFSET, 'u64'),
+    ],
+    note: 'This decodes the Dealer prefix. Claims owns terminal payout, burn and child request validation.',
+  },
+  {
     magic: RECEIPT_MAGIC,
     name: 'Scoring Dealer receipt',
     family: 'Trading',
@@ -1213,7 +1229,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     width: { kind: 'fixed', bytes: SCORING.RECEIPT_BYTES },
     fields: [
       field('Schema version', SCORING.RECEIPT_VERSION_OFFSET, 'u16'),
-      field('Route', SCORING.RECEIPT_ROUTE_OFFSET, 'enum', { tags: [{ tag: SCORING.ROUTE_FOUND, name: 'Found' }, { tag: SCORING.ROUTE_QUOTE, name: 'Quote' }, { tag: SCORING.ROUTE_FILL, name: 'Fill' }, { tag: SCORING.ROUTE_WITHDRAW, name: 'Withdraw' }] }),
+      field('Route', SCORING.RECEIPT_ROUTE_OFFSET, 'enum', { tags: [{ tag: SCORING.ROUTE_FOUND, name: 'Found' }, { tag: SCORING.ROUTE_QUOTE, name: 'Quote' }, { tag: SCORING.ROUTE_FILL, name: 'Fill' }, { tag: SCORING.ROUTE_WITHDRAW, name: 'Withdraw' }, { tag: SCORING.ROUTE_REDEEM, name: 'Redeem' }] }),
       field('Outcome count', SCORING.RECEIPT_OUTCOME_COUNT_OFFSET, 'u8'),
       field('Reserved', SCORING.RECEIPT_RESERVED_OFFSET, 'reserved'),
       field('Request digest', SCORING.RECEIPT_REQUEST_DIGEST_OFFSET, 'identity'),

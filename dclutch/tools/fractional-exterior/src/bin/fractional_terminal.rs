@@ -255,6 +255,13 @@ fn prepare(
     }
     fs::create_dir_all(&accounts)?;
     for account in &staged.base.accounts {
+        // A finalized record's staging PDA and caller-authority seats are
+        // canonically vacant. Naming them in the transaction materializes the
+        // zero-lamport System view; preloading them would turn vacancy into a
+        // rent-funded account and Resolution would correctly refuse it.
+        if account.owner == system() && account.data.is_empty() {
+            continue;
+        }
         validator::write_account(
             &accounts,
             &validator::account_file(
@@ -1208,14 +1215,18 @@ fn execute(
         TerminalAction::ZeroBurn => replay_after == replay_before_terminal,
         TerminalAction::Redeem => replay_immutable_matches && replay_after_state.next_revision == 2,
     };
-    let expected_collateral_supply = staged.winning_collateral;
+    let expected_collateral_supply = staged.initial_collateral_supply;
+    let expected_hoard = staged
+        .initial_collateral_supply
+        .checked_sub(staged.terminal_payout)
+        .ok_or_else(|| Error::new("terminal payout exceeded staged collateral"))?;
     let expected_recipient = match terminal_action {
         TerminalAction::ZeroBurn => 0,
-        TerminalAction::Redeem => staged.winning_collateral,
+        TerminalAction::Redeem => staged.terminal_payout,
     };
     if after != terminal_expected
         || collateral_supply != expected_collateral_supply
-        || hoard_amount != 0
+        || hoard_amount != expected_hoard
         || recipient_amount != expected_recipient
         || !replay_effect_matches
     {
@@ -1226,7 +1237,13 @@ fn execute(
         .into());
     }
     let terminal_poststate = json!({
+        "scope": match terminal_action {
+            TerminalAction::ZeroBurn => "losing-holder-zero-burn",
+            TerminalAction::Redeem => "winner-reserve-slice-only",
+        },
         "fractional": after,
+        "initial_collateral_supply": staged.initial_collateral_supply,
+        "reserve_slice_payout": staged.terminal_payout,
         "collateral_mint_supply": collateral_supply,
         "hoard_token_amount": hoard_amount,
         "recipient_token_amount": recipient_amount,
@@ -1297,5 +1314,53 @@ fn main() -> ExitCode {
             eprintln!("dclutch-fractional-terminal: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(accounts: &Path, key: Pubkey) -> PathBuf {
+        accounts.join(format!("{key}.json"))
+    }
+
+    #[test]
+    fn prepare_preserves_finalized_staging_vacancy() -> Result<()> {
+        let claims = [1_u8];
+        let registry = [2_u8];
+        let core = [3_u8];
+        let custody = [4_u8];
+        let caller = [5_u8];
+        let resolution = [6_u8];
+        let elves = stage::Elves {
+            claims: &claims,
+            registry: &registry,
+            core: &core,
+            custody: &custody,
+            caller: &caller,
+        };
+        let staged = stage::stage_terminal(
+            &elves,
+            &resolution,
+            Pubkey::new_from_array([0x31; 32]),
+            Pubkey::new_from_array([0x32; 32]),
+        );
+        let out = env::temp_dir().join(format!(
+            "dclutch-fractional-terminal-prepare-{}",
+            std::process::id()
+        ));
+        if out.exists() {
+            fs::remove_dir_all(&out)?;
+        }
+        prepare(&out, &staged, &[])?;
+        let accounts = out.join("accounts");
+        assert!(file(&accounts, staged.source_material.raw).is_file());
+        assert!(!file(&accounts, staged.source_material.staging).exists());
+        assert!(file(&accounts, staged.capability_manifest.raw).is_file());
+        assert!(!file(&accounts, staged.capability_manifest.staging).exists());
+        assert!(file(&accounts, staged.source_state).is_file());
+        fs::remove_dir_all(out)?;
+        Ok(())
     }
 }

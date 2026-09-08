@@ -106,7 +106,7 @@ pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, 
         Action::CloseBatch => (27, 0, 0),
         // 46 -> 47: the order record's version no longer shares the `ONE`
         // register with the literal one, so the program reloads it last.
-        Action::PlaceOrder => (47, 4, 0),
+        Action::PlaceOrder => (49, 4, 0),
         Action::CancelOrder => (50, 4, 0),
         Action::ReleaseOrder => (42, 4, 0),
         Action::CloseCandidate => (34, 1, 0),
@@ -918,8 +918,13 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                     i(identity::SETTLEMENT_POSITION_OWNER)?,
                     i(identity::ORDER)?,
                 ),
-                InstructionV3::identity_eq(i(identity::RENT_CREDIT)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::RENT_REFUND)?, i(identity::OWNER)?),
                 InstructionV3::identity_eq(i(identity::PAYER)?, i(identity::OWNER)?),
+                // InitializeReplay and OpenVault consumed revisions 0 -> 1
+                // and 1 -> 2. The deposit is the third operation in the same
+                // replay namespace.
+                InstructionV3::load_const(s(scalar::CUSTODY_EXPECTED_REVISION)?, 2),
+                InstructionV3::load_const(s(scalar::CUSTODY_RESULTING_REVISION)?, 3),
                 InstructionV3::load_const(
                     s(scalar::CUSTODY_OPERATION)?,
                     OperationV1::Transfer as u64,

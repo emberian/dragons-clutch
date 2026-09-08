@@ -91,12 +91,13 @@ use dclutch_claims::{
         TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3,
         TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3 as TOKEN_PROGRAM,
         TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3 as BOND_ACCOUNT_COUNT,
-        TerminalSettlementReceiptInputV3, TerminalSettlementReceiptV3, TerminalSettlementRequestV3,
+        TerminalRecipientV3, TerminalSettlementErrorV3, TerminalSettlementReceiptInputV3,
+        TerminalSettlementReceiptV3, TerminalSettlementRequestV3,
     },
 };
 use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
-    CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
+    CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
@@ -133,6 +134,38 @@ use super::{
     },
 };
 
+/// Located refusals for the explicit terminal capital destination.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalRecipientErrorV3 {
+    /// Unallocated recipient mode.
+    Mode = 0x50E0,
+    /// A non-Trading caller requested Trading principal.
+    Role = 0x50E1,
+    /// Recipient differs from the Position owner's canonical Trading vault.
+    Vault = 0x50E2,
+    /// Founder-bond recipient differs from the native beneficiary.
+    NativeBeneficiary = 0x50E3,
+}
+
+const _: () = assert!(
+    TerminalRecipientErrorV3::Mode as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0xE0
+);
+
+impl From<TerminalRecipientErrorV3> for ProgramError {
+    fn from(value: TerminalRecipientErrorV3) -> Self {
+        Self::Custom(value as u32)
+    }
+}
+
+fn decode_terminal_request(bytes: &[u8]) -> Result<TerminalSettlementRequestV3, ProgramError> {
+    TerminalSettlementRequestV3::decode(bytes).map_err(|error| match error {
+        TerminalSettlementErrorV3::RecipientMode => TerminalRecipientErrorV3::Mode.into(),
+        TerminalSettlementErrorV3::RecipientRole => TerminalRecipientErrorV3::Role.into(),
+        _ => ClaimsSbfError::Instruction.into(),
+    })
+}
+
 /// Whether a frame is the fixed thirty-six or the thirty-six plus the
 /// founder-bond tail. Any other width is refused before a byte is read.
 const fn frame_width_admitted(accounts: &[AccountInfo<'_>]) -> bool {
@@ -147,8 +180,7 @@ pub(super) fn process(
     if !frame_width_admitted(accounts) {
         return Err(ClaimsSbfError::Accounts.into());
     }
-    let request = TerminalSettlementRequestV3::decode(instruction_data)
-        .map_err(|_| ClaimsSbfError::Instruction)?;
+    let request = decode_terminal_request(instruction_data)?;
     let request_digest = hash(instruction_data).to_bytes();
     let authority = parent_authority(request.input());
     let prepared =
@@ -277,6 +309,7 @@ fn authenticate_and_prepare(
     authority: ParentAuthorityV3,
 ) -> Result<Box<PreparedTerminalSettlementV3>, ProgramError> {
     let input = (*request).input();
+    authenticate_terminal_recipient(accounts, *request, authority)?;
     authenticate_extra_privileges(program_id, accounts, input, authority)?;
     let aggregate_bytes = accounts[1]
         .try_borrow_data()
@@ -384,6 +417,7 @@ fn authenticate_and_prepare(
         refunds_on_failure,
         scenario,
         authority,
+        request.native_beneficiary(),
     )?;
     let admission = ProductClaimsTerminalAdmissionV3::new(
         input.exposure_id,
@@ -518,6 +552,7 @@ fn authenticate_founder_bond_arm(
     refunds_on_failure: bool,
     scenario: TerminalScenarioV3,
     authority: ParentAuthorityV3,
+    native_beneficiary: [u8; 32],
 ) -> Result<Option<FounderBondDrawPlanV1>, ProgramError> {
     let exhausted = matches!(scenario, TerminalScenarioV3::Failure);
     let Some(tail) = accounts.get(ACCOUNT_COUNT..) else {
@@ -584,10 +619,10 @@ fn authenticate_founder_bond_arm(
         }
         ParentAuthorityV3::PositionOwner(_)
         | ParentAuthorityV3::CallerProgramPda
-        | ParentAuthorityV3::EnclosingClaimsRoute => Pubkey::new_from_array(input.recipient_owner),
+        | ParentAuthorityV3::EnclosingClaimsRoute => Pubkey::new_from_array(native_beneficiary),
     };
     if *recipient.key != expected_recipient {
-        return Err(ClaimsSbfError::Identity.into());
+        return Err(TerminalRecipientErrorV3::NativeBeneficiary.into());
     }
     // The rent the escrow recorded when it was funded (decision 0030), read
     // off its admission rather than off the sysvar of the moment; and the
@@ -741,6 +776,10 @@ fn execute(
             realm: input.realm,
             parent_request_digest: request_digest,
             recipient_owner: input.recipient_owner,
+            destination_context: match request.recipient_mode() {
+                TerminalRecipientV3::External => None,
+                TerminalRecipientV3::TradingPrincipal => Some(input.owner),
+            },
             generation: input.generation,
             order_nonce: input.expected_position_revision,
             transfer_index: input.transfer_index,
@@ -1174,6 +1213,45 @@ fn authenticate_zero_custody_accounts(
     Ok(())
 }
 
+/// A Trading principal return has one physical address, not a caller-selected
+/// token account. Token mint/authority are still checked by the common path.
+fn authenticate_terminal_recipient(
+    accounts: &[AccountInfo<'_>],
+    request: TerminalSettlementRequestV3,
+    authority: ParentAuthorityV3,
+) -> Result<(), ProgramError> {
+    if request.recipient_mode() == TerminalRecipientV3::External {
+        return Ok(());
+    }
+    let input = request.input();
+    if input.caller_role != CallerRole::Trading
+        || !matches!(authority, ParentAuthorityV3::CallerProgramPda)
+    {
+        return Err(TerminalRecipientErrorV3::Role.into());
+    }
+    let expected_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(input.market, input.release_set).as_slices(),
+        accounts[CUSTODY_PROGRAM].key,
+    )
+    .0;
+    let vault = CustodyVaultSeedsV1::new(
+        input.market,
+        input.release_set,
+        input.owner,
+        CompartmentV1::TradingPrincipal,
+    );
+    let expected =
+        Pubkey::find_program_address(&vault.as_slices(), accounts[CUSTODY_PROGRAM].key).0;
+    if input.recipient_token_account != expected.to_bytes()
+        || accounts[RECIPIENT].key != &expected
+        || input.recipient_owner != accounts[CUSTODY_AUTHORITY].key.to_bytes()
+        || accounts[CUSTODY_AUTHORITY].key != &expected_authority
+    {
+        return Err(TerminalRecipientErrorV3::Vault.into());
+    }
+    Ok(())
+}
+
 fn custody_replay_digest(
     accounts: &[AccountInfo<'_>],
     expected_revision: u64,
@@ -1510,6 +1588,143 @@ mod exposure_identity_tests {
         assert_ne!(
             ClaimsSbfError::ExposureNotIdentity as u32,
             ClaimsSbfError::Economic as u32
+        );
+    }
+}
+
+#[cfg(test)]
+mod recipient_tests {
+    use super::*;
+    use dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestInputV3;
+
+    fn request() -> TerminalSettlementRequestV3 {
+        TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
+            caller_role: CallerRole::Trading,
+            release_set: [1; 32],
+            market: [2; 32],
+            realm: [3; 32],
+            parent_context: [4; 32],
+            product_record_digest: [5; 32],
+            exposure_id: [6; 32],
+            exposure_digest: [7; 32],
+            terminal_record_digest: [8; 32],
+            owner: [4; 32],
+            position: [9; 32],
+            recipient_owner: [10; 32],
+            recipient_token_account: [11; 32],
+            claims_program: [12; 32],
+            custody_program: [13; 32],
+            collateral_mint: [14; 32],
+            token_program: [15; 32],
+            semantic_basis_id: [16; 32],
+            linked_basis_record_digest: [17; 32],
+            generation: 1,
+            expected_market_revision: 1,
+            expected_position_revision: 1,
+            expected_custody_revision: 1,
+            quantity: 1,
+            claim_index: 0,
+            transfer_index: 0,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn terminal_destination_checks_canonical_vault_and_authority_without_mutation() {
+        let input = request().input();
+        let custody = Pubkey::new_from_array(input.custody_program);
+        let authority = Pubkey::find_program_address(
+            &CustodyAuthoritySeedsV1::new(input.market, input.release_set).as_slices(),
+            &custody,
+        )
+        .0;
+        let vault = Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::new(
+                input.market,
+                input.release_set,
+                input.owner,
+                CompartmentV1::TradingPrincipal,
+            )
+            .as_slices(),
+            &custody,
+        )
+        .0;
+        let mut input = input;
+        input.recipient_token_account = vault.to_bytes();
+        input.recipient_owner = authority.to_bytes();
+        let child = TerminalSettlementRequestV3::new(input)
+            .unwrap()
+            .to_trading_principal()
+            .unwrap();
+        let mut keys = vec![Pubkey::new_unique(); ACCOUNT_COUNT];
+        keys[CUSTODY_PROGRAM] = custody;
+        keys[CUSTODY_AUTHORITY] = authority;
+        keys[RECIPIENT] = vault;
+        let owner = Pubkey::new_unique();
+        for hostile in [
+            None,
+            Some(RECIPIENT),
+            Some(CUSTODY_AUTHORITY),
+            Some(CUSTODY_PROGRAM),
+        ] {
+            let mut observed_keys = keys.clone();
+            if let Some(index) = hostile {
+                observed_keys[index] = Pubkey::new_unique();
+            }
+            let mut lamports = vec![7; ACCOUNT_COUNT];
+            let mut data = vec![vec![23; 8]; ACCOUNT_COUNT];
+            let accounts = observed_keys
+                .iter()
+                .zip(lamports.iter_mut())
+                .zip(data.iter_mut())
+                .map(|((key, lamports), data)| {
+                    AccountInfo::new(key, false, false, lamports, data, &owner, false)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                authenticate_terminal_recipient(
+                    &accounts,
+                    child,
+                    ParentAuthorityV3::CallerProgramPda
+                ),
+                if hostile.is_some() {
+                    Err(TerminalRecipientErrorV3::Vault.into())
+                } else {
+                    Ok(())
+                }
+            );
+            assert_eq!(
+                authenticate_terminal_recipient(
+                    &accounts,
+                    child,
+                    ParentAuthorityV3::EnclosingClaimsRoute
+                ),
+                Err(TerminalRecipientErrorV3::Role.into())
+            );
+            drop(accounts);
+            assert_eq!(lamports, vec![7; ACCOUNT_COUNT]);
+            assert_eq!(data, vec![vec![23; 8]; ACCOUNT_COUNT]);
+        }
+    }
+
+    #[test]
+    fn terminal_destination_role_refusal_reaches_the_named_chain_code() {
+        let mut input = request().input();
+        input.caller_role = CallerRole::Claims;
+        let external = TerminalSettlementRequestV3::new(input).unwrap();
+        // The valid Trading wire supplies the allocated mode byte; changing
+        // only the caller-role byte keeps every economic input identical.
+        let mut bytes = request().to_trading_principal().unwrap().to_bytes();
+        bytes[10] = external.to_bytes()[10];
+        assert_eq!(
+            decode_terminal_request(&bytes),
+            Err(TerminalRecipientErrorV3::Role.into())
+        );
+        let mut unknown_mode = request().to_bytes();
+        unknown_mode[11] = 2;
+        assert_eq!(
+            decode_terminal_request(&unknown_mode),
+            Err(TerminalRecipientErrorV3::Mode.into())
         );
     }
 }

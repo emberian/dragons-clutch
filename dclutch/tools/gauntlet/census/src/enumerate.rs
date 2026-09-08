@@ -2659,6 +2659,11 @@ mod native_variant_tests {
         fold_pending_constants, index_constants_in_items, index_source,
     };
     use crate::ledger::{
+        CLAIM_CHECK_V1_ACTION_OFFSET, CLAIM_CHECK_V1_AGGREGATE, CLAIM_CHECK_V1_CLOSE_BODY_RESERVED,
+        CLAIM_CHECK_V1_CLOSE_ESCROW_ACTION, CLAIM_CHECK_V1_CLOSE_ESCROW_BYTES,
+        CLAIM_CHECK_V1_HEADER_RESERVED, CLAIM_CHECK_V1_MAGIC, CLAIM_CHECK_V1_REDEEM_ACTION,
+        CLAIM_CHECK_V1_REDEEM_BODY_RESERVED, CLAIM_CHECK_V1_REDEEM_BYTES,
+        CLAIM_CHECK_V1_REDEEM_OWNER, CLAIM_CHECK_V1_SCHEMA_VERSION,
         CLAIMS_FRACTIONAL_V2_ACTION_OFFSET, CLAIMS_FRACTIONAL_V2_HEADER_RESERVED,
         CLAIMS_FRACTIONAL_V2_MAGIC, CLAIMS_FRACTIONAL_V2_REQUEST_BYTES,
         CLAIMS_FRACTIONAL_V2_SCHEMA_VERSION, CLAIMS_FRACTIONAL_V2_TAIL_RESERVED,
@@ -2791,6 +2796,112 @@ mod native_variant_tests {
         assert_eq!(
             CLAIMS_FRACTIONAL_V2_TAIL_RESERVED.end,
             integer("FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2")
+        );
+    }
+
+    #[test]
+    fn claim_check_native_envelopes_are_pinned_to_the_shipped_codec() {
+        const RELATIVE: &str = "crates/dclutch-claims/src/claim_check_request_v1.rs";
+        const BASE_RELATIVE: &str = "crates/dclutch-claims/src/claim_check_v1.rs";
+        let source =
+            include_str!("../../../../crates/dclutch-claims/src/claim_check_request_v1.rs");
+        let base_source = include_str!("../../../../crates/dclutch-claims/src/claim_check_v1.rs");
+        let file = syn::parse_file(source).expect("shipped ClaimCheck V1 codec parses");
+        let base_file = syn::parse_file(base_source).expect("shipped ClaimCheck V1 base parses");
+        let mut constants = ConstantIndex::default();
+        constants.crates.insert("dclutch_claims".into());
+        let mut base_imports = BTreeMap::new();
+        collect_imports(&base_file.items, &mut base_imports);
+        let mut pending = Vec::new();
+        index_constants_in_items(
+            &base_file.items,
+            BASE_RELATIVE,
+            "dclutch_claims",
+            &base_imports,
+            &mut constants,
+            &mut pending,
+        );
+        let mut imports = BTreeMap::new();
+        collect_imports(&file.items, &mut imports);
+        index_constants_in_items(
+            &file.items,
+            RELATIVE,
+            "dclutch_claims",
+            &imports,
+            &mut constants,
+            &mut pending,
+        );
+        fold_pending_constants(&mut constants, pending);
+
+        let integer = |name: &str| match &constants.resolve(name).expect(name).value {
+            ConstantValue::Integer(value) => usize::try_from(*value).expect(name),
+            ConstantValue::Bytes { .. } => panic!("{name} is not an integer"),
+        };
+        let magic = match &constants
+            .resolve("CLAIM_CHECK_REDEEM_MAGIC_V1")
+            .expect("claim-check redeem magic")
+            .value
+        {
+            ConstantValue::Bytes { hex, .. } => hex.clone(),
+            ConstantValue::Integer(_) => panic!("claim-check magic is not bytes"),
+        };
+        let native_magic: String = CLAIM_CHECK_V1_MAGIC
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(native_magic, magic);
+        assert_eq!(
+            usize::from(CLAIM_CHECK_V1_SCHEMA_VERSION),
+            integer("CLAIM_CHECK_WIRE_VERSION_V1")
+        );
+        assert_eq!(CLAIM_CHECK_V1_ACTION_OFFSET, integer("ACTION_OFFSET"));
+        assert_eq!(
+            CLAIM_CHECK_V1_HEADER_RESERVED.start,
+            integer("RESERVED_HEADER_OFFSET")
+        );
+        assert_eq!(
+            CLAIM_CHECK_V1_HEADER_RESERVED.end,
+            integer("REDEEM_AGGREGATE_OFFSET")
+        );
+        assert_eq!(
+            CLAIM_CHECK_V1_AGGREGATE.start,
+            integer("REDEEM_AGGREGATE_OFFSET")
+        );
+        assert_eq!(CLAIM_CHECK_V1_AGGREGATE.end, integer("REDEEM_OWNER_OFFSET"));
+        assert_eq!(
+            CLAIM_CHECK_V1_REDEEM_OWNER,
+            integer("REDEEM_OWNER_OFFSET")..integer("REDEEM_RESERVED_BODY_OFFSET")
+        );
+        assert_eq!(
+            CLAIM_CHECK_V1_REDEEM_BODY_RESERVED,
+            integer("REDEEM_RESERVED_BODY_OFFSET")..integer("REDEEM_CLAIM_CHECK_BYTES_V1")
+        );
+        assert_eq!(
+            CLAIM_CHECK_V1_CLOSE_BODY_RESERVED,
+            integer("CLOSE_RESERVED_BODY_OFFSET")..integer("CLOSE_CLAIM_CHECK_ESCROW_BYTES_V1")
+        );
+        assert_eq!(
+            CLAIM_CHECK_V1_REDEEM_BYTES,
+            integer("REDEEM_CLAIM_CHECK_BYTES_V1")
+        );
+        assert_eq!(
+            CLAIM_CHECK_V1_CLOSE_ESCROW_BYTES,
+            integer("CLOSE_CLAIM_CHECK_ESCROW_BYTES_V1")
+        );
+        let index = index_source("claim_check_request_v1", source);
+        assert_eq!(
+            index
+                .variant("ClaimCheckActionV1::Redeem")
+                .expect("Redeem discriminant")
+                .value,
+            i64::from(CLAIM_CHECK_V1_REDEEM_ACTION)
+        );
+        assert_eq!(
+            index
+                .variant("ClaimCheckActionV1::CloseEscrow")
+                .expect("CloseEscrow discriminant")
+                .value,
+            i64::from(CLAIM_CHECK_V1_CLOSE_ESCROW_ACTION)
         );
     }
 }

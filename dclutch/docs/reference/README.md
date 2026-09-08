@@ -25,10 +25,10 @@ these pages always match the source they describe. Regenerate with
 - [abi/](abi/README.md) -- byte layouts: magics, PDA seed domains, record
   widths and offsets, account tables.
 
-Current totals: **8 programs**, **162 routes**
+Current totals: **8 programs**, **163 routes**
 (**56 in the historical accepted Agave union**,
 **70 successful-binding-only**, **1 checked
-refused-only**, **0 refusal-binding-only**), **458
+refused-only**, **0 refusal-binding-only**), **466
 refusal codes**.
 
 If you'd rather start with prose, the [guides](../guides/README.md)

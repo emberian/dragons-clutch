@@ -34,7 +34,7 @@ use dclutch_claims::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody::{
-    CustodyAuthoritySeedsV1, CustodyFrameRoleV1,
+    CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyRequestLayoutV1, CustodyRequestV1,
     token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID},
 };
 use dclutch_direct_hot_program_test_support::waist;
@@ -120,6 +120,7 @@ use dclutch_trading::general_codec::Action;
 use dclutch_trading::general_config::v3::GeneralConfigV3;
 use dclutch_trading::general_config::{GENERAL_ROOT_BYTES_V2, GeneralRootV2};
 use dclutch_vm::capability_seal::{CAPABILITY_SEAL_BYTES_V1, SealedDescriptorClosureV1};
+use dclutch_vm::effect::v2::FixedRole;
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent};
@@ -3000,6 +3001,71 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         "PlaceOrder reuses the founded market's accelerator page"
     );
     assert_eq!(place.built.admitted_authorities.entries.len(), 1);
+    for invocation in &place.built.bundle.engine.invocations {
+        if invocation.resolved.role == FixedRole::Custody {
+            let request = CustodyRequestV1::decode(&invocation.request).unwrap_or_else(|error| {
+                let zero_required = [
+                    ("release-set", CustodyRequestLayoutV1::RELEASE_SET),
+                    ("market", CustodyRequestLayoutV1::MARKET),
+                    ("realm", CustodyRequestLayoutV1::REALM),
+                    ("context", CustodyRequestLayoutV1::CONTEXT),
+                    ("caller-program", CustodyRequestLayoutV1::CALLER_PROGRAM),
+                    (
+                        "parent-request-digest",
+                        CustodyRequestLayoutV1::PARENT_REQUEST_DIGEST,
+                    ),
+                ]
+                .into_iter()
+                .filter_map(|(name, offset)| {
+                    invocation
+                        .request
+                        .get(offset..offset + 32)
+                        .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
+                        .then_some(name)
+                })
+                .collect::<Vec<_>>();
+                let byte = |offset| invocation.request.get(offset).copied();
+                let u64_at = |offset| {
+                    invocation
+                        .request
+                        .get(offset..offset + 8)
+                        .and_then(|bytes| bytes.try_into().ok())
+                        .map(u64::from_le_bytes)
+                };
+                let zero_identity = |offset| {
+                    invocation
+                        .request
+                        .get(offset..offset + 32)
+                        .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
+                };
+                panic!(
+                    "PlaceOrder projected a noncanonical Custody request at route {}: {error:?}; zero required identities: {zero_required:?}; operation={:?} source-compartment={:?} destination-compartment={:?} expected={:?} resulting={:?} amount={:?} rent={:?} zero source-owner={} destination-owner={} source={} destination={} source-context={} destination-context={} mint={} token-program={} payer={} rent-refund={}",
+                    invocation.route,
+                    byte(CustodyRequestLayoutV1::OPERATION),
+                    byte(CustodyRequestLayoutV1::SOURCE_COMPARTMENT),
+                    byte(CustodyRequestLayoutV1::DESTINATION_COMPARTMENT),
+                    u64_at(CustodyRequestLayoutV1::EXPECTED_REVISION),
+                    u64_at(CustodyRequestLayoutV1::RESULTING_REVISION),
+                    u64_at(CustodyRequestLayoutV1::AMOUNT),
+                    u64_at(CustodyRequestLayoutV1::RENT_LAMPORTS),
+                    zero_identity(CustodyRequestLayoutV1::SOURCE_OWNER),
+                    zero_identity(CustodyRequestLayoutV1::DESTINATION_OWNER),
+                    zero_identity(CustodyRequestLayoutV1::SOURCE),
+                    zero_identity(CustodyRequestLayoutV1::DESTINATION),
+                    zero_identity(CustodyRequestLayoutV1::SOURCE_VAULT_CONTEXT),
+                    zero_identity(CustodyRequestLayoutV1::DESTINATION_VAULT_CONTEXT),
+                    zero_identity(CustodyRequestLayoutV1::MINT),
+                    zero_identity(CustodyRequestLayoutV1::TOKEN_PROGRAM),
+                    zero_identity(CustodyRequestLayoutV1::PAYER),
+                    zero_identity(CustodyRequestLayoutV1::RENT_REFUND),
+                )
+            });
+            assert_eq!(
+                request.realm, campaign.realm.digest,
+                "every Custody child carries the authenticated Realm content identity"
+            );
+        }
+    }
     let place_installed =
         install_absent(&mut context, &place, &[place.built.bundle.artifacts.seal]).await;
     let (place_seal, place_seal_cu) =

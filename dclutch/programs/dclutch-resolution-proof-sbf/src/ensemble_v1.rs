@@ -193,7 +193,7 @@ pub fn plan_ensemble_fold_v1(
     if source_state.market() != request.market
         || source_state.generation() != request.generation
         || source_state.material_id() != source.material_id
-        || request.terminal_sequence == 0
+        || source_state.next_terminal_sequence().ok() != Some(request.terminal_sequence)
     {
         return Err(EnsembleFoldErrorV1::Request);
     }

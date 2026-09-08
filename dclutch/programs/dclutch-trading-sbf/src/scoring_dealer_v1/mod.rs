@@ -1,8 +1,8 @@
-//! The scoring Dealer's four top-level routes: found, quote, fill, withdraw.
+//! The scoring Dealer's top-level routes: found, quote, fill, withdraw, redeem.
 //!
-//! One participant, one sealed rule (`ScoringRuleV1.lean`), four permissioned
+//! One participant, one sealed rule (`ScoringRuleV1.lean`), authenticated
 //! movements. Every route is selected by its magic alone (`DCLSFDR1`,
-//! `DCLSQTR1`, `DCLSFLR1`, `DCLSWDR1`), parses a fixed PREFIX of accounts the
+//! `DCLSQTR1`, `DCLSFLR1`, `DCLSWDR1`, `DCLSRDR1`), parses a fixed PREFIX of accounts the
 //! Lean states (`ScoringRuleAbiV1.foundFrame` ...), and hands the child
 //! WINDOWS that follow it -- exact Custody and Claims frames, in a stated
 //! order -- to the child programs, which refuse their own frames by their own
@@ -65,11 +65,14 @@ pub mod fill;
 pub mod found;
 /// `DealerQuote`.
 pub mod quote;
+/// Terminal fund Position redemption.
+pub mod redeem;
 /// `DealerWithdraw`.
 pub mod withdraw;
 
 pub use dclutch_trading::scoring_rule::requests_v1::{
-    is_dealer_fill_v1, is_dealer_found_v1, is_dealer_quote_v1, is_dealer_withdraw_v1,
+    is_dealer_fill_v1, is_dealer_found_v1, is_dealer_quote_v1, is_dealer_redeem_v1,
+    is_dealer_withdraw_v1,
 };
 
 /// The scoring Dealer's refusals: Trading band 4, sub-band `0x100`.
@@ -150,6 +153,12 @@ pub enum ScoringDealerErrorV1 {
     /// the par the Hoard receives. Ordinary excludes decision 0025's failure
     /// coordinate, which the basis record's own `refunds_on_failure` names.
     OutcomeCount = 0x421B,
+    /// Redemption must credit the same fund's TradingPrincipal vault.
+    RedeemDestination = 0x421C,
+    /// Terminal child context disagrees with its fund and selected release.
+    RedeemContext = 0x421D,
+    /// Accepted terminal payout differs from the exact vault delta.
+    RedeemCashPoststate = 0x421E,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -183,7 +192,10 @@ dclutch_refusal_registry::pin_refusal_band!(
         Quote,
         Basis,
         ClaimUnit,
-        OutcomeCount
+        OutcomeCount,
+        RedeemDestination,
+        RedeemContext,
+        RedeemCashPoststate
     ]
 );
 

@@ -1,0 +1,250 @@
+{
+  "format": "dclutch-dealer-terminal-native-composition-v1",
+  "evidence_level": "native diagnostic archive plus owned source overlay; no SBF or validator execution",
+  "archive_base_commit": "f3f20f42afe12121665fee1e6fef5cacb75184a7",
+  "remote_source": "/tank/dclutch-c16c-repo/dealer-completion-20260908/candidate",
+  "cargo_target": "/tank/dclutch-c16c-repo/dealer-completion-20260908/candidate/target",
+  "source_sha256": {
+    "apps/dclutch-web/lib/explorer/accountRecords.ts": "ac160333425fe442ec44a609123ef695df4bf5b79031eac64a71c6f0dc07487b",
+    "crates/dclutch-claims/src/terminal_settlement_v3.rs": "64d92384511161c71717603e3c865f9f304cc2c7235ab41735b99b74d70a27a5",
+    "crates/dclutch-operator/src/wallet_terminal_payout/wire.rs": "b5604fdd2f356368ff7d245a143ec4ff8a20b56d9da21e49647aceedbbbeafed",
+    "crates/dclutch-operator/src/wallet_terminal_payout_v3.rs": "a9dc348f30a682ab2720d655549844928de51a6cb5dfd6c1a7cfddcdcb226eb8",
+    "crates/dclutch-trading/src/scoring_rule/generated_scoring_rule.rs": "015290d36f7d488a527938b2d84482b45a1ed1df6b12878d7c3fd30979d59464",
+    "crates/dclutch-trading/src/scoring_rule/requests_v1.rs": "c72d045cb9b22dbd8da06f67845ff054e0883cfc541f664c91878cb6a82b90ba",
+    "formal/dclutch-semantics/DClutchSemantics/ScoringRuleAbiV1.lean": "0a4a9a8aac5d4d8f900140f55b1074f9b0e6a0287c6d65240ef55a2f9e6d9976",
+    "formal/dclutch-semantics/EmitScoringRuleV1Rust.lean": "184c2b7fef22d4214d82df542c0bddec1088763b949c42fc1f12b228525ad1f0",
+    "formal/dclutch-semantics/EmitScoringRuleV1Ts.lean": "f34a0157a398486058d26dc955562b914a29db7960afe78084df76e91429a417",
+    "packages/dclutch-sdk/lib/generated/scoringRuleV1.ts": "f19295ae3f54e0f58f39056fbe9d3fee28f204e94f6b5beb611416d12f038936",
+    "programs/dclutch-claims-sbf/src/rational_terminal_v3.rs": "479b2f66093dbd3c5a8b716829fd860317bb471439ea46bfc88469b0b5c7e932",
+    "programs/dclutch-claims-sbf/src/terminal_settlement_v3.rs": "a85ef3499eb252c5223bac8b155c8abb8c1cd20f605edf67c33a050e26bde95f",
+    "programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs": "68659179d34eadc4def919c96622420cd08bb48ea1c2055d2c7748b2f9882690",
+    "programs/dclutch-trading-sbf/src/scoring_dealer_v1/redeem.rs": "68d1a97ae60f237ba3f614612a3e56d82aaae8a6e92c9f01f114049e1313787d",
+    "tools/local-validator/bootstrap/successor/src/scoring_dealer.rs": "6bccf55a83fd9e2c1cb4ee520a25001d40af6fa8d652bfe67e310ec101332e66"
+  },
+  "initial_focused_rows": [
+    {
+      "name": "native-check",
+      "status": 0,
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-trading-sbf",
+        "-p",
+        "dclutch-claims-sbf",
+        "-p",
+        "dclutch-local-successor-bootstrap"
+      ]
+    },
+    {
+      "name": "claims-codec",
+      "status": 0,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-claims",
+        "--lib",
+        "terminal_settlement_v3::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "dealer-codec",
+      "status": 0,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-trading",
+        "--lib",
+        "scoring_rule::requests_v1::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "claims-destination",
+      "status": 0,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-claims-sbf",
+        "--lib",
+        "terminal_settlement_v3::recipient_tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "dealer-redemption",
+      "status": 0,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-trading-sbf",
+        "--lib",
+        "scoring_dealer_v1::redeem::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "operator-trading",
+      "status": 0,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-operator",
+        "--lib",
+        "wallet_terminal_payout_v3::tests::trading_terminal_",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "operator-wallet-control",
+      "status": 0,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-operator",
+        "--lib",
+        "wallet_terminal_payout_v3::tests::builder_emits_exact_wallet_frame_for_positive_and_zero_payouts",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "operator-bond-control",
+      "status": 0,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-operator",
+        "--lib",
+        "wallet_terminal_payout_v3::tests::the_bond_tail_is_appended_in_order_and_draws_the_kernel_share",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "successor-origin-flags",
+      "status": 0,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "dclutch-local-successor-bootstrap",
+        "--bin",
+        "dclutch-local-successor-bootstrap",
+        "scoring_dealer::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    }
+  ],
+  "final_guard_rows": [
+    {
+      "name": "native-check",
+      "exit": 0,
+      "expected_refutation": false,
+      "admitted": true,
+      "log_sha256": "803f90f3dfbb215a7c9d71c851700ec2be50c87b5cf8d0276948721688c7a9a7"
+    },
+    {
+      "name": "successor-flags",
+      "exit": 0,
+      "expected_refutation": false,
+      "admitted": true,
+      "log_sha256": "b1996c59209003274f27633458d7e4b2fae30419bd872fa0baefd3e6dd110733"
+    },
+    {
+      "name": "claims-vault-red",
+      "exit": 101,
+      "expected_refutation": true,
+      "admitted": true,
+      "log_sha256": "d00d88ef904c31a96f0f1c4f85b0a0609a494ebd66f07fbfdc18e3134ab80f68"
+    },
+    {
+      "name": "claims-vault-restored",
+      "exit": 0,
+      "expected_refutation": false,
+      "admitted": true,
+      "log_sha256": "161dee5b8c1a32d9f9c737bebe8acd430b45ec3073ba6897e3bce73e301a9a0c"
+    },
+    {
+      "name": "dealer-owner-red",
+      "exit": 101,
+      "expected_refutation": true,
+      "admitted": true,
+      "log_sha256": "df207eee5cea8da5a8ca3d78f0af8bb5eccd80af7c60734a341be73db30e973f"
+    },
+    {
+      "name": "dealer-owner-restored",
+      "exit": 0,
+      "expected_refutation": false,
+      "admitted": true,
+      "log_sha256": "8fa609dac12f904bdd6cdaabc3fe8a8249a6c24789f794cdac50d28ffd61aff9"
+    },
+    {
+      "name": "native-beneficiary-red",
+      "exit": 101,
+      "expected_refutation": true,
+      "admitted": true,
+      "log_sha256": "5e030b06de2f3596cb16ad5b77fffb3caf1e29e0bcad5c916bbe4b9fb8364e36"
+    },
+    {
+      "name": "native-beneficiary-restored",
+      "exit": 0,
+      "expected_refutation": false,
+      "admitted": true,
+      "log_sha256": "476311014a15735b15b53419496befe340f2a7a4a4ee944e9d50c225e1639427"
+    },
+    {
+      "name": "census",
+      "exit": 0,
+      "expected_refutation": false,
+      "admitted": true,
+      "log_sha256": "63cff45eea6e95fbe706942d47ce5dc42d3af648201139d644bfedbfe7295757"
+    }
+  ],
+  "final_successor_test_count": 16,
+  "web": {
+    "checkout": "/private/tmp/dclutch-stranger-op-check.D4loTX/tree",
+    "test": "lib/explorer/scoringRecords.test.ts",
+    "passed": 3,
+    "account_records_sha256": "ac160333425fe442ec44a609123ef695df4bf5b79031eac64a71c6f0dc07487b",
+    "generated_scoring_sha256": "f19295ae3f54e0f58f39056fbe9d3fee28f204e94f6b5beb611416d12f038936"
+  },
+  "never_ran": [
+    "SBF link/frame/CU validation for this slice",
+    "real-validator terminal redemption",
+    "real-validator hostile rollback",
+    "fresh exact-current eight-program cohort"
+  ]
+}

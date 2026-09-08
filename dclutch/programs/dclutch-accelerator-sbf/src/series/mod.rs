@@ -13,29 +13,37 @@ pub mod evaluator;
 /// Compile-time selected, generator-produced release bundle boundary.
 pub mod release;
 
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_market::execution_strategy::{
-    shadow_digest_v3::ShadowRuntimeObservationV3,
-    shadow_v3::{ShadowAckV3, ShadowRequestV3},
+use dclutch_market::{
+    capability_program::{CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1},
+    execution_strategy::{
+        shadow_digest_v3::ShadowRuntimeObservationV3,
+        shadow_v3::{ShadowAckV3, ShadowRequestV3},
+    },
 };
 use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3,
     authenticate_content_addressed_product_runtime_v3,
 };
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
+    ActivatedExecutionReleaseSetViewV1,
+    activation_auth_v1::{
+        authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
+    },
+    release_set::ExecutionRoleV1,
+};
 use dclutch_trading::series::{
     AuthenticatedProductProjectionV2,
-    generated::{
-        SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
-        SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
-    },
     request::{SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3},
 };
 use dclutch_trading::shadow_accelerator_auth::{
     AuthenticatedShadowAcceleratorInvocationV4, ShadowAcceleratorAuthErrorV4,
     authenticate_shadow_accelerator_invocation_v4,
+};
+use dclutch_trading_sbf::series::effect_v4::SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4;
+use dclutch_trading_sbf::series::runtime_registers_v1::{
+    SeriesRuntimeBankContextV1, SeriesRuntimeChildProgramsV1, seed_series_derived_scalars_v1,
 };
 use dclutch_vm::account_profile::{
     AccountObservationV1,
@@ -43,17 +51,16 @@ use dclutch_vm::account_profile::{
 };
 use solana_program::{
     account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash, msg,
-    program::set_return_data, program_error::ProgramError, pubkey::Pubkey, sysvar::SysvarSerialize,
+    program::set_return_data, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
+    sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::system_program;
+use solana_sdk_ids::bpf_loader_upgradeable;
 
 use self::{
     evaluator::{
         SERIES_CLOCK_COORDINATE_V4, SERIES_LINKED_BASIS_STAGING_COORDINATE_V4,
-        SERIES_OCCURRENCE_RAW_COORDINATE_V4, SERIES_OCCURRENCE_STAGING_COORDINATE_V4,
-        SERIES_TEMPLATE_RAW_COORDINATE_V4, SERIES_TEMPLATE_STAGING_COORDINATE_V4,
-        SERIES_TICKET_RAW_COORDINATE_V4, SERIES_TICKET_STAGING_COORDINATE_V4,
-        SeriesShadowAuthenticatedFactsV4, SeriesShadowEvaluationV4, evaluate_series_shadow_aot_v4,
+        SERIES_TEMPLATE_RAW_COORDINATE_V4, SeriesShadowAuthenticatedFactsV4,
+        SeriesShadowEvaluationV4, evaluate_series_shadow_aot_v4,
     },
     release::{SelectedSeriesShadowReleaseV1, selected_series_shadow_release_v1},
 };
@@ -66,6 +73,14 @@ const PRODUCT_STAGING_COORDINATE: usize = 26;
 const RESULT_DOMAIN_RAW_COORDINATE: usize = 27;
 const RESULT_DOMAIN_STAGING_COORDINATE: usize = 28;
 const PORTFOLIO_STAGING_COORDINATE: usize = 30;
+const CORE_PROGRAM_COORDINATE: usize = evaluator::SERIES_SHADOW_FOUND_ACCOUNT_START_V4 + 25;
+const CORE_PROGRAMDATA_COORDINATE: usize = CORE_PROGRAM_COORDINATE + 1;
+const CORE_FOUND_SUFFIX_START: usize = evaluator::SERIES_SHADOW_FOUND_ACCOUNT_START_V4
+    + SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4 as usize;
+const CLAIMS_PROGRAM_COORDINATE: usize = CORE_FOUND_SUFFIX_START + 5;
+const CLAIMS_PROGRAMDATA_COORDINATE: usize = CLAIMS_PROGRAM_COORDINATE + 1;
+const CUSTODY_PROGRAM_COORDINATE: usize = CORE_FOUND_SUFFIX_START + 7;
+const CUSTODY_PROGRAMDATA_COORDINATE: usize = CUSTODY_PROGRAM_COORDINATE + 1;
 
 /// Stable physical refusal from the Series Shadow SBF adapter.
 #[repr(u32)]
@@ -197,7 +212,6 @@ fn evaluate_authenticated_invocation(
     {
         return Err(SeriesShadowSbfErrorV4::Runtime);
     }
-    authenticate_series_records(runtime, invocation.registry().key, series_request)?;
     let product_runtime = authenticate_product(runtime, invocation.registry().key)?;
     let product = AuthenticatedProductProjectionV2::new(
         core_content_id(
@@ -219,6 +233,14 @@ fn evaluate_authenticated_invocation(
     let now_slot = Clock::from_account_info(account(runtime, SERIES_CLOCK_COORDINATE_V4)?)
         .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?
         .slot;
+    let rent = Rent::from_account_info(account(
+        runtime,
+        evaluator::SERIES_RENT_SYSVAR_COORDINATE_V4,
+    )?)
+    .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
+    let root_header = authenticate_root_header(invocation, runtime, request)?;
+    let (core_program, child_programs) =
+        authenticate_selected_programs(invocation, runtime, root_header)?;
 
     let runtime_data = runtime
         .iter()
@@ -237,7 +259,13 @@ fn evaluate_authenticated_invocation(
         .prestate()
         == AccountPrestateV2::AdapterAuthenticatedVariableData;
     let projections = LogicalProjectionKeysV4 {
-        config: series_request.template().to_bytes(),
+        config: hash(
+            runtime_data
+                .get(SERIES_TEMPLATE_RAW_COORDINATE_V4)
+                .ok_or(SeriesShadowSbfErrorV4::Runtime)?
+                .as_ref(),
+        )
+        .to_bytes(),
         product: product_runtime
             .runtime
             .product_record
@@ -294,12 +322,18 @@ fn evaluate_authenticated_invocation(
                 privileges.executable(),
             )
         };
+        let transcript_data: &[u8] =
+            if current.executable || current.owner == &bpf_loader_upgradeable::ID {
+                &[]
+            } else {
+                data.as_ref()
+            };
         profile_observations.push(profile_observation);
         transcript_observations.push(ShadowRuntimeObservationV3 {
             key: *key,
             owner: current.owner.to_bytes(),
             lamports: current.lamports(),
-            data: data.as_ref(),
+            data: transcript_data,
             signer: false,
             writable: false,
             executable: current.executable,
@@ -308,12 +342,42 @@ fn evaluate_authenticated_invocation(
     invocation
         .validate_runtime_transcript(&transcript_observations)
         .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
+    let mut derived_scalars = vec![0; evaluator::SERIES_SHADOW_SCALAR_COUNT_V4];
+    let seeded = seed_series_derived_scalars_v1(
+        &SeriesRuntimeBankContextV1 {
+            trading_program: *invocation.trading_program().key,
+            core_program,
+            registry_program: *invocation.registry().key,
+            parent_root: *account(runtime, 0)?.key,
+            config_body: profile_observations
+                .get(CONFIG_COORDINATE)
+                .ok_or(SeriesShadowSbfErrorV4::Runtime)?
+                .data(),
+            child_programs: Some(child_programs),
+        },
+        root_header.selection().kind().to_bytes(),
+        u32::from(series_request.action() as u8),
+        request.family_request,
+        &product_runtime,
+        &rent,
+        &profile_observations,
+        &mut derived_scalars,
+        now_slot,
+    )
+    .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
+    if !seeded {
+        return Err(SeriesShadowSbfErrorV4::Runtime);
+    }
     evaluate_series_shadow_aot_v4(SeriesShadowEvaluationV4 {
         shadow_request: instruction_data,
         bundle: selected.bundle,
         profile_observations: &profile_observations,
         transcript_observations: &transcript_observations,
-        authenticated_facts: SeriesShadowAuthenticatedFactsV4 { product, now_slot },
+        authenticated_facts: SeriesShadowAuthenticatedFactsV4 {
+            product,
+            now_slot,
+            derived_scalars,
+        },
     })
     .map_err(|_| SeriesShadowSbfErrorV4::Runtime)
 }
@@ -378,79 +442,81 @@ fn authenticate_product<'accounts, 'info>(
     .map_err(|_| SeriesShadowSbfErrorV4::FinalizedRecord)
 }
 
-fn authenticate_series_records(
+fn authenticate_root_header(
+    invocation: &AuthenticatedShadowAcceleratorInvocationV4<'_, '_, '_>,
     runtime: &[AccountInfo<'_>],
-    registry: &Pubkey,
-    request: SeriesActionRequestV3<'_>,
-) -> Result<(), SeriesShadowSbfErrorV4> {
-    let occurrence = request
-        .occurrence()
-        .ok_or(SeriesShadowSbfErrorV4::FinalizedRecord)?;
-    let ticket = request
-        .ticket()
-        .ok_or(SeriesShadowSbfErrorV4::FinalizedRecord)?;
-    for (raw_coordinate, staging_coordinate, schema, digest) in [
-        (
-            SERIES_TEMPLATE_RAW_COORDINATE_V4,
-            SERIES_TEMPLATE_STAGING_COORDINATE_V4,
-            SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
-            request.template().to_bytes(),
-        ),
-        (
-            SERIES_OCCURRENCE_RAW_COORDINATE_V4,
-            SERIES_OCCURRENCE_STAGING_COORDINATE_V4,
-            SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
-            occurrence.to_bytes(),
-        ),
-        (
-            SERIES_TICKET_RAW_COORDINATE_V4,
-            SERIES_TICKET_STAGING_COORDINATE_V4,
-            SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
-            ticket.to_bytes(),
-        ),
-    ] {
-        authenticate_finalized_record(
-            registry,
-            account(runtime, raw_coordinate)?,
-            account(runtime, staging_coordinate)?,
-            schema,
-            digest,
-        )?;
+    request: ShadowRequestV3<'_>,
+) -> Result<CapabilityRootHeaderV1, SeriesShadowSbfErrorV4> {
+    let root = account(runtime, 0)?;
+    let data = root
+        .try_borrow_data()
+        .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
+    let header = CapabilityRootHeaderV1::decode(
+        data.get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .ok_or(SeriesShadowSbfErrorV4::Runtime)?,
+    )
+    .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
+    if root.key.to_bytes() != request.root.to_bytes()
+        || root.owner != invocation.trading_program().key
+        || header.release_set().to_bytes() != request.release_set.to_bytes()
+    {
+        return Err(SeriesShadowSbfErrorV4::Runtime);
     }
-    Ok(())
+    Ok(header)
 }
 
-fn authenticate_finalized_record(
-    registry: &Pubkey,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-    schema: [u8; 32],
-    digest: [u8; 32],
-) -> Result<(), SeriesShadowSbfErrorV4> {
-    let expected_raw =
-        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], registry).0;
-    let expected_staging =
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], registry).0;
-    let data = raw
+fn authenticate_selected_programs(
+    invocation: &AuthenticatedShadowAcceleratorInvocationV4<'_, '_, '_>,
+    runtime: &[AccountInfo<'_>],
+    header: CapabilityRootHeaderV1,
+) -> Result<(Pubkey, SeriesRuntimeChildProgramsV1), SeriesShadowSbfErrorV4> {
+    let activation_data = invocation
+        .activation()
         .try_borrow_data()
-        .map_err(|_| SeriesShadowSbfErrorV4::FinalizedRecord)?;
-    if raw.key != &expected_raw
-        || raw.owner != registry
-        || raw.is_signer
-        || raw.is_writable
-        || raw.executable
-        || hash(&data).to_bytes() != digest
-        || !funded_rent_persists_v1(raw.lamports())
-        || staging.key != &expected_staging
-        || staging.owner != &system_program::ID
-        || staging.is_signer
-        || staging.is_writable
-        || staging.executable
-        || staging.data_len() != 0
-    {
-        return Err(SeriesShadowSbfErrorV4::FinalizedRecord);
-    }
-    Ok(())
+        .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
+        .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
+    authenticate_activation_cache_identity_v1(
+        invocation.registry(),
+        invocation.activation(),
+        &header.release_set().to_bytes(),
+        activated,
+    )
+    .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
+    let core = authenticate_activated_role_in_frame_v1(
+        invocation.activation(),
+        activated,
+        ExecutionRoleV1::Core,
+        account(runtime, CORE_PROGRAM_COORDINATE)?,
+        account(runtime, CORE_PROGRAMDATA_COORDINATE)?,
+    )
+    .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?
+    .program()
+    .to_bytes();
+    let claims = authenticate_activated_role_in_frame_v1(
+        invocation.activation(),
+        activated,
+        ExecutionRoleV1::Claims,
+        account(runtime, CLAIMS_PROGRAM_COORDINATE)?,
+        account(runtime, CLAIMS_PROGRAMDATA_COORDINATE)?,
+    )
+    .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?
+    .program()
+    .to_bytes();
+    let custody = authenticate_activated_role_in_frame_v1(
+        invocation.activation(),
+        activated,
+        ExecutionRoleV1::Custody,
+        account(runtime, CUSTODY_PROGRAM_COORDINATE)?,
+        account(runtime, CUSTODY_PROGRAMDATA_COORDINATE)?,
+    )
+    .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?
+    .program()
+    .to_bytes();
+    Ok((
+        Pubkey::new_from_array(core),
+        SeriesRuntimeChildProgramsV1 { claims, custody },
+    ))
 }
 
 fn account<'accounts, 'info>(
@@ -495,6 +561,30 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn config_projection_uses_registry_raw_digest_not_template_domain_identity() {
+        let template = dclutch_trading::series::generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let registry_digest = hash(&template).to_bytes();
+        let template_identity = dclutch_trading::series::template_content_id(&template)
+            .expect("canonical Template identity")
+            .to_bytes();
+        assert_ne!(registry_digest, template_identity);
+        let projections = LogicalProjectionKeysV4 {
+            config: registry_digest,
+            product: [3; 32],
+            portfolio: [4; 32],
+            linked_basis: [5; 32],
+        };
+        assert_eq!(
+            *logical_projection_key(
+                CONFIG_COORDINATE,
+                &Pubkey::new_from_array(template_identity),
+                &projections,
+            ),
+            registry_digest,
+        );
     }
 
     #[test]

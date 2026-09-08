@@ -105,13 +105,14 @@ use dclutch_source::resolution::{
 use dclutch_source::{
     CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
     ENSEMBLE_FOLD_RECEIPT_V1_BYTES, EnsembleFoldReceiptV1, EnsembleSpecV1,
-    PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
-    RECOVERY_POLICY_SCHEMA_ID_V2, RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1, RecoveryAttemptV2,
-    RecoveryPolicyV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
-    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1,
-    SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
-    WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
+    EnsembleTerminalCapitalPlanV1, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
+    RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1, RecoveryAttemptV2, RecoveryPolicyV2,
+    RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
+    SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2,
+    SourceSpecV1, StatisticKind, StatisticSpecV1, WINDOW_SPEC_SCHEMA_ID_V1, WindowKind,
+    WindowSpecV1,
 };
 use solana_account::Account;
 use solana_program::clock::Clock;
@@ -901,6 +902,7 @@ fn venue_release(
 struct SourceGraph {
     material: RecordPair,
     material_id: [u8; 32],
+    material_value: SourceMaterialV3,
     spec: RecordPair,
     spec_id: [u8; 32],
     provider: RecordPair,
@@ -1260,6 +1262,7 @@ fn source_graph(
     SourceGraph {
         material,
         material_id: material_digest,
+        material_value,
         spec,
         spec_id: spec_digest,
         provider,
@@ -1730,10 +1733,23 @@ fn fixture_full(
     )
     .expect("fresh primary Source state")
     .state();
-    test.add_account(
-        source_state,
-        protocol_account(PROGRAM_ID, fresh.to_bytes().to_vec()),
-    );
+    let mut source_account = protocol_account(PROGRAM_ID, fresh.to_bytes().to_vec());
+    if let Some(ensemble) = graph.ensemble {
+        let rent = Rent::default();
+        let terminal_capital = EnsembleTerminalCapitalPlanV1::for_material(
+            graph.material_value,
+            ensemble.policy_value.attempt_count(),
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            rent.minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+        )
+        .expect("the active Ensemble fixture carries its exact Creation reserve");
+        source_account.lamports = source_account
+            .lamports
+            .checked_add(terminal_capital.source_creation_reserve_lamports())
+            .expect("fixture Source balance");
+    }
+    test.add_account(source_state, source_account);
 
     // The certificate address is the Resolution role's existing namespace, keyed
     // by the terminal's own wire tag and the sequence. Success and failure are
@@ -1751,14 +1767,16 @@ fn fixture_full(
             &PROGRAM_ID,
         )
         .0;
-        test.add_account(
-            account_key,
-            Account::new(
-                Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
-                0,
-                &system_program::ID,
-            ),
-        );
+        if graph.ensemble.is_none() {
+            test.add_account(
+                account_key,
+                Account::new(
+                    Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+                    0,
+                    &system_program::ID,
+                ),
+            );
+        }
         if kind == RESOLUTION_SUCCESS_KIND {
             certificate = account_key;
         }
@@ -4607,6 +4625,23 @@ async fn captured_ensemble_fragments_fold_then_reclaim_the_vacant_member_seat() 
     let captor_one_before = lamports_of(&mut context, captor_one).await;
     let seat_two_before = lamports_of(&mut context, seat_two).await;
     let beneficiary_before = lamports_of(&mut context, fixture.rent_beneficiary).await;
+    let source_before = lamports_of(&mut context, fixture.source_state).await;
+    let worker_before = lamports_of(&mut context, fixture.worker.pubkey()).await;
+    let receipt_address = fixture.ensemble.as_ref().expect("ensemble world").receipt;
+    assert_eq!(
+        lamports_of(
+            &mut context,
+            fixture.certificate_of(RESOLUTION_SUCCESS_KIND)
+        )
+        .await,
+        0,
+        "the terminal certificate is not independently prepaid"
+    );
+    assert_eq!(
+        lamports_of(&mut context, receipt_address).await,
+        0,
+        "the fold receipt is not independently prepaid"
+    );
 
     submit_recorded(
         &mut context,
@@ -4621,6 +4656,21 @@ async fn captured_ensemble_fragments_fold_then_reclaim_the_vacant_member_seat() 
         SourceResolutionStateV2::decode(&record_bytes(&mut context, fixture.source_state).await)
             .expect("folded Source state decodes");
     assert_eq!(source.phase(), SourceResolutionPhaseV1::Resolved);
+    let source_after = lamports_of(&mut context, fixture.source_state).await;
+    let terminal_output_rent = Rent::default()
+        .minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2)
+        .checked_add(Rent::default().minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES))
+        .expect("bounded terminal output rent");
+    assert_eq!(
+        source_before - source_after,
+        terminal_output_rent,
+        "the Source reserve funds the certificate and fold receipt"
+    );
+    assert_eq!(
+        lamports_of(&mut context, fixture.worker.pubkey()).await,
+        worker_before,
+        "the fold worker does not fund deferred protocol outputs"
+    );
     let certificate = ResolutionCertificateV2::decode(
         &record_bytes(
             &mut context,

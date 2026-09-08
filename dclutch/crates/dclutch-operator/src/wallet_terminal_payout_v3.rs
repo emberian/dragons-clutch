@@ -34,8 +34,8 @@ use dclutch_claims::{
     terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
         TERMINAL_SETTLEMENT_POST_RESOURCE_DOMAIN_V3, TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3,
-        TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3, TerminalSettlementReceiptV3,
-        TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
+        TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3, TerminalRecipientV3,
+        TerminalSettlementReceiptV3, TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
     },
 };
 use dclutch_core_contract::ContentId;
@@ -247,8 +247,10 @@ pub struct WalletTerminalPayoutReportV3 {
     pub custody_request_digest: [u8; 32],
     /// Exact positive-payout Custody request, absent for a zero payout.
     pub custody_request: Option<CustodyRequestV1>,
-    /// Sole wallet signer required by the instruction.
+    /// Position owner; a wallet for External mode or the enclosing Trading fund.
     pub owner: Pubkey,
+    /// Authenticated caller authority, program and ProgramData at coordinates 0, 14 and 15.
+    pub caller_frame: [Pubkey; 3],
     /// Exact physical route used to derive the instruction and postcondition.
     pub route: WalletTerminalPayoutRouteV3,
     /// Exact aggregate bytes used to build the request.
@@ -335,6 +337,38 @@ pub enum WalletTerminalPayoutErrorV3 {
 pub fn build_wallet_terminal_payout_v3(
     input: WalletTerminalPayoutInputV3<'_>,
 ) -> Result<WalletTerminalPayoutReportV3, WalletTerminalPayoutErrorV3> {
+    build_terminal_payout_v3(input, None)
+}
+
+/// Activated Trading program that signs the terminal child's caller PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TradingTerminalCallerV3 {
+    /// Registry-selected Trading program.
+    pub program: Pubkey,
+    /// Its current ProgramData, authenticated by Claims at execution.
+    pub programdata: Pubkey,
+}
+
+/// Terminal child construction for a Trading-owned fund. Claims owns the same
+/// evaluator, rounding and poststate checker used by the wallet entry point.
+/// The enclosing Trading parent must authenticate the fund and these programs.
+pub fn build_trading_terminal_payout_v3(
+    input: WalletTerminalPayoutInputV3<'_>,
+    caller: TradingTerminalCallerV3,
+) -> Result<WalletTerminalPayoutReportV3, WalletTerminalPayoutErrorV3> {
+    if caller.program == Pubkey::default()
+        || caller.programdata == Pubkey::default()
+        || input.parent_context != input.owner
+    {
+        return Err(WalletTerminalPayoutErrorV3::Route);
+    }
+    build_terminal_payout_v3(input, Some(caller))
+}
+
+fn build_terminal_payout_v3(
+    input: WalletTerminalPayoutInputV3<'_>,
+    trading: Option<TradingTerminalCallerV3>,
+) -> Result<WalletTerminalPayoutReportV3, WalletTerminalPayoutErrorV3> {
     validate_snapshot(input.observation)?;
     let route = input.route;
     let market = LiabilityBasisMarketViewV2::decode(input.aggregate_bytes)
@@ -348,13 +382,37 @@ pub fn build_wallet_terminal_payout_v3(
     let basis = ProductBasisV3::decode(input.product_basis_bytes)
         .map_err(WalletTerminalPayoutErrorV3::ProductBasis)?;
     let refunds = basis.refunds_on_failure();
-    let escrow = validate_claims_route(input, market, position, refunds)?;
+    let native_beneficiary = if trading.is_some() {
+        input.owner
+    } else {
+        input.recipient_owner
+    };
+    let escrow = validate_claims_route(input, market, position, refunds, native_beneficiary)?;
+    if trading.is_some() {
+        let seeds = CustodyVaultSeedsV1::new(
+            market.logical_market,
+            market.release_set,
+            input.owner,
+            CompartmentV1::TradingPrincipal,
+        );
+        if route.recipient
+            != Pubkey::find_program_address(&seeds.as_slices(), &route.custody_program).0
+            || input.recipient_owner != route.custody_authority.to_bytes()
+        {
+            return Err(WalletTerminalPayoutErrorV3::Custody);
+        }
+    }
+    let caller_role = if trading.is_some() {
+        CallerRole::Trading
+    } else {
+        CallerRole::Claims
+    };
     let founder_bond = founder_bond_plan(input, market, escrow)?;
     let founder_bond_draw = founder_bond.map_or(0, FounderBondDrawPlanV1::draw);
     let replay = validate_custody_route(input, market)?;
 
     let request = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
-        caller_role: CallerRole::Claims,
+        caller_role,
         release_set: market.release_set,
         market: market.logical_market,
         realm: market.realm_id,
@@ -382,6 +440,13 @@ pub fn build_wallet_terminal_payout_v3(
         transfer_index: input.transfer_index,
     })
     .map_err(WalletTerminalPayoutErrorV3::TerminalSettlement)?;
+    let request = if trading.is_some() {
+        request
+            .to_trading_principal()
+            .map_err(WalletTerminalPayoutErrorV3::TerminalSettlement)?
+    } else {
+        request
+    };
     let request_bytes = request.to_bytes();
     let request_digest = hash(&request_bytes).to_bytes();
     let product_width = usize::try_from(basis.basis_width())
@@ -413,7 +478,7 @@ pub fn build_wallet_terminal_payout_v3(
             position_bytes: input.position_bytes,
             owner: input.owner,
             request_id: request_digest,
-            caller_role: CallerRole::Claims,
+            caller_role,
             terminal: input.terminal,
             claim_index: input.claim_index,
             quantity: input.quantity,
@@ -448,7 +513,23 @@ pub fn build_wallet_terminal_payout_v3(
         signed_packet_digest,
         payout,
     )?;
-    let accounts = payout_accounts(route, Pubkey::new_from_array(input.owner), custody_caller);
+    let mut accounts = payout_accounts(route, Pubkey::new_from_array(input.owner), custody_caller);
+    if let Some(caller) = trading {
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(market.release_set).map_err(|_| WalletTerminalPayoutErrorV3::Route)?,
+            market.logical_market,
+            ExecutionRoleV1::Trading,
+            input.parent_context,
+            request_digest,
+        )
+        .map_err(WalletTerminalPayoutErrorV3::ReleaseSet)?;
+        accounts[0] = AccountMeta::new_readonly(
+            Pubkey::find_program_address(&seeds.as_slices(), &caller.program).0,
+            true,
+        );
+        accounts[14] = AccountMeta::new_readonly(caller.program, false);
+        accounts[15] = AccountMeta::new_readonly(caller.programdata, false);
+    }
     // Thirty-six accounts, or thirty-nine with the trailing bond tail; the two
     // widths the deployed program admits and no third.
     let expected_accounts = if route.founder_bond.is_some() {
@@ -459,7 +540,9 @@ pub fn build_wallet_terminal_payout_v3(
     if accounts.len() != expected_accounts {
         return Err(WalletTerminalPayoutErrorV3::Route);
     }
+    let caller_frame = [accounts[0].pubkey, accounts[14].pubkey, accounts[15].pubkey];
     Ok(WalletTerminalPayoutReportV3 {
+        caller_frame,
         instruction: Instruction {
             program_id: route.claims_program,
             accounts,
@@ -578,6 +661,11 @@ pub fn compile_wallet_terminal_payout_v0(
     lookup_table: &ObservedAccount,
 ) -> Result<WalletTerminalPayoutTransactionPlanV3, WalletTerminalPayoutErrorV3> {
     validate_snapshot(report.observation)?;
+    if report.request.recipient_mode() != TerminalRecipientV3::External
+        || report.request.input().caller_role != CallerRole::Claims
+    {
+        return Err(WalletTerminalPayoutErrorV3::Route);
+    }
     if lookup_table.observation != report.observation
         || lookup_table.owner != lookup_table_program::id()
         || lookup_table.executable
@@ -889,6 +977,7 @@ fn validate_claims_route(
     market: LiabilityBasisMarketViewV2,
     position: LiabilityBasisPositionViewV2,
     refunds: bool,
+    native_beneficiary: [u8; 32],
 ) -> Result<Option<FailureEscrowV1>, WalletTerminalPayoutErrorV3> {
     let route = input.route;
     let aggregate = Pubkey::find_program_address(
@@ -990,7 +1079,7 @@ fn validate_claims_route(
     // walks to the same identity the atoms do.
     if tail.escrow_position != escrow.position
         || tail.escrow_admission != escrow.admission
-        || tail.recipient != Pubkey::new_from_array(input.recipient_owner)
+        || tail.recipient != Pubkey::new_from_array(native_beneficiary)
     {
         return Err(WalletTerminalPayoutErrorV3::FounderBondRoute);
     }
@@ -1141,7 +1230,10 @@ fn custody_caller(
         operation: OperationV1::Transfer,
         caller_role: CustodyCallerRoleV1::Claims,
         source_compartment: CompartmentV1::HoardPrincipal,
-        destination_compartment: CompartmentV1::External,
+        destination_compartment: match request.recipient_mode() {
+            TerminalRecipientV3::External => CompartmentV1::External,
+            TerminalRecipientV3::TradingPrincipal => CompartmentV1::TradingPrincipal,
+        },
         release_set: input.release_set,
         market: input.market,
         realm: input.realm,
@@ -1150,7 +1242,10 @@ fn custody_caller(
         semantic: ContextV1 {
             candidate: candidate_digest,
             source_owner: [0; 32],
-            destination_owner: input.recipient_owner,
+            destination_owner: match request.recipient_mode() {
+                TerminalRecipientV3::External => input.recipient_owner,
+                TerminalRecipientV3::TradingPrincipal => [0; 32],
+            },
             order: [0; 32],
             parent_request_digest: request_digest,
             order_nonce: input.expected_position_revision,
@@ -1162,7 +1257,10 @@ fn custody_caller(
         source: route.hoard.to_bytes(),
         destination: route.recipient.to_bytes(),
         source_vault_context: market.custody_context,
-        destination_vault_context: [0; 32],
+        destination_vault_context: match request.recipient_mode() {
+            TerminalRecipientV3::External => [0; 32],
+            TerminalRecipientV3::TradingPrincipal => input.owner,
+        },
         mint: route.collateral_mint.to_bytes(),
         token_program: route.token_program.to_bytes(),
         payer: [0; 32],
@@ -1251,14 +1349,18 @@ fn payout_accounts(
 ///
 /// Successor operators that wrap the terminal route must extend this frame,
 /// never restate its account order. The returned value is derived only from
-/// the report's already-authenticated route, owner, and Custody caller; callers
+/// the report's already-authenticated route and caller frame; callers
 /// should still compare it with `report.instruction.accounts` before trusting
 /// a report received across an API boundary.
 #[must_use]
 pub fn wallet_terminal_payout_account_frame_v3(
     report: &WalletTerminalPayoutReportV3,
 ) -> Vec<AccountMeta> {
-    payout_accounts(report.route, report.owner, report.custody_caller)
+    let mut accounts = payout_accounts(report.route, report.owner, report.custody_caller);
+    accounts[0] = AccountMeta::new_readonly(report.caller_frame[0], true);
+    accounts[14] = AccountMeta::new_readonly(report.caller_frame[1], false);
+    accounts[15] = AccountMeta::new_readonly(report.caller_frame[2], false);
+    accounts
 }
 
 fn debited_claim_bytes(
@@ -1681,6 +1783,75 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn trading_terminal_returns_same_payout_into_canonical_fund_capital() {
+        let mut fixture = fixture();
+        let wallet = build_wallet_terminal_payout_v3(input(&fixture, 1)).unwrap();
+        fixture.route.recipient = Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::new(MARKET, RELEASE_SET, OWNER, CompartmentV1::TradingPrincipal)
+                .as_slices(),
+            &fixture.route.custody_program,
+        )
+        .0;
+        fixture.recipient = token(
+            fixture.route.collateral_mint,
+            fixture.route.custody_authority,
+            9,
+        );
+        let mut source = input(&fixture, 1);
+        source.parent_context = OWNER;
+        source.recipient_owner = fixture.route.custody_authority.to_bytes();
+        let caller = TradingTerminalCallerV3 {
+            program: Pubkey::new_unique(),
+            programdata: Pubkey::new_unique(),
+        };
+        let capital = build_trading_terminal_payout_v3(source, caller).unwrap();
+        assert_eq!(wallet.payout, 2);
+        assert_eq!(capital.payout, wallet.payout);
+        assert_eq!(
+            wallet_terminal_payout_account_frame_v3(&capital),
+            capital.instruction.accounts
+        );
+        assert_eq!(capital.request.input().caller_role, CallerRole::Trading);
+        assert_eq!(
+            capital.request.recipient_mode(),
+            TerminalRecipientV3::TradingPrincipal
+        );
+        assert_eq!(capital.request.native_beneficiary(), OWNER);
+        let custody = capital.custody_request.expect("positive payout");
+        assert_eq!(
+            custody.destination_compartment,
+            CompartmentV1::TradingPrincipal
+        );
+        assert_eq!(custody.destination_vault_context, OWNER);
+        assert_eq!(custody.semantic.destination_owner, [0; 32]);
+        assert_eq!(capital.instruction.accounts[14].pubkey, caller.program);
+        assert_eq!(capital.instruction.accounts[15].pubkey, caller.programdata);
+        let post = project_wallet_terminal_payout_postcondition_v3(&capital).unwrap();
+        let token_post =
+            TokenAccount::parse_base_or_immutable_owner(&post.recipient_token_bytes).unwrap();
+        assert_eq!(token_post.amount, 9 + wallet.payout);
+        assert_eq!(token_post.owner, fixture.route.custody_authority.to_bytes());
+        source.claim_index = 0;
+        let zero = build_trading_terminal_payout_v3(source, caller).unwrap();
+        assert_eq!(zero.payout, 0);
+        let zero_post = project_wallet_terminal_payout_postcondition_v3(&zero).unwrap();
+        assert_eq!(zero_post.hoard_token_bytes, zero.pre_hoard_token_bytes);
+        assert_eq!(
+            zero_post.recipient_token_bytes,
+            zero.pre_recipient_token_bytes
+        );
+        assert_eq!(
+            zero_post.custody_replay_bytes,
+            zero.pre_custody_replay_bytes
+        );
+        source.route.recipient = Pubkey::new_unique();
+        assert_eq!(
+            build_trading_terminal_payout_v3(source, caller),
+            Err(WalletTerminalPayoutErrorV3::Custody)
+        );
+    }
+
     fn input(fixture: &Fixture, claim_index: u32) -> WalletTerminalPayoutInputV3<'_> {
         WalletTerminalPayoutInputV3 {
             observation: fixture.observation,
@@ -2066,6 +2237,66 @@ pub(crate) mod tests {
             }),
             ..input(fixture, claim_index)
         }
+    }
+
+    #[test]
+    fn trading_terminal_keeps_native_bond_separate_and_refuses_a_substituted_beneficiary() {
+        let (mut fixture, _, admission) = refunding_fixture();
+        let wallet =
+            build_wallet_terminal_payout_v3(refunding_input(&fixture, &admission, 0)).unwrap();
+        assert!(wallet.founder_bond_draw > 0);
+        fixture.route.recipient = Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::new(MARKET, RELEASE_SET, OWNER, CompartmentV1::TradingPrincipal)
+                .as_slices(),
+            &fixture.route.custody_program,
+        )
+        .0;
+        fixture.recipient = token(
+            fixture.route.collateral_mint,
+            fixture.route.custody_authority,
+            9,
+        );
+        let mut source = refunding_input(&fixture, &admission, 0);
+        source.parent_context = OWNER;
+        source.recipient_owner = fixture.route.custody_authority.to_bytes();
+        let caller = TradingTerminalCallerV3 {
+            program: Pubkey::new_unique(),
+            programdata: Pubkey::new_unique(),
+        };
+        let capital = build_trading_terminal_payout_v3(source, caller).unwrap();
+        assert_eq!(capital.payout, wallet.payout);
+        assert_eq!(capital.founder_bond_draw, wallet.founder_bond_draw);
+        assert_eq!(
+            capital.instruction.accounts.last().unwrap().pubkey,
+            Pubkey::new_from_array(OWNER)
+        );
+        let post = project_wallet_terminal_payout_postcondition_v3(&capital).unwrap();
+        assert_eq!(
+            TokenAccount::parse_base_or_immutable_owner(&post.recipient_token_bytes)
+                .unwrap()
+                .amount,
+            9 + wallet.payout
+        );
+        assert_eq!(
+            post.founder_bond,
+            Some((
+                ESCROW_LAMPORTS - wallet.founder_bond_draw,
+                BOND_RECIPIENT_LAMPORTS + wallet.founder_bond_draw
+            ))
+        );
+        source.route.founder_bond.as_mut().unwrap().recipient = fixture.route.custody_authority;
+        assert_eq!(
+            build_trading_terminal_payout_v3(source, caller),
+            Err(WalletTerminalPayoutErrorV3::FounderBondRoute)
+        );
+        assert_eq!(
+            fixture.recipient,
+            token(
+                fixture.route.collateral_mint,
+                fixture.route.custody_authority,
+                9
+            )
+        );
     }
 
     #[test]

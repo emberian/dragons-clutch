@@ -2703,16 +2703,21 @@ fn validate_accounts(
         if representative == coordinate {
             let mut prior = 0_usize;
             while prior < coordinate {
-                // The key comparison first, the artifact decode only if it
-                // matches. Both conjuncts are pure and `&&` short-circuits, so
-                // the predicate is unchanged -- and no refusal can be skipped:
+                // The key prefix and then the complete key first, the artifact
+                // decode only if both match. All conjuncts are pure and `&&`
+                // short-circuits, so the predicate is unchanged -- and no
+                // refusal can be skipped:
                 // this outer loop already evaluated
                 // `profile.representative(tail_count, prior)` successfully in
                 // an earlier iteration for every `prior < coordinate`, or it
                 // returned that error instead of reaching here. What changes is
-                // that a 32-byte comparison stands where a rule decode stood,
-                // `coordinate * (coordinate - 1) / 2` times.
-                if accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key() == account.key()
+                // that an eight-byte comparison stands where a 32-byte
+                // comparison stood, `coordinate * (coordinate - 1) / 2`
+                // times. A prefix collision still reaches the complete-key
+                // comparison, so it cannot acquire alias authority.
+                let prior_key = accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key();
+                if prior_key.get(..8) == account.key().get(..8)
+                    && prior_key == account.key()
                     && profile.representative(tail_count, prior)? == prior
                 {
                     return Err(Error::CrossItemAlias);
@@ -2833,8 +2838,11 @@ fn validate_accounts_with_dynamic_spans(
             while prior < coordinate {
                 // See `validate_accounts`. The dynamic representative is the
                 // more expensive of the two -- it walks the whole span table --
-                // so putting the key comparison first matters more here.
-                if accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key() == account.key()
+                // so putting the prefix and complete-key comparisons first
+                // matters more here.
+                let prior_key = accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key();
+                if prior_key.get(..8) == account.key().get(..8)
+                    && prior_key == account.key()
                     && profile.representative_with_dynamic_spans(tail_count, span_counts, prior)?
                         == prior
                 {
@@ -4973,7 +4981,10 @@ mod tests {
     fn cross_item_alias_and_width_refuse_without_output_commit() {
         let bytes = profile_bytes();
         let profile = AccountProfileV2::decode(&bytes).expect("profile");
-        for accounts in [observations(true), observations(false)] {
+        for (accounts, expected) in [
+            (observations(true), Error::CrossItemAlias),
+            (observations(false), Error::WidthMismatch),
+        ] {
             let input_scalars = [0_u64; 5];
             let input_identities = [[0x11_u8; 32], [0; 32], [0; 32]];
             let mut scratch_scalars = [0_u64; 5];
@@ -4988,7 +4999,7 @@ mod tests {
                 } else {
                     accounts.get(..4).expect("short accounts")
                 };
-            assert!(
+            assert_eq!(
                 project_atomic(
                     profile,
                     2,
@@ -5002,12 +5013,48 @@ mod tests {
                         output_identities: &mut output_identities,
                     },
                     None,
-                )
-                .is_err()
+                ),
+                Err(expected),
             );
             assert_eq!(output_scalars, before_scalars);
             assert_eq!(output_identities, before_identities);
         }
+    }
+
+    #[test]
+    fn a_key_prefix_collision_is_not_cross_item_alias_authority() {
+        static PREFIX_COLLISION: [u8; 32] = [
+            0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31,
+            0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31,
+            0x31, 0x31, 0x31, 0x31,
+        ];
+        let bytes = profile_bytes();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile");
+        let mut accounts = observations(false);
+        *accounts.get_mut(3).expect("second item representative") =
+            AccountObservationV1::new(&PREFIX_COLLISION, &[1; 32], 4, &[], false, false, false);
+        let mut scratch_scalars = [0_u64; 5];
+        let mut scratch_identities = [[0_u8; 32]; 3];
+        let mut output_scalars = [9_u64; 5];
+        let mut output_identities = [[9_u8; 32]; 3];
+        assert_eq!(
+            project_atomic(
+                profile,
+                2,
+                &accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &[0; 5],
+                    input_identities: &[[0x11; 32], [0; 32], [0; 32]],
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+                None,
+            ),
+            Ok(())
+        );
+        assert_eq!(output_identities.get(2), Some(&PREFIX_COLLISION));
     }
 
     #[test]

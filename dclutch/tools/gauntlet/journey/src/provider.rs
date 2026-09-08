@@ -281,10 +281,6 @@ pub(crate) fn resolve_through_pyth(
     rung: Option<&RungCaptureV1>,
     terminal_sequence: u64,
 ) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
-    let mut fees = 0_u64;
-    let mut compute_units = 0_u64;
-    let mut submitted = 0_usize;
-
     // The tripwire. `max_age_seconds` in the Market's own window record is the
     // captured publication's declared shelf life, and the quantity it bounds
     // grows by 86,400 every day the fixture is not recaptured. Checking it here
@@ -299,179 +295,10 @@ pub(crate) fn resolve_through_pyth(
     let shelf_life_seconds = publication.shelf_life_seconds;
     require_primary_publication_freshness_v1(age, shelf_life_seconds, rung.is_some())?;
 
-    // ---------------------------------------------------------- the router
+    let (mut fees, mut compute_units, mut submitted) =
+        prepare_verified_publication_v1(rpc, payer, provider, publication, transactions)?;
     let addresses_p = provider.addresses;
-    if rpc.account(addresses_p.guardian_set)?.is_none() {
-        send(
-            rpc,
-            "journey: the captured Wormhole router initializes its synthetic guardian set",
-            &[Instruction {
-                program_id: addresses_p.router,
-                accounts: vec![
-                    AccountMeta::new(addresses_p.bridge, false),
-                    AccountMeta::new(addresses_p.guardian_set, false),
-                    AccountMeta::new(addresses_p.fee_collector, false),
-                    AccountMeta::new(payer.pubkey(), true),
-                    AccountMeta::new_readonly(sysvar::clock::ID, false),
-                    AccountMeta::new_readonly(sysvar::rent::ID, false),
-                    AccountMeta::new_readonly(system_program::ID, false),
-                ],
-                data: ROUTER_INITIALIZE.to_vec(),
-            }],
-            payer,
-            &[],
-            &mut fees,
-            &mut compute_units,
-            &mut submitted,
-            transactions,
-        )?;
-    }
-
-    // ---------------------------------------------------------- the receiver
-    if rpc.account(addresses_p.config)?.is_none() {
-        send(
-            rpc,
-            "journey: the captured Pyth receiver initializes its Config",
-            &[Instruction {
-                program_id: addresses_p.receiver,
-                accounts: vec![
-                    AccountMeta::new(payer.pubkey(), true),
-                    AccountMeta::new(addresses_p.config, false),
-                    AccountMeta::new_readonly(system_program::ID, false),
-                ],
-                data: RECEIVER_INITIALIZE.to_vec(),
-            }],
-            payer,
-            &[],
-            &mut fees,
-            &mut compute_units,
-            &mut submitted,
-            transactions,
-        )?;
-    }
-    let treasury_rent = rpc.minimum_balance(0)?;
-    if rpc
-        .account(addresses_p.treasury)?
-        .map(|account| account.lamports)
-        .unwrap_or(0)
-        < treasury_rent
-    {
-        send(
-            rpc,
-            "journey: capitalize the canonical zero-data receiver treasury",
-            &[transfer(
-                &payer.pubkey(),
-                &addresses_p.treasury,
-                treasury_rent,
-            )],
-            payer,
-            &[],
-            &mut fees,
-            &mut compute_units,
-            &mut submitted,
-            transactions,
-        )?;
-    }
-
-    // ------------------------------------------------------- the signed VAA
     let encoded = &provider.encoded_vaa;
-    let encoded_size = ENCODED_VAA_HEADER_BYTES + publication.signed_vaa.len();
-    let encoded_rent = rpc.minimum_balance(encoded_size)?;
-    send(
-        rpc,
-        "journey: create the exact encoded-VAA buffer",
-        &[create_account(
-            &payer.pubkey(),
-            &encoded.pubkey(),
-            encoded_rent,
-            encoded_size as u64,
-            &addresses_p.router,
-        )],
-        payer,
-        &[encoded],
-        &mut fees,
-        &mut compute_units,
-        &mut submitted,
-        transactions,
-    )?;
-    send(
-        rpc,
-        "journey: the real router initializes the encoded-VAA header",
-        &[Instruction {
-            program_id: addresses_p.router,
-            accounts: vec![
-                AccountMeta::new_readonly(payer.pubkey(), true),
-                AccountMeta::new(encoded.pubkey(), false),
-            ],
-            data: anchor_discriminator(b"global:init_encoded_vaa"),
-        }],
-        payer,
-        &[],
-        &mut fees,
-        &mut compute_units,
-        &mut submitted,
-        transactions,
-    )?;
-    for (index, chunk) in publication.signed_vaa.chunks(WRITE_CHUNK_BYTES).enumerate() {
-        let offset = index
-            .checked_mul(WRITE_CHUNK_BYTES)
-            .ok_or_else(|| Error::new("VAA chunk offset overflowed"))?;
-        let mut data = anchor_discriminator(b"global:write_encoded_vaa");
-        data.extend_from_slice(
-            &u32::try_from(offset)
-                .map_err(|_| Error::new("VAA chunk offset exceeded u32"))?
-                .to_le_bytes(),
-        );
-        data.extend_from_slice(
-            &u32::try_from(chunk.len())
-                .map_err(|_| Error::new("VAA chunk length exceeded u32"))?
-                .to_le_bytes(),
-        );
-        data.extend_from_slice(chunk);
-        send(
-            rpc,
-            &format!("journey: the real router writes signed-VAA chunk {index}"),
-            &[Instruction {
-                program_id: addresses_p.router,
-                accounts: vec![
-                    AccountMeta::new_readonly(payer.pubkey(), true),
-                    AccountMeta::new(encoded.pubkey(), false),
-                ],
-                data,
-            }],
-            payer,
-            &[],
-            &mut fees,
-            &mut compute_units,
-            &mut submitted,
-            transactions,
-        )?;
-    }
-    send(
-        rpc,
-        "journey: the real router cryptographically verifies the signed VAA",
-        &[Instruction {
-            program_id: addresses_p.router,
-            accounts: vec![
-                AccountMeta::new_readonly(payer.pubkey(), true),
-                AccountMeta::new(encoded.pubkey(), false),
-                AccountMeta::new_readonly(addresses_p.guardian_set, false),
-            ],
-            data: anchor_discriminator(b"global:verify_encoded_vaa_v1"),
-        }],
-        payer,
-        &[],
-        &mut fees,
-        &mut compute_units,
-        &mut submitted,
-        transactions,
-    )?;
-    let verified = rpc.required_account(encoded.pubkey(), "verified EncodedVaa")?;
-    if verified.data.get(8) != Some(&2) {
-        return Err(Error::new(
-            "the router did not leave the encoded VAA in ProcessingStatus::Verified",
-        ));
-    }
 
     // ------------------------------------------------- the dClutch submit leg
     // ONE READ FOR BOTH PROVIDER FRAMES. The submit and the execute name the
@@ -845,6 +672,196 @@ pub(crate) fn resolve_through_pyth(
             "two address lookup tables, rent-funded to route the two oversized provider frames",
         ),
     ))
+}
+
+/// Install and verify a lab publication through the existing real router and receiver.
+/// The durable capture campaign calls this before handing the verified VAA to
+/// the shipped provider-input producer; no dClutch account is changed here.
+pub(crate) fn prepare_verified_publication_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    provider: &ProviderPlanV1,
+    publication: &PublicationV1,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<(u64, u64, usize)> {
+    let mut fees = 0_u64;
+    let mut compute_units = 0_u64;
+    let mut submitted = 0_usize;
+    // ---------------------------------------------------------- the router
+    let addresses_p = provider.addresses;
+    if rpc.account(addresses_p.guardian_set)?.is_none() {
+        send(
+            rpc,
+            "journey: the captured Wormhole router initializes its synthetic guardian set",
+            &[Instruction {
+                program_id: addresses_p.router,
+                accounts: vec![
+                    AccountMeta::new(addresses_p.bridge, false),
+                    AccountMeta::new(addresses_p.guardian_set, false),
+                    AccountMeta::new(addresses_p.fee_collector, false),
+                    AccountMeta::new(payer.pubkey(), true),
+                    AccountMeta::new_readonly(sysvar::clock::ID, false),
+                    AccountMeta::new_readonly(sysvar::rent::ID, false),
+                    AccountMeta::new_readonly(system_program::ID, false),
+                ],
+                data: ROUTER_INITIALIZE.to_vec(),
+            }],
+            payer,
+            &[],
+            &mut fees,
+            &mut compute_units,
+            &mut submitted,
+            transactions,
+        )?;
+    }
+
+    // ---------------------------------------------------------- the receiver
+    if rpc.account(addresses_p.config)?.is_none() {
+        send(
+            rpc,
+            "journey: the captured Pyth receiver initializes its Config",
+            &[Instruction {
+                program_id: addresses_p.receiver,
+                accounts: vec![
+                    AccountMeta::new(payer.pubkey(), true),
+                    AccountMeta::new(addresses_p.config, false),
+                    AccountMeta::new_readonly(system_program::ID, false),
+                ],
+                data: RECEIVER_INITIALIZE.to_vec(),
+            }],
+            payer,
+            &[],
+            &mut fees,
+            &mut compute_units,
+            &mut submitted,
+            transactions,
+        )?;
+    }
+    let treasury_rent = rpc.minimum_balance(0)?;
+    if rpc
+        .account(addresses_p.treasury)?
+        .map(|account| account.lamports)
+        .unwrap_or(0)
+        < treasury_rent
+    {
+        send(
+            rpc,
+            "journey: capitalize the canonical zero-data receiver treasury",
+            &[transfer(
+                &payer.pubkey(),
+                &addresses_p.treasury,
+                treasury_rent,
+            )],
+            payer,
+            &[],
+            &mut fees,
+            &mut compute_units,
+            &mut submitted,
+            transactions,
+        )?;
+    }
+
+    // ------------------------------------------------------- the signed VAA
+    let encoded = &provider.encoded_vaa;
+    let encoded_size = ENCODED_VAA_HEADER_BYTES + publication.signed_vaa.len();
+    let encoded_rent = rpc.minimum_balance(encoded_size)?;
+    send(
+        rpc,
+        "journey: create the exact encoded-VAA buffer",
+        &[create_account(
+            &payer.pubkey(),
+            &encoded.pubkey(),
+            encoded_rent,
+            encoded_size as u64,
+            &addresses_p.router,
+        )],
+        payer,
+        &[encoded],
+        &mut fees,
+        &mut compute_units,
+        &mut submitted,
+        transactions,
+    )?;
+    send(
+        rpc,
+        "journey: the real router initializes the encoded-VAA header",
+        &[Instruction {
+            program_id: addresses_p.router,
+            accounts: vec![
+                AccountMeta::new_readonly(payer.pubkey(), true),
+                AccountMeta::new(encoded.pubkey(), false),
+            ],
+            data: anchor_discriminator(b"global:init_encoded_vaa"),
+        }],
+        payer,
+        &[],
+        &mut fees,
+        &mut compute_units,
+        &mut submitted,
+        transactions,
+    )?;
+    for (index, chunk) in publication.signed_vaa.chunks(WRITE_CHUNK_BYTES).enumerate() {
+        let offset = index
+            .checked_mul(WRITE_CHUNK_BYTES)
+            .ok_or_else(|| Error::new("VAA chunk offset overflowed"))?;
+        let mut data = anchor_discriminator(b"global:write_encoded_vaa");
+        data.extend_from_slice(
+            &u32::try_from(offset)
+                .map_err(|_| Error::new("VAA chunk offset exceeded u32"))?
+                .to_le_bytes(),
+        );
+        data.extend_from_slice(
+            &u32::try_from(chunk.len())
+                .map_err(|_| Error::new("VAA chunk length exceeded u32"))?
+                .to_le_bytes(),
+        );
+        data.extend_from_slice(chunk);
+        send(
+            rpc,
+            &format!("journey: the real router writes signed-VAA chunk {index}"),
+            &[Instruction {
+                program_id: addresses_p.router,
+                accounts: vec![
+                    AccountMeta::new_readonly(payer.pubkey(), true),
+                    AccountMeta::new(encoded.pubkey(), false),
+                ],
+                data,
+            }],
+            payer,
+            &[],
+            &mut fees,
+            &mut compute_units,
+            &mut submitted,
+            transactions,
+        )?;
+    }
+    send(
+        rpc,
+        "journey: the real router cryptographically verifies the signed VAA",
+        &[Instruction {
+            program_id: addresses_p.router,
+            accounts: vec![
+                AccountMeta::new_readonly(payer.pubkey(), true),
+                AccountMeta::new(encoded.pubkey(), false),
+                AccountMeta::new_readonly(addresses_p.guardian_set, false),
+            ],
+            data: anchor_discriminator(b"global:verify_encoded_vaa_v1"),
+        }],
+        payer,
+        &[],
+        &mut fees,
+        &mut compute_units,
+        &mut submitted,
+        transactions,
+    )?;
+    let verified = rpc.required_account(encoded.pubkey(), "verified EncodedVaa")?;
+    if verified.data.get(8) != Some(&2) {
+        return Err(Error::new(
+            "the router did not leave the encoded VAA in ProcessingStatus::Verified",
+        ));
+    }
+
+    Ok((fees, compute_units, submitted))
 }
 
 /// Apply the publication-age floor only to the primary Pyth leg.

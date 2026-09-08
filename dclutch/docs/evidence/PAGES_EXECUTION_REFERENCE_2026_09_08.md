@@ -138,3 +138,20 @@ directory indexes. Logs: `/private/tmp/dclutch-cut-73a2503d6-20260908.log`,
 `/private/tmp/dclutch-pages-34285462083.log`. The new console's build and
 targeted tests are source evidence; a current-cohort wallet execution and
 browser visual review remain separate outstanding checks.
+
+
+## Addendum — claim-check and retirement reference, 2026-09-08 22:41 UTC
+
+Cut `7951a6bdc3762189433fb92b1f75436339af6ef8` publishes source
+`dd756b79e7d3f82194c2852e1c74955e42378a0e`, tree
+`6f6d7de2b719fc4c81947ab95bf0dbfa7b4c2499`. The credential sweep found zero
+findings and the source and published trees matched exactly. The committed
+reference check converged unchanged.
+
+[Workflow 34287110785](https://github.com/emberian/dragons-clutch/actions/runs/34287110785)
+and existing Pages deployment `6338614401` succeeded at
+`2026-09-08T22:41:51Z`. Logs are
+`/private/tmp/dclutch-cut-dd756b79e-20260908.log` and
+`/private/tmp/dclutch-reference-check-dd756b79e-20260908.log`.
+This publishes the implementation checkpoint; the fresh devnet cohort and
+complete current-source lifecycles remain outstanding.

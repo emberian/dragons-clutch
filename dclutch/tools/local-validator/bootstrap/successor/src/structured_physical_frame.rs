@@ -57,11 +57,28 @@ pub(crate) fn activate_receipt_claims_instruction_v1(
     input: ActivateReceiptPhysicalInputsV1,
     lifecycle_bytes: &[u8],
 ) -> Result<Instruction> {
+    receipt_claims_instruction_v1(input, lifecycle_bytes, LifecycleActionV2::ActivateReceipt)
+}
+
+/// Construct the same Claims common frame plus every complete-support vacancy group.
+pub(crate) fn retire_receipt_claims_instruction_v1(
+    input: ActivateReceiptPhysicalInputsV1,
+    lifecycle_bytes: &[u8],
+) -> Result<Instruction> {
+    receipt_claims_instruction_v1(input, lifecycle_bytes, LifecycleActionV2::RetireReceipt)
+}
+
+fn receipt_claims_instruction_v1(
+    input: ActivateReceiptPhysicalInputsV1,
+    lifecycle_bytes: &[u8],
+    action: LifecycleActionV2,
+) -> Result<Instruction> {
     let request = LifecycleRequestV2::decode(lifecycle_bytes)
         .map_err(|error| Error::new(format!("Structured receipt lifecycle: {error:?}")))?;
     let header = request.header();
-    if header.action != LifecycleActionV2::ActivateReceipt
-        || header.coordinate_count != 0
+    if header.action != action
+        || (action == LifecycleActionV2::ActivateReceipt && header.coordinate_count != 0)
+        || (action == LifecycleActionV2::RetireReceipt && header.coordinate_count == 0)
         || header.representation_authority != input.representation_authority.to_bytes()
         || header.receipt_mint != input.receipt_mint.to_bytes()
         || header.rent_credit != input.rent_credit.to_bytes()
@@ -81,8 +98,8 @@ pub(crate) fn activate_receipt_claims_instruction_v1(
     )
     .map_err(|error| Error::new(format!("Structured receipt caller authority: {error:?}")))?;
     let outer = Pubkey::find_program_address(&authority_seeds.as_slices(), &input.trading).0;
-    let values = [
-        AccountMeta::new_readonly(outer, false),
+    let mut values = vec![
+        AccountMeta::new_readonly(outer, true),
         AccountMeta::new_readonly(input.trading, false),
         AccountMeta::new_readonly(input.trading_programdata, false),
         AccountMeta::new_readonly(input.claims, false),
@@ -96,16 +113,38 @@ pub(crate) fn activate_receipt_claims_instruction_v1(
         AccountMeta::new_readonly(input.representation_authority, false),
         AccountMeta::new(input.receipt_mint, false),
         AccountMeta::new_readonly(header.token_program.into(), false),
-        AccountMeta::new_readonly(input.rent_credit, false),
+        if action == LifecycleActionV2::RetireReceipt {
+            AccountMeta::new(input.rent_credit, false)
+        } else {
+            AccountMeta::new_readonly(input.rent_credit, false)
+        },
         AccountMeta::new_readonly(input.rent_program, false),
         AccountMeta::new_readonly(input.claims_market, false),
         AccountMeta::new_readonly(input.core_market, false),
         AccountMeta::new_readonly(input.core, false),
         AccountMeta::new_readonly(input.core_programdata, false),
     ];
+    if action == LifecycleActionV2::RetireReceipt {
+        for row in request.coordinates() {
+            let row = row.map_err(|error| {
+                Error::new(format!("Structured retirement vacancy row: {error:?}"))
+            })?;
+            values.extend(
+                [
+                    row.shard_mint,
+                    row.structured_custody_account,
+                    row.claims_custody_owner,
+                    row.claims_custody_position,
+                    row.position_admission,
+                ]
+                .into_iter()
+                .map(|key| AccountMeta::new_readonly(Pubkey::new_from_array(key), false)),
+            );
+        }
+    }
     Ok(Instruction {
         program_id: input.claims,
-        accounts: values.to_vec(),
+        accounts: values,
         data: lifecycle_bytes.to_vec(),
     })
 }

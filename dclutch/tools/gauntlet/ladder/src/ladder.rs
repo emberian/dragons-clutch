@@ -82,12 +82,10 @@ use crate::{Error, Result};
 /// profile changes.
 pub(crate) const DEFAULT_RECOVERY_RUNGS_V1: &str = "2500:900";
 
-/// How long a bounded wait for a leg's deadline may sleep.
-///
-/// There is no default inside the crank driver on purpose, so this tier states
-/// one. Ten minutes is the whole budget a campaign may spend waiting, and a
-/// deadline further away than that is REPORTED rather than slept for.
-pub(crate) const DEFAULT_MAX_WAIT_SECONDS_V1: i64 = 600;
+/// Provisional campaign wait budget, including the durable provider's one-hour
+/// reclaim delay. Lift with `--max-wait-seconds` when a measured host profile
+/// needs more headroom; this never changes a published protocol deadline.
+pub(crate) const DEFAULT_MAX_WAIT_SECONDS_V1: i64 = 4_200;
 
 /// The certificate sequence each crank writes its receipt under.
 ///
@@ -96,7 +94,6 @@ pub(crate) const DEFAULT_MAX_WAIT_SECONDS_V1: i64 = 600;
 /// uses, so a reader comparing the loopback figures against the program-test
 /// figures is comparing the same seats.
 const ADVANCE_SEQUENCE_V1: u64 = 2;
-const EXHAUST_SEQUENCE_V1: u64 = 3;
 
 /// What the worker is funded with. It pays fees and pre-funds a short seat, and
 /// it is paid back the bounty out of the market's own compartment.
@@ -145,13 +142,6 @@ pub(crate) const DEFAULT_PUBLICATION_SHELF_LIFE_SECONDS_V1: i64 = 1_200;
 /// period, not a re-post of the one the primary leg was offered.
 const PRIMARY_PUBLICATION_SEQUENCE_V1: u64 = 1;
 const RUNG_PUBLICATION_SEQUENCE_V1: u64 = 2;
-
-/// The terminal replay sequence a capture writes its certificate under.
-///
-/// One, and `resolution::derive` derives the seat at one: the ADVANCE and
-/// EXHAUST sequences above are the CRANK's receipts, which are a different
-/// certificate kind at a different seat.
-const CAPTURE_TERMINAL_SEQUENCE_V1: u64 = 1;
 
 /// The write authority the projected `PriceUpdateV2` image names.
 ///
@@ -425,7 +415,7 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
         pubkey(&checked.plan.rent_credit.program_id)?,
         &mut ledger,
     )?;
-    let resolution_addresses =
+    let mut resolution_addresses =
         crate::resolution::derive(&mut rpc, &checked.plan, &market_addresses, &accounts)?;
     crate::resolution::watch(&mut ledger, &resolution_addresses);
     let provider_plan = ProviderPlanV1::derive(&mut rpc, &checked.plan)?;
@@ -514,34 +504,41 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
     }
 
     let mut cranks = Vec::new();
-    let advance = drive_crank(
-        &checked,
-        &request,
-        &mut stages,
-        &mut transactions,
-        market,
-        worker.pubkey(),
-        &worker_keypair_path,
-        ADVANCE_SEQUENCE_V1,
-        "advance onto the funded alternative",
-    )?;
-    let advanced = advance.landed;
-    cranks.push(advance.report);
-    if advanced {
+    let mut advanced = true;
+    // Walk every purchased rung in its committed order. Capture answers the
+    // last rung; exhaust continues from there through the failure walk.
+    for index in 0..rung_count {
+        let sequence = ADVANCE_SEQUENCE_V1
+            .checked_add(
+                u64::try_from(index).map_err(|_| Error::new("recovery rung index exceeds u64"))?,
+            )
+            .ok_or_else(|| Error::new("recovery crank sequence overflow"))?;
+        let label = format!("advance onto funded alternative {}", index + 1);
+        let advance = drive_crank(
+            &checked,
+            &request,
+            &mut stages,
+            &mut transactions,
+            market,
+            worker.pubkey(),
+            &worker_keypair_path,
+            sequence,
+            &label,
+        )?;
+        advanced = advance.landed;
+        cranks.push(advance.report);
+        if !advanced {
+            break;
+        }
         if let Some(certificate) = advance.certificate {
-            ledger.watch("ladder_advance_certificate", certificate);
+            ledger.watch(&format!("ladder_advance_certificate_{index}"), certificate);
         }
         ledger.observe(
             &mut rpc,
-            "advance onto the funded alternative",
+            &label,
             0,
             0,
-            // The crank's fee, read off its own finalized evidence. The bounty
-            // it pays the stranger moves between two accounts this ledger
-            // watches, so the strong claim is that nothing else moved.
             LamportClaimV1::fees(advance.fee_lamports),
-            // A crank moves no collateral at all: it writes a certificate and a
-            // Source phase byte, and no vault is opened and no atom transferred.
             ClassClaimV1::unchanged(),
         )?;
     }
@@ -556,7 +553,12 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
             market,
             worker.pubkey(),
             &worker_keypair_path,
-            EXHAUST_SEQUENCE_V1,
+            ADVANCE_SEQUENCE_V1
+                .checked_add(
+                    u64::try_from(rung_count)
+                        .map_err(|_| Error::new("recovery rung count exceeds u64"))?,
+                )
+                .ok_or_else(|| Error::new("recovery exhaustion sequence overflow"))?,
             "exhaust the last funded rung",
         )?;
         let exhausted = exhaust.landed;
@@ -611,23 +613,35 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
         )?;
         publications.push(publication_report_v1(&rung_publication)?);
         let capture_dir = request.work.join("captures");
-        let (report, lamports) = crate::provider::resolve_through_pyth(
+        let (durable, lamports) = capture_through_durable_cli_v1(
+            &checked,
+            &request,
             &mut rpc,
             &payer,
-            &checked.plan,
-            &resolution_addresses,
+            &worker,
+            &worker_keypair_path,
             &provider_plan,
-            &capture_dir,
-            &mut transactions,
             &PublicationV1 {
                 signed_vaa: rung_publication.signed_vaa.clone(),
                 post_update_body: rung_publication.post_update_body.clone(),
                 price_update_image: rung_publication.projected_price_update.clone(),
                 shelf_life_seconds,
             },
-            Some(rung),
-            CAPTURE_TERMINAL_SEQUENCE_V1,
+            &capture_dir,
+            &mut transactions,
         )?;
+        resolution_addresses.certificate = pubkey(
+            durable["input"]["accounts"]["certificate"]
+                .as_str()
+                .ok_or_else(|| Error::new("durable input omitted certificate"))?,
+        )?;
+        let report = crate::stages::StageReportV1 {
+            stage: crate::provider::transport_stage_v1(Some(rung)).into(),
+            outcome: "executed".into(),
+            transactions: durable["receipts"].as_array().map_or(0, Vec::len),
+            compute_units: durable["computeUnits"].as_u64().unwrap_or(0),
+            note: "The shipped durable producer derived the active Source leg, provisioned exact frozen tables through its journal, and resumed Submit, Execute, AdmitTerminal and Reclaim in separate processes. Each finalized packet and exact poststate was authenticated by the existing command.".into(),
+        };
         stages.push(StageV1::new(
             &report.stage,
             &report.outcome,
@@ -637,6 +651,7 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
         // certificate rather than carried out of the stage that wrote them: the
         // transcript's claim about the route is the chain's own answer.
         capture = capture_reading_v1(&mut rpc, &resolution_addresses)?;
+        capture["durable"] = durable;
         ledger.observe(
             &mut rpc,
             &report.stage,
@@ -649,27 +664,31 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
             ClassClaimV1::unchanged(),
         )?;
 
-        // --------------------------------- 8. the Market's own phase byte
-        let (admit_report, admit_lamports, _outcomes) = crate::resolution::admit_terminal(
-            &mut rpc,
-            &payer,
-            &resolution_addresses,
-            &mut transactions,
-        )?;
+        let terminal = dclutch_market::CoreState::decode(
+            &rpc.required_account(market, "durable Terminal Market")?
+                .data,
+        )
+        .map_err(|error| Error::new(format!("durable Terminal Market: {error:?}")))?;
+        if terminal.phase != dclutch_market::Phase::Terminal {
+            return Err(Error::new(
+                "durable complete returned before Core became Terminal",
+            ));
+        }
         stages.push(StageV1::new(
-            &admit_report.stage,
-            &admit_report.outcome,
-            admit_report.note.clone(),
+            "Core terminal admission through the durable journal",
+            "executed",
+            "The complete checkpoint authenticated Core's terminal admission and reclaimed the consumed provider update; the Market was independently reread as Terminal.".into(),
         ));
-        ledger.observe(
+        capture["payout"] = continue_to_terminal_payout_v1(
+            &checked,
+            &request,
             &mut rpc,
-            &admit_report.stage,
-            0,
-            0,
-            admit_lamports,
-            // AdmitTerminal writes the Market's phase byte, its terminal
-            // receipt and its terminal winner, and moves no collateral at all.
-            ClassClaimV1::unchanged(),
+            &mut stages,
+            &mut transactions,
+            &accounts,
+            market,
+            &worker,
+            &worker_keypair_path,
         )?;
     } else if request.walk == WalkV1::Capture {
         stages.push(StageV1::new(
@@ -688,6 +707,7 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
         "market": market.to_string(),
         "recovery_policy_record": recovery_policy_record,
         "recovery_rungs": request.recovery_rungs,
+        "expected_capture_attempt_index": rung_count,
         "gate_sha256": request.expected_gate_sha256,
         "gate_source_revision": request.expected_source_revision,
         "started_unix_seconds": start_unix,
@@ -741,6 +761,554 @@ const INITIALIZE_ACCOUNT_3: u8 = 18;
 /// From `Exhausted` to the refund: the deadline walk, Core's admission, and the
 /// founder drawing only their holdings -- through the shipped drivers, in order.
 ///
+/// Run the shipped durable exterior in fresh processes. Its own fsynced files
+/// carry every table mutation and provider stage across those process restarts.
+#[allow(clippy::too_many_arguments)]
+fn capture_through_durable_cli_v1(
+    checked: &substrate::CheckedSubstrateV1,
+    request: &LadderRequestV1,
+    rpc: &mut Rpc,
+    founder: &Keypair,
+    worker: &Keypair,
+    worker_keypair: &Path,
+    provider: &ProviderPlanV1,
+    publication: &PublicationV1,
+    work: &Path,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<(serde_json::Value, LamportClaimV1)> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeSet;
+
+    std::fs::create_dir_all(work)?;
+    let binary = std::env::current_exe()?.with_file_name("dclutch-local-successor-bootstrap");
+    let binary_sha256 = crate::plan::hex(&Sha256::digest(std::fs::read(&binary).map_err(
+        |error| {
+            Error::new(format!(
+                "build the same-source sibling durable bootstrap {}: {error}",
+                binary.display()
+            ))
+        },
+    )?));
+    let (mut fees, mut compute_units, _) = crate::provider::prepare_verified_publication_v1(
+        rpc,
+        founder,
+        provider,
+        publication,
+        transactions,
+    )?;
+    let founder_key = work.join("founder.json");
+    let update_key = work.join("update.json");
+    write_keypair_file(&founder_key, founder)?;
+    write_keypair_file(&update_key, &provider.update)?;
+    let facts_path = work.join("pyth-facts.json");
+    std::fs::write(
+        &facts_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "format": "dclutch-flagship-pyth-update-facts-v1",
+            "encodedVaa": provider.encoded_vaa.pubkey().to_string(),
+            "updateAccount": provider.update.pubkey().to_string(),
+            "postUpdateBodyBase64": BASE64.encode(&publication.post_update_body),
+        }))?,
+    )?;
+    let producer_path = work.join("producer.json");
+    let table_path = work.join("tables.json");
+    let input_path = work.join("input.json");
+    let checkpoint_path = work.join("checkpoint.json");
+    let mut invocation = 0_usize;
+    let mut run = |label: &str, args: Vec<String>| -> Result<()> {
+        invocation = invocation
+            .checked_add(1)
+            .ok_or_else(|| Error::new("durable invocation overflow"))?;
+        let output = std::process::Command::new(&binary)
+            .arg("local-private-validator-flagship-resolution-v1")
+            .args(["--rpc-url", &checked.rpc_url])
+            .args(args)
+            .output()?;
+        std::fs::write(
+            work.join(format!("{invocation:03}-{label}.stdout")),
+            &output.stdout,
+        )?;
+        std::fs::write(
+            work.join(format!("{invocation:03}-{label}.stderr")),
+            &output.stderr,
+        )?;
+        if !output.status.success() {
+            return Err(Error::new(format!(
+                "durable {label} refused ({}); see {}: {}",
+                output.status,
+                work.display(),
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        Ok(())
+    };
+    // Each pass either emits the ready input or finalizes one explicit table
+    // mutation. Require the persisted journal to advance; there is no silent
+    // success retry count that can turn an unchanged journal into completion.
+    loop {
+        run(
+            "produce",
+            vec![
+                "--produce-input".into(),
+                "--plan".into(),
+                checked.plan_path.display().to_string(),
+                "--campaign-evidence".into(),
+                request
+                    .work
+                    .join("founding-evidence.json")
+                    .display()
+                    .to_string(),
+                "--pyth-facts".into(),
+                facts_path.display().to_string(),
+                "--producer-checkpoint".into(),
+                producer_path.display().to_string(),
+                "--output".into(),
+                input_path.display().to_string(),
+                "--payer".into(),
+                worker.pubkey().to_string(),
+            ],
+        )?;
+        if input_path.exists() {
+            break;
+        }
+        let before = std::fs::read(&table_path).ok();
+        run(
+            "provision",
+            vec![
+                "--provision-tables".into(),
+                "--producer-checkpoint".into(),
+                producer_path.display().to_string(),
+                "--table-journal".into(),
+                table_path.display().to_string(),
+                "--authority-keypair".into(),
+                founder_key.display().to_string(),
+                "--execute".into(),
+            ],
+        )?;
+        if before.as_deref() == Some(std::fs::read(&table_path)?.as_slice()) {
+            return Err(Error::new(
+                "durable table provisioner returned without journal progress",
+            ));
+        }
+    }
+    let input: serde_json::Value = serde_json::from_slice(&std::fs::read(&input_path)?)?;
+    let mut primary_countercontrol = serde_json::Value::Null;
+    let mut execute_plan = serde_json::Value::Null;
+    for (stage, receipt_stage) in [
+        ("submit", Some("submit")),
+        ("execute", Some("resolution-provider-execute-v1")),
+        ("accept", Some("core-terminal-accept-v1")),
+        ("reclaim", Some("reclaim")),
+        ("complete", None),
+    ] {
+        if stage == "reclaim" {
+            let target = input["reclaimAfterUnixSeconds"]
+                .as_i64()
+                .ok_or_else(|| Error::new("durable input omitted reclaim deadline"))?;
+            eprintln!(
+                "ladder: Core is Terminal; waiting for immutable provider reclaim deadline {target}"
+            );
+            crate::sponsored_schedule::wait_until_unix_seconds_v1(
+                rpc,
+                target,
+                request.max_wait_seconds,
+            )?;
+        }
+        if stage == "execute" {
+            let certificate = pubkey(
+                input["accounts"]["certificate"]
+                    .as_str()
+                    .ok_or_else(|| Error::new("durable input omitted certificate"))?,
+            )?;
+            let rent =
+                rpc.minimum_balance(dclutch_source::resolution::RESOLUTION_CERTIFICATE_BYTES_V2)?;
+            let current = rpc.account(certificate)?;
+            if current.as_ref().is_some_and(|account| {
+                account.owner != solana_sdk_ids::system_program::ID
+                    || account.executable
+                    || !account.data.is_empty()
+            }) {
+                return Err(Error::new(
+                    "terminal certificate prepay requires a vacant system account",
+                ));
+            }
+            let missing =
+                rent.saturating_sub(current.as_ref().map_or(0, |account| account.lamports));
+            if missing > 0 {
+                let evidence = rpc.send(
+                    "ladder: prepay exact terminal certificate rent before durable Execute",
+                    &[solana_system_interface::instruction::transfer(
+                        &founder.pubkey(),
+                        &certificate,
+                        missing,
+                    )],
+                    founder,
+                )?;
+                fees = fees
+                    .checked_add(
+                        evidence
+                            .fee_lamports
+                            .ok_or_else(|| Error::new("certificate prepay omitted fee"))?,
+                    )
+                    .ok_or_else(|| Error::new("certificate prepay fee overflow"))?;
+                compute_units =
+                    compute_units
+                        .checked_add(evidence.compute_units_consumed.ok_or_else(|| {
+                            Error::new("certificate prepay omitted compute units")
+                        })?)
+                        .ok_or_else(|| Error::new("certificate prepay compute overflow"))?;
+                transactions.push(evidence);
+            }
+            primary_countercontrol =
+                durable_primary_countercontrol_v1(rpc, &input, work, provider.lifecycle)?;
+            run(
+                "execute-preflight",
+                vec![
+                    "--input".into(),
+                    input_path.display().to_string(),
+                    "--checkpoint".into(),
+                    checkpoint_path.display().to_string(),
+                    "--through".into(),
+                    "execute".into(),
+                ],
+            )?;
+            let planned: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&checkpoint_path)?)?;
+            execute_plan = planned["stagePlan"].clone();
+            let expected_accounts =
+                dclutch_provider_transport_v3_operator::PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
+                    + dclutch_source::resolution::PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3;
+            if execute_plan["stage"] != "execute"
+                || execute_plan["action"]["accounts"].as_array().map(Vec::len)
+                    != Some(expected_accounts)
+            {
+                return Err(Error::new(
+                    "durable recovery preflight did not produce the canonical frame49",
+                ));
+            }
+            std::fs::write(
+                work.join("execute-preflight-plan.json"),
+                serde_json::to_vec_pretty(&execute_plan)?,
+            )?;
+        }
+        loop {
+            run(
+                stage,
+                vec![
+                    "--input".into(),
+                    input_path.display().to_string(),
+                    "--checkpoint".into(),
+                    checkpoint_path.display().to_string(),
+                    "--through".into(),
+                    stage.into(),
+                    "--submitter-keypair".into(),
+                    founder_key.display().to_string(),
+                    "--resolver-keypair".into(),
+                    founder_key.display().to_string(),
+                    "--payer-keypair".into(),
+                    worker_keypair.display().to_string(),
+                    "--update-keypair".into(),
+                    update_key.display().to_string(),
+                    "--execute".into(),
+                ],
+            )?;
+            let checkpoint: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&checkpoint_path)?)?;
+            let done = match receipt_stage {
+                Some(expected) => checkpoint["receipts"].as_array().is_some_and(|receipts| {
+                    receipts.iter().any(|receipt| receipt["stage"] == expected)
+                }),
+                None => checkpoint["verifiedTerminal"] == true,
+            };
+            if done {
+                break;
+            }
+        }
+    }
+    let accepted_bytes = std::fs::read(&checkpoint_path)?;
+    run(
+        "restart-complete",
+        vec![
+            "--input".into(),
+            input_path.display().to_string(),
+            "--checkpoint".into(),
+            checkpoint_path.display().to_string(),
+            "--through".into(),
+            "complete".into(),
+        ],
+    )?;
+    if std::fs::read(&checkpoint_path)? != accepted_bytes {
+        return Err(Error::new(
+            "read-only complete restart changed the accepted checkpoint",
+        ));
+    }
+    let checkpoint: serde_json::Value = serde_json::from_slice(&accepted_bytes)?;
+    let receipts = checkpoint["receipts"]
+        .as_array()
+        .ok_or_else(|| Error::new("durable checkpoint has no receipts"))?;
+    let stages: Vec<_> = receipts
+        .iter()
+        .map(|receipt| receipt["stage"].as_str())
+        .collect();
+    if stages
+        != [
+            Some("submit"),
+            Some("resolution-provider-execute-v1"),
+            Some("core-terminal-accept-v1"),
+            Some("reclaim"),
+        ]
+        || checkpoint["verifiedTerminal"] != true
+        || !checkpoint["stagePlan"].is_null()
+    {
+        return Err(Error::new(
+            "durable capture omitted an accepted stage or complete terminal verification",
+        ));
+    }
+    let tables: serde_json::Value = serde_json::from_slice(&std::fs::read(&table_path)?)?;
+    let mut all_receipts = tables["receipts"]
+        .as_array()
+        .ok_or_else(|| Error::new("durable table journal has no receipts"))?
+        .clone();
+    if !tables["finalized"].is_null() {
+        all_receipts.push(tables["finalized"].clone());
+    }
+    all_receipts.extend(receipts.iter().cloned());
+    let mut seen = BTreeSet::new();
+    for receipt in &all_receipts {
+        let signature = receipt["signature"]
+            .as_str()
+            .ok_or_else(|| Error::new("durable receipt omitted signature"))?;
+        if !seen.insert(signature.to_owned()) {
+            continue;
+        }
+        let packet = rpc
+            .finalized_signed_packet(
+                "ladder: durable table/provider finalized receipt",
+                signature
+                    .parse::<Signature>()
+                    .map_err(|error| Error::new(format!("durable signature: {error}")))?,
+                false,
+            )?
+            .ok_or_else(|| Error::new("durable finalized receipt disappeared from chain"))?;
+        if packet.evidence.slot
+            != receipt["slot"]
+                .as_u64()
+                .ok_or_else(|| Error::new("durable receipt omitted slot"))?
+            || packet.evidence.fee_lamports != receipt["feeLamports"].as_u64()
+            || packet.evidence.compute_units_consumed != receipt["computeUnitsConsumed"].as_u64()
+        {
+            return Err(Error::new(
+                "durable receipt differs from independently reread transaction metadata",
+            ));
+        }
+        fees = fees
+            .checked_add(
+                packet
+                    .evidence
+                    .fee_lamports
+                    .ok_or_else(|| Error::new("durable packet omitted fee"))?,
+            )
+            .ok_or_else(|| Error::new("durable fee overflow"))?;
+        compute_units = compute_units
+            .checked_add(
+                packet
+                    .evidence
+                    .compute_units_consumed
+                    .ok_or_else(|| Error::new("durable packet omitted compute units"))?,
+            )
+            .ok_or_else(|| Error::new("durable compute overflow"))?;
+        transactions.push(packet.evidence);
+    }
+    let mut table_lamports = 0_u64;
+    for stage in ["submit", "execute", "reclaim"] {
+        let address = pubkey(
+            input["lookupTables"][stage]
+                .as_str()
+                .ok_or_else(|| Error::new("durable input omitted routing table"))?,
+        )?;
+        table_lamports = table_lamports
+            .checked_add(
+                rpc.required_account(address, "durable frozen table")?
+                    .lamports,
+            )
+            .ok_or_else(|| Error::new("durable table rent overflow"))?;
+    }
+    Ok((
+        serde_json::json!({
+            "bootstrapSha256": binary_sha256,
+            "input": input,
+            "receipts": receipts,
+            "checkpoint": checkpoint,
+            "tableJournal": tables,
+            "processInvocations": invocation,
+            "restartCompleteUnchanged": true,
+        "primaryCountercontrol": primary_countercontrol,
+        "executePlan": execute_plan,
+            "computeUnits": compute_units,
+        }),
+        LamportClaimV1::fees(fees).with_unwatched(
+            table_lamports,
+            "three exact frozen tables created by the durable table journal",
+        ),
+    ))
+}
+
+/// Ask the canonical operator for a primary frame against the same submitted
+/// update and Recovery Source. Only the recovery tail is absent; this avoids
+/// conflating that refusal with stale primary timing or a different ALT.
+fn durable_primary_countercontrol_v1(
+    rpc: &mut Rpc,
+    input: &serde_json::Value,
+    work: &Path,
+    lifecycle: Pubkey,
+) -> Result<serde_json::Value> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use dclutch_provider_transport_v3_operator::{
+        ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
+        ProviderTransportOperatorErrorV3, build_provider_execute_v3,
+    };
+    use sha2::{Digest, Sha256};
+    let key = |name: &str| -> Result<Pubkey> {
+        pubkey(
+            input["accounts"][name]
+                .as_str()
+                .ok_or_else(|| Error::new(format!("durable countercontrol omitted {name}")))?,
+        )
+    };
+    let labels = [
+        "market",
+        "sourceState",
+        "updateAccount",
+        "sourceMaterial",
+        "sourceSpec",
+        "sourceProviderRelease",
+        "adapterConfig",
+        "window",
+        "statistic",
+        "pythRelease",
+        "product",
+        "resultDomain",
+        "portfolio",
+    ];
+    let mut keys = labels
+        .iter()
+        .map(|name| key(name))
+        .collect::<Result<Vec<_>>>()?;
+    keys.push(lifecycle);
+    let (_, observed) = rpc.finalized_observed_accounts(&keys, 0)?;
+    let get = |name: &str| -> Result<dclutch_operator::ObservedAccount> {
+        let address = key(name)?;
+        observed
+            .iter()
+            .find(|account| account.key == address)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("countercontrol snapshot omitted {name}")))
+    };
+    let snapshot = ProviderExecuteSnapshotV3 {
+        market: get("market")?,
+        source_state: get("sourceState")?,
+        lifecycle: observed
+            .last()
+            .cloned()
+            .ok_or_else(|| Error::new("countercontrol lifecycle missing"))?,
+        update: get("updateAccount")?,
+        source_material: get("sourceMaterial")?,
+        source_spec: get("sourceSpec")?,
+        source_provider_release: get("sourceProviderRelease")?,
+        adapter_config: get("adapterConfig")?,
+        window: get("window")?,
+        statistic: get("statistic")?,
+        pyth_release: get("pythRelease")?,
+        product: get("product")?,
+        result_domain: get("resultDomain")?,
+        portfolio: get("portfolio")?,
+        recovery_ladder: None,
+    };
+    let deployment = ProviderExecuteDeploymentV3 {
+        registry_programdata: key("registryProgramdata")?,
+        registry_artifact: key("registryArtifact")?,
+        registry_artifact_staging: key("registryArtifactStaging")?,
+        core_programdata: key("coreProgramdata")?,
+        trading_program: key("tradingProgram")?,
+        trading_programdata: key("tradingProgramdata")?,
+        resolution_program: key("resolutionProgram")?,
+        resolution_programdata: key("resolutionProgramdata")?,
+        receiver_config: key("receiverConfig")?,
+    };
+    let intent = ProviderExecuteIntentV3 {
+        resolver: pubkey(
+            input["resolver"]
+                .as_str()
+                .ok_or_else(|| Error::new("countercontrol resolver missing"))?,
+        )?,
+        terminal_sequence: input["terminalSequence"]
+            .as_u64()
+            .ok_or_else(|| Error::new("countercontrol sequence missing"))?,
+        post_update_body: BASE64
+            .decode(
+                input["postUpdateBodyBase64"]
+                    .as_str()
+                    .ok_or_else(|| Error::new("countercontrol post body missing"))?,
+            )
+            .map_err(|error| Error::new(format!("countercontrol post body: {error}")))?,
+    };
+    let mut mutable_keys = vec![lifecycle];
+    for name in [
+        "market",
+        "sourceState",
+        "updateAccount",
+        "fundingLedger",
+        "certificate",
+    ] {
+        mutable_keys.push(key(name)?);
+    }
+    let observe = |rpc: &mut Rpc| -> Result<Vec<serde_json::Value>> {
+        mutable_keys
+            .iter()
+            .map(|key| {
+                Ok(match rpc.account(*key)? {
+                    Some(account) => serde_json::json!({
+                        "key": key.to_string(), "owner": account.owner.to_string(),
+                        "lamports": account.lamports, "executable": account.executable,
+                        "dataSha256": crate::plan::hex(&Sha256::digest(&account.data)),
+                    }),
+                    None => serde_json::json!({"key": key.to_string(), "vacant": true}),
+                })
+            })
+            .collect()
+    };
+    let before = observe(rpc)?;
+    match build_provider_execute_v3(&snapshot, deployment, &intent) {
+        Err(ProviderTransportOperatorErrorV3::State) => {}
+        Err(error) => {
+            return Err(Error::new(format!(
+                "primary countercontrol refused at another boundary: {error:?}"
+            )));
+        }
+        Ok(_) => {
+            return Err(Error::new(
+                "canonical builder accepted a primary frame against a Recovery Source",
+            ));
+        }
+    }
+    let after = observe(rpc)?;
+    if before != after {
+        return Err(Error::new(
+            "read-only primary countercontrol changed protocol account bytes or balances",
+        ));
+    }
+    let result = serde_json::json!({
+        "refusal": format!("provider execute builder: {:?}", ProviderTransportOperatorErrorV3::State),
+        "preflightUnchanged": true, "accounts": after,
+    });
+    std::fs::write(
+        work.join("primary-countercontrol.json"),
+        serde_json::to_vec_pretty(&result)?,
+    )?;
+    Ok(result)
+}
+
 /// The ladder's market has no stranger (it never fills), so the founder holds
 /// every ordinary claim and the escrow the whole failure column. Under the
 /// failure selector every ordinary claim is one atom on the refunding scale,
@@ -760,10 +1328,6 @@ fn continue_to_the_refund(
     worker: &Keypair,
     worker_keypair: &Path,
 ) -> Result<serde_json::Value> {
-    use dclutch_custody::token_svm::{ACCOUNT_BYTES, TOKEN_2022_PROGRAM_ID, TokenAccount};
-    use solana_sdk::instruction::{AccountMeta, Instruction};
-    use solana_system_interface::instruction::create_account;
-
     let evidence_path = request.work.join("founding-evidence.json");
     let base = |sequence: u64| -> Vec<String> {
         vec![
@@ -865,6 +1429,54 @@ fn continue_to_the_refund(
     ));
     transactions.extend(admitted.transactions.iter().cloned());
 
+    let mut payout = continue_to_terminal_payout_v1(
+        checked,
+        request,
+        rpc,
+        stages,
+        transactions,
+        accounts,
+        market,
+        worker,
+        worker_keypair,
+    )?;
+    payout["failureWalk"] = serde_json::json!({
+        "arm": walked.arm,
+        "certificate": walked.certificate.to_string(),
+        "failureSelector": walked.failure_selector,
+        "outcomeCount": walked.outcome_count,
+        "workPaid": work_paid,
+        "signature": walk_signature,
+        "frameAccounts": walked.frame_accounts,
+    });
+    payout["admission"] = serde_json::json!({
+        "certificateKind": format!("{:?}", admitted.kind),
+        "selector": admitted.selector,
+        "transactions": admitted.transactions.len(),
+        "routingTableRentLamports": admitted.table_rent_lamports,
+    });
+    Ok(payout)
+}
+
+/// The same native Claims payout continuation for successful and failed
+/// resolution. Every ordinary holding is settled, including zero-payoff claims.
+#[allow(clippy::too_many_arguments)]
+fn continue_to_terminal_payout_v1(
+    checked: &substrate::CheckedSubstrateV1,
+    request: &LadderRequestV1,
+    rpc: &mut Rpc,
+    stages: &mut Vec<StageV1>,
+    transactions: &mut Vec<TransactionEvidence>,
+    accounts: &std::collections::BTreeMap<String, crate::model::AccountEvidence>,
+    market: Pubkey,
+    worker: &Keypair,
+    worker_keypair: &Path,
+) -> Result<serde_json::Value> {
+    use dclutch_custody::token_svm::{ACCOUNT_BYTES, TOKEN_2022_PROGRAM_ID, TokenAccount};
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    use solana_system_interface::instruction::create_account;
+
+    let evidence_path = request.work.join("founding-evidence.json");
     // ----------------------- 3. the Claims replay exists before its first use
     //
     // Terminal payout deliberately decodes the Claims-role Custody replay; it
@@ -938,6 +1550,20 @@ fn continue_to_the_refund(
     let mint = label_address("collateral_mint")?;
     let hoard = label_address("founding_hoard_vault_open")?;
     let aggregate = label_address("claims_aggregate")?;
+    let aggregate_account = rpc.required_account(aggregate, "terminal Claims aggregate")?;
+    let aggregate_view =
+        dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2::decode(
+            &aggregate_account.data,
+        )
+        .map_err(|error| Error::new(format!("terminal Claims aggregate: {error:?}")))?;
+    if aggregate_account.owner != pubkey(&checked.plan.claims.program_id)?
+        || aggregate_view.logical_market != market.to_bytes()
+    {
+        return Err(Error::new(
+            "terminal Claims aggregate owner or Market changed",
+        ));
+    }
+    let outcome_count = aggregate_view.claim_count;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
     let recipient = Keypair::new();
     let mut initialize = Vec::with_capacity(33);
@@ -976,8 +1602,7 @@ fn continue_to_the_refund(
     let hoard_before = hoard_amount(rpc)?;
 
     // --------------------------- 4. the founder draws only their holdings
-    let ordinary_count = admitted
-        .outcome_count
+    let ordinary_count = outcome_count
         .checked_sub(1)
         .ok_or_else(|| Error::new("a Product with no outcomes"))?;
     let mut refunds = Vec::new();
@@ -1039,29 +1664,100 @@ fn continue_to_the_refund(
             }
             crate::wallet_terminal_payout_exterior::run(arguments.clone())?;
         }
-        let document: serde_json::Value = serde_json::from_slice(&std::fs::read(&evidence)?)?;
+        let accepted = std::fs::read(&evidence)?;
+        crate::wallet_terminal_payout_exterior::run(arguments.clone())?;
+        if std::fs::read(&evidence)? != accepted {
+            return Err(Error::new(
+                "completed terminal payout restart changed accepted evidence",
+            ));
+        }
+        let document: serde_json::Value = serde_json::from_slice(&accepted)?;
+        let mut journals = std::fs::read_dir(&journal_dir)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        journals.sort();
+        let before_packets = transactions.len();
+        for path in journals {
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let journal: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+            let Some(signature) = journal["expectedSignature"].as_str() else {
+                continue; // Lookup activation observes a slot; it sends no packet.
+            };
+            if journal["phase"] != "finalized" {
+                return Err(Error::new(
+                    "completed payout retained an unfinalized signed packet",
+                ));
+            }
+            let packet = rpc
+                .finalized_signed_packet(
+                    &format!("ladder: terminal payout {claim_index}: {}", path.display()),
+                    signature.parse::<Signature>().map_err(|error| {
+                        Error::new(format!("payout journal signature: {error}"))
+                    })?,
+                    false,
+                )?
+                .ok_or_else(|| {
+                    Error::new("terminal payout packet disappeared from finalized history")
+                })?;
+            if Some(packet.evidence.slot) != journal["finalizedSlot"].as_u64()
+                || packet.evidence.fee_lamports != journal["feeLamports"].as_u64()
+                || packet.evidence.compute_units_consumed
+                    != journal["computeUnitsConsumed"].as_u64()
+            {
+                return Err(Error::new(
+                    "payout journal differs from finalized transaction metadata",
+                ));
+            }
+            transactions.push(packet.evidence);
+        }
+        if !transactions[before_packets..]
+            .iter()
+            .any(|packet| Some(packet.signature.as_str()) == document["signature"].as_str())
+        {
+            return Err(Error::new(
+                "terminal payout evidence has no authenticated journal packet",
+            ));
+        }
         let payout = payout_atoms_from_evidence(&document)?;
-        paid_total = paid_total.saturating_add(payout);
+        paid_total = paid_total
+            .checked_add(payout)
+            .ok_or_else(|| Error::new("terminal payout total overflow"))?;
         refunds.push(serde_json::json!({
             "claimIndex": claim_index,
             "payout": payout,
             "passes": passes,
+            "restartUnchanged": true,
+            "finalizedPackets": transactions.len() - before_packets,
             "evidence": evidence.display().to_string(),
         }));
         stages.push(StageV1::new(
-            &format!("the founder is refunded at ordinary index {claim_index}"),
+            &format!("the founder settles ordinary index {claim_index}"),
             "executed",
             format!(
-                "wallet-terminal-payout-input then the shipped payout driver ({passes} \
-                 invocations, one durable stage each) under the ResolutionFailure certificate: \
-                 the evaluator took the refunding failure arm and paid {payout} atoms -- the \
-                 founder's own balance at this index, one atom per ordinary claim, and nothing \
-                 for having chosen the oracle. The recipient is an account the founder key \
-                 owns, opened by this tier."
+                "The native wallet-terminal-payout-input and durable payout driver completed \
+                 {passes} invocations and paid {payout} atoms at claim index {claim_index}. \
+                 The producer derives the payoff from the authenticated terminal certificate; \
+                 the recipient is owned by the founder whose Position was settled."
             ),
         ));
     }
     let hoard_after = hoard_amount(rpc)?;
+    let recipient_after = TokenAccount::parse(
+        &rpc.required_account(recipient.pubkey(), "founder terminal recipient")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("founder terminal recipient: {error:?}")))?
+    .amount;
+    if hoard_before.checked_sub(hoard_after) != Some(paid_total)
+        || hoard_after != 0
+        || recipient_after != paid_total
+    {
+        return Err(Error::new(
+            "terminal payout failed exact Hoard/recipient conservation",
+        ));
+    }
 
     // ----------------------- 5. the escrow's payout is a no-op, recorded
     let claims = pubkey(&checked.plan.claims.program_id)?;
@@ -1069,7 +1765,7 @@ fn continue_to_the_refund(
         claims,
         market.to_bytes(),
         aggregate,
-        admitted.outcome_count,
+        outcome_count,
     )
     .map_err(|error| Error::new(format!("failure escrow: {error}")))?;
     let escrow_refusal =
@@ -1119,28 +1815,14 @@ fn continue_to_the_refund(
     ));
 
     Ok(serde_json::json!({
-        "failureWalk": {
-            "arm": walked.arm,
-            "certificate": walked.certificate.to_string(),
-            "failureSelector": walked.failure_selector,
-            "outcomeCount": walked.outcome_count,
-            "workPaid": work_paid,
-            "signature": walk_signature,
-            "frameAccounts": walked.frame_accounts,
-        },
-        "admission": {
-            "certificateKind": format!("{:?}", admitted.kind),
-            "selector": admitted.selector,
-            "transactions": admitted.transactions.len(),
-            "routingTableRentLamports": admitted.table_rent_lamports,
-        },
         "founder": founder.pubkey().to_string(),
         "founderRecipient": recipient.pubkey().to_string(),
         "refunds": refunds,
         "paidTotal": paid_total,
         "hoardBefore": hoard_before,
         "hoardAfter": hoard_after,
-        "hoardDrained": hoard_before.saturating_sub(hoard_after) == paid_total && hoard_after == 0,
+        "hoardDrained": true,
+        "recipientAfter": recipient_after,
         "escrow": {
             "owner": escrow.owner.to_string(),
             "position": escrow.position.to_string(),
@@ -1275,7 +1957,7 @@ fn rung_capture_v1(
     registry: Pubkey,
     addresses: &ResolutionAddressesV1,
 ) -> Result<RungCaptureV1> {
-    let records = input.recovery_source_records.first().ok_or_else(|| {
+    let records = input.recovery_source_records.last().ok_or_else(|| {
         Error::new(
             "the compiled market publishes no recovery source records: there is no alternative \
              source to answer a rung on",

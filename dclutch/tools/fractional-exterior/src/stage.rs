@@ -383,8 +383,13 @@ fn stage_terminal_at(
             data: Vec::new(),
         });
     }
-    let winning_collateral = if represented_outcome == u32::try_from(WIDTH - 1).expect("winner") {
+    let terminal_payout = if represented_outcome == u32::try_from(WIDTH - 1).expect("winner") {
         SLEEPER_SHARDS / DENOMINATOR
+    } else {
+        0
+    };
+    let initial_collateral_supply = if terminal_payout > 0 {
+        ACTOR_FUNDED_BALANCE
     } else {
         0
     };
@@ -402,12 +407,16 @@ fn stage_terminal_at(
         StagedAccount {
             key: COLLATERAL_MINT,
             owner: token_program(),
-            data: collateral_mint_bytes(winning_collateral),
+            data: collateral_mint_bytes(initial_collateral_supply),
         },
         StagedAccount {
             key: hoard,
             owner: token_program(),
-            data: token_account_bytes(COLLATERAL_MINT, custody_authority, winning_collateral),
+            data: token_account_bytes(
+                COLLATERAL_MINT,
+                custody_authority,
+                initial_collateral_supply,
+            ),
         },
         StagedAccount {
             key: RECIPIENT_TOKEN,
@@ -428,7 +437,8 @@ fn stage_terminal_at(
         custody_authority,
         hoard,
         recipient_token: RECIPIENT_TOKEN,
-        winning_collateral,
+        initial_collateral_supply,
+        terminal_payout,
         terminal_sequence: TERMINAL_SEQUENCE,
     }
 }
@@ -580,8 +590,10 @@ pub struct TerminalStaged {
     pub hoard: Pubkey,
     /// Holder collateral recipient.
     pub recipient_token: Pubkey,
-    /// Exact collateral atoms paid when the sleeper holds the failure winner.
-    pub winning_collateral: u64,
+    /// Exact collateral supply funding every current winner liability.
+    pub initial_collateral_supply: u64,
+    /// Exact reserve slice paid by the sleeper's terminal action.
+    pub terminal_payout: u64,
     /// Terminal sequence committed by Resolution and Core.
     pub terminal_sequence: u64,
 }
@@ -1286,9 +1298,11 @@ mod tests {
         let redeem = stage_terminal_redeem(&elves, &resolution, actor, sleeper);
 
         assert_eq!(zero.base.representation_coordinate, OUTCOME as usize);
-        assert_eq!(zero.winning_collateral, 0);
+        assert_eq!(zero.initial_collateral_supply, 0);
+        assert_eq!(zero.terminal_payout, 0);
         assert_eq!(redeem.base.representation_coordinate, WIDTH - 1);
-        assert_eq!(redeem.winning_collateral, SLEEPER_SHARDS / DENOMINATOR);
+        assert_eq!(redeem.initial_collateral_supply, ACTOR_FUNDED_BALANCE);
+        assert_eq!(redeem.terminal_payout, SLEEPER_SHARDS / DENOMINATOR);
         for staged in [&zero, &redeem] {
             assert!(
                 staged

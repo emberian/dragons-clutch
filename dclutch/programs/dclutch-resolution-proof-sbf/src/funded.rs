@@ -492,7 +492,6 @@ pub fn process_funded_transition(
     if source_state.market() != request.market
         || source_state.generation() != request.generation
         || source_state.material_id() != source.material_id
-        || request.terminal_sequence == 0
     {
         return Err(FundedWalkErrorV1::Request);
     }
@@ -542,6 +541,28 @@ pub fn process_funded_transition(
             ladder.policy_id.to_bytes(),
         ),
     };
+    let first_rung = source.material.ensemble().first_rung_index();
+    let recovery_rung_count = if source.material.ensemble().is_single() {
+        ladder.policy.attempt_count()
+    } else {
+        source.material.ensemble_rungs()
+    };
+    let expected_sequence = match certificate_kind {
+        ResolutionCertificateKindV2::RecoveryAdvanced => u64::from(
+            attempt_index
+                .checked_sub(u32::from(first_rung))
+                .ok_or(FundedWalkErrorV1::Request)?,
+        )
+        .checked_add(2)
+        .ok_or(FundedWalkErrorV1::Request)?,
+        ResolutionCertificateKindV2::Exhausted => u64::from(recovery_rung_count)
+            .checked_add(2)
+            .ok_or(FundedWalkErrorV1::Request)?,
+        _ => return Err(FundedWalkErrorV1::Transition),
+    };
+    if request.terminal_sequence != expected_sequence {
+        return Err(FundedWalkErrorV1::Request);
+    }
 
     let (next_funding, work_paid, funding_remaining, funding_lamports_after) =
         plan_funding_release(escrow, selecting_config)?;
@@ -608,7 +629,7 @@ pub fn plan_deadline_failure_v1(
     if source_state.market() != request.market
         || source_state.generation() != request.generation
         || source_state.material_id() != source.material_id
-        || request.terminal_sequence == 0
+        || source_state.next_terminal_sequence().ok() != Some(request.terminal_sequence)
     {
         return Err(FundedWalkErrorV1::Request);
     }

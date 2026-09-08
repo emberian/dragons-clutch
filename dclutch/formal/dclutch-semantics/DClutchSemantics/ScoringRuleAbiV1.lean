@@ -14,7 +14,7 @@ persists AROUND that rule and what a caller sends to move it:
   `inventoryMinimum` and `liquidityCost`, so `Ŵ = minimum − cost`;
 * the **quote** -- one account per Dealer, rewritten by every `DealerQuote`,
   carrying the price vector `p̂(inv)` at the fund revision it was derived at;
-* the four **requests** (found, quote, fill, withdraw) and the one **receipt**
+* the five **requests** (found, quote, fill, withdraw, redeem) and the one **receipt**
   every route returns;
 * the **fill witness** the accelerator's Dealer arm evaluates: the rule, the
   inventory and the fund scalars the request is checked against.
@@ -71,6 +71,7 @@ def foundRequestMagic : String := "DCLSFDR1"
 def quoteRequestMagic : String := "DCLSQTR1"
 def fillRequestMagic : String := "DCLSFLR1"
 def withdrawRequestMagic : String := "DCLSWDR1"
+def redeemRequestMagic : String := "DCLSRDR1"
 def receiptMagic : String := "DCLSRCP1"
 def fillWitnessMagic : String := "DCLSFLW1"
 
@@ -151,7 +152,7 @@ def quoteBytes : Nat := schemaWidth quoteSchema
 theorem quote_is_240_bytes : quoteBytes = 240 := by decide
 theorem quote_tiles : tiles 0 quoteLayout quoteBytes = true := by decide
 
-/-! ## The four requests -/
+/-! ## The five requests -/
 
 inductive FoundRequestField where
   | magic | version | outcomeCount | reserved | market | dealerId | releaseSet
@@ -185,6 +186,16 @@ def quoteRequestBytes : Nat := schemaWidth quoteRequestSchema
 
 theorem quote_request_is_88_bytes : quoteRequestBytes = 88 := by decide
 theorem quote_request_tiles : tiles 0 quoteRequestLayout quoteRequestBytes = true := by decide
+
+/-- Redemption owns only this optimistic fund prefix. The following bytes are
+Claims' canonical terminal-settlement request; its width and fields remain
+Claims-owned. A redemption is permissionless and returns collateral into the
+fund's same TradingPrincipal vault. -/
+def redeemRequestSchema := quoteRequestSchema
+def redeemRequestLayout := specialize redeemRequestSchema
+def redeemRequestBytes := schemaWidth redeemRequestSchema
+theorem redeem_request_is_88_bytes : redeemRequestBytes = 88 := by decide
+theorem redeem_request_tiles : tiles 0 redeemRequestLayout redeemRequestBytes = true := by decide
 
 /-- The fill: the taker's proposed uniform price vector `p̂` (R2 holds it to
 `p̂(inv′)` within `τ`), `mint` complete sets minted at par into the fill
@@ -237,6 +248,7 @@ def routeFound : UInt8 := 0
 def routeQuote : UInt8 := 1
 def routeFill : UInt8 := 2
 def routeWithdraw : UInt8 := 3
+def routeRedeem : UInt8 := 4
 
 inductive ReceiptField where
   | magic | version | route | outcomeCount | reserved | requestDigest | market
@@ -361,6 +373,21 @@ def withdrawFrame : List FrameSlot := [
   ⟨"activation_cache", false, false⟩, -- 12
   ⟨"registry_program", false, false⟩  -- 13
 ]
+
+/-- Followed by Claims' terminal settlement frame. The payer authorizes fees;
+payout can only return into the fund's canonical vault. -/
+def redeemFrame : List FrameSlot := [
+  ⟨"payer", true, true⟩,
+  ⟨"fund", true, false⟩,
+  ⟨"rule", false, false⟩,
+  ⟨"market", false, false⟩,
+  ⟨"vault", true, false⟩,
+  ⟨"claims_program", false, false⟩,
+  ⟨"custody_program", false, false⟩,
+  ⟨"activation_cache", false, false⟩,
+  ⟨"registry_program", false, false⟩
+]
+theorem redeem_frame_is_9 : redeemFrame.length = 9 := by decide
 
 theorem found_frame_is_21 : foundFrame.length = 21 := by decide
 /-- The quote frame carries the release waist because the price it writes is a
@@ -505,6 +532,9 @@ def QuoteRequestField.constantName : QuoteRequestField → String
   | .market => "QUOTE_REQUEST_MARKET_OFFSET"
   | .dealerId => "QUOTE_REQUEST_DEALER_ID_OFFSET"
   | .expectedFundRevision => "QUOTE_REQUEST_EXPECTED_FUND_REVISION_OFFSET"
+
+def RedeemRequestFieldName (field : QuoteRequestField) : String :=
+  "REDEEM" ++ ((QuoteRequestField.constantName field).drop 5).toString
 
 def FillRequestField.constantName : FillRequestField → String
   | .magic => "FILL_REQUEST_MAGIC_OFFSET"

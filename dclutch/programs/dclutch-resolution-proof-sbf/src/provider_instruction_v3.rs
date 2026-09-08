@@ -50,8 +50,7 @@ use dclutch_source::resolution::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
-    provider_resolution_direct_intent_digest_v1,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, provider_resolution_direct_intent_digest_v1,
 };
 use dclutch_source::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
@@ -76,6 +75,9 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign};
 
 use crate::market_admission_v1::RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1;
+use crate::relay_transport_v1::{
+    TerminalOutputFundingV1, initialize_certificate_at_kind, terminal_output_funding_for_material,
+};
 use crate::{
     ResolutionError, authenticate_clock, authenticate_rent, cached_deployment_observation,
     pinned_deployment_refusal,
@@ -205,10 +207,19 @@ pub(crate) fn process_provider_resolution_v3(
         // action until a dedicated composition owns that poststate.
         return Err(ResolutionError::SourceLadder.into());
     }
+    let terminal_output_funding = terminal_output_funding_for_material(source_records.material);
     drop(source_data);
     drop(result_domain_data);
     drop(update_data);
-    commit_plan(program_id, &request, frame, &rent, &lifecycle, &plan)
+    commit_plan(
+        program_id,
+        &request,
+        frame,
+        &rent,
+        &lifecycle,
+        terminal_output_funding,
+        &plan,
+    )
 }
 
 const fn map_provider_join_error(error: ProviderJoinErrorV3) -> ResolutionError {
@@ -364,6 +375,7 @@ fn commit_plan<'info>(
     frame: ProviderFrameV3<'_, 'info>,
     rent: &Rent,
     lifecycle: &ProviderUpdateLifecycleV3,
+    terminal_output_funding: TerminalOutputFundingV1,
     plan: &crate::provider_v3::ProviderResolutionPlanV3,
 ) -> ProgramResult {
     let next_source = Box::new(plan.next_source.to_bytes());
@@ -378,6 +390,7 @@ fn commit_plan<'info>(
         &certificate,
         &lifecycle_bytes,
         plan.capture,
+        terminal_output_funding,
     )?;
     set_provider_receipt(plan)
 }
@@ -1124,6 +1137,7 @@ fn commit_outputs<'info>(
     certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES_V2],
     lifecycle: &[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V3],
     capture: ProviderCaptureV3,
+    terminal_output_funding: TerminalOutputFundingV1,
 ) -> ProgramResult {
     let source_account = frame.account(2);
     let certificate_account = frame.account(3);
@@ -1156,6 +1170,7 @@ fn commit_outputs<'info>(
         frame.system(),
         rent,
         capture,
+        terminal_output_funding,
     )?;
     let mut certificate_output = certificate_account
         .try_borrow_mut_data()
@@ -1187,32 +1202,27 @@ fn initialize_certificate<'info>(
     system: &AccountInfo<'info>,
     rent: &Rent,
     capture: ProviderCaptureV3,
+    terminal_output_funding: TerminalOutputFundingV1,
 ) -> ProgramResult {
+    if matches!(capture, ProviderCaptureV3::Terminal) {
+        return initialize_certificate_at_kind(
+            program_id,
+            1,
+            request.terminal_sequence,
+            source,
+            certificate,
+            system,
+            rent,
+            terminal_output_funding,
+        );
+    }
     let sequence_seed = request.terminal_sequence.to_le_bytes();
-    let expected = match capture {
-        ProviderCaptureV3::Terminal => {
-            // Lean-owned Runtime V2 wire tag for ResolutionSuccess.
-            let kind_seed = [1_u8];
-            let (expected, _) = Pubkey::find_program_address(
-                &[
-                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-                    source.key.as_ref(),
-                    &kind_seed,
-                    &sequence_seed,
-                ],
-                program_id,
-            );
-            expected
-        }
-        ProviderCaptureV3::Member(member) => {
-            let seeds = EnsembleFragmentSeatSeedsV1::new(
-                source.key.to_bytes(),
-                member,
-                request.terminal_sequence,
-            );
-            Pubkey::find_program_address(&seeds.seeds(), program_id).0
-        }
+    let ProviderCaptureV3::Member(member) = capture else {
+        return Err(ResolutionError::Transition.into());
     };
+    let seeds =
+        EnsembleFragmentSeatSeedsV1::new(source.key.to_bytes(), member, request.terminal_sequence);
+    let expected = Pubkey::find_program_address(&seeds.seeds(), program_id).0;
     if certificate.key != &expected {
         return Err(ResolutionError::OutputState.into());
     }
@@ -1235,58 +1245,25 @@ fn initialize_certificate<'info>(
     {
         return Err(ResolutionError::OutputState.into());
     }
-    match capture {
-        ProviderCaptureV3::Terminal => {
-            let kind_seed = [1_u8];
-            let (_, bump) = Pubkey::find_program_address(
-                &[
-                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-                    source.key.as_ref(),
-                    &kind_seed,
-                    &sequence_seed,
-                ],
-                program_id,
-            );
-            let bump_seed = [bump];
-            allocate_and_assign_output(
-                program_id,
-                certificate,
-                system,
-                &[
-                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-                    source.key.as_ref(),
-                    kind_seed.as_slice(),
-                    sequence_seed.as_slice(),
-                    bump_seed.as_slice(),
-                ],
-            )
-        }
-        ProviderCaptureV3::Member(member) => {
-            let (_, bump) = Pubkey::find_program_address(
-                &EnsembleFragmentSeatSeedsV1::new(
-                    source.key.to_bytes(),
-                    member,
-                    request.terminal_sequence,
-                )
-                .seeds(),
-                program_id,
-            );
-            let member_seed = [member];
-            let bump_seed = [bump];
-            allocate_and_assign_output(
-                program_id,
-                certificate,
-                system,
-                &[
-                    dclutch_source::ENSEMBLE_FRAGMENT_PDA_DOMAIN_V1,
-                    source.key.as_ref(),
-                    member_seed.as_slice(),
-                    sequence_seed.as_slice(),
-                    bump_seed.as_slice(),
-                ],
-            )
-        }
-    }
+    let (_, bump) = Pubkey::find_program_address(
+        &EnsembleFragmentSeatSeedsV1::new(source.key.to_bytes(), member, request.terminal_sequence)
+            .seeds(),
+        program_id,
+    );
+    let member_seed = [member];
+    let bump_seed = [bump];
+    allocate_and_assign_output(
+        program_id,
+        certificate,
+        system,
+        &[
+            dclutch_source::ENSEMBLE_FRAGMENT_PDA_DOMAIN_V1,
+            source.key.as_ref(),
+            member_seed.as_slice(),
+            sequence_seed.as_slice(),
+            bump_seed.as_slice(),
+        ],
+    )
 }
 
 fn allocate_and_assign_output<'info>(

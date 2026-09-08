@@ -676,6 +676,7 @@ pub struct GeneralPlaceOrderActualFrameV2<'a> {
     pub source_key: [u8; 32],
     pub source_program: [u8; 32],
     pub source_data: &'a [u8],
+    pub destination_key: [u8; 32],
 }
 
 /// Authenticate PlaceOrder's physical Claims RentCredit and return the wallet
@@ -685,7 +686,7 @@ pub struct GeneralPlaceOrderActualFrameV2<'a> {
 /// the preceding actual-frame checks have already authenticated; in particular
 /// `expected_credit` is the Core's persisted canonical credit key. The returned
 /// wallet is intentionally not compared to signed terms here: the candidate's
-/// `EnvironmentRentCredit` clause owns that maker join.  This keeps a valid
+/// `EnvironmentRentRefund` clause owns that maker join.  This keeps a valid
 /// credit whose refund wallet differs from a maker observable, then refuses it
 /// at the named semantic clause rather than by treating a request assertion as
 /// account observation.
@@ -797,6 +798,7 @@ pub fn seed_general_place_order_actual_identities_v2(
     }
     if frame.realm_key == [0; 32]
         || frame.source_key == [0; 32]
+        || frame.destination_key == [0; 32]
         || frame.core_market_key == [0; 32]
         || frame.claims_market_key == [0; 32]
         || frame.maker_position_key == [0; 32]
@@ -907,6 +909,15 @@ pub fn seed_general_place_order_actual_identities_v2(
         )
         .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
         core.identity.selected_release_set.to_bytes();
+    // `realm_id` is the authenticated Realm CONTENT identity. The frame key
+    // above is its Registry address; Custody intentionally carries the
+    // content identity so it can re-derive and authenticate that address.
+    *identities
+        .get_mut(
+            usize::try_from(identity::REALM)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = realm_id;
     *identities
         .get_mut(
             usize::try_from(identity::RENT_PROGRAM)
@@ -928,6 +939,31 @@ pub fn seed_general_place_order_actual_identities_v2(
         .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = source_owner;
     *identities
         .get_mut(
+            usize::try_from(identity::CUSTODY_SOURCE)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = frame.source_key;
+    *identities
+        .get_mut(
+            usize::try_from(identity::CUSTODY_DESTINATION)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = frame.destination_key;
+    *identities
+        .get_mut(
+            usize::try_from(identity::MINT)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = frame.mint_key;
+    *identities
+        .get_mut(
+            usize::try_from(identity::TOKEN_PROGRAM)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
+        frame.token_program_key;
+    *identities
+        .get_mut(
             usize::try_from(identity::POSITION_ZERO_OWNER)
                 .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
         )
@@ -935,6 +971,12 @@ pub fn seed_general_place_order_actual_identities_v2(
     *identities
         .get_mut(
             usize::try_from(identity::RENT_CREDIT)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = frame.rent_credit_key;
+    *identities
+        .get_mut(
+            usize::try_from(identity::RENT_REFUND)
                 .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
         )
         .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
@@ -1000,7 +1042,7 @@ pub mod identity {
     pub const RENT_REFUND: u32 = 19;
     /// General settlement Position owner.
     pub const SETTLEMENT_POSITION_OWNER: u32 = 20;
-    /// Permanent RentCredit identity for Claims lifecycle.
+    /// Permanent RentCredit account identity for Claims lifecycle.
     pub const RENT_CREDIT: u32 = 21;
     /// Program owning the RentCredit.
     pub const RENT_PROGRAM: u32 = 22;
@@ -2344,8 +2386,8 @@ pub fn project_general_place_order_candidate_in_place_v3(
         PlaceOrderClauseV3::EnvironmentSettlementPositionOwner,
     )?;
     place_order_clause(
-        environment.rent_credit != owner,
-        PlaceOrderClauseV3::EnvironmentRentCredit,
+        environment.rent_refund != owner,
+        PlaceOrderClauseV3::EnvironmentRentRefund,
     )?;
     let mut claims_affine_active = false;
     for item in 0..outcome_count {
@@ -2454,6 +2496,10 @@ pub fn project_general_place_order_candidate_in_place_v3(
             DeltaDirectionV2::Credit as u64,
         ),
         (scalar::CUSTODY_OPERATION, OperationV1::Transfer as u64),
+        // PlaceOrder creates one replay (0 -> 1), then its vault (1 -> 2),
+        // before the guarded collateral deposit advances the same replay.
+        (scalar::CUSTODY_EXPECTED_REVISION, 2),
+        (scalar::CUSTODY_RESULTING_REVISION, 3),
     ] {
         write_scalar(candidate, coordinate, value)?;
     }
@@ -7989,7 +8035,7 @@ mod tests {
             environment.destination_vault_context = order.order_id();
             environment.custody_source_owner = order.header().owner_id;
             environment.settlement_position_owner = order.order_id();
-            environment.rent_credit = order.header().owner_id;
+            environment.rent_refund = order.header().owner_id;
             let mut candidate =
                 place_order_input(outcome_count, environment, root, batch, order, current_slot);
             let mut signed_terms =
@@ -8063,7 +8109,7 @@ mod tests {
         environment.destination_vault_context = order.order_id();
         environment.custody_source_owner = order.header().owner_id;
         environment.settlement_position_owner = order.order_id();
-        environment.rent_credit = order.header().owner_id;
+        environment.rent_refund = order.header().owner_id;
         let mut candidate =
             place_order_input(outcome_count, environment, root, batch, order, current_slot);
         let mut signed_terms =
@@ -8126,7 +8172,7 @@ mod tests {
         environment.destination_vault_context = order.order_id();
         environment.custody_source_owner = order.header().owner_id;
         environment.settlement_position_owner = order.order_id();
-        environment.rent_credit = order.header().owner_id;
+        environment.rent_refund = order.header().owner_id;
         let mut candidate =
             place_order_input(outcome_count, environment, root, batch, order, current_slot);
         let scalar_count =
@@ -8169,7 +8215,7 @@ mod tests {
         environment.destination_vault_context = order.order_id();
         environment.custody_source_owner = [0xee; 32];
         environment.settlement_position_owner = order.order_id();
-        environment.rent_credit = order.header().owner_id;
+        environment.rent_refund = order.header().owner_id;
         let mut candidate =
             place_order_input(outcome_count, environment, root, batch, order, current_slot);
         let before = candidate.clone();
@@ -8208,7 +8254,7 @@ mod tests {
         environment.destination_vault_context = order.order_id();
         environment.custody_source_owner = order.header().owner_id;
         environment.settlement_position_owner = order.order_id();
-        environment.rent_credit = order.header().owner_id;
+        environment.rent_refund = order.header().owner_id;
         let mut candidate =
             place_order_input(outcome_count, environment, root, batch, order, current_slot);
         let base = GENERAL_HOT_COMMON_SCALARS_V3;

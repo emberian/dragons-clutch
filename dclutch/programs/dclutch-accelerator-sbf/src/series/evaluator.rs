@@ -27,6 +27,7 @@ use dclutch_trading::series::{
 use dclutch_trading_sbf::series::{
     consume_artifacts_v4::{
         SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4, SERIES_CONSUME_COMMON_SCALAR_COUNT_V4,
+        SERIES_CONSUME_DERIVED_REQUEST_SCALAR_START_V1,
     },
     effect_v4::{SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4, SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4},
 };
@@ -58,7 +59,7 @@ pub const SERIES_SHADOW_SCALAR_COUNT_V4: usize = SERIES_CONSUME_COMMON_SCALAR_CO
 pub const SERIES_SHADOW_IDENTITY_COUNT_V4: usize = SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4 as usize;
 const SERIES_SHADOW_INJECTED_ACCOUNT_COUNT_V4: usize = 5;
 const SERIES_SHADOW_LOCK_ACCOUNT_COUNT_V4: usize = 14;
-const SERIES_SHADOW_FOUND_ACCOUNT_START_V4: usize =
+pub(crate) const SERIES_SHADOW_FOUND_ACCOUNT_START_V4: usize =
     SERIES_SHADOW_INJECTED_ACCOUNT_COUNT_V4 + SERIES_SHADOW_LOCK_ACCOUNT_COUNT_V4;
 const SERIES_SHADOW_CURRENT_FOUND_ACCOUNT_COUNT_V4: usize = 37;
 const SERIES_SHADOW_FOUND_SERIES_TAIL_START_V4: usize =
@@ -87,15 +88,10 @@ pub(crate) const SERIES_LINKED_BASIS_STAGING_COORDINATE_V4: usize =
 const SERIES_TICKET_STATE_COORDINATE_V4: usize = SERIES_SHADOW_FOUND_SERIES_TAIL_START_V4 + 3;
 pub(crate) const SERIES_TEMPLATE_RAW_COORDINATE_V4: usize =
     SERIES_SHADOW_FOUND_SERIES_TAIL_START_V4 + 4;
-pub(crate) const SERIES_TEMPLATE_STAGING_COORDINATE_V4: usize =
-    SERIES_TEMPLATE_RAW_COORDINATE_V4 + 1;
 pub(crate) const SERIES_OCCURRENCE_RAW_COORDINATE_V4: usize =
     SERIES_SHADOW_FOUND_SERIES_TAIL_START_V4 + 6;
-pub(crate) const SERIES_OCCURRENCE_STAGING_COORDINATE_V4: usize =
-    SERIES_OCCURRENCE_RAW_COORDINATE_V4 + 1;
 pub(crate) const SERIES_TICKET_RAW_COORDINATE_V4: usize =
     SERIES_SHADOW_FOUND_SERIES_TAIL_START_V4 + 8;
-pub(crate) const SERIES_TICKET_STAGING_COORDINATE_V4: usize = SERIES_TICKET_RAW_COORDINATE_V4 + 1;
 pub(crate) const SERIES_CLOCK_COORDINATE_V4: usize = SERIES_SHADOW_FOUND_SERIES_TAIL_START_V4 + 10;
 const SERIES_CORE_FOUND_ROUTE_V4: usize = 1;
 const SERIES_CORE_OPEN_ROUTE_V4: usize = 4;
@@ -139,12 +135,19 @@ pub struct EmbeddedSeriesShadowBundleV4<'a> {
 /// The Product projection is the output of the canonical Product Runtime
 /// graph reader. `now_slot` is accepted only when it equals the Clock bytes in
 /// the authenticated AccountProfile vector.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SeriesShadowAuthenticatedFactsV4 {
     /// Canonical Product Runtime graph projection.
     pub product: AuthenticatedProductProjectionV2,
     /// Current slot authenticated from the canonical Clock sysvar.
     pub now_slot: u64,
+    /// Native Series request words derived by this callback from authenticated
+    /// runtime records and selected child programs.
+    ///
+    /// The physical adapter is the only production constructor. These words
+    /// are never accepted in instruction data or copied from Trading's
+    /// interpreted candidate.
+    pub(crate) derived_scalars: Vec<u64>,
 }
 
 /// Independently observed input for one stateless comparison.
@@ -211,6 +214,7 @@ pub fn evaluate_series_shadow_aot_v4(input: SeriesShadowEvaluationV4<'_>) -> Res
         input.profile_observations,
         input.transcript_observations,
     )?;
+    let mut authenticated_facts = input.authenticated_facts;
     let candidate = project_candidate_registers(
         profile,
         input.bundle.request_profile,
@@ -218,13 +222,11 @@ pub fn evaluate_series_shadow_aot_v4(input: SeriesShadowEvaluationV4<'_>) -> Res
         shadow,
         funding_count,
         input.profile_observations,
+        core::mem::take(&mut authenticated_facts.derived_scalars),
     )?;
 
-    let expected_core = evaluate_semantic_core_request(
-        shadow,
-        input.profile_observations,
-        input.authenticated_facts,
-    )?;
+    let expected_core =
+        evaluate_semantic_core_request(shadow, input.profile_observations, authenticated_facts)?;
     let (output_lamports, request_bank, routes) = project_effect(
         profile,
         input.bundle.effect,
@@ -282,8 +284,11 @@ fn project_candidate_registers(
     shadow: ShadowRequestV3<'_>,
     funding_count: usize,
     observations: &[AccountObservationV1<'_>],
+    mut first_scalars: Vec<u64>,
 ) -> Result<SeriesCandidateRegistersV4> {
-    let mut first_scalars = vec![0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
+    if first_scalars.len() != SERIES_SHADOW_SCALAR_COUNT_V4 {
+        return Err(SeriesShadowAotErrorV4::Runtime);
+    }
     let mut first_identities = vec![[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
     let mut second_scalars = vec![0_u64; SERIES_SHADOW_SCALAR_COUNT_V4];
     let mut second_identities = vec![[0_u8; 32]; SERIES_SHADOW_IDENTITY_COUNT_V4];
@@ -309,6 +314,10 @@ fn project_candidate_registers(
         None,
     )
     .map_err(|_| SeriesShadowAotErrorV4::AccountProfile)?;
+    let derived_start = usize::from(SERIES_CONSUME_DERIVED_REQUEST_SCALAR_START_V1);
+    if third_scalars.get(derived_start..) != first_scalars.get(derived_start..) {
+        return Err(SeriesShadowAotErrorV4::AccountProfile);
+    }
 
     let request_profile = RequestProfileV1::decode(request_profile_bytes)
         .map_err(|_| SeriesShadowAotErrorV4::RequestProfile)?;

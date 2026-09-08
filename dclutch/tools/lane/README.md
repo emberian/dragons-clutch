@@ -52,11 +52,16 @@ missing patch file, and being run outside the repository root. Reads the commit
 back the way `lane.sh commit` does.
 
 **After the commit it reconciles the working tree**, per path, three ways: the
-patch applies, so it is applied; it does not, but its reverse does, so the hunk
-is already there and nothing happens; or neither, so a foreign hunk is in the
-way and the path is left alone and named. `git apply` writes nothing unless
-every context line matches, so the first branch can add your hunk and can never
-overwrite another lane's.
+reverse patch applies, so the hunk is already there and nothing happens;
+otherwise the forward patch applies, so it is applied; or neither, so a foreign
+hunk is in the way and the path is left alone and named. `git apply` writes
+nothing unless every context line matches, so applying the patch preserves
+another lane's edit.
+
+The reverse check comes first because repeated surrounding context can admit
+both directions. Forward-first duplicated an already-present Dealer dispatch
+insertion on 2026-09-08; the regression control preserves exactly one committed
+insertion while leaving the other lane's separate edit untouched.
 
 That step is not tidiness. Until 2026-09-02 the index was written and the
 working tree was not, so every path in a patch built in a detached worktree —

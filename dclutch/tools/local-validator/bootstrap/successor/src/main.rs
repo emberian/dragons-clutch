@@ -100,6 +100,7 @@ mod structured_claims_producer;
 mod structured_composition_admission;
 mod structured_market;
 mod structured_physical_frame;
+mod structured_representation_campaign;
 mod terminal_exterior_pyth;
 mod terminal_lifecycle;
 mod terminal_sequence;
@@ -394,6 +395,12 @@ fn run() -> Result<()> {
         }
         Some(command) if command == direct_fee_settlement::COMMAND_DEVNET_V1 => {
             direct_fee_settlement::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_REDEEM_LOCAL_V1 => {
+            scoring_dealer::run_redeem_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == scoring_dealer::COMMAND_REDEEM_V1 => {
+            scoring_dealer::run_redeem_devnet_v1(arguments.collect())
         }
         Some(command) if command == scoring_dealer::COMMAND_FOUND_LOCAL_V1 => {
             scoring_dealer::run_found_owned_loopback_v1(arguments.collect())

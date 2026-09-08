@@ -1435,6 +1435,20 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         .expect("Mint supply field")
         .copy_from_slice(&COEFFICIENT.to_le_bytes());
     context.set_account(&f.shard_mint, &AccountSharedData::from(outstanding));
+    let supply_guard_keys = [
+        f.graph.core_market,
+        f.graph.claims_market,
+        f.receipt_mint,
+        f.shard_mint,
+        f.structured_custody,
+        f.position,
+        f.admission,
+        f.rent_credit,
+    ];
+    let mut before_supply_guard = Vec::new();
+    for key in supply_guard_keys {
+        before_supply_guard.push(account(&mut context, key).await);
+    }
     let (accepted, logs, _, _) = submit(
         &mut context,
         retire_coordinate.clone(),
@@ -1449,17 +1463,18 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         "a coordinate whose Mint still carries supply must not be retired"
     );
     assert!(
-        logs.iter()
-            .any(|line| line.starts_with(&format!("Program {CLAIMS} failed"))),
-        "the nonzero-supply refusal must be Claims's own: {}",
-        logs.join("\n")
+        refused_with(&logs, RationalLifecycleSbfErrorV2::MintSupply as u32),
+        "nonzero-supply exact refusal: {}",
+        logs.join("\n"),
     );
-    for key in [f.structured_custody, f.position, f.admission, f.rent_credit] {
-        assert!(
-            account(&mut context, key).await.is_some(),
-            "a refused retirement closes nothing"
-        );
+    let mut after_supply_guard = Vec::new();
+    for key in supply_guard_keys {
+        after_supply_guard.push(account(&mut context, key).await);
     }
+    assert_eq!(
+        after_supply_guard, before_supply_guard,
+        "nonzero supply preserves every resource, balance and revision"
+    );
     context.set_account(&f.shard_mint, &AccountSharedData::from(live_shard));
     assert_eq!(
         [
@@ -2153,7 +2168,21 @@ async fn a_substituted_custody_owner_identity_still_refuses_the_retirement() {
 }
 
 #[tokio::test]
-async fn complete_sparse_support_refuses_omitted_duplicate_and_extra_rows_without_mutation() {
+async fn complete_sparse_support_refuses_omitted_without_mutation() {
+    complete_sparse_support_guard("omitted").await;
+}
+
+#[tokio::test]
+async fn complete_sparse_support_refuses_duplicate_without_mutation() {
+    complete_sparse_support_guard("duplicate").await;
+}
+
+#[tokio::test]
+async fn complete_sparse_support_refuses_extra_without_mutation() {
+    complete_sparse_support_guard("extra").await;
+}
+
+async fn complete_sparse_support_guard(case: &str) {
     let (mut context, f, accepted, table, addresses) =
         retired_coordinate_awaiting_its_receipt("sparse support guards").await;
     let rent = account(&mut context, f.rent_credit)
@@ -2182,7 +2211,10 @@ async fn complete_sparse_support_refuses_omitted_duplicate_and_extra_rows_withou
         ("omitted", vec![]),
         ("duplicate", vec![row, row]),
         ("extra", vec![row, zero_weight]),
-    ] {
+    ]
+    .into_iter()
+    .filter(|(label, _)| *label == case)
+    {
         let mut hostile_header = header;
         hostile_header.coordinate_count = u32::try_from(rows.len()).expect("support count");
         let mut row_bytes = vec![0; rows.len() * LIFECYCLE_COORDINATE_BYTES_V2];
@@ -2198,15 +2230,19 @@ async fn complete_sparse_support_refuses_omitted_duplicate_and_extra_rows_withou
             .expect("structurally valid hostile")
             .encode_into(&mut bytes)
             .expect("hostile bytes");
+        let instruction = wrapped(&f, bytes, false, false);
+        let hostile_addresses =
+            lookup_addresses(context.payer.pubkey(), std::slice::from_ref(&instruction));
+        let hostile_table = create_lookup_table(&mut context, &hostile_addresses, label).await;
         let mut before = Vec::new();
         for key in keys {
             before.push(account(&mut context, key).await);
         }
         let (committed, logs, _, _) = submit(
             &mut context,
-            wrapped(&f, bytes, false, false),
-            table,
-            &addresses,
+            instruction,
+            hostile_table,
+            &hostile_addresses,
             label,
         )
         .await

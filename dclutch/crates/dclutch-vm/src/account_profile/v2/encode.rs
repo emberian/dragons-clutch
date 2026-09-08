@@ -4661,6 +4661,11 @@ mod tests {
 
         static OWNER: [u8; 32] = [0x44; 32];
         static SHARED: [u8; 32] = [0x66; 32];
+        static PREFIX_COLLISION: [u8; 32] = [
+            0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67,
+            0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67,
+            0x67, 0x67, 0x67, 0x67,
+        ];
         static OTHER: [u8; 32] = [0x99; 32];
         let owner = OWNER;
         let observe = |borrowed_key: &'static [u8; 32]| {
@@ -4713,6 +4718,26 @@ mod tests {
         let mut output_scalars = [0_u64];
         let mut scratch_identities = [[0_u8; 32]];
         let mut output_identities = [[0_u8; 32]];
+        // Sharing the comparison prefix is not alias authority. Distinct full
+        // keys remain distinct representatives even on the fast path.
+        assert_eq!(
+            project_dynamic_fixed_spans_atomic(
+                undeclared,
+                0,
+                &[2],
+                &observe(&PREFIX_COLLISION),
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+                None,
+            ),
+            Ok(())
+        );
         assert_eq!(
             project_dynamic_fixed_spans_atomic(
                 undeclared,

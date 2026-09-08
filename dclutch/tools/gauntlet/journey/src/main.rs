@@ -276,6 +276,8 @@ mod structured_market;
 #[path = "../../../local-validator/bootstrap/successor/src/structured_physical_frame.rs"]
 #[allow(dead_code)]
 mod structured_physical_frame;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_representation_campaign.rs"]
+mod structured_representation_campaign;
 #[path = "../../../local-validator/bootstrap/successor/src/terminal_exterior_pyth.rs"]
 #[allow(dead_code)]
 mod terminal_exterior_pyth;

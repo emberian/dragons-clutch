@@ -57,9 +57,9 @@ usage: tools/gauntlet/ladder/run-ladder.sh --checked-release-gate PATH [options]
   --work PATH           scratch root (default: /private/tmp/dclutch-ladder)
   --recovery-rungs SPEC BPS:SECONDS_AFTER_PREVIOUS, comma separated
                         (default: the tier's own one-rung two-source market)
-  --max-wait-seconds N  the whole budget a walk may spend waiting for a leg's
-                        deadline (default: 600). A leg further away than this
-                        is REPORTED, never slept for and never warped past.
+  --max-wait-seconds N  maximum wait at a published deadline, including the
+                        provider reclaim delay (default: 4200). A deadline
+                        further away is reported; no clock is warped.
   --publication-shelf-life-seconds N
                         how old the publication this run MINTS may be before
                         the transport refuses it (default: 1200), and therefore
@@ -91,7 +91,7 @@ RPC_PORT="auto"
 WORK="/private/tmp/dclutch-ladder"
 WORKTREE=0
 RUNGS=""
-MAX_WAIT="600"
+MAX_WAIT="4200"
 SHELF_LIFE="1200"
 CENSUS=0
 GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
@@ -179,10 +179,10 @@ fi
 # evidence is explicitly diagnostic.
 
 # --------------------------------------------------------- 2. the campaign
-HOST_TARGET="$WORK/host-target"
+HOST_TARGET="$SOURCE/target"
 say "stage campaign binary"
 ( cd "$SOURCE" && CARGO_TARGET_DIR="$HOST_TARGET" \
-    run_build cargo build --release -p dclutch-ladder-campaign ) > "$LOGS/build-ladder.log" 2>&1 \
+    run_build cargo build --locked --release -p dclutch-ladder-campaign -p dclutch-local-successor-bootstrap ) > "$LOGS/build-ladder.log" 2>&1 \
     || { tail -n 40 "$LOGS/build-ladder.log" >&2; die "campaign build failed"; }
 CAMPAIGN_BIN="$HOST_TARGET/release/dclutch-ladder-campaign"
 [ -x "$CAMPAIGN_BIN" ] || die "campaign binary missing: $CAMPAIGN_BIN"

@@ -1159,6 +1159,7 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
         let mint = custody(CustodyFrameRoleV1::Mint)?;
         let token_program = custody(CustodyFrameRoleV1::TokenProgram)?;
         let source = custody(CustodyFrameRoleV1::TransferSource)?;
+        let destination = custody(CustodyFrameRoleV1::TransferDestination)?;
         let claims = |role| {
             let coordinate = general_place_order_affine_claims_coordinate_v3(role)
                 .map_err(|_| TradingSbfError::Content)?;
@@ -1218,6 +1219,7 @@ pub(super) fn project_account_and_request_registers_v3<'region, 'artifact, 'acco
                 source_key: source.key(),
                 source_program: source.owner(),
                 source_data: source.data(),
+                destination_key: destination.key(),
             },
             &mut current_scalars,
             &mut current_identities,

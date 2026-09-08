@@ -198,6 +198,17 @@ pub(crate) fn demo_structured_market_input(
         crate::market::demo_market_input_base_shaped(registry, resolution_release, shape)?;
 
     let product_basis = crate::runtime::decode_hex(&input.linked_basis_hex)?;
+    // The runtime producer selects exactly the Portfolio's nonzero Product
+    // coordinates. Its descriptor width must equal the pre-founding release
+    // width; the release still commits no particular coefficient vector.
+    let representation_outcome_count = u32::try_from(
+        input
+            .coefficients
+            .iter()
+            .filter(|coefficient| **coefficient != 0)
+            .count(),
+    )
+    .map_err(|_| Error::new("Structured selected representation width overflows"))?;
 
     let closure = structured_selected_closure_v1(StructuredSelectedReleaseInputV1 {
         realm: market_realm_identity_v1(collateral_mint)?,
@@ -205,10 +216,7 @@ pub(crate) fn demo_structured_market_input(
         root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
         root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
             .map_err(|_| Error::new("Structured capability root width overflow"))?,
-        // NOT the market's outcome count -- see this module's header. The
-        // composition width the receipt is issued against, at the widest the
-        // open RequestProfile V1 artifact can dispatch.
-        representation_outcome_count: STRUCTURED_MAXIMUM_REPRESENTATION_WIDTH_V1,
+        representation_outcome_count,
         item_state_bytes: 64,
         product_basis: &product_basis,
     })?;

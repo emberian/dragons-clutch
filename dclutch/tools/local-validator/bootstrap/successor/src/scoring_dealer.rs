@@ -1,6 +1,6 @@
-//! The scoring Dealer's four routes, driven against an authenticated cluster.
+//! The scoring Dealer's five routes, driven against an authenticated cluster.
 //!
-//! `DCLSFDR1`, `DCLSQTR1`, `DCLSFLR1` and `DCLSWDR1` are decision 0031's
+//! `DCLSFDR1`, `DCLSQTR1`, `DCLSFLR1`, `DCLSWDR1` and `DCLSRDR1` are decision 0031's
 //! second mechanism. Until this module they had a program, a codec, a Lean-
 //! emitted frame table and no caller at all: not an operator, not a program
 //! test, not a fixture. A route nothing can build an instruction for is a
@@ -26,11 +26,12 @@
 //! * a fill's `receive`, `deliver`, `prices` and `mint` come out of the
 //!   host-only solver, which returns the fill the kernel already admitted.
 //!
-//! Only five addresses are taken from the campaign report rather than derived,
+//! Routing record addresses are taken from the campaign report rather than derived,
 //! and each is a finalized Registry RECORD whose raw address this module
 //! re-derives from the report's own `data_sha256` and refuses if it differs:
 //! the Realm, the linked basis, the Product, the result domain and the
-//! portfolio. Their content digests exist nowhere on chain that a caller can
+//! portfolio, plus terminal redemption's native composition descriptor, graph,
+//! translation and exposure. Their content digests exist nowhere on chain that a caller can
 //! reach, which is why the report is an input and not a convenience.
 //!
 //! # The agreement that has to hold exactly
@@ -108,8 +109,8 @@ use dclutch_trading::scoring_rule::generated;
 use dclutch_trading::scoring_rule::records_v1::{DealerFundV1, DealerQuoteV1, ScoringRuleRecordV1};
 use dclutch_trading::scoring_rule::requests_v1::{
     DealerFillRequestV1, DealerFoundRequestV1, DealerQuoteRequestV1, DealerReceiptV1,
-    DealerRouteV1, DealerWithdrawRequestV1, fill_privileges_v1, found_privileges_v1,
-    quote_privileges_v1, withdraw_privileges_v1,
+    DealerRedeemRequestV1, DealerRouteV1, DealerWithdrawRequestV1, fill_privileges_v1,
+    found_privileges_v1, quote_privileges_v1, redeem_privileges_v1, withdraw_privileges_v1,
 };
 use dclutch_trading::scoring_rule::solver::solve_buy;
 use dclutch_trading::scoring_rule::{RuleParameters, Vector, potential, prices_of, subsidy_of};
@@ -148,6 +149,7 @@ const FILL_CUSTODY_LEGS: usize = 3;
 /// Which of the four the operator asked for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RouteV1 {
+    Redeem,
     Found,
     Quote,
     Fill,
@@ -157,6 +159,8 @@ enum RouteV1 {
 impl RouteV1 {
     const fn command(self, expected: ExpectedClusterV1) -> &'static str {
         match (self, expected) {
+            (Self::Redeem, ExpectedClusterV1::Devnet) => COMMAND_REDEEM_V1,
+            (Self::Redeem, ExpectedClusterV1::OwnedLoopback) => COMMAND_REDEEM_LOCAL_V1,
             (Self::Found, ExpectedClusterV1::Devnet) => COMMAND_FOUND_V1,
             (Self::Quote, ExpectedClusterV1::Devnet) => COMMAND_QUOTE_V1,
             (Self::Fill, ExpectedClusterV1::Devnet) => COMMAND_FILL_V1,
@@ -170,6 +174,7 @@ impl RouteV1 {
 
     const fn label(self) -> &'static str {
         match self {
+            Self::Redeem => "scoring Dealer redemption",
             Self::Found => "scoring Dealer founding",
             Self::Quote => "scoring Dealer quote",
             Self::Fill => "scoring Dealer fill",
@@ -179,6 +184,7 @@ impl RouteV1 {
 
     const fn receipt_route(self) -> DealerRouteV1 {
         match self {
+            Self::Redeem => DealerRouteV1::Redeem,
             Self::Found => DealerRouteV1::Found,
             Self::Quote => DealerRouteV1::Quote,
             Self::Fill => DealerRouteV1::Fill,
@@ -193,6 +199,7 @@ pub(crate) fn usage() -> &'static str {
      \n  dclutch-local-successor-bootstrap devnet-dealer-fill-v1 --rpc-url URL --i-mean-devnet GENESIS --market PUBKEY --campaign-report ABSOLUTE_JSON --dealer-id HEX64 --taker PUBKEY --taker-token PUBKEY --buy-outcome INDEX --buy-claims CLAIM_UNITS --evidence ABSOLUTE_JSON [--execute --taker-keypair ABSOLUTE_JSON]\n\
      \n  dclutch-local-successor-bootstrap devnet-dealer-withdraw-v1 --rpc-url URL --i-mean-devnet GENESIS --market PUBKEY --campaign-report ABSOLUTE_JSON --dealer-id HEX64 --sponsor PUBKEY --sponsor-token PUBKEY --amount ATOMS --evidence ABSOLUTE_JSON [--execute --sponsor-keypair ABSOLUTE_JSON]\n\
      \nOwned local-validator equivalents are local-private-validator-dealer-found-v1, local-private-validator-dealer-quote-v1, local-private-validator-dealer-fill-v1 and local-private-validator-dealer-withdraw-v1. They take the same route arguments with --rpc-url http://127.0.0.1:PORT and no --i-mean-devnet. Each arm authenticates both the RPC origin and the founding evidence against its selected cluster.\n\
+     \nDealer redemption: devnet-dealer-redeem-v1 (or local-private-validator-dealer-redeem-v1) --rpc-url URL --market PUBKEY --campaign-report ABSOLUTE_JSON --dealer-id HEX64 --fee-payer PUBKEY --claim-index INDEX [--quantity CLAIMS] --evidence ABSOLUTE_JSON [--execute --fee-payer-keypair ABSOLUTE_JSON]. The devnet arm also requires --i-mean-devnet GENESIS. Terminal Claims collateral returns to the fund vault; native founder-bond proceeds stay separate.\n\
      \nThe scoring Dealer (decision 0031 mechanism two), and the only caller of DCLSFDR1/DCLSQTR1/DCLSFLR1/DCLSWDR1 anywhere. Nothing economic is guessed: K and the claim-unit conversion come off the Market's own linked-basis record, the rule off the sealed rule account, the inventory off the Dealer's Claims Position, and a fill's receive/deliver/prices out of the host solver that returns only fills the kernel admits. Preflight opens no key and sends nothing. Execute sends one transaction and then reads the fund back and joins it to the route's own receipt shape."
 }
 
@@ -229,6 +236,18 @@ struct ArgumentsV1 {
     claim_unit_atoms: Option<u64>,
     /// Withdrawal: atoms out.
     amount: Option<u64>,
+    claim_index: Option<u32>,
+    quantity: Option<u64>,
+}
+
+pub(crate) const COMMAND_REDEEM_V1: &str = "devnet-dealer-redeem-v1";
+pub(crate) const COMMAND_REDEEM_LOCAL_V1: &str = "local-private-validator-dealer-redeem-v1";
+
+pub(crate) fn run_redeem_devnet_v1(arguments: Vec<String>) -> Result<()> {
+    run(RouteV1::Redeem, ExpectedClusterV1::Devnet, arguments)
+}
+pub(crate) fn run_redeem_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    run(RouteV1::Redeem, ExpectedClusterV1::OwnedLoopback, arguments)
 }
 
 pub(crate) fn run_found_devnet_v1(arguments: Vec<String>) -> Result<()> {
@@ -297,6 +316,7 @@ fn run(route: RouteV1, expected_cluster: ExpectedClusterV1, arguments: Vec<Strin
 
     let coordinates = derive_coordinates(&mut rpc, &arguments)?;
     let plan = match route {
+        RouteV1::Redeem => plan_redeem(&mut rpc, &arguments, &coordinates),
         RouteV1::Found => plan_found(&mut rpc, &arguments, &coordinates),
         RouteV1::Quote => plan_quote(&mut rpc, &arguments, &coordinates),
         RouteV1::Fill => plan_fill(&mut rpc, &arguments, &coordinates),
@@ -325,7 +345,7 @@ fn run(route: RouteV1, expected_cluster: ExpectedClusterV1, arguments: Vec<Strin
                 .sponsor
                 .ok_or_else(|| Error::new("--sponsor is required"))?,
         ),
-        RouteV1::Quote => (
+        RouteV1::Quote | RouteV1::Redeem => (
             arguments.fee_payer_keypair.as_deref(),
             arguments
                 .fee_payer
@@ -2030,9 +2050,175 @@ fn delta_v1(value: i128) -> Result<SignedDeltaV3> {
         .map_err(|error| Error::new(format!("one signed delta: {error:?}")))
 }
 
-// ---------------------------------------------------------------- withdraw
+// ---------------------------------------------------------------- terminal redemption
 
-/// `DealerWithdraw`: fourteen accounts, then one Custody `Transfer` window.
+/// Generated Dealer prefix followed by Claims' exact terminal child frame.
+fn plan_redeem(rpc: &mut Rpc, arguments: &ArgumentsV1, c: &CoordinatesV1) -> Result<PlanV1> {
+    use dclutch_operator::wallet_terminal_payout::wire::{
+        INPUT_FORMAT, LookupTableRequirementV1, PlanInputV1, SelectedInputV1, build_trading_report,
+    };
+    use dclutch_operator::wallet_terminal_payout_v3::{
+        TradingTerminalCallerV3, project_wallet_terminal_payout_postcondition_v3,
+    };
+    let payer = arguments
+        .fee_payer
+        .ok_or_else(|| Error::new("--fee-payer is required"))?;
+    if ![Phase::Terminal, Phase::Retiring].contains(&c.phase) {
+        return Err(Error::new("Dealer redemption requires a terminal Market"));
+    }
+    let fund_key = c.fund(&arguments.dealer_id);
+    let (fund, _) = read_fund(rpc, fund_key, c, arguments.dealer_id)?;
+    let position_key = c.position(fund_key)?;
+    let position = rpc.required_account(position_key, "Dealer Position")?;
+    let view = LiabilityBasisPositionViewV2::decode(&position.data)
+        .map_err(|e| Error::new(format!("Dealer Position: {e:?}")))?;
+    let claim_index = arguments
+        .claim_index
+        .ok_or_else(|| Error::new("--claim-index is required"))?;
+    let quantity = arguments.quantity.unwrap_or(
+        view.balance(&position.data, claim_index)
+            .map_err(|e| Error::new(format!("Dealer claim coordinate: {e:?}")))?,
+    );
+    if quantity == 0 {
+        return Err(Error::new(
+            "the selected Dealer coordinate has no claims to redeem",
+        ));
+    }
+    let core_account = rpc.required_account(c.market, "Core Market")?;
+    let core = CoreState::decode(&core_account.data)
+        .map_err(|e| Error::new(format!("Core Market: {e:?}")))?;
+    let terminal = core
+        .terminal_receipt
+        .ok_or_else(|| Error::new("Market has no terminal certificate"))?;
+    let cache_account = rpc.required_account(c.activation_cache, "activation cache")?;
+    let cache = ActivatedExecutionReleaseSetViewV1::decode(&cache_account.data)
+        .map_err(|e| Error::new(format!("activation cache: {e:?}")))?;
+    let resolution = cache
+        .role(ExecutionRoleV1::Resolution)
+        .map_err(|e| Error::new(format!("Resolution role: {e:?}")))?
+        .release()
+        .program()
+        .to_bytes();
+    let evidence = parse_campaign_terminal_evidence_with_expected_cluster_v1(
+        &std::fs::read(&arguments.campaign_report)?,
+        arguments.expected_cluster,
+    )?;
+    let digest = |label: &str| -> Result<String> {
+        Ok(
+            crate::terminal_lifecycle::required_account(&evidence, label)?
+                .data_sha256
+                .clone(),
+        )
+    };
+    let escrow = dclutch_claims::protocol_position_v2::failure_escrow_v1(
+        c.claims_program,
+        c.market.to_bytes(),
+        c.aggregate,
+        c.claim_count,
+    )
+    .map_err(|e| Error::new(format!("failure escrow derivation: {e:?}")))?;
+    let input: PlanInputV1 = serde_json::from_value(json!({
+        "format": INPUT_FORMAT, "market": c.market.to_string(), "owner": fund_key.to_string(),
+        "recipientOwner": c.custody_authority.to_string(), "recipient": Pubkey::new_from_array(fund.vault).to_string(),
+        "collateralMint": c.mint.to_string(), "tokenProgram": c.token_program.to_string(),
+        "quantity": quantity.to_string(), "claimIndex": claim_index, "transferIndex": 0,
+        "parentContext": hex_lower(&fund_key.to_bytes()), "custodyContext": hex_lower(&c.custody_context),
+        "releaseSet": hex_lower(&c.release_set), "terminalCertificate": Pubkey::new_from_array(terminal.to_bytes()).to_string(),
+        "founderBondEscrowPosition": escrow.position.to_string(), "founderBondEscrowAdmission": escrow.admission.to_string(),
+        "founderBondRecipient": fund_key.to_string(),
+        "programs": { "registry": c.registry.to_string(), "core": c.core_program.to_string(), "claims": c.claims_program.to_string(), "custody": c.custody_program.to_string(), "resolution": Pubkey::new_from_array(resolution).to_string() },
+        "records": { "realm": hex_lower(&c.realm.digest), "product": hex_lower(&c.product.digest), "resultDomain": hex_lower(&c.result_domain.digest), "portfolio": hex_lower(&c.portfolio.digest), "productBasis": hex_lower(&c.linked_basis.digest),
+            "compositionDescriptor": digest("terminal_composition_descriptor_record")?, "compositionGraph": digest("terminal_composition_graph_record")?, "compositionTranslation": digest("terminal_composition_translation_record")?, "compositionExposure": digest("terminal_composition_exposure_record")? }
+    }))?;
+    let selected =
+        SelectedInputV1::parse_trading_principal(&input, LookupTableRequirementV1::Absent)?;
+    let mut addresses = selected.addresses();
+    for key in [c.trading_program, c.trading_programdata, fund_key] {
+        if !addresses.contains(&key) {
+            addresses.push(key);
+        }
+    }
+    let floor = rpc.finalized_slot()?;
+    let (slot, observed) = rpc.finalized_accounts(&addresses, floor)?;
+    let snapshot = crate::wallet_terminal::snapshot_from_rpc(
+        slot,
+        rpc.block_time(slot)?,
+        &addresses,
+        observed,
+    )?;
+    let current_fund = DealerFundV1::decode(&snapshot.required(fund_key, "Dealer fund")?.data)
+        .map_err(|e| Error::new(format!("Dealer fund snapshot: {e:?}")))?;
+    if current_fund != fund {
+        return Err(Error::new(
+            "Dealer fund advanced while acquiring terminal inputs; retry",
+        ));
+    }
+    let report = build_trading_report(
+        &selected,
+        &snapshot,
+        TradingTerminalCallerV3 {
+            program: c.trading_program,
+            programdata: c.trading_programdata,
+        },
+    )?;
+    let expected = project_wallet_terminal_payout_postcondition_v3(&report)
+        .map_err(|e| Error::new(format!("terminal poststate: {e:?}")))?;
+    let prefix_request = DealerRedeemRequestV1 {
+        market: c.market.to_bytes(),
+        dealer_id: arguments.dealer_id,
+        expected_fund_revision: fund.revision,
+    }
+    .to_bytes()
+    .map_err(|e| Error::new(format!("Dealer redemption request: {e:?}")))?;
+    let mut request = prefix_request.to_vec();
+    request.extend_from_slice(&report.request.to_bytes());
+    let mut keys = vec![None; generated::REDEEM_ACCOUNT_COUNT];
+    for (index, key) in [
+        (generated::REDEEM_PAYER_ACCOUNT, payer),
+        (generated::REDEEM_FUND_ACCOUNT, fund_key),
+        (generated::REDEEM_RULE_ACCOUNT, c.rule(&arguments.dealer_id)),
+        (generated::REDEEM_MARKET_ACCOUNT, c.market),
+        (generated::REDEEM_VAULT_ACCOUNT, c.vault(fund_key)),
+        (generated::REDEEM_CLAIMS_PROGRAM_ACCOUNT, c.claims_program),
+        (generated::REDEEM_CUSTODY_PROGRAM_ACCOUNT, c.custody_program),
+        (
+            generated::REDEEM_ACTIVATION_CACHE_ACCOUNT,
+            c.activation_cache,
+        ),
+        (generated::REDEEM_REGISTRY_PROGRAM_ACCOUNT, c.registry),
+    ] {
+        keys[index] = Some(key);
+    }
+    let mut accounts = prefix_v1(&keys, redeem_privileges_v1)?;
+    accounts.extend(report.instruction.accounts.iter().cloned().map(|mut meta| {
+        meta.is_signer = false;
+        meta
+    }));
+    let expected_accounts = [(c.aggregate, expected.aggregate_bytes),(position_key, expected.position_bytes),(report.route.custody_replay, expected.custody_replay_bytes),(c.hoard, expected.hoard_token_bytes),(c.vault(fund_key), expected.recipient_token_bytes)].into_iter().map(|(key,bytes)| json!({"address":key.to_string(),"sha256":hex_lower(&hash(&bytes).to_bytes())})).collect::<Vec<_>>();
+    Ok(PlanV1 {
+        route: RouteV1::Redeem,
+        instruction: Instruction {
+            program_id: c.trading_program,
+            accounts,
+            data: request.clone(),
+        },
+        request,
+        routed: true,
+        fund: fund_key,
+        rule: c.rule(&arguments.dealer_id),
+        quote: c.quote(&arguments.dealer_id),
+        dealer_position: position_key,
+        expected_fund_revision: fund.revision,
+        authorities: vec![(
+            "claims-terminal".into(),
+            report.instruction.accounts[0].pubkey,
+        )],
+        facts: json!({"claimIndex":claim_index,"quantity":quantity,"payoutAtoms":report.payout,"cashBefore":fund.cash,"cashAfter":fund.cash.checked_add(report.payout).ok_or_else(||Error::new("cash overflow"))?,"nativeBondDrawLamports":report.founder_bond_draw,"expectedAccounts":expected_accounts,"expectedNativeBond":expected.founder_bond.map(|(escrow_after,fund_after)|json!({"escrow":escrow.position.to_string(),"escrowAfter":escrow_after,"fundAfter":fund_after}))}),
+        dealer_pays: 0,
+        dealer_receives: 0,
+    })
+}
+
 fn plan_withdraw(
     rpc: &mut Rpc,
     arguments: &ArgumentsV1,
@@ -2202,7 +2388,10 @@ fn read_back(
     let account = rpc.required_account(plan.fund, "Dealer fund after the route")?;
     let fund = DealerFundV1::decode(&account.data)
         .map_err(|error| Error::new(format!("Dealer fund {}: {error:?}", plan.fund)))?;
-    let advances = matches!(plan.route, RouteV1::Fill | RouteV1::Withdraw);
+    let advances = matches!(
+        plan.route,
+        RouteV1::Fill | RouteV1::Withdraw | RouteV1::Redeem
+    );
     let expected = if advances {
         plan.expected_fund_revision
             .checked_add(1)
@@ -2221,6 +2410,49 @@ fn read_back(
         return Err(Error::new(
             "the fund read back belongs to another Market or Dealer",
         ));
+    }
+    if plan.route == RouteV1::Redeem {
+        if plan.facts["cashAfter"].as_u64() != Some(fund.cash) {
+            return Err(Error::new(
+                "Dealer terminal collateral cash poststate differs",
+            ));
+        }
+        for expected in plan.facts["expectedAccounts"]
+            .as_array()
+            .ok_or_else(|| Error::new("missing terminal poststate plan"))?
+        {
+            let key = parse_pubkey(
+                expected["address"]
+                    .as_str()
+                    .ok_or_else(|| Error::new("missing expected address"))?,
+                "terminal poststate",
+            )?;
+            let observed = rpc.required_account(key, "terminal poststate")?;
+            if expected["sha256"].as_str()
+                != Some(hex_lower(&hash(&observed.data).to_bytes()).as_str())
+            {
+                return Err(Error::new(format!(
+                    "Dealer redemption exact poststate differs at {key}"
+                )));
+            }
+        }
+        if let Some(native) = plan.facts["expectedNativeBond"].as_object() {
+            let escrow = parse_pubkey(
+                native["escrow"]
+                    .as_str()
+                    .ok_or_else(|| Error::new("missing native escrow"))?,
+                "native escrow",
+            )?;
+            if native["fundAfter"].as_u64() != Some(account.lamports)
+                || native["escrowAfter"].as_u64()
+                    != Some(
+                        rpc.required_account(escrow, "founder-bond escrow")?
+                            .lamports,
+                    )
+            {
+                return Err(Error::new("Dealer native founder-bond poststate differs"));
+            }
+        }
     }
     let receipt = DealerReceiptV1::from_fund(
         plan.route.receipt_route(),
@@ -2255,7 +2487,7 @@ fn read_back(
             println!("quote fund revision  {} (fresh)", decoded.fund_revision);
             Some(decoded.fund_revision)
         }
-        RouteV1::Fill | RouteV1::Withdraw => None,
+        RouteV1::Fill | RouteV1::Withdraw | RouteV1::Redeem => None,
     };
 
     Ok(PostStateV1 {
@@ -2458,6 +2690,8 @@ fn parse(
     let mut deposit = None;
     let mut claim_unit_atoms = None;
     let mut amount = None;
+    let mut claim_index = None;
+    let mut quantity = None;
     let mut cursor = arguments.into_iter();
     while let Some(flag) = cursor.next() {
         let mut value = || {
@@ -2492,6 +2726,14 @@ fn parse(
                 claim_unit_atoms = Some(parse_u64(&value()?, "--claim-unit-atoms")?);
             }
             "--amount" => amount = Some(parse_u64(&value()?, "--amount")?),
+            "--claim-index" => {
+                claim_index = Some(
+                    value()?
+                        .parse::<u32>()
+                        .map_err(|e| Error::new(format!("--claim-index: {e}")))?,
+                )
+            }
+            "--quantity" => quantity = Some(parse_u64(&value()?, "--quantity")?),
             "--execute" => execute = true,
             other => return Err(Error::new(format!("unknown flag: {other}"))),
         }
@@ -2523,6 +2765,8 @@ fn parse(
         deposit,
         claim_unit_atoms,
         amount,
+        claim_index,
+        quantity,
     };
     require_route_flags_v1(&arguments)?;
     Ok(arguments)
@@ -2534,7 +2778,30 @@ fn parse(
 /// believes this run withdraws something, and the run that silently ignored it
 /// would report a founding they did not ask for.
 fn require_route_flags_v1(arguments: &ArgumentsV1) -> Result<()> {
+    if arguments.route != RouteV1::Redeem
+        && (arguments.claim_index.is_some() || arguments.quantity.is_some())
+    {
+        return Err(Error::new(
+            "--claim-index and --quantity belong to Dealer redemption",
+        ));
+    }
     let foreign: &[(&str, bool)] = match arguments.route {
+        RouteV1::Redeem => &[
+            ("--amount", arguments.amount.is_some()),
+            ("--sponsor", arguments.sponsor.is_some()),
+            ("--taker", arguments.taker.is_some()),
+            ("--deposit", arguments.deposit.is_some()),
+            ("--sponsor-token", arguments.sponsor_token.is_some()),
+            ("--sponsor-keypair", arguments.sponsor_keypair.is_some()),
+            ("--taker-token", arguments.taker_token.is_some()),
+            ("--taker-keypair", arguments.taker_keypair.is_some()),
+            ("--buy-outcome", arguments.buy_outcome.is_some()),
+            ("--buy-claims", arguments.buy_claims.is_some()),
+            ("--liquidity", arguments.liquidity.is_some()),
+            ("--scale", arguments.scale.is_some()),
+            ("--tolerance", arguments.tolerance.is_some()),
+            ("--claim-unit-atoms", arguments.claim_unit_atoms.is_some()),
+        ],
         RouteV1::Found => &[
             ("--amount", arguments.amount.is_some()),
             ("--taker", arguments.taker.is_some()),
@@ -2617,6 +2884,7 @@ mod tests {
     #[test]
     fn every_arm_accepts_the_injected_origin_pair() {
         for route in [
+            RouteV1::Redeem,
             RouteV1::Found,
             RouteV1::Quote,
             RouteV1::Fill,
@@ -2653,6 +2921,7 @@ mod tests {
     #[test]
     fn every_local_arm_admits_loopback_before_reading_any_files() {
         for route in [
+            RouteV1::Redeem,
             RouteV1::Found,
             RouteV1::Quote,
             RouteV1::Fill,
@@ -2838,6 +3107,45 @@ mod tests {
     /// after DealerFound has paid their rent. Reusing the vacant lengths would
     /// make the request fail `ProtocolPositionRequestV2::validate` before the
     /// founding instruction can perform that prefund.
+    #[test]
+    fn redemption_flags_cannot_silently_select_another_capital_action() {
+        let redemption = parse(
+            RouteV1::Redeem,
+            ExpectedClusterV1::Devnet,
+            args(&["--claim-index", "0", "--quantity", "1"]),
+        )
+        .unwrap();
+        assert_eq!(redemption.claim_index, Some(0));
+        assert_eq!(redemption.quantity, Some(1));
+        let wrong = parse(
+            RouteV1::Redeem,
+            ExpectedClusterV1::Devnet,
+            args(&["--amount", "1"]),
+        )
+        .expect_err("withdrawal flag");
+        assert_eq!(
+            format!("{wrong}"),
+            "--amount belongs to another scoring Dealer verb, not to devnet-dealer-redeem-v1"
+        );
+        for route in [
+            RouteV1::Found,
+            RouteV1::Quote,
+            RouteV1::Fill,
+            RouteV1::Withdraw,
+        ] {
+            let wrong = parse(
+                route,
+                ExpectedClusterV1::Devnet,
+                args(&["--claim-index", "0"]),
+            )
+            .expect_err("redemption flag");
+            assert_eq!(
+                format!("{wrong}"),
+                "--claim-index and --quantity belong to Dealer redemption"
+            );
+        }
+    }
+
     #[test]
     fn vacant_dealer_admission_uses_post_allocation_rent_principals() {
         let rent = solana_sdk::rent::Rent::default();

@@ -5379,6 +5379,21 @@ fn provider_submit_report(
     Ok(report)
 }
 
+fn recovery_ladder_snapshot_v1(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+) -> Result<Option<ProviderExecuteLadderV3>> {
+    selected
+        .recovery_ladder
+        .map(|(policy, staging)| {
+            Ok(ProviderExecuteLadderV3 {
+                policy: snapshot.observed(policy, "RecoveryPolicyV2")?,
+                policy_staging: snapshot.observed_or_vacant(staging)?,
+            })
+        })
+        .transpose()
+}
+
 fn provider_execute_report(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
@@ -5409,13 +5424,7 @@ fn provider_execute_report(
             // builder reads WHICH rung the market stands on off the Source
             // state and the policy, and refuses a snapshot whose finalized
             // records are not that rung's.
-            recovery_ladder: match selected.recovery_ladder {
-                None => None,
-                Some((policy, staging)) => Some(ProviderExecuteLadderV3 {
-                    policy: snapshot.observed(policy, "RecoveryPolicyV2")?,
-                    policy_staging: snapshot.observed(staging, "RecoveryPolicyV2 staging")?,
-                }),
-            },
+            recovery_ladder: recovery_ladder_snapshot_v1(selected, snapshot)?,
         },
         ProviderExecuteDeploymentV3 {
             registry_programdata: selected.account("registry_programdata")?,
@@ -8659,6 +8668,54 @@ mod tests {
                 .expect_err("wrong question period")
                 .0,
             "stale or wrong-period Pyth observation: publication 89, Market window [90, 110], finalized freshness band [180, 205]"
+        );
+    }
+
+    #[test]
+    fn recovery_capture_accepts_observed_vacant_policy_staging_but_not_an_unread_key() {
+        let mut input = sample_input();
+        input.accounts.primary_source_spec = Pubkey::new_from_array([201; 32]).to_string();
+        input.accounts.recovery_policy = Pubkey::new_from_array([202; 32]).to_string();
+        input.accounts.recovery_policy_staging = Pubkey::new_from_array([203; 32]).to_string();
+        let selected =
+            SelectedInputV1::parse(&input, ExpectedClusterV1::Devnet).expect("recovery input");
+        let (policy, staging) = selected.recovery_ladder.expect("policy pair");
+        let observation = Observation {
+            slot: 9,
+            unix_timestamp: 100,
+            finality: Finality::Finalized,
+        };
+        let mut snapshot = FinalizedSnapshotV1 {
+            observation,
+            accounts: BTreeMap::from([
+                (
+                    policy,
+                    Some(RpcAccount {
+                        lamports: 7,
+                        owner: selected.account("registry_program").expect("registry"),
+                        executable: false,
+                        rent_epoch: 0,
+                        data: vec![1, 2, 3],
+                    }),
+                ),
+                (staging, None),
+            ]),
+        };
+        let ladder = recovery_ladder_snapshot_v1(&selected, &snapshot)
+            .expect("observed vacancy")
+            .expect("ladder");
+        assert_eq!(ladder.policy_staging.key, staging);
+        assert_eq!(ladder.policy_staging.owner, system_program::ID);
+        assert_eq!(ladder.policy_staging.lamports, 0);
+        assert!(ladder.policy_staging.data.is_empty());
+        snapshot.accounts.remove(&staging);
+        assert_eq!(
+            recovery_ladder_snapshot_v1(&selected, &snapshot)
+                .expect_err("unread is not vacant")
+                .0,
+            format!(
+                "finalized snapshot never observed {staging}; a vacant reading would be a fabrication"
+            )
         );
     }
 

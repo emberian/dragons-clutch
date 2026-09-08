@@ -1056,6 +1056,11 @@ fn process_consume(
             .to_bytes()
             .map_err(|_| ResolutionError::Transition)?,
     );
+    let terminal_output_funding = if records.material.ensemble().is_single() {
+        TerminalOutputFundingV1::Prepaid
+    } else {
+        TerminalOutputFundingV1::SourceReserve
+    };
     drop(source_data);
     drop(record_data);
     drop(domain_data);
@@ -1067,6 +1072,7 @@ fn process_consume(
         record_account,
         system,
         &rent,
+        terminal_output_funding,
         &next_source,
         &certificate,
     )
@@ -1271,6 +1277,7 @@ fn process_advance_recovery(
             system,
         },
         &rent,
+        terminal_output_funding_for_material(walk_source.material),
         &outputs.encoded,
         worker_lamports_after,
     )
@@ -1345,7 +1352,6 @@ fn process_ensemble_fold(
         |index| ensemble_fold_tail_v1(members, index),
     )?;
 
-    let worker = account(accounts, 0)?;
     let certificate_account = account(accounts, 5)?;
     let receipt_account = account(accounts, 6)?;
     let funding_account = account(accounts, 25)?;
@@ -1448,7 +1454,6 @@ fn process_ensemble_fold(
             certificate: certificate_account,
             receipt: receipt_account,
             funding: funding_account,
-            worker,
             system,
         },
         accounts
@@ -1787,7 +1792,6 @@ struct EnsembleFoldOutputs<'a, 'info> {
     certificate: &'a AccountInfo<'info>,
     receipt: &'a AccountInfo<'info>,
     funding: &'a AccountInfo<'info>,
-    worker: &'a AccountInfo<'info>,
     system: &'a AccountInfo<'info>,
 }
 
@@ -1818,13 +1822,13 @@ fn commit_ensemble_fold(
         outputs.certificate,
         outputs.system,
         rent,
+        TerminalOutputFundingV1::SourceReserve,
     )?;
     initialize_fold_receipt_seat(
         program_id,
         terminal_sequence,
         outputs.source_state,
         outputs.receipt,
-        outputs.worker,
         outputs.system,
         rent,
     )?;
@@ -1910,11 +1914,10 @@ fn commit_ensemble_fold(
 
 /// Create the fold's receipt seat at its own derived address.
 ///
-/// Unlike the terminal certificate, no founding prepays this account: the
-/// receipt exists because a fold happened, so the worker that folds pays its
-/// rent. The seat is derived from the Source state and the terminal sequence,
-/// so one fold has one receipt and a second fold at the same sequence finds a
-/// written account rather than an empty one.
+/// Founding reserves this receipt's rent on the Source itself. The seat is
+/// derived from the Source state and the terminal sequence, so one fold has one
+/// receipt and a second fold at the same sequence finds a written account
+/// rather than an empty one.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn initialize_fold_receipt_seat<'info>(
@@ -1922,7 +1925,6 @@ fn initialize_fold_receipt_seat<'info>(
     terminal_sequence: u64,
     source_state: &AccountInfo<'info>,
     receipt: &AccountInfo<'info>,
-    payer: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     rent: &Rent,
 ) -> ProgramResult {
@@ -1940,13 +1942,14 @@ fn initialize_fold_receipt_seat<'info>(
         &sequence_seed,
         &bump_seed,
     ];
-    create_prefunded_pda(
-        payer,
+    create_pda_from_source_reserve(
+        program_id,
+        source_state,
         receipt,
         system,
         rent.minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+        rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2),
         ENSEMBLE_FOLD_RECEIPT_V1_BYTES,
-        program_id,
         &signer,
     )
 }
@@ -2306,6 +2309,7 @@ pub(crate) fn process_deadline_failure_coordinates(
             system,
         },
         &rent,
+        terminal_output_funding_for_material(walk_source.material),
         &outputs,
         worker_lamports_after,
     )
@@ -2566,6 +2570,7 @@ fn commit_deadline_failure(
     terminal_sequence: u64,
     outputs: DeadlineFailureOutputs<'_, '_>,
     rent: &Rent,
+    terminal_output_funding: TerminalOutputFundingV1,
     encoded: &EncodedDeadlineFailureV1,
     worker_lamports_after: u64,
 ) -> ProgramResult {
@@ -2577,6 +2582,7 @@ fn commit_deadline_failure(
         outputs.certificate,
         outputs.system,
         rent,
+        terminal_output_funding,
     )?;
     let mut state_output = outputs
         .source_state
@@ -2994,6 +3000,7 @@ fn commit_consumption<'info>(
     record: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     rent: &Rent,
+    terminal_output_funding: TerminalOutputFundingV1,
     next_source: &[u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
     next_certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES_V2],
 ) -> ProgramResult {
@@ -3005,6 +3012,7 @@ fn commit_consumption<'info>(
         certificate,
         system,
         rent,
+        terminal_output_funding,
     )?;
     {
         let mut state_output = source_state
@@ -3039,6 +3047,26 @@ fn commit_consumption<'info>(
 /// omission.
 pub(crate) const RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED: u8 = 1;
 
+/// Physical source of one terminal certificate's rent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TerminalOutputFundingV1 {
+    /// Legacy single-source route whose producer prepays the output PDA.
+    Prepaid,
+    /// Ensemble route capitalized on the Resolution-owned Source before Core
+    /// accepted its Pending funding ledger.
+    SourceReserve,
+}
+
+pub(crate) const fn terminal_output_funding_for_material(
+    material: SourceMaterialV3,
+) -> TerminalOutputFundingV1 {
+    if material.ensemble().is_single() {
+        TerminalOutputFundingV1::Prepaid
+    } else {
+        TerminalOutputFundingV1::SourceReserve
+    }
+}
+
 /// Allocate and assign a terminal certificate at its canonical address.
 ///
 /// The domain and seed shape are the Resolution role's existing certificate
@@ -3057,6 +3085,7 @@ pub(crate) fn initialize_certificate_at_kind<'info>(
     certificate: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     rent: &Rent,
+    funding: TerminalOutputFundingV1,
 ) -> ProgramResult {
     let kind_seed = [kind];
     let sequence_seed = terminal_sequence.to_le_bytes();
@@ -3082,13 +3111,6 @@ pub(crate) fn initialize_certificate_at_kind<'info>(
         }
         return Ok(());
     }
-    if certificate.owner != &system_program::ID
-        || certificate.data_len() != 0
-        || certificate.lamports() < minimum
-        || certificate.executable
-    {
-        return Err(ResolutionError::OutputState.into());
-    }
     let bump_seed = [bump];
     let signer = [
         RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
@@ -3097,20 +3119,116 @@ pub(crate) fn initialize_certificate_at_kind<'info>(
         sequence_seed.as_slice(),
         bump_seed.as_slice(),
     ];
-    let space =
-        u64::try_from(RESOLUTION_CERTIFICATE_BYTES_V2).map_err(|_| ResolutionError::Arithmetic)?;
+    match funding {
+        TerminalOutputFundingV1::Prepaid => {
+            if certificate.owner != &system_program::ID
+                || certificate.data_len() != 0
+                || certificate.lamports() < minimum
+                || certificate.executable
+            {
+                return Err(ResolutionError::OutputState.into());
+            }
+            allocate_and_assign_prefunded_output(
+                program_id,
+                certificate,
+                system,
+                RESOLUTION_CERTIFICATE_BYTES_V2,
+                &signer,
+            )
+        }
+        TerminalOutputFundingV1::SourceReserve => create_pda_from_source_reserve(
+            program_id,
+            source_state,
+            certificate,
+            system,
+            minimum,
+            rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2),
+            RESOLUTION_CERTIFICATE_BYTES_V2,
+            &signer,
+        ),
+    }
+}
+
+fn allocate_and_assign_prefunded_output<'info>(
+    program_id: &Pubkey,
+    output: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    space: usize,
+    signer: &[&[u8]],
+) -> ProgramResult {
+    let space = u64::try_from(space).map_err(|_| ResolutionError::Arithmetic)?;
     invoke_signed(
-        &allocate(certificate.key, space),
-        &[certificate.clone(), system.clone()],
-        &[&signer],
+        &allocate(output.key, space),
+        &[output.clone(), system.clone()],
+        &[signer],
     )
     .map_err(|_| ResolutionError::OutputState)?;
     invoke_signed(
-        &assign(certificate.key, program_id),
-        &[certificate.clone(), system.clone()],
-        &[&signer],
+        &assign(output.key, program_id),
+        &[output.clone(), system.clone()],
+        &[signer],
     )
     .map_err(|_| ResolutionError::OutputState)?;
+    Ok(())
+}
+
+/// Debit a Resolution-owned Source reserve and initialize one of its canonical
+/// terminal outputs. The Source's own chain rent remains untouchable.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_pda_from_source_reserve<'info>(
+    program_id: &Pubkey,
+    source: &AccountInfo<'info>,
+    output: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    minimum_balance: u64,
+    source_minimum_balance: u64,
+    space: usize,
+    signer: &[&[u8]],
+) -> ProgramResult {
+    if source.key == output.key
+        || source.owner != program_id
+        || !source.is_writable
+        || source.executable
+        || source.data_len() != SOURCE_RESOLUTION_STATE_BYTES_V2
+        || output.owner != &system_program::ID
+        || !output.is_writable
+        || output.executable
+        || output.data_len() != 0
+        || system.key != &system_program::ID
+        || !system.executable
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let output_before = output.lamports();
+    let top_up = minimum_balance.saturating_sub(output_before);
+    let source_after = source
+        .lamports()
+        .checked_sub(top_up)
+        .filter(|after| *after >= source_minimum_balance)
+        .ok_or(ResolutionError::Funding)?;
+    let output_after = output_before
+        .checked_add(top_up)
+        .ok_or(ResolutionError::Arithmetic)?;
+    // Allocate while the instruction's balances still equal its entry
+    // snapshot. The System program sees only the output account, so moving
+    // reserve lamports before this CPI would make that nested instruction look
+    // locally unbalanced even though Source + output is conserved by the
+    // parent Resolution instruction.
+    allocate_and_assign_prefunded_output(program_id, output, system, space, signer)?;
+    **source
+        .try_borrow_mut_lamports()
+        .map_err(|_| ResolutionError::OutputState)? = source_after;
+    **output
+        .try_borrow_mut_lamports()
+        .map_err(|_| ResolutionError::OutputState)? = output_after;
+    if output.owner != program_id
+        || output.data_len() != space
+        || output.lamports() != output_after
+        || output.lamports() < minimum_balance
+        || source.lamports() != source_after
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
     Ok(())
 }
 

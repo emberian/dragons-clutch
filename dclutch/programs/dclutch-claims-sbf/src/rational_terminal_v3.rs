@@ -106,6 +106,7 @@ pub(crate) struct TerminalCustodyInputV3 {
     pub(crate) realm: [u8; 32],
     pub(crate) parent_request_digest: [u8; 32],
     pub(crate) recipient_owner: [u8; 32],
+    pub(crate) destination_context: Option<[u8; 32]>,
     pub(crate) generation: u64,
     pub(crate) order_nonce: u64,
     pub(crate) transfer_index: u16,
@@ -291,6 +292,7 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
             realm: header.realm,
             parent_request_digest: request_digest,
             recipient_owner: header.actor,
+            destination_context: None,
             generation: header.generation,
             order_nonce: header.expected_representation_revision,
             transfer_index: 0,
@@ -353,7 +355,11 @@ pub(crate) fn execute_terminal_custody_v3(
         operation: OperationV1::Transfer,
         caller_role: CallerRoleV1::Claims,
         source_compartment: CompartmentV1::HoardPrincipal,
-        destination_compartment: CompartmentV1::External,
+        destination_compartment: if input.destination_context.is_some() {
+            CompartmentV1::TradingPrincipal
+        } else {
+            CompartmentV1::External
+        },
         release_set: input.release_set,
         market: input.market,
         realm: input.realm,
@@ -362,7 +368,11 @@ pub(crate) fn execute_terminal_custody_v3(
         semantic: ContextV1 {
             candidate: input.candidate_digest,
             source_owner: [0; 32],
-            destination_owner: input.recipient_owner,
+            destination_owner: if input.destination_context.is_some() {
+                [0; 32]
+            } else {
+                input.recipient_owner
+            },
             order: [0; 32],
             parent_request_digest: input.parent_request_digest,
             order_nonce: input.order_nonce,
@@ -379,7 +389,7 @@ pub(crate) fn execute_terminal_custody_v3(
         // here was the half that did not, and it is what put the founded
         // Market's principal out of reach of every payout route.
         source_vault_context: input.custody_context,
-        destination_vault_context: [0; 32],
+        destination_vault_context: input.destination_context.unwrap_or([0; 32]),
         mint: frame.collateral_mint.key.to_bytes(),
         token_program: frame.token_program.key.to_bytes(),
         payer: [0; 32],

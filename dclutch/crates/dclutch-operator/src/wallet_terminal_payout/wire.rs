@@ -41,10 +41,11 @@ use crate::representation_composition::{
 use crate::{
     Finality, Observation, ObservedAccount,
     wallet_terminal_payout_v3::{
-        WalletTerminalPayoutFounderBondInputV3, WalletTerminalPayoutFounderBondRouteV3,
-        WalletTerminalPayoutInputV3, WalletTerminalPayoutReportV3, WalletTerminalPayoutRouteV3,
-        build_wallet_terminal_payout_v3, canonical_wallet_terminal_payout_lookup_addresses_v3,
-        compile_wallet_terminal_payout_v0,
+        TradingTerminalCallerV3, WalletTerminalPayoutFounderBondInputV3,
+        WalletTerminalPayoutFounderBondRouteV3, WalletTerminalPayoutInputV3,
+        WalletTerminalPayoutReportV3, WalletTerminalPayoutRouteV3,
+        build_trading_terminal_payout_v3, build_wallet_terminal_payout_v3,
+        canonical_wallet_terminal_payout_lookup_addresses_v3, compile_wallet_terminal_payout_v0,
     },
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -241,12 +242,21 @@ pub enum LookupTableRequirementV1 {
 #[derive(Clone, Copy)]
 enum RecipientRouteV1 {
     Wallet,
+    TradingPrincipal,
     ClaimCheckEscrow,
 }
 
 impl SelectedInputV1 {
     pub fn parse(input: &PlanInputV1, requirement: LookupTableRequirementV1) -> Result<Self> {
         Self::parse_for_route(input, requirement, RecipientRouteV1::Wallet)
+    }
+
+    /// Select a canonical fund vault instead of a wallet recipient.
+    pub fn parse_trading_principal(
+        input: &PlanInputV1,
+        requirement: LookupTableRequirementV1,
+    ) -> Result<Self> {
+        Self::parse_for_route(input, requirement, RecipientRouteV1::TradingPrincipal)
     }
 
     pub fn parse_claim_check_compaction(
@@ -378,6 +388,30 @@ impl SelectedInputV1 {
                 return Err(Error::new(
                     "recipientOwner must equal owner for a wallet terminal payout",
                 ));
+            }
+            RecipientRouteV1::TradingPrincipal => {
+                let vault = CustodyVaultSeedsV1::new(
+                    market.to_bytes(),
+                    release_set,
+                    owner.to_bytes(),
+                    CompartmentV1::TradingPrincipal,
+                );
+                let authority = Pubkey::find_program_address(
+                    &[
+                        CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+                        market.as_ref(),
+                        release_set.as_slice(),
+                    ],
+                    &custody,
+                )
+                .0;
+                if recipient != Pubkey::find_program_address(&vault.as_slices(), &custody).0
+                    || recipient_owner != authority
+                {
+                    return Err(Error::new(
+                        "Trading terminal recipient must be the Position owner's canonical TradingPrincipal vault and Custody authority",
+                    ));
+                }
             }
             RecipientRouteV1::ClaimCheckEscrow => {
                 let escrow = Pubkey::find_program_address(
@@ -739,6 +773,32 @@ pub fn build_report(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
 ) -> Result<WalletTerminalPayoutReportV3> {
+    build_terminal_report(selected, snapshot, None)
+}
+
+/// Authenticate the same finalized Product and Claims snapshot for a Trading
+/// terminal parent, including its Registry-selected program and ProgramData.
+pub fn build_trading_report(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+    caller: TradingTerminalCallerV3,
+) -> Result<WalletTerminalPayoutReportV3> {
+    authenticate_role(
+        snapshot.required(selected.registry, "Registry program")?,
+        snapshot.required(selected.activation_cache, "activation cache")?,
+        selected.release_set,
+        ExecutionRoleV1::Trading,
+        snapshot.required(caller.program, "Trading program")?,
+        snapshot.required(caller.programdata, "Trading ProgramData")?,
+    )?;
+    build_terminal_report(selected, snapshot, Some(caller))
+}
+
+fn build_terminal_report(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+    trading: Option<TradingTerminalCallerV3>,
+) -> Result<WalletTerminalPayoutReportV3> {
     let rent_account = snapshot.required(sysvar::rent::ID, "Rent sysvar")?;
     let rent: Rent = bincode::deserialize(&rent_account.data)
         .map_err(|error| Error::new(format!("Rent sysvar: {error}")))?;
@@ -864,7 +924,7 @@ pub fn build_report(
     let terminal_certificate = core
         .terminal_receipt
         .ok_or_else(|| Error::new("Core Market has no terminal certificate"))?;
-    if core.phase != CorePhase::Terminal
+    if ![CorePhase::Terminal, CorePhase::Retiring].contains(&core.phase)
         || expected_market != selected.market
         || core.identity.market_id.to_bytes() != selected.market.to_bytes()
         || core.identity.registry_program.to_bytes() != selected.registry.to_bytes()
@@ -995,7 +1055,7 @@ pub fn build_report(
         }
         None => None,
     };
-    let report = build_wallet_terminal_payout_v3(WalletTerminalPayoutInputV3 {
+    let input = WalletTerminalPayoutInputV3 {
         observation: snapshot.observation,
         route,
         parent_context: selected.parent_context,
@@ -1032,8 +1092,12 @@ pub fn build_report(
         expected_market_revision: aggregate.revision,
         expected_position_revision: position_revision(&position_account.data)?,
         founder_bond,
-    })
-    .map_err(|error| Error::new(format!("wallet terminal payout builder: {error:?}")))?;
+    };
+    let report = match trading {
+        Some(caller) => build_trading_terminal_payout_v3(input, caller),
+        None => build_wallet_terminal_payout_v3(input),
+    }
+    .map_err(|error| Error::new(format!("terminal payout builder: {error:?}")))?;
     Ok(report)
 }
 
@@ -1963,6 +2027,7 @@ pub mod tests {
             }
         }));
         WalletTerminalPayoutReportV3 {
+            caller_frame: [owner, route.claims_program, route.claims_programdata],
             instruction: Instruction {
                 program_id: route.claims_program,
                 accounts,

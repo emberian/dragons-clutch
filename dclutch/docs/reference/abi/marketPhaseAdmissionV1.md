@@ -18,7 +18,7 @@ Regenerate with: npm run abi:phase-admission
 
 | name | value |
 | --- | ---: |
-| `ROUTE_COUNT_V1` | 162 |
+| `ROUTE_COUNT_V1` | 163 |
 
 ## Functions (see the source module)
 

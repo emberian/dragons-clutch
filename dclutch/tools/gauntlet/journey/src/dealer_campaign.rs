@@ -81,6 +81,7 @@ fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
     )?;
     let shape = crate::market::LocalMarketShapeV1 {
         recovery: Some(crate::local_mutable::parse_recovery_rungs_v1("2500:120")?),
+        terminal_max_age_seconds: Some(crate::failure::FAILURE_WALK_MAX_AGE_SECONDS_V1),
         ..crate::market::LocalMarketShapeV1::default()
     };
     let market_input =
@@ -273,7 +274,7 @@ fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
     progress.stages.push(json!({"stage": "nonzero fill poststates", "outcome": "executed", "before": before, "after": after}));
     let before_withdraw = token_balance(&mut rpc, addresses.founder_wallet)?;
     let before_vault = token_balance(&mut rpc, vault)?;
-    let mut withdraw_args = sponsor_args;
+    let mut withdraw_args = sponsor_args.clone();
     withdraw_args.extend(strings(&["--amount", "3"]));
     drive(
         progress,
@@ -294,6 +295,138 @@ fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
             "Dealer withdrawal did not transfer exactly three atoms",
         ));
     }
+    progress.stage = "resolve the unanswered market".into();
+    let (failure_report, _, failure_detail, _) = crate::failure::walk_to_failure(
+        &crate::failure::FailureWalkContextV1 {
+            rpc_url: &checked.rpc_url,
+            plan: &checked.plan_path,
+            campaign_report: &founding_path,
+            market: addresses.founding_market,
+            work: &request.work,
+            worker: sponsor.pubkey(),
+            worker_keypair: Path::new(sponsor_key),
+        },
+        &mut progress.transactions,
+    )?;
+    progress.stages.push(json!({"stage":progress.stage,"outcome":"executed","report":failure_report,"detail":failure_detail}));
+    progress.stage = "admit the failure terminal".into();
+    let terminal = crate::admit_terminal::run_v1(
+        vec![
+            "--rpc-url".into(),
+            checked.rpc_url.clone(),
+            "--plan".into(),
+            checked.plan_path.display().to_string(),
+            "--evidence".into(),
+            founding_path.display().to_string(),
+            "--market".into(),
+            addresses.founding_market.to_string(),
+            "--terminal-sequence".into(),
+            "1".into(),
+            "--fee-payer".into(),
+            sponsor.pubkey().to_string(),
+            "--fee-payer-keypair".into(),
+            sponsor_key.clone(),
+            "--output".into(),
+            request
+                .work
+                .join("admit-terminal.json")
+                .display()
+                .to_string(),
+            "--execute".into(),
+        ],
+        crate::cluster::ExpectedClusterV1::OwnedLoopback,
+    )?;
+    progress.transactions.extend(terminal.transactions);
+    progress.stages.push(json!({"stage":progress.stage,"outcome":"executed","certificate":terminal.certificate.to_string()}));
+
+    let pre_redeem = snapshot(
+        &mut rpc,
+        &addresses,
+        vault,
+        dealer_position,
+        taker_token,
+        participant.position,
+    )?;
+    let inventory: Vec<u64> = serde_json::from_value(pre_redeem["inventory"].clone())?;
+    let mut payout = 0u64;
+    for (index, quantity) in inventory.iter().copied().enumerate() {
+        if quantity == 0 {
+            continue;
+        }
+        let report = drive(
+            progress,
+            &mut rpc,
+            &request.work,
+            &format!("dealer-redeem-{index}"),
+            &common,
+            vec![
+                "--fee-payer".into(),
+                sponsor.pubkey().to_string(),
+                "--fee-payer-keypair".into(),
+                sponsor_key.clone(),
+                "--claim-index".into(),
+                index.to_string(),
+            ],
+            crate::scoring_dealer::run_redeem_owned_loopback_v1,
+        )?;
+        payout = payout
+            .checked_add(
+                report["facts"]["payoutAtoms"]
+                    .as_u64()
+                    .ok_or_else(|| Error::new("redemption omitted payout atoms"))?,
+            )
+            .ok_or_else(|| Error::new("redemption sum overflow"))?;
+    }
+    let post_redeem = snapshot(
+        &mut rpc,
+        &addresses,
+        vault,
+        dealer_position,
+        taker_token,
+        participant.position,
+    )?;
+    if payout == 0
+        || post_redeem["inventory"]
+            .as_array()
+            .ok_or_else(|| Error::new("missing inventory"))?
+            .iter()
+            .any(|value| value.as_u64() != Some(0))
+        || post_redeem["vault"]
+            .as_u64()
+            .and_then(|v| v.checked_sub(pre_redeem["vault"].as_u64()?))
+            != Some(payout)
+        || pre_redeem["hoard"]
+            .as_u64()
+            .and_then(|v| v.checked_sub(post_redeem["hoard"].as_u64()?))
+            != Some(payout)
+    {
+        return Err(Error::new(
+            "terminal Dealer redemption did not exhaust inventory and return exact positive hoard capital",
+        ));
+    }
+    progress.stages.push(json!({"stage":"terminal redemption poststates","outcome":"executed","before":pre_redeem,"after":post_redeem,"payoutAtoms":payout}));
+    let remaining = token_balance(&mut rpc, vault)?;
+    let sponsor_before_exit = token_balance(&mut rpc, addresses.founder_wallet)?;
+    let mut exit_args = sponsor_args;
+    exit_args.extend(["--amount".into(), remaining.to_string()]);
+    drive(
+        progress,
+        &mut rpc,
+        &request.work,
+        "dealer-capital-exit",
+        &common,
+        exit_args,
+        crate::scoring_dealer::run_withdraw_owned_loopback_v1,
+    )?;
+    if token_balance(&mut rpc, vault)? != 0
+        || token_balance(&mut rpc, addresses.founder_wallet)?.checked_sub(sponsor_before_exit)
+            != Some(remaining)
+    {
+        return Err(Error::new(
+            "terminal capital exit did not empty the vault into the sponsor wallet exactly",
+        ));
+    }
+    progress.stages.push(json!({"stage":"complete sponsor collateral exit","outcome":"executed","withdrawnAtoms":remaining,"vaultAtoms":0}));
     Ok(())
 }
 

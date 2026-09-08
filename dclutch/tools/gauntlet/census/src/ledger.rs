@@ -300,29 +300,54 @@ fn relay_v1_variant_selected(path: &str, data: &[u8]) -> bool {
 /// magic. The source decoder requires this exact width/header/body before it
 /// enters `process_escrow_close`; a matching magic by itself would also admit
 /// the holder-signed redemption route.
-fn claim_check_v1_variant_selected(path: &str, data: &[u8]) -> bool {
-    const MAGIC: &[u8; 8] = b"DCLTCCR1";
-    const SCHEMA_VERSION: &[u8; 2] = &[1, 0];
-    const ACTION_OFFSET: usize = 10;
-    const CLOSE_ESCROW_ACTION: u8 = 4;
-    const HEADER_RESERVED: core::ops::Range<usize> = 11..16;
-    const AGGREGATE: core::ops::Range<usize> = 16..48;
-    const BODY_RESERVED: core::ops::Range<usize> = 48..64;
-    const CLOSE_ESCROW_BYTES: usize = 64;
+pub(super) const CLAIM_CHECK_V1_MAGIC: &[u8; 8] = b"DCLTCCR1";
+pub(super) const CLAIM_CHECK_V1_SCHEMA_VERSION: u16 = 1;
+pub(super) const CLAIM_CHECK_V1_ACTION_OFFSET: usize = 10;
+pub(super) const CLAIM_CHECK_V1_HEADER_RESERVED: core::ops::Range<usize> = 11..16;
+pub(super) const CLAIM_CHECK_V1_AGGREGATE: core::ops::Range<usize> = 16..48;
+pub(super) const CLAIM_CHECK_V1_CLOSE_BODY_RESERVED: core::ops::Range<usize> = 48..64;
+pub(super) const CLAIM_CHECK_V1_REDEEM_OWNER: core::ops::Range<usize> = 48..80;
+pub(super) const CLAIM_CHECK_V1_REDEEM_BODY_RESERVED: core::ops::Range<usize> = 80..96;
+pub(super) const CLAIM_CHECK_V1_CLOSE_ESCROW_BYTES: usize = 64;
+pub(super) const CLAIM_CHECK_V1_REDEEM_BYTES: usize = 96;
+pub(super) const CLAIM_CHECK_V1_REDEEM_ACTION: u8 = 3;
+pub(super) const CLAIM_CHECK_V1_CLOSE_ESCROW_ACTION: u8 = 4;
 
-    path == "dclutch_claims::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow"
-        && data.len() == CLOSE_ESCROW_BYTES
-        && data.get(..MAGIC.len()) == Some(MAGIC)
-        && data.get(8..10) == Some(SCHEMA_VERSION)
-        && data.get(ACTION_OFFSET) == Some(&CLOSE_ESCROW_ACTION)
+fn claim_check_v1_header_selected(data: &[u8], action: u8) -> bool {
+    data.get(..CLAIM_CHECK_V1_MAGIC.len()) == Some(CLAIM_CHECK_V1_MAGIC)
+        && data.get(8..10) == Some(&CLAIM_CHECK_V1_SCHEMA_VERSION.to_le_bytes())
+        && data.get(CLAIM_CHECK_V1_ACTION_OFFSET) == Some(&action)
         && data
-            .get(HEADER_RESERVED)
+            .get(CLAIM_CHECK_V1_HEADER_RESERVED)
             .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
         && data
-            .get(AGGREGATE)
+            .get(CLAIM_CHECK_V1_AGGREGATE)
+            .is_some_and(|bytes| bytes.iter().any(|byte| *byte != 0))
+}
+
+fn claim_check_v1_variant_selected(path: &str, data: &[u8]) -> bool {
+    path == "dclutch_claims::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow"
+        && data.len() == CLAIM_CHECK_V1_CLOSE_ESCROW_BYTES
+        && claim_check_v1_header_selected(data, CLAIM_CHECK_V1_CLOSE_ESCROW_ACTION)
+        && data
+            .get(CLAIM_CHECK_V1_CLOSE_BODY_RESERVED)
+            .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
+}
+
+/// Match the source codec's exact nonfractional redemption packet. This route
+/// is the dispatch fallthrough after `CloseEscrow`, so the route inventory has
+/// no enum-pattern selector to carry. Width, action, and both nonzero PDA seed
+/// coordinates close that otherwise-unmatchable branch without treating an
+/// arbitrary fallthrough as native evidence.
+fn claim_check_v1_redeem_selected(route: &Route, data: &[u8]) -> bool {
+    route.id == "claims/claim_check_redemption_v1::process_redemption#else"
+        && data.len() == CLAIM_CHECK_V1_REDEEM_BYTES
+        && claim_check_v1_header_selected(data, CLAIM_CHECK_V1_REDEEM_ACTION)
+        && data
+            .get(CLAIM_CHECK_V1_REDEEM_OWNER)
             .is_some_and(|bytes| bytes.iter().any(|byte| *byte != 0))
         && data
-            .get(BODY_RESERVED)
+            .get(CLAIM_CHECK_V1_REDEEM_BODY_RESERVED)
             .is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0))
 }
 
@@ -429,10 +454,8 @@ fn route_selected(route: &Route, program_address: &str, instruction: &CampaignIn
         // These selectors depend on deserializing the instruction payload or
         // on a predicate body. The census has no native decoder for them, so
         // finalized bytes alone are insufficient to credit this route.
-        Selector::Predicate { .. }
-        | Selector::Tag { .. }
-        | Selector::Literal { .. }
-        | Selector::Fallthrough => false,
+        Selector::Fallthrough => claim_check_v1_redeem_selected(route, &data),
+        Selector::Predicate { .. } | Selector::Tag { .. } | Selector::Literal { .. } => false,
     })
 }
 
@@ -1191,6 +1214,90 @@ mod tests {
             &route,
             "ClaimsProgram1111",
             &instruction(&close[..63])
+        ));
+    }
+
+    #[test]
+    fn claim_check_redeem_requires_exact_fallthrough_packet() {
+        let route = Route {
+            id: "claims/claim_check_redemption_v1::process_redemption#else".into(),
+            kind: RouteKind::Action,
+            parent: Some("claims/process_non_fractional_instruction".into()),
+            handler: "claim_check_redemption_v1::process_redemption".into(),
+            provenance: "programs/dclutch-claims-sbf/src/lib.rs:1".into(),
+            cfg: Vec::new(),
+            selectors: vec![
+                Selector::Magic {
+                    constant: "dclutch_claims::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1".into(),
+                    bytes: Some("44434c5443435231".into()),
+                    ascii: Some("DCLTCCR1".into()),
+                    provenance: None,
+                },
+                Selector::Fallthrough,
+            ],
+            admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
+        };
+        let instruction = |data: &[u8]| CampaignInstruction {
+            program_id: "ClaimsProgram1111".into(),
+            data_hex: hex(data),
+        };
+        let packet = || {
+            let mut data = vec![0_u8; 96];
+            data[..8].copy_from_slice(b"DCLTCCR1");
+            data[8..10].copy_from_slice(&1_u16.to_le_bytes());
+            data[10] = 3;
+            data[16] = 1;
+            data[48] = 1;
+            data
+        };
+
+        let redeem = packet();
+        assert!(route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&redeem)
+        ));
+        for (offset, value) in [(0, b'X'), (8, 2), (10, 4), (11, 1), (80, 1)] {
+            let mut malformed = packet();
+            malformed[offset] = value;
+            assert!(!route_selected(
+                &route,
+                "ClaimsProgram1111",
+                &instruction(&malformed)
+            ));
+        }
+        let mut zero_aggregate = packet();
+        zero_aggregate[16..48].fill(0);
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&zero_aggregate)
+        ));
+        let mut zero_owner = packet();
+        zero_owner[48..80].fill(0);
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&zero_owner)
+        ));
+        assert!(!route_selected(
+            &route,
+            "ClaimsProgram1111",
+            &instruction(&redeem[..95])
+        ));
+        assert!(!route_selected(
+            &route,
+            "DifferentClaimsProgram1111",
+            &instruction(&redeem)
+        ));
+
+        let mut unrelated = route;
+        unrelated.id = "claims/other_handler#else".into();
+        assert!(!route_selected(
+            &unrelated,
+            "ClaimsProgram1111",
+            &instruction(&redeem)
         ));
     }
 

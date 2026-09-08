@@ -22,28 +22,28 @@ remains a separate substrate.
 | **checked refused-only** | 1 | finalized native refusal and no native acceptance |
 | **refusal binding only** | 0 | authored `refused` binding without a checked native row |
 | **blocked** | 32 | no evidence or binding; a blocker records why and who owns it |
-| **unrecorded** | 3 | no evidence, binding or reason |
+| **unrecorded** | 4 | no evidence, binding or reason |
 
-- **historical accepted Agave union: 56 of 162** -- an
+- **historical accepted Agave union: 56 of 163** -- an
   `executed` finalized native observation in a checked census ledger or an
   `executed` corroborated devnet record. A binding cannot enter this set, and
   this count is not final-source acceptance.
-- **historical local-validator accepted: 11 of 162** --
+- **historical local-validator accepted: 11 of 163** --
   checked successful local-validator ledger rows.
-- **historical devnet accepted: 46 of 162** --
+- **historical devnet accepted: 46 of 163** --
   checked successful devnet records. The local and devnet sets can overlap, so
   their counts do not add to the union.
-- **successful-binding-only: 70 of 162** -- at
+- **successful-binding-only: 70 of 163** -- at
   least one campaign binding says `executed`, but no checked native observation
   in the repository does. Its declared substrate is useful provenance, not an
   acceptance result.
-- **checked refused-only: 1 of 162** -- a
+- **checked refused-only: 1 of 163** -- a
   finalized native refusal with no accepted native evidence. It proves a
   boundary was reached; it never proves the accepted poststate.
-- **refusal-binding-only: 0 of 162** -- an
+- **refusal-binding-only: 0 of 163** -- an
   authored refusal binding with no checked native row. It is a claim, not an
   observed refusal.
-- **no historical successful claim: 35 of 162** --
+- **no historical successful claim: 36 of 163** --
   no accepted native observation and no `executed` binding. This includes exact
   refusals, refusal claims, blocked rows and wholly unrecorded rows.
 
@@ -298,6 +298,7 @@ not decide which.
 | `trading/scoring_dealer_v1::fill::process_dealer_fill_v1` | local-validator accepted (historical) | local-validator `scoring-dealer-local-validator` slot 8,408 `5juD5dkRCVfD...`; binding register: `scoring-dealer-local-validator` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` |
 | `trading/scoring_dealer_v1::found::process_dealer_found_v1` | local-validator accepted (historical) | local-validator `scoring-dealer-local-validator` slot 8,214 `4DPottw5ENC3...`; binding register: `scoring-dealer-local-validator` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` |
 | `trading/scoring_dealer_v1::quote::process_dealer_quote_v1` | local-validator accepted (historical) | local-validator `scoring-dealer-local-validator` slot 8,246 `3Xc6iDeP6otx...`; binding register: `scoring-dealer-local-validator` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` |
+| `trading/scoring_dealer_v1::redeem::process_dealer_redeem_v1` | unrecorded | no evidence, binding or reason recorded | -- |
 | `trading/scoring_dealer_v1::withdraw::process_dealer_withdraw_v1` | local-validator accepted (historical) | local-validator `scoring-dealer-local-validator` slot 8,443 `2xtEfxu5UfHG...`; binding register: `scoring-dealer-local-validator` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` |
 | `trading/user_position_admission_v1::process_user_position_admission_v1` | devnet accepted (historical) | devnet `cohort-13` slot 492,089,325 `3crBKWVQszbx...`; devnet `cohort-13` slot 492,089,485 `2hZtmJwpdyCM...`; devnet `cohort-14` slot 492,315,744 `2y4w3esS39SD...`; devnet `cohort-15` slot 492,767,048 `2wqT3rjHAvUx...`; devnet `cohort-15` slot 492,767,229 `2yRSDsSs3oRC...`; devnet `cohort-15` slot 492,863,447 `2CabHYSLTdKe...`; devnet `cohort-17` slot 494,088,846 `21tePvWMywdh...`; devnet `cohort-17` slot 494,088,993 `62y8KDzGPXW2...` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `trading/user_position_admission_v1::process_user_position_admission_v1#Admit` | blocked | blocked by rule `trading/user_position_admission_v1::process_user_position_admission_v1#Admit` | `tools/gauntlet/blocked.json` |

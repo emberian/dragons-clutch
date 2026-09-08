@@ -53,6 +53,9 @@ pub mod sparse_native_transfer_v1;
 mod terminal_certificate_v3;
 mod terminal_settlement_v3;
 
+/// Exact Claims refusals for explicit terminal capital recipients.
+pub use terminal_settlement_v3::TerminalRecipientErrorV3;
+
 /// One diagnostic phase mark: a label and the transaction meter's remaining CU.
 ///
 /// A child program reached by CPI is ONE number in its caller's log, and one

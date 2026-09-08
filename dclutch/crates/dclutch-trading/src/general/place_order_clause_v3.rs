@@ -138,8 +138,8 @@ pub enum PlaceOrderClauseV3 {
     IdentityPositionOneOwner,
     /// The settlement position is not keyed on this order.
     EnvironmentSettlementPositionOwner,
-    /// The rent credit does not name the maker.
-    EnvironmentRentCredit,
+    /// The authenticated rent-refund wallet does not name the maker.
+    EnvironmentRentRefund,
     /// A per-outcome `CURSOR_INVENTORY` is not the signed receive-per-lot.
     ItemReceivePerLot,
     /// A per-outcome `QUANTITY` is not the signed deliver-per-lot.
@@ -238,7 +238,7 @@ impl PlaceOrderClauseV3 {
             Self::EnvironmentSettlementPositionOwner => {
                 "place-order: the settlement position is not keyed on this order"
             }
-            Self::EnvironmentRentCredit => "place-order: the rent credit is not the maker",
+            Self::EnvironmentRentRefund => "place-order: the rent refund is not the maker",
             Self::ItemReceivePerLot => "place-order: an observed receive row is not the signed one",
             Self::ItemDeliverPerLot => "place-order: an observed deliver row is not the signed one",
             Self::EscrowOrder => "place-order: the escrow names another order",

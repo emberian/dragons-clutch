@@ -86,7 +86,37 @@ pub const TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3: &[u8] =
 pub const TERMINAL_SETTLEMENT_POST_RESOURCE_DOMAIN_V3: &[u8] =
     b"dclutch/claims-terminal-postresources/v3";
 
+/// Exact child privileges `(writable, signer)` for the terminal frame.
+/// The SignedDelta prefix is projected from its own account specification.
+pub fn terminal_settlement_privileges_v3(index: usize, founder_bond: bool) -> Option<(bool, bool)> {
+    if index < TERMINAL_SETTLEMENT_SIGNED_DELTA_ACCOUNTS_V3 {
+        let spec = crate::frame_spec_v1::SignedDeltaFrameSpecV3::new(1).ok()?;
+        let account = spec.account(u16::try_from(index).ok()?).ok()?;
+        let privileges = account.privileges();
+        return Some((privileges.writable(), privileges.signer()));
+    }
+    if index < TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 {
+        return Some((
+            matches!(
+                index,
+                TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3
+                    | TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3
+                    | TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3
+            ),
+            false,
+        ));
+    }
+    if founder_bond && index < TERMINAL_SETTLEMENT_WITH_FOUNDER_BOND_ACCOUNT_COUNT_V3 {
+        return Some((
+            index != TERMINAL_SETTLEMENT_FOUNDER_BOND_ADMISSION_ACCOUNT_V3,
+            false,
+        ));
+    }
+    None
+}
+
 const ROLE_OFFSET: usize = 10;
+const RECIPIENT_MODE_OFFSET: usize = 11;
 const RELEASE_OFFSET: usize = 16;
 const MARKET_OFFSET: usize = 48;
 const REALM_OFFSET: usize = 80;
@@ -150,6 +180,10 @@ pub enum TerminalSettlementErrorV3 {
     InvalidCoordinate,
     /// Positive/zero payout and Custody evidence disagreed.
     InvalidCustodyShape,
+    /// Only an authenticated Trading caller may return capital to its vault.
+    RecipientRole,
+    /// The recipient mode is not allocated.
+    RecipientMode,
     /// Receipt did not bind the exact request and physical commitments.
     ReceiptMismatch,
 }
@@ -217,9 +251,20 @@ pub struct TerminalSettlementRequestInputV3 {
     pub transfer_index: u16,
 }
 
+/// The economic destination of terminal collateral. Zero preserves every V3
+/// external payout byte; Trading principal is an explicit opt-in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalRecipientV3 {
+    /// Ordinary token recipient; native bond follows its external owner.
+    External,
+    /// Canonical TradingPrincipal vault with context equal to Position owner.
+    /// Native founder-bond lamports go to that Position owner, separately.
+    TradingPrincipal,
+}
+
 /// Exact hostile-decodable terminal settlement request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TerminalSettlementRequestV3(TerminalSettlementRequestInputV3);
+pub struct TerminalSettlementRequestV3(TerminalSettlementRequestInputV3, TerminalRecipientV3);
 
 impl TerminalSettlementRequestV3 {
     /// Construct and fully validate one request.
@@ -256,7 +301,28 @@ impl TerminalSettlementRequestV3 {
         {
             return Err(TerminalSettlementErrorV3::InvalidCoordinate);
         }
-        Ok(Self(input))
+        Ok(Self(input, TerminalRecipientV3::External))
+    }
+
+    /// Select a canonical TradingPrincipal return without changing payout math.
+    pub fn to_trading_principal(self) -> Result<Self> {
+        if self.0.caller_role != CallerRole::Trading {
+            return Err(TerminalSettlementErrorV3::RecipientRole);
+        }
+        Ok(Self(self.0, TerminalRecipientV3::TradingPrincipal))
+    }
+
+    /// Authenticated destination mode carried by the request.
+    pub const fn recipient_mode(self) -> TerminalRecipientV3 {
+        self.1
+    }
+
+    /// Native founder-bond beneficiary, separate from collateral token authority.
+    pub const fn native_beneficiary(self) -> [u8; 32] {
+        match self.1 {
+            TerminalRecipientV3::External => self.0.recipient_owner,
+            TerminalRecipientV3::TradingPrincipal => self.0.owner,
+        }
     }
 
     /// Decode one exact request and refuse every noncanonical byte.
@@ -266,7 +332,7 @@ impl TerminalSettlementRequestV3 {
             TERMINAL_SETTLEMENT_REQUEST_BYTES_V3,
             TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3,
         )?;
-        require_zero(bytes, 11, 5)?;
+        require_zero(bytes, 12, 4)?;
         require_zero(bytes, 638, 2)?;
         // The three execution roles that can settle a Product terminal. `Core`
         // and `Trading` are EXTERNAL callers: they reach this route by CPI and
@@ -282,7 +348,7 @@ impl TerminalSettlementRequestV3 {
             2 => CallerRole::Trading,
             _ => return Err(TerminalSettlementErrorV3::NonCanonical),
         };
-        Self::new(TerminalSettlementRequestInputV3 {
+        let request = Self::new(TerminalSettlementRequestInputV3 {
             caller_role,
             release_set: array(bytes, RELEASE_OFFSET)?,
             market: array(bytes, MARKET_OFFSET)?,
@@ -309,7 +375,12 @@ impl TerminalSettlementRequestV3 {
             quantity: u64_at(bytes, QUANTITY_OFFSET)?,
             claim_index: u32_at(bytes, CLAIM_INDEX_OFFSET)?,
             transfer_index: u16_at(bytes, TRANSFER_INDEX_OFFSET)?,
-        })
+        })?;
+        match byte(bytes, RECIPIENT_MODE_OFFSET)? {
+            0 => Ok(request),
+            1 => request.to_trading_principal(),
+            _ => Err(TerminalSettlementErrorV3::RecipientMode),
+        }
     }
 
     /// Encode the canonical fixed request.
@@ -318,6 +389,10 @@ impl TerminalSettlementRequestV3 {
         put(&mut out, 0, &TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3);
         put(&mut out, 8, &TERMINAL_SETTLEMENT_VERSION_V3.to_le_bytes());
         out[ROLE_OFFSET] = self.0.caller_role as u8;
+        out[RECIPIENT_MODE_OFFSET] = match self.1 {
+            TerminalRecipientV3::External => 0,
+            TerminalRecipientV3::TradingPrincipal => 1,
+        };
         for (offset, value) in [
             (RELEASE_OFFSET, self.0.release_set),
             (MARKET_OFFSET, self.0.market),
@@ -665,6 +740,53 @@ fn put(out: &mut [u8], offset: usize, value: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_trading_destination_preserves_external_wire_and_native_beneficiary() {
+        let external = request();
+        let bytes = external.to_bytes();
+        assert_eq!(bytes[RECIPIENT_MODE_OFFSET], 0);
+        assert_eq!(external.recipient_mode(), TerminalRecipientV3::External);
+        assert_eq!(
+            external.native_beneficiary(),
+            external.input().recipient_owner
+        );
+        let capital = external.to_trading_principal().expect("Trading capital");
+        let capital_bytes = capital.to_bytes();
+        assert_eq!(
+            TerminalSettlementRequestV3::decode(&capital_bytes),
+            Ok(capital)
+        );
+        assert_eq!(capital.native_beneficiary(), capital.input().owner);
+        let mut restored = capital_bytes;
+        restored[RECIPIENT_MODE_OFFSET] = 0;
+        assert_eq!(restored, bytes);
+    }
+
+    #[test]
+    fn trading_destination_refuses_wallet_core_and_unknown_mode_exactly() {
+        for role in [CallerRole::Claims, CallerRole::Core] {
+            let mut input = request().input();
+            input.caller_role = role;
+            let value = TerminalSettlementRequestV3::new(input).unwrap();
+            assert_eq!(
+                value.to_trading_principal(),
+                Err(TerminalSettlementErrorV3::RecipientRole)
+            );
+            let mut bytes = value.to_bytes();
+            bytes[RECIPIENT_MODE_OFFSET] = 1;
+            assert_eq!(
+                TerminalSettlementRequestV3::decode(&bytes),
+                Err(TerminalSettlementErrorV3::RecipientRole)
+            );
+        }
+        let mut bytes = request().to_bytes();
+        bytes[RECIPIENT_MODE_OFFSET] = 2;
+        assert_eq!(
+            TerminalSettlementRequestV3::decode(&bytes),
+            Err(TerminalSettlementErrorV3::RecipientMode)
+        );
+    }
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]

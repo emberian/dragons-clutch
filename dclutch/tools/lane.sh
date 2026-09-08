@@ -409,25 +409,28 @@ lane_cmd_commit_patch() {
   #
   # So each path is now brought forward, with the same conservatism the index
   # side already has:
-  #   - the patch applies to the working tree  -> apply it (the file the next
-  #     reader sees is the file that was committed);
-  #   - it does not apply, but its REVERSE does -> the hunk is already there;
+  #   - its REVERSE applies                    -> the hunk is already there;
   #     nothing to do, which is the ordinary case where you edited in place;
+  #   - otherwise the patch applies            -> carry the committed hunk;
   #   - neither                                 -> someone else's hunk sits in
   #     the way. Left ALONE and named, because clobbering it is the one thing
   #     this subcommand exists to make impossible.
-  # `git apply` writes nothing unless every context line matches, so the first
-  # branch cannot overwrite another lane's line either.
+  # Check reverse FIRST: with repeated context both directions may apply, and
+  # forward-first duplicates an already-present insertion at the next matching
+  # block. Dealer dispatch exposed this on 2026-09-08. `git apply` still writes
+  # nothing unless every context line matches.
   local w
   local -a carried=() blocked=()
   for w in "${want[@]}"; do
-    if git apply --check --include="$w" "$patch" >/dev/null 2>&1; then
+    if git apply --reverse --check --include="$w" "$patch" >/dev/null 2>&1; then
+      continue
+    elif git apply --check --include="$w" "$patch" >/dev/null 2>&1; then
       if git apply --include="$w" "$patch" >/dev/null 2>&1; then
         carried+=("$w")
       else
         blocked+=("$w")
       fi
-    elif ! git apply --reverse --check --include="$w" "$patch" >/dev/null 2>&1; then
+    else
       blocked+=("$w")
     fi
   done

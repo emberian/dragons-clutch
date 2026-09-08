@@ -215,6 +215,15 @@ pub(crate) fn run_profile_capture_replay_v1(arguments: Vec<String>) -> Result<()
 }
 
 fn current_source_receipt_profile_v1(market_input_bytes: &[u8]) -> Result<Vec<u8>> {
+    Ok(current_source_selected_release_v1(market_input_bytes)?
+        .activation
+        .activate_receipt
+        .account_profile)
+}
+
+fn current_source_selected_release_v1(
+    market_input_bytes: &[u8],
+) -> Result<dclutch_operator::structured_selected_release_v1::StructuredSelectedReleaseV1> {
     let input: crate::model::MarketRunInput = serde_json::from_value(
         crate::rpc::parse_json_without_duplicate_keys_v1(market_input_bytes)
             .map_err(|error| Error::new(format!("Structured market input {error}")))?,
@@ -280,7 +289,7 @@ fn current_source_receipt_profile_v1(market_input_bytes: &[u8]) -> Result<Vec<u8
         product_basis: &product_basis,
     })
     .map_err(|error| Error::new(format!("Structured current-source release: {error:?}")))?;
-    Ok(release.activation.activate_receipt.account_profile)
+    Ok(release)
 }
 
 /// Run the authenticated Structured publication predecessor on an owned
@@ -530,6 +539,7 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         (published.as_ref(), root_activation.as_ref(), payer.as_ref())
     {
         Some(activate_structured_receipt_v1(
+            &arguments,
             &mut rpc,
             payer,
             &plan,
@@ -558,7 +568,7 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
             "payer": payer.as_ref().map(|value| value.pubkey().to_string()),
             "finalizedSlot": published.as_ref().map(|value| value.slot).unwrap_or(activation_slot),
             "productCoordinates": coordinates,
-            "denominator": 2_u64,
+            "denominator": denominator,
             "coefficients": coefficients,
             "publication": published.as_ref().map(|value| value.records.iter().map(|record| json!({
                 "raw": record.raw.to_string(), "staging": record.staging.to_string(), "schema": crate::plan::hex(&record.schema), "digest": crate::plan::hex(&record.digest)
@@ -1640,6 +1650,7 @@ fn project_saved_structured_receipt_snapshot_v1(
 /// the only fresh writable PDA is the receipt Mint the Claims instruction
 /// itself creates.
 fn activate_structured_receipt_v1(
+    arguments: &ArgumentsV1,
     rpc: &mut Rpc,
     payer: &Keypair,
     plan: &SuccessorPlan,
@@ -1670,6 +1681,16 @@ fn activate_structured_receipt_v1(
         .selected_capability
         .as_ref()
         .ok_or_else(|| Error::new("Structured receipt omitted selected capability"))?;
+    let selected_release = current_source_selected_release_v1(market_input)?;
+    if selected_release.program_set != crate::runtime::decode_hex(&selected.program_set_hex)?
+        || selected_release.config != crate::runtime::decode_hex(&selected.config_hex)?
+        || selected_release.publication.to_bytes().as_slice()
+            != crate::runtime::decode_hex(&selected.publication_hex)?.as_slice()
+    {
+        return Err(Error::new(
+            "Structured current-source bundles differ from immutable selected publication",
+        ));
+    }
     let root = root_activation
         .get("root")
         .and_then(serde_json::Value::as_str)
@@ -2055,6 +2076,12 @@ fn activate_structured_receipt_v1(
         None
     };
     let hot_instruction = hot.instruction;
+    let receipt_funding = solana_system_interface::instruction::transfer(
+        &payer.pubkey(),
+        &receipt_mint,
+        header.observed_receipt_lamports,
+    );
+    let funded_hot = [receipt_funding, hot_instruction.clone()];
     // The root is read-only to the permissionless seal outer, while Hot owns
     // its writable root frame. Solana merges account privileges across one
     // message, so putting both instructions in one transaction upgrades the
@@ -2065,7 +2092,7 @@ fn activate_structured_receipt_v1(
     if let Some(seal) = seal_instruction.as_ref() {
         instructions.push(seal.clone());
     }
-    instructions.push(hot_instruction.clone());
+    instructions.extend_from_slice(&funded_hot);
     let mut routing_addresses = std::collections::BTreeSet::new();
     for instruction in &instructions {
         routing_addresses.insert(instruction.program_id);
@@ -2134,7 +2161,7 @@ fn activate_structured_receipt_v1(
     }
     let sent = rpc.send_v0_on_heap(
         "activate Structured receipt",
-        std::slice::from_ref(&hot_instruction),
+        &funded_hot,
         payer,
         observation,
         &tables,
@@ -2181,6 +2208,7 @@ fn activate_structured_receipt_v1(
         plan,
         evidence,
         coordinate_artifacts,
+        LifecycleActionV2::ActivateCoordinate,
         market,
         root,
         representation_descriptor_record,
@@ -2191,8 +2219,46 @@ fn activate_structured_receipt_v1(
         &mut fixed,
         transactions,
     )?;
+    let native_claims = prepare_structured_native_position_v1(
+        arguments,
+        rpc,
+        payer,
+        evidence,
+        market,
+        transactions
+            .last()
+            .map_or(sent.slot, |transaction| transaction.slot),
+        transactions,
+    )?;
+    let representation =
+        crate::structured_representation_campaign::run_structured_representation_campaign_v1(
+            crate::structured_representation_campaign::StructuredRepresentationCampaignInputV1 {
+                rpc,
+                fee_payer: payer,
+                actor: payer,
+                plan,
+                campaign: evidence,
+                selected_release: &selected_release,
+                market,
+                root,
+                representation_descriptor: representation_descriptor_record,
+                representation_descriptor_body: receipt_descriptor,
+                composition_exposure: selected_pair_v1(
+                    registry,
+                    dclutch_claims::composition::COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+                    &closure.exposure,
+                )?,
+                composition_exposure_body: &closure.exposure,
+                hot_fixed: &fixed,
+                lifecycle_hot_outer: hot_outer,
+                minimum_finalized_slot: transactions
+                    .last()
+                    .map_or(sent.slot, |transaction| transaction.slot),
+            },
+            transactions,
+        )?;
     Ok(
-        json!({"slot": sent.slot, "receiptMint": receipt_mint.to_string(), "receiptMintLamports": mint.lamports, "receiptMintBytes": mint.data.len(), "root": root.to_string(), "rootBytes": root_after.data.len(), "rootStateSha256": sha256_hex(root_tail), "seal": fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3].to_string(), "routingTables": tables.iter().map(|table| table.key.to_string()).collect::<Vec<_>>(), "coordinates": coordinates }),
+        json!({"slot": sent.slot, "receiptMint": receipt_mint.to_string(), "receiptMintLamports": mint.lamports, "receiptMintBytes": mint.data.len(), "root": root.to_string(), "rootBytes": root_after.data.len(), "rootStateSha256": sha256_hex(root_tail), "seal": fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3].to_string(), "routingTables": tables.iter().map(|table| table.key.to_string()).collect::<Vec<_>>(), "coordinates": coordinates, "nativeClaims": native_claims, "representation": representation }),
     )
 }
 
@@ -2206,6 +2272,7 @@ fn activate_structured_coordinates_v1(
     plan: &SuccessorPlan,
     evidence: &crate::campaign::CampaignTerminalEvidenceV1,
     artifacts: &structured_activation::StructuredActivateReceiptArtifactsV1,
+    action: LifecycleActionV2,
     market: Pubkey,
     root: Pubkey,
     representation_descriptor_record: SelectedActivationRecordPairV1,
@@ -2221,6 +2288,21 @@ fn activate_structured_coordinates_v1(
     };
     use dclutch_registry::{ActivatedExecutionReleaseSetV1, release_set::ExecutionRoleV1};
 
+    let retiring = action == LifecycleActionV2::RetireCoordinate;
+    if !matches!(
+        action,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate
+    ) {
+        return Err(Error::new(
+            "Structured coordinate action differs from coordinate lifecycle",
+        ));
+    }
+    let selector =
+        dclutch_claims::rational_lifecycle::hot_v6::structured_lifecycle_action_selector_v1(
+            STRUCTURED_CAPABILITY_KIND_ID_V2,
+            action,
+        )
+        .ok_or_else(|| Error::new("Structured coordinate selector is absent"))?;
     let registry = pubkey(&plan.registry.program_id)?;
     let claims = pubkey(&plan.claims.program_id)?;
     let trading = pubkey(&plan.trading.program_id)?;
@@ -2295,7 +2377,7 @@ fn activate_structured_coordinates_v1(
     let seal_key = dclutch_vm::capability_seal::CapabilitySealKeyV1::new(
         dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
         capability_descriptor.content,
-        STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1,
+        selector,
         trading_release.semantic_release_id().to_bytes(),
         registry.to_bytes(),
     )
@@ -2305,6 +2387,13 @@ fn activate_structured_coordinates_v1(
 
     let mut accepted = Vec::new();
     for outcome in 0..descriptor.outcome_count() {
+        if descriptor
+            .coefficient(outcome)
+            .map_err(|error| Error::new(format!("Structured coordinate coefficient: {error:?}")))?
+            == 0
+        {
+            continue;
+        }
         let outcome_bytes = outcome.to_le_bytes();
         let shard_mint = Pubkey::find_program_address(
             &[
@@ -2364,7 +2453,7 @@ fn activate_structured_coordinates_v1(
         let receipt_account = required(3, "receipt Mint")?;
         let rent_account = required(4, "Rent sysvar")?;
         let root_account = required(5, "capability root")?;
-        if accounts[6..].iter().any(Option::is_some) {
+        if !retiring && accounts[6..].iter().any(Option::is_some) {
             return Err(Error::new(
                 "Structured coordinate resources are not vacant before activation",
             ));
@@ -2398,7 +2487,7 @@ fn activate_structured_coordinates_v1(
             exposure.product_width(),
         )
         .map_err(|error| Error::new(format!("Structured coordinate Position width: {error:?}")))?;
-        let row = LifecycleCoordinateV2 {
+        let mut row = LifecycleCoordinateV2 {
             outcome,
             coefficient: descriptor.coefficient(outcome).map_err(|error| {
                 Error::new(format!("Structured coordinate coefficient: {error:?}"))
@@ -2420,8 +2509,52 @@ fn activate_structured_coordinates_v1(
             expected_structured_amount: 0,
             expected_position_revision: 0,
         };
+        if retiring {
+            let shard = required(6, "shard Mint")?;
+            let custody = required(7, "Structured custody")?;
+            let position_account = required(8, "Claims custody Position")?;
+            let admission_account = required(9, "Position admission")?;
+            row.observed_shard_lamports = shard.lamports;
+            row.observed_structured_lamports = custody.lamports;
+            row.observed_position_lamports = position_account.lamports;
+            row.observed_admission_lamports = admission_account.lamports;
+            row.expected_shard_supply = Mint::parse(
+                shard
+                    .data
+                    .get(..MINT_BYTES)
+                    .ok_or_else(|| Error::new("Structured retiring shard truncated"))?,
+            )
+            .map_err(|error| Error::new(format!("Structured retiring shard: {error:?}")))?
+            .supply;
+            row.expected_structured_amount =
+                dclutch_custody::token_svm::TokenAccount::parse(&custody.data)
+                    .map_err(|error| Error::new(format!("Structured retiring custody: {error:?}")))?
+                    .amount;
+            let position_view =
+                dclutch_claims::liability_basis_state_v2::LiabilityBasisPositionViewV2::decode(
+                    &position_account.data,
+                )
+                .map_err(|error| Error::new(format!("Structured retiring Position: {error:?}")))?;
+            row.expected_position_revision = position_view.revision;
+        }
+        let credit_after = if retiring {
+            [
+                row.observed_shard_lamports,
+                row.observed_structured_lamports,
+                row.observed_position_lamports,
+                row.observed_admission_lamports,
+            ]
+            .into_iter()
+            .try_fold(rent_credit_account.lamports, |credit, value| {
+                credit
+                    .checked_add(value)
+                    .ok_or_else(|| Error::new("Structured retirement rent credit overflows"))
+            })?
+        } else {
+            rent_credit_account.lamports
+        };
         let header = LifecycleHeaderV2 {
-            action: LifecycleActionV2::ActivateCoordinate,
+            action,
             release_set: core_state.identity.selected_release_set.to_bytes(),
             market: market.to_bytes(),
             graph_id: descriptor.graph_id(),
@@ -2437,10 +2570,10 @@ fn activate_structured_coordinates_v1(
             observed_receipt_lamports: receipt_account.lamports,
             receipt_rent_principal: rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2),
             expected_receipt_supply: receipt_supply,
-            outcome_count: exposure.product_width(),
+            outcome_count: descriptor.outcome_count(),
             coordinate_count: 1,
             rent_credit_before: rent_credit_account.lamports,
-            rent_credit_after: rent_credit_account.lamports,
+            rent_credit_after: credit_after,
         };
         let mut coordinate_bytes = vec![0; LIFECYCLE_COORDINATE_BYTES_V2];
         row.encode_into(&mut coordinate_bytes)
@@ -2457,9 +2590,17 @@ fn activate_structured_coordinates_v1(
             })?;
         let lifecycle_digest = hash(&lifecycle_bytes).to_bytes();
         let protocol = ProtocolPositionRequestV2 {
-            action: ProtocolPositionActionV2::Admit,
+            action: if retiring {
+                ProtocolPositionActionV2::Close
+            } else {
+                ProtocolPositionActionV2::Admit
+            },
             owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
-            presence: ProtocolPositionPresenceV2::Vacant,
+            presence: if retiring {
+                ProtocolPositionPresenceV2::Existing
+            } else {
+                ProtocolPositionPresenceV2::Vacant
+            },
             release_set: header.release_set,
             market: header.market,
             position_owner: owner.to_bytes(),
@@ -2555,13 +2696,23 @@ fn activate_structured_coordinates_v1(
             finalized_slot: slot,
             hot_outer,
         };
-        let hot = structured_activation::build_selected_activate_coordinate_instruction_v1(
-            artifacts,
-            &frame.state()?,
-            &child,
-            descriptor,
-            market_realm,
-        )?;
+        let hot = if retiring {
+            structured_activation::build_selected_retirement_instruction_v1(
+                artifacts,
+                &frame.state()?,
+                &child,
+                descriptor,
+                market_realm,
+            )?
+        } else {
+            structured_activation::build_selected_activate_coordinate_instruction_v1(
+                artifacts,
+                &frame.state()?,
+                &child,
+                descriptor,
+                market_realm,
+            )?
+        };
         let seal = if rpc
             .account(fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3])?
             .is_none()
@@ -2572,7 +2723,7 @@ fn activate_structured_coordinates_v1(
                     registry_program: registry,
                     trading_semantic_release: trading_release.semantic_release_id().to_bytes(),
                     descriptor_digest: capability_descriptor.content,
-                    action: STRUCTURED_ACTIVATE_COORDINATE_SELECTOR_V1,
+                    action: selector,
                     fixed_frame: fixed,
                     payer: payer.pubkey(),
                 })
@@ -2584,8 +2735,23 @@ fn activate_structured_coordinates_v1(
         } else {
             None
         };
+        let mut funded_hot = [
+            (shard_mint, row.observed_shard_lamports),
+            (structured_custody, row.observed_structured_lamports),
+            (position, row.observed_position_lamports),
+            (admission, row.observed_admission_lamports),
+        ]
+        .into_iter()
+        .map(|(account, lamports)| {
+            solana_system_interface::instruction::transfer(&payer.pubkey(), &account, lamports)
+        })
+        .collect::<Vec<_>>();
+        if retiring {
+            funded_hot.clear();
+        }
+        funded_hot.push(hot.instruction);
         let mut routing = std::collections::BTreeSet::new();
-        for instruction in seal.iter().chain(std::iter::once(&hot.instruction)) {
+        for instruction in seal.iter().chain(funded_hot.iter()) {
             routing.insert(instruction.program_id);
             routing.extend(instruction.accounts.iter().map(|meta| meta.pubkey));
         }
@@ -2614,8 +2780,8 @@ fn activate_structured_coordinates_v1(
             transactions.push(sent);
         }
         let sent = rpc.send_v0_on_heap(
-            &format!("activate Structured coordinate {outcome}"),
-            std::slice::from_ref(&hot.instruction),
+            &format!("{action:?} Structured coordinate {outcome}"),
+            &funded_hot,
             payer,
             observation,
             &tables,
@@ -2631,6 +2797,23 @@ fn activate_structured_coordinates_v1(
             &[shard_mint, structured_custody, position, admission],
             sent.slot,
         )?;
+        if retiring {
+            if after.iter().any(Option::is_some) {
+                return Err(Error::new(
+                    "Structured coordinate retirement left a live resource",
+                ));
+            }
+            let credit = rpc
+                .account(rent_credit)?
+                .ok_or_else(|| Error::new("Structured retirement RentCredit vanished"))?;
+            if credit.lamports != credit_after {
+                return Err(Error::new(
+                    "Structured coordinate retirement rent credit differs",
+                ));
+            }
+            accepted.push(json!({"action": "RetireCoordinate", "outcome": outcome, "slot": sent.slot, "rentCreditBefore": rent_credit_account.lamports, "rentCreditAfter": credit.lamports, "closed": ([shard_mint, structured_custody, position, admission].map(|key| key.to_string()))}));
+            continue;
+        }
         let live = after
             .into_iter()
             .collect::<Option<Vec<_>>>()
@@ -2661,6 +2844,522 @@ fn activate_structured_coordinates_v1(
         }));
     }
     Ok(accepted)
+}
+
+/// Admit the actual collateral owner and issue two backed complete sets through
+/// the shipped wallet exteriors. Two is this campaign's trade quantity, not a
+/// protocol width or supply limit; every atom is debited by the canonical Split.
+fn prepare_structured_native_position_v1(
+    arguments: &ArgumentsV1,
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    evidence: &crate::campaign::CampaignTerminalEvidenceV1,
+    market: Pubkey,
+    minimum_slot: u64,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<serde_json::Value> {
+    let admission_path = arguments.output.with_extension("holder-admission.json");
+    let split_path = arguments.output.with_extension("holder-split.json");
+    let mut seen = std::collections::BTreeSet::new();
+    let admission = loop {
+        if admission_path.exists() {
+            let bytes = std::fs::read(&admission_path)?;
+            let document: serde_json::Value = serde_json::from_slice(&bytes)?;
+            if document.get("phase").and_then(serde_json::Value::as_str) == Some("finalized") {
+                break document;
+            }
+            if !seen.insert(sha256_hex(&bytes)) {
+                return Err(Error::new(
+                    "Structured holder admission journal did not advance",
+                ));
+            }
+        }
+        crate::user_position_admission::run_owned_loopback(vec![
+            "--rpc-url".into(),
+            arguments.rpc_url.clone(),
+            "--plan".into(),
+            arguments.plan.display().to_string(),
+            "--campaign-evidence".into(),
+            arguments.campaign_report.display().to_string(),
+            "--position-owner".into(),
+            payer.pubkey().to_string(),
+            "--position-owner-keypair".into(),
+            arguments.payer_keypair.display().to_string(),
+            "--fee-payer".into(),
+            payer.pubkey().to_string(),
+            "--fee-payer-keypair".into(),
+            arguments.payer_keypair.display().to_string(),
+            "--minimum-finalized-slot".into(),
+            minimum_slot.to_string(),
+            "--output".into(),
+            admission_path.display().to_string(),
+            "--execute".into(),
+        ])?;
+    };
+    let report_key = |label: &str| {
+        evidence
+            .accounts
+            .get(label)
+            .map(|account| account.address.clone())
+            .ok_or_else(|| Error::new(format!("Structured holder report omitted {label}")))
+    };
+    if !split_path.exists() {
+        crate::claims_conservation::run_split_owned_loopback_v1(vec![
+            "--rpc-url".into(),
+            arguments.rpc_url.clone(),
+            "--plan".into(),
+            arguments.plan.display().to_string(),
+            "--market".into(),
+            market.to_string(),
+            "--owner".into(),
+            payer.pubkey().to_string(),
+            "--collateral-account".into(),
+            report_key("collateral_wallet")?,
+            "--linked-basis-record".into(),
+            report_key("linked_liability_basis_record")?,
+            "--quantity".into(),
+            "2".into(),
+            "--evidence".into(),
+            split_path.display().to_string(),
+            "--owner-keypair".into(),
+            arguments.payer_keypair.display().to_string(),
+            "--execute".into(),
+        ])?;
+    }
+    let split: serde_json::Value = serde_json::from_slice(&std::fs::read(&split_path)?)?;
+    if split.get("market").and_then(serde_json::Value::as_str) != Some(market.to_string().as_str())
+        || split.get("owner").and_then(serde_json::Value::as_str)
+            != Some(payer.pubkey().to_string().as_str())
+        || split.get("landed").is_none_or(serde_json::Value::is_null)
+    {
+        return Err(Error::new(
+            "Structured holder Split evidence does not name its real owner and Market",
+        ));
+    }
+    for (label, document) in [
+        ("Structured holder admission", &admission),
+        ("Structured holder complete-set issuance", &split),
+    ] {
+        harvest_structured_driver_signatures_v1(rpc, label, document, transactions)?;
+    }
+    Ok(json!({"admission": admission, "split": split}))
+}
+
+/// Driver JSON only suggests signatures; finalized signed packets author every
+/// transaction added to the campaign evidence.
+fn harvest_structured_driver_signatures_v1(
+    rpc: &mut Rpc,
+    label: &str,
+    document: &serde_json::Value,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<()> {
+    match document {
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields {
+                if (key == "signature" || key.ends_with("Signature"))
+                    && let Some(signature) = value.as_str()
+                {
+                    let signature: solana_sdk::signature::Signature =
+                        signature.parse().map_err(|error| {
+                            Error::new(format!("{label} reported an invalid signature: {error}"))
+                        })?;
+                    if !transactions
+                        .iter()
+                        .any(|row| row.signature == signature.to_string())
+                    {
+                        let finalized = rpc
+                            .finalized_signed_packet(label, signature, false)?
+                            .ok_or_else(|| {
+                                Error::new(format!(
+                                    "{label} reported a signature absent from finalized history"
+                                ))
+                            })?;
+                        transactions.push(finalized.evidence);
+                    }
+                }
+                harvest_structured_driver_signatures_v1(rpc, label, value, transactions)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                harvest_structured_driver_signatures_v1(rpc, label, value, transactions)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Retire a zero-supply representation after genuine Core/Claims terminal work.
+/// All resources and rent credits are read from finalized accounts; this
+/// continuation never manufactures a terminal Market or a zero token supply.
+#[allow(clippy::too_many_arguments)]
+fn retire_structured_representation_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    plan: &SuccessorPlan,
+    evidence: &crate::campaign::CampaignTerminalEvidenceV1,
+    market_input: &[u8],
+    market: Pubkey,
+    root: Pubkey,
+    descriptor_record: SelectedActivationRecordPairV1,
+    descriptor: RepresentationDescriptorV2<'_>,
+    exposure: CompositionExposureBundleV3<'_>,
+    hot_outer: CheckedRationalLifecycleHotOuterV3,
+    fixed: &mut [Pubkey],
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<serde_json::Value> {
+    use dclutch_claims::rational_lifecycle::{
+        compact_hot_v4::RationalLifecycleCompactHotRequestV4,
+        hot_v6::STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1,
+    };
+    use dclutch_custody::token_svm::{MINT_BYTES, Mint, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2};
+    use dclutch_registry::{ActivatedExecutionReleaseSetV1, release_set::ExecutionRoleV1};
+    let registry = pubkey(&plan.registry.program_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
+    let trading = pubkey(&plan.trading.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+    let aggregate = pubkey(
+        &evidence
+            .accounts
+            .get("claims_aggregate")
+            .ok_or_else(|| Error::new("Structured retirement omitted aggregate"))?
+            .address,
+    )?;
+    let market_before = rpc
+        .account(market)?
+        .ok_or_else(|| Error::new("Structured retirement Market vanished"))?;
+    let core_state = CoreState::decode(&market_before.data)
+        .map_err(|error| Error::new(format!("Structured retirement Market: {error:?}")))?;
+    if core_state.phase != Phase::Retiring {
+        return Err(Error::new(
+            "Structured retirement requires genuine Core Retiring state",
+        ));
+    }
+    let coordinate_artifacts = structured_activation::hydrate_selected_retirement_artifacts_v1(
+        rpc,
+        registry,
+        market_input,
+        0,
+        LifecycleActionV2::RetireCoordinate,
+    )?;
+    let coordinates = activate_structured_coordinates_v1(
+        rpc,
+        payer,
+        plan,
+        evidence,
+        &coordinate_artifacts,
+        LifecycleActionV2::RetireCoordinate,
+        market,
+        root,
+        descriptor_record,
+        descriptor,
+        exposure,
+        hot_outer,
+        core_state.identity.realm_id.to_bytes(),
+        fixed,
+        transactions,
+    )?;
+    let artifacts = structured_activation::hydrate_selected_retirement_artifacts_v1(
+        rpc,
+        registry,
+        market_input,
+        coordinate_artifacts.slot,
+        LifecycleActionV2::RetireReceipt,
+    )?;
+    let rent_credit = Pubkey::new_from_array(core_state.rent_beneficiary.to_bytes());
+    let receipt_mint = Pubkey::new_from_array(descriptor.receipt_mint());
+    let mut vacancy_keys = Vec::new();
+    for outcome in 0..descriptor.outcome_count() {
+        if descriptor
+            .coefficient(outcome)
+            .map_err(|error| Error::new(format!("Structured retirement coefficient: {error:?}")))?
+            == 0
+        {
+            continue;
+        }
+        let outcome_bytes = outcome.to_le_bytes();
+        let shard = Pubkey::find_program_address(
+            &[
+                RATIONAL_SHARD_MINT_SEED_V2,
+                &descriptor.descriptor_id(),
+                &outcome_bytes,
+            ],
+            &claims,
+        )
+        .0;
+        let custody = Pubkey::find_program_address(
+            &[
+                RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+                &descriptor.descriptor_id(),
+                &outcome_bytes,
+            ],
+            &claims,
+        )
+        .0;
+        let owner_seeds =
+            ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor.descriptor_id(), outcome)
+                .map_err(|error| Error::new(format!("Structured retirement owner: {error:?}")))?;
+        let owner = Pubkey::find_program_address(&owner_seeds.as_slices(), &claims).0;
+        let position_seeds = ProtocolPositionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
+            .map_err(|error| {
+            Error::new(format!("Structured retirement Position: {error:?}"))
+        })?;
+        let admission_seeds =
+            ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes()).map_err(
+                |error| Error::new(format!("Structured retirement admission: {error:?}")),
+            )?;
+        vacancy_keys.extend(
+            [
+                shard,
+                custody,
+                owner,
+                Pubkey::find_program_address(&position_seeds.as_slices(), &claims).0,
+                Pubkey::find_program_address(&admission_seeds.as_slices(), &claims).0,
+            ]
+            .map(|key| key.to_bytes()),
+        );
+    }
+    let mut addresses = vec![
+        market,
+        aggregate,
+        rent_credit,
+        receipt_mint,
+        root,
+        solana_sdk_ids::sysvar::rent::ID,
+        pubkey(&plan.activation)?,
+    ];
+    addresses.extend(vacancy_keys.iter().copied().map(Pubkey::new_from_array));
+    let (slot, accounts) = rpc.finalized_accounts(&addresses, artifacts.slot)?;
+    let required = |index: usize| {
+        accounts.get(index).cloned().flatten().ok_or_else(|| {
+            Error::new(format!(
+                "Structured retirement snapshot omitted account {index}"
+            ))
+        })
+    };
+    for (index, resource) in accounts.iter().skip(7).enumerate() {
+        // Claims custody owner is an inert authority name; the other four
+        // slots are resources whose entire account must be absent.
+        if index % 5 != 2 && resource.is_some() {
+            return Err(Error::new(
+                "Structured retirement support still owns a resource",
+            ));
+        }
+    }
+    let market_account = required(0)?;
+    let aggregate_account = required(1)?;
+    let credit_account = required(2)?;
+    let mint_account = required(3)?;
+    let root_account = required(4)?;
+    let rent_account = required(5)?;
+    let activation = required(6)?;
+    let rent_observed = dclutch_operator::ObservedAccount {
+        observation: dclutch_operator::Observation {
+            slot,
+            unix_timestamp: rpc.block_time(slot)?,
+            finality: dclutch_operator::Finality::Finalized,
+        },
+        key: solana_sdk_ids::sysvar::rent::ID,
+        owner: rent_account.owner,
+        lamports: rent_account.lamports,
+        executable: rent_account.executable,
+        data: rent_account.data,
+    };
+    let rent = decode_rent(&rent_observed)
+        .map_err(|error| Error::new(format!("Structured retirement Rent: {error:?}")))?;
+    let supply = Mint::parse(
+        mint_account
+            .data
+            .get(..MINT_BYTES)
+            .ok_or_else(|| Error::new("Structured retiring receipt truncated"))?,
+    )
+    .map_err(|error| Error::new(format!("Structured retiring receipt: {error:?}")))?
+    .supply;
+    let aggregate_view = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+        .map_err(|error| Error::new(format!("Structured retirement aggregate: {error:?}")))?;
+    let credit_after = credit_account
+        .lamports
+        .checked_add(mint_account.lamports)
+        .ok_or_else(|| Error::new("Structured receipt rent credit overflows"))?;
+    let header = LifecycleHeaderV2 {
+        action: LifecycleActionV2::RetireReceipt,
+        release_set: core_state.identity.selected_release_set.to_bytes(),
+        market: market.to_bytes(),
+        graph_id: descriptor.graph_id(),
+        descriptor_id: descriptor.descriptor_id(),
+        parent_context: [0; 32],
+        representation_authority: descriptor.representation_authority(),
+        receipt_mint: descriptor.receipt_mint(),
+        token_program: descriptor.token_program(),
+        rent_credit: rent_credit.to_bytes(),
+        rent_program: rent_program.to_bytes(),
+        generation: core_state.identity.generation,
+        expected_claims_market_revision: aggregate_view.revision,
+        observed_receipt_lamports: mint_account.lamports,
+        receipt_rent_principal: rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2),
+        expected_receipt_supply: supply,
+        outcome_count: descriptor.outcome_count(),
+        coordinate_count: 0,
+        rent_credit_before: credit_account.lamports,
+        rent_credit_after: credit_after,
+    };
+    let mut compact_bytes = [0; LIFECYCLE_HEADER_BYTES_V2];
+    let compact =
+        RationalLifecycleCompactHotRequestV4::from_header_into(header, &mut compact_bytes)
+            .map_err(|error| {
+                Error::new(format!("Structured retirement compact header: {error:?}"))
+            })?;
+    let width =
+        LIFECYCLE_HEADER_BYTES_V2 + (vacancy_keys.len() / 5) * LIFECYCLE_COORDINATE_BYTES_V2;
+    let mut scratch = vec![0; width];
+    let mut child_bytes = vec![0; width];
+    compact
+        .specialize_child_into(
+            hash(compact.as_bytes()).to_bytes(),
+            descriptor,
+            &vacancy_keys,
+            &mut scratch,
+            &mut child_bytes,
+        )
+        .map_err(|error| Error::new(format!("Structured retirement support: {error:?}")))?;
+    let child = crate::structured_physical_frame::retire_receipt_claims_instruction_v1(
+        ActivateReceiptPhysicalInputsV1 {
+            trading,
+            trading_programdata: pubkey(&plan.trading.programdata_id)?,
+            claims,
+            claims_programdata: pubkey(&plan.claims.programdata_id)?,
+            registry,
+            activation_cache: pubkey(&plan.activation)?,
+            descriptor_raw: descriptor_record.raw,
+            descriptor_staging: descriptor_record.staging,
+            representation_authority: Pubkey::new_from_array(descriptor.representation_authority()),
+            receipt_mint,
+            rent_credit,
+            rent_program,
+            claims_market: aggregate,
+            core_market: market,
+            core,
+            core_programdata: pubkey(&plan.core.programdata_id)?,
+        },
+        &child_bytes,
+    )?;
+    for (index, record) in [
+        HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_STRATEGY_RAW_ACCOUNT_V3,
+        HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_EFFECT_RAW_ACCOUNT_V3,
+    ]
+    .into_iter()
+    .zip(&artifacts.bundle_records)
+    {
+        fixed[index] = record.raw;
+        fixed[index + 1] = record.staging;
+    }
+    let activated = ActivatedExecutionReleaseSetV1::decode(&activation.data)
+        .map_err(|error| Error::new(format!("Structured retirement activation: {error:?}")))?;
+    let trading_release = activated.role(ExecutionRoleV1::Trading).release();
+    let capability_descriptor = artifacts.bundle_records[0].raw;
+    let descriptor_digest = hash(&artifacts.bundle.descriptor).to_bytes();
+    if fixed[HOT_DESCRIPTOR_RAW_ACCOUNT_V3] != capability_descriptor {
+        return Err(Error::new(
+            "Structured retirement selected descriptor differs",
+        ));
+    }
+    let seal_key = dclutch_vm::capability_seal::CapabilitySealKeyV1::new(
+        dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
+        descriptor_digest,
+        STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1,
+        trading_release.semantic_release_id().to_bytes(),
+        registry.to_bytes(),
+    )
+    .map_err(|error| Error::new(format!("Structured retirement seal: {error:?}")))?;
+    fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3] =
+        Pubkey::find_program_address(&seal_key.seeds().as_slices(), &trading).0;
+    let frame = AuthenticatedRationalLifecycleHotFrameV1 {
+        fixed_accounts: fixed
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                if index == HOT_ROOT_ACCOUNT_V3 {
+                    AccountMeta::new(*key, false)
+                } else {
+                    AccountMeta::new_readonly(*key, false)
+                }
+            })
+            .collect(),
+        strategy_accounts: Vec::new(),
+        root_data: root_account.data,
+        market_data: market_account.data,
+        release_set: core_state.identity.selected_release_set.to_bytes(),
+        market,
+        generation: core_state.identity.generation,
+        finalized_slot: slot,
+        hot_outer,
+    };
+    let hot = structured_activation::build_selected_retirement_instruction_v1(
+        &artifacts,
+        &frame.state()?,
+        &child,
+        descriptor,
+        core_state.identity.realm_id.to_bytes(),
+    )?;
+    let seal = capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
+        trading_program: trading,
+        registry_program: registry,
+        trading_semantic_release: trading_release.semantic_release_id().to_bytes(),
+        descriptor_digest,
+        action: STRUCTURED_RETIRE_RECEIPT_SELECTOR_V1,
+        fixed_frame: fixed,
+        payer: payer.pubkey(),
+    })
+    .map_err(|error| Error::new(format!("Structured retirement seal instruction: {error:?}")))?
+    .instruction;
+    let mut routing = std::collections::BTreeSet::new();
+    for instruction in [&seal, &hot.instruction] {
+        routing.insert(instruction.program_id);
+        routing.extend(instruction.accounts.iter().map(|meta| meta.pubkey));
+    }
+    let (observation, tables) = crate::market::publish_routing_table_over_v1(
+        rpc,
+        payer,
+        "STRUCTURED-RETIRE-RECEIPT",
+        &routing.into_iter().collect::<Vec<_>>(),
+        transactions,
+    )?;
+    for (label, instruction) in [
+        ("seal Structured receipt retirement", seal),
+        ("retire Structured receipt", hot.instruction),
+    ] {
+        let sent = rpc.send_v0_on_heap(
+            label,
+            &[instruction],
+            payer,
+            observation,
+            &tables,
+            DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+        )?;
+        if let Some(error) = sent.error.as_ref() {
+            return Err(Error::new(format!("{label} refused: {error}")));
+        }
+        transactions.push(sent);
+    }
+    let (after_slot, after) = rpc.finalized_accounts(&[receipt_mint, rent_credit], slot)?;
+    let after_credit = after[1]
+        .as_ref()
+        .ok_or_else(|| Error::new("Structured receipt retirement removed RentCredit"))?;
+    if after[0].is_some() || after_credit.lamports != credit_after {
+        return Err(Error::new(
+            "Structured receipt retirement poststates differ",
+        ));
+    }
+    Ok(
+        json!({"coordinates": coordinates, "receipt": {"slot": after_slot, "mint": receipt_mint.to_string(), "supplyBefore": supply, "closed": true, "rentCreditBefore": credit_account.lamports, "rentCreditAfter": after_credit.lamports}}),
+    )
 }
 
 fn derive_selected_lifecycle_parent_with_coordinates_v6(

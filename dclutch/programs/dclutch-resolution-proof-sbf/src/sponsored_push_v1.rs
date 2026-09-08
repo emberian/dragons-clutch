@@ -58,7 +58,7 @@ use crate::{
         MarketFacts, RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED, account, authenticate_market,
         authenticate_source_state_account, boxed_product_runtime, close_to_beneficiary,
         create_prefunded_pda, initialize_certificate_at_kind, process_deadline_failure_coordinates,
-        require_system, validate_frame,
+        require_system, terminal_output_funding_for_material, validate_frame,
     },
 };
 
@@ -938,6 +938,7 @@ fn process_settle(
     )?;
     let certificate = boxed_success_certificate(request, &keys, &records, &sealed, &decision)?;
     let receipt = boxed_sponsored_receipt(program_id, request, &keys, &sealed, &decision)?;
+    let terminal_output_funding = terminal_output_funding_for_material(records.material);
     drop(domain_data);
     commit_settlement(
         program_id,
@@ -948,6 +949,7 @@ fn process_settle(
         receipt_account,
         system,
         &rent,
+        terminal_output_funding,
         receipt.bump,
         &decision.source,
         &certificate,
@@ -1330,6 +1332,7 @@ fn commit_settlement<'info>(
     receipt: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     rent: &Rent,
+    terminal_output_funding: crate::relay_transport_v1::TerminalOutputFundingV1,
     receipt_bump: u8,
     next_source: &[u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
     next_certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES_V2],
@@ -1343,6 +1346,7 @@ fn commit_settlement<'info>(
         certificate,
         system,
         rent,
+        terminal_output_funding,
     )?;
     let minimum = rent.minimum_balance(SPONSORED_PUSH_RECEIPT_BYTES_V1);
     let sequence = terminal_sequence.to_le_bytes();

@@ -193,6 +193,7 @@ pub fn plan_provider_resolution_v3(
                 .to_bytes()
         || request.provider_release != observation.pyth_release_id
         || request.update_account != observation.update_account
+        || source_state.next_terminal_sequence().ok() != Some(request.terminal_sequence)
     {
         return Err(ProviderJoinErrorV3::Request);
     }

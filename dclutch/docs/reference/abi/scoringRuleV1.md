@@ -25,6 +25,7 @@ Regenerate with: npm run abi:scoring-rule
 | `QUOTE_REQUEST_MAGIC` | `DCLSQTR1` |
 | `FILL_REQUEST_MAGIC` | `DCLSFLR1` |
 | `WITHDRAW_REQUEST_MAGIC` | `DCLSWDR1` |
+| `REDEEM_REQUEST_MAGIC` | `DCLSRDR1` |
 | `RECEIPT_MAGIC` | `DCLSRCP1` |
 | `FILL_WITNESS_MAGIC` | `DCLSFLW1` |
 | `RULE_PDA_DOMAIN` | `dclutch:scoring-rule:v1` |
@@ -49,6 +50,7 @@ Regenerate with: npm run abi:scoring-rule
 | `QUOTE_REQUEST_BYTES` | 88 |
 | `FILL_REQUEST_BYTES` | 512 |
 | `WITHDRAW_REQUEST_BYTES` | 96 |
+| `REDEEM_REQUEST_BYTES` | 88 |
 | `RECEIPT_BYTES` | 192 |
 | `FILL_WITNESS_BYTES` | 272 |
 | `RULE_MAGIC_OFFSET` | 0 |
@@ -128,6 +130,12 @@ Regenerate with: npm run abi:scoring-rule
 | `WITHDRAW_REQUEST_DEALER_ID_OFFSET` | 48 |
 | `WITHDRAW_REQUEST_EXPECTED_FUND_REVISION_OFFSET` | 80 |
 | `WITHDRAW_REQUEST_AMOUNT_OFFSET` | 88 |
+| `REDEEM_REQUEST_MAGIC_OFFSET` | 0 |
+| `REDEEM_REQUEST_VERSION_OFFSET` | 8 |
+| `REDEEM_REQUEST_RESERVED_OFFSET` | 10 |
+| `REDEEM_REQUEST_MARKET_OFFSET` | 16 |
+| `REDEEM_REQUEST_DEALER_ID_OFFSET` | 48 |
+| `REDEEM_REQUEST_EXPECTED_FUND_REVISION_OFFSET` | 80 |
 | `RECEIPT_MAGIC_OFFSET` | 0 |
 | `RECEIPT_VERSION_OFFSET` | 8 |
 | `RECEIPT_ROUTE_OFFSET` | 10 |
@@ -157,6 +165,17 @@ Regenerate with: npm run abi:scoring-rule
 | `ROUTE_QUOTE` | 1 |
 | `ROUTE_FILL` | 2 |
 | `ROUTE_WITHDRAW` | 3 |
+| `ROUTE_REDEEM` | 4 |
+| `REDEEM_ACCOUNT_COUNT` | 9 |
+| `REDEEM_PAYER_ACCOUNT` | 0 |
+| `REDEEM_FUND_ACCOUNT` | 1 |
+| `REDEEM_RULE_ACCOUNT` | 2 |
+| `REDEEM_MARKET_ACCOUNT` | 3 |
+| `REDEEM_VAULT_ACCOUNT` | 4 |
+| `REDEEM_CLAIMS_PROGRAM_ACCOUNT` | 5 |
+| `REDEEM_CUSTODY_PROGRAM_ACCOUNT` | 6 |
+| `REDEEM_ACTIVATION_CACHE_ACCOUNT` | 7 |
+| `REDEEM_REGISTRY_PROGRAM_ACCOUNT` | 8 |
 | `FOUND_ACCOUNT_COUNT` | 21 |
 | `FOUND_SPONSOR_ACCOUNT` | 0 |
 | `FOUND_FUND_ACCOUNT` | 1 |
@@ -257,6 +276,12 @@ export const EXP2_NEG_TABLE_Q62: readonly bigint[] = [
   4611686018427387858n, 4611686018427387880n, 4611686018427387891n, 4611686018427387897n,
   4611686018427387900n, 4611686018427387901n, 4611686018427387902n,
 ] as const;
+```
+```ts
+export const REDEEM_WRITABLE: readonly boolean[] = [true, true, false, false, true, false, false, false, false];
+```
+```ts
+export const REDEEM_SIGNER: readonly boolean[] = [true, false, false, false, false, false, false, false, false];
 ```
 ```ts
 export const FOUND_WRITABLE: readonly boolean[] = [true, true, true, true, false, true, true, true, false, false, true, true, true, false, false, false, false, false, false, false, false];

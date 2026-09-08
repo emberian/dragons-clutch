@@ -915,6 +915,14 @@ pub fn process_instruction(
         );
     }
     #[cfg(feature = "dealer-family")]
+    if scoring_dealer_v1::is_dealer_redeem_v1(instruction_data) {
+        return scoring_dealer_v1::redeem::process_dealer_redeem_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "dealer-family")]
     if scoring_dealer_v1::is_dealer_withdraw_v1(instruction_data) {
         return scoring_dealer_v1::withdraw::process_dealer_withdraw_v1(
             program_id,

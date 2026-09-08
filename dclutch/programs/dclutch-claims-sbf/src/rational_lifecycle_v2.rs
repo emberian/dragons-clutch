@@ -219,6 +219,8 @@ pub enum RationalLifecycleSbfErrorV2 {
     InvalidSupport = 0x521D,
     /// Declared nonzero supply, custody, or invalid vacancy observations.
     InvalidPhysicalState = 0x521E,
+    /// Observed Mint supply differs from the lifecycle request's zero supply.
+    MintSupply = 0x521F,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -239,7 +241,8 @@ dclutch_refusal_registry::pin_refusal_band!(
         CustodyState,
         Allocation,
         InvalidSupport,
-        InvalidPhysicalState
+        InvalidPhysicalState,
+        MintSupply
     ]
 );
 
@@ -1234,7 +1237,15 @@ fn authenticate_closeable_mint(
         expected_supply,
         0,
     )
-    .map_err(|_| RationalLifecycleSbfErrorV2::MintProfile)?;
+    .map_err(|cause| match cause {
+        dclutch_custody::token_svm::Error::MintSupplyMismatch => {
+            RationalLifecycleSbfErrorV2::MintSupply
+        }
+        other => {
+            solana_program::msg!("lifecycle Mint profile refusal: {:?}", other);
+            RationalLifecycleSbfErrorV2::MintProfile
+        }
+    })?;
     Ok(())
 }
 

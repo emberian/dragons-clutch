@@ -278,10 +278,11 @@ fn selected_activation_record_expectations_v1(
         LifecycleActionV2::ActivateCoordinate => {
             (ACTIVATE_COORDINATE_RECORD_START_V1, "ActivateCoordinate")
         }
-        LifecycleActionV2::RetireCoordinate | LifecycleActionV2::RetireReceipt => {
-            return Err(Error::new(
-                "Structured selected creation artifacts do not own retirement",
-            ));
+        LifecycleActionV2::RetireCoordinate => {
+            (ACTIVATE_COORDINATE_RECORD_START_V1 + 7, "RetireCoordinate")
+        }
+        LifecycleActionV2::RetireReceipt => {
+            (ACTIVATE_COORDINATE_RECORD_START_V1 + 14, "RetireReceipt")
         }
     };
     let selected_at = |offset: usize, suffix: &str, compiled: &str| {
@@ -484,6 +485,67 @@ pub(crate) fn hydrate_selected_activate_coordinate_artifacts_v1(
     )
 }
 
+/// Authenticate either retirement bundle from the same immutable selected release.
+pub(crate) fn hydrate_selected_retirement_artifacts_v1(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    market_input_bytes: &[u8],
+    minimum_slot: u64,
+    action: LifecycleActionV2,
+) -> Result<StructuredActivateReceiptArtifactsV1> {
+    if !matches!(
+        action,
+        LifecycleActionV2::RetireCoordinate | LifecycleActionV2::RetireReceipt
+    ) {
+        return Err(Error::new(
+            "Structured retirement requested a creation bundle",
+        ));
+    }
+    let expected = selected_activation_record_expectations_v1(market_input_bytes, action)?;
+    let addresses = expected
+        .iter()
+        .map(|record| record_coordinates_v1(registry, record.schema, &record.body))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flat_map(|(raw, staging)| [raw, staging])
+        .collect::<Vec<_>>();
+    let (observation, live) =
+        rpc.finalized_observed_accounts_admitting_vacant(&addresses, minimum_slot)?;
+    hydrate_selected_activation_artifacts_from_snapshot_v1(
+        registry,
+        &expected,
+        observation.slot,
+        &live,
+        action,
+    )
+}
+
+/// Build a retirement child against its authenticated selected bundle.
+pub(crate) fn build_selected_retirement_instruction_v1(
+    artifacts: &StructuredActivateReceiptArtifactsV1,
+    state: &RationalLifecycleHotStateV3<'_>,
+    claims_child: &Instruction,
+    representation_descriptor: RepresentationDescriptorV2<'_>,
+    market_realm: [u8; 32],
+) -> Result<RationalLifecycleHotInstructionV3> {
+    if !matches!(
+        artifacts.bundle.action,
+        LifecycleActionV2::RetireCoordinate | LifecycleActionV2::RetireReceipt
+    ) {
+        return Err(Error::new(
+            "Structured retirement selected a creation bundle",
+        ));
+    }
+    build_selected_activation_instruction_v1(
+        artifacts,
+        state,
+        claims_child,
+        representation_descriptor,
+        market_realm,
+        artifacts.bundle.action,
+    )
+}
+
 /// Build the canonical unsigned V6 `ActivateReceipt` instruction.
 ///
 /// The caller supplies the same-finalized Hot frame and per-Market rational
@@ -535,13 +597,28 @@ fn build_selected_activation_instruction_v1(
 ) -> Result<RationalLifecycleHotInstructionV3> {
     let request = LifecycleRequestV2::decode(&claims_child.data)
         .map_err(|error| Error::new(format!("Structured activation Claims child: {error:?}")))?;
-    let expected_coordinates = u32::from(action == LifecycleActionV2::ActivateCoordinate);
+    let expected_coordinates = match action {
+        LifecycleActionV2::ActivateReceipt => 0,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => 1,
+        LifecycleActionV2::RetireReceipt => (0..representation_descriptor.outcome_count())
+            .try_fold(0_u32, |count, outcome| {
+                let coefficient =
+                    representation_descriptor
+                        .coefficient(outcome)
+                        .map_err(|error| {
+                            Error::new(format!("Structured retirement support: {error:?}"))
+                        })?;
+                count
+                    .checked_add(u32::from(coefficient != 0))
+                    .ok_or_else(|| Error::new("Structured retirement support overflow"))
+            })?,
+    };
     if request.header().action != action
         || request.header().coordinate_count != expected_coordinates
         || artifacts.bundle.action != action
     {
         return Err(Error::new(
-            "Structured activation child geometry differs from the selected creation bundle",
+            "Structured lifecycle child geometry differs from its selected bundle",
         ));
     }
     let config_digest: [u8; 32] = Sha256::digest(&artifacts.config.body).into();

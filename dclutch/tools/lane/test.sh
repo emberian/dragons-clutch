@@ -258,6 +258,35 @@ else
   bad "commit-patch: the in-place path is clean and still carries its hunk"
 fi
 
+# (d) Repeated surrounding context can make BOTH directions apply: after the
+# insertion is already present, forward-apply finds the second untouched block.
+# Reconciliation must recognize the existing hunk before considering a replay.
+printf 'head\na\nb\nc\nd\ne\nf\na\nb\nc\nd\ne\nf\ntail\n' >"$CP/repeated.txt"
+git -C "$CP" add -- repeated.txt
+git -C "$CP" commit -q --only -m "repeated context fixture" -- repeated.txt
+python3 - "$CP/repeated.txt" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace('c\nd\n', 'c\nowned-insertion\nd\n', 1))
+PY
+git -C "$CP" diff -- repeated.txt >"$WORK/repeated.patch"
+expect_success "commit-patch: repeated-context fixture permits forward apply" \
+  in_dir "$CP" git apply --check "$WORK/repeated.patch"
+expect_success "commit-patch: repeated-context fixture also permits reverse apply" \
+  in_dir "$CP" git apply --reverse --check "$WORK/repeated.patch"
+sed -i.bak 's/^tail$/tail-THEIRS/' "$CP/repeated.txt" && rm -f "$CP/repeated.txt.bak"
+expect_success "commit-patch: repeated context commits without duplicating the insertion" \
+  in_dir "$CP" "$LANE_SH" commit-patch "lane test: repeated-context insertion" "$WORK/repeated.patch"
+if [[ "$(grep -c '^owned-insertion$' "$CP/repeated.txt")" -eq 1 ]] && \
+   [[ "$(git -C "$CP" show HEAD:repeated.txt | grep -c '^owned-insertion$')" -eq 1 ]] && \
+   git -C "$CP" diff -- repeated.txt | grep -qx '+tail-THEIRS' && \
+   ! git -C "$CP" diff -- repeated.txt | grep -q 'owned-insertion'; then
+  ok "commit-patch: one insertion in HEAD and worktree, foreign hunk preserved"
+else
+  bad "commit-patch: one insertion in HEAD and worktree, foreign hunk preserved"
+fi
+
 expect_refusal "commit-patch: refuses a non-empty index" \
   in_dir "$CP" env GIT_INDEX_TEST=1 bash -c 'git add -A >/dev/null 2>&1; touch staged.txt; git add staged.txt; "$0" commit-patch "msg" "$1"' "$LANE_SH" "$WORK/inplace.patch"
 git -C "$CP" reset -q
