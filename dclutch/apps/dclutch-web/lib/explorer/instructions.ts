@@ -325,24 +325,24 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
   },
   {
     routeId: 'resolution/core_effect::process_direct_funding_close_v1',
-    summary: 'Closes a finished market’s source and its funding ledger together, without asking the Core program to do it.',
+    summary: 'Closes a finished market’s source and its funding ledger.',
   },
 
   // ------------------------------------------------------------------ trading
   {
     routeId: 'trading/generic_founding_stages_v1::process_generic_market_open_v1',
     summary:
-      'Opens the market a founding permit already paid for. The submitter supplies no economic truth of its own: the permit carries all of it, and expires on its own schedule.',
+      'Opens a market using its funded founding permit before the permit expires.',
   },
   {
     routeId: 'trading/generic_founding_stages_v1::process_generic_found_and_permit_v1',
     summary:
-      'Founds a market in one rollback domain — Lock, Found, Realize, Claims — and escrows the permit that will open it. From this commit onward the escrowed permit, not the staged checkpoint, is the sole abort authority for the founding.',
+      'Creates a market, locks its collateral, initializes claims and funds the permit used to open or refund it.',
   },
   {
     routeId: 'trading/generic_market_founding_v1::process_generic_market_founding_v3',
     summary:
-      'Founds and opens a market in one rollback domain — Lock, Found, Realize, Claims, Open — so a market that fails any stage leaves no record behind.',
+      'Creates and opens a market, locks its collateral and initializes claims in one transaction.',
   },
   {
     routeId: 'trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1',

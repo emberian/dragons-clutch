@@ -53,6 +53,15 @@ use dclutch_operator::series_lifecycle_v3::{
     SeriesLifecycleSnapshotV3, SeriesNextActV3, SeriesTerminalTicketV3,
     inspect_series_lifecycle_v3, series_account_key_v3,
 };
+pub(crate) use dclutch_operator::series_operation_corpus_v1::{
+    AcquiredSeriesSelectedV1, DecodedSeriesCurrentSourceV1, SeriesConsumeShadowAcquisitionV2,
+    SeriesCorpusPlanV1, SeriesCurrentOccurrenceRouteV1, SeriesCurrentSourceCorpusV1,
+    SeriesFinalizedRecordAddressesV2, SeriesHotAcquisitionRecipeV2, SeriesHotFixedAddressesV2,
+    SeriesNativeOperationSourceV1, SeriesObservedAccountSlotV1, SeriesObservedAccountV1,
+    SeriesTerminalTicketRouteV1, decode_exact_base64_v1, inspect_current_series_corpus_v1,
+    operator_account_v1, parse_hex32_v1, required_series_account_v1,
+    series_acquisition_addresses_v1,
+};
 use dclutch_operator::{
     Finality,
     direct_inline_route_v3::{DirectHotFixedRouteV3, FinalizedRecordRouteV3},
@@ -125,6 +134,8 @@ use crate::{
     series_lifecycle_campaign::read_authenticated_series_prefix_found_v2,
 };
 
+#[path = "series_corpus_transport.rs"]
+mod corpus_transport;
 #[path = "series_operation_driver.rs"]
 pub(crate) mod operation;
 
@@ -154,162 +165,6 @@ struct SeriesTerminalCampaignArgumentsV1 {
     execute: bool,
 }
 
-/// Addresses for one finalized Registry record and its vacant staging cursor.
-/// No caller-authored privilege is accepted anywhere in the campaign input.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SeriesFinalizedRecordAddressesV2 {
-    raw: String,
-    staging: String,
-}
-
-/// Address-only common Hot acquisition coordinates. The operator owns the
-/// fixed-coordinate order, privileges, owners, widths, and record admission.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SeriesHotFixedAddressesV2 {
-    market: String,
-    root: String,
-    manifest: SeriesFinalizedRecordAddressesV2,
-    program_set: SeriesFinalizedRecordAddressesV2,
-    descriptor: SeriesFinalizedRecordAddressesV2,
-    config: SeriesFinalizedRecordAddressesV2,
-    account_profile: SeriesFinalizedRecordAddressesV2,
-    request_profile: SeriesFinalizedRecordAddressesV2,
-    transition: SeriesFinalizedRecordAddressesV2,
-    effect: SeriesFinalizedRecordAddressesV2,
-    lifecycle: SeriesFinalizedRecordAddressesV2,
-    strategy: SeriesFinalizedRecordAddressesV2,
-    activation_cache: String,
-    core_program: String,
-    core_programdata: String,
-    trading_program: String,
-    trading_programdata: String,
-    registry_program: String,
-    rent_sysvar: String,
-    instructions_sysvar: String,
-    product: SeriesFinalizedRecordAddressesV2,
-    result_domain: SeriesFinalizedRecordAddressesV2,
-    portfolio: SeriesFinalizedRecordAddressesV2,
-    linked_basis: SeriesFinalizedRecordAddressesV2,
-    capability_seal: String,
-}
-
-/// Consume-only address/provenance input. Exact records, deployment, request,
-/// caller PDA, and checked-manifest identity are reauthenticated by the
-/// production acquisition operator; this carries no privilege or alias truth.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SeriesConsumeShadowAcquisitionV2 {
-    certificate: SeriesFinalizedRecordAddressesV2,
-    artifact: SeriesFinalizedRecordAddressesV2,
-    accelerator_program: String,
-    accelerator_programdata: String,
-    caller_authority: String,
-    checked_manifest_sha256: String,
-    request_base64: String,
-}
-
-impl SeriesFinalizedRecordAddressesV2 {
-    fn addresses(&self) -> [&str; 2] {
-        [&self.raw, &self.staging]
-    }
-}
-
-impl SeriesHotFixedAddressesV2 {
-    fn addresses(&self) -> Vec<&str> {
-        let mut output = vec![self.market.as_str(), self.root.as_str()];
-        for record in [
-            &self.manifest,
-            &self.program_set,
-            &self.descriptor,
-            &self.config,
-            &self.account_profile,
-            &self.request_profile,
-            &self.transition,
-            &self.effect,
-            &self.lifecycle,
-            &self.strategy,
-        ] {
-            output.extend(record.addresses());
-        }
-        output.extend([
-            self.activation_cache.as_str(),
-            self.core_program.as_str(),
-            self.core_programdata.as_str(),
-            self.trading_program.as_str(),
-            self.trading_programdata.as_str(),
-            self.registry_program.as_str(),
-            self.rent_sysvar.as_str(),
-            self.instructions_sysvar.as_str(),
-        ]);
-        for record in [
-            &self.product,
-            &self.result_domain,
-            &self.portfolio,
-            &self.linked_basis,
-        ] {
-            output.extend(record.addresses());
-        }
-        output.push(self.capability_seal.as_str());
-        output
-    }
-}
-
-impl SeriesConsumeShadowAcquisitionV2 {
-    fn addresses(&self) -> [&str; 7] {
-        [
-            &self.certificate.raw,
-            &self.certificate.staging,
-            &self.artifact.raw,
-            &self.artifact.staging,
-            &self.accelerator_program,
-            &self.accelerator_programdata,
-            &self.caller_authority,
-        ]
-    }
-}
-
-/// Current-occurrence evidence routing. Immutable bodies and replay bytes are
-/// read from the same finalized RPC response as the Hot account frame.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SeriesCurrentOccurrenceRouteV1 {
-    occurrence_record: String,
-    occurrence_staging: String,
-    ticket_record: String,
-    ticket_staging: String,
-    ticket_replay: Option<String>,
-    siblings: Vec<String>,
-}
-
-/// Terminal Ticket routing. The planner hostile-decodes both live accounts and
-/// proves the replay is terminal before it may select Retire.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SeriesTerminalTicketRouteV1 {
-    ticket_record: String,
-    ticket_staging: String,
-    ticket_replay: String,
-}
-
-/// One sequence-indexed acquisition recipe. Future entries are inert candidate
-/// addresses, not preauthorized banks: only the current entry can become a
-/// durable frame after one finalized observation passes the canonical V5
-/// acquisition operator.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SeriesHotAcquisitionRecipeV2 {
-    sequence: u32,
-    fixed: SeriesHotFixedAddressesV2,
-    runtime_logical_accounts: Vec<String>,
-    consume_shadow: Option<SeriesConsumeShadowAcquisitionV2>,
-    current_occurrence: Option<SeriesCurrentOccurrenceRouteV1>,
-    terminal_ticket: Option<SeriesTerminalTicketRouteV1>,
-    lifecycle_rent_credit: Option<String>,
-    expire_permit: Option<String>,
-}
-
 /// One address-only current frame appended after canonical acquisition. It
 /// persists no caller-authored privilege, alias, or physical-order truth.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -326,37 +181,6 @@ struct SeriesAcquiredAddressFrameV2 {
     selected_release_set: String,
     recipe: SeriesHotAcquisitionRecipeV2,
     frame_sha256: String,
-}
-
-/// Candidate corpus consumed by the current semantic emitters. These values
-/// cannot authorize a release: the production operator requires the emitted
-/// ProgramSet, descriptor, ProfileV3, lifecycle, strategy, transition, and
-/// EffectV5 bytes to match the live finalized accounts byte-for-byte.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SeriesCurrentSourceCorpusV1 {
-    template_occurrence_count: u32,
-    consume_shadow_certificate_program: String,
-    prepare_fixed_data_lengths: Vec<u32>,
-    prepare_ticket_rent_lamports: u64,
-    prepare_projected_initialize_base64: String,
-    prepare_projected_open_base64: String,
-    prepare_replay_initialize_base64: String,
-    prepare_escrow_open_base64: String,
-    prepare_escrow_lock_base64: String,
-    consume_fixed_data_lengths: Vec<u32>,
-    consume_lock_base64: String,
-    consume_core_base64: String,
-    consume_realize_base64: String,
-    consume_claims_base64: String,
-    consume_funding_count: u32,
-    expire_fixed_data_lengths: Vec<u32>,
-    expire_refund_base64: String,
-    expire_close_vault_base64: String,
-    expire_close_replay_base64: String,
-    expire_projected_abort_base64: String,
-    expire_permit_expiry_base64: String,
-    expire_core_base64: String,
 }
 
 /// Existing Found transaction evidence. The constructor reauthenticates its
@@ -474,42 +298,6 @@ const SERIES_RETIREMENT_ESCROW_ROLES_V1: [&str; 3] = [
     "failure-escrow-admission",
     "linked-basis-record",
 ];
-
-/// Host-decoded current-source corpus. Fixed arrays are exact-width so no
-/// runtime slice can silently alter one emitter's geometry.
-struct DecodedSeriesCurrentSourceV1 {
-    template_occurrence_count: u32,
-    consume_shadow_certificate_program: ContentId,
-    prepare_fixed_data_lengths: [u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize],
-    prepare_ticket_rent_lamports: u64,
-    prepare_projected_initialize: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    prepare_projected_open: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    prepare_replay_initialize: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    prepare_escrow_open: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    prepare_escrow_lock: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    consume_fixed_data_lengths: [u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
-    consume_lock: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    consume_core: [u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3],
-    consume_realize: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    consume_claims: [u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3],
-    consume_funding_count: u32,
-    expire_fixed_data_lengths: [u32; SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize],
-    expire_refund: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    expire_close_vault: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    expire_close_replay: [u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3],
-    expire_projected_abort: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    expire_permit_expiry: SeriesPermitExpiryRequestV1,
-    expire_core: SeriesCoreRequestV1,
-}
-
-/// One bounded same-finalized RPC acquisition. `accounts` includes every Hot,
-/// lifecycle, source-role, routing, and fee-payer key requested by the frame.
-struct AcquiredSeriesSelectedV1 {
-    observation: Observation,
-    accounts: BTreeMap<Pubkey, Option<SeriesObservedAccountV1>>,
-    lifecycle: SeriesLifecycleReportV3,
-    selected: SeriesSelectedHotReportV5,
-}
 
 /// In-memory, source-derived address frame for the first real Prepare.
 ///
@@ -893,184 +681,6 @@ impl SelectedSeriesPhysicalActionV1 for SeriesSelectedHotReportV5 {
     }
 }
 
-impl DecodedSeriesCurrentSourceV1 {
-    fn from_release_v1(input: SeriesCurrentReleaseInputV5<'_>) -> Result<Self> {
-        if input.consume_funding_count == 0 || input.prepare_ticket_rent_lamports == 0 {
-            return Err(refusal(
-                "Series Prepare release omitted funding span or Ticket rent",
-            ));
-        }
-        Ok(Self {
-            template_occurrence_count: input.template_occurrence_count,
-            consume_shadow_certificate_program: input.consume_shadow_certificate_program,
-            prepare_fixed_data_lengths: *input.prepare_profile.fixed_data_lengths,
-            prepare_ticket_rent_lamports: input.prepare_ticket_rent_lamports,
-            prepare_projected_initialize: *input.prepare_requests.projected_initialize,
-            prepare_projected_open: *input.prepare_requests.projected_open,
-            prepare_replay_initialize: *input.prepare_requests.replay_initialize,
-            prepare_escrow_open: *input.prepare_requests.escrow_open,
-            prepare_escrow_lock: *input.prepare_requests.escrow_lock,
-            consume_fixed_data_lengths: *input.consume_observed_data_lengths,
-            consume_lock: *input.consume_requests.lock,
-            consume_core: *input.consume_requests.core,
-            consume_realize: *input.consume_requests.realize,
-            consume_claims: *input.consume_requests.claims,
-            consume_funding_count: input.consume_funding_count,
-            expire_fixed_data_lengths: *input.expire_profile.fixed_data_lengths,
-            expire_refund: *input.expire_requests.refund,
-            expire_close_vault: *input.expire_requests.close_vault,
-            expire_close_replay: *input.expire_requests.close_replay,
-            expire_projected_abort: *input.expire_requests.projected_abort,
-            expire_permit_expiry: input.expire_requests.permit_expiry,
-            expire_core: input.expire_requests.core_expire,
-        })
-    }
-
-    fn decode(candidate: &SeriesCurrentSourceCorpusV1) -> Result<Self> {
-        let consume_shadow_certificate_program = ContentId::new(parse_hex32_v1(
-            &candidate.consume_shadow_certificate_program,
-            "Series Consume Shadow certificate program",
-        )?)
-        .map_err(|_| refusal("Series Consume Shadow certificate program was zero"))?;
-        let prepare_fixed_data_lengths = candidate
-            .prepare_fixed_data_lengths
-            .clone()
-            .try_into()
-            .map_err(|_| refusal("Series Prepare fixed-width corpus changed cardinality"))?;
-        let consume_fixed_data_lengths = candidate
-            .consume_fixed_data_lengths
-            .clone()
-            .try_into()
-            .map_err(|_| refusal("Series Consume fixed-width corpus changed cardinality"))?;
-        let expire_fixed_data_lengths = candidate
-            .expire_fixed_data_lengths
-            .clone()
-            .try_into()
-            .map_err(|_| refusal("Series Expire fixed-width corpus changed cardinality"))?;
-        let expire_permit_expiry = SeriesPermitExpiryRequestV1::decode(&decode_base64(
-            &candidate.expire_permit_expiry_base64,
-            "Series Expire permit request",
-        )?)
-        .map_err(|_| refusal("Series Expire permit request was not canonical"))?;
-        let expire_core = SeriesCoreRequestV1::decode(&decode_base64(
-            &candidate.expire_core_base64,
-            "Series Expire Core request",
-        )?)
-        .map_err(|_| refusal("Series Expire Core request was not canonical"))?;
-        if candidate.consume_funding_count == 0 || candidate.prepare_ticket_rent_lamports == 0 {
-            return Err(refusal(
-                "Series Consume funding span or Prepare Ticket rent was zero",
-            ));
-        }
-        if candidate.template_occurrence_count == 0 {
-            return Err(refusal(
-                "Series current-source Template occurrence count was zero",
-            ));
-        }
-        Ok(Self {
-            template_occurrence_count: candidate.template_occurrence_count,
-            consume_shadow_certificate_program,
-            prepare_fixed_data_lengths,
-            prepare_ticket_rent_lamports: candidate.prepare_ticket_rent_lamports,
-            prepare_projected_initialize: decode_exact_base64_v1(
-                &candidate.prepare_projected_initialize_base64,
-                "Series Prepare projected initialize",
-            )?,
-            prepare_projected_open: decode_exact_base64_v1(
-                &candidate.prepare_projected_open_base64,
-                "Series Prepare projected open",
-            )?,
-            prepare_replay_initialize: decode_exact_base64_v1(
-                &candidate.prepare_replay_initialize_base64,
-                "Series Prepare replay initialize",
-            )?,
-            prepare_escrow_open: decode_exact_base64_v1(
-                &candidate.prepare_escrow_open_base64,
-                "Series Prepare escrow open",
-            )?,
-            prepare_escrow_lock: decode_exact_base64_v1(
-                &candidate.prepare_escrow_lock_base64,
-                "Series Prepare escrow lock",
-            )?,
-            consume_fixed_data_lengths,
-            consume_lock: decode_exact_base64_v1(
-                &candidate.consume_lock_base64,
-                "Series Consume lock",
-            )?,
-            consume_core: decode_exact_base64_v1(
-                &candidate.consume_core_base64,
-                "Series Consume Core",
-            )?,
-            consume_realize: decode_exact_base64_v1(
-                &candidate.consume_realize_base64,
-                "Series Consume realize",
-            )?,
-            consume_claims: decode_exact_base64_v1(
-                &candidate.consume_claims_base64,
-                "Series Consume Claims",
-            )?,
-            consume_funding_count: candidate.consume_funding_count,
-            expire_fixed_data_lengths,
-            expire_refund: decode_exact_base64_v1(
-                &candidate.expire_refund_base64,
-                "Series Expire refund",
-            )?,
-            expire_close_vault: decode_exact_base64_v1(
-                &candidate.expire_close_vault_base64,
-                "Series Expire close vault",
-            )?,
-            expire_close_replay: decode_exact_base64_v1(
-                &candidate.expire_close_replay_base64,
-                "Series Expire close replay",
-            )?,
-            expire_projected_abort: decode_exact_base64_v1(
-                &candidate.expire_projected_abort_base64,
-                "Series Expire projected abort",
-            )?,
-            expire_permit_expiry,
-            expire_core,
-        })
-    }
-
-    fn input(&self, template: ContentId) -> SeriesCurrentReleaseInputV5<'_> {
-        SeriesCurrentReleaseInputV5 {
-            template,
-            template_occurrence_count: self.template_occurrence_count,
-            consume_shadow_certificate_program: self.consume_shadow_certificate_program,
-            prepare_profile: SeriesPrepareAccountProfileInputV5 {
-                fixed_data_lengths: &self.prepare_fixed_data_lengths,
-            },
-            prepare_requests: SeriesPrepareChildRequestsV4 {
-                projected_initialize: &self.prepare_projected_initialize,
-                projected_open: &self.prepare_projected_open,
-                replay_initialize: &self.prepare_replay_initialize,
-                escrow_open: &self.prepare_escrow_open,
-                escrow_lock: &self.prepare_escrow_lock,
-            },
-            prepare_ticket_rent_lamports: self.prepare_ticket_rent_lamports,
-            consume_observed_data_lengths: &self.consume_fixed_data_lengths,
-            consume_requests: SeriesConsumeChildRequestsV4 {
-                lock: &self.consume_lock,
-                core: &self.consume_core,
-                realize: &self.consume_realize,
-                claims: &self.consume_claims,
-            },
-            consume_funding_count: self.consume_funding_count,
-            expire_profile: SeriesExpireAccountProfileInputV5 {
-                fixed_data_lengths: &self.expire_fixed_data_lengths,
-            },
-            expire_requests: SeriesExpireChildRequestsV5 {
-                refund: &self.expire_refund,
-                close_vault: &self.expire_close_vault,
-                close_replay: &self.expire_close_replay,
-                projected_abort: &self.expire_projected_abort,
-                permit_expiry: self.expire_permit_expiry,
-                core_expire: self.expire_core,
-            },
-        }
-    }
-}
-
 fn acquire_current_series_selected_v1(
     rpc: &mut Rpc,
     frame: &SeriesHotAcquisitionRecipeV2,
@@ -1079,64 +689,8 @@ fn acquire_current_series_selected_v1(
     lookup_table: Pubkey,
     policy: SeriesCampaignPolicyV1,
 ) -> Result<AcquiredSeriesSelectedV1> {
-    let mut keys = BTreeSet::new();
-    for address in frame
-        .fixed
-        .addresses()
-        .into_iter()
-        .chain(frame.runtime_logical_accounts.iter().map(String::as_str))
-        .chain(
-            frame
-                .consume_shadow
-                .iter()
-                .flat_map(SeriesConsumeShadowAcquisitionV2::addresses),
-        )
-    {
-        keys.insert(parse_pubkey(address, "Series acquisition account")?);
-    }
-    if let Some(current) = &frame.current_occurrence {
-        for (address, label) in [
-            (&current.occurrence_record, "Series occurrence record"),
-            (&current.occurrence_staging, "Series occurrence staging"),
-            (&current.ticket_record, "Series Ticket record"),
-            (&current.ticket_staging, "Series Ticket staging"),
-        ] {
-            keys.insert(parse_pubkey(address, label)?);
-        }
-        if let Some(replay) = &current.ticket_replay {
-            keys.insert(parse_pubkey(replay, "Series current Ticket replay")?);
-        }
-    }
-    if let Some(terminal) = &frame.terminal_ticket {
-        for (address, label) in [
-            (&terminal.ticket_record, "Series terminal Ticket record"),
-            (&terminal.ticket_staging, "Series terminal Ticket staging"),
-            (&terminal.ticket_replay, "Series terminal Ticket replay"),
-        ] {
-            keys.insert(parse_pubkey(address, label)?);
-        }
-    }
-    for candidate in [
-        frame.lifecycle_rent_credit.as_ref(),
-        frame.expire_permit.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        keys.insert(parse_pubkey(
-            candidate,
-            "Series lifecycle acquisition role",
-        )?);
-    }
-    keys.insert(payer);
-    keys.insert(lookup_table);
-    if keys.is_empty() || keys.len() > 512 {
-        return Err(refusal(
-            "Series acquisition account set was empty or exceeded 512",
-        ));
-    }
-    let keys = keys.into_iter().collect::<Vec<_>>();
-    let (slot, values) = rpc.finalized_accounts(&keys, 0)?;
+    let keys = series_acquisition_addresses_v1(frame, payer, lookup_table)?;
+    let (slot, values) = corpus_transport::read_series_finalized_corpus_v1(rpc, &keys, 0)?;
     if slot == 0 || values.len() != keys.len() {
         return Err(refusal(
             "Series acquisition was not one complete finalized account vector",
@@ -1163,553 +717,18 @@ fn acquire_current_series_selected_v1(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let fixed = series_hot_fixed_route_v2(&frame.fixed, &accounts, observation)?;
-    let template_bytes = fixed.config.raw.data.clone();
-    let template = TemplateV3::decode(&template_bytes)
-        .map_err(|_| refusal("Series live Template refused hostile decode"))?;
-    let template_id = template_content_id(&template_bytes)
-        .map_err(|_| refusal("Series live Template identity refused"))?;
-    let root_tail = fixed
-        .root
-        .data
-        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
-        .ok_or_else(|| refusal("Series composite root omitted its replay tail"))?;
-    if root_tail.len() != SERIES_STATE_BYTES_V3 {
-        return Err(refusal("Series composite root replay tail changed width"));
-    }
-    let series = SeriesStateV3::decode(root_tail, template.occurrence_count())
-        .map_err(|_| refusal("Series live replay tail refused hostile decode"))?;
-    let root_lamports = fixed.root.lamports;
-    let root_data_len = fixed.root.data.len();
-    let rent: Rent = bincode::deserialize(&fixed.rent_sysvar.data)
-        .map_err(|_| refusal("Series same-slot Rent sysvar refused decode"))?;
-    let siblings = frame
-        .current_occurrence
-        .as_ref()
-        .map(|current| {
-            current
-                .siblings
-                .iter()
-                .map(|value| parse_hex32_v1(value, "Series occurrence sibling"))
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let current = frame
-        .current_occurrence
-        .as_ref()
-        .map(|route| -> Result<SeriesCurrentOccurrenceV3<'_>> {
-            let occurrence = required_series_account_v1(
-                &accounts,
-                parse_pubkey(&route.occurrence_record, "Series occurrence record")?,
-                "Series occurrence record",
-            )?;
-            let ticket = required_series_account_v1(
-                &accounts,
-                parse_pubkey(&route.ticket_record, "Series Ticket record")?,
-                "Series Ticket record",
-            )?;
-            let ticket_state = route
-                .ticket_replay
-                .as_ref()
-                .map(|key| -> Result<Option<TicketStateV3>> {
-                    let key = parse_pubkey(key, "Series current Ticket replay")?;
-                    accounts
-                        .get(&key)
-                        .ok_or_else(|| refusal("Series current Ticket replay was not observed"))?
-                        .as_ref()
-                        .map(|account| {
-                            TicketStateV3::decode(&account.data).map_err(|_| {
-                                refusal("Series current Ticket replay refused hostile decode")
-                            })
-                        })
-                        .transpose()
-                })
-                .transpose()?
-                .flatten();
-            Ok(SeriesCurrentOccurrenceV3 {
-                occurrence_bytes: &occurrence.data,
-                ticket_bytes: &ticket.data,
-                siblings: &siblings,
-                ticket_state,
-            })
-        })
-        .transpose()?;
-    let terminal_ticket = frame
-        .terminal_ticket
-        .as_ref()
-        .map(|route| -> Result<SeriesTerminalTicketV3<'_>> {
-            let ticket = required_series_account_v1(
-                &accounts,
-                parse_pubkey(&route.ticket_record, "Series terminal Ticket record")?,
-                "Series terminal Ticket record",
-            )?;
-            let replay = required_series_account_v1(
-                &accounts,
-                parse_pubkey(&route.ticket_replay, "Series terminal Ticket replay")?,
-                "Series terminal Ticket replay",
-            )?;
-            let ticket_state = TicketStateV3::decode(&replay.data)
-                .map_err(|_| refusal("Series terminal Ticket replay refused hostile decode"))?;
-            Ok(SeriesTerminalTicketV3 {
-                ticket_bytes: &ticket.data,
-                ticket_state,
-                observed_lamports: replay.lamports,
-                exact_rent: rent.minimum_balance(replay.data.len()),
-            })
-        })
-        .transpose()?;
-    let rent_sink = frame
-        .lifecycle_rent_credit
-        .as_ref()
-        .map(|key| -> Result<SeriesLifecycleRentSinkV3> {
-            let credit_key = parse_pubkey(key, "Series lifecycle RentCredit")?;
-            let credit =
-                required_series_account_v1(&accounts, credit_key, "Series lifecycle RentCredit")?;
-            let header = CapabilityRootHeaderV1::decode(
-                fixed
-                    .root
-                    .data
-                    .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
-                    .ok_or_else(|| refusal("Series root omitted its immutable header"))?,
-            )
-            .map_err(|_| refusal("Series root header refused hostile decode"))?;
-            SeriesLifecycleRentSinkV3::admit(
-                series_account_key_v3(credit_key.to_bytes())
-                    .map_err(|_| refusal("Series RentCredit key refused"))?,
-                &credit.data,
-                series_account_key_v3(header.market())
-                    .map_err(|_| refusal("Series parent Market key refused"))?,
-                header.release_set(),
-                header.generation(),
-                template.refund_owner(),
-            )
-            .map_err(|_| refusal("Series lifecycle RentCredit refused root/Template binding"))
-        })
-        .transpose()?;
-    let lifecycle_snapshot = SeriesLifecycleSnapshotV3 {
-        template_bytes: &template_bytes,
-        series,
-        now_slot: observation.slot,
-        current,
-        terminal_ticket,
-        observed_root_lamports: root_lamports,
-        exact_root_rent: rent.minimum_balance(root_data_len),
-        rent_sink,
-    };
-    let lifecycle = inspect_series_lifecycle_v3(lifecycle_snapshot)
-        .map_err(|error| refusal(format!("Series lifecycle planner: {error:?}")))?;
-    if source.prepare_ticket_rent_lamports
-        != rent.minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3)
-    {
-        return Err(refusal(
-            "Series current-source Ticket rent differed from same-slot Rent",
-        ));
-    }
-    // The count is release GEOMETRY: every occurrence action's family request
-    // is exactly `series_action_request_bytes_v3(count)` wide and its Effect
-    // declares a borrowed proof range only when that width exceeds the header.
-    // The corpus states the count the candidate artifacts were compiled for;
-    // the live finalized Template is its only author, so a disagreement is
-    // named here rather than discovered as an artifact-shaped refusal later.
-    if source.template_occurrence_count != template.occurrence_count() {
-        return Err(refusal(format!(
-            "Series current-source occurrence count {} differed from the live Template's {}",
-            source.template_occurrence_count,
-            template.occurrence_count(),
-        )));
-    }
-    let current_source = source.input(template_id);
-    let planned = match lifecycle.next() {
-        SeriesNextActV3::Ready(planned) => planned,
-        SeriesNextActV3::Acquire(needed) => {
-            return Err(refusal(format!(
-                "Series lifecycle needs another authenticated acquisition: {needed:?}"
-            )));
+    match inspect_current_series_corpus_v1(frame, source, observation, accounts)? {
+        SeriesCorpusPlanV1::Ready(acquired) => {
+            policy.require_act(acquired.selected.selected.action)?;
+            Ok(acquired)
         }
-        SeriesNextActV3::WaitUntil { scheduled_slot } => {
-            return Err(refusal(format!(
-                "Series lifecycle waits until slot {scheduled_slot}"
-            )));
-        }
-    };
-    let owned_release = emit_current_series_release_source_v5(current_source)
-        .map_err(|error| refusal(format!("emit current Series V5 release: {error:?}")))?;
-    let release = compile_series_release_v5(owned_release.as_source())
-        .map_err(|error| refusal(format!("compile current Series V5 release: {error:?}")))?;
-    let preselected = authenticate_series_selected_action_v5(
-        &release,
-        owned_release.as_source(),
-        planned.request().as_bytes(),
-    )
-    .map_err(|error| refusal(format!("authenticate current Series V5 action: {error:?}")))?;
-    if preselected.action != planned.action() {
-        return Err(refusal(
-            "current Series release changed the lifecycle-selected action",
-        ));
+        SeriesCorpusPlanV1::Acquire(needed) => Err(refusal(format!(
+            "Series lifecycle needs another authenticated acquisition: {needed:?}"
+        ))),
+        SeriesCorpusPlanV1::WaitUntil { scheduled_slot } => Err(refusal(format!(
+            "Series lifecycle waits until slot {scheduled_slot}"
+        ))),
     }
-    policy.require_act(planned.action())?;
-    let runtime_logical_accounts = frame
-        .runtime_logical_accounts
-        .iter()
-        .map(|address| {
-            series_operator_account_from_address_v2(
-                &accounts,
-                address,
-                "Series logical runtime account",
-                observation,
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let occurrence_record = frame
-        .current_occurrence
-        .as_ref()
-        .map(|route| {
-            series_finalized_record_route_v2(
-                &accounts,
-                &route.occurrence_record,
-                &route.occurrence_staging,
-                "Series occurrence",
-                observation,
-            )
-        })
-        .transpose()?;
-    if frame.current_occurrence.is_some() && frame.terminal_ticket.is_some() {
-        return Err(refusal(
-            "Series acquisition supplied current and terminal Ticket routes together",
-        ));
-    }
-    let ticket_record = match (&frame.current_occurrence, &frame.terminal_ticket) {
-        (Some(route), None) => Some(series_finalized_record_route_v2(
-            &accounts,
-            &route.ticket_record,
-            &route.ticket_staging,
-            "Series current Ticket",
-            observation,
-        )?),
-        (None, Some(route)) => Some(series_finalized_record_route_v2(
-            &accounts,
-            &route.ticket_record,
-            &route.ticket_staging,
-            "Series terminal Ticket",
-            observation,
-        )?),
-        (None, None) => None,
-        (Some(_), Some(_)) => unreachable!("refused above"),
-    };
-    let rent_credit = frame
-        .lifecycle_rent_credit
-        .as_ref()
-        .map(|address| {
-            series_operator_account_from_address_v2(
-                &accounts,
-                address,
-                "Series lifecycle RentCredit",
-                observation,
-            )
-        })
-        .transpose()?;
-    let expire_permit = frame
-        .expire_permit
-        .as_ref()
-        .map(|address| {
-            series_operator_account_from_address_v2(
-                &accounts,
-                address,
-                "Series Expire permit",
-                observation,
-            )
-        })
-        .transpose()?;
-    let shadow_request_bytes = frame
-        .consume_shadow
-        .as_ref()
-        .map(|shadow| decode_base64(&shadow.request_base64, "Series Consume Shadow request"))
-        .transpose()?;
-    let shadow_request = shadow_request_bytes
-        .as_deref()
-        .map(ShadowRequestV3::decode)
-        .transpose()
-        .map_err(|_| refusal("Series Consume Shadow request refused hostile decode"))?;
-    let shadow_certificate = frame
-        .consume_shadow
-        .as_ref()
-        .map(|shadow| {
-            series_finalized_record_route_v2(
-                &accounts,
-                &shadow.certificate.raw,
-                &shadow.certificate.staging,
-                "Series Consume Shadow certificate",
-                observation,
-            )
-        })
-        .transpose()?;
-    let shadow_artifact = frame
-        .consume_shadow
-        .as_ref()
-        .map(|shadow| {
-            series_finalized_record_route_v2(
-                &accounts,
-                &shadow.artifact.raw,
-                &shadow.artifact.staging,
-                "Series Consume Shadow artifact",
-                observation,
-            )
-        })
-        .transpose()?;
-    let shadow_accelerator_program = frame
-        .consume_shadow
-        .as_ref()
-        .map(|shadow| {
-            series_operator_account_from_address_v2(
-                &accounts,
-                &shadow.accelerator_program,
-                "Series Consume accelerator program",
-                observation,
-            )
-        })
-        .transpose()?;
-    let shadow_accelerator_programdata = frame
-        .consume_shadow
-        .as_ref()
-        .map(|shadow| {
-            series_operator_account_from_address_v2(
-                &accounts,
-                &shadow.accelerator_programdata,
-                "Series Consume accelerator ProgramData",
-                observation,
-            )
-        })
-        .transpose()?;
-    let shadow_caller_authority = frame
-        .consume_shadow
-        .as_ref()
-        .map(|shadow| {
-            series_operator_account_from_address_v2(
-                &accounts,
-                &shadow.caller_authority,
-                "Series Consume Shadow caller authority",
-                observation,
-            )
-        })
-        .transpose()?;
-    let shadow_checked = match (&frame.consume_shadow, &shadow_artifact) {
-        (Some(shadow), Some(artifact)) => Some(CheckedSeriesShadowAcceleratorV3 {
-            artifact_release: hash(&artifact.raw.data).to_bytes(),
-            accelerator_program: shadow_accelerator_program
-                .as_ref()
-                .ok_or_else(|| refusal("Series Consume accelerator program was absent"))?
-                .key,
-            accelerator_programdata: shadow_accelerator_programdata
-                .as_ref()
-                .ok_or_else(|| refusal("Series Consume accelerator ProgramData was absent"))?
-                .key,
-            checked_manifest_digest: parse_hex32_v1(
-                &shadow.checked_manifest_sha256,
-                "Series Consume checked manifest",
-            )?,
-        }),
-        (None, None) => None,
-        _ => return Err(refusal("Series Consume Shadow acquisition was incomplete")),
-    };
-    let shadow = match frame.consume_shadow.as_ref() {
-        Some(_) => Some(SeriesConsumeShadowObservationsV5 {
-            certificate: shadow_certificate
-                .as_ref()
-                .ok_or_else(|| refusal("Series Consume Shadow certificate was absent"))?,
-            artifact: shadow_artifact
-                .as_ref()
-                .ok_or_else(|| refusal("Series Consume Shadow artifact was absent"))?,
-            accelerator_program: shadow_accelerator_program
-                .as_ref()
-                .ok_or_else(|| refusal("Series Consume accelerator program was absent"))?,
-            accelerator_programdata: shadow_accelerator_programdata
-                .as_ref()
-                .ok_or_else(|| refusal("Series Consume accelerator ProgramData was absent"))?,
-            caller_authority: shadow_caller_authority
-                .as_ref()
-                .ok_or_else(|| refusal("Series Consume Shadow caller authority was absent"))?,
-            checked: shadow_checked
-                .ok_or_else(|| refusal("Series Consume checked release was absent"))?,
-            request: shadow_request
-                .ok_or_else(|| refusal("Series Consume Shadow request was absent"))?,
-        }),
-        None => None,
-    };
-    let acquired = acquire_current_series_hot_v5(
-        &preselected,
-        owned_release.action_artifacts(preselected.action),
-        SeriesCurrentAcquisitionInputV5 {
-            fixed: &fixed,
-            runtime_logical_accounts: &runtime_logical_accounts,
-            records: SeriesSelectedRecordObservationsV5 {
-                occurrence: occurrence_record.as_ref(),
-                ticket: ticket_record.as_ref(),
-                rent_credit: rent_credit.as_ref(),
-                expire_permit: expire_permit.as_ref(),
-            },
-            shadow,
-            lifecycle: lifecycle_snapshot,
-        },
-    )
-    .map_err(|error| refusal(format!("acquire current Series V5 bank: {error:?}")))?;
-    let selected = match inspect_current_series_hot_v5(&acquired.state, current_source)
-        .map_err(|error| refusal(format!("current Series V5 operator: {error:?}")))?
-    {
-        SeriesCurrentHotPlanV5::Ready(report) => report,
-        SeriesCurrentHotPlanV5::Acquire(needed) => {
-            return Err(refusal(format!(
-                "Series lifecycle needs another authenticated acquisition: {needed:?}"
-            )));
-        }
-        SeriesCurrentHotPlanV5::WaitUntil { scheduled_slot } => {
-            return Err(refusal(format!(
-                "Series lifecycle waits until slot {scheduled_slot}"
-            )));
-        }
-    };
-    if selected.observation != observation || selected.selected != preselected {
-        return Err(refusal(
-            "Series selected report changed the acquired observation or release action",
-        ));
-    }
-    Ok(AcquiredSeriesSelectedV1 {
-        observation,
-        accounts,
-        lifecycle,
-        selected,
-    })
-}
-
-fn series_operator_account_from_address_v2(
-    accounts: &BTreeMap<Pubkey, Option<SeriesObservedAccountV1>>,
-    address: &str,
-    label: &str,
-    observation: Observation,
-) -> Result<ObservedAccount> {
-    let key = parse_pubkey(address, label)?;
-    operator_account_v1(
-        required_series_account_v1(accounts, key, label)?,
-        observation,
-    )
-}
-
-fn series_finalized_record_route_v2(
-    accounts: &BTreeMap<Pubkey, Option<SeriesObservedAccountV1>>,
-    raw: &str,
-    staging: &str,
-    label: &str,
-    observation: Observation,
-) -> Result<FinalizedRecordRouteV3> {
-    Ok(FinalizedRecordRouteV3 {
-        raw: series_operator_account_from_address_v2(
-            accounts,
-            raw,
-            &format!("{label} raw"),
-            observation,
-        )?,
-        staging: series_operator_account_from_address_v2(
-            accounts,
-            staging,
-            &format!("{label} staging"),
-            observation,
-        )?,
-    })
-}
-
-fn series_hot_fixed_route_v2(
-    addresses: &SeriesHotFixedAddressesV2,
-    accounts: &BTreeMap<Pubkey, Option<SeriesObservedAccountV1>>,
-    observation: Observation,
-) -> Result<DirectHotFixedRouteV3> {
-    let account = |address: &str, label: &str| {
-        series_operator_account_from_address_v2(accounts, address, label, observation)
-    };
-    let record = |addresses: &SeriesFinalizedRecordAddressesV2, label: &str| {
-        series_finalized_record_route_v2(
-            accounts,
-            &addresses.raw,
-            &addresses.staging,
-            label,
-            observation,
-        )
-    };
-    Ok(DirectHotFixedRouteV3 {
-        market: account(&addresses.market, "Series controller Market")?,
-        root: account(&addresses.root, "Series capability root")?,
-        manifest: record(&addresses.manifest, "Series CapabilityManifest")?,
-        program_set: record(&addresses.program_set, "Series CapabilityProgramSet")?,
-        descriptor: record(&addresses.descriptor, "Series CapabilityProgram")?,
-        config: record(&addresses.config, "Series Template")?,
-        account_profile: record(&addresses.account_profile, "Series AccountProfile")?,
-        request_profile: record(&addresses.request_profile, "Series RequestProfile")?,
-        transition: record(&addresses.transition, "Series Transition")?,
-        effect: record(&addresses.effect, "Series Effect")?,
-        lifecycle: record(&addresses.lifecycle, "Series lifecycle policy")?,
-        strategy: record(&addresses.strategy, "Series execution strategy")?,
-        activation_cache: account(&addresses.activation_cache, "Series activation cache")?,
-        core_program: account(&addresses.core_program, "Series Core program")?,
-        core_programdata: account(&addresses.core_programdata, "Series Core ProgramData")?,
-        trading_program: account(&addresses.trading_program, "Series Trading program")?,
-        trading_programdata: account(&addresses.trading_programdata, "Series Trading ProgramData")?,
-        registry_program: account(&addresses.registry_program, "Series Registry program")?,
-        rent_sysvar: account(&addresses.rent_sysvar, "Series Rent sysvar")?,
-        instructions_sysvar: account(&addresses.instructions_sysvar, "Series Instructions sysvar")?,
-        product: record(&addresses.product, "Series Product")?,
-        result_domain: record(&addresses.result_domain, "Series result domain")?,
-        portfolio: record(&addresses.portfolio, "Series portfolio")?,
-        linked_basis: record(&addresses.linked_basis, "Series linked basis")?,
-        capability_seal: account(&addresses.capability_seal, "Series capability seal")?,
-    })
-}
-
-fn operator_account_v1(
-    value: &SeriesObservedAccountV1,
-    observation: Observation,
-) -> Result<ObservedAccount> {
-    if value.key == Pubkey::default() {
-        return Err(refusal("Series observed account had the zero key"));
-    }
-    Ok(ObservedAccount {
-        observation,
-        key: value.key,
-        owner: value.owner,
-        lamports: value.lamports,
-        executable: value.executable,
-        data: value.data.clone(),
-    })
-}
-
-fn required_series_account_v1<'a>(
-    accounts: &'a BTreeMap<Pubkey, Option<SeriesObservedAccountV1>>,
-    key: Pubkey,
-    label: &str,
-) -> Result<&'a SeriesObservedAccountV1> {
-    accounts
-        .get(&key)
-        .ok_or_else(|| refusal(format!("{label} was outside the bounded acquisition")))?
-        .as_ref()
-        .ok_or_else(|| refusal(format!("{label} was absent")))
-}
-
-fn decode_exact_base64_v1<const N: usize>(value: &str, label: &str) -> Result<[u8; N]> {
-    decode_base64(value, label)?
-        .try_into()
-        .map_err(|_| refusal(format!("{label} changed exact width")))
-}
-
-fn parse_hex32_v1(value: &str, label: &str) -> Result<[u8; 32]> {
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(refusal(format!("{label} was not canonical SHA-256 hex")));
-    }
-    let mut output = [0_u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        let pair =
-            std::str::from_utf8(pair).map_err(|_| refusal(format!("{label} was not UTF-8 hex")))?;
-        output[index] = u8::from_str_radix(pair, 16)
-            .map_err(|_| refusal(format!("{label} was not canonical hex")))?;
-    }
-    Ok(output)
 }
 
 /// Drive one bounded crash-safe pass of the current-source Series campaign.
@@ -2551,7 +1570,8 @@ fn observe_durable_series_projection_from_rpc_v1(
         ));
     }
     let keys = keys.into_iter().collect::<Vec<_>>();
-    let (slot, accounts) = rpc.finalized_accounts(&keys, minimum_slot)?;
+    let (slot, accounts) =
+        corpus_transport::read_series_finalized_corpus_v1(rpc, &keys, minimum_slot)?;
     let observed = keys
         .into_iter()
         .zip(accounts)
@@ -2842,7 +1862,7 @@ fn load_or_create_series_retirement_snapshot_v1(
     keys.insert(payer);
     keys.insert(lookup_table);
     let keys = keys.into_iter().collect::<Vec<_>>();
-    let (slot, values) = rpc.finalized_accounts(&keys, 0)?;
+    let (slot, values) = corpus_transport::read_series_finalized_corpus_v1(rpc, &keys, 0)?;
     if slot == 0 || values.len() != keys.len() {
         return Err(refusal(
             "Series retirement snapshot was not one complete finalized vector",
@@ -3534,23 +2554,6 @@ then appends and rereads one address-only acquired frame; a future durable frame
 is the first durable action-journal boundary. Without --execute it never opens the key. With --execute \
 it fsyncs one signed v0 packet before send and thereafter only polls or resends those exact bytes. \
 Loopback RPC is mandatory."
-}
-
-/// Host account fact captured directly from one finalized RPC observation.
-#[derive(Clone, Debug)]
-pub(crate) struct SeriesObservedAccountV1 {
-    pub(crate) key: Pubkey,
-    pub(crate) owner: Pubkey,
-    pub(crate) lamports: u64,
-    pub(crate) executable: bool,
-    pub(crate) data: Vec<u8>,
-}
-
-/// A present account or exact absence at one finalized slot.
-#[derive(Clone, Debug)]
-pub(crate) struct SeriesObservedAccountSlotV1 {
-    pub(crate) key: Pubkey,
-    pub(crate) account: Option<SeriesObservedAccountV1>,
 }
 
 /// Content-complete durable account fact. Zero-lamport deletion is represented
@@ -5642,7 +4645,8 @@ pub(crate) fn observe_selected_series_projection_from_rpc_v1<S: SelectedSeriesPh
     }
     keys.insert(payer);
     let keys = keys.into_iter().collect::<Vec<_>>();
-    let (slot, accounts) = rpc.finalized_accounts(&keys, minimum_slot)?;
+    let (slot, accounts) =
+        corpus_transport::read_series_finalized_corpus_v1(rpc, &keys, minimum_slot)?;
     if accounts.len() != keys.len() {
         return Err(refusal(
             "Series finalized account response changed its cardinality",
@@ -5910,22 +4914,11 @@ fn authenticate_series_lookup_table_v1(
     expected_key: Pubkey,
     expected_sha256: &str,
 ) -> Result<()> {
-    require_sha256(expected_sha256, "Series lookup table")?;
-    let decoded = AddressLookupTable::deserialize(&table.data)
-        .map_err(|_| refusal("Series lookup table bytes did not decode"))?;
-    if table.key != expected_key
-        || table.owner != lookup_table_program::id()
-        || table.executable
-        || decoded.meta.authority.is_some()
-        || decoded.meta.deactivation_slot != u64::MAX
-        || decoded.meta.last_extended_slot >= table.observation.slot
-        || decoded.addresses.is_empty()
-        || sha256_hex(&table.data) != expected_sha256
-    {
-        return Err(refusal(
-            "Series lookup table was not the exact frozen activated routing table",
-        ));
-    }
+    dclutch_operator::series_operation_corpus_v1::authenticate_series_lookup_table_v1(
+        table,
+        expected_key,
+        expected_sha256,
+    )?;
     Ok(())
 }
 

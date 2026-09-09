@@ -1376,7 +1376,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Floor', MANIPULATION_FLOOR_V1_FLOOR_ATOMS_OFFSET, 'u64'),
       field('Reserved', MANIPULATION_FLOOR_V1_TAIL_RESERVED_OFFSET, 'reserved'),
     ],
-    note: 'A floor measured against a different source or collateral answers a different question. Zero means nothing was found. Founding derives the Market’s principal cap from the one floor its Source names, and every later complete-set split is checked against the cap the Market carries.',
+    note: 'The selected source’s floor determines the market’s principal cap. Complete-set issuance must remain within that cap.',
   },
   {
     magic: REALM_MAGIC_V1,
@@ -1644,7 +1644,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Capacity profile', STATISTIC_SPEC_CAPACITY_PROFILE_ID_OFFSET_V1, 'identity'),
       field('Evaluator release', STATISTIC_SPEC_EVALUATOR_RELEASE_ID_OFFSET_V1, 'identity'),
     ],
-    note: 'All twelve coordinates and both tag tables are read from the crate `EmitSourceStatisticSpecV1Rust.lean` prints, so this table restates nothing. The scale exponent is the one field whose reading depends on its value, and it is the one a reader most needs: the units above it say WHICH two quantities are being compared and only this says on what scale.',
+    note: 'The source scale exponent specifies how to interpret the observation’s integer amount. Source and result units identify the quantities being compared.',
   },
   {
     magic: MARKET_OPENING_READINESS_MAGIC_V1,
@@ -2879,7 +2879,7 @@ function stateMachineSpecsV1(rendered: ReadonlyArray<RecordSpec>): ReadonlyArray
       width,
       fields: stateMachineFields(row),
       rowDiscriminant,
-      note: `Only the discriminant and the pinned schema words are published for this record. ${row.record} is emitted from ${row.authority}, which states no full field map, so the rest of its bytes are left unread rather than guessed.`,
+      note: `The field view includes the state tag and schema identifiers. Additional ${row.record} fields are not mapped in this explorer.`,
     }));
   }
   return Object.freeze(specs);

@@ -719,6 +719,7 @@ fn build_series_found_prepare_input_v1<'a>(
         crate::series_found_prepare_input::build_series_found_prepare_selection_input_v1(
             rpc,
             crate::series_found_prepare_input::SeriesFoundPrepareInputFactsV1 {
+                occurrence_index: 0,
                 plan,
                 m0,
                 founder,

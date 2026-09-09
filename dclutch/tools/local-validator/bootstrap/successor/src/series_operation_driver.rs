@@ -11,60 +11,8 @@ use dclutch_operator::series_intent_v1::SeriesOperationIntentV1;
 
 pub(crate) const LOCAL_COMMAND: &str = "local-private-validator-series-act-v1";
 pub(crate) const DEVNET_COMMAND: &str = "devnet-series-act-v1";
-const SOURCE_SCHEMA: &str = "dclutch-series-operation-source-v1";
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SeriesOperationSourceV1 {
-    schema: String,
-    genesis_hash: String,
-    payer: String,
-    lookup_table: String,
-    lookup_table_sha256: String,
-    accepted_root: String,
-    accepted_request_base64: String,
-    current_source: SeriesCurrentSourceCorpusV1,
-    acquisition: SeriesHotAcquisitionRecipeV2,
-}
-
-impl DecodedSeriesCurrentSourceV1 {
-    fn document(&self) -> Result<SeriesCurrentSourceCorpusV1> {
-        Ok(SeriesCurrentSourceCorpusV1 {
-            template_occurrence_count: self.template_occurrence_count,
-            consume_shadow_certificate_program: hex32(
-                self.consume_shadow_certificate_program.to_bytes(),
-            ),
-            prepare_fixed_data_lengths: self.prepare_fixed_data_lengths.to_vec(),
-            prepare_ticket_rent_lamports: self.prepare_ticket_rent_lamports,
-            prepare_projected_initialize_base64: BASE64.encode(self.prepare_projected_initialize),
-            prepare_projected_open_base64: BASE64.encode(self.prepare_projected_open),
-            prepare_replay_initialize_base64: BASE64.encode(self.prepare_replay_initialize),
-            prepare_escrow_open_base64: BASE64.encode(self.prepare_escrow_open),
-            prepare_escrow_lock_base64: BASE64.encode(self.prepare_escrow_lock),
-            consume_fixed_data_lengths: self.consume_fixed_data_lengths.to_vec(),
-            consume_lock_base64: BASE64.encode(self.consume_lock),
-            consume_core_base64: BASE64.encode(self.consume_core),
-            consume_realize_base64: BASE64.encode(self.consume_realize),
-            consume_claims_base64: BASE64.encode(self.consume_claims),
-            consume_funding_count: self.consume_funding_count,
-            expire_fixed_data_lengths: self.expire_fixed_data_lengths.to_vec(),
-            expire_refund_base64: BASE64.encode(self.expire_refund),
-            expire_close_vault_base64: BASE64.encode(self.expire_close_vault),
-            expire_close_replay_base64: BASE64.encode(self.expire_close_replay),
-            expire_projected_abort_base64: BASE64.encode(self.expire_projected_abort),
-            expire_permit_expiry_base64: BASE64.encode(
-                self.expire_permit_expiry.encode().map_err(|error| {
-                    refusal(format!("Series permit source encoding: {error:?}"))
-                })?,
-            ),
-            expire_core_base64: BASE64.encode(
-                self.expire_core
-                    .encode()
-                    .map_err(|error| refusal(format!("Series Core source encoding: {error:?}")))?,
-            ),
-        })
-    }
-}
+const SOURCE_SCHEMA: &str =
+    dclutch_operator::series_operation_corpus_v1::SERIES_NATIVE_OPERATION_SOURCE_SCHEMA_V1;
 
 /// Emit the first production continuation from the same typed source that
 /// constructed its accepted native Prepare instruction. No raw corpus entry
@@ -81,7 +29,7 @@ pub(crate) fn write_prepare_source(
         .map_err(|error| refusal(format!("Series accepted request decode: {error:?}")))?;
     let _intent = SeriesOperationIntentV1::from_request(selected.roles.root.to_bytes(), request)
         .map_err(|error| refusal(format!("Series accepted intent: {error:?}")))?;
-    let source = SeriesOperationSourceV1 {
+    let source = SeriesNativeOperationSourceV1 {
         schema: SOURCE_SCHEMA.into(),
         genesis_hash,
         payer: input.payer.to_string(),
@@ -237,7 +185,7 @@ pub(crate) fn write_current_source(
             })
         })
         .transpose()?;
-    let source = SeriesOperationSourceV1 {
+    let source = SeriesNativeOperationSourceV1 {
         schema: SOURCE_SCHEMA.into(),
         genesis_hash,
         payer: payer.to_string(),
@@ -320,7 +268,7 @@ pub(crate) fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result
     if source_sha256 != required("--expected-source-sha256")? {
         return Err(refusal("Series operation source digest changed"));
     }
-    let source: SeriesOperationSourceV1 = serde_json::from_slice(&bytes)?;
+    let source: SeriesNativeOperationSourceV1 = serde_json::from_slice(&bytes)?;
     if source.schema != SOURCE_SCHEMA || source.acquisition.sequence != 0 {
         return Err(refusal(
             "Series operation source schema or sequence changed",

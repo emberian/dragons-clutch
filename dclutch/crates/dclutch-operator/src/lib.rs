@@ -149,6 +149,9 @@ pub mod series_intent_v1;
 /// Chain-derived selection of the next recurring-Series lifecycle act.
 #[cfg(feature = "dealer-series")]
 pub mod series_lifecycle_v3;
+/// Production native Series source and finalized-corpus acquisition.
+#[cfg(feature = "dealer-series")]
+pub mod series_operation_corpus_v1;
 /// Chain-derived Direct close and retirement replay-handoff construction.
 pub mod terminal_retirement_v1;
 /// Wallet-authorized Claims terminal payout and exact v0 routing construction.

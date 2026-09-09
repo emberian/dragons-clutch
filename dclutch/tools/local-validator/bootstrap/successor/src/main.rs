@@ -142,6 +142,12 @@ impl From<dclutch_operator::wallet_terminal_payout::Error> for Error {
     }
 }
 
+impl From<dclutch_operator::series_operation_corpus_v1::SeriesCorpusErrorV1> for Error {
+    fn from(error: dclutch_operator::series_operation_corpus_v1::SeriesCorpusErrorV1) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Self::new(error.to_string())

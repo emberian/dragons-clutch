@@ -59,6 +59,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-09 | Usage-limited restart: plain-language frontend changes committed; full devnet redeploy and aquarium unfinished; hbox validators paused after storage filled | — | [restart handoff](docs/HANDOFF_2026_09_09_USAGE_PAUSE.md) |
 | 2026-09-09 | Exact a3dd6962 V2 integration source seals eight fresh production ELFs and its genesis pack; two independent production captures admit the exact all-eight frame baseline while Series remains unselected | — | [V2 integration checkpoint](docs/evidence/STRICT_ALL_EIGHT_A3DD_INTEGRATION_CHECKPOINT_2026_09_09.md) |
 | 2026-09-09 | Custody checks the caller’s live deployment on ordinary and upkeep routes; actual ELF rejects a changed authority before replay allocation | — | [Custody caller continuity evidence](docs/evidence/CUSTODY_CALLER_DEPLOYMENT_CONTINUITY_2026_09_09.md) |
 | 2026-09-09 | Exact a8e3 Claims ELFs execute atomic sparse Admit → transfer → Close and a two-row affine group mutation; exact substitution, stale-state and late-caller refusals roll back byte-for-byte | — | [Claims atomic Position operations](docs/evidence/CLAIMS_ATOMIC_POSITION_OPERATIONS_V2_2026_09_09.md) |

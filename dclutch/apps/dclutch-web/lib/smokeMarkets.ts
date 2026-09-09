@@ -23,17 +23,17 @@ export const SMOKE_CLUSTER_GENESIS_V1 = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxP
 export const SMOKE_MARKETS_V1: Readonly<Record<'price' | 'graduation' | 'abandoned', SmokeMarketV1>> =
   Object.freeze({
     price: Object.freeze({
-      title: 'Oracle truth · the price market',
+      title: 'SOL price market',
       address: null,
       liveNote: null,
     }),
     graduation: Object.freeze({
-      title: 'Cross-chain truth · the graduation market',
+      title: 'Token graduation market',
       address: null,
       liveNote: null,
     }),
     abandoned: Object.freeze({
-      title: 'Adversarial truth · the abandoned market',
+      title: 'Source failure market',
       address: null,
       liveNote: null,
     }),

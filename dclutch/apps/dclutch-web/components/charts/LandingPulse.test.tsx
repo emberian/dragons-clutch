@@ -152,7 +152,7 @@ describe('LandingPulse', () => {
     // exist and are not in the count.
     expect(state.provenance).toContain('holds no market this page can read');
     expect(state.provenance).toContain('2 older markets');
-    expect(state.provenance).toContain('not counted above');
+    expect(state.provenance).toContain('unsupported account format');
     expect(state.provenance).not.toContain('owns no Market');
     expect(state.provenance).not.toContain('DCLTCOR2');
   });
@@ -179,8 +179,7 @@ describe('what the front page leads with', () => {
     const state = readPulseV1('Devnet', LIVE_SCAN, LIVE_SHAPE);
     expect(state.provenance).toContain('16 markets are listed on this deployment in all: 2 open');
     expect(state.provenance).toContain('14 are still in founding');
-    expect(state.provenance).toContain('earlier attempts from the build-out');
-    expect(state.provenance).toContain('devnet history is public');
+    expect(state.provenance).toContain('14 are still in founding');
     // The older generation is disclosed as its own fact, not folded into the
     // sixteen, because it was never in the sixteen.
     expect(state.provenance).toContain('6 more were written by an older version of the protocol');
@@ -190,7 +189,7 @@ describe('what the front page leads with', () => {
   it('says so plainly when nothing has opened yet', () => {
     const state = readPulseV1('Devnet', SCAN, discovery([card('found11111111111111111111111111111111111111', 'Founding')]));
     expect(state.stats[0]).toMatchObject({ value: '0' });
-    expect(state.stats[0].detail).toBe('none yet — every market here is still being founded');
+    expect(state.stats[0].detail).toBe('No markets are currently open for trading.');
     expect(state.provenance).toContain('1 market is listed on this deployment in all: 0 open');
     expect(state.provenance).toContain('1 is still in founding');
   });
@@ -241,7 +240,7 @@ describe('what the front page leads with', () => {
     expect(onlyShut.stats[0].detail).toContain('none you can trade');
     // It can still reach its answer, so the resolutions tile does not claim
     // there is nothing here to resolve.
-    expect(onlyShut.stats[2].detail).toBe('none yet — a market reaches its answer when its own source reports, and not before');
+    expect(onlyShut.stats[2].detail).toBe('No markets have resolved yet.');
   });
 
   it('names refused and settled markets in the sentence rather than dropping them', () => {
@@ -258,7 +257,7 @@ describe('what the front page leads with', () => {
       refused,
     ]));
     expect(state.provenance).toContain('1 has passed its answer');
-    expect(state.provenance).toContain('1 would not decode and carries its refusal instead of a figure');
+    expect(state.provenance).toContain('1 could not be loaded');
     expect(state.stats[2]).toMatchObject({ label: 'Markets resolved', value: '1' });
     expect(state.stats[2].detail).toBe('markets that have reached their answer');
   });
@@ -277,7 +276,7 @@ describe('collateral across more than one token', () => {
     expect(tile.parts).toHaveLength(2);
     expect(tile.parts?.[0].value).toBe('500000000');
     expect(tile.parts?.[1].value).toBe('500000000');
-    expect(tile.detail).toContain('units of different tokens are never added together');
+    expect(tile.detail).toContain('separate totals in token atoms');
     // No row anywhere is the two mints added together.
     expect(tile.parts?.map((part) => part.value)).not.toContain('1000000000');
   });
@@ -311,7 +310,7 @@ describe('collateral across more than one token', () => {
     const tile = collateralTileV1(discovery([card('found11111111111111111111111111111111111111', 'Founding')]));
     expect(tile.value).toBeNull();
     expect(tile.parts).toBeUndefined();
-    expect(tile.detail).toBe('no vault here could be authenticated, so no total is claimed');
+    expect(tile.detail).toBe('Collateral balances unavailable.');
   });
 
   it('renders the per-token rows as figures, not as one em dash', () => {
@@ -329,14 +328,14 @@ describe('the resolutions count, which is a real zero', () => {
   it('keeps the zero and explains what would move it', () => {
     const state = readPulseV1('Devnet', LIVE_SCAN, LIVE_SHAPE);
     expect(state.stats[2]).toMatchObject({ label: 'Markets resolved', value: '0' });
-    expect(state.stats[2].detail).toBe('none yet — a market reaches its answer when its own source reports, and not before');
+    expect(state.stats[2].detail).toBe('No markets have resolved yet.');
     // No date, no "yesterday": a caption that ages is a caption that will lie.
     expect(state.stats[2].detail).not.toMatch(/yesterday|today|this week|2026/);
   });
 
   it('says the simpler true thing when there is nothing open to resolve', () => {
     const state = readPulseV1('Devnet', SCAN, discovery([card('found11111111111111111111111111111111111111', 'Founding')]));
-    expect(state.stats[2].detail).toBe('none yet — no market is open to resolve');
+    expect(state.stats[2].detail).toBe('No markets have resolved yet.');
   });
 });
 
@@ -356,12 +355,12 @@ describe('a scan that answered and a join that did not', () => {
     // and the front page is the worst place to throw away a number we hold.
     const state = partiallyReadPulseV1('Devnet', enumeration, 'the endpoint is rate-limiting this browser (HTTP 429).');
     expect(state.provenance).toContain('holds 1 market');
-    expect(state.provenance).toContain('Reading inside them did not finish');
+    expect(state.provenance).toContain('Market details unavailable');
     expect(state.provenance).toContain('rate-limiting');
     // The count survives; the headline does not claim it. How many are OPEN is
     // read INSIDE each market, and that is exactly the read that failed.
     expect(state.stats[0].value).toBeNull();
-    expect(state.stats[0].detail).toBe('1 market is listed here; whether it is open is read inside it');
+    expect(state.stats[0].detail).toBe('1 market found; status unavailable');
   });
 
   it('leaves the two it did not read as dashes, never as zeroes', () => {

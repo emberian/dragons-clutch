@@ -1,4 +1,4 @@
-//! Live fact admission for the first Series Found -> Prepare compiler pass.
+//! Live fact admission for one recurring Series Found -> Prepare compiler pass.
 //!
 //! This module turns the M0 publisher's finalized records and bounded RPC
 //! observations into the typed selection input.  The source, Rent, Clock, and
@@ -166,6 +166,8 @@ pub(crate) enum SeriesParentRootFactV1 {
 }
 
 pub(crate) struct SeriesFoundPrepareInputFactsV1<'a> {
+    /// Explicit authored occurrence, required to equal finalized replay's next cursor.
+    pub(crate) occurrence_index: u32,
     pub(crate) plan: &'a SuccessorPlan,
     pub(crate) m0: &'a FutureMarketImmutablePublicationV1,
     pub(crate) founder: &'a PreparedSeriesFounderV1,
@@ -258,14 +260,77 @@ pub(crate) fn build_series_found_prepare_selection_input_v1<'a>(
         ));
     }
     verify_founder_publication(input.founder, input.founder_records)?;
+    let occurrence_index = usize::try_from(input.occurrence_index)
+        .map_err(|_| Error::new("Series occurrence index exceeded host address width"))?;
+    let occurrence_bytes = input
+        .founder
+        .admitted
+        .occurrences()
+        .get(occurrence_index)
+        .ok_or_else(|| {
+            Error::new("Series requested occurrence was outside the authored Template")
+        })?;
+    let ticket_bytes = input
+        .founder
+        .admitted
+        .tickets()
+        .get(occurrence_index)
+        .ok_or_else(|| Error::new("Series requested Ticket was outside the authored Template"))?;
+    let siblings = input
+        .founder
+        .admitted
+        .siblings()
+        .get(occurrence_index)
+        .ok_or_else(|| Error::new("Series requested occurrence omitted its authored proof"))?;
+    let series = match input.parent_root {
+        SeriesParentRootFactV1::Predicted(_) => SeriesStateV3::new(template.close_rent()),
+        SeriesParentRootFactV1::Finalized {
+            observed_data_len,
+            observed_lamports,
+            ..
+        } => {
+            let (slot, accounts) = rpc.finalized_accounts(&[parent_root], now_slot)?;
+            let account = accounts
+                .into_iter()
+                .next()
+                .flatten()
+                .ok_or_else(|| Error::new("Series finalized parent root was absent"))?;
+            if account.data.len() != observed_data_len || account.lamports != observed_lamports {
+                return Err(Error::new(
+                    "Series finalized parent root changed since input observation",
+                ));
+            }
+            dclutch_operator::series_operation_corpus_v1::decode_series_root_replay_v1(
+                &dclutch_operator::ObservedAccount {
+                    observation: dclutch_operator::Observation {
+                        slot,
+                        unix_timestamp: 0,
+                        finality: dclutch_operator::Finality::Finalized,
+                    },
+                    key: parent_root,
+                    owner: account.owner,
+                    lamports: account.lamports,
+                    executable: account.executable,
+                    data: account.data,
+                },
+                trading,
+                input.founder.admitted.template(),
+            )?
+        }
+    };
+    if series.next_occurrence() != input.occurrence_index || series.current_ticket_prepared() {
+        return Err(Error::new(
+            "Series Prepare occurrence did not match the unprepared finalized cursor",
+        ));
+    }
     let occurrence = admit_occurrence(
         input.founder.admitted.template(),
-        &input.founder.admitted.occurrences()[0],
-        &input.founder.admitted.siblings()[0],
+        occurrence_bytes,
+        siblings,
     )
-    .map_err(|_| Error::new("Series first occurrence refused admission"))?;
-    let ticket = admit_ticket(&input.founder.admitted.tickets()[0])
-        .map_err(|_| Error::new("Series first Ticket refused admission"))?;
+    .map_err(|_| Error::new("Series selected occurrence refused admission"))?;
+    let ticket = admit_ticket(ticket_bytes)
+        .map_err(|_| Error::new("Series selected Ticket refused admission"))?;
     let product = AuthenticatedProductProjectionV2::new(
         dclutch_core_contract::ContentId::new(record_identity(&m0_body(
             input.m0,
@@ -344,13 +409,13 @@ pub(crate) fn build_series_found_prepare_selection_input_v1<'a>(
     .0;
     let lifecycle = dclutch_operator::series_lifecycle_v3::SeriesLifecycleSnapshotV3 {
         template_bytes: input.founder.admitted.template(),
-        series: SeriesStateV3::new(template.close_rent()),
+        series,
         now_slot,
         current: Some(
             dclutch_operator::series_lifecycle_v3::SeriesCurrentOccurrenceV3 {
-                occurrence_bytes: &input.founder.admitted.occurrences()[0],
-                ticket_bytes: &input.founder.admitted.tickets()[0],
-                siblings: &input.founder.admitted.siblings()[0],
+                occurrence_bytes: occurrence_bytes,
+                ticket_bytes: ticket_bytes,
+                siblings: siblings,
                 ticket_state: None,
             },
         ),

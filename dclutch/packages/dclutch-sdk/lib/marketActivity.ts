@@ -88,7 +88,7 @@ async function boundedMap<T, U>(values: ReadonlyArray<T>, limit: number, mapper:
 }
 
 export const MARKET_ACTIVITY_PROVENANCE_V1 =
-  'Every row is the node’s own finalized history for this Market address, decoded from the transaction bytes it returned. A node kept without history answers with an empty list, and that is reported as the node’s answer — never as “nothing ever happened here”.';
+  'Finalized market transactions from the selected RPC provider.';
 
 // ---------------------------------------------------------------- the census
 

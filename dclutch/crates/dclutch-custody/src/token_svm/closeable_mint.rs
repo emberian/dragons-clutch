@@ -15,6 +15,7 @@
 //! it can never be burned and can never be repaired — which makes the writer,
 //! not the reader, the side that has to satisfy this profile.
 
+use crate::token_svm::state::MintLayoutV1;
 use crate::token_svm::{
     Address, COption, Error, MINT_BYTES, Mint, Result, TOKEN_2022_PROGRAM_ID,
     tlv::{
@@ -66,6 +67,57 @@ impl Token2022CloseableMintFactsV2 {
 pub struct Token2022CloseableMintProfileV2;
 
 impl Token2022CloseableMintProfileV2 {
+    /// Encode an initialized Mint with no freeze authority and the two
+    /// lifecycle extensions, in the order used by Claims initialization.
+    ///
+    /// This predicts account bytes for a native operation plan. All three
+    /// authorities must be nonzero; they may be distinct.
+    pub fn encode_mint(
+        mint_authority: Address,
+        close_authority: Address,
+        burn_authority: Address,
+        supply: u64,
+        decimals: u8,
+    ) -> Result<[u8; TOKEN_2022_CLOSEABLE_MINT_BYTES_V2]> {
+        let mut output = [0; TOKEN_2022_CLOSEABLE_MINT_BYTES_V2];
+        write_mint_bytes(&mut output, MintLayoutV1::AUTHORITY, &1_u32.to_le_bytes())?;
+        write_mint_bytes(
+            &mut output,
+            MintLayoutV1::AUTHORITY + core::mem::size_of::<u32>(),
+            &mint_authority,
+        )?;
+        write_mint_bytes(&mut output, MintLayoutV1::SUPPLY, &supply.to_le_bytes())?;
+        write_mint_bytes(&mut output, MintLayoutV1::DECIMALS, &[decimals])?;
+        write_mint_bytes(&mut output, MintLayoutV1::IS_INITIALIZED, &[1])?;
+        write_mint_bytes(&mut output, ACCOUNT_TYPE_OFFSET, &[MINT_ACCOUNT_TYPE])?;
+        let authority_bytes =
+            u16::try_from(AUTHORITY_EXTENSION_BYTES).map_err(|_| Error::InvalidExtensionLayout)?;
+        let mut offset = TLV_START_OFFSET;
+        for (kind, authority) in [
+            (MINT_CLOSE_AUTHORITY_EXTENSION, close_authority),
+            (PERMISSIONED_BURN_EXTENSION, burn_authority),
+        ] {
+            write_mint_bytes(&mut output, offset, &kind.to_le_bytes())?;
+            write_mint_bytes(
+                &mut output,
+                offset + core::mem::size_of::<u16>(),
+                &authority_bytes.to_le_bytes(),
+            )?;
+            write_mint_bytes(&mut output, offset + TLV_HEADER_BYTES, &authority)?;
+            offset += TLV_HEADER_BYTES + AUTHORITY_EXTENSION_BYTES;
+        }
+        Self::check_mint(
+            TOKEN_2022_PROGRAM_ID,
+            &output,
+            mint_authority,
+            close_authority,
+            burn_authority,
+            supply,
+            decimals,
+        )?;
+        Ok(output)
+    }
+
     /// Authenticate one exact initialized Mint and all lifecycle-relevant
     /// authority, supply, decimal, freeze and extension facts.
     ///
@@ -165,6 +217,17 @@ impl Token2022CloseableMintProfileV2 {
     }
 }
 
+fn write_mint_bytes(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
+    let end = offset
+        .checked_add(value.len())
+        .ok_or(Error::InvalidExtensionLayout)?;
+    output
+        .get_mut(offset..end)
+        .ok_or(Error::InvalidExtensionLayout)?
+        .copy_from_slice(value);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::token_svm::{
@@ -183,6 +246,70 @@ mod tests {
     const DECIMALS_OFFSET: usize = 44;
     const INITIALIZED_OFFSET: usize = 45;
     const FREEZE_AUTHORITY_OFFSET: usize = 46;
+
+    #[test]
+    fn encoded_mint_matches_token_2022_extension_writer() {
+        use solana_address::Address as SplAddress;
+        use solana_program_option::COption as SplCOption;
+        use spl_token_2022_interface::{
+            extension::{
+                BaseStateWithExtensionsMut, StateWithExtensionsMut,
+                mint_close_authority::MintCloseAuthority,
+                permissioned_burn::PermissionedBurnConfig,
+            },
+            state::Mint as SplMint,
+        };
+
+        for (supply, decimals) in [(0, 0), (11, 6), (u64::MAX, u8::MAX)] {
+            let mut expected = [0; TOKEN_2022_CLOSEABLE_MINT_BYTES_V2];
+            let mut state = StateWithExtensionsMut::<SplMint>::unpack_uninitialized(&mut expected)
+                .expect("Token-2022 Mint storage");
+            state
+                .init_extension::<MintCloseAuthority>(false)
+                .expect("close extension")
+                .close_authority = Some(SplAddress::new_from_array(OTHER_AUTHORITY))
+                .try_into()
+                .expect("nonzero close authority");
+            state
+                .init_extension::<PermissionedBurnConfig>(false)
+                .expect("burn extension")
+                .authority = Some(SplAddress::new_from_array(BURN_AUTHORITY))
+                .try_into()
+                .expect("nonzero burn authority");
+            state.base = SplMint {
+                mint_authority: SplCOption::Some(SplAddress::new_from_array(AUTHORITY)),
+                supply,
+                decimals,
+                is_initialized: true,
+                freeze_authority: SplCOption::None,
+            };
+            state.init_account_type().expect("Mint account type");
+            state.pack_base();
+            let encoded = Token2022CloseableMintProfileV2::encode_mint(
+                AUTHORITY,
+                OTHER_AUTHORITY,
+                BURN_AUTHORITY,
+                supply,
+                decimals,
+            )
+            .expect("native closeable Mint");
+            assert_eq!(encoded, expected);
+        }
+    }
+
+    #[test]
+    fn encoder_refuses_each_zero_authority() {
+        for (mint, close, burn) in [
+            ([0; 32], OTHER_AUTHORITY, BURN_AUTHORITY),
+            (AUTHORITY, [0; 32], BURN_AUTHORITY),
+            (AUTHORITY, OTHER_AUTHORITY, [0; 32]),
+        ] {
+            assert_eq!(
+                Token2022CloseableMintProfileV2::encode_mint(mint, close, burn, 0, 0),
+                Err(Error::AuthorityMismatch),
+            );
+        }
+    }
 
     /// The base account bytes, with no extension storage at all.
     fn base_account() -> std::vec::Vec<u8> {

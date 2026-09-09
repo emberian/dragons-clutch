@@ -69,8 +69,8 @@ function plural(count: number, one: string, many: string): string {
 function incompatibleDisclosure(enumeration: ProgramScanEnumerationV1): string {
   const count = enumeration.incompatibleMarketAccounts.length;
   return count === 0
-    ? 'The same scan found no older markets that this page cannot read.'
-    : `The same scan found ${count} older market${plural(count, '', 's')} in a layout this page cannot read, so ${plural(count, 'it is', 'they are')} not counted above.`;
+    ? ''
+    : `${count} older market${plural(count, '', 's')} use an unsupported account format.`;
 }
 
 /**
@@ -98,12 +98,12 @@ export function partiallyReadPulseV1(
       Object.freeze({
         label: OPEN_LABEL,
         value: null,
-        detail: `${listed} market${plural(listed, '', 's')} ${plural(listed, 'is', 'are')} listed here; whether ${plural(listed, 'it is', 'they are')} open is read inside ${plural(listed, 'it', 'them')}`,
+        detail: `${listed} market${plural(listed, '', 's')} found; status unavailable`,
       }),
       Object.freeze({ label: COLLATERAL_LABEL, value: null, detail: 'not read this time' }),
       Object.freeze({ label: RESOLVED_LABEL, value: null, detail: 'not read this time' }),
     ]),
-    provenance: `Read live from ${deploymentLabel} at slot ${enumeration.scanSlot}: the deployment holds ${listed} market${plural(listed, '', 's')}. Reading inside them did not finish — ${reason}`,
+    provenance: `Read live from ${deploymentLabel} at slot ${enumeration.scanSlot}: the deployment holds ${listed} market${plural(listed, '', 's')}. Market details unavailable: ${reason}`,
   });
 }
 
@@ -111,9 +111,9 @@ export function partiallyReadPulseV1(
 export function emptyCurrentMarketPulseV1(deploymentLabel: string, enumeration: ProgramScanEnumerationV1): PulseState {
   return Object.freeze({
     stats: Object.freeze([
-      Object.freeze({ label: OPEN_LABEL, value: '0', detail: 'no market this reader can read exists here yet' }),
-      Object.freeze({ label: COLLATERAL_LABEL, value: '0', detail: 'there is no market to hold any' }),
-      Object.freeze({ label: RESOLVED_LABEL, value: '0', detail: 'there is no market to resolve' }),
+      Object.freeze({ label: OPEN_LABEL, value: '0', detail: 'no compatible markets found' }),
+      Object.freeze({ label: COLLATERAL_LABEL, value: '0', detail: 'no compatible market vaults found' }),
+      Object.freeze({ label: RESOLVED_LABEL, value: '0', detail: 'no resolved markets found' }),
     ]),
     provenance: `Read live from ${deploymentLabel} at slot ${enumeration.scanSlot}: this deployment holds no market this page can read. ${incompatibleDisclosure(enumeration)}`,
   });
@@ -140,7 +140,7 @@ export function collateralTileV1(discovery: MarketDiscoveryV1): NumberStripStatV
     return Object.freeze({
       label: COLLATERAL_LABEL,
       value: null,
-      detail: 'no vault here could be authenticated, so no total is claimed',
+      detail: 'Collateral balances unavailable.',
     });
   }
   const vaults = rows.reduce((total, row) => total + row.vaults, 0);
@@ -157,7 +157,7 @@ export function collateralTileV1(discovery: MarketDiscoveryV1): NumberStripStatV
     }))),
     detail: rows.length === 1
       ? `one collateral token, in raw units, across ${vaults} vault${plural(vaults, '', 's')}`
-      : `${rows.length} different collateral tokens, each totalled in its own raw units — units of different tokens are never added together`,
+      : `${rows.length} collateral tokens, with separate totals in token atoms`,
   });
 }
 
@@ -187,13 +187,13 @@ export function readPulseV1(
     rest.push(`${untradeable} ${plural(untradeable, 'is', 'are')} open and readable but can never trade — the window to switch trading on closed before it happened`);
   }
   if (listing.founding.length > 0) {
-    rest.push(`${listing.founding.length} ${plural(listing.founding.length, 'is', 'are')} still in founding — earlier attempts from the build-out, left standing because devnet history is public`);
+    rest.push(`${listing.founding.length} ${plural(listing.founding.length, 'is', 'are')} still in founding`);
   }
   if (listing.settled.length > 0) {
     rest.push(`${listing.settled.length} ${plural(listing.settled.length, 'has', 'have')} passed its answer and ${plural(listing.settled.length, 'is', 'are')} winding down`);
   }
   if (listing.unreadable.length > 0) {
-    rest.push(`${listing.unreadable.length} would not decode and ${plural(listing.unreadable.length, 'carries', 'carry')} its refusal instead of a figure`);
+    rest.push(`${listing.unreadable.length} could not be loaded`);
   }
 
   const breakdown = rest.length === 0
@@ -214,7 +214,7 @@ export function readPulseV1(
         // silently folded into this figure, and not silently dropped either.
         detail: open === 0
           ? untradeable === 0
-            ? 'none yet — every market here is still being founded'
+            ? 'No markets are currently open for trading.'
             : `none you can trade — ${plural(untradeable, 'the one market', `all ${untradeable} markets`)} that finished founding here can never have trading switched on`
           : `founding is finished on ${plural(open, 'this one', 'these')}; ${plural(open, 'it holds', 'they hold')} live claims and locked collateral${untradeable === 0 ? '' : ` · ${untradeable} more ${plural(untradeable, 'is', 'are')} open to read but can never trade`}`,
       }),
@@ -227,11 +227,11 @@ export function readPulseV1(
           // A market that can never trade can still reach its answer, so it
           // counts as something there is to resolve.
           : open + untradeable === 0
-            ? 'none yet — no market is open to resolve'
-            : 'none yet — a market reaches its answer when its own source reports, and not before',
+            ? 'No markets have resolved yet.'
+            : 'No markets have resolved yet.',
       }),
     ]),
-    provenance: `Read live from ${deploymentLabel} at slot ${discovery.floorSlot}, straight from the deployment's own programs. ${breakdown}${olderSentence}`,
+    provenance: `Read live from ${deploymentLabel} at slot ${discovery.floorSlot}. ${breakdown}${olderSentence}`,
   });
 }
 

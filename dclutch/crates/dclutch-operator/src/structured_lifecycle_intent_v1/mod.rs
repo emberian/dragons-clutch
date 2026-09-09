@@ -27,7 +27,10 @@ use dclutch_market::capability_program::hot_v3::{
     HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
 };
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_vm::capability_seal::CapabilitySealKeyV1;
+use dclutch_vm::capability_seal::{
+    CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, SealedDescriptorClosureV1, SealedRecordRowV1,
+    SealedRoleV1,
+};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -68,6 +71,17 @@ pub enum StructuredLifecycleConstructionErrorV1 {
     Discovery(discovery::StructuredLifecycleDiscoveryErrorV1),
     /// A finalized account image differed from the native plan.
     Poststate,
+    /// Authenticated immutable context discovery refused.
+    Context(discovery_context::StructuredLifecycleContextErrorV1),
+    /// Native instruction construction refused at a named boundary.
+    Native {
+        /// Semantic construction boundary.
+        stage: &'static str,
+        /// Original native cause.
+        cause: String,
+    },
+    /// Checked lamport or width arithmetic overflowed or underflowed.
+    Arithmetic,
 }
 
 /// Exact selected artifacts and fixed account coordinates before mutable state planning.
@@ -371,6 +385,298 @@ pub fn verify_structured_lifecycle_poststates_v1(
         return Err(StructuredLifecycleConstructionErrorV1::Poststate);
     }
     Ok(())
+}
+
+/// Plan the next pure Structured lifecycle step from one finalized corpus.
+///
+/// Discovery and explicit selection are returned unchanged. Once immutable
+/// context exists, the first missing executable prerequisite is the exact
+/// selected-artifact seal. A later call against the finalized seal continues
+/// into physical lifecycle planning.
+pub fn plan_structured_lifecycle_v1(
+    intent: &StructuredLifecycleIntentV1,
+    programs: &StructuredLifecycleProgramsV1,
+    snapshot: &StructuredLifecycleSnapshotV1,
+) -> Result<StructuredLifecyclePlanningV1, StructuredLifecycleConstructionErrorV1> {
+    let context = match discovery_context::discover_structured_lifecycle_context_v1(
+        intent, programs, snapshot,
+    )
+    .map_err(StructuredLifecycleConstructionErrorV1::Context)?
+    {
+        discovery_context::StructuredLifecycleContextProgressV1::Continue(progress) => {
+            return Ok(progress);
+        }
+        discovery_context::StructuredLifecycleContextProgressV1::Ready(context) => context,
+    };
+    let prepared = prepare_selected_structured_lifecycle_v1(intent.action, programs, &context)?;
+    let physical =
+        structured_lifecycle_physical_coordinates_v1(intent, programs, &context, &prepared)?;
+    let corpus = discovery::StructuredLifecycleCorpusV1::new(snapshot)
+        .map_err(StructuredLifecycleConstructionErrorV1::Discovery)?;
+    let missing = corpus
+        .missing(&physical.requests())
+        .map_err(StructuredLifecycleConstructionErrorV1::Discovery)?;
+    if !missing.is_empty() {
+        return Ok(StructuredLifecyclePlanningV1::Discover {
+            requests: missing,
+            scans: Vec::new(),
+        });
+    }
+    let (seal, bump) = Pubkey::find_program_address(
+        &prepared.seal_key.seeds().as_slices(),
+        &Pubkey::new_from_array(programs.trading),
+    );
+    let expected_seal = selected_capability_seal_body_v1(&context, &prepared, bump)?;
+    match corpus
+        .full(seal.to_bytes())
+        .map_err(StructuredLifecycleConstructionErrorV1::Discovery)?
+    {
+        None => plan_structured_lifecycle_seal_v1(
+            intent,
+            programs,
+            snapshot,
+            &context,
+            &prepared,
+            seal,
+            expected_seal,
+        ),
+        Some(account)
+            if account.owner == programs.trading
+                && !account.executable
+                && account.data == expected_seal =>
+        {
+            plan_selected_structured_lifecycle_execution_v1(
+                intent, programs, snapshot, &context, &prepared, &physical,
+            )
+        }
+        Some(_) => Err(StructuredLifecycleConstructionErrorV1::Poststate),
+    }
+}
+
+fn selected_capability_seal_body_v1(
+    context: &discovery_context::StructuredLifecycleContextV1,
+    prepared: &StructuredLifecycleSelectedPreparationV1,
+    bump: u8,
+) -> Result<Vec<u8>, StructuredLifecycleConstructionErrorV1> {
+    let records = [
+        &context.action_records[0],
+        &context.action_records[3],
+        &context.action_records[1],
+        &context.action_records[2],
+        &context.action_records[5],
+        &context.action_records[6],
+    ];
+    let roles = SealedRoleV1::canonical_order();
+    let mut rows = Vec::with_capacity(records.len());
+    for index in 0..records.len() {
+        let record = records[index];
+        rows.push(
+            SealedRecordRowV1::new(
+                roles[index],
+                u32::try_from(record.raw.data.len())
+                    .map_err(|_| StructuredLifecycleConstructionErrorV1::ArtifactWidth)?,
+                record.key.schema,
+                record.key.content,
+                record.key.raw,
+                record.key.staging,
+            )
+            .map_err(StructuredLifecycleConstructionErrorV1::Seal)?,
+        );
+    }
+    let rows = rows
+        .try_into()
+        .map_err(|_| StructuredLifecycleConstructionErrorV1::ArtifactWidth)?;
+    let mut bytes = vec![0; CAPABILITY_SEAL_BYTES_V1];
+    SealedDescriptorClosureV1::encode(prepared.seal_key, rows, bump, &mut bytes)
+        .map_err(StructuredLifecycleConstructionErrorV1::Seal)?;
+    Ok(bytes)
+}
+
+fn plan_structured_lifecycle_seal_v1(
+    intent: &StructuredLifecycleIntentV1,
+    programs: &StructuredLifecycleProgramsV1,
+    snapshot: &StructuredLifecycleSnapshotV1,
+    context: &discovery_context::StructuredLifecycleContextV1,
+    prepared: &StructuredLifecycleSelectedPreparationV1,
+    seal: Pubkey,
+    expected_seal: Vec<u8>,
+) -> Result<StructuredLifecyclePlanningV1, StructuredLifecycleConstructionErrorV1> {
+    let corpus = discovery::StructuredLifecycleCorpusV1::new(snapshot)
+        .map_err(StructuredLifecycleConstructionErrorV1::Discovery)?;
+    let rent = crate::observation::decode_rent(
+        &corpus
+            .observed(sysvar::rent::ID.to_bytes(), context.clock.unix_timestamp)
+            .map_err(StructuredLifecycleConstructionErrorV1::Discovery)?,
+    )
+    .map_err(|error| StructuredLifecycleConstructionErrorV1::Native {
+        stage: "Rent sysvar",
+        cause: format!("{error:?}"),
+    })?;
+    let payer = corpus
+        .present(intent.payer)
+        .map_err(StructuredLifecycleConstructionErrorV1::Discovery)?;
+    if payer.owner != system_program::ID.to_bytes()
+        || payer.executable
+        || payer.space != 0
+        || !payer.data.is_empty()
+    {
+        return Err(StructuredLifecycleConstructionErrorV1::Poststate);
+    }
+    let seal_rent = rent.minimum_balance(CAPABILITY_SEAL_BYTES_V1);
+    let payer_after = payer
+        .lamports
+        .checked_sub(seal_rent)
+        .ok_or(StructuredLifecycleConstructionErrorV1::Arithmetic)?;
+    let trading = context
+        .roles
+        .iter()
+        .find(|role| role.role == ExecutionRoleV1::Trading)
+        .ok_or(StructuredLifecycleConstructionErrorV1::Deployment)?;
+    let selector =
+        dclutch_claims::rational_lifecycle::hot_v6::structured_lifecycle_action_selector_v1(
+            dclutch_claims::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2,
+            intent.action,
+        )
+        .ok_or(StructuredLifecycleConstructionErrorV1::Selector)?;
+    let instruction = crate::capability_seal_v1::capability_seal_instruction_v1(
+        crate::capability_seal_v1::CapabilitySealInstructionInputV1 {
+            trading_program: Pubkey::new_from_array(programs.trading),
+            registry_program: Pubkey::new_from_array(programs.registry),
+            trading_semantic_release: trading.activated.release().semantic_release_id().to_bytes(),
+            descriptor_digest: context.action_records[0].key.content,
+            action: selector,
+            fixed_frame: &prepared.fixed_accounts,
+            payer: Pubkey::new_from_array(intent.payer),
+        },
+    )
+    .map_err(|error| StructuredLifecycleConstructionErrorV1::Native {
+        stage: "Capability seal instruction",
+        cause: format!("{error:?}"),
+    })?
+    .instruction;
+    let expected_poststates = vec![
+        StructuredLifecycleExpectedAccountV1 {
+            address: intent.payer,
+            value: Some(StructuredLifecycleAccountValueV1 {
+                lamports: payer_after,
+                ..payer.clone()
+            }),
+            deduct_transaction_fee: true,
+        },
+        StructuredLifecycleExpectedAccountV1 {
+            address: seal.to_bytes(),
+            value: Some(StructuredLifecycleAccountValueV1 {
+                owner: programs.trading,
+                lamports: seal_rent,
+                executable: false,
+                space: u64::try_from(CAPABILITY_SEAL_BYTES_V1)
+                    .map_err(|_| StructuredLifecycleConstructionErrorV1::Arithmetic)?,
+                data: expected_seal,
+            }),
+            deduct_transaction_fee: false,
+        },
+    ];
+    let preview = StructuredLifecyclePreviewV1 {
+        receipt_mint: context.selection.receipt_mint,
+        coordinate: intent.coordinate,
+        position: physical_position_v1(intent, context, programs)?,
+        preparation_lamports: seal_rent,
+        returned_rent_lamports: 0,
+        rent_recipient: None,
+        receipt_supply_before: 0,
+        receipt_supply_after: 0,
+    };
+    let mut plan = StructuredLifecyclePlanV1 {
+        intent: intent.clone(),
+        step_id: [0; 32],
+        step_kind: StructuredLifecycleStepKindV1::SealArtifact,
+        selected_capability: context.root,
+        finalized_slot: snapshot.slot,
+        instructions: vec![instruction],
+        required_wallet_signers: vec![intent.payer],
+        preview,
+        expected_poststates,
+    };
+    plan.step_id = structured_lifecycle_step_id_v1(&plan)?;
+    Ok(StructuredLifecyclePlanningV1::Ready { plan })
+}
+
+fn physical_position_v1(
+    intent: &StructuredLifecycleIntentV1,
+    context: &discovery_context::StructuredLifecycleContextV1,
+    programs: &StructuredLifecycleProgramsV1,
+) -> Result<Option<[u8; 32]>, StructuredLifecycleConstructionErrorV1> {
+    if intent.coordinate.is_none() {
+        return Ok(None);
+    }
+    let prepared = prepare_selected_structured_lifecycle_v1(intent.action, programs, context)?;
+    Ok(
+        structured_lifecycle_physical_coordinates_v1(intent, programs, context, &prepared)?
+            .coordinates
+            .first()
+            .map(|coordinate| coordinate.position.to_bytes()),
+    )
+}
+
+fn structured_lifecycle_step_id_v1(
+    plan: &StructuredLifecyclePlanV1,
+) -> Result<[u8; 32], StructuredLifecycleConstructionErrorV1> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"dclutch/structured-lifecycle-step/v1");
+    bytes.extend_from_slice(&plan.intent.market);
+    bytes.extend_from_slice(&plan.intent.payer);
+    bytes.push(plan.intent.action.tag());
+    bytes.extend_from_slice(&plan.intent.coordinate.unwrap_or(u32::MAX).to_le_bytes());
+    bytes.extend_from_slice(&plan.selected_capability);
+    bytes.push(match plan.step_kind {
+        StructuredLifecycleStepKindV1::SealArtifact => 0,
+        StructuredLifecycleStepKindV1::FundRent => 1,
+        StructuredLifecycleStepKindV1::ExecuteLifecycle => 2,
+    });
+    for instruction in &plan.instructions {
+        bytes.extend_from_slice(&instruction.program_id.to_bytes());
+        bytes.extend_from_slice(
+            &u32::try_from(instruction.accounts.len())
+                .map_err(|_| StructuredLifecycleConstructionErrorV1::Arithmetic)?
+                .to_le_bytes(),
+        );
+        for meta in &instruction.accounts {
+            bytes.extend_from_slice(&meta.pubkey.to_bytes());
+            bytes.push(u8::from(meta.is_signer));
+            bytes.push(u8::from(meta.is_writable));
+        }
+        bytes.extend_from_slice(&hash(&instruction.data).to_bytes());
+    }
+    for expected in &plan.expected_poststates {
+        bytes.extend_from_slice(&expected.address);
+        bytes.push(u8::from(expected.deduct_transaction_fee));
+        match &expected.value {
+            None => bytes.push(0),
+            Some(value) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&value.owner);
+                bytes.extend_from_slice(&value.lamports.to_le_bytes());
+                bytes.push(u8::from(value.executable));
+                bytes.extend_from_slice(&value.space.to_le_bytes());
+                bytes.extend_from_slice(&hash(&value.data).to_bytes());
+            }
+        }
+    }
+    Ok(hash(&bytes).to_bytes())
+}
+
+fn plan_selected_structured_lifecycle_execution_v1(
+    _intent: &StructuredLifecycleIntentV1,
+    _programs: &StructuredLifecycleProgramsV1,
+    _snapshot: &StructuredLifecycleSnapshotV1,
+    _context: &discovery_context::StructuredLifecycleContextV1,
+    _prepared: &StructuredLifecycleSelectedPreparationV1,
+    _physical: &StructuredLifecyclePhysicalCoordinatesV1,
+) -> Result<StructuredLifecyclePlanningV1, StructuredLifecycleConstructionErrorV1> {
+    Err(StructuredLifecycleConstructionErrorV1::Native {
+        stage: "Lifecycle execution planning",
+        cause: "selected artifact seal is ready; physical transition extraction continues".into(),
+    })
 }
 
 /// Bind a Claims lifecycle child to the exact V6 family bytes Hot will carry.

@@ -453,9 +453,10 @@ pub(crate) fn require_series_geometry_address_v1(
     address: Pubkey,
     expected_owner: Option<Pubkey>,
 ) -> Result<()> {
-    let native_system = address == solana_sdk_ids::system_program::ID
-        && expected_owner == Some(solana_sdk_ids::native_loader::ID);
-    if address == Pubkey::default() && !native_system {
+    if !dclutch_operator::series_operation_corpus_v1::is_series_source_address_v1(
+        address,
+        expected_owner,
+    ) {
         return Err(Error::new("Series geometry role named default Pubkey"));
     }
     Ok(())
