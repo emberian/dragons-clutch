@@ -282,11 +282,11 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
       <span>02</span>
       <div>
         <h2>What has happened here</h2>
-        <p>Read from this market&apos;s own transactions and accounts. There is no index behind this — the crossings are decoded out of the instructions that carried them.</p>
+        <p>Recent trades, payouts and account activity.</p>
       </div>
       {onReread !== undefined && <div className="direct-actions">
         <button type="button" onClick={onReread} disabled={state.kind === 'loading'}>
-          {state.kind === 'loading' ? 'Reading…' : 'Read it again'}
+          {state.kind === 'loading' ? 'Reading…' : 'Refresh'}
         </button>
       </div>}
     </header>
@@ -296,18 +296,14 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
     {activity !== null && <>
       {fills.length === 0
         ? <p className="market-empty">
-          No crossing is in the {MARKET_ACTIVITY_TRANSACTIONS_V1} most recent transactions this node holds for this market.
-          That is the node&apos;s answer over that window, not a claim that this market has never traded.
+          No trades found in the {MARKET_ACTIVITY_TRANSACTIONS_V1} most recent transactions returned by this node.
         </p>
         : <>
-          <h3 className="detail-subhead">The crossings</h3>
+          <h3 className="detail-subhead">Recent trades</h3>
           <CrossingsTable fills={fills} denomination={denomination} outcomes={outcomes} />
           <p className="slot-clock-note">
-            Both sides sign a limit and the crossing happens between them, so gross, both fees and both net legs
-            are recomputed here from the signed intents at the venue&apos;s immutable
-            scale ({spine === null ? 'unread' : spine.priceScale.toString()}) and
-            rate ({spine === null ? 'unread' : spine.feeBasisPoints} basis points a side)
-            — by the same function that previews a fill nobody has sent.
+            Fees: {spine === null ? 'unavailable' : spine.feeBasisPoints} basis points per side.
+            Price scale: {spine === null ? 'unavailable' : spine.priceScale.toString()}.
           </p>
           {/* FE-CHART mount: the crossing history. ONE point is a point, and it
               is drawn as one: a line needs two, and manufacturing a second from
@@ -393,7 +389,7 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
       </>}
 
       <details className="market-detail-drawer">
-        <summary>Everything this node holds for this market</summary>
+        <summary>Recent transactions</summary>
         <div className="market-detail-drawer-body">
           <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="Transactions this node holds for this market">
             <table className="holders-table">
@@ -423,7 +419,7 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
               : ` ${activity.signaturesNotRead} older signature${activity.signaturesNotRead === 1 ? '' : 's'} the node listed are counted here and not read.`}
             {activity.transactionsRefused === 0
               ? ''
-              : ` ${activity.transactionsRefused} the node would not return; each of those rows says so rather than reading as an act that did not happen.`}
+              : ` ${activity.transactionsRefused} transactions could not be loaded.`}
             {' '}Read at finalized slot {activity.observedSlot}.
           </p>
         </div>

@@ -64,12 +64,12 @@ export default function ArtifactInput({
   }, [decoded, value]);
 
   const fact = value === ''
-    ? 'nothing loaded yet'
+    ? 'No file loaded.'
     : decoded === null
-      ? 'not decodable as base64 yet'
+      ? 'Invalid base64.'
       : [
         expectedBytes !== undefined && decoded.length !== expectedBytes
-          ? `${decoded.length.toLocaleString()} bytes — the consumer expects exactly ${expectedBytes.toLocaleString()}`
+          ? `${decoded.length.toLocaleString()} bytes — expected ${expectedBytes.toLocaleString()}`
           : `${decoded.length.toLocaleString()} bytes`,
         digest !== null && digest.source === value ? `SHA-256 ${digest.hex}` : null,
       ].filter((part) => part !== null).join(' · ');
@@ -105,7 +105,7 @@ export default function ArtifactInput({
       <span>Drop the file here, or click to choose it</span>
     </label>
     <label className="artifact-paste">
-      <span>Offline fallback · paste the same file as base64</span>
+      <span>Or paste the file as base64</span>
       <textarea
         required={required}
         spellCheck={false}

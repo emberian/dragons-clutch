@@ -96,6 +96,173 @@ pub(crate) fn write_prepare_source(
     Ok(sha256_hex(&fs::read(path)?))
 }
 
+/// Emit any of the five actions from the same typed observations accepted by
+/// the native acquisition operator. All bodies, aliases, privileges, replay,
+/// and scheduling remain owned by that operator. This is the source-producer
+/// seam for a CLI authoring driver or a wallet-backed Workbench adapter.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_current_source(
+    path: &Path,
+    input: SeriesCurrentAcquisitionInputV5<'_>,
+    current_source: SeriesCurrentReleaseInputV5<'_>,
+    intent: SeriesOperationIntentV1,
+    payer: Pubkey,
+    genesis_hash: String,
+    lookup: &ObservedAccount,
+) -> Result<(String, SeriesSelectedHotReportV5)> {
+    let lifecycle = inspect_series_lifecycle_v3(input.lifecycle)
+        .map_err(|error| refusal(format!("Series source lifecycle: {error:?}")))?;
+    let planned = match lifecycle.next() {
+        SeriesNextActV3::Ready(planned) => planned,
+        other => return Err(refusal(format!("Series source is not ready: {other:?}"))),
+    };
+    let owned_release = emit_current_series_release_source_v5(current_source)
+        .map_err(|error| refusal(format!("Series source emission: {error:?}")))?;
+    let release = compile_series_release_v5(owned_release.as_source())
+        .map_err(|error| refusal(format!("Series source compilation: {error:?}")))?;
+    let preselected = authenticate_series_selected_action_v5(
+        &release,
+        owned_release.as_source(),
+        planned.request().as_bytes(),
+    )
+    .map_err(|error| refusal(format!("Series source selection: {error:?}")))?;
+    let occurrence = input.records.occurrence;
+    let ticket = input.records.ticket;
+    let rent_credit = input.records.rent_credit;
+    let expire_permit = input.records.expire_permit;
+    let current = input.lifecycle.current;
+    let shadow = input.shadow;
+    let logical = input
+        .runtime_logical_accounts
+        .iter()
+        .map(|account| account.key.to_string())
+        .collect();
+    let acquired = acquire_current_series_hot_v5(
+        &preselected,
+        owned_release.action_artifacts(preselected.action),
+        input,
+    )
+    .map_err(|error| refusal(format!("Series source native acquisition: {error:?}")))?;
+    let selected = match inspect_current_series_hot_v5(&acquired.state, current_source)
+        .map_err(|error| refusal(format!("Series source native inspection: {error:?}")))?
+    {
+        SeriesCurrentHotPlanV5::Ready(selected) => selected,
+        other => {
+            return Err(refusal(format!(
+                "Series source native inspection is not ready: {other:?}"
+            )));
+        }
+    };
+    let request = SeriesActionRequestV3::decode(&selected.selected.request_bytes)
+        .map_err(|error| refusal(format!("Series source request: {error:?}")))?;
+    intent
+        .require_matches(selected.roles.root.to_bytes(), request)
+        .map_err(|error| refusal(format!("Series source intent changed: {error:?}")))?;
+    authenticate_permissionless_series_signers_v1(&selected.instruction, payer)?;
+    let fixed: [Pubkey; dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3] =
+        acquired
+            .state
+            .fixed_accounts
+            .iter()
+            .map(|meta| meta.account.key)
+            .collect::<Vec<_>>()
+            .try_into()
+            .map_err(|_| refusal("Series source fixed frame cardinality changed"))?;
+    let pair = |record: &dclutch_operator::direct_inline_route_v3::FinalizedRecordRouteV3| {
+        SeriesFinalizedRecordAddressesV2 {
+            raw: record.raw.key.to_string(),
+            staging: record.staging.key.to_string(),
+        }
+    };
+    let current_occurrence = if selected.selected.action.occurrence_bound() {
+        let occurrence =
+            occurrence.ok_or_else(|| refusal("Series source omitted occurrence record"))?;
+        let ticket = ticket.ok_or_else(|| refusal("Series source omitted Ticket record"))?;
+        let current =
+            current.ok_or_else(|| refusal("Series source omitted native occurrence proof"))?;
+        Some(SeriesCurrentOccurrenceRouteV1 {
+            occurrence_record: occurrence.raw.key.to_string(),
+            occurrence_staging: occurrence.staging.key.to_string(),
+            ticket_record: ticket.raw.key.to_string(),
+            ticket_staging: ticket.staging.key.to_string(),
+            ticket_replay: current
+                .ticket_state
+                .map(|_| {
+                    selected
+                        .roles
+                        .ticket
+                        .ok_or_else(|| refusal("Series source omitted Ticket replay role"))
+                        .map(|key| key.to_string())
+                })
+                .transpose()?,
+            siblings: current.siblings.iter().map(|value| hex32(*value)).collect(),
+        })
+    } else {
+        None
+    };
+    let terminal_ticket = if selected.selected.action == SeriesActionV3::Retire {
+        let ticket = ticket.ok_or_else(|| refusal("Series Retire source omitted Ticket record"))?;
+        Some(SeriesTerminalTicketRouteV1 {
+            ticket_record: ticket.raw.key.to_string(),
+            ticket_staging: ticket.staging.key.to_string(),
+            ticket_replay: selected
+                .roles
+                .ticket
+                .ok_or_else(|| refusal("Series Retire source omitted replay"))?
+                .to_string(),
+        })
+    } else {
+        None
+    };
+    let consume_shadow = shadow
+        .map(|shadow| -> Result<_> {
+            let mut request = vec![
+                0;
+                shadow.request.encoded_len().map_err(|error| refusal(
+                    format!("Series shadow source length: {error:?}")
+                ))?
+            ];
+            shadow
+                .request
+                .encode_into(&mut request)
+                .map_err(|error| refusal(format!("Series shadow source encode: {error:?}")))?;
+            Ok(SeriesConsumeShadowAcquisitionV2 {
+                certificate: pair(shadow.certificate),
+                artifact: pair(shadow.artifact),
+                accelerator_program: shadow.accelerator_program.key.to_string(),
+                accelerator_programdata: shadow.accelerator_programdata.key.to_string(),
+                caller_authority: shadow.caller_authority.key.to_string(),
+                checked_manifest_sha256: hex32(shadow.checked.checked_manifest_digest),
+                request_base64: BASE64.encode(request),
+            })
+        })
+        .transpose()?;
+    let source = SeriesOperationSourceV1 {
+        schema: SOURCE_SCHEMA.into(),
+        genesis_hash,
+        payer: payer.to_string(),
+        lookup_table: lookup.key.to_string(),
+        lookup_table_sha256: sha256_hex(&lookup.data),
+        accepted_root: selected.roles.root.to_string(),
+        accepted_request_base64: BASE64.encode(&selected.selected.request_bytes),
+        current_source: DecodedSeriesCurrentSourceV1::from_release_v1(current_source)?
+            .document()?,
+        acquisition: SeriesHotAcquisitionRecipeV2 {
+            sequence: 0,
+            fixed: hot_fixed_source_from_addresses_v1(&fixed)?,
+            runtime_logical_accounts: logical,
+            consume_shadow,
+            current_occurrence,
+            terminal_ticket,
+            lifecycle_rent_credit: rent_credit.map(|account| account.key.to_string()),
+            expire_permit: expire_permit.map(|account| account.key.to_string()),
+        },
+    };
+    authenticate_series_lookup_table_v1(lookup, lookup.key, &source.lookup_table_sha256)?;
+    create_series_canonical_json_v1(path, &source, "Series operation source")?;
+    Ok((sha256_hex(&fs::read(path)?), selected))
+}
+
 /// One operation, using the same native acquisition and durable packet engine
 /// on either admitted cluster. A public origin is bound to the actual devnet
 /// genesis; no local validator path is invented for it.

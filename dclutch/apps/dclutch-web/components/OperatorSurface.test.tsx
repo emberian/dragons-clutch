@@ -1,3 +1,4 @@
+import { CAPABILITY_ACTIONS_V1 } from '@dclutch/sdk/capabilityModel';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
@@ -16,19 +17,19 @@ describe('operator surface presentation', () => {
     expect(html).toContain('No chain state has been read');
     expect(html).toContain('open its wallet flow or CLI instructions');
     expect(html).toContain('Protocol actions');
-    expect(html).toContain('Found a Market and admit its first participant');
-    expect(html).toContain('Author a portable sell offer');
-    expect(html).toContain('Export a portable Direct route');
-    expect(html).toContain('Take and execute a signed offer');
-    expect(html).toContain('This browser \u00b7 one detached message signature');
-    expect(html).toContain('This browser \u00b7 one wallet signature, sent from here');
-    expect(html).toContain('This browser \u00b7 one wallet signature, exported as a file');
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'market.found')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'direct.author')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'direct.route')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'direct.inline')!.action);
+    expect(html).toContain('Browser · sign a message');
+    expect(html).toContain('Browser · sign and submit');
+    expect(html).toContain('Browser · sign and export');
     expect(html).toContain('Enter a Market above to open its actions');
     expect(html).toContain('Inspect a deployment');
-    expect(html).toContain('Create a registered resting order');
-    expect(html).toContain('Check a settlement plan and export its exact packet');
-    expect(html).toContain('Take an inventory-bounded immediate trade');
-    expect(html).toContain('Redeem a terminal Claims Position');
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'direct.register')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'general.consider')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'dealer.trade')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'claims.redeem')!.action);
     expect(html).toContain('Inspect and export a transaction');
     expect(html).toContain('Export the portable Direct route');
     expect(html).toContain('Checked releases + frozen Direct session');
@@ -92,8 +93,8 @@ describe('operator surface presentation', () => {
       const outcome = html.indexOf(standing.action.action);
       expect(outcome, `${standing.action.id} is not on the census`).toBeGreaterThanOrEqual(0);
       expect(
-        html.indexOf('a file this browser cannot produce', outcome),
-        `${standing.action.id} needs a file this browser cannot produce and the census does not say so`,
+        html.indexOf(browserActPrerequisitesV1(standing).find((entry) => entry.id === 'external-file')!.statement, outcome),
+        `${standing.action.id} needs a prepared input file and the census does not say so`,
       ).toBeGreaterThan(outcome);
     }
   });

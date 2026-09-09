@@ -227,7 +227,6 @@ describe('the selected gate is answered for the family that takes the selection'
     expect(verdict.reason).toContain(gate.machine);
     expect(verdict.reason).toContain(outside);
     expect(verdict.reason).toContain(gate.selectedBy);
-    expect(verdict.reason).toContain('before any account is read');
     expect(verdict.phaseGate.selectedGates[0]!.verdict).toBe('excluded');
   });
 

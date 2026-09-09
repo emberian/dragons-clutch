@@ -48,6 +48,8 @@ pub mod structured_activation_bundle_v1;
 pub mod structured_root_close_v1;
 /// Market-free lifecycle activation artifacts for Structured representations.
 pub mod structured_lifecycle_selected_v1;
+/// Pure discovery and unsigned transaction planning for Structured lifecycle actions.
+pub mod structured_lifecycle_intent_v1;
 /// Wallet-terminal payout input derivation, callable from a browser.
 pub mod wallet_terminal_input;
 /// Wallet-terminal payout derivation, callable from a browser.

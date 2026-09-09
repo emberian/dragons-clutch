@@ -17,22 +17,22 @@ describe('Product V2 Studio presentation', () => {
   it('starts empty and exposes exact authoring, finalized authority, and an external signing boundary', () => {
     const html = renderToStaticMarkup(<ProductV2Studio />);
     expect(html).toContain('Product studio.');
-    expect(html).toContain('Compile one admitted spline Product graph');
-    expect(html).toContain('compile_spline_product_records_v3');
+    expect(html).toContain('Compile market payout records');
+    expect(html).toContain('product spline');
     expect(html).toContain('DCLTPGT1 price-gate certificate');
     expect(html).toContain('product-basis.bin');
     expect(html).toContain('price-gate.bin');
     expect(html).toContain('--bootstrap-bin &quot;$SUCCESSOR&quot; product spline');
-    expect(html).toContain('Key-free canonical compilation');
-    expect(html).toContain('does not found a Market');
-    expect(html).toContain('Nothing is rounded until the named cumulative-floor boundary.');
-    expect(html).toContain('No Product has been authored or compiled.');
-    expect(html).toContain('No private keys · no signing · no submission');
+    expect(html).toContain('Compile with the CLI');
+    expect(html).toContain('Use the compiled files in the market-opening workflow.');
+    expect(html).toContain('Payouts use exact fractions and cumulative-floor rounding.');
+    expect(html).toContain('Enter the payout terms, then compile the record.');
+    expect(html).toContain('Payout design and preview');
     expect(html).not.toContain('illustrative');
     expect(html).not.toContain('sample state');
     expect(html).not.toContain('value="1"');
     expect(html).not.toContain('Unsigned atomic v0 transaction');
-    expect(html).toContain('does not reproduce the five-record spline graph or price-gate authority above');
+    expect(html).toContain('Enter knots and payoff terms to create a Product V2 record and evaluate its payout.');
   });
 
   it('carries the compiler output into an inspectable Found39 handoff', () => {
@@ -46,8 +46,8 @@ describe('Product V2 Studio presentation', () => {
     expect(html).toContain('<summary>Replace one file</summary>');
     expect(html).toContain('Each replacement must keep its exact compiler filename.');
     expect(html).toContain('Waiting for report.json and product.bin, result-domain.bin, portfolio.bin, product-basis.bin, price-gate.bin.');
-    expect(html).toContain('It does not reimplement the spline compiler or price-gate theorem.');
-    expect(html).toContain('Nothing is read from a chain.');
+    expect(html).toContain('inspect the outcome boundaries');
+    expect(html).toContain('Load report.json and all five compiler files.');
   });
 
   it('classifies only one exact, complete compiler bundle', () => {
@@ -84,7 +84,7 @@ describe('the studio does not present its own description as the partition', () 
     // different list of a different length that only the chain holds. Rendering
     // the first where a reader looks for the second is the mirror this whole
     // page was supposed to stop being.
-    expect(html).toContain('Where the payoff bends, not where the outcome changes');
+    expect(html).toContain('Knots define the payout curve.');
     expect(html).toContain('result-domain.bin');
   });
 

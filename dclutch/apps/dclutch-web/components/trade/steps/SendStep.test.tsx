@@ -48,7 +48,7 @@ describe('step 7, the one send', () => {
   it('says a signed packet is saved and not yet sent, before it is sent', () => {
     const html = render(WALLET_SIGNED_V1);
     expect(html).toContain('Wallet signed · saved locally, not yet submitted');
-    expect(html).toContain('nothing has been sent to RPC');
+    expect(html).toContain('Saved in this browser and ready to submit.');
   });
 
   it('sends the reader to the explorer once it is finalized, and only then', () => {
@@ -63,9 +63,9 @@ describe('step 7, the one send', () => {
     expect(render(WALLET_SIGNED_V1)).not.toContain('/explorer?view=transaction');
   });
 
-  it('keeps the never-send-twice promise standing in every state', () => {
+  it('shows how to resume transaction status', () => {
     for (const state of [{ kind: 'idle' } as WalletPreparationState, WALLET_SIGNED_V1]) {
-      expect(render(state)).toContain('The signed packet is saved in this browser before its one send, so a reload picks it up rather than sending twice.');
+      expect(render(state)).toContain('You can reload this page to resume checking this transaction.');
     }
   });
 

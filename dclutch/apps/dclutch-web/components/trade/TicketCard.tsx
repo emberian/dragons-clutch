@@ -111,7 +111,7 @@ export default function TicketCard({
     {action}
     <details className="ticket-fields">
       <summary>The exact signed fields</summary>
-      <p className="direct-status">Every field below is covered by the maker&apos;s signature. Changing any one of them changes the signing message, and the chain refuses the trade rather than executing a different one.</p>
+      <p className="direct-status">The maker signed the terms below. Check the amount, price and expiry before trading.</p>
       <dl className="detail-facts">
         <div><dt>Maker</dt><dd><code>{ticket.maker}</code></dd></div>
         <div><dt>Market</dt><dd><code>{intent.market}</code></dd></div>

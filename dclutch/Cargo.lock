@@ -2119,6 +2119,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-dealer-liquidity-wasm"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-operator",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-trading",
+ "dclutch-trading-sbf",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "solana-program",
+ "solana-sdk-ids",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "dclutch-devnet-frame-replay"
 version = "0.1.0"
 dependencies = [
@@ -2357,6 +2380,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-general-wasm"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dclutch-market",
+ "dclutch-operator",
+ "dclutch-trading",
+ "dclutch-versioned-message-operator",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "solana-hash 4.6.0",
+ "solana-program",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "dclutch-journey-campaign"
 version = "0.1.0"
 dependencies = [
@@ -2580,7 +2621,9 @@ dependencies = [
  "solana-program-pack",
  "solana-sdk",
  "solana-sdk-ids",
+ "solana-signature",
  "solana-system-interface 2.0.0",
+ "solana-transaction 3.1.0",
  "spl-associated-token-account-interface",
  "spl-token-2022-interface 3.1.1",
  "spl-token-interface 3.0.0",

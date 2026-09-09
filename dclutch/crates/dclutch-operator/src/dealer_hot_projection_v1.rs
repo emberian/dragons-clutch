@@ -28,6 +28,7 @@ use dclutch_custody::{
     PROJECTED_CUSTODY_REQUEST_MAGIC_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyRequestV1,
 };
 use dclutch_market::capability_program::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
+use dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4;
 use dclutch_market::execution_strategy::shadow_digest_v3::{
     AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1,
 };
@@ -52,6 +53,7 @@ use dclutch_vm::account_profile::{
         project_dynamic_fixed_spans_atomic,
     },
 };
+use dclutch_vm::capability_seal::CapabilitySealKeyV1;
 use dclutch_vm::effect::{
     v2::{AccountInput, AccountPermission},
     v3::{ProjectionV3, ResolvedInvocationV3},
@@ -229,6 +231,28 @@ pub fn derive_dealer_admitted_authority_v1(
     )
     .map_err(|_| DealerAuthorityDiscoveryErrorV1::ZeroIdentity)?;
     Ok(Pubkey::find_program_address(&seeds.as_slices(), &input.trading_program).0)
+}
+
+/// Derive the validated-artifact seal selected by one Dealer action.
+pub fn derive_dealer_hot_seal_address_v1(
+    trading_program: Pubkey,
+    registry_program: Pubkey,
+    descriptor_digest: [u8; 32],
+    action: u32,
+    trading_semantic_release: [u8; 32],
+) -> Result<Pubkey, DealerAuthorityDiscoveryErrorV1> {
+    if trading_program == Pubkey::default() || registry_program == Pubkey::default() {
+        return Err(DealerAuthorityDiscoveryErrorV1::ZeroIdentity);
+    }
+    let key = CapabilitySealKeyV1::new(
+        CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        descriptor_digest,
+        action,
+        trading_semantic_release,
+        registry_program.to_bytes(),
+    )
+    .map_err(|_| DealerAuthorityDiscoveryErrorV1::InvalidRequest)?;
+    Ok(Pubkey::find_program_address(&key.seeds().as_slices(), &trading_program).0)
 }
 
 fn custody_market_and_context_v1(
@@ -2400,6 +2424,31 @@ mod tests {
             encode_request_profile_v3_atomic,
         },
     };
+
+    #[test]
+    fn dealer_hot_seal_address_commits_to_action_and_release() {
+        let trading = Pubkey::new_unique();
+        let registry = Pubkey::new_unique();
+        let descriptor = [3_u8; 32];
+        let release = [5_u8; 32];
+        let open = derive_dealer_hot_seal_address_v1(trading, registry, descriptor, 1, release)
+            .expect("canonical Dealer seal");
+
+        assert_ne!(
+            open,
+            derive_dealer_hot_seal_address_v1(trading, registry, descriptor, 2, release)
+                .expect("distinct action seal")
+        );
+        assert_ne!(
+            open,
+            derive_dealer_hot_seal_address_v1(trading, registry, descriptor, 1, [6_u8; 32])
+                .expect("distinct release seal")
+        );
+        assert_eq!(
+            derive_dealer_hot_seal_address_v1(Pubkey::default(), registry, descriptor, 1, release,),
+            Err(DealerAuthorityDiscoveryErrorV1::ZeroIdentity)
+        );
+    }
 
     fn exact_effect_v4() -> Vec<u8> {
         let routes = [RouteInputV3 {

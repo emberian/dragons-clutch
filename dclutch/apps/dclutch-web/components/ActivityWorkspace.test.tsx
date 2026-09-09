@@ -6,18 +6,14 @@ import ActivityWorkspace from './ActivityWorkspace';
 describe('Activity route', () => {
   const html = renderToStaticMarkup(<ActivityWorkspace />);
 
-  it('names its provenance as the node history, never a protocol index', () => {
+  it('shows wallet activity and its selected history source', () => {
     expect(html).toContain('node history');
-    expect(html).toContain('As the node remembers it');
-    // Renegotiated 2026-08-31: "Not consensus state and not a protocol fact"
-    // plus the paragraph on how the node's per-address signature index works
-    // are deleted. The one thing a reader acts on is that two nodes can
-    // disagree, and that is what the aside says now.
-    expect(html).toContain('Two nodes can remember different histories.');
+    expect(html).toContain('Wallet activity.');
+    expect(html).toContain('History is limited to the selected RPC provider’s records.');
   });
 
   it('derives Position addresses from named Markets exactly like the portfolio', () => {
-    expect(html).toContain('the same derivation the portfolio uses');
+    expect(html).toContain('include trades and payouts involving its claim accounts');
     expect(html).toContain('Claims program · required to derive Positions');
     expect(html).toContain('Market addresses · one per line');
   });
@@ -27,13 +23,9 @@ describe('Activity route', () => {
     expect(html).not.toContain('activity snapshot');
   });
 
-  it('keeps the honest empty state instead of a placeholder feed', () => {
+  it('shows the initial state before a history read', () => {
     expect(html).toContain('No signature history has been read.');
     expect(html).toContain('Nothing read yet.');
-  });
-
-  it('states that an empty node answer is the node speaking, not the chain', () => {
-    expect(html).toContain('answers &quot;nothing&quot; for every address');
   });
 
   it('makes the browser wallet optional and identity-only', () => {

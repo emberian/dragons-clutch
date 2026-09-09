@@ -45,7 +45,7 @@ use crate::{
     Finality, Observation,
     direct_inline_v3::{CheckedHotOuterReleaseV3, ObservedAccountMetaV3},
 };
-use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4;
 use dclutch_market::capability_program::{
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
@@ -57,7 +57,7 @@ use dclutch_market::capability_program::{
         HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3, HotBumpHintsV1,
         HotExecutionEnvelopeV3,
     },
-    set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
+    set_v2::{CapabilityDescriptorReferenceV2, CapabilityProgramSetV2, SelectorWidthV2},
 };
 use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
@@ -130,8 +130,8 @@ pub struct DealerEquityHotReportV3 {
     pub action: EquityRequestActionV3,
     /// Selected sparse Claims Position-table cardinality, P in P0/P1/P2.
     pub signed_position_count: u32,
-    /// CapabilityProgram content identity selected from the canonical set.
-    pub selected_program: ContentId,
+    /// Schema/content descriptor selected from the canonical set.
+    pub selected_descriptor: CapabilityDescriptorReferenceV2,
     /// [`family_request_digest_v3`] of the exact family request supplied to
     /// the Hot envelope -- the value the chain seeds this route's admitted
     /// caller-authority PDAs with, NOT a bare SHA-256.
@@ -160,7 +160,7 @@ pub enum DealerEquityHotOperatorErrorV3 {
     /// `dclutch_trading_sbf` refused; the cause is its own.
     EquityOperator(dclutch_trading_sbf::dealer::equity_request::EquityOperatorErrorV3),
     /// `dclutch_market::capability_program` refused; the cause is its own.
-    ProgramSet(dclutch_market::capability_program::set_v1::ProgramSetErrorV1),
+    ProgramSet(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
     /// `dclutch_trading_sbf` refused; the cause is its own.
     DealerEquityArtifact(dclutch_trading_sbf::dealer::equity_effect::DealerEquityArtifactErrorV3),
     /// `dclutch_trading_sbf` refused; the cause is its own.
@@ -210,17 +210,20 @@ pub fn build_dealer_equity_hot_instruction_v3(
     validate_request_coordinates(state, outer, request)?;
 
     let set =
-        CapabilityProgramSetV1::decode(&fixed(state, HOT_PROGRAM_SET_RAW_ACCOUNT_V3)?.account.data)
+        CapabilityProgramSetV2::decode(&fixed(state, HOT_PROGRAM_SET_RAW_ACCOUNT_V3)?.account.data)
             .map_err(DealerEquityHotOperatorErrorV3::ProgramSet)?;
     if set.selector_offset() != DEALER_EQUITY_SELECTOR_OFFSET_V3
-        || set.selector_width() != SelectorWidthV1::U16
+        || set.selector_width() != SelectorWidthV2::U16
     {
         return Err(DealerEquityHotOperatorErrorV3::Artifact);
     }
-    let selected_program = set
-        .select(family_request)
+    let selected_descriptor = set
+        .select_descriptor(family_request)
         .map_err(DealerEquityHotOperatorErrorV3::ProgramSet)?;
-    if selected_program.to_bytes() != hash(&fixed(state, 6)?.account.data).to_bytes() {
+    if selected_descriptor.schema().to_bytes() != CAPABILITY_PROGRAM_SCHEMA_ID_V4
+        || selected_descriptor.program().to_bytes()
+            != hash(&fixed(state, 6)?.account.data).to_bytes()
+    {
         return Err(DealerEquityHotOperatorErrorV3::Artifact);
     }
 
@@ -284,7 +287,7 @@ pub fn build_dealer_equity_hot_instruction_v3(
         observation,
         action: request.action(),
         signed_position_count: position_count,
-        selected_program,
+        selected_descriptor,
         // `family_request_digest_v3`, NOT `hash(family_request)`. The chain
         // seeds this route's admitted caller-authority PDAs with
         // `accelerator_caller_authority_digest_v1(Admitted, THIS value, index)`

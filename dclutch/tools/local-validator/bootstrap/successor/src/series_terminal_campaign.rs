@@ -561,17 +561,16 @@ pub(crate) enum SeriesTerminalJournalPhaseV1 {
     Finalized,
 }
 
-fn prepare_source_from_addresses_v1(
-    input: &SeriesPrepareAddressFrameV1<'_>,
-) -> Result<(SeriesHotAcquisitionRecipeV2, DecodedSeriesCurrentSourceV1)> {
+fn hot_fixed_source_from_addresses_v1(
+    fixed: &[Pubkey; dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3],
+) -> Result<SeriesHotFixedAddressesV2> {
     use dclutch_market::capability_program::hot_v3::*;
 
     let key = |coordinate: usize| {
-        input
-            .fixed
+        fixed
             .get(coordinate)
             .copied()
-            .ok_or_else(|| refusal("Series Prepare fixed frame was truncated"))
+            .ok_or_else(|| refusal("Series Hot fixed frame was truncated"))
     };
     let record = |raw: usize, staging: usize| -> Result<SeriesFinalizedRecordAddressesV2> {
         Ok(SeriesFinalizedRecordAddressesV2 {
@@ -579,7 +578,7 @@ fn prepare_source_from_addresses_v1(
             staging: key(staging)?.to_string(),
         })
     };
-    let fixed = SeriesHotFixedAddressesV2 {
+    Ok(SeriesHotFixedAddressesV2 {
         market: key(HOT_MARKET_ACCOUNT_V3)?.to_string(),
         root: key(HOT_ROOT_ACCOUNT_V3)?.to_string(),
         manifest: record(HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3)?,
@@ -632,7 +631,13 @@ fn prepare_source_from_addresses_v1(
             HOT_LINKED_BASIS_STAGING_ACCOUNT_V3,
         )?,
         capability_seal: key(HOT_CAPABILITY_SEAL_ACCOUNT_V3)?.to_string(),
-    };
+    })
+}
+
+fn prepare_source_from_addresses_v1(
+    input: &SeriesPrepareAddressFrameV1<'_>,
+) -> Result<(SeriesHotAcquisitionRecipeV2, DecodedSeriesCurrentSourceV1)> {
+    let fixed = hot_fixed_source_from_addresses_v1(input.fixed)?;
     let source = DecodedSeriesCurrentSourceV1::from_release_v1(input.release)?;
     let recipe = SeriesHotAcquisitionRecipeV2 {
         sequence: 0,

@@ -31,7 +31,7 @@ export const SIMULATOR_STATUS_URL_V1 = '/simulator-status.json';
 
 /** One plain sentence for the shipped default state. */
 export const NO_SIMULATOR_SENTENCE_V1 =
-  'No simulator running.';
+  'No simulator is running. Start one to publish status.';
 
 /** A pulse older than this renders as stale rather than running: the
  * simulator writes every cycle, and fifteen minutes of silence is a stopped
@@ -223,8 +223,8 @@ export function simulatorBeatV1(status: SimulatorStatusV1, nowMs: number): Simul
     return Object.freeze({
       state: 'halted' as const,
       sentence: status.haltReason === null
-        ? 'The simulator halted itself and recorded no reason; the work directory holds the details.'
-        : `The simulator halted itself: ${status.haltReason}`,
+        ? 'Simulator halted without a recorded reason.'
+        : `Simulator halted: ${status.haltReason}`,
     });
   }
   // The run's OWN deadline first, when it stamped one: it knows its cadence
@@ -241,13 +241,13 @@ export function simulatorBeatV1(status: SimulatorStatusV1, nowMs: number): Simul
   } else if (nowMs - Date.parse(status.updatedAt) > STALE_AFTER_MS_V1) {
     return Object.freeze({
       state: 'stale' as const,
-      sentence: `The last write is older than ${Math.floor(STALE_AFTER_MS_V1 / 60_000)} minutes, so this pulse is a record, not a heartbeat.`,
+      sentence: `No update for more than ${Math.floor(STALE_AFTER_MS_V1 / 60_000)} minutes.`,
     });
   }
   if (status.stopping) {
-    return Object.freeze({ state: 'stopping' as const, sentence: 'The simulator is finishing its current cycle and sealing its journals.' });
+    return Object.freeze({ state: 'stopping' as const, sentence: 'Simulator is finishing the current cycle.' });
   }
-  return Object.freeze({ state: 'running' as const, sentence: 'The simulator wrote this within the last few minutes.' });
+  return Object.freeze({ state: 'running' as const, sentence: 'Simulator is running.' });
 }
 
 export type SimulatorReadV1 =

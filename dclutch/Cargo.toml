@@ -5,6 +5,8 @@ members = [
     "crates/dclutch-core-contract",
     "crates/dclutch-custody",
     "crates/dclutch-custody/token_svm/program-test",
+    "crates/dclutch-dealer-liquidity-wasm",
+    "crates/dclutch-general-wasm",
     "crates/dclutch-direct-aot-contract",
     "crates/dclutch-direct-ticket",
     "crates/dclutch-liability-basis-v2-kernel",

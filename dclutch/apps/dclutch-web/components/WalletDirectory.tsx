@@ -167,7 +167,7 @@ export default function WalletDirectory({
   const { state, wallets, refusals } = directory;
   return <div className="wallet-directory">
     <span>Wallet</span>
-    {purpose !== undefined && <p>Connecting lets this page {purpose}. Nothing is signed here.</p>}
+    {purpose !== undefined && <p>Connect to {purpose}.</p>}
     {wallets.length > 0 && <div className="wallet-directory-list">
       {wallets.map((wallet) => (
         <button
@@ -175,7 +175,7 @@ export default function WalletDirectory({
           type="button"
           className={`wallet-choice${directory.connectedWalletId === wallet.id ? ' connected' : ''}`}
           disabled={state.kind === 'connecting'}
-          title={`${wallet.solanaChains.join(', ')} · ${wallet.canSignTransaction ? 'announces solana:signTransaction' : 'announces no transaction signing'}`}
+          title={`${wallet.solanaChains.join(', ')} · ${wallet.canSignTransaction ? 'supports transaction signing' : 'transaction signing unavailable'}`}
           onClick={() => void directory.connect(wallet.id).then((outcome) => { if (outcome.status === 'connected') onConnected(outcome.address); })}
         >
           {wallet.icon !== null && <i className="wallet-mark" style={{ backgroundImage: `url("${wallet.icon}")` }} aria-hidden="true" />}

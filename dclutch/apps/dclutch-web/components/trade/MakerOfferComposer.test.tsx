@@ -45,10 +45,10 @@ function render(): string {
 }
 
 describe('the maker offer composer surface', () => {
-  it('explains the exact non-transaction authority boundary before either act', () => {
+  it('explains when signing an offer moves claims', () => {
     const html = render();
     expect(html).toContain('Make your own sell offer');
-    expect(html).toContain('authoring an offer, not making a transaction');
+    expect(html).toContain('Your claims move when a matching trade executes');
     expect(html).toContain('Nothing is signed by checking');
     expect(html).toContain('Sign portable ticket');
     expect(html).not.toContain('Submit');

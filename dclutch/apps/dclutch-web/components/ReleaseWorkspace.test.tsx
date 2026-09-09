@@ -19,7 +19,7 @@ describe('Registry release presentation', () => {
     expect(html).toContain('infrastructure.checked');
     expect(html).toContain('exactly 2,360 bytes');
     expect(html).toContain('Drop the file here, or click to choose it');
-    expect(html).toContain('Offline fallback · paste the same file as base64');
+    expect(html).toContain('Or paste the file as base64');
     // Steps feed forward and say so: the wallet can fill the payer, while the
     // active deployment supplies the cache until a green plan derives it.
     expect(html).toContain('Connect a wallet in step 03, or paste a public address');

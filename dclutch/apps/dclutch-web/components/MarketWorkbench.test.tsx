@@ -1,3 +1,4 @@
+import { CAPABILITY_ACTIONS_V1 } from '@dclutch/sdk/capabilityModel';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
@@ -12,10 +13,10 @@ describe('market lifecycle workbench', () => {
     expect(html).toContain('Enter a market address to see its current stage');
     expect(html).toContain('available actions and requirements');
     expect(html).toContain('Author &amp; fund');
-    expect(html).toContain('Compile a Product record and its admission request');
-    expect(html).toContain('Found a Market and admit its first participant');
-    expect(html).toContain('Admit another participant');
-    expect(html).toContain('Read the selected programs, and any Market you name, at one finalized floor first');
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'product.compile')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'market.found')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'market.join')!.action);
+    expect(html).toContain('Load the selected deployment and market to continue.');
     expect(html).toContain('Where it runs');
     expect(html).toContain('What it does');
     // No disabled control anywhere: every card that cannot be opened links to
@@ -73,10 +74,10 @@ describe('market lifecycle workbench', () => {
   it('opens the trade stage without synthetic pool or order state', () => {
     const html = renderToStaticMarkup(<MarketWorkbench initialStage="trade" />);
     expect(html).toContain('Trade &amp; provide liquidity');
-    expect(html).toContain('Author a portable sell offer');
-    expect(html).toContain('Take and execute a signed offer');
-    expect(html).toContain('This browser \u00b7 one detached message signature');
-    expect(html).toContain('Take an inventory-bounded immediate trade');
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'direct.author')!.action);
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'direct.inline')!.action);
+    expect(html).toContain('Browser · sign a message');
+    expect(html).toContain(CAPABILITY_ACTIONS_V1.find((entry) => entry.id === 'dealer.trade')!.action);
     // An act with no venue names its wall here too, in the same words and
     // with the same citation the census uses.
     expect(html).toContain('Requires:');

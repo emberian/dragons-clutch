@@ -113,6 +113,8 @@ export type DeploymentV1 = Readonly<{
    * `node packages/dclutch-sdk/scripts/derive-activation-hint.mjs --write`.
    */
   activationCache: string | null;
+  /** Published infrastructure.checked file for this deployment, consumed by native planners. */
+  checkedInfrastructureUrl?: string;
   /** One sentence: where these addresses come from. */
   provenance: string;
 }>;
@@ -192,7 +194,7 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   // pinning Core at deployment slot 493941954.
   // A session follows past this when it ages out; a reader cannot.
   activationCache: 'CKuMxu7gQN5SuoP58Ns7pFgida9WkvuyYK2cjpusPuHX',
-  provenance: `Cohort-${DEVNET_RELEASE_EVIDENCE_V1.cohort}, deployed on Solana devnet from ${DEVNET_RELEASE_EVIDENCE_V1.sourceCommit}. The recorded release reproduced all eight program images on the named builder. These addresses and recorded deployment slots identify that release; current account state is read separately.`,
+  provenance: `Solana devnet · cohort ${DEVNET_RELEASE_EVIDENCE_V1.cohort} · source ${DEVNET_RELEASE_EVIDENCE_V1.sourceCommit}.`,
 });
 
 /**
@@ -239,7 +241,7 @@ export const LOCAL_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
     core: '2rJGzuF2AduNJCc2td1y87ApUk8NhiCUGhsKCNRqhd8o',
   }),
   activationCache: null,
-  provenance: 'The gauntlet campaign’s fixed-seed layout: every tier-1 campaign derives these same addresses from one pinned seed preimage.',
+  provenance: 'Local validator · default campaign program addresses.',
 });
 
 export const DEFAULT_DEPLOYMENT_V1: DeploymentV1 = DEVNET_DEPLOYMENT_V1;

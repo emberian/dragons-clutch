@@ -58,12 +58,12 @@ export type ActPrerequisiteV1 = Readonly<{ id: 'market' | 'external-file'; state
 
 const NEEDS_MARKET_V1: ActPrerequisiteV1 = Object.freeze({
   id: 'market',
-  statement: 'one Market, chosen first — this act has no address of its own',
+  statement: 'Select a market first.',
 });
 
 const NEEDS_EXTERNAL_FILE_V1: ActPrerequisiteV1 = Object.freeze({
   id: 'external-file',
-  statement: 'a file this browser cannot produce — the workspace opens a picker and reads bytes authored elsewhere',
+  statement: 'A prepared input file.',
 });
 
 /**

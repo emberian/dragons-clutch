@@ -1,11 +1,15 @@
 //! Adversarial integration coverage for canonical Dealer V3 multi-LP capital.
 
 use dclutch_claims::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2;
+use dclutch_core_contract::ContentId;
 use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyRequestV1, CustodyVaultSeedsV1,
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2,
 };
-use dclutch_market::capability_program::set_v1::CapabilityProgramSetV1;
+use dclutch_market::capability_program::set_v2::{
+    CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
+    SelectorWidthV2, encode_program_set_v2, encoded_program_set_bytes_v2,
+};
 use dclutch_trading::dealer::scenario::ClaimsInventoryObservation;
 use dclutch_trading_sbf::dealer::{
     equity_effect::{
@@ -16,7 +20,7 @@ use dclutch_trading_sbf::dealer::{
         DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_HEADER_BYTES_V3,
         DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityBumpBankV3, DealerEquityRequestV3,
         EquityOperatorErrorV3, EquityPoolChainProjectionV3, EquityRequestActionV3,
-        EquityRequestIntentV3, build_equity_request_v3, materialize_equity_intent_v3,
+        EquityRequestIntentV3, build_equity_request_v4, materialize_equity_intent_v3,
         prepare_equity_request_v3,
     },
     multi_lp::{
@@ -171,36 +175,21 @@ fn fixture() -> Fixture {
 }
 
 fn program_set(selector: u16) -> Vec<u8> {
-    let mut bytes = vec![0; 72];
-    bytes
-        .get_mut(..8)
-        .expect("program set offset in bounds")
-        .copy_from_slice(b"DCLTCPS1");
-    bytes
-        .get_mut(8..10)
-        .expect("program set offset in bounds")
-        .copy_from_slice(&1_u16.to_le_bytes());
-    bytes
-        .get_mut(10..12)
-        .expect("program set offset in bounds")
-        .copy_from_slice(&1_u16.to_le_bytes());
-    bytes
-        .get_mut(12..16)
-        .expect("program set offset in bounds")
-        .copy_from_slice(&DEALER_EQUITY_SELECTOR_OFFSET_V3.to_le_bytes());
-    *bytes.get_mut(16).expect("program set offset in bounds") = 2;
-    bytes
-        .get_mut(18..20)
-        .expect("program set offset in bounds")
-        .copy_from_slice(&1_u16.to_le_bytes());
-    bytes
-        .get_mut(32..36)
-        .expect("program set offset in bounds")
-        .copy_from_slice(&u32::from(selector).to_le_bytes());
-    bytes
-        .get_mut(36..68)
-        .expect("program set offset in bounds")
-        .copy_from_slice(&[42; 32]);
+    let entry = CapabilityProgramSetEntryV2::new(
+        u32::from(selector),
+        CapabilityDescriptorReferenceV2::new(
+            ContentId::new([41; 32]).expect("descriptor schema"),
+            ContentId::new([42; 32]).expect("descriptor content"),
+        ),
+    );
+    let mut bytes = vec![0; encoded_program_set_bytes_v2(1).expect("program set width")];
+    encode_program_set_v2(
+        DEALER_EQUITY_SELECTOR_OFFSET_V3,
+        SelectorWidthV2::U16,
+        &[entry],
+        &mut bytes,
+    )
+    .expect("program set");
     bytes
 }
 
@@ -288,7 +277,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         basis_scale: 1,
     };
     let set_bytes = program_set(DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3);
-    let set = CapabilityProgramSetV1::decode(&set_bytes).expect("program set");
+    let set = CapabilityProgramSetV2::decode(&set_bytes).expect("program set");
     let mut output = vec![0; 1024];
     let mut obligation_scratch = [0; 3];
     let mut builder_before = [0; 3];
@@ -296,7 +285,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     let mut builder_transferred = [0; 3];
     let mut builder_post_dealer = [0; 3];
     let mut builder_post_lp = [0; 3];
-    let unsigned = build_equity_request_v3(
+    let unsigned = build_equity_request_v4(
         chain,
         EquityRequestIntentV3::Contribute {
             collateral: 10,
@@ -314,7 +303,8 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     )
     .expect("proportional request");
     assert_eq!(unsigned.request_bytes, 944);
-    assert_eq!(unsigned.selected_program.to_bytes(), [42; 32]);
+    assert_eq!(unsigned.selected_descriptor.schema().to_bytes(), [41; 32]);
+    assert_eq!(unsigned.selected_descriptor.program().to_bytes(), [42; 32]);
     let request_bytes = output.get(..unsigned.request_bytes).expect("request bytes");
     let request = DealerEquityRequestV3::decode(request_bytes).expect("request");
     assert_eq!(request.action(), EquityRequestActionV3::Contribute);
@@ -472,7 +462,7 @@ fn unsigned_equity_builder_refuses_dilution_before_emitting_request() {
         basis_scale: 1,
     };
     let set_bytes = program_set(DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3);
-    let set = CapabilityProgramSetV1::decode(&set_bytes).expect("program set");
+    let set = CapabilityProgramSetV2::decode(&set_bytes).expect("program set");
     let mut output = vec![0xa5; 1024];
     let mut obligation_scratch = [0; 3];
     let mut before = [0; 3];
@@ -481,7 +471,7 @@ fn unsigned_equity_builder_refuses_dilution_before_emitting_request() {
     let mut post_dealer = [0; 3];
     let mut post_lp = [0; 3];
     assert_eq!(
-        build_equity_request_v3(
+        build_equity_request_v4(
             chain,
             EquityRequestIntentV3::Contribute {
                 collateral: 10,

@@ -56,7 +56,7 @@ describe('what this page refuses to draw', () => {
     const single = parseSimulatorSeriesV1({ ...published, schema: SIMULATOR_SERIES_SCHEMA_V3, world: null, markets: [] });
     const state = populationOrRefusalV1({ kind: 'loaded', series: single });
     expect(state.kind).toBe('refused');
-    expect(state.kind === 'refused' && state.reason).toContain('carries no world block');
+    expect(state.kind === 'refused' && state.reason).toContain('contains one market and no population data');
   });
 
   it('says nothing is published rather than drawing an empty axis', () => {
@@ -189,7 +189,7 @@ describe('where the answers landed', () => {
       world: { ...capture.world, outcomeSpread: null },
     };
     const html = renderToStaticMarkup(<OutcomeSpread series={older} />);
-    expect(html).toContain('predates');
+    expect(html).toContain('No outcome spread is available. Publish a capture with settlement results.');
     expect(html).not.toContain('0/10');
   });
 });

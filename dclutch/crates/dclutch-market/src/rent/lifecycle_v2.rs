@@ -126,6 +126,11 @@ pub struct LifecycleRentCreditV2 {
 }
 
 impl LifecycleRentCreditV2 {
+    /// Byte offset of the immutable refund wallet in the canonical state wire.
+    pub const fn refund_wallet_offset() -> usize {
+        STATE_REFUND_WALLET_OFFSET
+    }
+
     /// Construct one exact Market-lifecycle binding.
     pub fn new(
         refund_wallet: RefundAuthority,

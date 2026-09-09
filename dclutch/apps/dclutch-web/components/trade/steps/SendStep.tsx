@@ -36,18 +36,18 @@ export default function SendStep({
     {walletPreparation.kind === 'wallet-signed' && <div className="portfolio-claim">
       <span>Wallet signed · saved locally, not yet submitted</span>
       <strong>{walletPreparation.signature}</strong>
-      <p>{walletPreparation.wireBytes} bytes. Route slot {walletPreparation.routeObservedSlot}; blockhash slot {walletPreparation.blockhashObservedSlot}; expires at block height {walletPreparation.lastValidBlockHeight}. Frozen table {walletPreparation.lookupTable}. The exact packet is saved in this browser; nothing has been sent to RPC.</p>
+      <p>{walletPreparation.wireBytes} bytes. Route slot {walletPreparation.routeObservedSlot}; blockhash slot {walletPreparation.blockhashObservedSlot}; expires at block height {walletPreparation.lastValidBlockHeight}. Frozen table {walletPreparation.lookupTable}. Saved in this browser and ready to submit.</p>
       <div className="direct-actions"><button type="button" onClick={onSubmit}>Send it</button></div>
-      <p className="direct-status">Sending submits this one saved packet once, then reads your Position back at finalized commitment. If this page closes mid-flight, reloading resumes the saved signature and never sends a second packet.</p>
+      <p className="direct-status">Submit the signed transaction, then check your updated claim balances.</p>
       <details className="trade-v3-bytes">
-        <summary>The exact bytes that will be sent</summary>
-        <label><span>Exact signed packet · base64</span><textarea readOnly rows={6} value={walletPreparation.signedWireBase64} /></label>
-        <label><span>Exact v0 message · base64</span><textarea readOnly rows={5} value={walletPreparation.messageBase64} /></label>
+        <summary>Transaction data</summary>
+        <label><span>Signed transaction · base64</span><textarea readOnly rows={6} value={walletPreparation.signedWireBase64} /></label>
+        <label><span>Transaction message · base64</span><textarea readOnly rows={5} value={walletPreparation.messageBase64} /></label>
       </details>
     </div>}
 
     {walletPreparation.kind === 'submitted' && <div className="portfolio-claim">
-      <span>Submitted · awaiting finalized truth</span>
+      <span>Submitted · awaiting confirmation</span>
       <strong>{walletPreparation.signature}</strong>
       <p aria-live="polite">{walletPreparation.confirmation}</p>
     </div>}
@@ -61,10 +61,10 @@ export default function SendStep({
           ? walletPreparation.after.positionBalances.map((balance, index) => <li key={index}>claim {index}: {balance.toString()} atoms</li>)
           : walletPreparation.changes.claims.map((change) => <li key={change.claimIndex}>{describeClaimChangeV1(change)}</li>)}
       </ul>
-      {walletPreparation.changes !== null && <p>Spendable collateral: {walletPreparation.changes.spendableBefore.toString()} → {walletPreparation.changes.spendableAfter.toString()} atoms.{walletPreparation.changes.moved ? '' : ' Nothing moved — the finalized crossing changed no balance, and that is reported as exactly that.'}</p>}
+      {walletPreparation.changes !== null && <p>Spendable collateral: {walletPreparation.changes.spendableBefore.toString()} → {walletPreparation.changes.spendableAfter.toString()} atoms.{walletPreparation.changes.moved ? '' : ' Balances unchanged.'}</p>}
       <Anchor className="secondary-action" href={`/explorer?view=transaction&q=${encodeURIComponent(walletPreparation.signature)}`}>See it in the explorer →</Anchor>
     </div>}
 
-    <p className="direct-status">The signed packet is saved in this browser before its one send, so a reload picks it up rather than sending twice.</p>
+    <p className="direct-status">You can reload this page to resume checking this transaction.</p>
   </>;
 }

@@ -16,9 +16,9 @@ default = ["dealer-series", "successor"]
 # size assertions; the fixed-address SBF heap constructor is unavailable on
 # 32-bit targets. No protocol algorithm or wire changes with the target.
 dealer-series = ["dep:dclutch-trading-sbf"]
-# The General successor-plan reader: a route document, `solana-sdk` and a
-# bincode plan file. Off for a browser consumer.
-successor = ["dep:solana-sdk"]
+# The General producer uses portable official transaction types; native file
+# transport is excluded from browser builds.
+successor = []
 # The wallet-terminal payout fixtures a program-test builds its scenario from.
 test-fixtures = []
 
@@ -29,7 +29,8 @@ dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "=0.10.9"
-solana-sdk = { version = "=3.0.0", optional = true }
+solana-signature = { version = "=3.5.2", features = ["serde"] }
+solana-transaction = { version = "=3.1.0", default-features = false, features = ["serde", "bincode"] }
 spl-associated-token-account-interface = { version = "=2.0.0", default-features = false }
 dclutch-vm = { path = "../dclutch-vm" }
 dclutch-market = { path = "../dclutch-market" }
@@ -61,6 +62,7 @@ solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 
 [dev-dependencies]
+solana-sdk = "=3.0.0"
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
 spl-token-interface = "=3.0.0"

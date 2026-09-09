@@ -8,7 +8,6 @@ import LawBand from '@/components/charts/LawBand';
 import Sparkline from '@/components/charts/Sparkline';
 import { marketEditorialV1 } from '@dclutch/sdk/marketRegistry';
 import {
-  CAMPAIGN_LOCAL_CAVEAT_V1,
   CAMPAIGN_SERIES_URL_V1,
   campaignReadingV1,
   campaignSpendLineV1,
@@ -23,7 +22,6 @@ import {
   lawBandCyclesV1,
   NO_CAMPAIGN_SENTENCE_V1,
   readSimulatorSeriesV1,
-  SERIES_RECORD_CAVEAT_V1,
   settlementCellsV1,
   type SimulatorSeriesReadV1,
   type SimulatorSeriesV1,
@@ -68,19 +66,14 @@ import {
 
 /** This site's editorial gloss on what each law is FOR. Not the census's words. */
 const LAW_GLOSSES: Readonly<Record<string, string>> = Object.freeze({
-  L1: 'collateral closure — every collateral atom that exists is sitting in an account this census watches',
-  L2: 'declared vault movement — the market’s vault moved by exactly what was declared, and by nothing else',
-  L3: 'supply agreement — what the positions hold adds up, outcome by outcome, to what the market issued',
-  L4: 'full collateralisation — the vault holds at least what the worst outcome could be asked to pay, which is a question about a market that still owes: settlement discharges that liability, so this law retires at a Terminal market rather than reading broken against one that paid',
-  L5: 'stage delta — tracked collateral changed between two readings by exactly the declared amount',
-  L6: 'rent conservation — lamports leaving a closed protocol account are accounted for',
-  L7: 'lamport accounting — the fee payer’s balance moved by exactly the fees paid',
+  L1: 'all collateral atoms are held in tracked accounts',
+  L2: 'vault movement matches the declared transfer',
+  L3: 'position balances match issued claims by outcome',
+  L4: 'the vault covers the largest unsettled outcome liability',
+  L5: 'tracked collateral delta matches the declared amount',
+  L6: 'lamports from closed protocol accounts are accounted for',
+  L7: 'fee-payer delta matches transaction fees',
 });
-
-/** Said under every figure. A caption, not a disclaimer buried in a footer. */
-function LocalNote() {
-  return <p className="market-editorial-note">{CAMPAIGN_LOCAL_CAVEAT_V1}</p>;
-}
 
 /**
  * The one guard between a devnet record and a page that calls everything local.
@@ -100,13 +93,13 @@ export function campaignSeriesOrRefusalV1(read: SimulatorSeriesReadV1 | null):
   if (read.series.cluster !== 'local') {
     return Object.freeze({
       kind: 'refused' as const,
-      reason: `this page draws local rehearsal campaigns and the published record says its cluster is ${read.series.cluster}. Every caption here would be false about it, so it is not drawn.`,
+      reason: `campaign cluster is ${read.series.cluster}; this page requires local`,
     });
   }
   if (read.series.campaign === null) {
     return Object.freeze({
       kind: 'refused' as const,
-      reason: 'the published record names no campaign, so there is no run to attribute these figures to.',
+      reason: 'campaign name is missing',
     });
   }
   return Object.freeze({ kind: 'loaded' as const, series: read.series });
@@ -125,26 +118,24 @@ export function OddsPath({ series }: Readonly<{ series: SimulatorSeriesV1 }>) {
       lines={lines}
       xLabels={xLabels}
       unit="basis points of the issued supply"
-      caption="Each outcome’s share of the claims the market has issued, at every stage boundary the campaign censused. This is the market’s own liability record — what it says it owes on each outcome — not a price anyone paid, because nobody has bought or sold anything in this run. Shares are floored to the basis point, so they can sum to slightly under 10,000."
+      caption="Issued claims by outcome · basis points · stage boundaries"
       flatNote={lines.length > 0 && everyLineFlatV1(lines)
-        ? 'unchanged at every boundary: this is the distribution the founding set, and no fill has moved it'
+        ? 'Unchanged across all boundaries.'
         : undefined}
-      emptyReason="At least one boundary of this run had no claims issued at all, and a share of nothing is undefined rather than zero — so no odds line is drawn."
+      emptyReason="No share is available before claims are issued. Continue the campaign to an issued boundary."
     />
-    <LocalNote />
-    <h3 className="detail-subhead">The same thing in atoms</h3>
+    <h3 className="detail-subhead">Issued claims</h3>
     {/* FE-CHART mount: the raw per-cell liability the shares are computed from. */}
     <Sparkline
       lines={supply}
       xLabels={xLabels}
       unit="claim atoms"
-      caption="The claim atoms behind those shares, read from the market’s Claims aggregate. A share is a ratio and hides the size; this is the size."
+      caption="Issued claims by outcome · atoms · stage boundaries"
       flatNote={everyLineFlatV1(supply)
-        ? 'unchanged at every boundary: no claim was issued or retired between them'
+        ? 'Unchanged across all boundaries.'
         : undefined}
       emptyReason={NO_CAMPAIGN_SENTENCE_V1}
     />
-    <LocalNote />
   </>;
 }
 
@@ -157,13 +148,12 @@ export function VaultPath({ series }: Readonly<{ series: SimulatorSeriesV1 }>) {
       lines={lines}
       xLabels={campaignStageLabelsV1(series)}
       unit="collateral atoms"
-      caption="What the market’s own Hoard held at each boundary, against every collateral atom the conservation ledger could find in an account it names, against the Mint’s whole supply. When the first two move apart, collateral left the vault for somewhere still watched; when the tracked total itself moves, an atom went somewhere nobody named — and L1 is the law that says so."
+      caption="Hoard, tracked collateral, and Mint supply · atoms · stage boundaries"
       flatNote={lines.length > 0 && everyLineFlatV1(lines)
-        ? 'unchanged at every boundary: this campaign moves the market’s phase and its resolution, and never its collateral'
+        ? 'Unchanged across all boundaries.'
         : undefined}
       emptyReason={NO_CAMPAIGN_SENTENCE_V1}
     />
-    <LocalNote />
   </>;
 }
 
@@ -173,7 +163,7 @@ export function WorkPerStage({ series }: Readonly<{ series: SimulatorSeriesV1 }>
   const spend = campaignSpendLineV1(series);
   if (volume === null) {
     return <p className="market-empty">
-      This record does not carry per-boundary transaction counts, so there is nothing here to draw. It is not a zero.
+      No stage-cost data is available. Publish a capture with transaction metrics.
     </p>;
   }
   return <>
@@ -181,7 +171,6 @@ export function WorkPerStage({ series }: Readonly<{ series: SimulatorSeriesV1 }>
       {volume.totalTransactions === null ? null : <>{volume.totalTransactions} transactions across the drawn boundaries</>}
       {volume.totalComputeUnits === null ? null : <>, {volume.totalComputeUnits} compute units</>}
       {volume.totalFeeLamports === null ? null : <>, {volume.totalFeeLamports} lamports in fees</>}.
-      {' '}A transaction belongs to the boundary that could have seen it: the one whose finalized slot it landed at or before, and after the previous boundary&apos;s. A boundary censused at the same slot as the one before it honestly gets none.
     </p>
     {volume.transactions === null ? null : <>
       {/* FE-CHART mount: transactions per boundary. */}
@@ -189,36 +178,33 @@ export function WorkPerStage({ series }: Readonly<{ series: SimulatorSeriesV1 }>
         lines={[volume.transactions]}
         xLabels={volume.xLabels}
         unit="transactions"
-        caption="Transactions the campaign submitted between one boundary and the next. This is the only volume a market with no fills has, and it is work rather than trade."
+        caption="Transactions submitted · count · stage boundaries"
         emptyReason={NO_CAMPAIGN_SENTENCE_V1}
       />
-      <LocalNote />
     </>}
     {volume.computeUnits === null ? null : <>
-      <h3 className="detail-subhead">And what that work cost the runtime</h3>
+      <h3 className="detail-subhead">Compute used</h3>
       {/* FE-CHART mount: compute units per boundary, its own figure because
           compute and transaction counts are different dimensions. */}
       <Sparkline
         lines={[volume.computeUnits]}
         xLabels={volume.xLabels}
         unit="compute units"
-        caption="Compute units those same transactions consumed. Kept on its own axis: a count of transactions and a count of compute units are different dimensions, and one pair of axes for both would be a shape chosen rather than measured."
+        caption="Compute consumed · CU · stage boundaries"
         emptyReason={NO_CAMPAIGN_SENTENCE_V1}
       />
-      <LocalNote />
     </>}
     {spend === null ? null : <>
-      <h3 className="detail-subhead">And what it cost the wallet paying for it</h3>
+      <h3 className="detail-subhead">Fees paid</h3>
       {/* FE-CHART mount: the fee payer's drawdown. A level, not an interval,
           so it never shares an axis with the counts above. */}
       <Sparkline
         lines={[spend]}
         xLabels={volume.xLabels}
         unit="lamports"
-        caption="What the campaign’s fee payer had spent by each boundary, measured as the drop from its balance at the first one. The raw balance is an eighteen-digit genesis figure and the interesting part is the last six digits of it, so the drop is what is drawn."
+        caption="Fee-payer spend since first boundary · lamports · stage boundaries"
         emptyReason={NO_CAMPAIGN_SENTENCE_V1}
       />
-      <LocalNote />
     </>}
   </>;
 }
@@ -230,13 +216,13 @@ export function Settlement({ series }: Readonly<{ series: SimulatorSeriesV1 }>) 
   if (cells.length === 0) {
     return <p className="market-empty">
       {series.settlement === null
-        ? 'This market has not reached a terminal answer in this record, so no claim has a realized value yet.'
-        : 'This record names a terminal answer but no claim unit, so what a claim is worth in collateral cannot be stated exactly — and it is not going to be approximated here.'}
+        ? 'Settlement is pending. Continue the campaign to a terminal answer.'
+        : 'Claim-unit data is missing. Publish a complete settlement capture.'}
     </p>;
   }
   return <>
     <p className="direct-status">
-      The terminal certificate selected cell {series.settlement?.selectedCell}. One claim on that cell is worth {series.claimUnitAtoms} collateral atom{series.claimUnitAtoms === '1' ? '' : 's'}; one claim on every other cell is worth nothing. That is the whole of a settlement, and it is the only price move a market without fills ever makes.
+      Selected outcome {series.settlement?.selectedCell} pays {series.claimUnitAtoms} collateral atom{series.claimUnitAtoms === '1' ? '' : 's'} per claim; other outcomes pay 0.
     </p>
     <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="What each outcome is owed at settlement">
       <table className="holders-table">
@@ -253,7 +239,7 @@ export function Settlement({ series }: Readonly<{ series: SimulatorSeriesV1 }>) 
     </div>
     {series.settlement?.certificate === null || series.settlement === null
       ? null
-      : <p className="market-editorial-note">The certificate is at {series.settlement.certificate}, on the rehearsal chain this run started and then stopped. {CAMPAIGN_LOCAL_CAVEAT_V1}</p>}
+      : <p className="market-editorial-note">Certificate: {series.settlement.certificate}</p>}
   </>;
 }
 
@@ -264,7 +250,7 @@ export function CampaignLaws({ series }: Readonly<{ series: SimulatorSeriesV1 }>
   const reading = conservationReadingV1(series);
   const labels = campaignStageLabelsV1(series);
   if (rows.length === 0) {
-    return <p className="market-empty">This record carries the laws&apos; counts and not their identities, so there is no band to draw.</p>;
+    return <p className="market-empty">Law identities are missing. Publish a capture with named law results.</p>;
   }
   return <>
     {reading === null ? null : <p className="direct-status">{reading}</p>}
@@ -274,13 +260,12 @@ export function CampaignLaws({ series }: Readonly<{ series: SimulatorSeriesV1 }>
       rows={rows}
       cycles={cycles}
       glosses={LAW_GLOSSES}
-      caption="Each row is one conservation law; each column is one stage boundary the campaign re-checked it at. The columns are numbered; the list below says which stage each number is."
+      caption="Conservation result by law · status · stage boundaries"
       emptyReason={NO_CAMPAIGN_SENTENCE_V1}
     />
     <ol className="market-editorial-note">
       {labels.map((label, index) => <li key={`${index}-${label}`}>{index + 1} · {label}</li>)}
     </ol>
-    <LocalNote />
   </>;
 }
 
@@ -314,60 +299,58 @@ export default function CampaignWorkspace({ preloaded }: Readonly<{
     return inner(state.series);
   };
 
-  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/campaign" status="local rehearsal record" />}>
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/campaign" status="campaign" />}>
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">A campaign · one market&apos;s whole life on a private chain</p>
-        <h1>Founded, resolved, retired.<br /><em>On a chain we started for it.</em></h1>
-        <p>Everything on this page came off a private validator running on 127.0.0.1 — its own genesis, its own seven programs, nobody else on it. A campaign founds one market there from nothing, publishes the source graph it will resolve against, funds and activates its resolution, carries it to a terminal answer through the real transport, and retires it. Then it re-reads the chain at every boundary and proves the collateral is all still where the ledger says it must be.</p>
-        <p>None of this is devnet or mainnet. It is a rehearsal.</p>
+        <p className="eyebrow">Campaign lifecycle</p>
+        <h1>Market lifecycle.<br /><em>From founding to settlement.</em></h1>
+        <p>Track one local campaign across founding, activation, resolution, settlement, and retirement.</p>
       </div>
       <aside>
-        <span>Where this stands</span>
+        <span>Run</span>
         <strong>{state.kind === 'loaded' ? 'One campaign recorded' : state.kind === 'refused' ? 'Refused' : state.kind === 'absent' ? 'Nothing published' : 'Reading…'}</strong>
         {reading === null
           ? <p>{NO_CAMPAIGN_SENTENCE_V1}</p>
           : <p>{reading}</p>}
-        {series === null ? null : <p className="market-editorial-note">
-          Re-derive this file from the run&apos;s transcript with <code>scripts/campaign-series.mjs --check</code>.
-        </p>}
       </aside>
     </section>
 
     <div className="local-status-strip">
       <i className={series === null ? undefined : 'online'} />
       <strong>{series === null ? 'No campaign record' : series.settlement === null ? 'Founded, not settled' : 'Founded and settled'}</strong>
-      <span>{series === null ? NO_CAMPAIGN_SENTENCE_V1 : SERIES_RECORD_CAVEAT_V1}</span>
+      <span>{series === null
+        ? NO_CAMPAIGN_SENTENCE_V1
+        : `${series.points.length} stage boundar${series.points.length === 1 ? 'y' : 'ies'} · ${series.settlement === null ? 'settlement pending' : `settled cell ${series.settlement.selectedCell}`}`}</span>
     </div>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>Where the claims sit</h2><p>Each outcome&apos;s share of the claims issued against it. Nobody has traded in this one.</p></div></header>
+      <header><span>01</span><div><h2>Issued claims</h2><p>Claims by outcome across the campaign.</p></div></header>
       {body((loaded) => <OddsPath series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>What the vault held</h2><p>What was in the market&apos;s vault, against every unit of collateral the ledger could account for anywhere.</p></div></header>
+      <header><span>02</span><div><h2>Collateral</h2><p>Hoard balance, tracked collateral, and Mint supply.</p></div></header>
       {body((loaded) => <VaultPath series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The work each stage took</h2><p>Transactions, and what they cost to run.</p></div></header>
+      <header><span>03</span><div><h2>Stage costs</h2><p>Transactions, compute units, and fees by stage.</p></div></header>
       {body((loaded) => <WorkPerStage series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>The answer, and what a claim turned out to be worth</h2><p>One outcome pays the full claim unit; every other one pays nothing.</p></div></header>
+      <header><span>04</span><div><h2>Settlement</h2><p>Selected outcome and collateral owed per claim.</p></div></header>
       {body((loaded) => <Settlement series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>05</span><div><h2>The checks, after every stage</h2><p>After each stage the run re-checks that the collateral is all still somewhere we can name, that the positions add up to the claims issued, and that the vault covers the worst outcome it could be asked to pay. Any one failing stops the campaign.</p></div></header>
+      <header><span>05</span><div><h2>Conservation checks</h2><p>Law status at each stage boundary.</p></div></header>
       {body((loaded) => <CampaignLaws series={loaded} />)}
     </section>
 
     <footer className="product-footer">
-      <span>One campaign&apos;s own transcript · a private validator on 127.0.0.1</span>
+      <span>Campaign metrics</span>
     </footer>
   </PageShell>;
 }

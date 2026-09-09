@@ -57,7 +57,7 @@ describe('the browser half of the operator surface', () => {
     expect(author && capabilityWorkspaceV1(author.action, inTerminal)).toBe(`/market?address=${key(44)}`);
     const walled = BROWSER_CAPABILITY_STANDINGS_V1.find((standing) => standing.action.id === 'dealer.trade');
     expect(walled && evaluateCapabilityV1(walled, inTerminal, [])).toMatchObject({ status: 'no-venue' });
-    expect(walled && capabilityActContractV1(walled).venue).toBe('Nothing here can build it yet');
+    expect(walled && capabilityActContractV1(walled).venue).toBe('Unavailable in this client');
   });
 });
 

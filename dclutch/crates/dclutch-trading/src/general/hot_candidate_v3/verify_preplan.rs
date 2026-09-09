@@ -173,6 +173,11 @@ pub(super) fn assert_terminal_seed_controls(
     }
     bodies[candidate_coordinate] = view.candidate.to_vec();
     bodies[page_coordinate] = view.page.to_vec();
+    assert_candidate_seed_projection(
+        count,
+        &bodies[submission_coordinate],
+        view.submission.opening().candidate_id,
+    );
     let request = GeneralDecodedRequestV3 {
         wire: GeneralRequestWireV3::V3,
         action: Action::VerifyCandidateRow,
@@ -257,4 +262,117 @@ pub(super) fn assert_terminal_seed_controls(
             "refusal preserves every scalar at mutation {mutation}"
         );
     }
+}
+
+#[cfg(test)]
+fn assert_candidate_seed_projection(count: u32, submission: &[u8], expected: [u8; 32]) {
+    use super::identity;
+    use crate::general::account_rules_v3::{
+        GeneralExternalAccountWidthsV3, general_account_profile_operation_count_v3,
+        general_account_profile_operation_v3, general_account_profile_rule_v3,
+    };
+    use dclutch_vm::account_profile::v2::{
+        AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES, ProjectionRegistersV2,
+        RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+        encode::{
+            AccountEffectPermissionsV2, AccountOperationInputV2, IdentityCoordinateV2,
+            RegisterGeometryV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
+        },
+        project_dynamic_fixed_spans_atomic,
+    };
+    use std::{vec, vec::Vec};
+    let action = Action::VerifyCandidateRow;
+    let candidate_register = u16::try_from(identity::CANDIDATE).expect("candidate register");
+    // Run the published candidate seed producers over a real observed envelope.
+    // The reduced profile isolates this seed's data flow from unrelated CPI roles.
+    let operations = (0..general_account_profile_operation_count_v3(action))
+        .map(|index| general_account_profile_operation_v3(action, index).expect("operation"))
+        .filter(|operation| {
+            matches!(operation,
+            AccountOperationInputV2::ProjectDataIdentity { destination, .. }
+            if *destination == IdentityCoordinateV2::common(candidate_register))
+        })
+        .collect::<Vec<_>>();
+    let mut rule = general_account_profile_rule_v3(
+        action,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+        // No external account is selected in this reduced projection.
+        GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 1,
+            result_domain: 1,
+            rent_sysvar: 1,
+            core_market: 1,
+            activation_cache: 1,
+            upgradeable_program: 1,
+            trading_programdata_prefix: 1,
+            claims_programdata_prefix: 1,
+            core_programdata_prefix: 1,
+            realm_record: 1,
+            rent_credit: 1,
+        },
+    )
+    .expect("Candidate rule");
+    // This projection-only control executes no effects. Owner authentication
+    // is exercised separately by the shared envelope controls above.
+    rule.rule.effect_permissions = AccountEffectPermissionsV2::new(false, false, false);
+    let slots = usize::from(GENERAL_PRIMARY_STATE_ACCOUNT_V3) + 1;
+    let rules = vec![rule; slots];
+    let mut bytes = vec![
+        0;
+        DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + slots * RULE_BYTES
+            + operations.len() * OPERATION_BYTES
+    ];
+    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+        TrustedEnvironmentV2::None,
+        TrustedIdentityEnvironmentV2::None,
+        TrustedBuiltinIdentityV2::None,
+        &[],
+        &rules,
+        &[],
+        &operations,
+        RegisterGeometryV2 {
+            common_scalars: 1,
+            item_scalar_stride: 0,
+            common_identities: candidate_register + 1,
+            item_identity_stride: 0,
+        },
+        &mut vec![0; bytes.len()],
+        &mut bytes,
+    )
+    .expect("candidate seed profile");
+    let keys = (0..slots)
+        .map(|index| [u8::try_from(index + 1).expect("coordinate"); 32])
+        .collect::<Vec<_>>();
+    let owners = vec![[0xa1; 32]; slots];
+    let observations = keys
+        .iter()
+        .zip(&owners)
+        .map(|(key, owner)| {
+            AccountObservationV1::new(key, owner, 1, submission, false, true, false)
+        })
+        .collect::<Vec<_>>();
+    let identity_width = usize::from(candidate_register) + 1;
+    let mut projected = vec![[0; 32]; identity_width];
+    project_dynamic_fixed_spans_atomic(
+        AccountProfileV2::decode(&bytes).expect("profile"),
+        count,
+        &[],
+        &observations,
+        ProjectionRegistersV2 {
+            input_scalars: &[0],
+            input_identities: &vec![[0; 32]; identity_width],
+            scratch_scalars: &mut [0],
+            scratch_identities: &mut vec![[0; 32]; identity_width],
+            output_scalars: &mut [0],
+            output_identities: &mut projected,
+        },
+        None,
+    )
+    .expect("observed Candidate projection");
+    assert_eq!(
+        projected[usize::from(candidate_register)],
+        expected,
+        "Verify must seed all three lifecycle PDAs from the actual submitted Candidate"
+    );
 }

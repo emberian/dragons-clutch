@@ -56,18 +56,16 @@ export function configuredTicketBoardV1(): TicketBoardConfigV1 | null {
  * a fixed string or it is decoration.
  */
 export const TICKET_BOARD_HONESTY_LINE_V1 =
-  'Offers are collected by a relay, not by the chain. The chain checks every '
-  + 'signature when the trade executes — a relay can hide an offer from you, but '
-  + 'it cannot change one.';
+  'The offer board lists signed offers. Review the terms before trading.';
 
 /** What the reader is told when this deployment names no board. */
 export const TICKET_BOARD_ABSENT_MESSAGE_V1 =
-  'No offer board is configured for this deployment. You can still take an '
+  'No offer board is configured. You can take an '
   + 'offer someone sends you directly.';
 
 /** What the reader is told when the board is configured but silent. */
 export const TICKET_BOARD_UNREACHABLE_MESSAGE_V1 =
-  'The offer board did not answer. Nothing is wrong with this market — you can '
+  'Could not load the offer board. You can '
   + 'still paste a ticket.';
 
 /** List this deployment's board, through the browser's own `fetch`. */

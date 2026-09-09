@@ -61,7 +61,7 @@ export default function OpenerFirstCrankTerms({
    */
   fundedRentRate?: bigint;
 }>) {
-  const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading this cluster’s rent minimums…' });
+  const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading account storage costs…' });
 
   const read = useCallback(async () => {
     if (fundedRentRate !== undefined) {
@@ -73,7 +73,7 @@ export default function OpenerFirstCrankTerms({
       });
       return;
     }
-    setState({ kind: 'loading', message: 'Deriving this cluster’s funded-rent rate…' });
+    setState({ kind: 'loading', message: 'Reading account storage costs…' });
     const widths = OPENER_ACCOUNT_WIDTHS_V1;
     const client = new SolanaRpcClient(endpoint);
     try {
@@ -100,7 +100,7 @@ export default function OpenerFirstCrankTerms({
     } catch (error) {
       setState({
         kind: 'refused',
-        message: `The cluster did not answer for its rent minimums, so no figure is stated here: ${error instanceof Error ? error.message : 'no reason was given'}.`,
+        message: `Unable to calculate storage costs: ${error instanceof Error ? error.message : 'no reason was given'}.`,
       });
     }
   }, [endpoint, outcomeCount, fundedRentRate]);
@@ -119,30 +119,25 @@ export default function OpenerFirstCrankTerms({
   return <section className="opener-terms" aria-label="What opening this market costs the opener">
     <h3 className="detail-subhead">{heading}</h3>
     <p>
-      Opening a claim-check escrow here costs the opener the first crank. The opener advances rent for
-      the escrow record and its token vault; the first permissionless compaction sweeps the Position and
-      the admission record, pays the new claim check&apos;s own rent, pays <strong>the cranker before the
-      opener</strong>, and repays the opener only out of what is left. A market whose escrow is compacted
-      exactly once never repays its opener in full.
+      The opener pays the storage deposit for the escrow record and token vault. When anyone compacts
+      the escrow, recovered deposits fund the new claim check and pay <strong>the cranker before the
+      opener</strong>. The opener receives the remainder. One compaction does not repay the opener in full.
     </p>
     {state.kind !== 'ready'
       ? <p className={state.kind === 'refused' ? 'market-refusal' : 'direct-status'} aria-live="polite">{state.message}</p>
       : <>
         <dl className="detail-facts">
           <div><dt>The opener advances</dt><dd>{lamportsAsSolV1(state.plan.openerOutlay)} SOL · {state.plan.openerOutlay.toString()} lamports</dd></div>
-          <div><dt>The first crank repays</dt><dd>{lamportsAsSolV1(state.plan.openerRepayment)} SOL</dd></div>
-          <div><dt>Still owed after it</dt><dd><strong>{lamportsAsSolV1(state.plan.openerStillOwed)} SOL</strong> · {state.plan.openerStillOwed.toString()} lamports</dd></div>
-          <div><dt>The cranker is paid</dt><dd>{lamportsAsSolV1(state.plan.crankReward)} SOL, first</dd></div>
-          <div><dt>Priced at</dt><dd>{state.rate.toString()} lamports a byte · {state.recorded ? 'this market’s recorded founding rate' : 'derived from this cluster, the rate a founding here would record'}</dd></div>
+          <div><dt>First compaction repayment</dt><dd>{lamportsAsSolV1(state.plan.openerRepayment)} SOL</dd></div>
+          <div><dt>Still owed to the opener</dt><dd><strong>{lamportsAsSolV1(state.plan.openerStillOwed)} SOL</strong> · {state.plan.openerStillOwed.toString()} lamports</dd></div>
+          <div><dt>Cranker reward</dt><dd>{lamportsAsSolV1(state.plan.crankReward)} SOL, first</dd></div>
+          <div><dt>Priced at</dt><dd>{state.rate.toString()} lamports a byte · {state.recorded ? 'this market’s recorded founding rate' : 'current cluster rate'}</dd></div>
         </dl>
         <p className="direct-status">
-          Derived at {outcomeCount} outcomes from the one rate above, not quoted: rent is a cluster
-          parameter and devnet moved it by a fifth inside one cohort, so the number that describes a market
-          is the number priced at the rate that market&apos;s own founding fixed. A market compacted more
-          than once repays the opener progressively; the cap on one crank&apos;s reward is{' '}
-          {lamportsAsSolV1(COMPACTION_CRANK_REWARD_LAMPORTS_V1)} SOL and it is a ceiling on a residual, never
-          a demand — a thin sweep pays a thin reward rather than refusing, because a crank that could refuse
-          for lack of funds is a crank nobody turns.
+          Calculated for {outcomeCount} outcomes at the rate above. Further compactions can repay the
+          opener progressively. Each crank reward is capped at{' '}
+          {lamportsAsSolV1(COMPACTION_CRANK_REWARD_LAMPORTS_V1)} SOL and limited to the available funds.
+          A smaller balance reduces the reward; it does not block compaction.
         </p>
       </>}
   </section>;

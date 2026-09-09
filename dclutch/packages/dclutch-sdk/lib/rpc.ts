@@ -59,6 +59,13 @@ export type MultipleAccountObservation = Readonly<{
   accounts: ReadonlyArray<Readonly<{ address: string; account: RpcAccount | null }>>;
 }>;
 
+/** Generic native-authored account inventory filters; no protocol offsets live here. */
+export type ProgramAccountFiltersV1 = Readonly<{
+  dataSize?: number;
+  memcmp: ReadonlyArray<Readonly<{ offset: number; bytes: Uint8Array }>>;
+  dataSlice?: Readonly<{ offset: number; length: number }>;
+}>;
+
 type HeaderObservation = Readonly<{
   address: string;
   account: RpcAccount;
@@ -541,6 +548,55 @@ export class SolanaRpcClient {
     });
     if (new Set(accounts.map((account) => account.address)).size !== accounts.length) throw new Error('program scan repeated an account address');
     return Object.freeze({ slot: String(exactUnsigned(raw.context.slot, 'program scan slot')), accounts: Object.freeze(accounts) });
+  }
+
+  /** Bounded finalized candidate inventory, with every returned filter checked again. */
+  async programAccountsFiltered(
+    programId: string, selection: ProgramAccountFiltersV1, minimumContextSlot?: string,
+  ): Promise<MultipleAccountObservation> {
+    if (new PublicKey(programId).toBase58() !== programId) throw new Error('filtered program scan requires a canonical program address');
+    // Provisional transport profile: native consumers must justify broader scans.
+    if (selection.memcmp.length > 4 || (selection.memcmp.length === 0 && selection.dataSize === undefined)) throw new Error('filtered program scan requires a width or 1..4 byte filters');
+    const width = selection.dataSize === undefined ? undefined : exactUnsigned(selection.dataSize, 'filtered account width');
+    const slice = selection.dataSlice === undefined ? undefined : { ...selection.dataSlice };
+    const start = slice === undefined ? 0 : exactUnsigned(slice.offset, 'filtered scan slice offset');
+    if (slice !== undefined && (exactUnsigned(slice.length, 'filtered scan slice length') < 1 || slice.length > 4096)) throw new Error('filtered scan data slice exceeds its 1..4096-byte profile');
+    const end = slice === undefined ? Number.MAX_SAFE_INTEGER : start + slice.length;
+    const filters: unknown[] = width === undefined ? [] : [{ dataSize: width }];
+    const comparisons = selection.memcmp.map((filter) => {
+      const offset = exactUnsigned(filter.offset, 'filtered scan comparison offset');
+      if (!(filter.bytes instanceof Uint8Array) || filter.bytes.length === 0 || filter.bytes.length > 128
+          || offset < start || offset + filter.bytes.length > end) throw new Error('filtered scan byte comparison must fit its returned data window');
+      const bytes = Uint8Array.from(filter.bytes);
+      filters.push({ memcmp: { offset, bytes: btoa(String.fromCharCode(...bytes)), encoding: 'base64' } });
+      return { offset, bytes };
+    });
+    const floor = minimumContextSlot === undefined ? 0 : exactUnsigned(Number(minimumContextSlot), 'filtered scan minimum slot');
+    const configuration: Record<string, unknown> = { commitment: 'finalized', encoding: 'base64', withContext: true, filters };
+    if (slice !== undefined) configuration.dataSlice = { offset: start, length: slice.length };
+    if (minimumContextSlot !== undefined) configuration.minContextSlot = floor;
+    const raw = await this.#request('getProgramAccounts', [programId, configuration]);
+    if (!plain(raw) || !plain(raw.context) || !Array.isArray(raw.value)) throw new Error('filtered program scan omitted its finalized context or account array');
+    const slot = exactUnsigned(raw.context.slot, 'filtered program scan slot');
+    if (slot < floor) throw new Error('filtered program scan precedes the requested slot');
+    if (raw.value.length > MAX_PROGRAM_ACCOUNTS) throw new Error(`filtered program scan exceeds ${MAX_PROGRAM_ACCOUNTS} candidates`);
+    const seen = new Set<string>();
+    const accounts = raw.value.map((entry, index) => {
+      if (!plain(entry)) throw new Error('filtered program scan returned a malformed account');
+      const address = exactText(entry.pubkey, `filtered account ${index} address`, 64);
+      if (new PublicKey(address).toBase58() !== address || seen.has(address)) throw new Error('filtered program scan repeated or changed a canonical address');
+      seen.add(address);
+      const account = parseAccount(entry.account, `filtered account ${index}`);
+      if (account.owner !== programId || (width !== undefined && account.space !== width)) throw new Error('filtered program scan returned another owner or account width');
+      if (slice === undefined ? account.data.length !== account.space
+        : account.data.length !== Math.min(slice.length, Math.max(0, account.space - start))) throw new Error('filtered program scan returned an incomplete data window');
+      for (const comparison of comparisons) {
+        const offset = comparison.offset - start;
+        if (offset + comparison.bytes.length > account.data.length || comparison.bytes.some((byte, at) => account.data[offset + at] !== byte)) throw new Error('filtered program scan returned bytes outside its requested filters');
+      }
+      return { address, account };
+    });
+    return { slot: String(slot), accounts };
   }
 
   async accountInfo(address: string, minimumContextSlot?: string): Promise<AccountInfoObservation> {

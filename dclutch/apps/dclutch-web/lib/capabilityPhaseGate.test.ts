@@ -86,8 +86,8 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
     expect(early.status).toBe('wrong-phase');
     expect(early.phaseGate.verdict).toBe('excluded');
     expect(early.phaseGate.excludedBy?.route).toBe('core/execute_provider_v3::process#ExecuteProvider');
-    expect(early.reason).toContain('admits only Open+Consumed');
-    expect(early.reason).toContain('this Market is Founding+Prepaid');
+    expect(early.reason).toContain('Requires Open+Consumed');
+    expect(early.reason).toContain('this market is Founding+Prepaid');
   });
 
   it('refuses a resolution act on a retired market', () => {
@@ -186,7 +186,7 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
       const verdict = evaluateCapabilityV1(close!, observed(phase, readiness), []);
       expect(verdict.phaseGate.verdict, `${phase}+${readiness}`).toBe('excluded');
       expect(verdict.status, `${phase}+${readiness}`).toBe('wrong-phase');
-      expect(verdict.reason).toContain('admits only Retiring+Consumed');
+      expect(verdict.reason).toContain('Requires Retiring+Consumed');
     }
   });
 
@@ -273,7 +273,7 @@ describe('an act gated on a machine this observation cannot read', () => {
     expect(verdict.status).toBe('needs-chain');
     expect(verdict.phaseGate.verdict).toBe('other-machine');
     expect(verdict.phaseGate.unobservableMachines).toEqual(['source']);
-    expect(verdict.reason).toContain('source state machine');
+    expect(verdict.reason).toContain('gated on source');
   });
 
   it('is not counted as an act with no published gate', () => {
@@ -300,10 +300,10 @@ describe('an act that founds a Market is not about the Market on screen', () => 
     expect(found.action.subject).toBe('new-market');
     const verdict = evaluateCapabilityV1(found, observed('Open', 'Consumed'), []);
     expect(verdict.status).toBe('not-this-market');
-    expect(verdict.reason).toContain('founds a NEW Market');
+    expect(verdict.reason).toContain('creates a new market');
     expect(verdict.reason).toContain(COHORT_12);
     expect(verdict.reason).toContain('Open');
-    expect(verdict.reason).toContain('clear the Market coordinate');
+    expect(verdict.reason).toContain('Clear the selected market');
   });
 
   it('is ready with no Market held, because founding one genuinely is', () => {

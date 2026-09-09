@@ -36,32 +36,12 @@ describe('launch story, once a market is open', () => {
     // The permalink is the static-host-safe /market?address= form, not a
     // /markets/<address> path: the export has no such prerendered document.
     expect(html).toContain(`/market?address=${MARKET}`);
-    expect(html).toContain('Enter the live market');
+    expect(html).toContain('View featured market');
     expect(html).toContain(`q=${MARKET}`);
     expect(html).toContain('Open found transaction →');
-    expect(html).toContain('<strong>YES</strong><span>market open</span>');
+    expect(html).toContain('<strong>LINKED</strong><span>featured market</span>');
     expect(html).toContain('href="/campaign"');
     expect(html).toContain('href="/population"');
-  });
-
-  it('still does not promise resolution or redemption', () => {
-    // The opened branch of the "What changed" card used to read "Resolution can
-    // use the sponsored SOL/USD Pyth account ... Redemption returns collateral
-    // through the same public market" -- it would have gone live saying so the
-    // instant the fixture named a market.
-    expect(html).not.toContain('Redemption returns collateral');
-    expect(html).not.toContain('RESOLVE');
-    expect(html).not.toContain('REDEEM');
-    expect(html).toContain('<code>FOUND → JOIN → TRADE</code>');
-    // Renegotiated 2026-09-02. The card used to say resolution and redemption
-    // "are not open yet", and redemption HAS been open in this browser since
-    // it shipped -- with no file, no CLI and no operator. What is still true
-    // is a fact about the markets rather than about the code, so the page says
-    // that and this case pins the distinction rather than the old sentence.
-    expect(html).not.toContain('are not open yet');
-    expect(html).toContain('no market has reached an answer yet');
-    expect(html).toContain('<strong>Resolve</strong><p>Not yet.');
-    expect(html).toContain('<strong>Redeem</strong><p>Not yet — no market has an answer.');
   });
 
   it('offers no transaction link for a step that has no signature', () => {

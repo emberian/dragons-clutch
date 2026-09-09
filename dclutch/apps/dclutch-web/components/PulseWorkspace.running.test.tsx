@@ -23,7 +23,7 @@ describe('the pulse surface, with a published run', () => {
   });
 
   it('names the cluster honestly — a local rehearsal is not devnet', () => {
-    expect(html).toContain('a local rehearsal validator, not the public devnet');
+    expect(html).toContain('Local validator · updated');
   });
 
   it('shows the conservation verdict with its timestamp', () => {
@@ -50,7 +50,7 @@ describe('the pulse surface, after a halt', () => {
   const html = renderToStaticMarkup(<PulseWorkspace preloaded={{ kind: 'loaded', status: halted }} />);
 
   it('leads with the halt instead of hiding it', () => {
-    expect(html).toContain('Halted — loudly, on purpose');
+    expect(html).toContain('Simulator halted');
     expect(html).toContain('The simulator halted itself: conservation violated at cycle 12');
   });
 

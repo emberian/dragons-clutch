@@ -130,7 +130,7 @@ export const SIMLIFE_SERIES_URL_V1 = '/simlife-series.json';
 
 /** One plain sentence for the shipped default state of the campaign artifact. */
 export const NO_CAMPAIGN_SENTENCE_V1 =
-  'No campaign record is published beside this site right now, so there is no market’s life to draw and nothing below is a zero.';
+  'No campaign data is available. Run the campaign publisher to add a capture.';
 
 /**
  * What a reader must be told beside EVERY chart drawn from a campaign record.
@@ -141,18 +141,18 @@ export const NO_CAMPAIGN_SENTENCE_V1 =
  * the chart, and the `cluster` field is what decides whether it is said.
  */
 export const CAMPAIGN_LOCAL_CAVEAT_V1 =
-  'Produced on a local rehearsal validator — a private chain this project started for the run on 127.0.0.1, with its own genesis. Not the public devnet, not mainnet, and nobody traded against it but the campaign itself.';
+  'Local validator · 127.0.0.1';
 
 /** One plain sentence for the shipped default state. */
 export const NO_SERIES_SENTENCE_V1 =
-  'No recorded run is published beside this site right now, so there is no line to draw and nothing below is a zero.';
+  'No run data is available. Publish a simulator capture to view this chart.';
 
 /**
  * What a reader must be told beside every line drawn from this artifact: it is
  * a record that was captured once, not a feed.
  */
 export const SERIES_RECORD_CAVEAT_V1 =
-  'These points were captured from the run’s own records when this site was last published. The run continues past the last point; this page does not.';
+  'Recorded run · last published capture';
 
 export type SimulatorSeriesPointV1 = Readonly<{
   /** The simulator's own cycle number, ascending. */
@@ -1171,14 +1171,14 @@ export function impliedOddsLinesV1(
 export function hoardCoverageLinesV1(series: SimulatorSeriesV1): ReadonlyArray<SimulatorSeriesLineV1> {
   if (series.points.length === 0) return Object.freeze([]);
   const lines: SimulatorSeriesLineV1[] = [
-    Object.freeze({ label: 'in the market’s own Hoard', values: Object.freeze(series.points.map((entry) => entry.hoardAtoms)) }),
-    Object.freeze({ label: 'tracked across every named account', values: Object.freeze(series.points.map((entry) => entry.trackedCollateral)) }),
+    Object.freeze({ label: 'Hoard', values: Object.freeze(series.points.map((entry) => entry.hoardAtoms)) }),
+    Object.freeze({ label: 'tracked collateral', values: Object.freeze(series.points.map((entry) => entry.trackedCollateral)) }),
   ];
   // The Mint's supply is drawn only when every boundary recorded it: a line
   // with a hole would be redrawn shorter than the axis it sits on.
   if (series.points.every((entry) => entry.mintSupply !== null)) {
     lines.push(Object.freeze({
-      label: 'the collateral Mint’s whole supply',
+      label: 'Mint supply',
       values: Object.freeze(series.points.map((entry) => entry.mintSupply as string)),
     }));
   }
@@ -1255,7 +1255,7 @@ export function campaignSpendLineV1(series: SimulatorSeriesV1): SimulatorSeriesL
   // number wearing a positive name, so the line is dropped and said to be.
   if (points.some((entry) => BigInt(entry.payerLamports as string) > first)) return null;
   return Object.freeze({
-    label: 'lamports the fee payer has spent since the first boundary',
+    label: 'fee-payer spend',
     values: Object.freeze(points.map((entry) => (first - BigInt(entry.payerLamports as string)).toString())),
   });
 }
@@ -1316,13 +1316,11 @@ export function campaignReadingV1(series: SimulatorSeriesV1): string | null {
   const campaign = series.campaign;
   if (campaign === null) return null;
   const where = series.cluster === 'local'
-    ? `a local rehearsal validator at ${campaign.rpcOrigin}`
-    : `the ${series.cluster} cluster`;
+    ? `local validator ${campaign.rpcOrigin}`
+    : `${series.cluster}`;
   const boundaries = `${series.points.length} stage boundar${series.points.length === 1 ? 'y' : 'ies'}`;
-  const settled = series.settlement === null
-    ? 'The market has not reached a terminal answer in this record.'
-    : `The market reached a terminal answer: cell ${series.settlement.selectedCell} was selected.`;
-  return `${campaign.label}, run against ${where} from source revision ${campaign.sourceRevision.slice(0, 12)}, re-censused at ${boundaries}. ${settled}`;
+  const settled = series.settlement === null ? 'not settled' : `settled at cell ${series.settlement.selectedCell}`;
+  return `${campaign.label} · ${where} · source ${campaign.sourceRevision.slice(0, 12)} · ${boundaries} · ${settled}`;
 }
 
 /** True when a position holds the same number of claims on every outcome. */
@@ -1357,7 +1355,7 @@ export function holdingsReadingV1(series: SimulatorSeriesV1): HoldingsReadingV1 
       positionCount: 0,
       rankable: false,
       allComplete: false,
-      sentence: 'No position was recorded on this market, so there is nobody to list.',
+      sentence: 'No positions are recorded. Add a participant to populate this table.',
     });
   }
   if (positions.length === 1) {
@@ -1366,8 +1364,8 @@ export function holdingsReadingV1(series: SimulatorSeriesV1): HoldingsReadingV1 
       rankable: false,
       allComplete,
       sentence: allComplete
-        ? 'One position exists, and it holds the same number of claims on every outcome — a complete set, which is worth the same whatever the answer turns out to be. There is nothing here to rank yet.'
-        : 'One position exists on this market, so there is nothing here to rank yet.',
+        ? 'One position holds a complete set across all outcomes.'
+        : 'One position is recorded.',
     });
   }
   // `allComplete` WAS COMPUTED HERE AND NOT SAID, which is the whole shape of
@@ -1382,8 +1380,8 @@ export function holdingsReadingV1(series: SimulatorSeriesV1): HoldingsReadingV1 
     rankable: !allComplete,
     allComplete,
     sentence: allComplete
-      ? `${positions.length} positions, and not one of them is exposed to the answer: each holds the same number of claims on every outcome — a complete set, which is worth the same whatever the answer turns out to be. Ordering them ranks nothing.`
-      : `${positions.length} positions, ordered by the total claims each holds. That is a count of claims held, not a score and not a return.`,
+      ? `${positions.length} positions hold complete sets across all outcomes.`
+      : `${positions.length} positions ordered by total claims held.`,
   });
 }
 
@@ -1604,9 +1602,9 @@ export function conservationPhaseRuleV1(series: SimulatorSeriesV1): string | nul
   const watching = series.lawIds.filter((id) => !retired.includes(id));
   const boundary = last.stage ?? `cycle ${last.cycle}`;
   if (retired.length === 0) {
-    return `At ${boundary} the Market was ${phase}, and every one of these ${series.lawIds.length} laws applies at that phase: a broken check here would be a run that halted and stayed halted.`;
+    return `${boundary} · Market ${phase} · ${series.lawIds.length} active laws`;
   }
-  return `At ${boundary} the Market was ${phase}. ${retired.join(', ')} ${retired.length === 1 ? 'is a PRE-TERMINAL law and retires here' : 'are PRE-TERMINAL laws and retire here'}: settlement discharged the liability ${retired.length === 1 ? 'it is' : 'they are'} stated about, so ${retired.length === 1 ? 'it does' : 'they do'} not apply rather than failing. ${watching.join(', ')} go on watching a paid market unweakened, and a broken check among them would still be a run that halted.`;
+  return `${boundary} · Market ${phase} · ${retired.join(', ')} retired after settlement · ${watching.join(', ')} active`;
 }
 
 /**
@@ -1634,18 +1632,17 @@ export function conservationReadingV1(series: SimulatorSeriesV1): string | null 
     : violated.filter((row) => (LAW_RETIRED_AT_PHASES_V1[row.id] ?? []).includes(phase));
   const halting = violated.filter((row) => !retiredHere.includes(row));
   if (halting.length > 0) {
-    return `${halting.map((row) => row.id).join(', ')} did not hold. The run halts on exactly this, and the market's collateral is the thing in question.`;
+    return `${halting.map((row) => row.id).join(', ')} failed. The run halted.`;
   }
   if (retiredHere.length > 0) {
-    return `${retiredHere.map((row) => row.id).join(', ')} read broken at a boundary where ${retiredHere.length === 1 ? 'it does' : 'they do'} not apply: the Market is ${phase}, and settlement discharged the liability ${retiredHere.length === 1 ? 'that law is' : 'those laws are'} stated about. That is the census reading a paid market against a pre-terminal invariant, not a market that broke.`;
+    return `${retiredHere.map((row) => row.id).join(', ')} ${retiredHere.length === 1 ? 'is' : 'are'} inactive at Market phase ${phase}.`;
   }
   const held = rows.reduce((sum, row) => sum + row.held, 0);
   const skipped = rows.reduce((sum, row) => sum + row.inapplicable, 0);
   const drawn = rows[0]?.statuses.length ?? 0;
   // "240 did not apply" beside "240 cycle boundaries" reads as the same 240.
   // The noun is what disambiguates them, so the noun is always said.
-  return `${rows.length} laws, re-checked at every one of ${drawn} cycle boundaries: ${held} checks held and none broke.${
-    skipped === 0 ? '' : ` ${skipped} checks did not apply at the boundary they were on, which is neither a pass nor a failure.`}`;
+  return `${held} checks passed across ${drawn} boundaries.${skipped === 0 ? '' : ` ${skipped} did not apply.`}`;
 }
 
 /**
@@ -1723,11 +1720,7 @@ export function populationReadingV1(series: SimulatorSeriesV1): string | null {
   const where = world.substrate.label ?? `the ${series.cluster} cluster`;
   const founded = world.marketsFoundedByThisRun.length;
   const existing = world.marketsPreFounded.length;
-  const provenance = founded === 0
-    ? `This run founded no market of its own; the ${existing === 1 ? 'one it observed' : `${existing} it observed`} already stood on that chain.`
-    : `This run founded ${founded} of them itself.`;
-  return `${world.marketsPlanned} markets drawn from the seed ${world.seedPreimage}, `
-    + `walked against ${where}. ${world.marketsObserved} of them were observed. ${provenance}`;
+  return `Seed ${world.seedPreimage} · ${where} · ${world.marketsPlanned} planned · ${world.marketsObserved} observed · ${founded} founded · ${existing} pre-existing`;
 }
 
 /**
@@ -1763,7 +1756,7 @@ export function notDoneReadingV1(series: SimulatorSeriesV1): string | null {
     clauses.push(`${blocked} were blocked behind a step that never happened`);
   }
   if (clauses.length === 0) return null;
-  return `${clauses.join('; ')}. Those are three different things and this record keeps them apart.`;
+  return `${clauses.join('; ')}.`;
 }
 
 /**
@@ -1963,13 +1956,12 @@ export function executedReadingV1(series: SimulatorSeriesV1): string | null {
   const executed = mutations.reduce((sum, entry) => sum + entry.executed, 0);
   const census = rows.find((entry) => entry.route === 'census')?.executed ?? 0;
   if (executed === 0) {
-    return `Nothing was mutated: this run took ${census} censuses and signed nothing else.`;
+    return `0 mutations · ${census} census reads`;
   }
   const named = mutations.filter((entry) => entry.executed > 0)
     .map((entry) => `${entry.executed} ${entry.route}`)
     .join(', ');
-  return `${executed} mutations landed on the chain (${named}), and ${census} censuses read the `
-    + 'result back through the same conservation ledger.';
+  return `${executed} mutations landed (${named}) · ${census} census reads`;
 }
 
 /**

@@ -23,7 +23,7 @@ pub struct StructuredLifecycleIntentV1 {
 }
 
 /// Deployment coordinates remain untrusted until joined to the selected release.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StructuredLifecycleProgramsV1 {
     /// Market Core program.
     pub core: [u8; 32],
@@ -39,6 +39,8 @@ pub struct StructuredLifecycleProgramsV1 {
     pub custody: [u8; 32],
     /// Exact activated release cache selected by deployment discovery.
     pub activation_cache: [u8; 32],
+    /// Canonical checked multiprogram binary from the selected deployment manifest.
+    pub checked_execution_release_set: Vec<u8>,
 }
 
 /// Explicit native-requested account data window, used for Loader headers.
@@ -151,6 +153,17 @@ pub struct StructuredLifecycleCapabilityV1 {
     pub support: Vec<StructuredLifecycleSupportV1>,
 }
 
+/// One authenticated per-Market Structured capability before receipt selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructuredLifecycleRootChoiceV1 {
+    /// Canonical Trading capability-root PDA.
+    pub capability: [u8; 32],
+    /// Immutable selected ProgramSet identity.
+    pub program_set: [u8; 32],
+    /// Exact manifest entry index.
+    pub entry_index: u16,
+}
+
 /// One transaction boundary in the retained native preparation/execution path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StructuredLifecycleStepKindV1 {
@@ -227,6 +240,11 @@ pub enum StructuredLifecyclePlanningV1 {
         requests: Vec<StructuredLifecycleAccountRequestV1>,
         /// Native-requested bounded candidate inventories.
         scans: Vec<StructuredLifecycleProgramScanV1>,
+    },
+    /// Choose an authenticated capability before discovering its receipt actions.
+    SelectCapability {
+        /// Per-Market capabilities admitting the requested selector.
+        capabilities: Vec<StructuredLifecycleRootChoiceV1>,
     },
     /// Choose among authenticated capabilities/support before constructing a step.
     Select {

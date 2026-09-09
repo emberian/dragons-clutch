@@ -117,6 +117,31 @@ describe('client operation crash journal', () => {
     expect(storage.length).toBe(0);
   });
 
+  it('an old finalized callback never clears a newer packet for the same operation', async () => {
+    const storage = new MemoryStorage();
+    const first = await unsigned(storage);
+    const packet = signedPacket(9);
+    const submitted = await markClientOperationSubmittedV1(storage, first, packet.signature, packet.wireBytes);
+    const replacement = signedPacket(10);
+    const next = { ...submitted, signature: replacement.signature,
+      signedWireBase64: btoa(String.fromCharCode(...replacement.wireBytes)) };
+    const key = storage.key(0)!;
+    storage.values.set(key, JSON.stringify(next));
+    await expect(clearFinalizedClientOperationJournalV1(storage, submitted)).rejects.toThrow('changed before finalized completion');
+    expect(storage.getItem(key)).toBe(JSON.stringify(next));
+
+    storage.values.set(key, JSON.stringify(submitted));
+    const getItem = storage.getItem.bind(storage);
+    let replaced = false;
+    storage.getItem = (name) => {
+      const observed = getItem(name);
+      if (name === key && !replaced) { replaced = true; storage.values.set(key, JSON.stringify(next)); }
+      return observed;
+    };
+    await expect(clearFinalizedClientOperationJournalV1(storage, submitted)).rejects.toThrow('changed before finalized completion');
+    expect(getItem(key)).toBe(JSON.stringify(next));
+  });
+
   it('refuses plan, scope, signature, and duplicate-journal substitution instead of replaying it', async () => {
     const storage = new MemoryStorage();
     await unsigned(storage);

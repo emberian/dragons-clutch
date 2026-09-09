@@ -194,10 +194,10 @@ describe('KeypairHandoff', () => {
       what="the activation packet"
       envVar="DCLUTCH_AUTHORITY_KEYPAIR"
       invocation="dclutch-operator sign --packet activation.bin" />);
-    expect(html).toContain('a key never enters this page');
+    expect(html).toContain('Sign the activation packet with your command-line keypair:');
     expect(html).toContain('DCLUTCH_AUTHORITY_KEYPAIR');
     expect(html).toContain('dclutch-operator sign --packet activation.bin');
-    expect(html).toContain('This browser reads no files and holds no keys.');
+    expect(html).toContain('Run this command in your terminal.');
     // The rule is that no control collects the key. There is no input here.
     expect(html).not.toContain('<input');
     expect(html).not.toContain('type="password"');

@@ -56,7 +56,7 @@ function ActivityRow({ entry }: Readonly<{ entry: ActivityEntryV1 }>) {
     </div>
     {entry.errorText !== null && <p className="market-refusal">Chain error: {entry.errorText}</p>}
     <dl className="market-card-facts">
-      <div><dt>Touched because of</dt><dd>{entry.watchedAddresses.map((watched) => watched.meaning).join(' · ')}</dd></div>
+      <div><dt>Related accounts</dt><dd>{entry.watchedAddresses.map((watched) => watched.meaning).join(' · ')}</dd></div>
       <div><dt>Programs invoked</dt><dd>{entry.programs.length === 0
         ? 'not decoded'
         : entry.programs.map((program) => program.label ?? shortAddressV1(program.address, 6)).join(' · ')}</dd></div>
@@ -88,7 +88,7 @@ export default function ActivityWorkspace() {
   const activity = state.kind === 'ready' ? state.activity : null;
 
   const read = useCallback(async (nextOwner: string, marketAddresses: ReadonlyArray<string>) => {
-    setState({ kind: 'loading', message: 'Reading this node’s finalized signature history for the owner and every derived Position address…' });
+    setState({ kind: 'loading', message: 'Loading wallet and claim activity…' });
     try {
       const client = new SolanaRpcClient(endpoint);
       const facts = await client.probe();
@@ -137,18 +137,18 @@ export default function ActivityWorkspace() {
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">Activity</p>
-        <h1>What this wallet did.<br /><em>As the node remembers it.</em></h1>
-        <p>Finalized transactions for a wallet, and for its claims in any market you name. A node kept without history answers &quot;nothing&quot; for every address.</p>
+        <h1>Wallet activity.</h1>
+        <p>View a wallet’s recent transactions. Add market addresses to include trades and payouts involving its claim accounts.</p>
       </div>
       <aside>
         <span>Source</span>
-        <strong>Node signature index</strong>
-        <p>Two nodes can remember different histories.</p>
+        <strong>RPC transaction history</strong>
+        <p>History is limited to the selected RPC provider’s records.</p>
       </aside>
     </section>
 
     <form className="trade-v3-card route-card" onSubmit={submit}>
-      <header><span>01</span><div><h2>Owner, Markets, and the node to ask</h2><p>The owner address is watched directly. Naming Markets additionally watches the Claims Position derived for each — the same derivation the portfolio uses — so trades and redemptions that touched the Position but not the wallet still appear.</p></div></header>
+      <header><span>01</span><div><h2>Wallet and markets</h2><p>Enter a wallet address and any markets whose claim activity you want to include.</p></div></header>
       <div className="direct-form-grid">
         <label><span>RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label>
         <label><span>Owner address · wallet, pasted, or linked</span><input required value={owner} onChange={(event) => setOwnerOverride(event.target.value.trim())} /></label>
@@ -162,17 +162,17 @@ export default function ActivityWorkspace() {
         <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading node history…' : 'Read activity'}</button>
       </div>
       <p className="direct-status" aria-live="polite">{state.message}</p>
-      {state.kind === 'ready' && <div className="direct-actions"><a className="secondary-action" href={state.href}>Open this live view →</a><span className="direct-status">This link carries public addresses only. Opening it re-reads finalized node history; it does not preserve a snapshot.</span></div>}
+      {state.kind === 'ready' && <div className="direct-actions"><a className="secondary-action" href={state.href}>Open this live view →</a><span className="direct-status">This link loads the latest activity for these addresses.</span></div>}
     </form>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Finalized transactions, newest first</h2><p>Each row names why it appears (which watched address it touched), the programs it invoked, and the owner&apos;s exact lamport movement. Claim-atom movements live on the portfolio surface, where the Position is decoded in full.</p></div></header>
+      <header><span>02</span><div><h2>Finalized transactions, newest first</h2><p>View each transaction’s accounts, programs, fees and wallet balance changes. Open Portfolio to see your claim balances.</p></div></header>
       {activity === null && <p className="market-empty">Nothing read yet.</p>}
       {activity !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
           <article><span>Owner</span><strong>{shortAddressV1(activity.owner, 6)}</strong><small>address only</small></article>
           <article><span>Watched addresses</span><strong>{activity.watched.length}</strong><small>wallet + derived Positions</small></article>
-          <article><span>Transactions</span><strong>{activity.entries.length}{activity.truncated ? '+' : ''}</strong><small>{activity.truncated ? 'truncated at the explicit browser bound' : 'complete node answer'}</small></article>
+          <article><span>Transactions</span><strong>{activity.entries.length}{activity.truncated ? '+' : ''}</strong><small>{activity.truncated ? 'more transactions available' : 'transactions returned'}</small></article>
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
         </div>
         {activity.entries.length === 0
@@ -182,8 +182,8 @@ export default function ActivityWorkspace() {
     </section>
 
     <footer className="product-footer">
-      <span>Node history · finalized bytes · explicit refusals</span>
-      <span>No indexer · no synthesized events · raw lamports</span>
+      <span>Finalized transactions</span>
+      <span>Wallet balance changes in lamports</span>
     </footer>
   </PageShell>;
 }

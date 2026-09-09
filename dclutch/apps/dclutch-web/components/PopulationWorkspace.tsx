@@ -41,9 +41,7 @@ import {
  */
 
 export const NO_POPULATION_SENTENCE_V1 =
-  'No population capture is published. A simlife run writes one with '
-  + 'apps/dclutch-web/scripts/simlife-series.mjs after it finishes; until then this page has '
-  + 'nothing to draw and says so rather than drawing an empty axis.';
+  'No population data is available. Run simlife and publish its capture to view this page.';
 
 export function populationOrRefusalV1(read: SimulatorSeriesReadV1 | null):
   | Readonly<{ kind: 'waiting' }>
@@ -60,8 +58,7 @@ export function populationOrRefusalV1(read: SimulatorSeriesReadV1 | null):
   if (read.series.world === null) {
     return Object.freeze({
       kind: 'refused' as const,
-      reason: 'the published capture describes one market and carries no world block, so it is '
-        + 'not a population. /campaign draws that shape.',
+      reason: 'This capture contains one market and no population data. Open Campaign to view it.',
     });
   }
   return Object.freeze({ kind: 'loaded' as const, series: read.series });
@@ -70,7 +67,7 @@ export function populationOrRefusalV1(read: SimulatorSeriesReadV1 | null):
 /** The per-market odds paths, one small chart each. */
 export function OddsPaths({ series }: Readonly<{ series: SimulatorSeriesV1 }>) {
   if (series.markets.length === 0) {
-    return <p className="market-empty">This capture observed no market, so there is no path to draw.</p>;
+    return <p className="market-empty">No markets were observed. Run simlife with at least one market.</p>;
   }
   return <div className="population-grid">
     {series.markets.map((market) => <MarketOdds key={market.marketId} market={market} />)}
@@ -85,17 +82,17 @@ function MarketOdds({ market }: Readonly<{ market: SimulatorMarketSeriesV1 }>) {
   return <article className="population-card">
     <header>
       <strong>{market.marketId}</strong>
-      <span>{what.length === 0 ? 'a market this world drew' : what}</span>
+      <span>{what.length === 0 ? 'market' : what}</span>
     </header>
     <Sparkline
       lines={lines}
       xLabels={marketSlotLabelsV1(market)}
       unit="basis points of issued supply"
-      caption={`Each cell's share of what ${market.marketId} has issued against it, read off the Claims aggregate at every boundary this run censused. Floored integer division, so the cells can sum to slightly under 10,000.`}
+      caption={`${market.marketId} issued share by cell · basis points · recorded boundaries`}
       emptyReason={lines.length === 0
-        ? `${market.marketId} had a boundary with nothing issued, and a share of zero supply is undefined rather than zero. No odds line is drawn for it.`
+        ? `${market.marketId} has no issued supply. Run a funded cycle to add an odds path.`
         : undefined}
-      flatNote={`Nothing moved: ${market.marketId} stood at the same distribution at every boundary. Nobody traded it, which is a fact about the run and not a gap in the record.`}
+      flatNote={`${market.marketId} was unchanged across all boundaries.`}
     />
   </article>;
 }
@@ -107,9 +104,9 @@ export function EventTimeline({ series }: Readonly<{ series: SimulatorSeriesV1 }
     lines={lines}
     xLabels={eventTimelineLabelsV1(series)}
     unit="events"
-    caption="What the run did at each tick, from its own ledger: mutations that landed, mutations the chain refused, and markets censused. Blocked and never-attempted events are deliberately absent — they are consequences of a shape rather than things that happened at a moment, and they are counted by reason in the strip below."
+    caption="Landed mutations, refused mutations, and markets censused · events · run ticks"
     emptyReason={lines.length === 0
-      ? 'This capture predates the timeline block, so the run’s tick-by-tick history was never written down. Every other block on this page is complete; this one has nothing to show and will not invent it.'
+      ? 'No timeline is available. Publish a capture with tick events to view it.'
       : undefined}
     flatNote="Every tick did the same amount of work."
   />;
@@ -118,7 +115,7 @@ export function EventTimeline({ series }: Readonly<{ series: SimulatorSeriesV1 }
 /** Every route, and what became of it. */
 export function HonestyStrip({ series }: Readonly<{ series: SimulatorSeriesV1 }>) {
   const rows = honestyRowsV1(series);
-  if (rows.length === 0) return <p className="market-empty">This capture carries no route tally.</p>;
+  if (rows.length === 0) return <p className="market-empty">No route tally is available. Publish a capture with route results.</p>;
   return <>
     <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="Planned against executed, per route">
       <table className="holders-table population-honesty">
@@ -213,10 +210,10 @@ export function ArchetypeCensus({ series }: Readonly<{ series: SimulatorSeriesV1
 export function OutcomeSpread({ series }: Readonly<{ series: SimulatorSeriesV1 }>) {
   const spread = series.world?.outcomeSpread ?? null;
   if (spread === null) {
-    return <p>This capture predates the settling histogram.</p>;
+    return <p className="market-empty">No outcome spread is available. Publish a capture with settlement results.</p>;
   }
   if (spread.positionedMarkets === 0) {
-    return <p>No market in this world both resolves and has more than one ordinary cell.</p>;
+    return <p className="market-empty">No resolved multi-cell markets are available. Complete one to add an outcome spread.</p>;
   }
   const buckets = Array.from({ length: 11 }, (_, tenths) => ({
     tenths,
@@ -291,17 +288,16 @@ export default function PopulationWorkspace({ preloaded }: Readonly<{
     return inner(state.series);
   };
 
-  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/population" status="local rehearsal record" />}>
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/population" status="population" />}>
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">A population · many markets, one chain, one clock</p>
-        <h1>Twelve markets, or four.<br /><em>Drawn from a sentence, driven by their own drivers.</em></h1>
-        <p>A simlife run draws a whole world from a named seed — markets of different archetypes, widths, fuses and destinies, held by participants who admit at different times, trade in bursts, redeem promptly, or never come back — interleaves their lifecycles into one ordered schedule, and drives every step through the shipped driver that owns it. Then it censuses every live market at every tick through the same conservation ledger.</p>
-        <p>The engine decides what to attempt and when. The census decides what is true. Every number on this page came off a chain.</p>
+        <p className="eyebrow">Market population</p>
+        <h1>One run,<br /><em>many markets.</em></h1>
+        <p>Compare market paths, route results, conservation checks, and settled outcomes across one seeded run.</p>
       </div>
       <aside>
-        <span>What this run was</span>
+        <span>Run status</span>
         <strong>{state.kind === 'loaded' ? 'One population recorded' : state.kind === 'refused' ? 'Refused' : state.kind === 'absent' ? 'Nothing published' : 'Reading…'}</strong>
         {drew === null ? <p>{NO_POPULATION_SENTENCE_V1}</p> : <p>{drew}</p>}
         {did === null ? null : <p className="market-editorial-note">{did}</p>}
@@ -310,33 +306,32 @@ export default function PopulationWorkspace({ preloaded }: Readonly<{
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>Every market&apos;s odds path</h2><p>Each market&apos;s cells, as a share of what it has issued against them, at every boundary this run read. These markets are contemporaries — censused at the same ticks — so the paths are comparable, and a flat one is a market nobody traded rather than a market nobody watched.</p></div></header>
+      <header><span>01</span><div><h2>Market odds paths</h2><p>Issued share by cell at each recorded boundary.</p></div></header>
       {body((loaded) => <OddsPaths series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>The population&apos;s own timeline</h2><p>What the run did, tick by tick, from its ledger. Mutations that landed and mutations the chain refused are two lines and not one: a run that founded four markets is not the same as a run that failed four foundings and censused a lot.</p></div></header>
+      <header><span>02</span><div><h2>Run timeline</h2><p>Landed mutations, refusals, and censused markets by tick.</p></div></header>
       {body((loaded) => <EventTimeline series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>Executed, refused, never attempted, blocked</h2><p>Every route the world planned, and what became of each attempt. The four endings are never added together: a route with one refusal and forty blocks is not a route with forty-one failures. Each route&apos;s commonest reason is printed underneath.</p></div></header>
+      <header><span>03</span><div><h2>Route results</h2><p>Planned, executed, refused, unattempted, and blocked counts by route.</p></div></header>
       {body((loaded) => <HonestyStrip series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>What the world drew, and what stood still</h2><p>The archetypes the seed produced — including the ones no substrate here could found — and then every observed market with the slots it covered and the conservation checks it passed. An archetype table containing only what today&apos;s compiler emits could not say what is missing.</p></div></header>
+      <header><span>04</span><div><h2>Market census</h2><p>Archetypes, observed markets, slot coverage, and conservation results.</p></div></header>
       {body((loaded) => <ArchetypeCensus series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>05</span><div><h2>Where the answers landed</h2><p>Each resolving market&apos;s settled cell, normalised to tenths of the way through its own ordinary cells. 0/10 is the open tail below the first cut and 10/10 the one above the last.</p></div></header>
+      <header><span>05</span><div><h2>Outcome spread</h2><p>Settled cell positions · tenths of each market&apos;s ordinary cells</p></div></header>
       {body((loaded) => <OutcomeSpread series={loaded} />)}
     </section>
 
     <footer className="product-footer">
-      <span>One seeded population&apos;s own transcript · a private validator on 127.0.0.1</span>
-      <span>Not devnet · not mainnet · every mutation went through its own shipped driver</span>
+      <span>Population metrics</span>
     </footer>
   </PageShell>;
 }

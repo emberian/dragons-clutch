@@ -100,7 +100,6 @@ mod structured_campaign;
 mod structured_claims_producer;
 mod structured_composition_admission;
 mod structured_market;
-mod structured_physical_frame;
 mod structured_representation_campaign;
 mod structured_root_close;
 mod terminal_exterior_pyth;

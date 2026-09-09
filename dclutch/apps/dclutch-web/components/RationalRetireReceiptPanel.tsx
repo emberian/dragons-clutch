@@ -54,7 +54,7 @@ export default function RationalRetireReceiptPanel() {
 
   function adoptIdentity(address: string) {
     setPayer(address);
-    setWalletStatus(`${address} · identity only; signing remains release-gated`);
+    setWalletStatus(`${address} · connected`);
   }
 
   async function inspect(event: FormEvent<HTMLFormElement>) {
@@ -109,12 +109,12 @@ export default function RationalRetireReceiptPanel() {
 
   return <>
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>Retire a zero-supply Structured receipt from descriptor truth</h2><p>Your wallet never supplies N, K, outcomes, coefficients, custody owners, Position addresses, or rent arithmetic. The browser derives them from finalized Product, descriptor, Claims, Token-2022, and lifecycle-scoped RentCreditV2 state.</p></div></header>
-      <div className="trade-v3-evidence"><article><span>Family wire</span><strong>fixed 400</strong><small>DCRLHC04 · RetireReceipt only</small></article><article><span>Claims frame</span><strong>20 + 4S</strong><small>S is ordered nonzero support within representation K</small></article><article><span>Current lock limit</span><strong>S ≤ 3</strong><small>this one-shot route uses 50 + 4S unique locks; an ALT does not reduce that count</small></article><article><span>Execution</span><strong>checked release required</strong><small>signing appears only after the exact V4 route is authenticated</small></article></div>
+      <header><span>04</span><div><h2>Retire an empty Structured receipt</h2><p>Retire a receipt after its supply reaches zero. Review the accounts to close and the rent returned before signing.</p></div></header>
+      <div className="trade-v3-evidence"><article><span>Family wire</span><strong>fixed 400</strong><small>DCRLHC04 · RetireReceipt only</small></article><article><span>Claims frame</span><strong>20 + 4S</strong><small>S is ordered nonzero support within representation K</small></article><article><span>Current lock limit</span><strong>S ≤ 3</strong><small>this one-shot route uses 50 + 4S unique locks; an ALT does not reduce that count</small></article><article><span>Execution</span><strong>Wallet signing</strong><small>Load a compatible retirement route to continue</small></article></div>
     </section>
 
     <form className="trade-v3-card route-card" onSubmit={(event) => void inspect(event)}>
-      <header><span>05</span><div><h2>Reacquire one exact compact route</h2><p>The 38 lines are account transport for the universal Hot frame, not caller-authored authority. Their root selection, ProgramSet, CapabilityV4, finalized artifacts, Product graph, and activated programs are hostile-decoded before any candidate exists.</p></div></header>
+      <header><span>05</span><div><h2>Load the retirement route</h2><p>Enter the receipt descriptor and route accounts to check that the supply is zero and the receipt can close.</p></div></header>
       <div className="direct-form-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Transaction payer</span><input required value={payer} onChange={(event) => setPayer(event.target.value.trim())} /></label><label><span>Canonical address lookup table</span><input required value={lookupTable} onChange={(event) => setLookupTable(event.target.value.trim())} /></label></div>
       <label><span>Hot fixed38 addresses · one canonical base58 address per line</span><textarea required rows={12} value={fixed} onChange={(event) => setFixed(event.target.value)} /></label>
       <WalletDirectory directory={wallets} onConnected={adoptIdentity} />
@@ -124,8 +124,8 @@ export default function RationalRetireReceiptPanel() {
     </form>
 
     <section className="trade-v3-card signing-card">
-      <header><span>06</span><div><h2>Review, sign, and submit the checked packet</h2><p>The exact v0+ALT packet is available only after this page authenticates the compact V4 capability, every selected artifact, the active Trading release, and the lookup table at one finalized floor. Your wallet signs the same packet you review.</p></div></header>
-      <button type="button" disabled={inspection === null} onClick={() => void build()}>Build exact unsigned v0 + ALT candidate</button><p className="direct-status" aria-live="polite">{buildStatus}</p>
+      <header><span>06</span><div><h2>Review and sign the retirement</h2><p>Build the retirement transaction, review the rent return, and sign with the transaction payer.</p></div></header>
+      <button type="button" disabled={inspection === null} onClick={() => void build()}>Build unsigned retirement transaction</button><p className="direct-status" aria-live="polite">{buildStatus}</p>
       <div className="direct-actions"><button type="button" disabled={candidate === null || candidate.executionStatus !== 'ready'} onClick={() => void sign()}>Sign retirement transaction</button><button type="button" disabled={signed === null || !signed.complete} onClick={() => void submit()}>Submit fully signed retirement</button><button type="button" disabled={candidate === null} onClick={download}>Download unsigned candidate</button></div>
       {submittedSignature !== null && <p className="direct-status"><Anchor href={`/explorer?view=transaction&q=${encodeURIComponent(submittedSignature)}`}>Open your retirement transaction in the explorer →</Anchor></p>}
       {candidate && <div className="direct-output"><dl><div><dt>Packet</dt><dd>{candidate.wireBytes.length} / 1232 bytes · {candidate.loadedAddresses} ALT addresses</dd></div><div><dt>Unique account locks</dt><dd>{candidate.accountLocks} / 64</dd></div><div><dt>Account frame</dt><dd>{candidate.accountCount} metas before message de-duplication</dd></div><div><dt>Signer</dt><dd>{candidate.requiredSigners.join(', ')}</dd></div><div><dt>Execution status</dt><dd>checked route ready for wallet signature</dd></div></dl><details className="trade-v3-bytes"><summary>Exact compact wire</summary><dl><div><dt>400-byte family · base64</dt><dd>{base64(candidate.familyBytes)}</dd></div><div><dt>528-byte Hot data · base64</dt><dd>{base64(candidate.outerBytes)}</dd></div><div><dt>v0 packet · base64</dt><dd>{base64(candidate.wireBytes)}</dd></div></dl></details></div>}

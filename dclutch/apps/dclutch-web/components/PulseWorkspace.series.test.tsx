@@ -26,15 +26,15 @@ describe('the pulse surface, with a recorded run', () => {
   );
 
   it('draws the run against time, which no other chart on this site does', () => {
-    expect(html).toContain('What the run looked like over time');
+    expect(html).toContain('Run history');
     expect(html).toContain('<polyline');
     expect(html).toContain(`cycle ${series.points[0].cycle}`);
   });
 
   it('says in numbers what the drawn window covers, instead of in adjectives', () => {
-    expect(html).toContain(`${series.points.length} recorded boundaries covering`);
+    expect(html).toContain(`${series.points.length} boundaries`);
     expect(html).toContain('slots of chain');
-    expect(html).toContain(`census file ${series.censusFile}`);
+    expect(html).toContain(series.censusFile);
   });
 
   it('draws the collateral coverage and the spend, which the producer had starved', () => {
@@ -44,15 +44,14 @@ describe('the pulse surface, with a recorded run', () => {
     // before they reached the artifact. Pinned on the SHIPPED capture, so the
     // day a producer stops carrying them this goes red here rather than the
     // charts quietly vanishing from the page.
-    expect(html).toContain('The collateral, and everything the census could find of it');
-    expect(html).toContain('the collateral Mint’s whole supply');
-    expect(html).toContain('What the run has spent');
-    expect(html).toContain('lamports the fee payer has spent since the first boundary');
+    expect(html).toContain('<h3 class="detail-subhead">Collateral</h3>');
+    expect(html).toContain('>Mint supply</text>');
+    expect(html).toContain('<h3 class="detail-subhead">Fees</h3>');
+    expect(html).toContain('Fee-payer spend since first boundary · lamports · recorded boundaries');
   });
 
   it('tells the reader the line is a record, not a feed', () => {
-    expect(html).toContain('The run continues past the last point; this page does not.');
-    expect(html).toContain('the last write before publication');
+    expect(html).toContain('Latest published simulator run');
   });
 
   it('reports the ledger checks across every drawn cycle, and whether they held', () => {
@@ -62,9 +61,7 @@ describe('the pulse surface, with a recorded run', () => {
     // this a case that only a spotless capture could pass, which is a case
     // that fails the day the census earns its keep.
     const broken = series.points.reduce((sum, point) => sum + point.checksBroken, 0);
-    expect(html).toContain(broken === 0 ? 'the ledger was re-checked' : 'did not hold');
-    if (broken === 0) expect(html).toContain('held every time');
-    else expect(html).toContain(`${broken} check${broken === 1 ? '' : 's'} did not hold`);
+    expect(html).toContain(broken === 0 ? 'checks passed' : 'failed. The run halted.');
   });
 
   /**
@@ -76,7 +73,7 @@ describe('the pulse surface, with a recorded run', () => {
    * is presented as measured rather than as a constant somebody looked up.
    */
   it('draws the two quantities that are actually moving', () => {
-    expect(html).toContain('The heartbeat');
+    expect(html).toContain('<h2>Heartbeat</h2>');
     expect(html).toContain('slots the chain advanced');
     expect(html).toContain('Chain slots covered');
     // The cadence is the half that depends on the record carrying instants,
@@ -84,15 +81,13 @@ describe('the pulse surface, with a recorded run', () => {
     // So the page either draws the seconds or says why it has none — what it
     // may never do is leave the reader with an unexplained gap.
     const timed = series.points.every((point) => point.recordedAt !== null);
-    expect(html).toContain(timed ? 'seconds between recordings' : 'Some cycles recorded no timestamp');
+    expect(html).toContain(timed ? 'seconds between recordings' : 'Timestamps are missing');
   });
 
   it('says the slot rate was measured here rather than looked up', () => {
     expect(html).toContain('Measured slot rate');
     const timed = series.points.every((point) => point.recordedAt !== null);
-    expect(html).toContain(timed
-      ? 'measured here, not a published constant'
-      : 'the run did not record enough instants to divide by');
+    expect(html).toContain(timed ? 'slots per second' : 'more timestamps required');
   });
 
   /**
@@ -104,7 +99,7 @@ describe('the pulse surface, with a recorded run', () => {
     // gained L8 and the heading still said seven, which is the shape of wrong
     // that no decoder can catch. It is derived now, so this asserts the
     // derivation rather than a number.
-    expect(html).toContain(`The ${series.lawIds.length} checks, after every boundary`);
+    expect(html).toContain(`${series.lawIds.length} conservation checks`);
     for (const id of series.lawIds) expect(html).toContain(`>${id}<`);
     // The census writes its sentences with real comparison operators in them
     // ("Hoard ... >= worst outcome ..."), which is exactly the phrasing worth
@@ -135,8 +130,8 @@ describe('the pulse surface, with a recorded run', () => {
    * never be the author of the second one.
    */
   it('keeps this site’s gloss on a law apart from the census’s own finding', () => {
-    expect(html).toContain('is this site&#x27;s gloss on what that law is for');
-    expect(html).toContain('full collateralisation');
+    expect(html).toContain('all collateral atoms are held in tracked accounts');
+    expect(html).toContain('the vault covers the largest unsettled outcome liability');
   });
 
   /**
@@ -154,8 +149,7 @@ describe('the pulse surface, with a recorded run', () => {
     // trade landed: a Direct fill moves claims between two positions and
     // issues none, so this line is flat across a real crossing. The note says
     // what the line means now, and points at the table that does move.
-    expect(html).toContain('unchanged at every recorded boundary');
-    expect(html).toContain('A Direct fill MOVES claims between two positions');
+    expect(html).toContain('Unchanged across all boundaries.');
     expect(html).not.toContain('no trade has landed in this run yet');
   });
 
@@ -210,7 +204,7 @@ describe('who is in the market', () => {
 
   it('refuses to call a single position a ranking', () => {
     if (series.positions.length !== 1) return;
-    expect(html).toContain('There is nothing here to rank yet.');
+    expect(html).toContain('One position');
     expect(html).not.toContain('leaderboard');
     expect(html).not.toContain('rank 1');
   });
@@ -218,11 +212,11 @@ describe('who is in the market', () => {
   it('names a complete set for what it is, because it is the same whatever happens', () => {
     if (!series.positions.every(isCompleteSetV1)) return;
     expect(html).toContain('complete set');
-    expect(html).toContain('worth the same whatever the answer turns out to be');
   });
 
   it('never lets holding collateral read as holding a claim on the answer', () => {
-    expect(html).toContain('only a position holds claims on the answer');
+    expect(html).toContain('Claims held, per outcome');
+    expect(html).toContain('Collateral atoms');
   });
 
   it('marks the operator’s labels and this site’s gloss as what they each are', () => {
@@ -230,7 +224,7 @@ describe('who is in the market', () => {
     // account names to the run operator and the vault gloss to this site.
     // Deleted; what survives is the one distinction a reader can act on.
     expect(html).not.toContain('not anything the chain stores');
-    expect(html).toContain('Collateral holders hold the token the market settles in');
+    expect(html).toContain('Collateral atoms by account.');
   });
 });
 
@@ -250,7 +244,7 @@ describe('what may be said about who holds what', () => {
   it('says there is nobody to list when no position was recorded', () => {
     const reading = holdingsReadingV1(withPositions([]));
     expect(reading.rankable).toBe(false);
-    expect(reading.sentence).toContain('nobody to list');
+    expect(reading.sentence).toContain('No positions are recorded');
   });
 
   it('says one position cannot be ranked', () => {
@@ -271,7 +265,7 @@ describe('what may be said about who holds what', () => {
     const reading = holdingsReadingV1(withPositions([position('a', ['3', '1']), position('b', ['1', '1'])]));
     expect(reading.positionCount).toBe(2);
     expect(reading.rankable).toBe(true);
-    expect(reading.sentence).toContain('not a score and not a return');
+    expect(reading.sentence).toContain('ordered by total claims held');
   });
 
   it('recognises a complete set, and an uneven position as not one', () => {
@@ -284,18 +278,18 @@ describe('the recorded-run section on its own', () => {
   it('says nothing was published rather than drawing an empty frame', () => {
     const html = renderToStaticMarkup(<RecordedCycles read={{ kind: 'absent' }} />);
     expect(html).not.toContain('<svg');
-    expect(html).toContain('there is no line to draw and nothing below is a zero');
+    expect(html).toContain('No run data is available. Publish a simulator capture to view this chart.');
   });
 
   it('shows a refusal as a refusal, with the field that failed', () => {
     const html = renderToStaticMarkup(<RecordedCycles read={{ kind: 'refused', reason: 'cluster must be local or devnet' }} />);
-    expect(html).toContain('it did not decode');
+    expect(html).toContain('Run data refused');
     expect(html).toContain('cluster must be local or devnet');
   });
 
   it('says it is looking before the read settles, and claims nothing', () => {
     const html = renderToStaticMarkup(<RecordedCycles read={null} />);
-    expect(html).toContain('Looking for a recorded run');
+    expect(html).toContain('Loading run…');
     expect(html).not.toContain('<svg');
   });
 
@@ -306,6 +300,6 @@ describe('the recorded-run section on its own', () => {
       points: (published as { points: ReadonlyArray<unknown> }).points.slice(-3),
     });
     const html = renderToStaticMarkup(<RecordedCycles read={{ kind: 'loaded', series: trimmed }} />);
-    expect(html).toContain('7 earlier boundaries are counted but not drawn');
+    expect(html).toContain('7 earlier boundaries omitted');
   });
 });

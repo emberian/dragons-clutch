@@ -15,7 +15,7 @@ describe('local artifact input accessibility', () => {
 
     expect(html).toContain('type="file" aria-label="Choose Core checked release"');
     expect(html).not.toContain('tabindex="-1"');
-    expect(html).toContain('Offline fallback · paste the same file as base64');
+    expect(html).toContain('Or paste the file as base64');
     expect(html).toContain('<textarea required=""');
     expect(html).toContain('aria-live="polite"');
   });

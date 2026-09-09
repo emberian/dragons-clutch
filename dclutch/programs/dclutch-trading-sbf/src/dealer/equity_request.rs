@@ -12,12 +12,13 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 use dclutch_claims::signed_delta_v3::{DeltaDirectionV3, SignedDeltaPlanV3};
-use dclutch_core_contract::ContentId;
 #[cfg(not(target_os = "solana"))]
 use dclutch_custody::{
     CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
-use dclutch_market::capability_program::set_v1::{CapabilityProgramSetV1, SelectorWidthV1};
+use dclutch_market::capability_program::set_v2::{
+    CapabilityDescriptorReferenceV2, CapabilityProgramSetV2, SelectorWidthV2,
+};
 #[cfg(not(target_os = "solana"))]
 use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
 #[cfg(not(target_os = "solana"))]
@@ -608,11 +609,11 @@ pub fn mine_dealer_equity_bumps_v3(seeds: DealerEquityBumpSeedsV3) -> DealerEqui
 
 /// Metadata for one caller-buffer-backed unsigned request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct UnsignedEquityRequestV3 {
+pub struct UnsignedEquityRequestV4 {
     /// Exact initialized prefix in the caller-owned output.
     pub request_bytes: usize,
-    /// Exact CapabilityProgramV3 selected for action and Claims frame P.
-    pub selected_program: ContentId,
+    /// Exact schema/content descriptor selected for action and Claims frame P.
+    pub selected_descriptor: CapabilityDescriptorReferenceV2,
 }
 
 /// Exact request width for one optional Claims suffix.
@@ -631,10 +632,10 @@ pub fn equity_request_bytes_v3(claims_packet_bytes: u32) -> Result<usize, Equity
 /// hostile decode and chain reauthentication.
 #[cfg(not(target_os = "solana"))]
 #[allow(clippy::too_many_arguments)]
-pub fn build_equity_request_v3(
+pub fn build_equity_request_v4(
     chain: EquityPoolChainProjectionV3<'_>,
     intent: EquityRequestIntentV3<'_>,
-    set: CapabilityProgramSetV1<'_>,
+    set: CapabilityProgramSetV2<'_>,
     output: &mut [u8],
     obligation_scratch: &mut [u64],
     residual_before: &mut [u64],
@@ -642,7 +643,7 @@ pub fn build_equity_request_v3(
     claims_transferred: &mut [u64],
     post_dealer_claims: &mut [u64],
     post_lp_claims: &mut [u64],
-) -> Result<UnsignedEquityRequestV3, EquityOperatorErrorV3> {
+) -> Result<UnsignedEquityRequestV4, EquityOperatorErrorV3> {
     validate_projection(&chain)?;
     let width = chain.dealer_claims.inventory.len();
     for observed in [
@@ -742,14 +743,14 @@ pub fn build_equity_request_v3(
         u32::try_from(geometry.packet_bytes).map_err(|_| EquityOperatorErrorV3::WidthMismatch)?;
     let selector = dealer_equity_selector_v3(action, geometry.position_count)?;
     if set.selector_offset() != DEALER_EQUITY_SELECTOR_OFFSET_V3
-        || set.selector_width() != SelectorWidthV1::U16
+        || set.selector_width() != SelectorWidthV2::U16
     {
         return Err(EquityOperatorErrorV3::ProgramSelection);
     }
     let mut selector_bytes = [0_u8; 12];
     write_bytes(&mut selector_bytes, 10, &selector.to_le_bytes())?;
-    let selected_program = set
-        .select(&selector_bytes)
+    let selected_descriptor = set
+        .select_descriptor(&selector_bytes)
         .map_err(|_| EquityOperatorErrorV3::ProgramSelection)?;
 
     let mut header = [0_u8; DEALER_EQUITY_HEADER_BYTES_V3];
@@ -782,9 +783,9 @@ pub fn build_equity_request_v3(
         .get_mut(..request_bytes)
         .ok_or(EquityOperatorErrorV3::WidthMismatch)?
         .copy_from_slice(&request);
-    Ok(UnsignedEquityRequestV3 {
+    Ok(UnsignedEquityRequestV4 {
         request_bytes,
-        selected_program,
+        selected_descriptor,
     })
 }
 

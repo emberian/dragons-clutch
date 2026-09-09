@@ -276,7 +276,7 @@ export default function MakerOfferComposer({
   return <details className="maker-offer">
     <summary>Make your own sell offer</summary>
     <div className="maker-offer-body">
-      <p className="direct-status">You are authoring an offer, not making a transaction. Your wallet signs the terms; your claims move only if someone later submits a matching trade that the chain accepts.</p>
+      <p className="direct-status">Sign an offer to share its terms with buyers. Your claims move when a matching trade executes.</p>
 
       <div className="direct-form-grid maker-offer-fields">
         <label>
@@ -349,7 +349,7 @@ export default function MakerOfferComposer({
           {boardConfig !== null && <button type="button" disabled={boardPost.kind === 'working'} onClick={() => void postTicket()}>Post to configured relay</button>}
         </div>
         <p className={boardPost.kind === 'refused' ? 'market-refusal' : 'direct-status'} aria-live="polite">{boardPost.kind === 'refused' ? `Relay refused: ${boardPost.message}` : boardPost.message}</p>
-        {boardConfig === null && <p className="board-honesty">No relay is configured. That does not weaken this ticket: download it or send its exact text directly to a taker.</p>}
+        {boardConfig === null && <p className="board-honesty">No offer board is configured. Download the offer or send its text directly to a buyer.</p>}
         <button type="button" className="secondary-action" onClick={() => {
           issuedRevision.current += 1;
           setIssued(null);

@@ -18,21 +18,21 @@ import { marketDetailHrefV1 } from '@dclutch/sdk/marketHref';
 function statsV1(bundle: BundleV1): ReadonlyArray<NumberStripStatV1> {
   const base: NumberStripStatV1[] = [
     Object.freeze({
-      label: 'Arrives whatever happens',
+      label: 'Payout floor',
       value: bundle.floorAtoms,
-      detail: 'The smallest claim balance in each Position, added up. Every outcome pays at least this, and so does a Market that never resolves at all.',
+      detail: 'At least this amount is payable across the Positions, including their fallback outcomes.',
     }),
     Object.freeze({
-      label: 'The most it can pay',
+      label: 'Payout ceiling',
       value: bundle.ceilingAtoms,
       detail: bundle.sharedTerms
-        ? 'The largest claim balance in each Position, added up. Some of these Markets are locked to each other, so a narrower ceiling holds while they all resolve — it is beside this one, not folded into it.'
-        : 'The largest claim balance in each Position, added up — and with these Markets settling against different things, that sum is exactly attainable rather than a safe overstatement.',
+        ? 'The sum of each Position’s payout ceiling. A second bound accounts for markets with shared resolution terms.'
+        : 'The sum of the largest claim balance in each Position.',
     }),
     Object.freeze({
-      label: 'Decided by the outcomes',
+      label: 'Outcome-dependent amount',
       value: bundle.swingAtoms,
-      detail: 'The gap between the two figures beside this one: the part of the bundle that the results actually move. The rest is already yours.',
+      detail: 'The difference between the payout floor and ceiling.',
     }),
   ];
   if (!bundle.sharedTerms) return Object.freeze(base);
@@ -71,7 +71,7 @@ function Bundle({ bundle }: Readonly<{ bundle: BundleV1 }>) {
     </div>
     <NumberStrip
       stats={statsV1(bundle)}
-      provenance="Raw u64 collateral atoms, added and compared in exact integers. There is no division anywhere in this arithmetic, so there is nothing here that could have been rounded in either direction."
+      provenance="Payout amounts in collateral atoms."
     />
     <p className="bundle-exposure-line">{bundle.headline}</p>
     <ExposureBand
@@ -79,7 +79,7 @@ function Bundle({ bundle }: Readonly<{ bundle: BundleV1 }>) {
       scaleAtoms={bundle.ceilingAtoms}
       conditionalCeilingAtoms={bundle.sharedTerms ? bundle.coResolvedCeilingAtoms : null}
       conditionalLabel={bundle.sharedTerms ? 'ceiling while every locked Market resolves' : null}
-      caption="One row per Position and one for all of them. Each band runs from what that Position pays under its worst outcome to what it pays under its best; the whole scale is what the bundle can pay together."
+      caption="Payout bounds for each Position and their combined holdings."
       emptyReason="Every Position in this bundle holds nothing, so there is no band to draw."
     />
     <p className="bundle-exposure-line">{bundle.netting}</p>
@@ -95,7 +95,7 @@ function Bundle({ bundle }: Readonly<{ bundle: BundleV1 }>) {
             </li>)}
           </ul>
         </>
-        : <><span>no netting claimed</span>{cluster.reason}</>}
+        : <><span>Separate payout bounds</span>{cluster.reason}</>}
     </div>)}
     <p className="bundle-exposure-line">{bundle.settlement}</p>
   </article>;

@@ -295,66 +295,66 @@ const NO_ROUTE: ReadonlyArray<string> = Object.freeze([]);
 const NO_FAMILY: ReadonlyArray<HotFamilyV1> = Object.freeze([]);
 
 export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.freeze([
-  action('release.activate', 'author', 'Release', 'Activate a checked multiprogram release', '/release', 'no-market',
+  action('release.activate', 'author', 'Release', 'Activate a checked release', '/release', 'no-market',
     anchors('components/ReleaseWorkspace.tsx', '@dclutch/sdk/releaseRegistry'),
     ['registry/record_v1::dispatch'],
     NO_FAMILY,
-    'Each role packet is signed on its own and leaves as a file; this page never sends one.'),
-  action('product.compile', 'author', 'Creation', 'Compile a Product record and its admission request', '/product-v2', 'no-market',
+    'Sign and export one transaction for each program role.'),
+  action('product.compile', 'author', 'Creation', 'Compile a Product and admission request', '/product-v2', 'no-market',
     anchors('components/ProductV2Studio.tsx', '@dclutch/sdk/productV2', 'components/ProductV2Studio.tsx'),
     NO_ROUTE,
     NO_FAMILY,
-    'Nothing is read from a chain and nothing is signed: the output is a record and an instruction, not a transaction.'),
-  action('market.inspect', 'author', 'Creation', 'Check a founding against the chain before you commit to it', '/create', 'new-market',
+    'Create the Product record and admission instruction for your payout design.'),
+  action('market.inspect', 'author', 'Creation', 'Preview market opening', '/create', 'new-market',
     anchors('components/CreateMarketWizard.tsx', '@dclutch/sdk/coreFound'),
     NO_ROUTE,
     NO_FAMILY,
-    'Finalized reads only. The wizard reports what the founding would cost and refuse; it exports no packet.'),
-  action('market.found', 'author', 'Creation', 'Found a Market and admit its first participant', '/found', 'new-market',
+    'Review the market records, opening costs and requirements.'),
+  action('market.found', 'author', 'Creation', 'Found a market and admit its first participant', '/found', 'new-market',
     anchors('components/CoreFoundWorkspace.tsx', '@dclutch/sdk/coreFound', 'components/CoreFoundWorkspace.tsx'),
     ['core/found::process#Found'],
     NO_FAMILY,
-    'The browser exports unsigned bytes and asks for no key; the published campaign records devnet authorization before any child may sign.'),
-  action('market.join', 'author', 'Creation', 'Admit another participant', 'market-detail', 'observed-market',
+    'Use the command-line workflow to fund and open the market, then create its first participant accounts.'),
+  action('market.join', 'author', 'Creation', 'Join a market', 'market-detail', 'observed-market',
     anchors('components/JoinPanel.tsx', 'lib/userPositionAdmissionOperation.ts'),
     ['trading/user_position_admission_v1::process_user_position_admission_v1',
      'trading/user_position_admission_v1::process_user_position_admission_v1#Admit'],
     NO_FAMILY,
-    'The compiled Rust planner derives all 27 accounts from one finalized observation; the exact packet is saved before your wallet sees it, sent once, and cleared only after the chain confirms it, so reloading resumes and never resubmits.'),
+    'Create your participant accounts with a refundable storage deposit. Review and sign the joining transaction.'),
   action('source.create-fund', 'author', 'Source', 'Create the resolution fund', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceReadinessV1.ts'),
     ['core/resolution::process#CreateFund'],
     NO_FAMILY,
-    'The exact packet is saved before your wallet sees it, sent once, and cleared only after the finalized poststate is read back; reloading resumes and never resubmits.'),
+    'Fund the account that pays for source resolution. Requires a wallet transaction.'),
 
-  action('direct.route', 'trade', 'Direct', 'Export a portable Direct route', '/operate', 'no-market',
+  action('direct.route', 'trade', 'Direct', 'Export a Direct route', '/operate', 'no-market',
     anchors('components/OperatorSurface.tsx', null, 'components/OperatorSurface.tsx'),
     NO_ROUTE,
     NO_FAMILY,
-    'The published command holds no key and can neither sign nor send: it reads finalized state and writes two files.'),
-  action('direct.author', 'trade', 'Direct', 'Author a portable sell offer', 'market-detail', 'observed-market',
+    'Read the market and export route files for a Direct trade.'),
+  action('direct.author', 'trade', 'Direct', 'Sign a sell offer', 'market-detail', 'observed-market',
     anchors('components/trade/MakerOfferComposer.tsx', '@dclutch/sdk/directOfferAuthoring'),
     NO_ROUTE,
     NO_FAMILY,
-    'One detached message signature. No transaction is built and no claims move; the ticket is yours to keep or hand on.'),
-  action('direct.inline', 'trade', 'Direct', 'Take and execute a signed offer', 'market-detail', 'observed-market',
+    'Sign an offer message to share with a taker. Signing does not reserve or transfer your claims.'),
+  action('direct.inline', 'trade', 'Direct', 'Trade a signed offer', 'market-detail', 'observed-market',
     anchors('lib/tradeFlowMachine.ts', '@dclutch/sdk/directInlineV3'),
     ['trading/hot_v3::process_hot_execution_v3'],
     ['Direct'],
-    'Two separate signatures, neither of which sends. The signed packet is saved before submission, sent once, and reconciled against finalized balances.',
-    [wall('Trading runs to 1,330,239 of 1,399,700 CU and dies ProgramFailedToComplete; the fill can exhaust its budget on chain.', 'GOAL.md')]),
-  action('direct.register', 'trade', 'Direct', 'Create a registered resting order', null, 'observed-market',
+    'Review the claims, collateral and fees, then sign the offer message and transaction.',
+    [wall('This trade route can exceed the transaction compute limit.', 'GOAL.md')]),
+  action('direct.register', 'trade', 'Direct', 'Create a resting order', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
     NO_FAMILY,
-    'No signature is requested, because nothing here can build this transaction.',
-    [wall('No route renders a control for it and no browser module builds its transaction; the registered-order wire lives in the Rust codec.', 'crates/dclutch-trading')]),
-  action('direct.cancel', 'trade', 'Direct', 'Cancel, expire, or cancel through a resting order', null, 'observed-market',
+    'Post an order that can be filled later.',
+    [wall('Resting-order creation is not available in this client.', 'crates/dclutch-trading')]),
+  action('direct.cancel', 'trade', 'Direct', 'Cancel or expire a resting order', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
     NO_FAMILY,
-    'No signature is requested, because nothing here can build this transaction.',
-    [wall('No route renders a control for it and no browser module builds its transaction; successor replay roots and terminal account profiles are not one accepted route.', 'crates/dclutch-trading')]),
+    'End a resting order so it can no longer be filled.',
+    [wall('Resting-order cancellation is not available in this client.', 'crates/dclutch-trading')]),
   action('series.prepare', 'trade', 'Series', 'Prepare an occurrence and its ticket', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
@@ -379,39 +379,39 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; the Dealer scenario kernel owns it.', 'crates/dclutch-trading')]),
 
-  action('source.ready', 'resolve', 'Source', 'Have Core accept the fund as ready', '/resolution', 'observed-market',
+  action('source.ready', 'resolve', 'Source', 'Mark the resolution fund ready', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceReadinessV1.ts'),
     ['core/resolution::process#VerifyFundReady'],
     NO_FAMILY,
-    'The exact packet is saved before your wallet sees it, sent once, and cleared only after the Ready poststate selects the terminal route.'),
-  action('source.provider', 'resolve', 'Source', 'Submit provider evidence, or reclaim it', '/resolution', 'observed-market',
+    'Check that the fund meets the market’s source requirements. Requires a wallet transaction.'),
+  action('source.provider', 'resolve', 'Source', 'Submit or reclaim a source observation', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceProviderV1.ts'),
     ['core/execute_provider_v3::process#ExecuteProvider'],
     NO_FAMILY,
-    'Two signatures on one immutable message — a fresh operation signer and your wallet — saved before submission and verified against the terminal accounts.'),
-  action('source.admit-terminal', 'resolve', 'Source', 'Admit the terminal resolution', '/resolution', 'observed-market',
+    'Submit a source observation for the market. Reclaim its account deposit when eligible.'),
+  action('source.admit-terminal', 'resolve', 'Source', 'Apply the final resolution', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceTerminalV1.ts'),
     ['core/resolution::process#AdmitTerminal'],
     NO_FAMILY,
-    'The signed record is saved before one submission and kept until the finalized Terminal receipt is read back; a reload resumes the same signature.'),
+    'Record the source result as the market’s final outcome. Requires a wallet transaction.'),
   action('source.close-fund', 'resolve', 'Source', 'Close the resolution fund', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceCloseFundV1.ts'),
     ['resolution/core_effect::process_direct_funding_close_v1'],
     NO_FAMILY,
-    'Prepay and close are separate signed acts; each is saved before submission and confirmed against the finalized typed receipt.'),
+    'Prepay the closing work, then sign a separate transaction to close the fund.'),
   action('general.settle', 'resolve', 'General', 'Check a settlement plan and export its exact packet', '/general', 'observed-market',
     anchors('components/GeneralWorkspace.tsx', '@dclutch/sdk/generalPlanV5'),
     ['trading/hot_v3::process_hot_execution_v3'],
     NO_FAMILY,
     'The plan is authored elsewhere; this page authenticates it against finalized state and hands back the same bytes. No key is asked for.'),
 
-  action('claims.conserve', 'claim', 'Claims', 'Split or merge conservative claims', null, 'observed-market',
+  action('claims.conserve', 'claim', 'Claims', 'Split or merge claims', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
     NO_FAMILY,
-    'No signature is requested, because nothing here can build this transaction.',
-    [wall('No route renders a control for it and no browser module builds its transaction; the conservation contract owns the wire.', 'crates/dclutch-claims'),
-     wall('The handler now exists and still cannot complete, which is a harder wall than the missing one this used to name: Claims dispatches DCLCNS01, and the route reads its aggregate as LBV2 and then as an economic slice, two account families whose magics differ, so a conserving split on a founded refunding market refuses 0x5005 Economic and the same frame with an economic-slice aggregate refuses 0x5002 Identity.', 'programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/claims_conservation.rs')]),
+    'Reshape a claim holding while preserving its total payout.',
+    [wall('Claim splitting and merging are not available in this client.', 'crates/dclutch-claims'),
+     wall('The conserving-split route is blocked by incompatible Claims account layouts.', 'programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/claims_conservation.rs')]),
   action('claims.represent', 'claim', 'Claims', 'Denominate or reconstitute a rational representation', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
@@ -419,16 +419,16 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; route DCRRPRQ2 and its Denominate/Reconstitute actions own the wire.', 'crates/dclutch-claims'),
      wall('The structured representation campaign stands at a named ATA-derivation wall.', 'GOAL.md')]),
-  action('claims.replay', 'claim', 'Claims', 'Create the replay account redemption requires', '/redeem', 'observed-market',
+  action('claims.replay', 'claim', 'Claims', 'Set up claim payments', '/redeem', 'observed-market',
     anchors('components/RedeemFlow.tsx', '@dclutch/sdk/claimsCustodyReplay'),
     ['claims/custody_replay_v1::process'],
     NO_FAMILY,
-    'One signature for the account the chain demands before payout; saved before submission, sent once, and confirmed finalized before the payout step opens.'),
-  action('claims.redeem', 'claim', 'Claims', 'Redeem a terminal Claims Position', '/redeem', 'observed-market',
+    'Create the reusable payment record needed for redemption. Requires a refundable account deposit.'),
+  action('claims.redeem', 'claim', 'Claims', 'Redeem paying claims', '/redeem', 'observed-market',
     anchors('components/RedeemFlow.tsx', '@dclutch/sdk/walletTerminalPayoutV3'),
     ['claims/terminal_settlement_v3::process'],
     NO_FAMILY,
-    'The payout plan and the signed packet are both saved before one submission; recovery resumes the saved signature and never sends a second.'),
+    'Burn your paying claims and receive collateral in your token account. Review the payout before signing.'),
   action('series.close', 'claim', 'Series', 'Consume or expire a ticket and close the occurrence', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
@@ -557,21 +557,21 @@ export function capabilityStandingsV1(surface: CapabilityClientSurfaceV1): Reado
  * protocol lecture and nothing apologises for the architecture.
  */
 export function capabilityVenueTextV1(standing: CapabilityStandingV1): string {
-  if (standing.venue === 'no-venue') return 'Nothing here can build it yet';
+  if (standing.venue === 'no-venue') return 'Unavailable in this client';
   if (standing.venue === 'operator-cli') {
     return standing.authority === 'operator-key'
-      ? 'Published command · your own key, after an explicit authorization'
-      : 'Published command · reads only, no key';
+      ? 'Command line · signing key required'
+      : 'Command line · read-only';
   }
   switch (standing.authority) {
     case 'wallet-transaction':
       return standing.submits
-        ? 'This browser · one wallet signature, sent from here'
-        : 'This browser · one wallet signature, exported as a file';
+        ? 'Browser · sign and submit'
+        : 'Browser · sign and export';
     case 'wallet-message':
-      return 'This browser · one detached message signature';
+      return 'Browser · sign a message';
     default:
-      return 'This browser · no key, no signature';
+      return 'Browser · preview';
   }
 }
 
@@ -1115,7 +1115,7 @@ export function evaluateCapabilityV1(
     return Object.freeze({
       standing,
       status: 'no-venue',
-      reason: standing.walls[0]?.statement ?? 'No route, command, or constructor reaches this act.',
+      reason: standing.walls[0]?.statement ?? 'This action is unavailable in the current client.',
       phaseGate: NO_GATE_READ,
     });
   }
@@ -1123,10 +1123,10 @@ export function evaluateCapabilityV1(
     return Object.freeze({ standing, status: 'operator-only', reason: capabilityVenueTextV1(standing), phaseGate: NO_GATE_READ });
   }
   if (snapshot === null) {
-    return Object.freeze({ standing, status: 'needs-chain', reason: 'Read the selected programs, and any Market you name, at one finalized floor first.', phaseGate: NO_GATE_READ });
+    return Object.freeze({ standing, status: 'needs-chain', reason: 'Load the selected deployment and market to continue.', phaseGate: NO_GATE_READ });
   }
   if (capabilityRequiresMarketV1(standing.action) && snapshot.market === null) {
-    return Object.freeze({ standing, status: 'needs-market', reason: 'Name one Core-owned Market and read it at the same finalized floor first.', phaseGate: NO_GATE_READ });
+    return Object.freeze({ standing, status: 'needs-market', reason: 'Select and load a market to continue.', phaseGate: NO_GATE_READ });
   }
   // An act that CREATES a Market is never about the Market on screen, whatever
   // phase that one is in. Saying so is not pedantry: `ready-to-preflight`
@@ -1141,7 +1141,7 @@ export function evaluateCapabilityV1(
     return Object.freeze({
       standing,
       status: 'not-this-market',
-      reason: `This act founds a NEW Market. The one this observation holds (${held}) is not its subject and nothing here can act on it; clear the Market coordinate to preflight a founding.`,
+      reason: `This action creates a new market. Clear the selected market (${held}) to preview it.`,
       phaseGate: Object.freeze({
         routes: standing.action.routes,
         gates: capabilityActPhaseGatesV1(standing.action),
@@ -1188,7 +1188,7 @@ export function evaluateCapabilityV1(
     return Object.freeze({
       standing,
       status: 'wrong-phase',
-      reason: `${capitalize(excludedMachine.reason)}. The chain refuses this act before any account is read.`,
+      reason: `${capitalize(excludedMachine.reason)}.`,
       phaseGate: Object.freeze({
         routes, gates, verdict: 'excluded', excludedBy: null, unobservableMachines, machineGates, selectedGates,
       }),
@@ -1202,7 +1202,7 @@ export function evaluateCapabilityV1(
     return Object.freeze({
       standing,
       status: 'needs-chain',
-      reason: `${because} on the ${unobservableMachines.join(' and ')} state machine, which this observation does not read. Read that state at the same finalized floor before calling this act attemptable.`,
+      reason: `${because} on ${unobservableMachines.join(' and ')}. Load that state to continue.`,
       phaseGate: Object.freeze({ routes, gates, verdict: 'other-machine', excludedBy: null, unobservableMachines, machineGates, selectedGates }),
     });
   }
@@ -1221,7 +1221,7 @@ export function evaluateCapabilityV1(
     return Object.freeze({
       standing,
       status: 'needs-chain',
-      reason: `This act is admitted only at ${gateTextV1(gates[0])}, and the Market's Core phase was not decoded at this observation. Read the Market again at one finalized floor.`,
+      reason: `Requires ${gateTextV1(gates[0])}. Refresh the market to read its current phase.`,
       phaseGate: Object.freeze({ routes, gates, verdict: 'unread', excludedBy: null, unobservableMachines, machineGates, selectedGates }),
     });
   }
@@ -1233,7 +1233,7 @@ export function evaluateCapabilityV1(
     return Object.freeze({
       standing,
       status: 'wrong-phase',
-      reason: `\`${excludedBy.route}\` admits only ${gateTextV1(excludedBy)}; this Market is ${observed}. The chain refuses this act before any account is read.`,
+      reason: `Requires ${gateTextV1(excludedBy)}; this market is ${observed}.`,
       phaseGate: Object.freeze({ routes, gates, verdict: 'excluded', excludedBy, unobservableMachines, machineGates, selectedGates }),
     });
   }

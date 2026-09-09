@@ -1133,7 +1133,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     magic: QUOTE_MAGIC,
     name: 'Scoring Dealer quote',
     family: 'Trading',
-    summary: 'Prices recorded for one fund revision; this record does not guarantee a later fill.',
+    summary: 'Recorded prices for one fund revision.',
     width: { kind: 'fixed', bytes: SCORING.QUOTE_BYTES },
     fields: [
       field('Schema version', SCORING.QUOTE_VERSION_OFFSET, 'u16'),
@@ -1148,7 +1148,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('PDA bump', SCORING.QUOTE_BUMP_OFFSET, 'u8'),
       field('Reserved tail', SCORING.QUOTE_RESERVED_TAIL_OFFSET, 'reserved'),
     ],
-    note: 'Vectors show every stored coordinate; entries beyond the outcome count must be zero. This is a layout reading, not a pricing or conservation certificate.',
+    note: 'One value per outcome. Unused entries must be zero.',
   },
   {
     magic: FOUND_REQUEST_MAGIC,
@@ -1206,7 +1206,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Claims the Dealer receives', SCORING.FILL_REQUEST_RECEIVE_OFFSET, 'u64-vector'),
       field('Claims the Dealer delivers', SCORING.FILL_REQUEST_DELIVER_OFFSET, 'u64-vector'),
     ],
-    note: 'Vectors show every stored coordinate; entries beyond the outcome count must be zero. This is a layout reading, not a pricing or conservation certificate.',
+    note: 'One value per outcome. Unused entries must be zero.',
   },
   {
     magic: WITHDRAW_REQUEST_MAGIC,
@@ -1293,7 +1293,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Fund revision', SCORING.FILL_WITNESS_FUND_REVISION_OFFSET, 'u64'),
       field('Cash in collateral atoms', SCORING.FILL_WITNESS_CASH_OFFSET, 'u64'),
     ],
-    note: 'Vectors show every stored coordinate; entries beyond the outcome count must be zero. This is a layout reading, not a pricing or conservation certificate.',
+    note: 'One value per outcome. Unused entries must be zero.',
   },
   // ---------------------------------------------------------------- Core / Realm
   {
@@ -1592,7 +1592,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     // The slot status is the `funding-ledger` state machine, and it is one row
     // deep. Looked up by this record's own magic so the two never disagree.
     rowDiscriminant: rowDiscriminantForMagicV1(CAPABILITY_FUNDING_LEDGER_MAGIC_V2),
-    note: 'How many rows there are is the number of bits set in the mask, not a count the record stores. Each row carries its own status, and every one of them is shown.',
+    note: 'The mask selects the rows. Each row has its own status.',
   },
   {
     magic: CAPABILITY_FUNDING_STATE_MAGIC_V1,
@@ -1623,7 +1623,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Window start', WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1, 'i64', { note: 'unix seconds, inclusive' }),
       field('Window end', WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1, 'i64', { note: 'unix seconds, inclusive' }),
     ],
-    note: 'Two of this record’s seven coordinates are named by the Rust that writes it, and those two are the settlement window itself. The rest — its source identity, kind, freshness budget, schedule and cadence tolerance — sit at bare numbers inside `WindowSpecV1::decode`, and this table does not restate a coordinate nobody published.',
+    note: 'The start and end of the settlement window are decoded below.',
   },
   {
     magic: STATISTIC_SPEC_MAGIC,
@@ -2084,7 +2084,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     magic: GENERAL_BATCH_MAGIC_V2,
     name: 'General batch',
     family: 'General',
-    summary: 'One auction occurrence: the window orders may arrive in, the running count of what has arrived, and — once it has settled — the price the whole book cleared at. It bounds its orders rather than listing them.',
+    summary: 'A batch auction’s order window, order count and clearing prices.',
     width: {
       kind: 'header-and-rows',
       headerBytes: GENERAL_CLEARING_PRICES_OFFSET_V1,
@@ -2123,7 +2123,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Live order count', GENERAL_CLEARING_LIVE_ORDER_COUNT_OFFSET_V1, 'u32'),
       field('Reserved', GENERAL_CLEARING_RESERVED_TAIL_OFFSET_V1, 'reserved'),
     ],
-    note: 'Everything from the status byte on is mutable; everything before it is fixed when the batch opens. The clearing — from the cleared-candidate identity to the end — is VACANT, every byte zero, until the status reads Cleared, so a batch that was never settled cannot present a price. The identity preimage stops at the opening terms and never commits to this tail, so every order signed against this batch keeps its identity through the clearing.',
+    note: 'Opening terms remain fixed. Clearing fields are populated when the batch reaches Cleared status.',
   },
   {
     magic: GENERAL_BATCH_OCCURRENCE_TERMS_MAGIC_V1,
@@ -2147,7 +2147,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Max orders', GENERAL_BATCH_OCCURRENCE_TERMS_MAX_ORDERS_OFFSET_V1, 'u32'),
       field('Reserved', GENERAL_BATCH_OCCURRENCE_TERMS_RESERVED_B_OFFSET_V1, 'reserved'),
     ],
-    note: 'This is a preimage, not an account: it is what gets hashed, and it is never stored on chain under its own magic.',
+    note: 'Hash input used to derive the batch identity.',
   },
   {
     magic: GENERAL_ORDER_MAGIC_V2,
@@ -2189,7 +2189,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Released at slot', GENERAL_ORDER_STATE_RELEASED_SLOT_OFFSET_V2, 'u64'),
       field('Reserved', GENERAL_ORDER_RESERVED_STATE_TAIL_OFFSET_V2, 'reserved'),
     ],
-    note: 'The side, the inclusive outcome interval and the claims one lot moves are the whole portfolio: the per-outcome rows are DERIVED from them, and the decoder refuses a record whose rows disagree with its own shape. The mutable state sits at a fixed offset ahead of those rows, and the order identity is the digest of the signed header alone — not the state, and not the rows the header already determines.',
+    note: 'The side, outcome interval and claims per lot determine the portfolio. The signed terms determine the order identity.',
   },
   {
     magic: GENERAL_SUBMISSION_MAGIC_V1,
@@ -2221,7 +2221,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Cleanup remaining', GENERAL_SUBMISSION_CLEANUP_REMAINING_OFFSET_V1, 'u64'),
       field('Reserved', GENERAL_SUBMISSION_TAIL_RESERVED_OFFSET_V1, 'reserved'),
     ],
-    note: 'The candidate identity is the record’s own digest, proved at submission. A better candidate may arrive at any time while selection is open and wins by the policy’s own comparison; there is no challenge step.',
+    note: 'Candidates compete under the batch’s selection policy until selection closes.',
   },
   {
     magic: GENERAL_VERIFIER_MAGIC_V2,
@@ -2261,7 +2261,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Current order source page', GENERAL_VERIFIER_CURRENT_SOURCE_PAGE_INDEX_OFFSET_V2, 'u32'),
       field('Current order source row', GENERAL_VERIFIER_CURRENT_SOURCE_EXECUTION_INDEX_OFFSET_V2, 'u32'),
     ],
-    note: 'The current-order fields mean nothing unless the has-current-order byte is 1. The seven tails are the simplex prices, the current order’s receive and deliver coefficients, the aggregate claim inputs and outputs, and the price floor and ceiling; none has a fixed offset, because each begins after the one before it at a width the record itself declares.',
+    note: 'When has-current-order is 1, the cursor includes that order’s progress. The remaining vectors contain prices, order coefficients, aggregate claim amounts and price bounds.',
   },
   {
     magic: GENERAL_VERIFIED_CANDIDATE_MAGIC_V2,
@@ -2548,7 +2548,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Rent credit before (lamports)', RATIONAL_LIFECYCLE.LIFECYCLE_RENT_CREDIT_BEFORE_OFFSET, 'u64'),
       field('Rent credit after (lamports)', RATIONAL_LIFECYCLE.LIFECYCLE_RENT_CREDIT_AFTER_OFFSET, 'u64'),
     ],
-    note: 'The compact form is canonical only for Retire receipt with a zero parent-context run and zero coordinate count; this layout shows those stored facts without treating them as a general lifecycle header.',
+    note: 'Compact Retire receipt request: zero parent-context run and zero coordinate count.',
   },
   {
     magic: DESCRIPTOR_MAGIC_V3,
@@ -2629,7 +2629,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Result denominator', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_RESULT_DENOMINATOR_OFFSET, 'u64'),
       field('Observed at (unix seconds)', RESOLUTION_CERTIFICATE.CERTIFICATE_V2_OBSERVED_AT_OFFSET, 'u64'),
     ],
-    note: 'Recovery advanced and Exhausted record recovery transitions; neither kind is accepted as a terminal Product certificate. This layout reading does not prove Core admission.',
+    note: 'Recovery advanced and Exhausted identify steps in the recovery sequence.',
   },
 
   // ---------------------------------------------------------------- Product V2

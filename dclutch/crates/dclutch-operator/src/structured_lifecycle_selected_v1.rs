@@ -315,10 +315,9 @@ fn compile(
         .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
         u32::try_from(dclutch_market::STATE_BYTES)
             .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
-    if matches!(
-        action,
-        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate
-    ) {
+    // Native ProtocolPosition Admit creates Position and Admission from vacant
+    // accounts. Only Close consumes their live account images.
+    if action == LifecycleActionV2::RetireCoordinate {
         *lengths
             .get_mut(26)
             .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
@@ -328,6 +327,11 @@ fn compile(
             .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
             u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
                 .map_err(|_| StructuredLifecycleSelectedErrorV1::Input)?;
+    }
+    if matches!(
+        action,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate
+    ) {
         *lengths
             .get_mut(35)
             .ok_or(StructuredLifecycleSelectedErrorV1::Input)? =
@@ -370,6 +374,10 @@ mod tests {
     }
 
     fn basis() -> [u8; BASIS_HEADER_BYTES_V3] {
+        basis_with_width(258)
+    }
+
+    fn basis_with_width(width: u32) -> [u8; BASIS_HEADER_BYTES_V3] {
         let mut output = [0; BASIS_HEADER_BYTES_V3];
         compile_basis_v3(
             BasisInputV3 {
@@ -379,7 +387,7 @@ mod tests {
                 coordinate_domain_id: id(3),
                 result_unit_id: id(4),
                 evaluator_release_id: id(5),
-                basis_width: 258,
+                basis_width: width,
                 payout_scale: 1,
                 knot_denominator: 1,
                 knots: &[],
@@ -486,22 +494,8 @@ mod tests {
                     Exact,
                     u32::try_from(dclutch_market::STATE_BYTES).expect("Core market"),
                 ),
-                26 => (
-                    Exact,
-                    u32::try_from(
-                        liability_basis_vector_width_v2(
-                            LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-                            width,
-                        )
-                        .expect("Claims Position"),
-                    )
-                    .expect("Claims Position u32"),
-                ),
-                27 => (
-                    Exact,
-                    u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
-                        .expect("Position admission"),
-                ),
+                // ProtocolPosition Admit owns allocation of both accounts.
+                26 | 27 => (Exact, 0),
                 35 => (AuthenticatedOpaqueReadonlyData, 0),
                 _ => (Exact, 0),
             };
@@ -529,6 +523,41 @@ mod tests {
                 dclutch_vm::account_profile::v2::AccountProfileV2::decode(&bundle.account_profile)
                     .expect("Profile13");
             assert_native_profile(profile, action);
+        }
+    }
+
+    #[test]
+    fn coordinate_position_profiles_match_admit_vacancy_and_close_live_state() {
+        use dclutch_vm::account_profile::v2::{AccountPrestateV2, AccountProfileV2};
+
+        for width in [2, 258] {
+            let basis = basis_with_width(width);
+            let mut geometry = input(&basis);
+            geometry.representation_outcome_count = width.min(3);
+            let closure = structured_activation_selected_closure_v1(geometry).expect("closure");
+            let live_position = u32::try_from(
+                liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, width)
+                    .expect("native Position allocation width"),
+            )
+            .expect("Position width u32");
+            let live_admission = u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+                .expect("native admission allocation width");
+            for (bundle, widths) in [
+                (&closure.activate_coordinate, [0, 0]),
+                (&closure.retire_coordinate, [live_position, live_admission]),
+            ] {
+                let profile = AccountProfileV2::decode(&bundle.account_profile).expect("Profile13");
+                for (coordinate, expected) in [26_u16, 27].into_iter().zip(widths) {
+                    let rule = profile.rule(false, coordinate).expect("Position rule");
+                    assert_eq!(rule.prestate(), AccountPrestateV2::Exact);
+                    assert_eq!(
+                        rule.data_length(),
+                        expected,
+                        "{:?} coordinate {coordinate}",
+                        bundle.action
+                    );
+                }
+            }
         }
     }
 
@@ -640,26 +669,8 @@ mod tests {
         )
         .expect("ActivateCoordinate profile");
         for (coordinate, expected, label) in [
-            (
-                26,
-                u32::try_from(
-                    dclutch_claims::liability_basis_state_v2::liability_basis_vector_width_v2(
-                        dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-                        258,
-                    )
-                    .expect("Claims Position width"),
-                )
-                .expect("Claims Position width u32"),
-                "Claims Position",
-            ),
-            (
-                27,
-                u32::try_from(
-                    dclutch_claims::protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2,
-                )
-                .expect("admission width"),
-                "Position admission",
-            ),
+            (26, 0, "vacant Claims Position"),
+            (27, 0, "vacant Position admission"),
         ] {
             assert_eq!(
                 coordinate_profile

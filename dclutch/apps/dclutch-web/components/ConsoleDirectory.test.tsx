@@ -46,16 +46,16 @@ describe('the console index', () => {
       const guarantee = html.indexOf(standing.action.guarantee, outcome);
       expect(guarantee, `${standing.action.id} has no guarantee line after its outcome`).toBeGreaterThan(outcome);
     }
-    expect(html).toContain('This browser · one wallet signature, sent from here');
-    expect(html).toContain('This browser · one wallet signature, exported as a file');
-    expect(html).toContain('This browser · one detached message signature');
-    expect(html).toContain('This browser · no key, no signature');
+    expect(html).toContain('Browser · sign and submit');
+    expect(html).toContain('Browser · sign and export');
+    expect(html).toContain('Browser · sign a message');
+    expect(html).toContain('Browser · preview');
     // WAS pinned here because `market.join` was the one act that published an
     // `--execute` command. It is a browser act now — the compiled admission
     // planner builds its frame — so no listed act asks a reader for their own
     // key, and asserting that string would pin a wall this lane removed.
-    expect(html).not.toContain('Published command · your own key, after an explicit authorization');
-    expect(html).toContain('Published command · reads only, no key');
+    expect(html).not.toContain('Command line · signing key required');
+    expect(html).toContain('Command line · read-only');
   });
 
   it('carries a known wall in the same card as the outcome it qualifies', () => {
@@ -83,7 +83,7 @@ describe('the console index', () => {
         .map((entry) => entry.statement)[0]!;
       expect(
         html.indexOf(statement, outcome),
-        `${standing.action.id} needs a file this browser cannot produce and its card does not say so`,
+        `${standing.action.id} needs a prepared input file and its card does not say so`,
       ).toBeGreaterThan(outcome);
     }
   });

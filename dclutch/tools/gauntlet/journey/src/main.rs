@@ -440,8 +440,11 @@ fn run() -> Result<()> {
         Some("structured-claims") => {
             structured_claims_campaign::execute(parse_journey_request(arguments.collect())?)
         }
-        Some("structured-claims-continue") => {
-            structured_claims_campaign::continue_existing(parse_journey_request(arguments.collect())?)
+        Some("structured-claims-continue") => structured_claims_campaign::continue_existing(
+            parse_journey_request(arguments.collect())?,
+        ),
+        Some("structured-claims-fresh-selection") => {
+            structured_claims_campaign::fresh_selection(arguments.collect())
         }
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
@@ -660,6 +663,12 @@ fn run_demo_market(_arguments: Vec<String>) -> Result<()> {
 }
 
 fn usage() {
+    println!(
+        "Structured: structured-claims and structured-claims-continue accept the run flags below.\n\
+         structured-claims-fresh-selection also requires --retained-work ABSOLUTE_EXISTING_CAMPAIGN,\n\
+         a fresh --seed, and unused --work/--transcript paths. It founds a new immutable selection\n\
+         on the retained checked loopback validator, then uses the same lifecycle continuation.\n"
+    );
     println!(
         "Usage:\n  dclutch-journey-campaign run \\\n      \
          --transcript ABSOLUTE_NEW_JSON --work ABSOLUTE_DIR --rpc-port PORT \\\n      \

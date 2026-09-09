@@ -44,7 +44,6 @@ use dclutch_market::capability_manifest::{
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
-    set_v1::CapabilityProgramSetV1,
     set_v2::{
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
         CapabilityProgramSetEntryV2, CapabilityProgramSetV2, SelectorWidthV2,
@@ -121,7 +120,7 @@ use dclutch_trading_sbf::{
             DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_REDEEM_P0_SELECTOR_V3,
             DEALER_EQUITY_REDEEM_P1_SELECTOR_V3, DEALER_EQUITY_REDEEM_P2_SELECTOR_V3,
             DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityBumpSeedsV3, DealerEquityRequestV3,
-            EquityPoolChainProjectionV3, EquityRequestIntentV3, build_equity_request_v3,
+            EquityPoolChainProjectionV3, EquityRequestIntentV3, build_equity_request_v4,
             mine_dealer_equity_bumps_v3, prepare_equity_request_v3,
         },
         lp_artifacts::{
@@ -168,7 +167,7 @@ const CLAIMS_PROGRAM: Pubkey = Pubkey::new_from_array([0xe6; 32]);
 const CORE_PROGRAM: Pubkey = Pubkey::new_from_array([0xe7; 32]);
 const ACCELERATOR: Pubkey = Pubkey::new_from_array([0xe8; 32]);
 const BENEFICIARY: Pubkey = Pubkey::new_from_array([0xd2; 32]);
-const WIDTH: u32 = 1;
+const WIDTH: u32 = 3;
 const FUNDED_COORDINATE: usize = 0;
 const GENERATION: u64 = 17;
 const POSITION_REVISION: u64 = 3;
@@ -1291,7 +1290,7 @@ fn campaign(scenario: &Scenario) -> LpCampaign {
         scenario.dealer.pubkey().to_bytes(),
         root.to_bytes(),
         7,
-        &[100],
+        &[100, 0, 0],
     );
     let accelerator_programdata_key = programdata_address(ACCELERATOR);
     let accelerator_program = deployment_account(
@@ -1911,22 +1910,6 @@ async fn current_equity_claims(
     }
 }
 
-/// Legacy composer adapter for a descriptor already selected from the
-/// campaign's authenticated SetV2.  This carries no independent program
-/// authority: callers must rejoin the returned request to SetV2 below.
-fn single_selection_set(selector_offset: u32, selector: u16, program_id: [u8; 32]) -> Vec<u8> {
-    let mut bytes = vec![0_u8; 72];
-    bytes[..8].copy_from_slice(b"DCLTCPS1");
-    bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
-    bytes[10..12].copy_from_slice(&1_u16.to_le_bytes());
-    bytes[12..16].copy_from_slice(&selector_offset.to_le_bytes());
-    bytes[16] = 2;
-    bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
-    bytes[32..36].copy_from_slice(&u32::from(selector).to_le_bytes());
-    bytes[36..68].copy_from_slice(&program_id);
-    bytes
-}
-
 async fn observed_binding(context: &mut ProgramTestContext, key: Pubkey) -> BuiltAccountV1 {
     BuiltAccountV1 {
         key,
@@ -2110,13 +2093,8 @@ async fn build_equity_bundle(
             .descriptor,
     )
     .to_bytes();
-    let selector_set_bytes = single_selection_set(
-        dclutch_trading_sbf::dealer::equity_request::DEALER_EQUITY_SELECTOR_OFFSET_V3,
-        expected_selector,
-        selected_program,
-    );
     let selector_set =
-        CapabilityProgramSetV1::decode(&selector_set_bytes).expect("equity selection set");
+        CapabilityProgramSetV2::decode(&campaign.program_set).expect("equity selection SetV2");
     let width = usize::try_from(scenario.fixture.outcome_count).expect("small width");
     let mut request = vec![0_u8; 4096];
     let mut obligation_scratch = vec![0_u64; width];
@@ -2125,7 +2103,7 @@ async fn build_equity_bundle(
     let mut claims_transferred = vec![0_u64; width];
     let mut dealer_after = vec![0_u64; width];
     let mut lp_after = vec![0_u64; width];
-    let unsigned = build_equity_request_v3(
+    let unsigned = build_equity_request_v4(
         chain,
         intent,
         selector_set,
@@ -2138,7 +2116,14 @@ async fn build_equity_bundle(
         &mut lp_after,
     )
     .expect("first cash-only equity contribution");
-    assert_eq!(unsigned.selected_program.to_bytes(), selected_program);
+    assert_eq!(
+        unsigned.selected_descriptor.schema().to_bytes(),
+        CAPABILITY_PROGRAM_SCHEMA_V4
+    );
+    assert_eq!(
+        unsigned.selected_descriptor.program().to_bytes(),
+        selected_program
+    );
     request.truncate(unsigned.request_bytes);
     let decoded = DealerEquityRequestV3::decode(&request).expect("equity request");
     assert_eq!(decoded.selector(), expected_selector);
@@ -2758,9 +2743,9 @@ async fn accepted_multi_lp_full_exit_uses_current_real_elf_and_rolls_back_late_s
     );
     assert_eq!(live_a.market, live_b.market);
     assert_eq!(live_a.dealer_position, live_b.dealer_position);
-    assert_eq!(live_a.dealer_balances, vec![100]);
-    assert_eq!(live_a.counterparty_balances, vec![0]);
-    assert_eq!(live_b.counterparty_balances, vec![0]);
+    assert_eq!(live_a.dealer_balances, vec![100, 0, 0]);
+    assert_eq!(live_a.counterparty_balances, vec![0, 0, 0]);
+    assert_eq!(live_b.counterparty_balances, vec![0, 0, 0]);
 
     let mut test = program_test(&scenario);
     dclutch_fractional_atomic_program_test::campaign_support::add_upgradeable_program(

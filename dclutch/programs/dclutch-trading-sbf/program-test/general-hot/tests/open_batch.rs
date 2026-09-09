@@ -4,6 +4,8 @@
 
 #[path = "open_batch/matched_trade.rs"]
 mod matched_trade;
+#[path = "open_batch/native_export.rs"]
+mod native_export;
 #[path = "open_batch/verify_continuation.rs"]
 mod verify_continuation;
 
@@ -2894,6 +2896,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
 
     // ---- ACTION ONE: OpenBatch ------------------------------------------
     assert_frame_control(&mut context, &open).await;
+    native_export::export_before_submit(&mut context, &campaign, &open, fee_payer.pubkey()).await;
     let payer_before_open = chain_account(&mut context, payer.pubkey()).await.lamports;
     let open_execution = waist::submit_v0_observed(
         &mut context,

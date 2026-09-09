@@ -218,7 +218,7 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     // carry both literals are unchanged to the byte.
     match action {
         Action::SubmitCandidate => 41,
-        Action::VerifyCandidateRow => 19,
+        Action::VerifyCandidateRow => 21,
         Action::CloseCandidate => 26,
         Action::OpenBatch => 24,
         Action::CloseBatch => 22,
@@ -619,6 +619,29 @@ pub fn general_account_profile_operation_v3(
             account: primary,
             expected: common_identity(identity::TRADING_PROGRAM)?,
         }),
+        // All three Verify state recipes use the submitted Candidate identity.
+        // Read it from the existing owner-authenticated envelope before preplan;
+        // the request identity is independently joined by the General adapter.
+        11 if action == Action::VerifyCandidateRow => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: primary,
+                destination: common_identity(identity::CANDIDATE)?,
+                data_offset: candidate_body_offset(GeneralCandidateLayoutV1::CANDIDATE_ID_OFFSET)?,
+            })
+        }
+        // Pure Result/Create compares its declared refund wallet to the same
+        // RentCredit the lifecycle kernel authenticates. The cranker pays the
+        // creation debit but does not replace the market's refund authority.
+        12 if action == Action::VerifyCandidateRow => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3),
+                destination: common_identity(identity::RESULT_BENEFICIARY_OBSERVATION)?,
+                data_offset: width(
+                    dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2::refund_wallet_offset(
+                    ),
+                )?,
+            })
+        }
         // Candidate close authenticates the persisted work compartments,
         // their physical balance, the joined Batch deadline, and the two
         // distinct lamport beneficiaries. CurrentSlot is supplied only by the
@@ -4649,3 +4672,7 @@ mod tests {
         assert!(short.iter().all(|byte| *byte == 0x55));
     }
 }
+
+#[cfg(test)]
+#[path = "verify_result_funding_tests.rs"]
+mod verify_result_funding_tests;

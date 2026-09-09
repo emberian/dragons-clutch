@@ -604,7 +604,7 @@ function LensCard({ node }: Readonly<{ node: LensNode }>) {
 
 function MarketView({ state }: Readonly<{ state: Async<MarketLens> }>) {
   if (state.kind === 'idle') {
-    return <Notice kind="quiet" title="Paste a Market address." message="A Market is not one account. This joins the Core state, the Realm it is collateralized in, the Claims aggregate, the Hoard behind it and the capability manifest, and makes every identity openable." />;
+    return <Notice kind="quiet" title="Paste a Market address." message="View the market’s status, collateral vault, claims and related accounts." />;
   }
   if (state.kind === 'loading') return <Notice kind="loading" title="Joining the record graph" message={state.message} />;
   if (state.kind === 'error') return <Notice kind="error" title="Market read refused" message={state.message} />;

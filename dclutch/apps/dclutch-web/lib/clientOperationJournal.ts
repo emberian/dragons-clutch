@@ -378,6 +378,13 @@ export async function clearFinalizedClientOperationJournalV1(
 ): Promise<void> {
   const current = await findClientOperationJournalV1(storage, journal, journal.operation);
   if (current === null) return;
-  if (current.operationDigest !== journal.operationDigest) throw new Error('operation journal changed before finalized completion');
-  storage.removeItem(journalKeyUnchecked(current));
+  const expected = JSON.stringify(parseJournal(JSON.stringify(journal)));
+  if (JSON.stringify(current) !== expected) throw new Error('operation journal changed before finalized completion');
+  const key = journalKeyUnchecked(current);
+  // Recheck synchronously after the digest awaits in find: another tab may
+  // have installed a different packet for the same operation in that interval.
+  const latest = storage.getItem(key);
+  if (latest === null) return;
+  if (JSON.stringify(parseJournal(latest)) !== expected) throw new Error('operation journal changed before finalized completion');
+  storage.removeItem(key);
 }

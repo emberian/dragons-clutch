@@ -421,9 +421,9 @@ export function KeypairHandoff({
   invocation: string;
 }>) {
   return <div className="operator-keypair">
-    <p>Signing {what} needs a key, and a key never enters this page. Run it where the key already is:</p>
+    <p>Sign {what} with your command-line keypair:</p>
     <pre><code>{`export ${envVar}=/path/to/your/keypair.json\n${invocation}`}</code></pre>
-    <p className="operator-field-reading">This browser reads no files and holds no keys. The command above is the whole handoff.</p>
+    <p className="operator-field-reading">Run this command in your terminal.</p>
   </div>;
 }
 

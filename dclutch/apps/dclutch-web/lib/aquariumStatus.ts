@@ -262,12 +262,12 @@ export type AquariumBeatV1 = Readonly<{ state: AquariumStateV1; sentence: string
 
 /** The producer's own deadline overrides a stale-looking state left by a dead writer. */
 export function aquariumBeatV1(status: AquariumStatusV1, nowMs: number): AquariumBeatV1 {
-  if (status.failure !== null) return Object.freeze({ state: 'halted', sentence: `The aquarium driver exited: ${status.failure.detail}` });
+  if (status.failure !== null) return Object.freeze({ state: 'halted', sentence: `Aquarium driver exited: ${status.failure.detail}` });
   if (status.run.expectedNextUpdateBy !== null && nowMs > Date.parse(status.run.expectedNextUpdateBy)) {
-    return Object.freeze({ state: 'stale', sentence: 'The aquarium is overdue for its next published observation.' });
+    return Object.freeze({ state: 'stale', sentence: 'Aquarium update is overdue.' });
   }
   const sentence: Record<AquariumStateV1, string> = {
-    preflight: 'The aquarium is preparing its bounded run.', running: 'The aquarium is publishing bounded synthetic activity.', stopping: 'The aquarium is finishing its current epoch.', stopped: 'The aquarium stopped after its recorded work.', halted: 'The aquarium halted itself.', stale: 'The aquarium marked its last observation stale.',
+    preflight: 'Aquarium is preparing.', running: 'Aquarium is running.', stopping: 'Aquarium is finishing the current epoch.', stopped: 'Aquarium stopped.', halted: 'Aquarium halted.', stale: 'Aquarium data is stale.',
   };
   return Object.freeze({ state: status.state, sentence: sentence[status.state] });
 }

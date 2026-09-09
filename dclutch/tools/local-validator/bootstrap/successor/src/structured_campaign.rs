@@ -66,6 +66,11 @@ use dclutch_operator::{
     representation_composition::native_categorical_v1::{
         NativeBasisCompositionInputV1, compile_native_basis_composition_v1,
     },
+    structured_lifecycle_intent_v1::{
+        StructuredCoordinatePhysicalAccountsV1, StructuredReceiptPhysicalAccountsV1,
+        activate_receipt_claims_instruction_v1, coordinate_claims_instruction_v1,
+        retire_receipt_claims_instruction_v1,
+    },
 };
 use dclutch_product::admission::ProductRecordV2;
 use dclutch_product::{PortfolioV2, ResultDomainV2};
@@ -112,10 +117,6 @@ use crate::{
         record_coordinates_v1,
     },
     structured_composition_admission::hydrate_structured_composition_admission_v1,
-    structured_physical_frame::{
-        ActivateReceiptPhysicalInputsV1, CoordinatePhysicalInputsV1,
-        activate_receipt_claims_instruction_v1, coordinate_claims_instruction_v1,
-    },
 };
 
 /// Public owned-loopback command for the Structured publication predecessor.
@@ -140,11 +141,25 @@ pub(crate) fn run_profile_capture_replay_v1(arguments: Vec<String>) -> Result<()
     let mut capture = None;
     let mut market_input = None;
     let mut output = None;
+    let mut action = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
             .next()
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if argument == "--action" {
+            let selected = match value.as_str() {
+                "activate-receipt" => LifecycleActionV2::ActivateReceipt,
+                "activate-coordinate" => LifecycleActionV2::ActivateCoordinate,
+                "retire-coordinate" => LifecycleActionV2::RetireCoordinate,
+                "retire-receipt" => LifecycleActionV2::RetireReceipt,
+                _ => return Err(Error::new("Structured profile replay action is unknown")),
+            };
+            if action.replace(selected).is_some() {
+                return Err(Error::new("--action may be supplied only once"));
+            }
+            continue;
+        }
         let destination = match argument.as_str() {
             "--capture" => &mut capture,
             "--market-input" => &mut market_input,
@@ -192,11 +207,13 @@ pub(crate) fn run_profile_capture_replay_v1(arguments: Vec<String>) -> Result<()
         ))
     })?;
     let market_input_bytes = std::fs::read(&market_input)?;
-    let candidate_profile = current_source_receipt_profile_v1(&market_input_bytes)?;
+    let action = action.unwrap_or(LifecycleActionV2::ActivateReceipt);
+    let candidate_profile = current_source_lifecycle_profile_v1(&market_input_bytes, action)?;
     let original = project_saved_structured_receipt_snapshot_v1(&captured, &original_profile)?;
     let candidate = project_saved_structured_receipt_snapshot_v1(&captured, &candidate_profile)?;
     let evidence = json!({
         "schema": "dclutch-structured-profile-capture-replay-v1",
+        "action": format!("{action:?}"),
         "capture": capture.display().to_string(),
         "captureSha256": sha256_hex(&capture_bytes),
         "marketInput": market_input.display().to_string(),
@@ -212,11 +229,16 @@ pub(crate) fn run_profile_capture_replay_v1(arguments: Vec<String>) -> Result<()
     Ok(())
 }
 
-fn current_source_receipt_profile_v1(market_input_bytes: &[u8]) -> Result<Vec<u8>> {
+fn current_source_lifecycle_profile_v1(
+    market_input_bytes: &[u8],
+    action: LifecycleActionV2,
+) -> Result<Vec<u8>> {
     Ok(current_source_selected_release_v1(market_input_bytes)?
         .activation
-        .activate_receipt
-        .account_profile)
+        .bundle(action)
+        .ok_or_else(|| Error::new("Structured profile replay action has no selected bundle"))?
+        .account_profile
+        .clone())
 }
 
 fn current_source_selected_release_v1(
@@ -1292,6 +1314,14 @@ fn structured_receipt_profile_projection_v1(
     for coordinate in 1..=4 {
         keys[coordinate] = hash(&data[coordinate]).to_bytes();
     }
+    // Trading chooses the projected key by the canonical representative, so
+    // packed child aliases carry the same authenticated content identity.
+    for coordinate in 0..logical_count {
+        let representative = representatives[coordinate];
+        if (1..=4).contains(&representative) {
+            keys[coordinate] = keys[representative];
+        }
+    }
     let product_digest = hash(&data[2]).to_bytes();
     let mut observations = Vec::with_capacity(logical_count);
     for coordinate in 0..logical_count {
@@ -1586,6 +1616,16 @@ fn project_saved_structured_receipt_snapshot_v1(
     let mut keys = physical_keys.clone();
     for coordinate in 1..=4 {
         keys[coordinate] = hash(&data[coordinate]).to_bytes();
+    }
+    for coordinate in 0..logical_count {
+        let representative = profile
+            .representative_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+            .map_err(|error| {
+                Error::new(format!("Structured saved key representative: {error:?}"))
+            })?;
+        if (1..=4).contains(&representative) {
+            keys[coordinate] = keys[representative];
+        }
     }
     let product_digest = hash(&data[2]).to_bytes();
     let mut observations = Vec::with_capacity(logical_count);
@@ -2063,7 +2103,7 @@ fn activate_structured_receipt_v1(
                 Error::new(format!("Structured receipt lifecycle encode: {error:?}"))
             })?;
         let mut claims_child = activate_receipt_claims_instruction_v1(
-            ActivateReceiptPhysicalInputsV1 {
+            StructuredReceiptPhysicalAccountsV1 {
                 trading,
                 trading_programdata: pubkey(&plan.trading.programdata_id)?,
                 claims,
@@ -2082,7 +2122,8 @@ fn activate_structured_receipt_v1(
                 core_programdata: pubkey(&plan.core.programdata_id)?,
             },
             &lifecycle_bytes,
-        )?;
+        )
+        .map_err(|error| Error::new(format!("Structured receipt Claims frame: {error:?}")))?;
         // The child frame records the caller-authority PDA as a signer for the
         // Claims CPI. Hot's selected operator removes that signer bit from the
         // outer transaction account, so the producer must preserve the child
@@ -2845,8 +2886,8 @@ fn activate_structured_coordinates_v1(
         let child_authority =
             Pubkey::find_program_address(&child_authority_seeds.as_slices(), &trading).0;
         let child = coordinate_claims_instruction_v1(
-            CoordinatePhysicalInputsV1 {
-                common: ActivateReceiptPhysicalInputsV1 {
+            StructuredCoordinatePhysicalAccountsV1 {
+                common: StructuredReceiptPhysicalAccountsV1 {
                     trading,
                     trading_programdata: pubkey(&plan.trading.programdata_id)?,
                     claims,
@@ -2880,7 +2921,8 @@ fn activate_structured_coordinates_v1(
                 portfolio_staging: portfolio.staging,
             },
             &lifecycle_bytes,
-        )?;
+        )
+        .map_err(|error| Error::new(format!("Structured coordinate Claims frame: {error:?}")))?;
         let metas = fixed
             .iter()
             .enumerate()
@@ -3013,6 +3055,15 @@ fn activate_structured_coordinates_v1(
             transactions.push(funded);
         }
         if let Some(path) = std::env::var_os("DCLUTCH_STRUCTURED_COORDINATE_FRAME_CAPTURE") {
+            let profile_projection = structured_receipt_profile_projection_v1(
+                rpc,
+                &frame,
+                &child,
+                funded_hot.first().ok_or_else(|| {
+                    Error::new("Structured coordinate capture omitted Hot instruction")
+                })?,
+                artifacts,
+            )?;
             write_structured_frame_capture_v1(
                 rpc,
                 Path::new(&path),
@@ -3020,7 +3071,7 @@ fn activate_structured_coordinates_v1(
                 payer.pubkey(),
                 observation,
                 &tables,
-                json!({"action": format!("{action:?}"), "coordinate": outcome}),
+                profile_projection,
             )?;
             return Err(Error::new(
                 "Structured coordinate diagnostic capture written; Hot submission skipped",
@@ -3855,8 +3906,8 @@ fn retire_structured_representation_v1(
             &mut child_bytes,
         )
         .map_err(|error| Error::new(format!("Structured retirement support: {error:?}")))?;
-    let child = crate::structured_physical_frame::retire_receipt_claims_instruction_v1(
-        ActivateReceiptPhysicalInputsV1 {
+    let child = retire_receipt_claims_instruction_v1(
+        StructuredReceiptPhysicalAccountsV1 {
             trading,
             trading_programdata: pubkey(&plan.trading.programdata_id)?,
             claims,
@@ -3875,7 +3926,8 @@ fn retire_structured_representation_v1(
             core_programdata: pubkey(&plan.core.programdata_id)?,
         },
         &child_bytes,
-    )?;
+    )
+    .map_err(|error| Error::new(format!("Structured retirement Claims frame: {error:?}")))?;
     for (index, record) in [
         HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,

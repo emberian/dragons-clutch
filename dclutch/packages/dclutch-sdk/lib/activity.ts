@@ -271,7 +271,7 @@ export async function inspectActivityV1(
     entries: Object.freeze(entries),
     truncated,
     reason: entries.length === 0
-      ? `The node reports no signature history for ${watched.length} watched address${watched.length === 1 ? '' : 'es'}. That is this node's answer, not a protocol fact: a node without transaction history answers empty for every address.`
-      : `${entries.length} finalized transaction${entries.length === 1 ? '' : 's'} across ${watched.length} watched address${watched.length === 1 ? '' : 'es'}, newest first, from this node's own signature history.`,
+      ? `No transactions returned for ${watched.length} watched address${watched.length === 1 ? '' : 'es'}. Try another RPC provider to check older history.`
+      : `${entries.length} finalized transaction${entries.length === 1 ? '' : 's'} across ${watched.length} watched address${watched.length === 1 ? '' : 'es'}, newest first.`,
   });
 }

@@ -743,7 +743,8 @@ pub fn general_place_order_rent_credit_beneficiary_v2(
 ///
 /// Realm pins both the mint and the exact production adapter release. This is
 /// observation-only: callers write its result only after all actual-frame
-/// bindings have succeeded.
+/// bindings have succeeded. A zero quote debit has no active Custody transfer,
+/// so it needs token ownership authentication but no transfer delegation.
 #[cfg(feature = "svm")]
 pub fn general_place_order_source_token_owner_v2(
     realm_data: &[u8],
@@ -781,9 +782,9 @@ pub fn general_place_order_source_token_owner_v2(
     if source.mint != mint_key {
         return Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint);
     }
-    if source.delegate != COption::Some(expected_delegate)
-        || source.delegated_amount != expected_allowance
-        || expected_allowance == 0
+    if expected_allowance != 0
+        && (source.delegate != COption::Some(expected_delegate)
+            || source.delegated_amount != expected_allowance)
     {
         return Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken);
     }
@@ -3948,7 +3949,6 @@ struct GeneralVerifyCandidateBankV3 {
     batch_id: [u8; 32],
     reward_rate_lamports: u64,
     principal: u64,
-    payer: [u8; 32],
     trading_program: [u8; 32],
     scalar_count: u32,
 }
@@ -4023,7 +4023,6 @@ fn authenticate_general_verify_candidate_bank_v3(
         batch_id: opening.batch_id,
         reward_rate_lamports: opening.reward_rate_lamports,
         principal,
-        payer,
         trading_program,
         scalar_count,
     })
@@ -4233,11 +4232,17 @@ fn project_general_verify_candidate_summary_into_bank_v3(
         (identity::ORDER, current_order),
         (identity::OWNER, current_owner),
         (identity::BEST_VERIFIED_DIGEST, after.verified_digest),
+        // AccountProfile already observed the immutable RentCredit wallet.
+        // Preserve it across evaluation so Result/Create's replan has the same
+        // refund authority even when the permissionless cranker is different.
         (
-            identity::RESULT_BENEFICIARY_OBSERVATION,
-            authenticated.payer,
+            identity::RESULT_BENEFICIARY,
+            read_identity(
+                candidate,
+                authenticated.scalar_count,
+                identity::RESULT_BENEFICIARY_OBSERVATION,
+            )?,
         ),
-        (identity::RESULT_BENEFICIARY, authenticated.payer),
         (identity::RESULT_OWNER, authenticated.trading_program),
     ] {
         write_identity(candidate, authenticated.scalar_count, coordinate, value)?;
@@ -5965,6 +5970,53 @@ mod tests {
                 ),
                 Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken),
                 "release {release_index} refuses an allowance other than the signed debit",
+            );
+
+            let mut no_delegate = source.clone();
+            no_delegate[TokenAccountLayoutV1::DELEGATE..TokenAccountLayoutV1::DELEGATE + 36]
+                .fill(0);
+            no_delegate[TokenAccountLayoutV1::DELEGATED_AMOUNT
+                ..TokenAccountLayoutV1::DELEGATED_AMOUNT + 8]
+                .fill(0);
+            assert_eq!(
+                general_place_order_source_token_owner_v2(
+                    &realm,
+                    mint,
+                    token_program,
+                    token_program,
+                    &no_delegate,
+                    delegate,
+                    0,
+                ),
+                Ok(source_owner),
+                "a zero-quote Sell authenticates its token owner without a transfer allowance",
+            );
+            assert_eq!(
+                general_place_order_source_token_owner_v2(
+                    &realm,
+                    mint,
+                    token_program,
+                    token_program,
+                    &no_delegate,
+                    delegate,
+                    1,
+                ),
+                Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken),
+                "a nonzero debit still requires the exact delegate and allowance",
+            );
+            no_delegate[TokenAccountLayoutV1::MINT] ^= 1;
+            assert_eq!(
+                general_place_order_source_token_owner_v2(
+                    &realm,
+                    mint,
+                    token_program,
+                    token_program,
+                    &no_delegate,
+                    delegate,
+                    0,
+                ),
+                Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint),
+                "zero debit still authenticates the source token mint",
             );
         }
 
@@ -7937,6 +7989,7 @@ mod tests {
                 candidate_header.candidate_id,
             ),
             (identity::PAYER, [0xf3; 32]),
+            (identity::RESULT_BENEFICIARY_OBSERVATION, [0xf4; 32]),
             (identity::TRADING_PROGRAM, environment.trading_program),
         ] {
             write_identity(&mut input, scalar_count, coordinate, value)
@@ -7961,6 +8014,15 @@ mod tests {
         )
         .expect("terminal verify projection");
 
+        for coordinate in [
+            identity::RESULT_BENEFICIARY_OBSERVATION,
+            identity::RESULT_BENEFICIARY,
+        ] {
+            assert_eq!(
+                read_identity(&output, scalar_count, coordinate),
+                Ok([0xf4; 32])
+            );
+        }
         assert!(projection.creates_verified_result());
         assert_eq!(
             projection.summary.submission.state().status,

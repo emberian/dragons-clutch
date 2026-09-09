@@ -203,6 +203,98 @@ pub(crate) fn continue_existing(request: JourneyRequestV1) -> Result<()> {
     )
 }
 
+/// Found a fresh immutable selection on the retained checked bank. The old
+/// Market, its reports and all substrate accounts remain independently named.
+pub(crate) fn fresh_selection(arguments: Vec<String>) -> Result<()> {
+    let mut retained_work = None;
+    let mut common = Vec::new();
+    let mut arguments = arguments.into_iter();
+    while let Some(flag) = arguments.next() {
+        let value = arguments
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if flag == "--retained-work" {
+            if retained_work
+                .replace(std::path::PathBuf::from(value))
+                .is_some()
+            {
+                return Err(Error::new("--retained-work was given twice"));
+            }
+        } else {
+            common.extend([flag, value]);
+        }
+    }
+    let retained_work = retained_work
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| Error::new("--retained-work must be an absolute path"))?;
+    let request = crate::parse_journey_request(common)?;
+    if request.work.exists() || request.transcript.exists() {
+        return Err(Error::new(
+            "Structured fresh selection requires unused work and transcript paths",
+        ));
+    }
+    let plan_bytes = std::fs::read(retained_work.join("substrate/plan.json"))?;
+    let plan: crate::model::SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
+    crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)?;
+    let pins = plan
+        .checked_local_mutable_set
+        .as_ref()
+        .ok_or_else(|| Error::new("Structured fresh selection omitted checked local pins"))?;
+    if pins.source_revision != request.expected_source_revision
+        || pins.source_tree_sha256 != request.expected_source_tree_sha256
+        || pins.checked_release_gate_sha256 != request.expected_gate_sha256
+    {
+        return Err(Error::new(
+            "Structured fresh selection differs from retained cohort",
+        ));
+    }
+    let administration_bytes =
+        std::fs::read(retained_work.join("substrate/administration-evidence.json"))?;
+    let administration: Value = serde_json::from_slice(&administration_bytes)?;
+    let rpc_url = format!("http://127.0.0.1:{}", request.rpc_port);
+    let mut rpc = crate::rpc::Rpc::connect(&rpc_url)?;
+    let genesis = rpc.call("getGenesisHash", &json!([]))?;
+    authenticate_retained_setup_v1(
+        &administration,
+        &rpc_url,
+        &crate::evidence_refresh::hex_digest_v1(&plan_bytes),
+        &genesis,
+    )?;
+    let seed = crate::plan::hex32(&request.seed)?;
+    let public = crate::local_mutable::local_campaign_public_identities_v1(seed)?;
+    let old_founder = crate::substrate::load_keypair(
+        &retained_work.join("substrate/prepare/keys/founding-founder.json"),
+    )?
+    .pubkey()
+    .to_string();
+    if public.get(crate::seed::role::FOUNDING_FOUNDER) == Some(&old_founder) {
+        return Err(Error::new(
+            "Structured fresh selection must use a fresh founding seed",
+        ));
+    }
+    std::fs::create_dir(&request.work)?;
+    let substrate = request.work.join("substrate");
+    std::fs::create_dir(&substrate)?;
+    std::fs::create_dir(substrate.join("prepare"))?;
+    crate::local_mutable::prepare_local_founding_keys_v1(&substrate.join("prepare/keys"), seed)?;
+    std::fs::write(substrate.join("plan.json"), &plan_bytes)?;
+    std::fs::write(
+        substrate.join("administration-evidence.json"),
+        &administration_bytes,
+    )?;
+    write_json(
+        &request.work.join("retained-substrate.json"),
+        &json!({
+            "schema": "dclutch-structured-fresh-selection-on-retained-substrate-v1",
+            "retainedWork": retained_work, "rpcUrl": rpc_url, "genesisHash": genesis,
+            "planSha256": crate::evidence_refresh::hex_digest_v1(&plan_bytes),
+            "runtimeSourceRevision": request.expected_source_revision,
+            "checkedReleaseGateSha256": request.expected_gate_sha256,
+        }),
+    )?;
+    continue_existing(request)
+}
+
 fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
     crate::substrate::require_token_2022_fixture_v1()?;
     let substrate_dir = request.work.join("substrate");

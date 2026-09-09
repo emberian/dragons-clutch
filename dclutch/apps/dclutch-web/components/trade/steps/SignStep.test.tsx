@@ -54,28 +54,10 @@ const PAYER_REQUIRED_V1: WalletPreparationState = Object.freeze({
 describe('step 6, the two signatures', () => {
   const idle = render({ kind: 'idle' });
 
-  /**
-   * THE RESUMPTION PROMISE, relocated.
-   *
-   * It used to sit at the top of the panel as the second of three
-   * undifferentiated status paragraphs -- told to a reader who did not yet
-   * know what signing or sending were, which is to say told to nobody. It now
-   * renders in this step's header, one step away from being true, and it is
-   * pinned HERE so the move cannot become a deletion.
-   */
-  it('carries the resumption promise, whole and unsplit', () => {
-    expect(idle).toContain('Signing sends nothing.');
-    expect(idle).toContain('it happens once');
-    expect(idle).toContain('rather than sending a second one');
-    // One sentence in one element. A `toContain` guard cannot survive half of
-    // it being wrapped in a span for emphasis, and the guard is the point.
-    expect(idle).toContain('Signing sends nothing. Sending is a separate step you take, and it happens once — reload part-way through and this page picks up the transaction you already sent rather than sending a second one.');
-  });
-
   it('renders two signature rows and never one, before either has happened', () => {
     expect(idle).toContain('Your intent');
     expect(idle).toContain('The transaction');
-    expect(idle).toContain('sign message');
+    expect(idle).toContain('trade terms');
     expect(idle).toContain('sign transaction');
     expect(idle.split('signature-open').length - 1).toBe(2);
     expect(idle).not.toContain('signature-done');
@@ -88,18 +70,18 @@ describe('step 6, the two signatures', () => {
    */
   it('says what the first signature produced, on every path that reaches it', () => {
     const signed = render(PAYER_REQUIRED_V1);
-    expect(signed).toContain('Your intent is signed. Nothing has executed.');
+    expect(signed).toContain('Offer signed. Ready to prepare the transaction.');
     expect(signed.split('signature-done').length - 1).toBe(1);
   });
 
   it('does not offer to sign again once the intent is signed', () => {
-    expect(idle).toContain('Sign my intent, then authenticate the packet');
-    expect(render(PAYER_REQUIRED_V1)).not.toContain('Sign my intent, then authenticate the packet');
+    expect(idle).toContain('Sign offer and prepare trade');
+    expect(render(PAYER_REQUIRED_V1)).not.toContain('Sign offer and prepare trade');
   });
 
   it('keeps buyer and payer distinct, and enables the packet signature only for the route payer', () => {
     const waiting = render(PAYER_REQUIRED_V1);
-    expect(waiting).toContain(`Buyer ${BUYER} remains the buyer`);
+    expect(waiting).toContain(`Buyer ${BUYER} has signed the offer`);
     expect(waiting).toContain(`route payer ${PAYER}`);
     expect(waiting).toContain('Portable signed buyer ticket');
     expect(waiting).toContain('disabled=""');
@@ -111,7 +93,7 @@ describe('step 6, the two signatures', () => {
   it('says the packet request still does not submit, where the request is', () => {
     // Reached only in `wallet-preparable`, so the sentence is pinned against
     // the state that shows it rather than against the panel's idle shell.
-    expect(idle).not.toContain('This request still does not submit.');
+    expect(idle).not.toContain('After signing, continue to Submit');
   });
 
   it('uses the operator’s published route in one line, without a textarea', () => {

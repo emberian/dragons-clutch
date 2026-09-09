@@ -79,7 +79,7 @@ export default function SplineProductArtifactInspector() {
   const [artifacts, setArtifacts] = useState<LoadedArtifactsV1>({});
   const [result, setResult] = useState<InspectedSplineProductArtifactsV1 | null>(null);
   const [partition, setPartition] = useState<ResultDomainV2 | null>(null);
-  const [status, setStatus] = useState('Load report.json and all five compiler files. Nothing is read from a chain.');
+  const [status, setStatus] = useState('Load report.json and all five compiler files.');
   const [copyStatus, setCopyStatus] = useState('Founding handoff not copied.');
 
   const missing = useMemo(() => ARTIFACTS_V1.filter(({ key }) => artifacts[key] === undefined), [artifacts]);
@@ -157,7 +157,7 @@ export default function SplineProductArtifactInspector() {
       // already being decoded and discarded elsewhere; here it is read for
       // what it says rather than only for whether it is well formed.
       setPartition(decodeResultDomainV2(files.resultDomain));
-      setStatus('Verified all five files against the Rust compiler report and generated Registry authorities. Nothing was signed or submitted.');
+      setStatus('All five files match the compiler report and Registry coordinates.');
     } catch (error) {
       setPartition(null);
       setStatus(`Handoff refused: ${refusal(error)}`);
@@ -172,7 +172,7 @@ export default function SplineProductArtifactInspector() {
     }
     try {
       await navigator.clipboard.writeText(handoffJson(result));
-      setCopyStatus('Copied the exact five Found39 record coordinates. Nothing was executed.');
+      setCopyStatus('Copied the five record coordinates.');
     } catch (error) {
       setCopyStatus(`Copy refused: ${refusal(error)}`);
     }
@@ -181,13 +181,13 @@ export default function SplineProductArtifactInspector() {
   return <Card className="spline-artifact-inspector" aria-labelledby="spline-artifact-inspector-title">
     <CardHeader>
       <CardTitle id="spline-artifact-inspector-title">Inspect the compiler handoff</CardTitle>
-      <CardDescription>Load the files from one <code>product spline</code> output directory. The SDK verifies bytes, generated schemas, SHA-256 identities, canonical Registry coordinates, and the report&rsquo;s cross-record summary. It does not reimplement the spline compiler or price-gate theorem.</CardDescription>
+      <CardDescription>Load the files from one <code>product spline</code> output directory to check their hashes and Registry addresses, inspect the outcome boundaries, and copy the market-opening inputs.</CardDescription>
     </CardHeader>
     <CardContent className="spline-artifact-content">
       <div className="spline-artifact-bundle">
         <Label htmlFor="spline-bundle">Compiler output · choose all six files</Label>
         <Input id="spline-bundle" type="file" multiple accept="application/json,application/octet-stream,.json,.bin" onChange={(event) => { void loadBundle(event); }} />
-        <p>Select <code>report.json</code> and the five <code>.bin</code> files together. The browser accepts only the exact compiler filenames and updates the bundle only after every file can be read.</p>
+        <p>Select <code>report.json</code> and the five <code>.bin</code> files together. Keep their original filenames.</p>
         <ul aria-label="Compiler bundle file status">
           <li><span>report.json</span><strong>{report === null ? 'not loaded' : 'loaded'}</strong></li>
           {ARTIFACTS_V1.map(({ key, file }) => <li key={key}><span>{file}</span><strong>{artifacts[key] === undefined ? 'not loaded' : `${artifacts[key]!.bytes.length.toLocaleString()} bytes`}</strong></li>)}
@@ -196,7 +196,7 @@ export default function SplineProductArtifactInspector() {
 
       <details className="spline-artifact-replacements">
         <summary>Replace one file</summary>
-        <p>Use these controls only when correcting one file in an already loaded bundle. Each replacement must keep its exact compiler filename.</p>
+        <p>Replace a file in the loaded bundle. Each replacement must keep its exact compiler filename.</p>
         <div className="spline-artifact-grid">
           <div className="spline-artifact-picker">
             <Label htmlFor="spline-report">Compiler report · report.json</Label>
@@ -234,7 +234,7 @@ export default function SplineProductArtifactInspector() {
 
         {partition !== null && <div className="spline-artifact-partition">
           <h4 className="detail-subhead">The outcome partition this market actually sells</h4>
-          <p className="direct-status">{partition.regionCount} ordinary cells over {partition.cuts.length} cut{partition.cuts.length === 1 ? '' : 's'}, at {partition.denominator.toString()} ticks per whole unit — read out of the operator&rsquo;s own <code>result-domain.bin</code>, not derived here. These are where the outcome changes; the payoff knots in step 01 are where the payoff bends.</p>
+          <p className="direct-status">{partition.regionCount} ordinary outcomes separated by {partition.cuts.length} cut{partition.cuts.length === 1 ? '' : 's'}, at {partition.denominator.toString()} ticks per whole unit. These boundaries come from <code>result-domain.bin</code>.</p>
           <div className="spline-artifact-table" tabIndex={0} role="region" aria-label="The result domain's cuts, in order">
             <Table>
               <TableHeader><TableRow><TableHead>Cell</TableHead><TableHead>From</TableHead><TableHead>To</TableHead></TableRow></TableHeader>
@@ -245,7 +245,7 @@ export default function SplineProductArtifactInspector() {
               </TableRow>)}</TableBody>
             </Table>
           </div>
-          <p className="direct-status">What share of the ex-ante outcome mass each cell holds is not shown, because this bundle does not carry it: <code>dclutch-product-compiler</code> computes a <code>PartitionQualityReportV1</code> with <code>cell_share_bps</code>, and the authoring report schema <code>dclutch/product-spline-authoring-report/v1</code> does not yet emit it. Until the producer does, this page can say where the cells are and not how much of the question each one takes.</p>
+          <p className="direct-status">The compiler report does not include each outcome’s share of the ex-ante outcome mass.</p>
         </div>}
 
         <div className="spline-artifact-table" tabIndex={0} role="region" aria-label="Compiler files, bytes and Registry coordinates">
@@ -260,7 +260,7 @@ export default function SplineProductArtifactInspector() {
         </div>
 
         <div className="spline-founding-handoff">
-          <div><span>Next exact consumer</span><h3>Found39 record coordinates</h3><p>These are the five Registry raw accounts accepted by <code>prepareCoreFoundV2</code>. Found still authenticates their live owner, schema, digest, raw/staging relationship, and price-gate certificate on chain. Inspection does not publish the records or found a Market.</p></div>
+          <div><span>Market-opening inputs</span><h3>Found39 record coordinates</h3><p>Copy these five Registry record addresses into the market-opening inputs. The records must be published before the market can open.</p></div>
           <Button type="button" variant="outline" onClick={() => { void copyHandoff(); }}>Copy Found39 handoff</Button>
           <textarea readOnly value={handoffJson(result)} aria-label="Verified Found39 record coordinates" />
           <p aria-live="polite">{copyStatus}</p>

@@ -43,7 +43,7 @@ function short(value: string): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'the live read refused without a usable reason';
+  return error instanceof Error ? error.message : 'live read failed without an error message';
 }
 
 /**
@@ -118,19 +118,19 @@ export default function AquariumLiveChainPanel({ status }: Readonly<{ status: Aq
   const observation = shownState.observation;
   const decoded = observation?.detail.card.status === 'decoded' ? observation.detail.card : null;
   return <section className="trade-v3-card">
-    <header><span>02</span><div><h2>Live devnet market read</h2><p>One snapshot-listed market, read at finalized commitment and checked against its release set. Recent signatures are the node&apos;s index; they are not all trades, and this read cannot show whether the aquarium worker is running.</p></div></header>
+    <header><span>02</span><div><h2>Live devnet market</h2><p>Finalized account state and recent signatures for one active market.</p></div></header>
     {shownState.kind === 'unavailable' && <p className="market-empty">{shownState.reason}</p>}
     {shownState.kind === 'error' && <p className="market-refusal">Live read unavailable: {shownState.reason}</p>}
     {observation !== null && decoded !== null && <>
       <div className="trade-v3-evidence">
-        <article><span>Snapshot-listed market</span><strong><Anchor href={marketDetailHrefV1(observation.address)}>{short(observation.address)}</Anchor></strong><small>open its account detail and check joining there</small></article>
+        <article><span>Market</span><strong><Anchor href={marketDetailHrefV1(observation.address)}>{short(observation.address)}</Anchor></strong><small>Open account details</small></article>
         <article><span>Finalized observation</span><strong>slot {observation.detail.floorSlot}</strong><small>read {observation.observedAt}</small></article>
-        <article><span>Market phase now</span><strong>{decoded.phase}</strong><small>{shownState.kind === 'loading' ? 'refreshing this bounded read' : shownState.kind === 'stale' ? 'last known chain facts' : 'current finalized read'}</small></article>
+        <article><span>Market phase</span><strong>{decoded.phase}</strong><small>{shownState.kind === 'loading' ? 'refreshing' : shownState.kind === 'stale' ? 'last known state' : 'finalized'}</small></article>
       </div>
-      {shownState.kind === 'stale' && <p className="market-refusal">The refresh failed, so these are the last known chain facts: {shownState.reason}</p>}
+      {shownState.kind === 'stale' && <p className="market-refusal">Refresh failed; showing the last known state: {shownState.reason}</p>}
       <h3 className="detail-subhead">Recent finalized signatures</h3>
       {observation.signatures.length === 0
-        ? <p className="market-empty">This node lists no recent finalized signatures for this Market.</p>
+        ? <p className="market-empty">No finalized signatures found. Check again after market activity lands.</p>
         : <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="Recent finalized signatures for the selected Market">
           <table className="holders-table"><thead><tr><th>Signature</th><th>Slot</th><th>Time</th><th>Result</th></tr></thead><tbody>
             {observation.signatures.map((entry) => <tr key={entry.signature}>
@@ -139,8 +139,8 @@ export default function AquariumLiveChainPanel({ status }: Readonly<{ status: Aq
             </tr>)}
           </tbody></table>
         </div>}
-      <p className="slot-clock-note">At most eight rows, newest first, from this node&apos;s finalized per-address signature index. A signature can be any transaction that touched this Market.</p>
+      <p className="slot-clock-note">Up to 8 finalized signatures · newest first</p>
     </>}
-    {shownState.kind === 'loading' && observation === null && <p className="direct-status">Reading one checked Market at finalized commitment…</p>}
+    {shownState.kind === 'loading' && observation === null && <p className="direct-status">Loading finalized market state…</p>}
   </section>;
 }

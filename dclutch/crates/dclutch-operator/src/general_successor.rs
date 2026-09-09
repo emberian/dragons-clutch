@@ -9,9 +9,9 @@
 //! and compiles the exact unsigned v0 message. This command never reads a
 //! keypair, signs, simulates, submits, or calls a write RPC method.
 
+use std::{collections::BTreeMap, fmt};
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
-    collections::BTreeMap,
-    fmt,
     fs::{self, File, OpenOptions},
     io::Write,
     os::unix::fs::OpenOptionsExt,
@@ -42,10 +42,11 @@ use serde::{
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_sdk::{
-    hash::Hash, message::VersionedMessage, pubkey::Pubkey, signature::Signature,
-    transaction::VersionedTransaction,
-};
+use solana_hash::Hash;
+use solana_message::VersionedMessage;
+use solana_program::pubkey::Pubkey;
+use solana_signature::Signature;
+use solana_transaction::versioned::VersionedTransaction;
 
 /// Shared producer refusal with no endpoint or key-bearing context.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -405,6 +406,7 @@ impl GeneralSuccessorPlanDocumentV5 {
 }
 
 /// Read one ordinary bounded route file without following a symlink.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn read_bounded_route_file_v1(path: &Path) -> Result<Vec<u8>> {
     let metadata = path.symlink_metadata()?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -1104,6 +1106,7 @@ pub fn encode_plan_v5(value: &GeneralSuccessorPlanDocumentV5) -> Result<Vec<u8>>
 
 /// Atomically publish one new private plan file without clobbering an existing
 /// path or following a symlinked parent.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn write_new_plan_v5(path: &Path, value: &GeneralSuccessorPlanDocumentV5) -> Result<()> {
     if !path.is_absolute() || path.exists() {
         return Err(Error::new("--output must be one absent absolute path"));
@@ -1146,6 +1149,7 @@ pub fn write_new_plan_v5(path: &Path, value: &GeneralSuccessorPlanDocumentV5) ->
     publish
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn temporary_plan_path_v5(parent: &Path, bytes: &[u8]) -> PathBuf {
     let digest: [u8; 32] = Sha256::digest(bytes).into();
     parent.join(format!(
@@ -1155,7 +1159,7 @@ fn temporary_plan_path_v5(parent: &Path, bytes: &[u8]) -> PathBuf {
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use crate::general_hot_v3::{

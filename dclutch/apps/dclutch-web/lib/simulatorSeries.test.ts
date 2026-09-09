@@ -77,7 +77,7 @@ describe('the published simulator series', () => {
     const reading = conservationReadingV1(series);
     expect(reading).not.toBeNull();
     const violated = conservationLawRowsV1(series).filter((row) => row.violated > 0);
-    if (violated.length === 0) expect(reading).toContain('checks held and none broke');
+    if (violated.length === 0) expect(reading).toContain('checks passed');
     else expect(reading?.startsWith(violated[0].id)).toBe(true);
   });
 
@@ -221,12 +221,12 @@ describe('the published simulator series', () => {
     if (lastDrawn.marketPhase !== 'terminal') {
       // Before settlement NOTHING retires, and the sentence must not offer a
       // reader the reassurance that a law does not apply.
-      expect(rule).toContain('every one of');
+      expect(rule).toContain('active laws');
       expect(rule).not.toContain('PRE-TERMINAL');
       const l4 = series.lawIds.indexOf('L4');
       expect(l4).toBeGreaterThanOrEqual(0);
       expect(lastDrawn.lawStatuses[l4], 'L4 is a pre-terminal law and this market has not settled').toBe('holds');
-      expect(conservationReadingV1(series)).toContain('checks held and none broke');
+      expect(conservationReadingV1(series)).toContain('checks passed');
       return;
     }
     const terminal = series.points.filter((point) => point.marketPhase === 'terminal');
@@ -372,7 +372,7 @@ describe('the series decoder', () => {
       ...withLaws,
       points: [{ ...withLaws.points[0], law_statuses: 'hi' }, { ...withLaws.points[1], law_statuses: 'vh' }],
     });
-    expect(conservationReadingV1(broken)?.startsWith('L1 did not hold')).toBe(true);
+    expect(conservationReadingV1(broken)?.startsWith('L1 failed')).toBe(true);
   });
 });
 
@@ -644,9 +644,9 @@ describe('a campaign series', () => {
   it('draws the vault against the tracked total and the Mint supply', () => {
     const lines = hoardCoverageLinesV1(parseSimulatorSeriesV1(campaign));
     expect(lines.map((line) => line.label)).toEqual([
-      'in the market’s own Hoard',
-      'tracked across every named account',
-      'the collateral Mint’s whole supply',
+      'Hoard',
+      'tracked collateral',
+      'Mint supply',
     ]);
     expect(lines[0].values).toEqual(['5', '5', '5']);
   });
@@ -711,8 +711,8 @@ describe('a campaign series', () => {
 
   it('leads its reading with where the run happened, because that is the fact most easily got wrong', () => {
     const reading = campaignReadingV1(parseSimulatorSeriesV1(campaign));
-    expect(reading).toContain('a local rehearsal validator at http://127.0.0.1:31500/');
-    expect(reading).toContain('cell 0 was selected');
+    expect(reading).toContain('local validator http://127.0.0.1:31500/');
+    expect(reading).toContain('settled at cell 0');
     expect(campaignReadingV1(parseSimulatorSeriesV1(censusV1))).toBeNull();
   });
 
@@ -1114,10 +1114,10 @@ describe('a population that MUTATED, drawn', () => {
 
   it('leads its reading with the mutations rather than the total', () => {
     const series = parseSimulatorSeriesV1(driven());
-    expect(executedReadingV1(series)).toContain('3 mutations landed on the chain');
+    expect(executedReadingV1(series)).toContain('3 mutations landed');
     expect(executedReadingV1(series)).toContain('1 found');
     expect(executedReadingV1(series)).toContain('2 admit');
-    expect(executedReadingV1(series)).toContain('2 censuses');
+    expect(executedReadingV1(series)).toContain('2 census reads');
   });
 
   it('says plainly when a run mutated nothing at all', () => {
@@ -1126,7 +1126,7 @@ describe('a population that MUTATED, drawn', () => {
       census: { executed: 9, refused: 0, unattempted: 0, blocked: 0 },
     };
     expect(executedReadingV1(parseSimulatorSeriesV1(body)))
-      .toBe('Nothing was mutated: this run took 9 censuses and signed nothing else.');
+      .toBe('0 mutations · 9 census reads');
   });
 });
 
@@ -1240,7 +1240,7 @@ describe('reading a population out loud', () => {
     expect(reading).toContain('dclutch/simlife/2026-08-30/first-light');
     expect(reading).toContain('a loopback rehearsal chain');
     // The fact a reader would otherwise assume from seeing markets on a page.
-    expect(reading).toContain('founded no market of its own');
+    expect(reading).toContain('0 founded');
   });
 
   it('keeps refused, unattempted and blocked apart in the sentence about them', () => {
@@ -1248,7 +1248,6 @@ describe('reading a population out loud', () => {
     expect(reading).toMatch(/^1 planned step was refused by the chain/);
     expect(reading).toContain('3 were never attempted');
     expect(reading).toContain('9 were blocked');
-    expect(reading).toContain('three different things');
   });
 
   it('says a market did not move rather than drawing a flat line without comment', () => {
@@ -1331,12 +1330,12 @@ describe('the committed simlife capture', () => {
     const foundingRoute = (world?.substrate.routes ?? []).includes('found');
     const reading = populationReadingV1(series);
     if (founded.length === 0) {
-      expect(reading).toContain('founded no market of its own');
+      expect(reading).toContain('0 founded');
     } else {
       // A run cannot have founded a market through a route its own substrate
       // says it does not have.
       expect(foundingRoute).toBe(true);
-      expect(reading).toContain(`founded ${founded.length} of them itself`);
+      expect(reading).toContain(`${founded.length} founded`);
       // And every market it says it founded must be one it also observed.
       const observed = new Set(series.markets.map((market) => market.marketId));
       for (const marketId of founded) expect(observed.has(marketId)).toBe(true);

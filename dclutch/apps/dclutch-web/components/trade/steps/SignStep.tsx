@@ -76,7 +76,7 @@ export default function SignStep({
   const packetDone = packetSignedV1(walletPreparation);
 
   return <>
-    <p className="direct-status">Signing sends nothing. Sending is a separate step you take, and it happens once — reload part-way through and this page picks up the transaction you already sent rather than sending a second one.</p>
+    <p className="direct-status">Review and sign the transaction. You will submit it in the next step.</p>
 
     {usingPublished
       ? <p className="direct-status">Using the operator&apos;s published route for this market. <button type="button" className="secondary-action" onClick={() => setEditingRoute(true)}>change</button></p>
@@ -91,16 +91,16 @@ export default function SignStep({
         <span aria-hidden="true">A</span>
         <div>
           <strong>Your intent</strong>
-          <small>A detached message: your half of the trade. Your wallet calls this &ldquo;sign message&rdquo;. It produces a ticket you keep.</small>
-          {intentDone && <p className="signature-standing">Your intent is signed. Nothing has executed.</p>}
+          <small>Sign the message containing your trade terms to create a portable offer.</small>
+          {intentDone && <p className="signature-standing">Offer signed. Ready to prepare the transaction.</p>}
         </div>
       </li>
       <li className={packetDone ? 'signature-done' : 'signature-open'}>
         <span aria-hidden="true">B</span>
         <div>
           <strong>The transaction</strong>
-          <small>The exact packet carrying both halves. Your wallet calls this &ldquo;sign transaction&rdquo;. It produces a signed packet, saved in this browser.</small>
-          {packetDone && <p className="signature-standing">The packet exists and is still not sent.</p>}
+          <small>Use your wallet’s &ldquo;sign transaction&rdquo; action to approve the matched trade.</small>
+          {packetDone && <p className="signature-standing">Transaction signed. Ready to submit.</p>}
         </div>
       </li>
     </ol>
@@ -113,23 +113,23 @@ export default function SignStep({
         type="button"
         disabled={!previewReady || walletPreparation.kind === 'working'}
         onClick={onPrepare}
-      >Sign my intent, then authenticate the packet</button>
+      >Sign offer and prepare trade</button>
     </div>}
 
     {(walletPreparation.kind === 'wallet-preparable' || walletPreparation.kind === 'payer-wallet-required') && <div className="portfolio-claim">
-      <span>{walletPreparation.kind === 'payer-wallet-required' ? 'Buyer intent signed · route payer still needed' : 'Wallet-preparable · not signed as a transaction'}</span>
+      <span>{walletPreparation.kind === 'payer-wallet-required' ? 'Buyer intent signed · route payer still needed' : 'Ready for transaction signature'}</span>
       <strong>{walletPreparation.preparation.transactionPlan.wireBytes.length} bytes · {walletPreparation.preparation.transactionPlan.loadedAddresses} LUT addresses · 61 unique keys</strong>
       <p>Route slot {walletPreparation.preparation.binding.routeObservedSlot}; blockhash slot {walletPreparation.preparation.binding.blockhashObservedSlot.toString()}; expires at block height {walletPreparation.preparation.binding.lastValidBlockHeight.toString()}. Frozen table {walletPreparation.preparation.transactionPlan.transaction.message.addressTableLookups[0]?.accountKey.toBase58()}.</p>
       {walletPreparation.kind === 'payer-wallet-required' && <>
-        <p>{walletPreparation.preparation.reason} Buyer {walletPreparation.preparation.binding.taker.owner} remains the buyer; connecting the payer does not change either signed intent.</p>
+        <p>{walletPreparation.preparation.reason} Buyer {walletPreparation.preparation.binding.taker.owner} has signed the offer. Connect the payer to sign the transaction.</p>
         <label><span>Portable signed buyer ticket</span><textarea readOnly rows={6} value={walletPreparation.takerTicket} /></label>
         <WalletDirectory directory={wallets} onConnected={onWalletConnected} purpose={`connect route payer ${walletPreparation.preparation.payer} for the transaction signature`} />
       </>}
       <div className="direct-actions"><button type="button" disabled={wallets.address !== walletPreparation.preparation.payer} onClick={onSignPacket}>{walletPreparation.kind === 'payer-wallet-required' ? 'Sign as the route payer' : 'Sign this packet'}</button></div>
-      <p className="direct-status">This request still does not submit. Your wallet must preserve the exact message bytes; any rewrite is refused.</p>
+      <p className="direct-status">After signing, continue to Submit to send the transaction.</p>
       <details className="trade-v3-bytes">
-        <summary>The exact bytes your wallet will be given</summary>
-        <label><span>Exact unsigned v0 message · base64</span><textarea readOnly rows={5} value={base64(walletPreparation.preparation.transactionPlan.transaction.message.serialize())} /></label>
+        <summary>Transaction data</summary>
+        <label><span>Unsigned transaction message · base64</span><textarea readOnly rows={5} value={base64(walletPreparation.preparation.transactionPlan.transaction.message.serialize())} /></label>
       </details>
     </div>}
   </>;

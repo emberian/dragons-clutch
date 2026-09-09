@@ -25,7 +25,6 @@ import {
   lawBandCyclesV1,
   NO_SERIES_SENTENCE_V1,
   readSimulatorSeriesV1,
-  SERIES_RECORD_CAVEAT_V1,
   simulatorHeartbeatV1,
   simulatorSeriesSpanV1,
   type SimulatorSeriesReadV1,
@@ -65,15 +64,15 @@ import {
  * other is a defect worth showing.
  */
 
-const READING_SENTENCE = 'Looking for a published pulse…';
+const READING_SENTENCE = 'Loading pulse…';
 
 type PulseSurfaceState = Readonly<{ read: SimulatorReadV1 | null }>;
 type AquariumSurfaceState = Readonly<{ read: AquariumReadV1 | null }>;
 
 const UNREAD_STATS: ReadonlyArray<NumberStripStatV1> = Object.freeze([
-  Object.freeze({ label: 'Cycles completed', value: null, detail: 'one cycle is one trade round plus one full ledger check' }),
-  Object.freeze({ label: 'Trades landed', value: null, detail: 'real transactions, each one confirmed on the chain it names' }),
-  Object.freeze({ label: 'Wallets trading', value: null, detail: 'ordinary funded wallets, no special keys' }),
+  Object.freeze({ label: 'Cycles completed', value: null, detail: 'cycles' }),
+  Object.freeze({ label: 'Trades landed', value: null, detail: 'transactions' }),
+  Object.freeze({ label: 'Wallets trading', value: null, detail: 'wallets' }),
 ]);
 
 function loadedStats(status: SimulatorStatusV1): ReadonlyArray<NumberStripStatV1> {
@@ -85,19 +84,17 @@ function loadedStats(status: SimulatorStatusV1): ReadonlyArray<NumberStripStatV1
         ? 'running until told to stop'
         : `of ${status.cyclesTarget} planned`,
     }),
-    Object.freeze({ label: 'Trades landed', value: String(status.tradesLanded), detail: 'real transactions, each one confirmed on the chain it names' }),
-    Object.freeze({ label: 'Wallets trading', value: String(status.wallets.length), detail: 'ordinary funded wallets, no special keys' }),
+    Object.freeze({ label: 'Trades landed', value: String(status.tradesLanded), detail: 'transactions' }),
+    Object.freeze({ label: 'Wallets trading', value: String(status.wallets.length), detail: 'wallets' }),
   ]);
 }
 
 function provenance(read: SimulatorReadV1 | null): string {
   if (read === null) return READING_SENTENCE;
   if (read.kind === 'absent') return NO_SIMULATOR_SENTENCE_V1;
-  if (read.kind === 'refused') return `Refused: a status artifact was published here, and it did not decode — ${read.reason}`;
-  const where = read.status.clusterLabel === 'local'
-    ? 'a local rehearsal validator, not the public devnet'
-    : 'the public Solana devnet';
-  return `Read from the simulator's own status artifact, written ${read.status.updatedAt}. It is trading against ${where}.`;
+  if (read.kind === 'refused') return `Status refused: ${read.reason}`;
+  const where = read.status.clusterLabel === 'local' ? 'Local validator' : 'Solana devnet';
+  return `${where} · updated ${read.status.updatedAt}`;
 }
 
 function shortSignature(signature: string): string {
@@ -116,17 +113,17 @@ function aquariumStats(status: AquariumStatusV1 | null): ReadonlyArray<NumberStr
   ]);
   const openMarkets = status.activity.activeMarkets.filter((market) => market.joinOpen).length;
   return Object.freeze([
-    Object.freeze({ label: 'Active markets observed', value: String(status.activity.activeMarkets.length), detail: `bounded by ${status.limits.maxActiveMarkets} in this observation` }),
-    Object.freeze({ label: 'Synthetic fills observed', value: String(status.activity.counts.fill), detail: 'reported by the aquarium, not an exchange volume claim' }),
+    Object.freeze({ label: 'Active markets observed', value: String(status.activity.activeMarkets.length), detail: `limit ${status.limits.maxActiveMarkets}` }),
+    Object.freeze({ label: 'Synthetic fills observed', value: String(status.activity.counts.fill), detail: 'fills' }),
     Object.freeze({ label: 'Public joining', value: openMarkets > 0 ? 'open' : 'closed', detail: status.activity.joinNote }),
   ]);
 }
 
 function aquariumProvenance(read: AquariumReadV1 | null): string {
-  if (read === null) return 'Reading the published aquarium observation…';
-  if (read.kind === 'absent') return 'No aquarium observation has been published.';
-  if (read.kind === 'refused') return `Refused: a published aquarium observation did not decode — ${read.reason}`;
-  return `Published for cohort ${read.status.cohort.number}, checked ${read.status.cohort.checkedAt}. This is an untrusted report of synthetic actors; read Markets to authenticate a market from its own accounts.`;
+  if (read === null) return 'Loading aquarium…';
+  if (read.kind === 'absent') return 'No aquarium data is available. Start a run to publish an observation.';
+  if (read.kind === 'refused') return `Aquarium status refused: ${read.reason}`;
+  return `Devnet · cohort ${read.status.cohort.number} · checked ${read.status.cohort.checkedAt}`;
 }
 
 /**
@@ -138,14 +135,14 @@ function aquariumProvenance(read: AquariumReadV1 | null): string {
  * part no chain stores. Names follow tools/gauntlet/journey/src/ledger.rs.
  */
 const LAW_GLOSSES: Readonly<Record<string, string>> = Object.freeze({
-  L1: 'collateral closure — every collateral atom that exists is sitting in an account this census watches',
-  L2: 'declared vault movement — the market’s vault moved by exactly what was declared, and by nothing else',
-  L3: 'supply agreement — what the positions hold adds up, outcome by outcome, to what the market issued',
-  L4: 'full collateralisation — the vault holds at least what the worst outcome could be asked to pay, which is a question about a market that still owes: settlement discharges that liability, so this law retires at a Terminal market rather than reading broken against one that paid',
-  L5: 'stage delta — tracked collateral changed between two readings by exactly the declared amount',
-  L6: 'rent conservation — lamports leaving a closed protocol account are accounted for',
-  L7: 'lamport accounting — the fee payer’s balance moved by exactly the fees paid',
-  L8: 'compartment accounting — every named compartment of collateral moved by exactly what the act that moved it declared',
+  L1: 'all collateral atoms are held in tracked accounts',
+  L2: 'vault movement matches the declared transfer',
+  L3: 'position balances match issued claims by outcome',
+  L4: 'the vault covers the largest unsettled outcome liability',
+  L5: 'tracked collateral delta matches the declared amount',
+  L6: 'lamports from closed protocol accounts are accounted for',
+  L7: 'fee-payer delta matches transaction fees',
+  L8: 'collateral compartment deltas match declared movements',
 });
 
 /**
@@ -167,10 +164,10 @@ const LAW_GLOSSES: Readonly<Record<string, string>> = Object.freeze({
  * dual-axis chart with the scale chosen to make a shape.
  */
 export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | null }>) {
-  if (read === null) return <p className="direct-status">Looking for a recorded run…</p>;
+  if (read === null) return <p className="direct-status">Loading run…</p>;
   if (read.kind === 'absent') return <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>;
   if (read.kind === 'refused') {
-    return <p className="market-refusal">Refused: a recorded run was published here, and it did not decode — {read.reason}</p>;
+    return <p className="market-refusal">Run data refused: {read.reason}</p>;
   }
   const series = read.series;
   const heartbeat = simulatorHeartbeatV1(series);
@@ -183,21 +180,21 @@ export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | nul
     Object.freeze({
       label: 'Chain slots covered',
       value: span.slotsCovered,
-      detail: `slot ${span.firstSlot} to ${span.lastSlot}, read finalized at each end`,
+      detail: `slots ${span.firstSlot}–${span.lastSlot}`,
     }),
     Object.freeze({
       label: 'Measured slot rate',
       value: heartbeat.measuredSlotRate === null ? null : `${heartbeat.measuredSlotRate}/s`,
       detail: heartbeat.measuredSlotRate === null
-        ? 'the run did not record enough instants to divide by'
-        : 'those slots over the run’s own recorded seconds — measured here, not a published constant',
+        ? 'more timestamps required'
+        : 'slots per second',
     }),
     Object.freeze({
       label: 'Ledger checks held',
       value: String(span.checksHeld),
       detail: span.checksBroken === 0
-        ? 'and none broke, across every cycle drawn below'
-        : `and ${span.checksBroken} did not hold — see the band below`,
+        ? '0 failed'
+        : `${span.checksBroken} failed`,
     }),
   ]);
 
@@ -206,7 +203,7 @@ export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | nul
         about the chain rather than about the robot. */}
     <NumberStrip
       stats={stats}
-      provenance={`Derived from ${span.cycles} recorded boundaries in ${series.censusFile}. Slots and seconds are the run's own readings; the rate is the one divided by the other.`}
+      provenance={`${span.cycles} boundaries · ${series.censusFile}`}
     />
 
     {/* FE-CHART mount: how far the chain moved between two readings. */}
@@ -214,20 +211,20 @@ export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | nul
       lines={[heartbeat.slotAdvance]}
       xLabels={heartbeat.xLabels}
       unit="slots"
-      caption="Slots the chain advanced between readings."
+      caption="Slot advance · slots · recorded boundaries"
       emptyReason={NO_SERIES_SENTENCE_V1}
     />
 
     {heartbeat.cadence === null
-      ? <p className="market-empty">Some cycles recorded no timestamp.</p>
+      ? <p className="market-empty">Timestamps are missing. Publish a capture with recorded times.</p>
       : <>
-        <h3 className="detail-subhead">How often it came back</h3>
+        <h3 className="detail-subhead">Cadence</h3>
         {/* FE-CHART mount: the run's own rhythm, and its stalls. */}
         <Sparkline
           lines={[heartbeat.cadence]}
           xLabels={heartbeat.xLabels}
           unit="seconds"
-          caption="Seconds between readings."
+          caption="Time between readings · seconds · recorded boundaries"
           emptyReason={NO_SERIES_SENTENCE_V1}
         />
         <p className="slot-clock-note">
@@ -256,7 +253,7 @@ export function ConservationLaws({ series }: Readonly<{ series: SimulatorSeriesV
   const phaseRule = conservationPhaseRuleV1(series);
   if (rows.length === 0) {
     return <p className="market-empty">
-      This capture was taken before the laws were recorded by name, so it carries their counts and not their identities.
+      Law identities are missing. Publish a capture with named law results.
     </p>;
   }
   return <>
@@ -268,7 +265,7 @@ export function ConservationLaws({ series }: Readonly<{ series: SimulatorSeriesV
       rows={rows}
       cycles={cycles}
       glosses={LAW_GLOSSES}
-      caption="One row per check, one column per cycle."
+      caption="Conservation result by law · status · recorded boundaries"
       emptyReason={NO_SERIES_SENTENCE_V1}
     />
   </>;
@@ -286,10 +283,10 @@ export function ConservationLaws({ series }: Readonly<{ series: SimulatorSeriesV
  * Exported so its arrangement is pinned by a test rather than by a screenshot.
  */
 export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 | null }>) {
-  if (read === null) return <p className="direct-status">Looking for a recorded run…</p>;
+  if (read === null) return <p className="direct-status">Loading run…</p>;
   if (read.kind === 'absent') return <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>;
   if (read.kind === 'refused') {
-    return <p className="market-refusal">Refused: a recorded run was published here, and it did not decode — {read.reason}</p>;
+    return <p className="market-refusal">Run data refused: {read.reason}</p>;
   }
 
   const series = read.series;
@@ -318,30 +315,26 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
 
   return <>
     <p className="direct-status">
-      {span.cycles} recorded boundar{span.cycles === 1 ? 'y' : 'ies'} covering {covered}, from the run&apos;s own
-      census file {series.censusFile}.{' '}
+      {span.cycles} boundar{span.cycles === 1 ? 'y' : 'ies'} · {covered} · {series.censusFile}.{' '}
       {/* BOUNDARY, not cycle. A census chains: cohort-13's runs two poller
           cycles from one run, one from a second, and one boundary that no
           poller drove at all — the permissionless fee settlement. Calling
           those four "cycles" says the poller ran four times, which it did
           not. Each one's own name is on the axis below. */}
       {series.pointsOmittedBefore === 0
-        ? 'Every boundary the run has recorded is drawn.'
-        : `${series.pointsOmittedBefore} earlier boundar${series.pointsOmittedBefore === 1 ? 'y is' : 'ies are'} counted but not drawn.`}
-      {' '}{span.checksBroken === 0
-        ? `Across all of them the ledger was re-checked ${span.checksHeld} times and held every time.`
-        : `Across all of them ${span.checksBroken} check${span.checksBroken === 1 ? '' : 's'} did not hold.`}
+        ? 'All recorded boundaries shown.'
+        : `${series.pointsOmittedBefore} earlier boundar${series.pointsOmittedBefore === 1 ? 'y' : 'ies'} omitted.`}
+      {' '}{span.checksHeld} checks passed · {span.checksBroken} failed.
     </p>
-    <p className="slot-clock-note">{SERIES_RECORD_CAVEAT_V1}</p>
 
     {/* FE-CHART mount: issued claims against the run's own cycle number. */}
     <Sparkline
       lines={supplyLines}
       xLabels={xLabels}
       unit="atoms"
-      caption="Claims issued per outcome, per cycle."
+      caption="Issued claims by outcome · atoms · recorded boundaries"
       flatNote={everyLineFlatV1(supplyLines)
-        ? 'unchanged at every recorded boundary — which is what a market that has only issued complete sets looks like. A Direct fill MOVES claims between two positions; it issues none, so a flat line here does not mean nothing traded. Who holds them is the table below.'
+        ? 'Unchanged across all boundaries.'
         : undefined}
       emptyReason={NO_SERIES_SENTENCE_V1}
     />
@@ -358,25 +351,21 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
         the law that broke twice in this capture; the gap between the two IS
         the finding, drawn. */}
     {coverage.length > 1 && <>
-      <h3 className="detail-subhead">The collateral, and everything the census could find of it</h3>
+      <h3 className="detail-subhead">Collateral</h3>
       <Sparkline
         lines={coverage}
         xLabels={xLabels}
         unit="atoms"
-        caption="The market's own vault, every collateral atom the census could name, and the Mint's whole supply."
+        caption="Hoard, tracked collateral, and Mint supply · atoms · recorded boundaries"
         flatNote={everyLineFlatV1(coverage)
-          ? 'every line held still across every boundary drawn'
+          ? 'Unchanged across all boundaries.'
           : undefined}
         emptyReason={NO_SERIES_SENTENCE_V1}
       />
-      <p className="slot-clock-note">
-        When the tracked total and the Mint&apos;s supply differ, collateral is sitting in an account this
-        census does not name — which is L1, and which is what it caught here.
-      </p>
     </>}
 
     {spend !== null && <>
-      <h3 className="detail-subhead">What the run has spent</h3>
+      <h3 className="detail-subhead">Fees</h3>
       {/* FE-CHART mount: the one quantity a census-only run moves by itself.
           A level, drawn as the drop from the first boundary, because the raw
           balance is eighteen digits and the interesting part is the last six. */}
@@ -384,7 +373,7 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
         lines={[spend]}
         xLabels={xLabels}
         unit="lamports"
-        caption="Lamports the fee payer has spent since the first boundary."
+        caption="Fee-payer spend since first boundary · lamports · recorded boundaries"
         emptyReason={NO_SERIES_SENTENCE_V1}
       />
     </>}
@@ -431,7 +420,7 @@ export function WhoIsHolding({ series }: Readonly<{ series: SimulatorSeriesV1 }>
       </table>
     </div>}
     {series.collateralHolders.length > 0 && <>
-      <h3 className="detail-subhead">The collateral, and who is holding it</h3>
+      <h3 className="detail-subhead">Collateral holders</h3>
       <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="The collateral, and who is holding it">
         <table className="holders-table">
           <thead><tr><th>Account</th><th>Address</th><th>Collateral atoms · raw u64</th></tr></thead>
@@ -444,7 +433,7 @@ export function WhoIsHolding({ series }: Readonly<{ series: SimulatorSeriesV1 }>
           </tbody>
         </table>
       </div>
-      <p>Collateral holders hold the token the market settles in; only a position holds claims on the answer.</p>
+      <p>Collateral atoms by account.</p>
     </>}
   </>;
 }
@@ -546,27 +535,27 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Watch · bounded synthetic activity</p>
-        <h1>What is happening?<br /><em>Read the observation.</em></h1>
-        <p>Watch real devnet participation from bounded synthetic visitors. The aquarium runs against the protocol on a loop. If a check fails, it stops. Their snapshot is a report, while the live read below asks devnet about one market. Open that market&apos;s detail to see whether joining is available.</p>
+        <p className="eyebrow">Activity pulse</p>
+        <h1>Synthetic market<br /><em>activity.</em></h1>
+        <p>Track active markets, completed cycles, transactions, and conservation checks.</p>
       </div>
       <aside>
         <span>Where this stands</span>
         <strong>{aquariumRead === null
-          ? status === null ? 'No simulator running' : status.halted ? 'Halted — loudly, on purpose' : 'Publishing its pulse'
-          : aquariumRead.kind === 'absent' ? 'No aquarium observation' : aquariumRead.kind === 'refused' ? 'Observation refused' : aquariumBeat?.state === 'running' ? 'Publishing synthetic activity' : `Aquarium ${aquariumBeat?.state}`}</strong>
+          ? status === null ? 'No simulator running' : status.halted ? 'Simulator halted' : 'Simulator publishing'
+          : aquariumRead.kind === 'absent' ? 'No aquarium observation' : aquariumRead.kind === 'refused' ? 'Observation refused' : aquariumBeat?.state === 'running' ? 'Aquarium publishing' : `Aquarium ${aquariumBeat?.state}`}</strong>
         {aquariumRead === null
-          ? status === null ? <p>No run published yet.</p> : <p>One file, rewritten after every cycle. This site is static, so it shows the last write before publication.</p>
+          ? status === null ? <p>Start the simulator to publish a run.</p> : <p>Last published simulator status.</p>
           : aquariumRead.kind === 'loaded'
           ? <p>{aquariumBeat?.sentence}</p>
-          : <p>This static site shows only a record that was published beside it.</p>}
+          : <p>Publish an aquarium observation to update this view.</p>}
       </aside>
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>The aquarium</h2><p>One bounded observation of synthetic activity. It is a projection, not the authority for a market or a public joining path.</p></div></header>
+      <header><span>01</span><div><h2>Aquarium activity</h2><p>Latest published synthetic activity.</p></div></header>
       {aquariumRead === null
-        ? <p className="direct-status">Reading the published aquarium observation…</p>
+        ? <p className="direct-status">Loading aquarium activity…</p>
         : <NumberStrip stats={aquariumStats(aquariumStatus)} provenance={aquariumProvenance(aquariumRead)} />}
       {aquariumStatus !== null && <>
         <div className="trade-v3-evidence">
@@ -576,7 +565,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
         </div>
         {aquariumStatus.failure !== null && <p className="market-refusal">Driver exit at {aquariumStatus.failure.at}: {aquariumStatus.failure.detail}</p>}
         {aquariumStatus.activity.activeMarkets.length === 0
-          ? <p className="market-empty">This observation lists no active markets.</p>
+          ? <p className="market-empty">No active markets are listed. Run the aquarium to add one.</p>
           : <div className="market-card-grid">
             {aquariumStatus.activity.activeMarkets.map((market) => <article className="market-discovery-card" key={market.marketId}>
               <div className="market-card-top"><span className="provenance-chip">synthetic observation</span><span className="phase-chip">{market.state}</span></div>
@@ -608,37 +597,37 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
                 ? 'Gone quiet'
                 : 'Halted'}
       </strong>
-      <span>{beat === null ? (read === null ? READING_SENTENCE : 'nothing published') : beat.sentence}</span>
+      <span>{beat === null ? (read === null ? READING_SENTENCE : 'Start the simulator to publish a heartbeat.') : beat.sentence}</span>
     </div>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The legacy simulator pulse</h2><p>From the simulator&apos;s last write, when this older artifact is published.</p></div></header>
+      <header><span>03</span><div><h2>Simulator status</h2><p>Last published cycle totals.</p></div></header>
       {/* FE-CHART mount: the pulse feeds the presentational NumberStrip; the
           reader in lib/simulatorStatus.ts decides what may appear here. */}
       <NumberStrip stats={status === null ? UNREAD_STATS : loadedStats(status)} provenance={provenance(read)} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>The heartbeat</h2><p>How far the chain got between readings, and how long each reading took.</p></div></header>
+      <header><span>04</span><div><h2>Heartbeat</h2><p>Slot and time intervals between readings.</p></div></header>
       <Heartbeat read={series} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>05</span><div><h2>{lawCount === null ? 'The checks, after every cycle' : `The ${lawCount} checks, after every boundary`}</h2><p>At every boundary the census re-checks the same named laws: that the collateral is all still somewhere we can name, that the positions add up to the claims issued, that the vault covers the worst outcome it could be asked to pay, and the rest. Each row is one check; each column is one boundary. How many there are is the record&apos;s own number, not this page&apos;s — cohort-13 is the first run whose census judges all of them, with none sitting out.</p></div></header>
+      <header><span>05</span><div><h2>{lawCount === null ? 'Conservation checks' : `${lawCount} conservation checks`}</h2><p>Result for each law at every recorded boundary.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <ConservationLaws series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>06</span><div><h2>What the run looked like over time</h2><p>One point per recorded boundary, in the census&apos;s own order.</p></div></header>
+      <header><span>06</span><div><h2>Run history</h2><p>Claims, collateral, and fees by recorded boundary.</p></div></header>
       <RecordedCycles read={series} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>07</span><div><h2>The last ledger check</h2><p>After trading, the simulator re-reads the chain and proves conservation: every lamport and every collateral atom accounted for. This is the check that halts it.</p></div></header>
+      <header><span>07</span><div><h2>Last ledger check</h2><p>Latest reconciliation of lamports and collateral atoms.</p></div></header>
       {status === null || status.lastReconciliation === null
-        ? <p className="market-empty">No check has been read.</p>
+        ? <p className="market-empty">No reconciliation is available. Run a census to add one.</p>
         : <p className="direct-status">
           <span className={`status-chip ${status.lastReconciliation.ok ? 'pass' : 'fail'}`}>{status.lastReconciliation.ok ? 'conserved' : 'violated'}</span>
           {' '}Checked at {status.lastReconciliation.checkedAt}.
@@ -648,14 +637,14 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
     </section>
 
     <section className="trade-v3-card">
-      <header><span>08</span><div><h2>Who is in this market</h2><p>Every position on the market, and every account holding its collateral, as of the last recorded cycle.</p></div></header>
+      <header><span>08</span><div><h2>Market holdings</h2><p>Positions and collateral accounts at the last recorded boundary.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <WhoIsHolding series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>09</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
+      <header><span>09</span><div><h2>Wallets and trades</h2><p>Participant balances and recent transaction signatures.</p></div></header>
       {status === null
         ? <p className="market-empty">{NO_SIMULATOR_SENTENCE_V1}</p>
         : <>
@@ -670,7 +659,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
             ? <p className="direct-status">{status.wallets.length - 4} more wallet{status.wallets.length - 4 === 1 ? '' : 's'} in the artifact, not shown here.</p>
             : null}
           {status.signatures.length === 0
-            ? <p className="market-empty">No trades have landed yet in this run.</p>
+            ? <p className="market-empty">No trades have landed. Run a funded cycle to add one.</p>
             : <p className="direct-status">
               Latest signatures: {status.signatures.slice(-3).map(shortSignature).join(' · ')}
               {status.market === null
@@ -684,7 +673,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
     </section>
 
     <footer className="product-footer">
-      <span>The simulator&apos;s own report · one file, rewritten every cycle</span>
+      <span>Latest published simulator run</span>
     </footer>
   </PageShell>;
 }

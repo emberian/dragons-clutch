@@ -24,12 +24,12 @@ describe('reader-facing aggregate retirement status', () => {
    * page must not be able to lose them quietly.
    */
   it('states the crank-first order and who it leaves short', () => {
-    expect(html).toContain('costs the opener the first crank');
+    expect(html).toContain('The opener pays the storage deposit');
     expect(html).toContain('<strong>the cranker before the opener</strong>');
-    expect(html).toContain('never repays its opener in full');
+    expect(html).toContain('One compaction does not repay the opener in full.');
     // And it states no figure it has not read: the server render has made no
     // RPC call, so the loading line stands where a quoted number would be.
-    expect(html).toContain('Reading this cluster');
+    expect(html).toContain('Reading account storage costs');
     expect(html).not.toMatch(/0\.00\d{7} SOL/);
   });
 

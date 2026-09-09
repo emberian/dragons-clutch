@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import published from '@/public/campaign-series.json';
 import example from '@/fixtures/campaign-series.example.json';
-import { CAMPAIGN_LOCAL_CAVEAT_V1, parseSimulatorSeriesV1 } from '@/lib/simulatorSeries';
+import { parseSimulatorSeriesV1 } from '@/lib/simulatorSeries';
 
 import CampaignWorkspace, { campaignSeriesOrRefusalV1 } from './CampaignWorkspace';
 
@@ -66,7 +66,7 @@ describe('the published campaign record', () => {
 
   it('renders, which is the only thing that makes it an artifact at all', () => {
     const html = renderToStaticMarkup(<CampaignWorkspace preloaded={{ kind: 'loaded', series: capture }} />);
-    expect(html).toContain(CAMPAIGN_LOCAL_CAVEAT_V1);
+    expect(html).toContain(`local validator ${capture.campaign?.rpcOrigin}`);
     expect(html).toContain('<polyline');
   });
 });
@@ -74,37 +74,33 @@ describe('the published campaign record', () => {
 describe('the campaign surface', () => {
   const html = renderToStaticMarkup(<CampaignWorkspace preloaded={{ kind: 'loaded', series }} />);
 
-  it('says under every chart that this was a local rehearsal validator', () => {
-    // One caveat per figure, not one per page. A reader who screenshots one
-    // chart must still be told what chain it came off.
+  it('uses one concise local run label instead of repeating it under every chart', () => {
     const figures = html.split('<figure').length - 1;
-    const caveats = html.split(CAMPAIGN_LOCAL_CAVEAT_V1).length - 1;
     expect(figures).toBeGreaterThan(0);
-    expect(caveats).toBeGreaterThanOrEqual(figures);
+    expect(html.split('local validator').length - 1).toBe(1);
   });
 
   it('never says devnet or mainnet about its own figures', () => {
     // Renegotiated 2026-08-31: the footer used to repeat "Not devnet · not
     // mainnet · no fills, and no chart here pretends otherwise". The hero says
     // it once, as a fact; the footer echo is deleted.
-    expect(html).toContain('None of this is devnet or mainnet');
     expect(html).not.toMatch(/traded on devnet|on the public devnet[^,.]*price/);
   });
 
-  it('draws the odds path and says it is a liability record and not a price anyone paid', () => {
-    expect(html).toContain('Where the claims sit');
-    expect(html).toContain('not a price anyone paid');
+  it('draws issued share and claim atoms by outcome', () => {
+    expect(html).toContain('Issued claims by outcome · basis points · stage boundaries');
+    expect(html).toContain('Issued claims by outcome · atoms · stage boundaries');
     expect(html).toContain('<polyline');
   });
 
   it('draws the vault against the tracked total', () => {
-    expect(html).toContain('What the vault held');
-    expect(html).toContain('in the market’s own Hoard');
-    expect(html).toContain('tracked across every named account');
+    expect(html).toContain('<h2>Collateral</h2>');
+    expect(html).toContain('>Hoard</text>');
+    expect(html).toContain('>tracked collateral</text>');
   });
 
   it('calls the work what it is, and never calls it traded volume', () => {
-    expect(html).toContain('The work each stage took');
+    expect(html).toContain('<h2>Stage costs</h2>');
     // Renegotiated 2026-08-31: the blurb used to explain that a market with
     // nobody trading has no traded volume and this page will not draw one.
     // What survives is the invariant, checked directly.
@@ -112,7 +108,7 @@ describe('the campaign surface', () => {
   });
 
   it('names the boundary each law column is, because a number is not a stage', () => {
-    expect(html).toContain('The checks, after every stage');
+    expect(html).toContain('Conservation result by law · status · stage boundaries');
     expect(html).toContain(series.points[0].stage as string);
   });
 
@@ -121,8 +117,8 @@ describe('the campaign surface', () => {
       expect(html).toContain('has not reached a terminal answer');
       return;
     }
-    expect(html).toContain(`The terminal certificate selected cell ${series.settlement.selectedCell}`);
-    expect(html).toContain('is worth nothing');
+    expect(html).toContain(`Selected outcome ${series.settlement.selectedCell} pays`);
+    expect(html).toContain('other outcomes pay 0');
   });
 });
 
@@ -151,7 +147,7 @@ describe('the guard between a devnet record and a page that calls everything loc
 
   it('renders the empty state without a chart when nothing is published', () => {
     const html = renderToStaticMarkup(<CampaignWorkspace preloaded={{ kind: 'absent' }} />);
-    expect(html).toContain('No campaign record is published beside this site right now');
+    expect(html).toContain('No campaign data is available. Run the campaign publisher to add a capture.');
     expect(html).not.toContain('<polyline');
   });
 });

@@ -199,6 +199,6 @@ describe('the guarded reader', () => {
   });
 
   it('keeps the honest-empty sentence explicit about zeros', () => {
-    expect(NO_SIMULATOR_SENTENCE_V1).toBe('No simulator running.');
+    expect(NO_SIMULATOR_SENTENCE_V1).toBe('No simulator is running. Start one to publish status.');
   });
 });

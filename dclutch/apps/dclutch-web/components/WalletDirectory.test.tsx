@@ -119,8 +119,8 @@ describe('workspace wallet boundaries', () => {
   it('keeps the read-only Direct preview free of wallet and transaction controls', () => {
     const html = renderToStaticMarkup(<DirectTradeWorkspace />);
     expect(html).not.toContain('wallet-directory');
-    expect(html).toContain('No wallet connection, signature request, packet download, or submission control.');
-    expect(html).toContain('No wallet request · no packet builder · no submission path');
+    expect(html).toContain('This calculator is read-only.');
+    expect(html).toContain('Trade calculator');
   });
 
   it('keeps every release-gated signing control disabled on the Rational open route', () => {

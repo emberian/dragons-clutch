@@ -11,8 +11,7 @@ describe('the pulse surface, with nothing published', () => {
   const html = renderToStaticMarkup(<PulseWorkspace preloaded={{ kind: 'absent' }} />);
 
   it('says no simulator is running, in as many words', () => {
-    expect(html).toContain('No simulator running');
-    expect(html).toContain('nothing below is a zero');
+    expect(html).toContain('No simulator is running. Start one to publish status.');
   });
 
   it('shows dashes for every count and no zero anywhere', () => {
@@ -26,13 +25,12 @@ describe('the pulse surface, with nothing published', () => {
     }
   });
 
-  it('explains what the robot is in plain terms', () => {
-    expect(html).toContain('runs against the protocol on a loop');
-    expect(html).toContain('If a check fails, it stops.');
+  it('names the activity metrics', () => {
+    expect(html).toContain('active markets, completed cycles, transactions, and conservation checks');
   });
 
   it('keeps the ledger-check spot honest instead of green', () => {
-    expect(html).toContain('No check has been read.');
+    expect(html).toContain('No reconciliation is available. Run a census to add one.');
     expect(html).not.toContain('conserved');
   });
 });
@@ -41,7 +39,7 @@ describe('the pulse surface, before the read settles', () => {
   const html = renderToStaticMarkup(<PulseWorkspace />);
 
   it('says it is looking, and claims nothing else', () => {
-    expect(html).toContain('Looking for a published pulse');
+    expect(html).toContain('Loading pulse…');
     expect(html.split('>—</strong>').length - 1).toBe(3);
     expect(html).not.toContain('>0</strong>');
   });

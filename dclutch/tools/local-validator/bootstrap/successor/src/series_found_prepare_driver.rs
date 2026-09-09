@@ -551,20 +551,22 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         hydration,
         &final_compiled,
     )?;
-    let fixed = series_prepare_hot_fixed_addresses_v1(
+    let fixed = series_hot_fixed_addresses_v1(
         &plan,
         &parent_market,
         parent_root,
         &m0,
         &founder_records,
         &final_compiled,
+        dclutch_trading::series::request::SeriesActionV3::Prepare,
     )?;
-    materialize_series_prepare_seal_v1(
+    materialize_series_action_seal_v1(
         &mut rpc,
         &payer,
         &plan,
         &fixed,
         &final_compiled,
+        dclutch_trading::series::request::SeriesActionV3::Prepare,
         &mut transactions,
     )?;
     let template = dclutch_trading::series::TemplateV3::decode(founder.admitted.template())
@@ -1008,36 +1010,36 @@ pub(crate) fn series_current_release_v1<'a>(
     })
 }
 
-fn materialize_series_prepare_seal_v1(
+fn materialize_series_action_seal_v1(
     rpc: &mut Rpc,
     payer: &Keypair,
     plan: &SuccessorPlan,
     fixed: &[Pubkey; dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3],
     compiled: &crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
+    action: dclutch_trading::series::request::SeriesActionV3,
     transactions: &mut Vec<crate::model::TransactionEvidence>,
 ) -> Result<()> {
     use dclutch_market::capability_program::hot_v3::HOT_CAPABILITY_SEAL_ACCOUNT_V3;
     use dclutch_operator::capability_seal_v1::{
         CapabilitySealInstructionInputV1, capability_seal_instruction_v1,
     };
-    use dclutch_trading::series::request::SeriesActionV3;
 
     let seal = fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3];
     if rpc.account(seal)?.is_some() {
         return Ok(());
     }
-    let descriptor = compiled
-        .selected
-        .records
-        .get(6)
-        .ok_or_else(|| Error::new("Series Prepare selected records omitted descriptor"))?;
-    let descriptor_body = decode_hex(&descriptor.body_hex)?;
+    let descriptor = series_action_record_pairs_v1(
+        pubkey(&plan.registry.program_id)?,
+        &compiled.selected,
+        action,
+    )?
+    .descriptor;
     let instruction = capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
         trading_program: pubkey(&plan.trading.program_id)?,
         registry_program: pubkey(&plan.registry.program_id)?,
         trading_semantic_release: hex32(&plan.trading.semantic_release_id)?,
-        descriptor_digest: Sha256::digest(&descriptor_body).into(),
-        action: u32::from(SeriesActionV3::Prepare as u8),
+        descriptor_digest: descriptor.content,
+        action: u32::from(action as u8),
         fixed_frame: fixed,
         payer: payer.pubkey(),
     })
@@ -1778,47 +1780,116 @@ pub(crate) fn activate_series_parent_root_v1(
     Ok(expected)
 }
 
-fn series_prepare_hot_fixed_addresses_v1(
+/// Registry addresses for an action are selected through the native ProgramSet
+/// and descriptor references, never publication-vector offsets.
+struct SeriesActionRecordPairsV1 {
+    program_set: SelectedActivationRecordPairV1,
+    account_profile: SelectedActivationRecordPairV1,
+    request_profile: SelectedActivationRecordPairV1,
+    lifecycle: SelectedActivationRecordPairV1,
+    strategy: SelectedActivationRecordPairV1,
+    transition: SelectedActivationRecordPairV1,
+    effect: SelectedActivationRecordPairV1,
+    descriptor: SelectedActivationRecordPairV1,
+}
+
+fn series_action_record_pairs_v1(
+    registry: Pubkey,
+    selected: &crate::model::SelectedCapabilityV1,
+    action: dclutch_trading::series::request::SeriesActionV3,
+) -> Result<SeriesActionRecordPairsV1> {
+    use dclutch_market::capability_program::{
+        set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
+        v4::{ArtifactReferenceV4, CapabilityProgramV4},
+    };
+    let program_set_bytes = decode_hex(&selected.program_set_hex)?;
+    let set = CapabilityProgramSetV2::decode(&program_set_bytes)
+        .map_err(|error| Error::new(format!("Series action ProgramSet: {error:?}")))?;
+    let mut descriptor_ref = None;
+    for index in 0..set.entry_count() {
+        let entry = set
+            .entry(index)
+            .map_err(|error| Error::new(format!("Series action ProgramSet entry: {error:?}")))?;
+        if entry.selector() == u32::from(action as u8) {
+            descriptor_ref = Some(entry.descriptor());
+        }
+    }
+    let descriptor_ref =
+        descriptor_ref.ok_or_else(|| Error::new("Series ProgramSet omitted requested action"))?;
+    let body = |schema: ContentId, identity: ContentId| -> Result<Vec<u8>> {
+        for record in &selected.records {
+            if hex32(&record.schema_hex)? != schema.to_bytes() {
+                continue;
+            }
+            let bytes = decode_hex(&record.body_hex)?;
+            let digest: [u8; 32] = Sha256::digest(&bytes).into();
+            if digest == identity.to_bytes() {
+                return Ok(bytes);
+            }
+        }
+        Err(Error::new(
+            "Series publication omitted an exact action artifact reference",
+        ))
+    };
+    let descriptor_bytes = body(descriptor_ref.schema(), descriptor_ref.program())?;
+    let descriptor = CapabilityProgramV4::decode(&descriptor_bytes)
+        .map_err(|error| Error::new(format!("Series action descriptor: {error:?}")))?;
+    let artifact = |reference: ArtifactReferenceV4| -> Result<SelectedActivationRecordPairV1> {
+        let bytes = body(reference.schema(), reference.program())?;
+        pair_v1(registry, reference.schema().to_bytes(), &bytes)
+    };
+    Ok(SeriesActionRecordPairsV1 {
+        program_set: pair_v1(
+            registry,
+            CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            &program_set_bytes,
+        )?,
+        account_profile: artifact(descriptor.account_profile())?,
+        request_profile: artifact(descriptor.request_profile())?,
+        lifecycle: artifact(descriptor.lifecycle())?,
+        strategy: artifact(descriptor.strategy())?,
+        transition: artifact(descriptor.transition())?,
+        effect: artifact(descriptor.effect())?,
+        descriptor: pair_v1(
+            registry,
+            descriptor_ref.schema().to_bytes(),
+            &descriptor_bytes,
+        )?,
+    })
+}
+
+fn series_hot_fixed_addresses_v1(
     plan: &SuccessorPlan,
     parent: &MarketRunInput,
     parent_root: SeriesParentRootV1,
     m0: &FutureMarketImmutablePublicationV1,
     founder_records: &PublishedSeriesFounderRecordsV1,
     compiled: &crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
+    action: dclutch_trading::series::request::SeriesActionV3,
 ) -> Result<[Pubkey; dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3]> {
     use dclutch_market::capability_program::{
         hot_v3::*, v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
     };
-    use dclutch_trading::series::request::SeriesActionV3;
     use dclutch_vm::capability_seal::CapabilitySealKeyV1;
 
     let registry = pubkey(&plan.registry.program_id)?;
     let trading = pubkey(&plan.trading.program_id)?;
     let selected = &compiled.selected;
-    let selected_record = |index: usize, label: &str| {
-        let record = selected
-            .records
-            .get(index)
-            .ok_or_else(|| Error::new(format!("Series Prepare omitted {label}")))?;
-        pair_v1(
-            registry,
-            hex32(&record.schema_hex)?,
-            &decode_hex(&record.body_hex)?,
-        )
-    };
     let manifest = pair_v1(
         registry,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         &decode_hex(&parent.capability_manifest_hex)?,
     )?;
-    let program_set = selected_record(38, "ProgramSet record")?;
-    let account_profile = selected_record(0, "Prepare AccountProfile record")?;
-    let request_profile = selected_record(1, "Prepare RequestProfile record")?;
-    let lifecycle = selected_record(2, "Prepare lifecycle record")?;
-    let strategy = selected_record(3, "Prepare strategy record")?;
-    let transition = selected_record(4, "Prepare Transition record")?;
-    let effect = selected_record(5, "Prepare Effect record")?;
-    let descriptor = selected_record(6, "Prepare descriptor record")?;
+    let SeriesActionRecordPairsV1 {
+        program_set,
+        account_profile,
+        request_profile,
+        lifecycle,
+        strategy,
+        transition,
+        effect,
+        descriptor,
+    } = series_action_record_pairs_v1(registry, selected, action)?;
     let product = pair_v1(
         registry,
         m0.product.schema,
@@ -1892,7 +1963,7 @@ fn series_prepare_hot_fixed_addresses_v1(
     let seal_key = CapabilitySealKeyV1::new(
         CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
         descriptor.content,
-        u32::from(SeriesActionV3::Prepare as u8),
+        u32::from(action as u8),
         semantic_release,
         registry.to_bytes(),
     )
@@ -3926,6 +3997,89 @@ mod prepare_hydrator_tests {
         assert_eq!(
             error.to_string(),
             "Series Prepare forged record record pair was noncanonical"
+        );
+    }
+}
+
+#[cfg(test)]
+mod action_record_projection_tests {
+    use super::*;
+    use dclutch_trading::series::request::SeriesActionV3;
+
+    #[test]
+    fn every_series_action_resolves_its_native_records_independent_of_publication_order() {
+        let founder = crate::series_found_prepare_campaign::tests::prepared_founder();
+        let input = crate::series_found_prepare_campaign::tests::compiler_input(
+            &founder,
+            Pubkey::new_unique(),
+            &founder.admitted.tickets()[0],
+        );
+        let mut compiled =
+            crate::series_found_prepare_campaign::compile_series_found_prepare_selection_v1(
+                input,
+                ContentId::new([61; 32]).expect("certificate"),
+            )
+            .expect("native complete release");
+        let registry = Pubkey::new_unique();
+        let actions = [
+            SeriesActionV3::Prepare,
+            SeriesActionV3::Consume,
+            SeriesActionV3::Expire,
+            SeriesActionV3::Retire,
+            SeriesActionV3::Close,
+        ];
+        let keys = |pairs: SeriesActionRecordPairsV1| {
+            [
+                pairs.program_set.raw,
+                pairs.descriptor.raw,
+                pairs.account_profile.raw,
+                pairs.request_profile.raw,
+                pairs.lifecycle.raw,
+                pairs.strategy.raw,
+                pairs.transition.raw,
+                pairs.effect.raw,
+            ]
+        };
+        let original = actions.map(|action| {
+            keys(
+                series_action_record_pairs_v1(registry, &compiled.selected, action)
+                    .expect("native action references"),
+            )
+        });
+        assert_eq!(
+            original
+                .iter()
+                .map(|row| row[1])
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            5
+        );
+        compiled.selected.records.reverse();
+        for (action, expected) in actions.into_iter().zip(original) {
+            assert_eq!(
+                keys(
+                    series_action_record_pairs_v1(registry, &compiled.selected, action)
+                        .expect("publication order grants no authority")
+                ),
+                expected
+            );
+        }
+        let required =
+            series_action_record_pairs_v1(registry, &compiled.selected, SeriesActionV3::Consume)
+                .expect("Consume artifacts")
+                .effect
+                .content;
+        compiled.selected.records.retain(|record| {
+            let body = decode_hex(&record.body_hex).expect("fixture hex");
+            let digest: [u8; 32] = Sha256::digest(body).into();
+            digest != required
+        });
+        assert_eq!(
+            series_action_record_pairs_v1(registry, &compiled.selected, SeriesActionV3::Consume)
+                .err()
+                .expect("referenced artifact absence must refuse")
+                .to_string(),
+            "Series publication omitted an exact action artifact reference"
         );
     }
 }

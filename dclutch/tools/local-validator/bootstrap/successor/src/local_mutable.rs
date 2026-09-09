@@ -1170,6 +1170,29 @@ fn local_key_roles_v1() -> BTreeSet<&'static str> {
         .collect()
 }
 
+/// Fresh disposable founding roles on an already-authenticated loopback substrate.
+/// This writes no program identities, ProgramData images, or genesis accounts.
+pub(crate) fn prepare_local_founding_keys_v1(key_dir: &Path, seed: [u8; 32]) -> Result<()> {
+    fs::create_dir(key_dir)?;
+    for role in local_founding_key_roles_v1() {
+        let keypair = Keypair::new_from_array(derive(LOCAL_KEY_DOMAIN_V1, seed, role));
+        write_keypair_create_new(&key_dir.join(format!("{role}.json")), &keypair)?;
+    }
+    Ok(())
+}
+
+fn local_founding_key_roles_v1() -> BTreeSet<&'static str> {
+    crate::campaign::FOUNDING_REQUIRED_ROLES
+        .iter()
+        .copied()
+        .chain([
+            crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+            crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
+            crate::seed::role::FOUNDING_FOUNDER,
+        ])
+        .collect()
+}
+
 pub(crate) fn local_campaign_public_identities_v1(
     seed: [u8; 32],
 ) -> Result<BTreeMap<String, String>> {
@@ -2499,6 +2522,22 @@ mod tests {
             .parse::<Pubkey>()
             .expect("substituted-founder public key");
         assert_ne!(founder, substituted);
+    }
+
+    #[test]
+    fn retained_substrate_founding_roles_exclude_administration_and_public_only_identity() {
+        let roles = local_founding_key_roles_v1();
+        assert!(roles.is_subset(&local_key_roles_v1()));
+        assert!(roles.contains(crate::seed::role::FOUNDING_FOUNDER));
+        assert!(roles.contains(crate::seed::role::COLLATERAL_MINT));
+        assert!(!roles.contains(crate::seed::role::CORE_UPGRADE_AUTHORITY));
+        assert!(!roles.contains(crate::seed::role::SUBSTITUTED_FOUNDER));
+        let first = local_campaign_public_identities_v1([0x73; 32]).expect("first seed");
+        let second = local_campaign_public_identities_v1([0x74; 32]).expect("second seed");
+        assert_ne!(
+            first[crate::seed::role::FOUNDING_FOUNDER],
+            second[crate::seed::role::FOUNDING_FOUNDER]
+        );
     }
 
     #[test]

@@ -109,7 +109,7 @@ describe('indexer-free activity', () => {
     expect(asked).toEqual([OWNER, position]);
     expect(activity.watched.map((entry) => entry.address)).toEqual([OWNER, position]);
     expect(activity.entries).toHaveLength(0);
-    expect(activity.reason).toContain("this node's answer");
+    expect(activity.reason).toContain('No transactions returned');
   });
 
   it('merges duplicate signatures across watched addresses and orders newest first', async () => {
