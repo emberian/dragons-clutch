@@ -190,6 +190,20 @@ pub fn build_rational_lifecycle_hot_instruction_v3(
     })
 }
 
+/// Signers supplied by Trading's native lifecycle CPI boundary, never wallets.
+pub(crate) fn lifecycle_child_cpi_signer(
+    action: dclutch_claims::rational_lifecycle::LifecycleActionV2,
+    index: usize,
+) -> bool {
+    index == 0
+        || (index == dclutch_claims::rational_lifecycle::LIFECYCLE_COMMON_ACCOUNT_COUNT_V2
+            && matches!(
+                action,
+                dclutch_claims::rational_lifecycle::LifecycleActionV2::ActivateCoordinate
+                    | dclutch_claims::rational_lifecycle::LifecycleActionV2::RetireCoordinate
+            ))
+}
+
 pub(crate) fn validate_child_frame(
     claims_child: &Instruction,
     action: dclutch_claims::rational_lifecycle::LifecycleActionV2,
@@ -207,7 +221,7 @@ pub(crate) fn validate_child_frame(
         || accounts
             .iter()
             .enumerate()
-            .any(|(index, account)| index != 0 && account.is_signer)
+            .any(|(index, account)| account.is_signer != lifecycle_child_cpi_signer(action, index))
     {
         return Err(Error::Operator);
     }

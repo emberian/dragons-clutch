@@ -755,6 +755,22 @@ fn resume_transaction(
         }
         RecoveryActionV1::SignOnceAndPersistDispatching => {
             authenticate_planned_message(planning, arguments, journal)?;
+            // The address-lookup-table program accepts a creation slot only
+            // after that slot is present in the bank's SlotHashes sysvar.  A
+            // `finalized` snapshot can name the newly selected root before the
+            // root's own slot has entered that sysvar.  Most campaign passes
+            // used to hide the race because the root advanced while the host
+            // built the message; a fast pass reached simulation first and was
+            // refused with "is not a recent slot".  Wait before opening either
+            // key so the durable packet's identity remains both deterministic
+            // and executable.
+            if journal.stage == StageV1::LookupCreate {
+                await_lookup_creation_slot_recorded_v1(
+                    rpc,
+                    journal.lookup_creation_slot,
+                    arguments.origin.pacing().confirm_timeout,
+                )?;
+            }
             let current_height = rpc
                 .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
                 .as_u64()
@@ -918,6 +934,33 @@ fn resume_transaction(
             }
         }
     }
+}
+
+fn await_lookup_creation_slot_recorded_v1(
+    rpc: &mut Rpc,
+    lookup_creation_slot: u64,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let finalized_slot = rpc.finalized_slot()?;
+        if lookup_creation_slot_is_recorded_v1(finalized_slot, lookup_creation_slot) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(refusal(format!(
+                "wallet payout lookup creation slot {lookup_creation_slot} did not enter the finalized SlotHashes ancestry before the bounded deadline"
+            )));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+const fn lookup_creation_slot_is_recorded_v1(
+    finalized_slot: u64,
+    lookup_creation_slot: u64,
+) -> bool {
+    finalized_slot > lookup_creation_slot
 }
 
 fn finish_or_output(
@@ -2474,6 +2517,12 @@ mod tests {
             recovery_action(PhaseV1::Finalized),
             RecoveryActionV1::AuthenticateFinalized
         );
+    }
+
+    #[test]
+    fn lookup_create_waits_until_its_slot_is_in_finalized_ancestry() {
+        assert!(!lookup_creation_slot_is_recorded_v1(9, 9));
+        assert!(lookup_creation_slot_is_recorded_v1(10, 9));
     }
 
     #[test]

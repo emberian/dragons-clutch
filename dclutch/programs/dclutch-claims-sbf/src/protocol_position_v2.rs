@@ -763,14 +763,19 @@ fn protocol_position_frame_privileges_match(
     let privileges = expected.privileges();
     // SVM privilege union applies across the enclosing transaction. General
     // PlaceOrder also mutates the Claims Market through its affine child and
-    // the canonical RentCredit through its rent-funded lifecycle. Admission
-    // reads both; their key, owner, PDA, release and generation are still
-    // authenticated before effects. Only these semantic roles permit writable
+    // the canonical RentCredit through its rent-funded lifecycle. Trading also
+    // creates the Order record that owns the admitted Position. Admission
+    // reads these shared accounts; all existing identity checks still apply.
+    // The owner check accepts writable elevation only for TradingRecord and
+    // still requires its exact key, Trading owner and nonempty body.
+    // Only these semantic roles permit writable
     // elevation. Signer and executable privileges remain exact everywhere.
     let writable_matches = observed.is_writable == privileges.writable()
         || (matches!(
             expected.role(),
-            ClaimsFrameRoleV1::ClaimsMarket | ClaimsFrameRoleV1::RentCredit
+            ClaimsFrameRoleV1::ClaimsMarket
+                | ClaimsFrameRoleV1::RentCredit
+                | ClaimsFrameRoleV1::PositionOwnerIdentity
         ) && !privileges.writable()
             && observed.is_writable);
     observed.is_signer == privileges.signer()
@@ -976,7 +981,7 @@ fn authenticate_owner(
 ) -> Result<(), ProgramError> {
     if owner.key.to_bytes() != request.position_owner
         || owner.is_signer
-        || owner.is_writable
+        || (owner.is_writable && request.owner_kind != ProtocolPositionOwnerKindV2::TradingRecord)
         || owner.executable
     {
         return Err(ProtocolPositionSbfErrorV2::Position.into());
@@ -1553,7 +1558,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_position_accepts_only_market_and_rent_credit_writable_union() {
+    fn protocol_position_accepts_only_authenticated_shared_writable_roles() {
         for action in [
             ProtocolPositionActionV2::Admit,
             ProtocolPositionActionV2::Close,
@@ -1566,6 +1571,12 @@ mod tests {
                 CLOSE_RENT_CREDIT
             };
             accounts[credit].is_writable = true;
+            let owner = if action == ProtocolPositionActionV2::Admit {
+                ADMIT_OWNER_IDENTITY
+            } else {
+                CLOSE_OWNER_IDENTITY
+            };
+            accounts[owner].is_writable = true;
             authenticate_frame_spec(ClaimsFrameSpecV1::protocol_position(action), &accounts)
                 .expect("authenticated Market and RentCredit may inherit outer writable privilege");
 
@@ -1577,7 +1588,7 @@ mod tests {
             accounts[MARKET].is_signer = false;
 
             for hostile in 0..accounts.len() {
-                if hostile == MARKET || hostile == credit {
+                if hostile == MARKET || hostile == credit || hostile == owner {
                     continue;
                 }
                 accounts[hostile].is_writable = !accounts[hostile].is_writable;
@@ -1587,7 +1598,7 @@ mod tests {
                         &accounts
                     ),
                     Err(ProtocolPositionSbfErrorV2::Accounts.into()),
-                    "only Market/RentCredit allow writable union; hostile coordinate {hostile}"
+                    "only Market/RentCredit/TradingRecord allow writable union; hostile coordinate {hostile}"
                 );
                 accounts[hostile].is_writable = !accounts[hostile].is_writable;
             }
@@ -1597,6 +1608,41 @@ mod tests {
                 Err(ProtocolPositionSbfErrorV2::Accounts.into())
             );
         }
+    }
+
+    #[test]
+    fn writable_position_owner_still_requires_exact_trading_record() {
+        let (claims_program, accounts, request, _) = parent_fixture();
+        let trading = &accounts[CLOSE_TRADING_PROGRAM];
+        let claims = &accounts[CLOSE_CLAIMS_PROGRAM];
+        let mut owner = test_account(
+            Pubkey::new_from_array(request.position_owner),
+            *trading.key,
+            false,
+            true,
+            false,
+            vec![1],
+        );
+        authenticate_owner(&owner, trading, claims, request)
+            .expect("Trading creates its exact owner record in the enclosing transaction");
+        owner.is_signer = true;
+        assert_eq!(
+            authenticate_owner(&owner, trading, claims, request),
+            Err(ProtocolPositionSbfErrorV2::Position.into())
+        );
+        owner.is_signer = false;
+        owner.owner = Box::leak(Box::new(claims_program));
+        assert_eq!(
+            authenticate_owner(&owner, trading, claims, request),
+            Err(ProtocolPositionSbfErrorV2::Position.into())
+        );
+        owner.owner = trading.key;
+        let mut user_request = request;
+        user_request.owner_kind = ProtocolPositionOwnerKindV2::User;
+        assert_eq!(
+            authenticate_owner(&owner, trading, claims, user_request),
+            Err(ProtocolPositionSbfErrorV2::Position.into())
+        );
     }
 
     #[test]

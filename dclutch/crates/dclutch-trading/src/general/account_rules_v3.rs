@@ -2676,8 +2676,8 @@ fn prior_role_coordinate(
     // PlaceOrder's single maker is the outer lifecycle payer, its rent refund,
     // and the Claims child rent credit. Those are separate child roles but one
     // physical account, so each later child view must borrow the outer fact.
-    // The signed order identity is the exact OrderTerms evidence account: the
-    // order id is its digest, never an invented vacant side account.
+    // The signed order digest and its Trading Order PDA are distinct. Claims
+    // authenticates the latter as its Position owner.
     if action == Action::PlaceOrder {
         match role {
             // The outer frame is semantic: affine slot zero is the maker and
@@ -2709,9 +2709,9 @@ fn prior_role_coordinate(
                 return Ok(Some(general_rent_credit_account_v3(action)));
             }
             ChildRoleV3::Claims(ClaimsFrameRoleV1::PositionOwnerIdentity) => {
-                return general_readonly_evidence_v3(action, 0)
-                    .map(|selected| Some(selected.coordinate))
-                    .map_err(|_| GeneralAccountRuleErrorV3::Geometry);
+                // Claims owns its Position by the lifecycle-created Trading
+                // Order account, not by the Registry signed-terms record.
+                return Ok(Some(GENERAL_TERMINAL_STATE_ACCOUNT_V3));
             }
             ChildRoleV3::Custody(CustodyFrameRoleV1::TransferDestination) => {
                 let mut prior =
@@ -3737,8 +3737,8 @@ mod tests {
     /// orders, and every one of them opens with
     /// `CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3)`. A register the
     /// recipe READS and no artifact WRITES is not a build error and not a
-    /// geometry refusal: `AccountProfileV2::common_identity_count()` is 45 and
-    /// 27 < 45, so `validate_seed_against_profile` accepts it, and the
+    /// geometry refusal: `AccountProfileV2::common_identity_count()` is 46 and
+    /// 27 < 46, so `validate_seed_against_profile` accepts it, and the
     /// lifecycle adapter then derives the state address from 32 zero bytes
     /// where the root belongs. That derives a real, well-formed, WRONG address
     /// -- one that is the same for every General root in existence, so two

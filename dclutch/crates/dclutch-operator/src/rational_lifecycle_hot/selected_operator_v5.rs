@@ -19,8 +19,8 @@ use crate::rational_lifecycle_hot::{
     Error, RationalLifecycleHotInstructionV3, RationalLifecycleHotStateV3,
     RationalLifecycleSelectedBundleV5, Result, lifecycle_claims_account_count_v3,
     operator::{
-        MAX_SOLANA_PACKET_BYTES, lifecycle_hot_bump_hints_v3, validate_child_frame,
-        validate_fixed_frame,
+        MAX_SOLANA_PACKET_BYTES, lifecycle_child_cpi_signer, lifecycle_hot_bump_hints_v3,
+        validate_child_frame, validate_fixed_frame,
     },
     validate_rational_lifecycle_selected_bundle_for_authenticated_selection_v5,
 };
@@ -117,8 +117,12 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v5(
 
     let profile = AccountProfileV2::decode(&selection.bundle.account_profile)
         .map_err(Error::AccountProfile)?;
-    let physical_child =
-        compact_profile13_claims_accounts_v5(state, &claims_child.accounts, profile)?;
+    let physical_child = compact_profile13_claims_accounts_v5(
+        state,
+        &claims_child.accounts,
+        profile,
+        header.action,
+    )?;
     let mut accounts = Vec::with_capacity(
         state
             .fixed_accounts
@@ -148,6 +152,7 @@ pub(crate) fn compact_profile13_claims_accounts_v5(
     state: &RationalLifecycleHotStateV3<'_>,
     child: &[AccountMeta],
     profile: AccountProfileV2<'_>,
+    action: LifecycleActionV2,
 ) -> Result<Vec<AccountMeta>> {
     const INJECTED: usize = 5;
     const TAIL_COUNT: u32 = 0;
@@ -207,9 +212,10 @@ pub(crate) fn compact_profile13_claims_accounts_v5(
         let route = profile
             .route_privileges_with_dynamic_spans(TAIL_COUNT, &counts, logical)
             .map_err(Error::AccountProfile)?;
+        let native_cpi_signer = lifecycle_child_cpi_signer(action, child_index);
         if account.is_writable != route.writable()
-            || (child_index != 0 && account.is_signer != route.signer())
-            || (child_index == 0 && !account.is_signer)
+            || (native_cpi_signer && (!account.is_signer || route.signer()))
+            || (!native_cpi_signer && account.is_signer != route.signer())
         {
             return Err(Error::Operator);
         }

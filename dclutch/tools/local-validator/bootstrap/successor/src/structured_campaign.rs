@@ -2602,7 +2602,18 @@ fn activate_structured_coordinates_v1(
         let root_account = required(5, "capability root")?;
         let aggregate_view = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
             .map_err(|error| Error::new(format!("Structured coordinate aggregate: {error:?}")))?;
-        if !retiring && accounts[6..].iter().any(Option::is_some) {
+        let vacant_resource = |account: &Option<crate::rpc::RpcAccount>| {
+            account.as_ref().is_none_or(|account| {
+                account.owner == solana_sdk_ids::system_program::ID
+                    && !account.executable
+                    && account.data.is_empty()
+            })
+        };
+        if !retiring
+            && accounts[6..]
+                .iter()
+                .any(|account| !vacant_resource(account))
+        {
             let shard = required(6, "resumed shard Mint")?;
             let custody = required(7, "resumed custody")?;
             let position_account = required(8, "resumed Position")?;
@@ -2707,10 +2718,22 @@ fn activate_structured_coordinates_v1(
             claims_custody_owner: owner.to_bytes(),
             claims_custody_position: position.to_bytes(),
             position_admission: admission.to_bytes(),
-            observed_shard_lamports: rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2),
-            observed_structured_lamports: rent.minimum_balance(ACCOUNT_BYTES),
-            observed_position_lamports: rent.minimum_balance(position_width),
-            observed_admission_lamports: rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
+            observed_shard_lamports: accounts[6]
+                .as_ref()
+                .map_or(0, |account| account.lamports)
+                .max(rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2)),
+            observed_structured_lamports: accounts[7]
+                .as_ref()
+                .map_or(0, |account| account.lamports)
+                .max(rent.minimum_balance(ACCOUNT_BYTES)),
+            observed_position_lamports: accounts[8]
+                .as_ref()
+                .map_or(0, |account| account.lamports)
+                .max(rent.minimum_balance(position_width)),
+            observed_admission_lamports: accounts[9]
+                .as_ref()
+                .map_or(0, |account| account.lamports)
+                .max(rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)),
             shard_rent_principal: rent.minimum_balance(TOKEN_2022_CLOSEABLE_MINT_BYTES_V2),
             structured_rent_principal: rent.minimum_balance(ACCOUNT_BYTES),
             position_rent_principal: rent.minimum_balance(position_width),
@@ -2945,21 +2968,28 @@ fn activate_structured_coordinates_v1(
         } else {
             None
         };
-        let mut funded_hot = [
+        let mut prefunding = [
             (shard_mint, row.observed_shard_lamports),
             (structured_custody, row.observed_structured_lamports),
             (position, row.observed_position_lamports),
             (admission, row.observed_admission_lamports),
         ]
         .into_iter()
-        .map(|(account, lamports)| {
-            solana_system_interface::instruction::transfer(&payer.pubkey(), &account, lamports)
+        .enumerate()
+        .filter_map(|(index, (account, lamports))| {
+            let observed = accounts[6 + index]
+                .as_ref()
+                .map_or(0, |account| account.lamports);
+            let deficit = lamports.saturating_sub(observed);
+            (deficit != 0).then(|| {
+                solana_system_interface::instruction::transfer(&payer.pubkey(), &account, deficit)
+            })
         })
         .collect::<Vec<_>>();
         if retiring {
-            funded_hot.clear();
+            prefunding.clear();
         }
-        funded_hot.push(hot.instruction);
+        let funded_hot = [hot.instruction];
         let mut routing = std::collections::BTreeSet::new();
         for instruction in seal.iter().chain(funded_hot.iter()) {
             routing.insert(instruction.program_id);
@@ -2988,6 +3018,25 @@ fn activate_structured_coordinates_v1(
                 )));
             }
             transactions.push(sent);
+        }
+        // Rent is prepaid before the native entrance. Keeping these transfers
+        // outside the 672-byte lifecycle request avoids exceeding Solana's
+        // packet limit; system-owned empty prefunding remains resumable above.
+        if !prefunding.is_empty() {
+            let funded = rpc.send_v0_on_heap(
+                &format!("prepay Structured coordinate {outcome} rent"),
+                &prefunding,
+                payer,
+                observation,
+                &tables,
+                DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+            )?;
+            if let Some(error) = funded.error.as_ref() {
+                return Err(Error::new(format!(
+                    "Structured coordinate rent funding refused: {error}"
+                )));
+            }
+            transactions.push(funded);
         }
         let sent = rpc.send_v0_on_heap(
             &format!("{action:?} Structured coordinate {outcome}"),

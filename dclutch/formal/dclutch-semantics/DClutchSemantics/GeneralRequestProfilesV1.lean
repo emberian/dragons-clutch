@@ -222,7 +222,7 @@ def profile (action : Action) : Profile := {
   -- candidate banks. No settlement action's request touches them.
   commonScalars := 151
   itemScalarStride := actionItemScalarStride action
-  commonIdentities := 45
+  commonIdentities := 46
   itemIdentityStride := 0
   fixedOperations :=
     if action = .openBatch || action = .closeBatch then
@@ -272,7 +272,7 @@ theorem all_actions_have_distinct_checked_profiles :
   native_decide
 
 theorem freeze_has_no_candidate_projection :
-    (profile .freeze).commonIdentities = 45 ∧
+    (profile .freeze).commonIdentities = 46 ∧
       (profile .freeze).fixedOperations.any
         (fun operation => operation.kind = .requireZeroRange ∧
           operation.requestOffset = 24 ∧ operation.immediate = 32) := by native_decide

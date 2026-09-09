@@ -164,12 +164,11 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
     let profile = AccountProfileV2::decode(&selection.bundle.account_profile)
         .map_err(Error::AccountProfile)?;
     let physical_child =
-        compact_profile13_claims_accounts_v5(state, &claims_child.accounts, profile).map_err(
-            |error| match error {
+        compact_profile13_claims_accounts_v5(state, &claims_child.accounts, profile, header.action)
+            .map_err(|error| match error {
                 Error::Operator => Error::AccountCompaction,
                 other => other,
-            },
-        )?;
+            })?;
     let mut accounts = Vec::with_capacity(
         state
             .fixed_accounts
@@ -236,5 +235,48 @@ mod tests {
             validate_selected_child_frame_v6(&child, LifecycleActionV2::ActivateReceipt),
             Ok(())
         );
+    }
+    #[test]
+    fn coordinate_child_requires_both_native_cpi_signers() {
+        use dclutch_claims::rational_lifecycle::LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2;
+        for action in [
+            LifecycleActionV2::ActivateCoordinate,
+            LifecycleActionV2::RetireCoordinate,
+        ] {
+            let claims = Pubkey::new_unique();
+            let accounts = (0..LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2)
+                .map(|index| {
+                    let writable = (21..=24).contains(&index) || (index == 14 && action.retires());
+                    AccountMeta {
+                        pubkey: if index == 3 {
+                            claims
+                        } else {
+                            Pubkey::new_unique()
+                        },
+                        is_signer: index == 0 || index == 20,
+                        is_writable: writable,
+                    }
+                })
+                .collect();
+            let mut child = Instruction {
+                program_id: claims,
+                accounts,
+                data: Vec::new(),
+            };
+            assert_eq!(validate_selected_child_frame_v6(&child, action), Ok(()));
+            for index in [0, 20] {
+                child.accounts[index].is_signer = false;
+                assert_eq!(
+                    validate_selected_child_frame_v6(&child, action),
+                    Err(Error::ChildFrame)
+                );
+                child.accounts[index].is_signer = true;
+            }
+            child.accounts[21].is_signer = true;
+            assert_eq!(
+                validate_selected_child_frame_v6(&child, action),
+                Err(Error::ChildFrame)
+            );
+        }
     }
 }

@@ -523,6 +523,140 @@ fn only_exact_fractional_root_alias_may_cross_local_child_boundary() {
 }
 
 #[test]
+fn general_place_order_owner_overlap_is_exact_and_keeps_other_mutations_disjoint() {
+    use dclutch_claims::{
+        frame_spec_v1::{ClaimsFrameRoleV1, PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1},
+        protocol_position_v2::{
+            ProtocolPositionActionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
+            ProtocolPositionRequestV2,
+        },
+    };
+    use dclutch_trading::{
+        general::{
+            account_rules_v3::general_place_order_admit_claims_coordinate_v3,
+            state_artifacts_v3::GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+        },
+        general_codec::successor_request_v3::{ControllerActionV3, ControllerRequestV3},
+    };
+    let parent = ControllerRequestV3 {
+        action: ControllerActionV3::PlaceOrder,
+        expected_revision: 0,
+        subject_id: Some([1; 32]),
+        page_index: 0,
+        execution_index: 0,
+        manifest_order_index: 0,
+        primary_state_bump: 1,
+        secondary_state_bump: 2,
+        result_state_bump: 0,
+    }
+    .to_bytes()
+    .expect("PlaceOrder request");
+    let request = ProtocolPositionRequestV2 {
+        action: ProtocolPositionActionV2::Admit,
+        owner_kind: ProtocolPositionOwnerKindV2::TradingRecord,
+        presence: ProtocolPositionPresenceV2::Vacant,
+        release_set: [1; 32],
+        market: [2; 32],
+        position_owner: [3; 32],
+        parent_request_digest: [4; 32],
+        rent_credit: [5; 32],
+        rent_program: [6; 32],
+        generation: 1,
+        expected_market_revision: 1,
+        expected_position_revision: 0,
+        observed_position_lamports: 1,
+        observed_admission_lamports: 1,
+        position_rent_principal: 1,
+        admission_rent_principal: 1,
+        capability_descriptor: [0; 32],
+        capability_outcome: 0,
+    };
+    let bytes = request.to_bytes().expect("Trading-owned admission");
+    let start = general_place_order_admit_claims_coordinate_v3(ClaimsFrameRoleV1::CallerAuthority)
+        .expect("admit start");
+    let owner = usize::from(
+        general_place_order_admit_claims_coordinate_v3(ClaimsFrameRoleV1::PositionOwnerIdentity)
+            .expect("owner coordinate"),
+    );
+    let order = usize::from(GENERAL_TERMINAL_STATE_ACCOUNT_V3);
+    let invocation = dclutch_vm::effect::v3::ResolvedInvocationV3 {
+        fixed_account_start: start,
+        fixed_account_count: PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1,
+        ..fractional_wrap_invocation(bytes.len())
+    };
+    let count = usize::from(start + PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1);
+    let mut aliases = (0..count).collect::<Vec<_>>();
+    aliases[owner] = order;
+    let mut participation = vec![CoordinateParticipationV3::default(); count];
+    participation[order].mark_local_mutation();
+    assert_eq!(
+        general_place_order_owner_overlap_v3(invocation, &bytes, &parent, &aliases),
+        Ok(Some(order))
+    );
+    assert_eq!(
+        record_child_reach_and_require_disjoint_from_local(
+            invocation,
+            &aliases,
+            &mut participation,
+            AllowedLocalOverlapV3::None
+        ),
+        Err(TradingSbfError::Content.into())
+    );
+    record_child_reach_and_require_disjoint_from_local(
+        invocation,
+        &aliases,
+        &mut participation,
+        AllowedLocalOverlapV3::GeneralOrderOwner(order),
+    )
+    .expect("only owner observed");
+    participation[usize::from(start)].mark_local_mutation();
+    assert_eq!(
+        record_child_reach_and_require_disjoint_from_local(
+            invocation,
+            &aliases,
+            &mut participation,
+            AllowedLocalOverlapV3::GeneralOrderOwner(order)
+        ),
+        Err(TradingSbfError::Content.into())
+    );
+    aliases[owner] = order + 1;
+    assert_eq!(
+        general_place_order_owner_overlap_v3(invocation, &bytes, &parent, &aliases),
+        Ok(None)
+    );
+    aliases[owner] = order;
+    let mut user_request = request;
+    user_request.owner_kind = ProtocolPositionOwnerKindV2::User;
+    assert_eq!(
+        general_place_order_owner_overlap_v3(
+            invocation,
+            &user_request.to_bytes().expect("user admission"),
+            &parent,
+            &aliases
+        ),
+        Ok(None)
+    );
+    let mut foreign_parent = parent;
+    foreign_parent[0] ^= 1;
+    assert_eq!(
+        general_place_order_owner_overlap_v3(invocation, &bytes, &foreign_parent, &aliases),
+        Ok(None)
+    );
+    let mut wrong_frame = invocation;
+    wrong_frame.fixed_account_start += 1;
+    assert_eq!(
+        general_place_order_owner_overlap_v3(wrong_frame, &bytes, &parent, &aliases),
+        Ok(None)
+    );
+    let mut foreign_child = bytes;
+    foreign_child[0] ^= 1;
+    assert_eq!(
+        general_place_order_owner_overlap_v3(invocation, &foreign_child, &parent, &aliases),
+        Ok(None)
+    );
+}
+
+#[test]
 fn fractional_child_must_leave_sole_root_prestate_unchanged() {
     let request = fractional_wrap_request();
     let before = [17_u8; 128];
@@ -2037,7 +2171,7 @@ fn profile13_zero_spans_expand_aliases_and_downgrade_child_privileges() {
         make_account(true),
         make_account(false),
     ];
-    let logical = expand_runtime_accounts_v3(
+    let (logical, aliases) = expand_runtime_accounts_v3(
         profile,
         0,
         &[],
@@ -2052,6 +2186,7 @@ fn profile13_zero_spans_expand_aliases_and_downgrade_child_privileges() {
     )
     .expect("expand physical representatives");
     assert_eq!(logical.len(), 7);
+    assert_eq!(aliases, vec![0, 1, 2, 3, 4, 5, 4]);
     assert_eq!(
         logical
             .get(4)
@@ -2088,7 +2223,7 @@ fn profile13_zero_spans_expand_aliases_and_downgrade_child_privileges() {
         make_account(false),
         make_account(false),
     ];
-    let withheld_logical = expand_runtime_accounts_v3(
+    let (withheld_logical, _) = expand_runtime_accounts_v3(
         profile,
         0,
         &[],
@@ -2103,22 +2238,26 @@ fn profile13_zero_spans_expand_aliases_and_downgrade_child_privileges() {
     )
     .expect("expand physical representatives");
     assert!(child_route_privileges_v3(profile, 0, &[], &withheld_logical).is_err());
-    assert!(
-        expand_runtime_accounts_v3(
-            profile,
-            0,
-            &[],
-            [
-                &physical[0],
-                &physical[1],
-                &physical[2],
-                &physical[3],
-                &physical[4],
-            ],
-            &physical[4..],
-        )
-        .is_err()
-    );
+    for suffix in [&physical[4..], &physical[6..]] {
+        assert_eq!(
+            expand_runtime_accounts_v3(
+                profile,
+                0,
+                &[],
+                [
+                    &physical[0],
+                    &physical[1],
+                    &physical[2],
+                    &physical[3],
+                    &physical[4]
+                ],
+                suffix,
+            )
+            .err(),
+            Some(TradingSbfError::Content.into()),
+            "both excess and missing physical representatives refuse exactly",
+        );
+    }
 }
 
 #[test]

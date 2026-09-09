@@ -34,8 +34,9 @@ use dclutch_claims::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody::{
-    CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyRequestLayoutV1, CustodyRequestV1,
-    token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID},
+    CompartmentV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyRequestLayoutV1,
+    CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyRequestV2, OperationV1,
+    token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, state::TokenAccountLayoutV1},
 };
 use dclutch_direct_hot_program_test_support::waist;
 use dclutch_market::capability_manifest::{
@@ -991,6 +992,7 @@ struct PlaceOrderCorpusV1 {
     escrow_vault: BuiltAccountV1,
     custody_authority: BuiltAccountV1,
     order_identity: BuiltAccountV1,
+    order_owner: BuiltAccountV1,
 }
 
 fn token_mint_bytes(supply: u64) -> Vec<u8> {
@@ -1000,11 +1002,23 @@ fn token_mint_bytes(supply: u64) -> Vec<u8> {
     bytes
 }
 
-fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
+fn token_account_bytes(
+    mint: Pubkey,
+    owner: Pubkey,
+    amount: u64,
+    delegate: Pubkey,
+    delegated_amount: u64,
+) -> Vec<u8> {
     let mut bytes = vec![0_u8; 165];
     bytes[..32].copy_from_slice(mint.as_ref());
     bytes[32..64].copy_from_slice(owner.as_ref());
     bytes[64..72].copy_from_slice(&amount.to_le_bytes());
+    bytes[TokenAccountLayoutV1::DELEGATE..TokenAccountLayoutV1::DELEGATE + 4]
+        .copy_from_slice(&1_u32.to_le_bytes());
+    bytes[TokenAccountLayoutV1::DELEGATE + 4..TokenAccountLayoutV1::DELEGATE + 36]
+        .copy_from_slice(delegate.as_ref());
+    bytes[TokenAccountLayoutV1::DELEGATED_AMOUNT..TokenAccountLayoutV1::DELEGATED_AMOUNT + 8]
+        .copy_from_slice(&delegated_amount.to_le_bytes());
     bytes[108] = 1;
     bytes
 }
@@ -1016,6 +1030,26 @@ fn token_account_amount(bytes: &[u8]) -> u64 {
             .expect("canonical token account amount")
             .try_into()
             .expect("u64 token amount"),
+    )
+}
+
+fn token_account_delegate_tag(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes(
+        bytes
+            .get(TokenAccountLayoutV1::DELEGATE..TokenAccountLayoutV1::DELEGATE + 4)
+            .expect("canonical token delegate tag")
+            .try_into()
+            .expect("u32 delegate tag"),
+    )
+}
+
+fn token_account_delegated_amount(bytes: &[u8]) -> u64 {
+    u64::from_le_bytes(
+        bytes
+            .get(TokenAccountLayoutV1::DELEGATED_AMOUNT..TokenAccountLayoutV1::DELEGATED_AMOUNT + 8)
+            .expect("canonical token delegated amount")
+            .try_into()
+            .expect("u64 delegated amount"),
     )
 }
 
@@ -1112,6 +1146,14 @@ fn place_order_corpus(
     put_liability_basis_position_bump_v2(&mut maker_position_bytes, maker_position.1)
         .expect("maker Position bump");
 
+    let order_seeds = dclutch_trading::general::state_seeds_v3::GeneralStateAddressSeedsV3::order(
+        chain.root.key.to_bytes(),
+        order_id,
+    )
+    .expect("Order lifecycle seeds");
+    let order_seed_slices = order_seeds.as_slices().expect("Order seed slices");
+    let order_owner =
+        Pubkey::find_program_address(order_seed_slices.as_slice(), &waist::TRADING_PROGRAM_ID).0;
     let children = GeneralEscrowChildrenV1::derive(
         waist::CLAIMS_PROGRAM_ID,
         waist::CUSTODY_PROGRAM_ID,
@@ -1119,6 +1161,7 @@ fn place_order_corpus(
         chain.market.key.to_bytes(),
         campaign.releases.release_set,
         order_id,
+        order_owner,
     )
     .expect("order escrow children");
     let custody_authority = Pubkey::find_program_address(
@@ -1162,7 +1205,13 @@ fn place_order_corpus(
             &campaign.rent,
             maker_token,
             GENERAL_TOKEN_PROGRAM,
-            token_account_bytes(GENERAL_COLLATERAL_MINT, maker, quote_reserve),
+            token_account_bytes(
+                GENERAL_COLLATERAL_MINT,
+                maker,
+                quote_reserve,
+                custody_authority,
+                quote_reserve,
+            ),
         ),
         // Claims admission has no payer account. Its Position and admission
         // PDAs must therefore arrive as System-owned, data-empty accounts
@@ -1184,6 +1233,7 @@ fn place_order_corpus(
         escrow_vault: vacant(children.vault),
         custody_authority: vacant(custody_authority),
         order_identity: vacant(Pubkey::new_from_array(order_id)),
+        order_owner: vacant(order_owner),
     }
 }
 
@@ -1291,7 +1341,7 @@ fn place_order_child_bindings(
                             waist::programdata_v2(campaign.substrate, &waist::elves().core),
                         ),
                     ),
-                    ClaimsFrameRoleV1::PositionOwnerIdentity => order_terms.clone(),
+                    ClaimsFrameRoleV1::PositionOwnerIdentity => corpus.order_owner.clone(),
                     ClaimsFrameRoleV1::RentCredit => chain.rent_credit.clone(),
                     ClaimsFrameRoleV1::RentProgram => program(waist::RENT_PROGRAM_ID),
                     ClaimsFrameRoleV1::AffinePosition(index) => semantic_positions
@@ -3002,8 +3052,35 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     );
     assert_eq!(place.built.admitted_authorities.entries.len(), 1);
     for invocation in &place.built.bundle.engine.invocations {
+        if invocation.resolved.role == FixedRole::Claims
+            && invocation.request.get(..8)
+                == Some(
+                    dclutch_claims::protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2
+                        .as_slice(),
+                )
+        {
+            let request = dclutch_claims::protocol_position_v2::ProtocolPositionRequestV2::decode(
+                &invocation.request,
+            )
+            .expect("canonical projected Claims admission");
+            let observed =
+                LiabilityBasisMarketViewV2::decode(&place_corpus.claims_market.account.data)
+                    .expect("actual nonzero Claims revision");
+            assert_ne!(
+                observed.revision, 0,
+                "this control catches default-zero projection"
+            );
+            assert_eq!(request.expected_market_revision, observed.revision);
+        }
         if invocation.resolved.role == FixedRole::Custody {
-            let request = CustodyRequestV1::decode(&invocation.request).unwrap_or_else(|error| {
+            let delegated = (invocation.request.get(..8)
+                == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice()))
+            .then(|| {
+                DelegatedCustodyRequestV2::decode(&invocation.request)
+                    .expect("PlaceOrder delegated Custody request")
+            });
+            let request = delegated.map(|value| value.custody).unwrap_or_else(|| {
+                CustodyRequestV1::decode(&invocation.request).unwrap_or_else(|error| {
                 let zero_required = [
                     ("release-set", CustodyRequestLayoutV1::RELEASE_SET),
                     ("market", CustodyRequestLayoutV1::MARKET),
@@ -3059,11 +3136,37 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
                     zero_identity(CustodyRequestLayoutV1::PAYER),
                     zero_identity(CustodyRequestLayoutV1::RENT_REFUND),
                 )
+                })
             });
             assert_eq!(
                 request.realm, campaign.realm.digest,
                 "every Custody child carries the authenticated Realm content identity"
             );
+            assert_eq!(
+                request.context,
+                place_corpus.order_identity.key.to_bytes(),
+                "every PlaceOrder Custody child is keyed by the signed order identity"
+            );
+            if request.operation == OperationV1::OpenVault {
+                assert_eq!(
+                    request.destination_vault_context,
+                    place_corpus.order_identity.key.to_bytes(),
+                    "the opened Settlement vault shares the order context"
+                );
+            }
+            if request.source_compartment == CompartmentV1::External {
+                let delegated = delegated.expect("an external debit uses delegated Custody");
+                assert!(delegated.starts_atomic_debit);
+                assert!(delegated.terminal);
+                assert_eq!(
+                    delegated.delegate_before,
+                    place_corpus.custody_authority.key.to_bytes()
+                );
+                assert_eq!(delegated.delegate_after, [0; 32]);
+                assert_eq!(delegated.total_debit, quote_reserve);
+                assert_eq!(delegated.allowance_before, quote_reserve);
+                assert_eq!(delegated.allowance_after, 0);
+            }
         }
     }
     let place_installed =
@@ -3193,14 +3296,21 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         quote_reserve,
         "Custody holds the exact signed quote reserve"
     );
+    let maker_token_after = chain_account(&mut context, place_corpus.maker_token.key).await;
     assert_eq!(
-        token_account_amount(
-            &chain_account(&mut context, place_corpus.maker_token.key)
-                .await
-                .data,
-        ),
+        token_account_amount(&maker_token_after.data),
         0,
         "the one funded maker source paid exactly the quote reserve"
+    );
+    assert_eq!(
+        token_account_delegate_tag(&maker_token_after.data),
+        0,
+        "the terminal external debit revokes its Custody delegate"
+    );
+    assert_eq!(
+        token_account_delegated_amount(&maker_token_after.data),
+        0,
+        "the terminal external debit exhausts its exact allowance"
     );
     chain = ChainPrestateV1 {
         market: observed_binding(&mut context, campaign.state.market.key).await,

@@ -401,14 +401,21 @@ fn require_trailing_account_profile_only_span_v3(
     }
 }
 
+/// Expand the physical frame and record its alias authority in the same walk.
+/// Fixed profiles decode each representative once: the final physical cursor
+/// checks exact width, and already-recorded representatives prove that aliases
+/// point directly backward. The observation and commit walks retain this bank
+/// instead of deriving the identical mapping again.
 pub(super) fn expand_runtime_accounts_v3<'accounts, 'info>(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
     span_counts: &[u32],
     injected: [&'accounts AccountInfo<'info>; 5],
     supplied_suffix: &'accounts [AccountInfo<'info>],
-) -> Result<Vec<&'accounts AccountInfo<'info>>, ProgramError> {
-    let dynamic = profile.uses_dynamic_fixed_spans();
+) -> Result<(Vec<&'accounts AccountInfo<'info>>, Vec<usize>), ProgramError> {
+    // Profile13/14 with zero declared spans has exactly fixed geometry;
+    // its retained wire generation does not require a dynamic replay.
+    let dynamic = profile.dynamic_fixed_span_count() != 0;
     let logical_count = if dynamic {
         profile
             .logical_account_count_with_dynamic_spans(tail_count, span_counts)
@@ -421,68 +428,45 @@ pub(super) fn expand_runtime_accounts_v3<'accounts, 'info>(
             .logical_account_count(tail_count)
             .map_err(|_| TradingSbfError::Content)?
     };
-    let physical_count = if dynamic {
-        profile
-            .physical_account_count_with_dynamic_spans(tail_count, span_counts)
-            .map_err(|_| TradingSbfError::Content)?
-    } else {
-        profile
-            .physical_account_count(tail_count)
-            .map_err(|_| TradingSbfError::Content)?
-    };
-    if logical_count > MAX_HOT_RUNTIME_ACCOUNTS_V3
-        || physical_count < injected.len()
-        || supplied_suffix.len()
-            != physical_count
-                .checked_sub(injected.len())
-                .ok_or(TradingSbfError::Content)?
-    {
+    if logical_count > MAX_HOT_RUNTIME_ACCOUNTS_V3 || logical_count < injected.len() {
         return Err(TradingSbfError::Content.into());
     }
-    for coordinate in 0..injected.len() {
-        let representative = if dynamic {
-            profile
-                .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
-                .map_err(|_| TradingSbfError::Content)?
-        } else {
-            profile
-                .representative(tail_count, coordinate)
-                .map_err(|_| TradingSbfError::Content)?
-        };
-        let ordinal = if dynamic {
-            profile
-                .physical_account_ordinal_with_dynamic_spans(tail_count, span_counts, coordinate)
-                .map_err(|_| TradingSbfError::Content)?
-        } else {
-            profile
-                .physical_account_ordinal(tail_count, coordinate)
-                .map_err(|_| TradingSbfError::Content)?
-        };
-        if representative != coordinate || ordinal != coordinate {
+    let physical = PhysicalAccountsV4::new(&injected, supplied_suffix);
+    if dynamic {
+        let physical_count = profile
+            .physical_account_count_with_dynamic_spans(tail_count, span_counts)
+            .map_err(|_| TradingSbfError::Content)?;
+        if physical.len() != physical_count {
             return Err(TradingSbfError::Content.into());
         }
+        for coordinate in 0..injected.len() {
+            let representative = profile
+                .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
+                .map_err(|_| TradingSbfError::Content)?;
+            let ordinal = profile
+                .physical_account_ordinal_with_dynamic_spans(tail_count, span_counts, coordinate)
+                .map_err(|_| TradingSbfError::Content)?;
+            if representative != coordinate || ordinal != coordinate {
+                return Err(TradingSbfError::Content.into());
+            }
+        }
+        let logical =
+            expand_dynamic_physical_accounts_v4(profile, tail_count, span_counts, &physical)?;
+        let aliases =
+            representative_coordinates_v3(profile, tail_count, span_counts, logical_count)?;
+        return Ok((logical, aliases));
     }
-    // Addressed in place, never concatenated into a `Vec`. See
-    // [`PhysicalAccountsV4`]: the joined buffer was dead the moment the logical
-    // vector existed and still cost its full physical width for the rest of the
-    // instruction.
-    let physical = PhysicalAccountsV4::new(&injected, supplied_suffix);
-    if physical.len() != physical_count {
-        return Err(TradingSbfError::Content.into());
-    }
-    if dynamic {
-        return expand_dynamic_physical_accounts_v4(profile, tail_count, span_counts, &physical);
-    }
-    // One forward sweep, not one prefix recount per coordinate: see
-    // `expand_dynamic_physical_accounts_v4` for why the two maps are identical.
     let packs = profile.supports_route_alias_packing();
     let mut logical = Vec::with_capacity(logical_count);
+    let mut aliases = Vec::with_capacity(logical_count);
     let mut next = 0_usize;
-    let mut coordinate = 0_usize;
-    while coordinate < logical_count {
+    for coordinate in 0..logical_count {
         let representative = profile
             .representative(tail_count, coordinate)
             .map_err(|_| TradingSbfError::Content)?;
+        if coordinate < injected.len() && representative != coordinate {
+            return Err(TradingSbfError::Content.into());
+        }
         let resolved = if !packs {
             physical.get(coordinate).ok_or(TradingSbfError::Content)?
         } else if representative == coordinate {
@@ -491,10 +475,7 @@ pub(super) fn expand_runtime_accounts_v3<'accounts, 'info>(
             resolved
         } else {
             if representative >= coordinate
-                || profile
-                    .representative(tail_count, representative)
-                    .map_err(|_| TradingSbfError::Content)?
-                    != representative
+                || aliases.get(representative).copied() != Some(representative)
             {
                 return Err(TradingSbfError::Content.into());
             }
@@ -503,9 +484,12 @@ pub(super) fn expand_runtime_accounts_v3<'accounts, 'info>(
                 .ok_or(TradingSbfError::Content)?
         };
         logical.push(resolved);
-        coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+        aliases.push(representative);
     }
-    Ok(logical)
+    if physical.len() != if packs { next } else { logical_count } {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok((logical, aliases))
 }
 
 /// The child-CPI view of the logical account vector, materialised one window at

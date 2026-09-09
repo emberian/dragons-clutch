@@ -17,7 +17,7 @@ use crate::general_config::{
 use dclutch_claims::affine_batch_v2::DeltaDirectionV2;
 use dclutch_custody::OperationV1;
 #[cfg(feature = "svm")]
-use dclutch_custody::token_svm::{ExactTransferProfileV1, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_custody::token_svm::{COption, ExactTransferProfileV1, PRODUCTION_ADAPTER_RELEASES};
 use dclutch_market::execution_strategy::v2::{ExecutionCandidateV2, register_bank_bytes_v2};
 #[cfg(feature = "svm")]
 use dclutch_market::realm::RealmV1;
@@ -133,7 +133,7 @@ pub const fn general_hot_item_scalar_stride_v3(action: Action) -> u32 {
     }
 }
 /// Exact common identity-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 45;
+pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 46;
 /// General has no per-outcome identity tail.
 pub const GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3: u32 = 0;
 
@@ -522,6 +522,9 @@ pub fn seed_general_place_order_terms_from_signed_terms_v3(
     if terms.header().outcome_count != outcome_count {
         return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
     }
+    let quote_reserve = terms
+        .quote_reserve()
+        .map_err(GeneralHotCandidateErrorV3::Collection)?;
     let common = usize::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
         .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
     let stride = usize::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
@@ -563,26 +566,15 @@ pub fn seed_general_place_order_terms_from_signed_terms_v3(
                 .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
         )
         .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = terms.order_id();
-    // Slot one is the vacant order-escrow Position the lifecycle plan creates;
-    // unlike slot zero it has no prestate body to observe.  Its identity is
-    // therefore the authenticated signed order id, while the existing maker
-    // Position owner is installed later only from actual Claims bytes.
-    *identities
+    *scalars
         .get_mut(
-            usize::try_from(identity::POSITION_ONE_OWNER)
+            usize::try_from(scalar::QUOTE_QUANTITY)
                 .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
         )
-        .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = terms.order_id();
-    // PlaceOrder admits the order-owned settlement Position before the affine
-    // leg.  This is the same signed order identity as the vacant escrow slot;
-    // no ambient account key can name a Position that has not yet been
-    // created.
-    *identities
-        .get_mut(
-            usize::try_from(identity::SETTLEMENT_POSITION_OWNER)
-                .map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
-        )
-        .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = terms.order_id();
+        .ok_or(GeneralHotCandidateErrorV3::InvalidCapacity)? = quote_reserve;
+    // Claims owner identities are seeded only from the native lifecycle Order
+    // PDA in the actual-frame adapter below. Signed terms alone name content,
+    // not a Trading-owned account.
     Ok(())
 }
 
@@ -677,6 +669,8 @@ pub struct GeneralPlaceOrderActualFrameV2<'a> {
     pub source_program: [u8; 32],
     pub source_data: &'a [u8],
     pub destination_key: [u8; 32],
+    pub custody_authority_key: [u8; 32],
+    pub order_owner_key: [u8; 32],
 }
 
 /// Authenticate PlaceOrder's physical Claims RentCredit and return the wallet
@@ -742,6 +736,8 @@ pub fn general_place_order_source_token_owner_v2(
     token_program_key: [u8; 32],
     source_program: [u8; 32],
     source_data: &[u8],
+    expected_delegate: [u8; 32],
+    expected_allowance: u64,
 ) -> core::result::Result<[u8; 32], GeneralPlaceOrderTokenObservationErrorV1> {
     let realm =
         RealmV1::decode(realm_data).map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::Realm)?;
@@ -769,6 +765,12 @@ pub fn general_place_order_source_token_owner_v2(
         .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::SourceToken)?;
     if source.mint != mint_key {
         return Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint);
+    }
+    if source.delegate != COption::Some(expected_delegate)
+        || source.delegated_amount != expected_allowance
+        || expected_allowance == 0
+    {
+        return Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken);
     }
     Ok(source.owner)
 }
@@ -802,6 +804,8 @@ pub fn seed_general_place_order_actual_identities_v2(
         || frame.core_market_key == [0; 32]
         || frame.claims_market_key == [0; 32]
         || frame.maker_position_key == [0; 32]
+        || frame.custody_authority_key == [0; 32]
+        || frame.order_owner_key == [0; 32]
     {
         return Err(GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity);
     }
@@ -901,6 +905,13 @@ pub fn seed_general_place_order_actual_identities_v2(
         frame.token_program_key,
         frame.source_program,
         frame.source_data,
+        frame.custody_authority_key,
+        *scalars
+            .get(
+                usize::try_from(scalar::QUOTE_QUANTITY)
+                    .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+            )
+            .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
     )?;
     *identities
         .get_mut(
@@ -951,6 +962,13 @@ pub fn seed_general_place_order_actual_identities_v2(
         .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = frame.destination_key;
     *identities
         .get_mut(
+            usize::try_from(identity::CUSTODY_DELEGATE)
+                .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+        )
+        .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
+        frame.custody_authority_key;
+    *identities
+        .get_mut(
             usize::try_from(identity::MINT)
                 .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
         )
@@ -981,6 +999,37 @@ pub fn seed_general_place_order_actual_identities_v2(
         )
         .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
         rent_credit_beneficiary;
+    // The exact owner coordinate aliases the lifecycle Order account. The
+    // lifecycle preplan independently derives that PDA, and the candidate
+    // rejoins both Claims-owner registers to its authenticated TERMINAL_STATE.
+    // Signed order content remains the separate Custody context.
+    for coordinate in [
+        identity::POSITION_ONE_OWNER,
+        identity::SETTLEMENT_POSITION_OWNER,
+    ] {
+        *identities
+            .get_mut(
+                usize::try_from(coordinate)
+                    .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+            )
+            .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? =
+            frame.order_owner_key;
+    }
+    // These revisions belong to the authenticated Claims bodies. Leaving the
+    // request bank's zero initializer here builds an obsolete child request
+    // as soon as issuance or another order has advanced either account.
+    for (coordinate, revision) in [
+        (scalar::CLAIMS_MARKET_REVISION, claims_market.revision),
+        (scalar::OWNER_POSITION_REVISION, maker_position.revision),
+        (scalar::POSITION_ZERO_REVISION, maker_position.revision),
+    ] {
+        *scalars
+            .get_mut(
+                usize::try_from(coordinate)
+                    .map_err(|_| GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)?,
+            )
+            .ok_or(GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity)? = revision;
+    }
     *scalars
         .get_mut(
             usize::try_from(scalar::OBSERVED_POSITION_LAMPORTS)
@@ -1095,6 +1144,8 @@ pub mod identity {
     pub const RESULT_STATE: u32 = 43;
     /// Lifecycle-owned result-record Trading program owner.
     pub const RESULT_OWNER: u32 = 44;
+    /// Observed Custody transfer delegate for an external PlaceOrder debit.
+    pub const CUSTODY_DELEGATE: u32 = 45;
 }
 
 /// Independently authenticated environment needed by exact Claims/Custody packets.
@@ -2378,11 +2429,13 @@ pub fn project_general_place_order_candidate_in_place_v3(
         PlaceOrderClauseV3::IdentityPositionZeroOwner,
     )?;
     place_order_clause(
-        read_identity(candidate, scalar_count, identity::POSITION_ONE_OWNER)? != terms.order_id(),
+        read_identity(candidate, scalar_count, identity::POSITION_ONE_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TERMINAL_STATE)?,
         PlaceOrderClauseV3::IdentityPositionOneOwner,
     )?;
     place_order_clause(
-        environment.settlement_position_owner != terms.order_id(),
+        environment.settlement_position_owner
+            != read_identity(candidate, scalar_count, identity::TERMINAL_STATE)?,
         PlaceOrderClauseV3::EnvironmentSettlementPositionOwner,
     )?;
     place_order_clause(
@@ -2759,7 +2812,8 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
         CancelOrderClauseV3::EnvironmentCustodyDestinationOwner,
     )?;
     cancel_order_clause(
-        read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)? != order.order_id(),
+        read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)?
+            != read_identity(candidate, scalar_count, identity::TERMINAL_STATE)?,
         CancelOrderClauseV3::IdentityPositionZeroOwner,
     )?;
     cancel_order_clause(
@@ -2767,7 +2821,8 @@ pub fn project_general_cancel_order_candidate_in_place_v3(
         CancelOrderClauseV3::IdentityPositionOneOwner,
     )?;
     cancel_order_clause(
-        environment.settlement_position_owner != order.order_id(),
+        environment.settlement_position_owner
+            != read_identity(candidate, scalar_count, identity::TERMINAL_STATE)?,
         CancelOrderClauseV3::EnvironmentSettlementPositionOwner,
     )?;
     cancel_order_clause(
@@ -3083,7 +3138,8 @@ pub fn project_general_release_order_candidate_in_place_v3(
         ReleaseOrderClauseV3::EnvironmentCustodyDestinationOwner,
     )?;
     release_order_clause(
-        read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)? != order.order_id(),
+        read_identity(candidate, scalar_count, identity::POSITION_ZERO_OWNER)?
+            != read_identity(candidate, scalar_count, identity::PRIMARY_STATE)?,
         ReleaseOrderClauseV3::IdentityPositionZeroOwner,
     )?;
     release_order_clause(
@@ -3091,7 +3147,8 @@ pub fn project_general_release_order_candidate_in_place_v3(
         ReleaseOrderClauseV3::IdentityPositionOneOwner,
     )?;
     release_order_clause(
-        environment.settlement_position_owner != order.order_id(),
+        environment.settlement_position_owner
+            != read_identity(candidate, scalar_count, identity::PRIMARY_STATE)?,
         ReleaseOrderClauseV3::EnvironmentSettlementPositionOwner,
     )?;
     release_order_clause(
@@ -5803,6 +5860,7 @@ mod tests {
             let mint = [0x51; 32];
             let token_program = release.profile().program_id();
             let source_owner = [0x52; 32];
+            let delegate = [0x53; 32];
             let realm = RealmV1::new(RealmV1Input {
                 token_program,
                 collateral_mint: mint,
@@ -5819,6 +5877,13 @@ mod tests {
                 .copy_from_slice(&source_owner);
             source[TokenAccountLayoutV1::AMOUNT..TokenAccountLayoutV1::AMOUNT + 8]
                 .copy_from_slice(&1_u64.to_le_bytes());
+            source[TokenAccountLayoutV1::DELEGATE..TokenAccountLayoutV1::DELEGATE + 4]
+                .copy_from_slice(&1_u32.to_le_bytes());
+            source[TokenAccountLayoutV1::DELEGATE + 4..TokenAccountLayoutV1::DELEGATE + 36]
+                .copy_from_slice(&delegate);
+            source[TokenAccountLayoutV1::DELEGATED_AMOUNT
+                ..TokenAccountLayoutV1::DELEGATED_AMOUNT + 8]
+                .copy_from_slice(&1_u64.to_le_bytes());
             source[TokenAccountLayoutV1::STATE] = 1;
             if immutable_owner_suffix {
                 source.extend_from_slice(&IMMUTABLE_OWNER_ACCOUNT_SUFFIX);
@@ -5830,9 +5895,37 @@ mod tests {
                     token_program,
                     token_program,
                     &source,
+                    delegate,
+                    1,
                 ),
                 Ok(source_owner),
                 "release {release_index} owns its exact source width",
+            );
+            assert_eq!(
+                general_place_order_source_token_owner_v2(
+                    &realm,
+                    mint,
+                    token_program,
+                    token_program,
+                    &source,
+                    [0x54; 32],
+                    1,
+                ),
+                Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken),
+                "release {release_index} refuses a substituted delegate",
+            );
+            assert_eq!(
+                general_place_order_source_token_owner_v2(
+                    &realm,
+                    mint,
+                    token_program,
+                    token_program,
+                    &source,
+                    delegate,
+                    2,
+                ),
+                Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken),
+                "release {release_index} refuses an allowance other than the signed debit",
             );
         }
 
@@ -5849,10 +5942,17 @@ mod tests {
         .expect("canonical selected Realm")
         .to_bytes();
         let mut source = vec![0_u8; ACCOUNT_BYTES];
+        let delegate = [0x64; 32];
         source[TokenAccountLayoutV1::MINT..TokenAccountLayoutV1::MINT + 32].copy_from_slice(&mint);
         source[TokenAccountLayoutV1::OWNER..TokenAccountLayoutV1::OWNER + 32]
             .copy_from_slice(&[0x62; 32]);
         source[TokenAccountLayoutV1::AMOUNT..TokenAccountLayoutV1::AMOUNT + 8]
+            .copy_from_slice(&1_u64.to_le_bytes());
+        source[TokenAccountLayoutV1::DELEGATE..TokenAccountLayoutV1::DELEGATE + 4]
+            .copy_from_slice(&1_u32.to_le_bytes());
+        source[TokenAccountLayoutV1::DELEGATE + 4..TokenAccountLayoutV1::DELEGATE + 36]
+            .copy_from_slice(&delegate);
+        source[TokenAccountLayoutV1::DELEGATED_AMOUNT..TokenAccountLayoutV1::DELEGATED_AMOUNT + 8]
             .copy_from_slice(&1_u64.to_le_bytes());
         source[TokenAccountLayoutV1::STATE] = 1;
         assert_eq!(
@@ -5862,6 +5962,8 @@ mod tests {
                 token_program,
                 [0x63; 32],
                 &source,
+                delegate,
+                1,
             ),
             Err(GeneralPlaceOrderTokenObservationErrorV1::SourceProgram),
         );
@@ -5874,6 +5976,8 @@ mod tests {
                 token_program,
                 token_program,
                 &wrong_mint,
+                delegate,
+                1,
             ),
             Err(GeneralPlaceOrderTokenObservationErrorV1::SourceMint),
         );
@@ -5885,6 +5989,8 @@ mod tests {
                 token_program,
                 token_program,
                 &source,
+                delegate,
+                1,
             ),
             Err(GeneralPlaceOrderTokenObservationErrorV1::SourceToken),
         );
@@ -6511,7 +6617,14 @@ mod tests {
                 environment.custody_source_owner,
             ),
             (identity::POSITION_ZERO_OWNER, header.owner_id),
-            (identity::POSITION_ONE_OWNER, order.order_id()),
+            (
+                identity::POSITION_ONE_OWNER,
+                environment.settlement_position_owner,
+            ),
+            (
+                identity::TERMINAL_STATE,
+                environment.settlement_position_owner,
+            ),
             (
                 identity::SETTLEMENT_POSITION_OWNER,
                 environment.settlement_position_owner,
@@ -6574,14 +6687,20 @@ mod tests {
             assert_eq!(
                 identities[usize::try_from(identity::POSITION_ONE_OWNER)
                     .expect("escrow owner coordinate")],
-                order.order_id(),
-                "{side:?} order-keyed vacant escrow Position",
+                [0; 32],
+                "{side:?} Claims owner requires actual lifecycle account identity",
             );
             assert_eq!(
                 identities[usize::try_from(identity::SETTLEMENT_POSITION_OWNER)
                     .expect("settlement owner coordinate")],
-                order.order_id(),
-                "{side:?} order-keyed settlement Position",
+                [0; 32],
+                "{side:?} Claims owner is not the signed content digest",
+            );
+            assert_eq!(
+                scalars
+                    [usize::try_from(scalar::QUOTE_QUANTITY).expect("quote quantity coordinate")],
+                order.quote_reserve().expect("exact quote reserve"),
+                "{side:?} signed quote reserve",
             );
             for item in 0..outcome_count {
                 let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
@@ -6769,7 +6888,14 @@ mod tests {
                 identity::CUSTODY_DESTINATION_OWNER,
                 environment.custody_destination_owner,
             ),
-            (identity::POSITION_ZERO_OWNER, order.order_id()),
+            (
+                identity::POSITION_ZERO_OWNER,
+                environment.settlement_position_owner,
+            ),
+            (
+                identity::TERMINAL_STATE,
+                environment.settlement_position_owner,
+            ),
             (identity::POSITION_ONE_OWNER, header.owner_id),
             (
                 identity::SETTLEMENT_POSITION_OWNER,
@@ -6853,7 +6979,14 @@ mod tests {
                 identity::CUSTODY_DESTINATION_OWNER,
                 environment.custody_destination_owner,
             ),
-            (identity::POSITION_ZERO_OWNER, order.order_id()),
+            (
+                identity::POSITION_ZERO_OWNER,
+                environment.settlement_position_owner,
+            ),
+            (
+                identity::PRIMARY_STATE,
+                environment.settlement_position_owner,
+            ),
             (identity::POSITION_ONE_OWNER, header.owner_id),
             (
                 identity::SETTLEMENT_POSITION_OWNER,
@@ -8034,7 +8167,8 @@ mod tests {
             let order = GeneralOrderV2::decode(&order_bytes).expect("order");
             environment.destination_vault_context = order.order_id();
             environment.custody_source_owner = order.header().owner_id;
-            environment.settlement_position_owner = order.order_id();
+            environment.settlement_position_owner = [0xb9; 32];
+            assert_ne!(environment.settlement_position_owner, order.order_id());
             environment.rent_refund = order.header().owner_id;
             let mut candidate =
                 place_order_input(outcome_count, environment, root, batch, order, current_slot);

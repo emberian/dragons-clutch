@@ -516,6 +516,7 @@ pub(crate) fn run_engine_with_admitted_candidate(
         let token_program = custody(dclutch_custody::CustodyFrameRoleV1::TokenProgram)?;
         let source = custody(dclutch_custody::CustodyFrameRoleV1::TransferSource)?;
         let destination = custody(dclutch_custody::CustodyFrameRoleV1::TransferDestination)?;
+        let custody_authority = custody(dclutch_custody::CustodyFrameRoleV1::CustodyAuthority)?;
         let claims = |role| {
             let coordinate = dclutch_trading::general::account_rules_v3::general_place_order_affine_claims_coordinate_v3(role)
                 .map_err(|_| BuilderError::Projection("general-place-order-claims-frame"))?;
@@ -582,6 +583,8 @@ pub(crate) fn run_engine_with_admitted_candidate(
                 source_program: source.owner(),
                 source_data: source.data(),
                 destination_key: destination.key(),
+                custody_authority_key: custody_authority.key(),
+                order_owner_key: claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::PositionOwnerIdentity)?.key(),
             },
             &mut current_scalars,
             &mut current_identities,

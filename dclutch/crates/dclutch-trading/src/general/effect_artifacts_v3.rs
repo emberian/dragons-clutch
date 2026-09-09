@@ -33,7 +33,8 @@ use dclutch_custody::{
     CLOSE_REPLAY_ACCOUNT_COUNT_V1 as CUSTODY_CLOSE_REPLAY_ACCOUNT_COUNT_V1,
     CLOSE_VAULT_ACCOUNT_COUNT_V1 as CUSTODY_CLOSE_VAULT_ACCOUNT_COUNT_V1, CUSTODY_RECEIPT_BYTES_V1,
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyFrameSpecV1,
-    CustodyRequestLayoutV1, CustodyRequestV1,
+    CustodyRequestLayoutV1, CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2,
     INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
     OPEN_VAULT_ACCOUNT_COUNT_V1 as CUSTODY_OPEN_VAULT_ACCOUNT_COUNT_V1, OperationV1,
     TRANSFER_ACCOUNT_COUNT_V1 as CUSTODY_TRANSFER_ACCOUNT_COUNT_V1,
@@ -385,7 +386,7 @@ pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usiz
         Action::CloseCandidate => (0, 0),
         Action::OpenBatch => (24, 0),
         Action::CloseBatch => (4, 0),
-        Action::PlaceOrder => (96, 13),
+        Action::PlaceOrder => (99, 13),
         Action::CancelOrder => (92, 11),
         Action::ReleaseOrder => (90, 11),
         Action::Consider => (22, 0),
@@ -418,7 +419,15 @@ pub const fn general_effect_template_bytes_v3(action: Action) -> usize {
                 + CUSTODY_REQUEST_BYTES_V1
         }
         Action::Close => PROTOCOL_POSITION_REQUEST_BYTES_V2 + 3 * CUSTODY_REQUEST_BYTES_V1,
-        Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder => {
+        Action::PlaceOrder => {
+            AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+                + 2 * AFFINE_BATCH_POSITION_BYTES_V2
+                + AFFINE_BATCH_ROW_BYTES_V2
+                + PROTOCOL_POSITION_REQUEST_BYTES_V2
+                + 2 * CUSTODY_REQUEST_BYTES_V1
+                + DELEGATED_CUSTODY_REQUEST_BYTES_V2
+        }
+        Action::CancelOrder | Action::ReleaseOrder => {
             AFFINE_BATCH_PLAN_HEADER_BYTES_V2
                 + 2 * AFFINE_BATCH_POSITION_BYTES_V2
                 + AFFINE_BATCH_ROW_BYTES_V2
@@ -963,8 +972,8 @@ fn build_initialize<'a>(
         &[],
     );
     append_position_patches(instructions, fixed, 0, scalar::CLAIMS_MARKET_REVISION)?;
-    append_custody_initialize_patches(instructions, fixed, 1, false)?;
-    append_custody_initialize_patches(instructions, fixed, 2, true)?;
+    append_custody_initialize_patches(instructions, fixed, 1, false, identity::CANDIDATE)?;
+    append_custody_initialize_patches(instructions, fixed, 2, true, identity::CANDIDATE)?;
     Ok(3)
 }
 
@@ -1274,7 +1283,6 @@ fn build_place<'a>(
     templates: &'a mut [u8],
     routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
 ) -> Result<usize> {
-    let (source, destination) = action_template_compartments(Action::PlaceOrder)?;
     let (affine_bytes, affine_len) = affine_template(2)?;
     let initialize = custody_template(
         OperationV1::InitializeReplay,
@@ -1286,7 +1294,6 @@ fn build_place<'a>(
         CompartmentV1::None,
         CompartmentV1::Settlement,
     )?;
-    let transfer = custody_template(OperationV1::Transfer, source, destination)?;
     let position = position_template(ProtocolPositionActionV2::Admit)?;
     let initialize_offset = 0;
     let open_offset = CUSTODY_REQUEST_BYTES_V1;
@@ -1303,7 +1310,14 @@ fn build_place<'a>(
             .get(..affine_len)
             .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
     )?;
-    copy_at(templates, transfer_offset, &transfer)?;
+    let transfer_end = transfer_offset
+        .checked_add(DELEGATED_CUSTODY_REQUEST_BYTES_V2)
+        .ok_or(GeneralEffectArtifactErrorV3::Geometry)?;
+    write_delegated_place_order_deposit_template(
+        templates
+            .get_mut(transfer_offset..transfer_end)
+            .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
+    )?;
     let initialize_start = general_child_account_start_v3(Action::PlaceOrder);
     let open_start = add_accounts(initialize_start, CUSTODY_INITIALIZE_ACCOUNTS)?;
     let position_start = add_accounts(open_start, CUSTODY_OPEN_ACCOUNTS)?;
@@ -1371,16 +1385,20 @@ fn build_place<'a>(
         None,
         transfer_start,
         CUSTODY_TRANSFER_ACCOUNTS,
-        slice_at(templates, transfer_offset, CUSTODY_REQUEST_BYTES_V1)?,
+        slice_at(
+            templates,
+            transfer_offset,
+            DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+        )?,
         &[],
     );
-    append_custody_initialize_patches(instructions, fixed, 0, false)?;
-    append_custody_initialize_patches(instructions, fixed, 1, true)?;
+    append_custody_initialize_patches(instructions, fixed, 0, false, identity::ORDER)?;
+    append_custody_initialize_patches(instructions, fixed, 1, true, identity::ORDER)?;
     // A Position admit advances no market revision, so both the admit and the
     // affine that follows it expect the same observation.
     append_position_patches(instructions, fixed, 2, scalar::CLAIMS_MARKET_REVISION)?;
     append_affine_patches(instructions, fixed, item, 3, 2)?;
-    append_custody_transfer_patches(instructions, fixed, 4, false)?;
+    append_delegated_place_order_transfer_patches(instructions, fixed, 4)?;
     Ok(5)
 }
 
@@ -2997,17 +3015,127 @@ fn append_custody_transfer_patches(
     Ok(())
 }
 
+fn append_delegated_place_order_transfer_patches(
+    output: &mut [EffectInstructionV3],
+    cursor: &mut usize,
+    route: u16,
+) -> Result<()> {
+    let base = DelegatedCustodyRequestLayoutV2::BASE;
+    for (offset, coordinate) in [
+        (CustodyRequestLayoutV1::RELEASE_SET, identity::RELEASE_SET),
+        (CustodyRequestLayoutV1::MARKET, identity::MARKET),
+        (CustodyRequestLayoutV1::REALM, identity::REALM),
+        (CustodyRequestLayoutV1::CONTEXT, identity::ORDER),
+        (
+            CustodyRequestLayoutV1::CALLER_PROGRAM,
+            identity::TRADING_PROGRAM,
+        ),
+        (CustodyRequestLayoutV1::CANDIDATE, identity::CANDIDATE),
+        (CustodyRequestLayoutV1::ORDER, identity::ORDER),
+        (
+            CustodyRequestLayoutV1::PARENT_REQUEST_DIGEST,
+            identity::PARENT_REQUEST_DIGEST,
+        ),
+        (
+            CustodyRequestLayoutV1::SOURCE_OWNER,
+            identity::CUSTODY_SOURCE_OWNER,
+        ),
+        (
+            CustodyRequestLayoutV1::DESTINATION_OWNER,
+            identity::CUSTODY_DESTINATION_OWNER,
+        ),
+        (CustodyRequestLayoutV1::SOURCE, identity::CUSTODY_SOURCE),
+        (
+            CustodyRequestLayoutV1::DESTINATION,
+            identity::CUSTODY_DESTINATION,
+        ),
+        (
+            CustodyRequestLayoutV1::SOURCE_VAULT_CONTEXT,
+            identity::SOURCE_VAULT_CONTEXT,
+        ),
+        (
+            CustodyRequestLayoutV1::DESTINATION_VAULT_CONTEXT,
+            identity::DESTINATION_VAULT_CONTEXT,
+        ),
+        (CustodyRequestLayoutV1::MINT, identity::MINT),
+        (
+            CustodyRequestLayoutV1::TOKEN_PROGRAM,
+            identity::TOKEN_PROGRAM,
+        ),
+    ] {
+        push_custody_identity(
+            output,
+            cursor,
+            route,
+            base.checked_add(offset)
+                .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
+            coordinate,
+        )?;
+    }
+    for (offset, coordinate, width) in [
+        (
+            CustodyRequestLayoutV1::TRANSFER_INDEX,
+            scalar::TRANSFER_INDEX,
+            2,
+        ),
+        (
+            CustodyRequestLayoutV1::EXPECTED_REVISION,
+            scalar::CUSTODY_EXPECTED_REVISION,
+            8,
+        ),
+        (
+            CustodyRequestLayoutV1::RESULTING_REVISION,
+            scalar::CUSTODY_RESULTING_REVISION,
+            8,
+        ),
+        (CustodyRequestLayoutV1::ORDER_NONCE, scalar::ORDER_NONCE, 8),
+        (CustodyRequestLayoutV1::GENERATION, scalar::GENERATION, 8),
+        (CustodyRequestLayoutV1::AMOUNT, scalar::CUSTODY_AMOUNT, 8),
+        (CustodyRequestLayoutV1::PAGE_INDEX, scalar::PAGE_INDEX, 4),
+        (
+            CustodyRequestLayoutV1::EXECUTION_INDEX,
+            scalar::EXECUTION_INDEX,
+            4,
+        ),
+    ] {
+        push_custody_scalar(
+            output,
+            cursor,
+            route,
+            base.checked_add(offset)
+                .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
+            coordinate,
+            width,
+        )?;
+    }
+    push_custody_identity(
+        output,
+        cursor,
+        route,
+        DelegatedCustodyRequestLayoutV2::DELEGATE_BEFORE,
+        identity::CUSTODY_DELEGATE,
+    )?;
+    for offset in [
+        DelegatedCustodyRequestLayoutV2::TOTAL_DEBIT,
+        DelegatedCustodyRequestLayoutV2::ALLOWANCE_BEFORE,
+    ] {
+        push_custody_scalar(output, cursor, route, offset, scalar::QUOTE_QUANTITY, 8)?;
+    }
+    Ok(())
+}
+
 fn append_custody_initialize_patches(
     output: &mut [EffectInstructionV3],
     cursor: &mut usize,
     route: u16,
     open: bool,
+    context: u32,
 ) -> Result<()> {
     for (offset, coordinate) in [
         (CustodyRequestLayoutV1::RELEASE_SET, identity::RELEASE_SET),
         (CustodyRequestLayoutV1::MARKET, identity::MARKET),
         (CustodyRequestLayoutV1::REALM, identity::REALM),
-        (CustodyRequestLayoutV1::CONTEXT, identity::GENERAL_ROOT),
+        (CustodyRequestLayoutV1::CONTEXT, context),
         (
             CustodyRequestLayoutV1::CALLER_PROGRAM,
             identity::TRADING_PROGRAM,
@@ -3027,10 +3155,7 @@ fn append_custody_initialize_patches(
                 CustodyRequestLayoutV1::DESTINATION,
                 identity::CUSTODY_DESTINATION,
             ),
-            (
-                CustodyRequestLayoutV1::DESTINATION_VAULT_CONTEXT,
-                identity::GENERAL_ROOT,
-            ),
+            (CustodyRequestLayoutV1::DESTINATION_VAULT_CONTEXT, context),
             (CustodyRequestLayoutV1::MINT, identity::MINT),
             (
                 CustodyRequestLayoutV1::TOKEN_PROGRAM,
@@ -3456,6 +3581,33 @@ fn custody_template(
     .map_err(|_| GeneralEffectArtifactErrorV3::Custody)
 }
 
+#[inline(never)]
+fn write_delegated_place_order_deposit_template(output: &mut [u8]) -> Result<()> {
+    if output.len() != DELEGATED_CUSTODY_REQUEST_BYTES_V2 {
+        return Err(GeneralEffectArtifactErrorV3::Geometry);
+    }
+    let (source, destination) = action_template_compartments(Action::PlaceOrder)?;
+    let bytes = DelegatedCustodyRequestV2 {
+        custody: CustodyRequestV1::decode(&custody_template(
+            OperationV1::Transfer,
+            source,
+            destination,
+        )?)
+        .map_err(|_| GeneralEffectArtifactErrorV3::Custody)?,
+        starts_atomic_debit: true,
+        terminal: true,
+        delegate_before: id(17),
+        delegate_after: [0; 32],
+        total_debit: 1,
+        allowance_before: 1,
+        allowance_after: 0,
+    }
+    .encode()
+    .map_err(|_| GeneralEffectArtifactErrorV3::Custody)?;
+    output.copy_from_slice(&bytes);
+    Ok(())
+}
+
 const fn empty_route<'a>() -> RouteInputV3<'a> {
     route(
         FixedRole::Core,
@@ -3692,6 +3844,27 @@ mod tests {
             invocation.repeated_item_count, outcomes,
             "an active affine packet still carries one exact row per Product outcome"
         );
+    }
+
+    #[test]
+    fn place_order_external_debit_uses_the_delegated_successor_only() {
+        let mut bytes = [0; DELEGATED_CUSTODY_REQUEST_BYTES_V2];
+        write_delegated_place_order_deposit_template(&mut bytes)
+            .expect("delegated deposit template");
+        let request =
+            DelegatedCustodyRequestV2::decode(&bytes).expect("canonical delegated deposit");
+        assert_eq!(request.custody.operation, OperationV1::Transfer);
+        assert_eq!(request.custody.source_compartment, CompartmentV1::External);
+        assert_eq!(
+            request.custody.destination_compartment,
+            CompartmentV1::Settlement
+        );
+        assert!(request.starts_atomic_debit);
+        assert!(request.terminal);
+        assert_ne!(request.delegate_before, [0; 32]);
+        assert_eq!(request.delegate_after, [0; 32]);
+        assert_eq!(request.allowance_before, request.total_debit);
+        assert_eq!(request.allowance_after, 0);
     }
 
     #[test]

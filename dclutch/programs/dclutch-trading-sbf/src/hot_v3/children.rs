@@ -579,6 +579,13 @@ pub(super) fn preflight_child_routes_v3<'accounts, 'info>(
                 fractional_local_root_overlap_v3(invocation, request_bank, family_request, aliases)?
             {
                 AllowedLocalOverlapV3::FractionalRoot(root)
+            } else if let Some(order) = general_place_order_owner_overlap_v3(
+                invocation,
+                request_bank,
+                family_request,
+                aliases,
+            )? {
+                AllowedLocalOverlapV3::GeneralOrderOwner(order)
             } else {
                 series_expiry_local_replay_overlap_v1(
                     effect,
@@ -1687,6 +1694,7 @@ pub(super) fn record_child_reach_and_require_disjoint_from_local(
 pub(super) enum AllowedLocalOverlapV3 {
     None,
     FractionalRoot(usize),
+    GeneralOrderOwner(usize),
     SeriesExpiryReplay { root: usize, ticket: usize },
 }
 
@@ -1695,11 +1703,81 @@ impl AllowedLocalOverlapV3 {
         match self {
             Self::None => false,
             Self::FractionalRoot(root) => representative == root,
+            Self::GeneralOrderOwner(order) => representative == order,
             Self::SeriesExpiryReplay { root, ticket } => {
                 representative == root || representative == ticket
             }
         }
     }
+}
+
+/// Claims admission observes the lifecycle-created Trading Order as its
+/// Position owner. Only the exact PlaceOrder admission frame may alias that
+/// read-only semantic role to the locally written Order. Claims cannot write
+/// Trading-owned data or debit its lamports; its admission implementation only
+/// authenticates this owner. Candidate projection joins the child request's
+/// owner key to the lifecycle-derived Order, and Claims rechecks that key and
+/// the Trading owner after creation. All other local/child overlaps refuse.
+pub(super) fn general_place_order_owner_overlap_v3(
+    invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
+    request_bank: &[u8],
+    family_request: &[u8],
+    aliases: &[usize],
+) -> Result<Option<usize>, ProgramError> {
+    use dclutch_claims::{
+        frame_spec_v1::{ClaimsFrameRoleV1, PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1},
+        protocol_position_v2::{
+            ProtocolPositionActionV2, ProtocolPositionOwnerKindV2, ProtocolPositionRequestV2,
+        },
+    };
+    use dclutch_trading::general::{
+        account_rules_v3::general_place_order_admit_claims_coordinate_v3,
+        artifacts_v3::decode_general_request_v3,
+        state_artifacts_v3::GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+    };
+    if invocation.role != FixedRole::Claims
+        || invocation.kind != dclutch_vm::effect::v3::RouteKindV3::Once
+        || invocation.borrowed_witness.is_some()
+        || invocation.fixed_account_count != PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1
+        || invocation.item_account_count != 0
+        || invocation.repeated_item_count != 0
+    {
+        return Ok(None);
+    }
+    let Ok(parent) = decode_general_request_v3(family_request) else {
+        return Ok(None);
+    };
+    if parent.action != dclutch_trading::general_codec::Action::PlaceOrder {
+        return Ok(None);
+    }
+    let start = general_place_order_admit_claims_coordinate_v3(ClaimsFrameRoleV1::CallerAuthority)
+        .map_err(|_| TradingSbfError::Content)?;
+    if invocation.fixed_account_start != start {
+        return Ok(None);
+    }
+    let end = invocation
+        .request_offset
+        .checked_add(invocation.request_len)
+        .ok_or(TradingSbfError::Content)?;
+    let Some(bytes) = request_bank.get(invocation.request_offset..end) else {
+        return Ok(None);
+    };
+    let Ok(child) = ProtocolPositionRequestV2::decode(bytes) else {
+        return Ok(None);
+    };
+    if child.action != ProtocolPositionActionV2::Admit
+        || child.owner_kind != ProtocolPositionOwnerKindV2::TradingRecord
+    {
+        return Ok(None);
+    }
+    let coordinate =
+        general_place_order_admit_claims_coordinate_v3(ClaimsFrameRoleV1::PositionOwnerIdentity)
+            .map_err(|_| TradingSbfError::Content)?;
+    let order = usize::from(GENERAL_TERMINAL_STATE_ACCOUNT_V3);
+    if aliases.get(usize::from(coordinate)).copied() != Some(order) {
+        return Ok(None);
+    }
+    Ok(Some(order))
 }
 
 /// Select the one local/child overlap Fractional requires.

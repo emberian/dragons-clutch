@@ -1765,7 +1765,6 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1, report_schema: &str)
                     party: None,
                     order_children: None,
                     settlement_children: None,
-                    position_owner_identity: None,
                     surplus_beneficiary: None,
                     solver: None,
                     evidence: Vec::new(),
@@ -2694,6 +2693,12 @@ fn place_order_inputs_v1(
         .maker_token_account
         .ok_or_else(|| refusal("input/place-order-corpus", "--maker-token-account"))?;
     rpc.required_account(maker_token, "maker collateral token account")?;
+    let order_owner = states.secondary.map(|(key, _)| key).ok_or_else(|| {
+        refusal(
+            "session/order-owner",
+            "PlaceOrder lifecycle omitted Order PDA",
+        )
+    })?;
     let children = GeneralEscrowChildrenV1::derive(
         claims_program,
         custody_program,
@@ -2701,6 +2706,7 @@ fn place_order_inputs_v1(
         arguments.market.to_bytes(),
         release_set,
         terms.order_id(),
+        order_owner,
     )
     .map_err(|error| refusal("session/order-children", format!("{error:?}")))?;
     let rent_credit = Pubkey::new_from_array(market.rent_beneficiary.to_bytes());
@@ -2745,7 +2751,6 @@ fn place_order_inputs_v1(
         }),
         order_children: Some(children),
         settlement_children: None,
-        position_owner_identity: Some(terms_key),
         surplus_beneficiary: None,
         solver: None,
         evidence: vec![GeneralEvidenceAddressV1 {

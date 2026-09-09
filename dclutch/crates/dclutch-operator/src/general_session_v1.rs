@@ -482,19 +482,17 @@ fn child_source_at(
 
 /// The escrow children of one order or one candidate, derived.
 ///
-/// An order's escrow is a Claims protocol Position owned by the order identity,
-/// its admission record, a Custody replay ledger keyed by the order identity,
-/// and a Settlement-compartment vault keyed by the same identity; a candidate's
-/// settlement inventory is the same four shapes keyed by the candidate
-/// identity (decision 0010 §2: the same economic pool, distinguished by a
-/// seed). Every address comes from the Claims and Custody seed types, so a
-/// founding that installs them and a placement that admits them cannot
-/// disagree about where they are.
+/// Claims escrow is owned by the actual Trading Order or settlement-state
+/// account. Custody replay and vault namespaces use the separate signed order
+/// or candidate content identity. Native Claims/Custody seed types derive each
+/// address; these two namespaces must never be substituted for one another.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralEscrowChildrenV1 {
-    /// The identity the children are keyed by (an order or a candidate).
+    /// Content identity keying Custody (an order or a candidate).
     pub context: [u8; 32],
-    /// The Claims protocol Position owned by `context`.
+    /// Actual Trading-owned Order or settlement account owning Claims escrow.
+    pub position_owner: Pubkey,
+    /// The Claims protocol Position owned by `position_owner`.
     pub position: Pubkey,
     /// Its admission record.
     pub admission: Pubkey,
@@ -513,17 +511,21 @@ impl GeneralEscrowChildrenV1 {
         market: [u8; 32],
         release_set: [u8; 32],
         context: [u8; 32],
+        position_owner: Pubkey,
     ) -> Result<Self, GeneralSessionErrorV1> {
-        let position_seeds = ProtocolPositionSeedsV2::new(aggregate.to_bytes(), context)
-            .map_err(|_| GeneralSessionErrorV1::Seeds("protocol position"))?;
-        let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), context)
-            .map_err(|_| GeneralSessionErrorV1::Seeds("position admission"))?;
+        let position_seeds =
+            ProtocolPositionSeedsV2::new(aggregate.to_bytes(), position_owner.to_bytes())
+                .map_err(|_| GeneralSessionErrorV1::Seeds("protocol position"))?;
+        let admission_seeds =
+            ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), position_owner.to_bytes())
+                .map_err(|_| GeneralSessionErrorV1::Seeds("position admission"))?;
         let replay_seeds =
             CustodyReplaySeedsV1::new(market, release_set, CallerRoleV1::Trading, context);
         let vault_seeds =
             CustodyVaultSeedsV1::new(market, release_set, context, CompartmentV1::Settlement);
         Ok(Self {
             context,
+            position_owner,
             position: Pubkey::find_program_address(&position_seeds.as_slices(), &claims_program).0,
             admission: Pubkey::find_program_address(&admission_seeds.as_slices(), &claims_program)
                 .0,
@@ -651,10 +653,6 @@ pub struct GeneralFrameInputsV1 {
     pub order_children: Option<GeneralEscrowChildrenV1>,
     /// The candidate's settlement children (the settlement actions).
     pub settlement_children: Option<GeneralEscrowChildrenV1>,
-    /// The account whose key is the escrow Position's owner identity, where a
-    /// Claims frame names one. For an order escrow it is the account at the
-    /// order's identity; a caller states it (see BUILD doc §4).
-    pub position_owner_identity: Option<Pubkey>,
     /// The quote-surplus beneficiary a `Close` routes the remainder to.
     pub surplus_beneficiary: Option<Pubkey>,
     /// The solver's wallet (CloseCandidate's credit coordinate).
@@ -806,12 +804,12 @@ impl GeneralFrameInputsV1 {
                 ClaimsFrameRoleV1::ClaimsProgramData => self.child_chain()?.claims_programdata,
                 ClaimsFrameRoleV1::CoreProgram => self.core_program,
                 ClaimsFrameRoleV1::CoreProgramData => self.core_programdata,
-                ClaimsFrameRoleV1::PositionOwnerIdentity => {
-                    self.position_owner_identity
-                        .ok_or(GeneralSessionErrorV1::InputMissing(
-                            "--position-owner-identity",
-                        ))?
-                }
+                ClaimsFrameRoleV1::PositionOwnerIdentity => match action {
+                    Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder => {
+                        self.order_children()?.position_owner
+                    }
+                    _ => self.settlement_children()?.position_owner,
+                },
                 ClaimsFrameRoleV1::RentCredit => self.rent_credit,
                 ClaimsFrameRoleV1::RentProgram => self.child_chain()?.rent_program,
                 ClaimsFrameRoleV1::AffinePosition(index) => self.affine_position(action, index)?,
@@ -1061,6 +1059,7 @@ mod tests {
             [1; 32],
             [2; 32],
             [0xaa; 32],
+            Pubkey::new_from_array([0xca; 32]),
         )
         .expect("children");
         let b = GeneralEscrowChildrenV1::derive(
@@ -1070,11 +1069,26 @@ mod tests {
             [1; 32],
             [2; 32],
             [0xbb; 32],
+            Pubkey::new_from_array([0xcb; 32]),
         )
         .expect("children");
         let set = std::collections::BTreeSet::from([a.position, a.admission, a.replay, a.vault]);
         assert_eq!(set.len(), 4);
         assert_ne!(a.vault, b.vault);
         assert_ne!(a.position, b.position);
+        let different_owner = GeneralEscrowChildrenV1::derive(
+            claims,
+            custody,
+            Pubkey::new_from_array([3; 32]),
+            [1; 32],
+            [2; 32],
+            a.context,
+            b.position_owner,
+        )
+        .expect("same Custody context with another actual Claims owner");
+        assert_eq!(a.replay, different_owner.replay);
+        assert_eq!(a.vault, different_owner.vault);
+        assert_ne!(a.position, different_owner.position);
+        assert_ne!(a.admission, different_owner.admission);
     }
 }

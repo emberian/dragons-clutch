@@ -57,6 +57,100 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<()> {
     result
 }
 
+/// Resume the original founded Market on its still-running checked validator.
+/// No validator handle is acquired or restarted; native exteriors reauthenticate
+/// live state and continue their existing journals.
+pub(crate) fn continue_existing(request: JourneyRequestV1) -> Result<()> {
+    let plan_path = request.work.join("substrate/plan.json");
+    let plan_bytes = std::fs::read(&plan_path)?;
+    let plan: crate::model::SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
+    crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)?;
+    let pins = plan
+        .checked_local_mutable_set
+        .as_ref()
+        .ok_or_else(|| Error::new("Structured continuation omitted checked local pins"))?;
+    if pins.source_revision != request.expected_source_revision
+        || pins.source_tree_sha256 != request.expected_source_tree_sha256
+        || pins.checked_release_gate_sha256 != request.expected_gate_sha256
+    {
+        return Err(Error::new(
+            "Structured continuation source differs from its retained cohort",
+        ));
+    }
+    let rpc_url = format!("http://127.0.0.1:{}", request.rpc_port);
+    let context = StructuredTerminalContextV1 {
+        rpc_url: rpc_url.clone(),
+        plan_path: plan_path.clone(),
+        plan,
+        plan_sha256: crate::evidence_refresh::hex_digest_v1(&plan_bytes),
+        campaign_founding_keypairs: ["campaign-payer", "founding-founder"]
+            .into_iter()
+            .map(|role| {
+                (
+                    role.to_owned(),
+                    request
+                        .work
+                        .join("substrate/prepare/keys")
+                        .join(format!("{role}.json"))
+                        .display()
+                        .to_string(),
+                )
+            })
+            .collect(),
+    };
+    let mut driver = StructuredTerminalDriver {
+        request: &request,
+        checked: &context,
+    };
+    let output = request.work.join("structured-publication.json");
+    crate::structured_campaign::run_owned_loopback_with_terminal_v1(
+        vec![
+            "--rpc-url".into(),
+            rpc_url,
+            "--plan".into(),
+            plan_path.display().to_string(),
+            "--market-input".into(),
+            request
+                .work
+                .join("structured-market.json")
+                .display()
+                .to_string(),
+            "--campaign-report".into(),
+            request
+                .work
+                .join("structured-founding-evidence.json")
+                .display()
+                .to_string(),
+            "--payer-keypair".into(),
+            context.campaign_founding_keypairs["campaign-payer"].clone(),
+            "--output".into(),
+            output.display().to_string(),
+            "--execute".into(),
+        ],
+        Some(&mut driver),
+    )?;
+    let publication: Value = serde_json::from_slice(&std::fs::read(&output)?)?;
+    if publication
+        .pointer("/receiptActivation/retirement/rootClose/rootClosed")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(Error::new(
+            "Structured continuation did not close its capability root",
+        ));
+    }
+    write_json(
+        &request.transcript,
+        &json!({
+            "schema": "dclutch-structured-claims-continuation-v1",
+            "evidenceLevel": "local-validator", "completed": true,
+            "runtimeSourceRevision": request.expected_source_revision,
+            "checkedReleaseGateSha256": request.expected_gate_sha256,
+            "publication": output,
+        }),
+    )
+}
+
 fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
     crate::substrate::require_token_2022_fixture_v1()?;
     let substrate_dir = request.work.join("substrate");
@@ -134,7 +228,17 @@ fn campaign_on_checked_substrate(
         .get("campaign-payer")
         .ok_or_else(|| Error::new("checked substrate omitted campaign-payer role"))?;
     let publication_path = request.work.join("structured-publication.json");
-    let mut terminal_driver = StructuredTerminalDriver { request, checked };
+    let context = StructuredTerminalContextV1 {
+        rpc_url: checked.rpc_url.clone(),
+        plan_path: checked.plan_path.clone(),
+        plan: checked.plan.clone(),
+        plan_sha256: checked.plan_sha256.clone(),
+        campaign_founding_keypairs: checked.report.campaign_founding_keypairs.clone(),
+    };
+    let mut terminal_driver = StructuredTerminalDriver {
+        request,
+        checked: &context,
+    };
     crate::structured_campaign::run_owned_loopback_with_terminal_v1(
         vec![
             "--rpc-url".into(),
@@ -205,9 +309,17 @@ mod tests {
         assert_ne!(records.as_array().map(Vec::len), Some(7));
     }
 }
+struct StructuredTerminalContextV1 {
+    rpc_url: String,
+    plan_path: std::path::PathBuf,
+    plan: crate::model::SuccessorPlan,
+    plan_sha256: String,
+    campaign_founding_keypairs: std::collections::BTreeMap<String, String>,
+}
+
 struct StructuredTerminalDriver<'a> {
     request: &'a JourneyRequestV1,
-    checked: &'a crate::substrate::CheckedSubstrateV1,
+    checked: &'a StructuredTerminalContextV1,
 }
 
 impl crate::structured_campaign::StructuredTerminalDriverV1 for StructuredTerminalDriver<'_> {
@@ -230,7 +342,6 @@ impl crate::structured_campaign::StructuredTerminalDriverV1 for StructuredTermin
         )?;
         let payer_path = self
             .checked
-            .report
             .campaign_founding_keypairs
             .get("campaign-payer")
             .ok_or_else(|| Error::new("Structured terminal omitted payer key"))?;
@@ -297,7 +408,7 @@ impl crate::structured_campaign::StructuredTerminalDriverV1 for StructuredTermin
 /// execute against the checked validator.
 fn resolve_structured_terminal_v1(
     request: &JourneyRequestV1,
-    checked: &crate::substrate::CheckedSubstrateV1,
+    checked: &StructuredTerminalContextV1,
     rpc: &mut crate::rpc::Rpc,
     payer: &solana_sdk::signature::Keypair,
     finish_provider: bool,
@@ -308,12 +419,10 @@ fn resolve_structured_terminal_v1(
     let work = request.work.join("structured-terminal");
     std::fs::create_dir_all(&work)?;
     let founder_path = checked
-        .report
         .campaign_founding_keypairs
         .get("founding-founder")
         .ok_or_else(|| Error::new("Structured terminal omitted founder key"))?;
     let payer_path = checked
-        .report
         .campaign_founding_keypairs
         .get("campaign-payer")
         .ok_or_else(|| Error::new("Structured terminal omitted payer key"))?;

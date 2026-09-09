@@ -794,13 +794,18 @@ impl SelectedInputV1 {
         for (label, key) in [
             ("submitter", self.submitter),
             ("resolver", self.resolver),
-            // The payer must alias nothing: as the fee payer it is a writable
-            // signer, so aliasing any frame account flips that account's pinned
-            // privilege and the packet is refused on chain, not here.
+            // Execute and Reclaim pin the resolver readonly, so the payer may
+            // never alias it or any frame account. The submitter is different:
+            // Submit already names it as a writable signer, and Execute and
+            // Reclaim carry only its persisted identity, not the account. One
+            // wallet may therefore sponsor all three provider stages.
             ("payer", self.payer),
             ("refundRecipient", self.refund_recipient),
         ] {
             if let Some(other) = seen.get(&key) {
+                if label == "payer" && *other == "submitter" {
+                    continue;
+                }
                 return Err(Error::new(format!(
                     "address-book substitution: {label} and {other} both name {key}"
                 )));
@@ -9746,6 +9751,15 @@ mod tests {
                 "{alias}: {error}",
             );
         }
+
+        // Submit names this wallet as a writable signer, while Execute and
+        // Reclaim use the same wallet only as their fee payer. This is the
+        // canonical sponsored-provider shape used by the retained Journey.
+        let mut sponsored = sample_input();
+        sponsored.payer = sponsored.submitter.clone();
+        let sponsored = SelectedInputV1::parse(&sponsored, ExpectedClusterV1::Devnet)
+            .expect("one wallet may submit and pay for the provider lifecycle");
+        assert_eq!(sponsored.payer, sponsored.submitter);
 
         // And the honest shape still parses, with the payer sorting first.
         let selected =

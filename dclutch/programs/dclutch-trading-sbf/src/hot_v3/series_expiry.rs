@@ -615,7 +615,7 @@ fn authenticate_series_expiry_execution_artifacts_v1<'accounts, 'info>(
     // accounts. A zero tail therefore resolves the exact same fixed logical
     // vector as the later authenticated Product outcome count; the common tail
     // repeats the expansion and the full geometry agreement before mutation.
-    let runtime_accounts = expand_runtime_accounts_v3(
+    let (runtime_accounts, _) = expand_runtime_accounts_v3(
         account_profile,
         0,
         &[],

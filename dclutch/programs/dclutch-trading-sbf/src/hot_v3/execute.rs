@@ -818,7 +818,7 @@ pub(super) fn execute_authenticated_hot_v3(
         provisional_identity_count,
     )?;
 
-    let runtime_accounts = expand_runtime_accounts_v3(
+    let (runtime_accounts, aliases) = expand_runtime_accounts_v3(
         account_profile,
         product_outcome_count,
         &dynamic_spans.widths,
@@ -833,6 +833,7 @@ pub(super) fn execute_authenticated_hot_v3(
             .get(runtime_start..)
             .ok_or(TradingSbfError::Content)?,
     )?;
+    hot_cu_checkpoint!("runtime-expanded");
     let input_scratch_pages = authenticated_input_scratch_pages_v3(
         account_profile,
         &dynamic_spans.widths,
@@ -864,22 +865,17 @@ pub(super) fn execute_authenticated_hot_v3(
         )?;
     }
     hot_heap_mark!("runtime-data");
+    hot_cu_checkpoint!("runtime-borrowed");
     let projected_tail_count = project_tail_count(account_profile, product_outcome_count)?;
     require_tail_count_agreement_v3(product_outcome_count, projected_tail_count)?;
     // A profile that projects no tail count operates at width zero, which is
     // what a fixed topology means. Every item span downstream is then empty,
     // which is the correct geometry rather than a degenerate one.
     let tail_count = projected_tail_count.unwrap_or(0);
-    // Representatives are resolved before the observation bank because the
-    // logical projection key of an aliased coordinate is its representative's,
-    // not its own.
-    let aliases = representative_coordinates_v3(
-        account_profile,
-        tail_count,
-        &dynamic_spans.widths,
-        runtime_accounts.len(),
-    )?;
+    // Expansion already resolved the canonical representative bank. Aliased
+    // observations use the same mapping that resolved their physical account.
     hot_heap_mark!("aliases");
+    hot_cu_checkpoint!("runtime-aliases");
     let projected_keys = logical_projection_keys_boxed_v3(context, product_runtime_v3);
     // Only these shared-prefix records have their bodies independently
     // authenticated by the outer adapter before AccountProfile runs. Child

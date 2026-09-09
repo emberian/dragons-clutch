@@ -440,6 +440,9 @@ fn run() -> Result<()> {
         Some("structured-claims") => {
             structured_claims_campaign::execute(parse_journey_request(arguments.collect())?)
         }
+        Some("structured-claims-continue") => {
+            structured_claims_campaign::continue_existing(parse_journey_request(arguments.collect())?)
+        }
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();

@@ -29,7 +29,10 @@ use dclutch_claims::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody::{CUSTODY_RECEIPT_BYTES_V1, CompartmentV1, CustodyRequestV1, OperationV1};
+use dclutch_custody::{
+    CUSTODY_RECEIPT_BYTES_V1, CompartmentV1, CustodyRequestV1, DelegatedCustodyRequestV2,
+    OperationV1,
+};
 use dclutch_market::capability_program::{
     hot_v3::{
         HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3,
@@ -895,7 +898,7 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
             )?;
             require_position_route(effect, 2, ProtocolPositionActionV2::Admit)?;
             require_affine_route(effect, 3, 2)?;
-            require_named_custody_transfer_route(effect, 4, action)
+            require_delegated_place_order_transfer_route(effect, 4)
         }
         // The residual refund and the escrow teardown, in the money order:
         // the claims residual empties the Position, the quote residual empties
@@ -1076,6 +1079,44 @@ fn require_custody_transfer_route(
         destination,
         None,
     )
+}
+
+/// Require PlaceOrder's external debit to use Custody's delegated successor.
+///
+/// The immutable template commits to one atomic debit that consumes the exact
+/// allowance and revokes the delegate. Runtime projection may replace the
+/// nonzero placeholder values with authenticated observations, but it cannot
+/// turn this route back into the V1 external-debit wire that Custody refuses.
+fn require_delegated_place_order_transfer_route(
+    effect: EffectProgramV3<'_>,
+    index: u16,
+) -> Result<()> {
+    let route = effect
+        .route(index)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let (fixed, item) = effect
+        .route_template(index)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let request =
+        DelegatedCustodyRequestV2::decode(fixed).map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    if route.role() != FixedRole::Custody
+        || route.kind() != RouteKindV3::Once
+        || route.receipt_dependency().is_some()
+        || !item.is_empty()
+        || request.custody.operation != OperationV1::Transfer
+        || request.custody.source_compartment != CompartmentV1::External
+        || request.custody.destination_compartment != CompartmentV1::Settlement
+        || !request.starts_atomic_debit
+        || !request.terminal
+        || request.delegate_before == [0; 32]
+        || request.delegate_after != [0; 32]
+        || request.total_debit == 0
+        || request.allowance_before != request.total_debit
+        || request.allowance_after != 0
+    {
+        return Err(GeneralArtifactErrorV3::Effect);
+    }
+    Ok(())
 }
 
 fn require_custody_route(
