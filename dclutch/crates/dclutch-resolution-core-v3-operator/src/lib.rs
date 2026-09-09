@@ -43,9 +43,9 @@ use dclutch_registry::{
 };
 use dclutch_source::resolution::{
     DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DirectFundingCloseRequestV1,
-    EnsembleFragmentSeatSeedsV1, FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
-    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, FundingActivationReceiptV1,
-    FundingActivationRequestV1, RESOLUTION_CERTIFICATE_BYTES_V2,
+    EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1,
+    FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+    FundingActivationReceiptV1, FundingActivationRequestV1, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     ResolutionCertificateKindV2, ResolutionCertificateV2, ResolutionCoreActionV1,
     ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
@@ -53,10 +53,11 @@ use dclutch_source::resolution::{
     SourceClosureReceiptV3, funding_lifecycle_account_digest_v1,
 };
 use dclutch_source::{
-    ENSEMBLE_FOLD_RECEIPT_V1_BYTES, EnsembleTerminalCapitalPlanV1, RECOVERY_POLICY_BYTES_V2,
+    ENSEMBLE_FOLD_RECEIPT_V1_BYTES, ENSEMBLE_MAX_MEMBERS_V1, EnsembleFoldReceiptV1,
+    EnsembleTerminalCapitalPlanV1, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV3,
-    SourceResolutionPhaseV1, SourceResolutionStateV2,
+    SourceResolutionPhaseV1, SourceResolutionRouteV1, SourceResolutionStateV2,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -122,8 +123,16 @@ pub const RESOLUTION_VERIFY_FUND_ACCOUNT_COUNT_V3: usize = 20;
 pub const RESOLUTION_ACTIVATE_FUND_PREFIX_ACCOUNT_COUNT_V1: usize = 18;
 /// Maximum direct activation account count with a policy and all five seats.
 pub const RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1: usize = 25;
-/// Exact direct Resolution account count for terminal close with a recovery-policy pair.
-pub const RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1: usize = 21;
+/// Fixed direct Resolution close prefix before optional policy/artifact tails.
+pub const RESOLUTION_DIRECT_CLOSE_FUND_PREFIX_ACCOUNT_COUNT_V1: usize = 19;
+/// Maximum direct close frame with policy, all seats/fold, and recovery receipts.
+pub const RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1: usize =
+    RESOLUTION_DIRECT_CLOSE_FUND_PREFIX_ACCOUNT_COUNT_V1
+        + 2
+        + ENSEMBLE_MAX_MEMBERS_V1 as usize
+        + 1
+        + RECOVERY_POLICY_MAX_ATTEMPTS_V2
+        + 1;
 
 /// Same-finalized state selecting dust-tolerant Source/funding creation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -974,6 +983,8 @@ pub struct ResolutionCloseFundSnapshotV3 {
     pub recovery_policy: ObservedAccount,
     /// Vacant RecoveryPolicy staging cursor.
     pub recovery_policy_staging: ObservedAccount,
+    /// Canonically ordered writable Ensemble and recovery receipt retirement tail.
+    pub retirement_artifacts: Vec<ObservedAccount>,
 }
 
 /// Exact unsigned Core CloseFund report and the receipt facts it will commit.
@@ -2386,8 +2397,22 @@ pub fn build_resolution_close_fund_v3(
         return Err(ResolutionCoreOperatorErrorV3::Terminal);
     }
 
-    let close_plan =
-        authenticate_close_funding(snapshot, market, material, recovery_policy, &rent)?;
+    let artifact_refund = authenticate_close_retirement_artifacts(
+        snapshot,
+        material,
+        recovery_policy,
+        terminal.route(),
+        certificate,
+        &rent,
+    )?;
+    let close_plan = authenticate_close_funding(
+        snapshot,
+        market,
+        material,
+        recovery_policy,
+        artifact_refund,
+        &rent,
+    )?;
     let entries = close_plan.entries;
     let closure_receipt = Pubkey::find_program_address(
         &[
@@ -2623,15 +2648,22 @@ pub fn build_resolution_direct_close_fund_v1(
             false,
         ));
     }
-    let expected_count = if material.recovery_policy().is_some() {
-        RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1
-    } else {
-        RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1.saturating_sub(2)
-    };
+    let artifact_offset = accounts.len();
+    accounts.extend(
+        snapshot
+            .retirement_artifacts
+            .iter()
+            .map(|account| AccountMeta::new(account.key, false)),
+    );
+    let expected_count = RESOLUTION_DIRECT_CLOSE_FUND_PREFIX_ACCOUNT_COUNT_V1
+        .checked_add(usize::from(material.recovery_policy().is_some()) * 2)
+        .and_then(|value| value.checked_add(snapshot.retirement_artifacts.len()))
+        .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     if accounts.len() != expected_count
+        || accounts.len() > RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1
         || accounts.iter().any(|account| account.is_signer)
         || accounts.iter().enumerate().any(|(index, account)| {
-            account.is_writable != matches!(index, 11 | 12 | 14 | 15)
+            account.is_writable != (matches!(index, 11 | 12 | 14 | 15) || index >= artifact_offset)
                 || accounts
                     .iter()
                     .skip(index.saturating_add(1))
@@ -4054,11 +4086,306 @@ impl ResolutionCloseFundingPlanV3 {
     }
 }
 
+fn close_recovery_rungs(
+    material: SourceMaterialV3,
+    recovery_policy: Option<RecoveryPolicyV2>,
+) -> Result<u8, ResolutionCoreOperatorErrorV3> {
+    match (material.recovery_policy(), recovery_policy) {
+        (None, None) => Ok(0),
+        (Some(_), Some(policy)) if material.ensemble().is_single() => Ok(policy.attempt_count()),
+        (Some(_), Some(policy)) => {
+            let expected = material
+                .ensemble()
+                .first_rung_index()
+                .checked_add(material.ensemble_rungs())
+                .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+            if policy.attempt_count() != expected {
+                return Err(ResolutionCoreOperatorErrorV3::Funding);
+            }
+            Ok(material.ensemble_rungs())
+        }
+        _ => Err(ResolutionCoreOperatorErrorV3::Funding),
+    }
+}
+
+fn authenticate_vacant_retirement_artifact(
+    account: &ObservedAccount,
+) -> Result<(), ResolutionCoreOperatorErrorV3> {
+    if account.owner != system_program::ID || account.executable || !account.data.is_empty() {
+        return Err(ResolutionCoreOperatorErrorV3::Terminal);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_close_recovery_receipt(
+    snapshot: &ResolutionCloseFundSnapshotV3,
+    material: SourceMaterialV3,
+    material_id: [u8; 32],
+    policy: RecoveryPolicyV2,
+    policy_id: [u8; 32],
+    account: &ObservedAccount,
+    kind: ResolutionCertificateKindV2,
+    attempt_index: u8,
+    terminal_sequence: u64,
+    generation: u64,
+    populated: bool,
+    rent: &solana_program::rent::Rent,
+) -> Result<(), ResolutionCoreOperatorErrorV3> {
+    let expected = Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+            snapshot.source_state.key.as_ref(),
+            &[kind.kind_seed()],
+            &terminal_sequence.to_le_bytes(),
+        ],
+        &snapshot.resolution_program.key,
+    )
+    .0;
+    if account.key != expected {
+        return Err(ResolutionCoreOperatorErrorV3::Frame);
+    }
+    if !populated {
+        return authenticate_vacant_retirement_artifact(account);
+    }
+    let certificate = ResolutionCertificateV2::decode(&account.data)
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
+    let attempt = policy
+        .attempt(attempt_index)
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
+    let expected_attempt_index = if kind == ResolutionCertificateKindV2::Exhausted {
+        u32::from(attempt_index)
+            .checked_add(1)
+            .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?
+    } else {
+        u32::from(attempt_index)
+    };
+    let expected_funding = if kind == ResolutionCertificateKindV2::Exhausted {
+        policy_id
+    } else {
+        attempt.funding_allocation_id().to_bytes()
+    };
+    if account.owner != snapshot.resolution_program.key
+        || account.executable
+        || account.data.len() != RESOLUTION_CERTIFICATE_BYTES_V2
+        || !rent.is_exempt(account.lamports, account.data.len())
+        || certificate.kind != kind
+        || certificate.market != snapshot.market.key.to_bytes()
+        || certificate.route != attempt.provider_release_id().to_bytes()
+        || certificate.source_material != material_id
+        || certificate.product_record_digest != material.product_record_digest().to_bytes()
+        || certificate.funding_allocation != expected_funding
+        || certificate.receipt_account != account.key.to_bytes()
+        || certificate.generation != generation
+        || certificate.attempt_index != expected_attempt_index
+        || certificate.selector != 0
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Terminal);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_close_retirement_artifacts(
+    snapshot: &ResolutionCloseFundSnapshotV3,
+    material: SourceMaterialV3,
+    recovery_policy: Option<RecoveryPolicyV2>,
+    terminal_route: SourceResolutionRouteV1,
+    terminal_certificate: ResolutionCertificateV2,
+    rent: &solana_program::rent::Rent,
+) -> Result<u64, ResolutionCoreOperatorErrorV3> {
+    let ensemble = material.ensemble();
+    let seat_count = if ensemble.is_single() {
+        0
+    } else {
+        usize::from(ensemble.members())
+    };
+    let fold_count = usize::from(!ensemble.is_single());
+    let recovery_rungs = close_recovery_rungs(material, recovery_policy)?;
+    let recovery_count = if recovery_rungs == 0 {
+        0
+    } else {
+        usize::from(recovery_rungs)
+            .checked_add(1)
+            .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?
+    };
+    if snapshot.retirement_artifacts.len()
+        != seat_count
+            .checked_add(fold_count)
+            .and_then(|value| value.checked_add(recovery_count))
+            .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Frame);
+    }
+
+    let mut fold_receipt = None;
+    if fold_count != 0 {
+        let account = snapshot
+            .retirement_artifacts
+            .get(seat_count)
+            .ok_or(ResolutionCoreOperatorErrorV3::Frame)?;
+        let seeds = EnsembleFoldReceiptSeatSeedsV1::new(snapshot.source_state.key.to_bytes(), 1);
+        if Pubkey::find_program_address(&seeds.seeds(), &snapshot.resolution_program.key).0
+            != account.key
+        {
+            return Err(ResolutionCoreOperatorErrorV3::Frame);
+        }
+        if terminal_route == SourceResolutionRouteV1::Primary {
+            let receipt = EnsembleFoldReceiptV1::decode(&account.data)
+                .map_err(ResolutionCoreOperatorErrorV3::Source)?;
+            if account.owner != snapshot.resolution_program.key
+                || account.executable
+                || account.data.len() != ENSEMBLE_FOLD_RECEIPT_V1_BYTES
+                || !rent.is_exempt(account.lamports, account.data.len())
+                || receipt.member_count != ensemble.members()
+                || receipt.quorum != ensemble.quorum()
+                || receipt.market != snapshot.market.key.to_bytes()
+                || receipt.generation != terminal_certificate.generation
+                || receipt.terminal_sequence != 1
+                || receipt.source_material != terminal_certificate.source_material
+                || receipt.median_numerator != terminal_certificate.result_numerator
+                || receipt.selector != terminal_certificate.selector
+            {
+                return Err(ResolutionCoreOperatorErrorV3::Terminal);
+            }
+            fold_receipt = Some(receipt);
+        } else {
+            authenticate_vacant_retirement_artifact(account)?;
+        }
+    }
+    for member in 0..ensemble.members() {
+        if ensemble.is_single() {
+            break;
+        }
+        let account = snapshot
+            .retirement_artifacts
+            .get(usize::from(member))
+            .ok_or(ResolutionCoreOperatorErrorV3::Frame)?;
+        let seeds =
+            EnsembleFragmentSeatSeedsV1::new(snapshot.source_state.key.to_bytes(), member, 1);
+        if Pubkey::find_program_address(&seeds.seeds(), &snapshot.resolution_program.key).0
+            != account.key
+        {
+            return Err(ResolutionCoreOperatorErrorV3::Frame);
+        }
+        if account.owner == system_program::ID {
+            authenticate_vacant_retirement_artifact(account)?;
+            if fold_receipt.is_some_and(|receipt| receipt.consumed(member)) {
+                return Err(ResolutionCoreOperatorErrorV3::Terminal);
+            }
+            continue;
+        }
+        let certificate = ResolutionCertificateV2::decode(&account.data)
+            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
+        if account.owner != snapshot.resolution_program.key
+            || account.data.len() != RESOLUTION_CERTIFICATE_BYTES_V2
+            || !rent.is_exempt(account.lamports, account.data.len())
+            || certificate.kind != ResolutionCertificateKindV2::ResolutionSuccess
+            || certificate.market != snapshot.market.key.to_bytes()
+            || certificate.source_material != terminal_certificate.source_material
+            || certificate.product_record_digest != terminal_certificate.product_record_digest
+            || certificate.receipt_account.iter().all(|byte| *byte == 0)
+            || certificate.generation != terminal_certificate.generation
+            || certificate.attempt_index != u32::from(member)
+        {
+            return Err(ResolutionCoreOperatorErrorV3::Terminal);
+        }
+        if let Some(receipt) = fold_receipt
+            && receipt.consumed(member)
+            && receipt.fragment_digests[usize::from(member)] != hash(&account.data).to_bytes()
+        {
+            return Err(ResolutionCoreOperatorErrorV3::Terminal);
+        }
+    }
+
+    if recovery_rungs != 0 {
+        let policy = recovery_policy.ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+        let policy_id = material
+            .recovery_policy()
+            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?
+            .to_bytes();
+        let first_rung = ensemble.first_rung_index();
+        let populated_advances = match (terminal_route, terminal_certificate.kind) {
+            (SourceResolutionRouteV1::Primary, ResolutionCertificateKindV2::ResolutionSuccess) => 0,
+            (SourceResolutionRouteV1::Recovery, ResolutionCertificateKindV2::ResolutionSuccess) => {
+                u8::try_from(terminal_certificate.attempt_index)
+                    .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?
+                    .checked_sub(first_rung)
+                    .and_then(|value| value.checked_add(1))
+                    .filter(|value| *value <= recovery_rungs)
+                    .ok_or(ResolutionCoreOperatorErrorV3::Terminal)?
+            }
+            (SourceResolutionRouteV1::Failure, ResolutionCertificateKindV2::ResolutionFailure) => {
+                recovery_rungs
+            }
+            _ => return Err(ResolutionCoreOperatorErrorV3::Terminal),
+        };
+        let recovery_offset = seat_count
+            .checked_add(fold_count)
+            .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
+        for ordinal in 0..recovery_rungs {
+            authenticate_close_recovery_receipt(
+                snapshot,
+                material,
+                terminal_certificate.source_material,
+                policy,
+                policy_id,
+                snapshot
+                    .retirement_artifacts
+                    .get(recovery_offset + usize::from(ordinal))
+                    .ok_or(ResolutionCoreOperatorErrorV3::Frame)?,
+                ResolutionCertificateKindV2::RecoveryAdvanced,
+                first_rung
+                    .checked_add(ordinal)
+                    .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
+                u64::from(ordinal)
+                    .checked_add(2)
+                    .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
+                terminal_certificate.generation,
+                ordinal < populated_advances,
+                rent,
+            )?;
+        }
+        authenticate_close_recovery_receipt(
+            snapshot,
+            material,
+            terminal_certificate.source_material,
+            policy,
+            policy_id,
+            snapshot
+                .retirement_artifacts
+                .get(recovery_offset + usize::from(recovery_rungs))
+                .ok_or(ResolutionCoreOperatorErrorV3::Frame)?,
+            ResolutionCertificateKindV2::Exhausted,
+            ensemble
+                .first_rung_index()
+                .checked_add(recovery_rungs)
+                .and_then(|value| value.checked_sub(1))
+                .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
+            u64::from(recovery_rungs)
+                .checked_add(2)
+                .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
+            terminal_certificate.generation,
+            terminal_route == SourceResolutionRouteV1::Failure,
+            rent,
+        )?;
+    }
+    snapshot
+        .retirement_artifacts
+        .iter()
+        .try_fold(0_u64, |total, account| {
+            total
+                .checked_add(account.lamports)
+                .ok_or(ResolutionCoreOperatorErrorV3::Funding)
+        })
+}
+
 fn authenticate_close_funding(
     snapshot: &ResolutionCloseFundSnapshotV3,
     market: CoreState,
     material: SourceMaterialV3,
     recovery_policy: Option<RecoveryPolicyV2>,
+    artifact_refund_lamports: u64,
     rent: &solana_program::rent::Rent,
 ) -> Result<ResolutionCloseFundingPlanV3, ResolutionCoreOperatorErrorV3> {
     // Twelve sites in this function publish one `Funding`, six of them through
@@ -4196,13 +4523,18 @@ fn authenticate_close_funding(
             snapshot.funding_ledger.lamports
         )));
     }
-    let source_refund_lamports = snapshot.source_state.lamports;
-    if source_refund_lamports < rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2) {
+    if snapshot.source_state.lamports < rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2) {
         return Err(refuse(&format!(
-            "Source refund {source_refund_lamports} below its rent minimum {}",
+            "Source refund {} below its rent minimum {}",
+            snapshot.source_state.lamports,
             rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2)
         )));
     }
+    let source_refund_lamports = snapshot
+        .source_state
+        .lamports
+        .checked_add(artifact_refund_lamports)
+        .ok_or_else(|| refuse("Source subtree refund overflow"))?;
     let refund_lamports = source_refund_lamports
         .checked_add(classified_ledger_lamports)
         .ok_or_else(|| refuse("refund lamports overflow"))?;
@@ -4499,6 +4831,10 @@ fn same_finalized_close_observation(
         .observation;
     if first.finality != Finality::Finalized
         || accounts.iter().any(|account| account.observation != first)
+        || snapshot
+            .retirement_artifacts
+            .iter()
+            .any(|account| account.observation != first)
     {
         return Err(ResolutionCoreOperatorErrorV3::Snapshot);
     }

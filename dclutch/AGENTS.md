@@ -62,6 +62,10 @@ and the dated ledger it links to.
   the discriminator when a link fails with "multiple different versions".
 - Run `cargo check` on the touched workspace before any SBF build. Heavy
   Linux builds go to hbox through `swarm-build`, never bare `taskset`.
+- On hbox, put source checkouts, build targets, validator ledgers, simulator
+  runs and evidence under `/tank/dregg-build`, never `/home/hbox`. Keep live
+  validators in place until their continuation finishes; move inactive jobs
+  only after verifying the copy and preserving their evidence.
 
 ## Provenance
 

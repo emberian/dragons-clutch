@@ -39,6 +39,7 @@ export const QUOTE_REQUEST_MAGIC = 'DCLSQTR1' as const;
 export const FILL_REQUEST_MAGIC = 'DCLSFLR1' as const;
 export const WITHDRAW_REQUEST_MAGIC = 'DCLSWDR1' as const;
 export const REDEEM_REQUEST_MAGIC = 'DCLSRDR1' as const;
+export const CLOSE_REQUEST_MAGIC = 'DCLSCLR1' as const;
 export const RECEIPT_MAGIC = 'DCLSRCP1' as const;
 export const FILL_WITNESS_MAGIC = 'DCLSFLW1' as const;
 
@@ -54,6 +55,7 @@ export const QUOTE_REQUEST_BYTES = 88 as const;
 export const FILL_REQUEST_BYTES = 512 as const;
 export const WITHDRAW_REQUEST_BYTES = 96 as const;
 export const REDEEM_REQUEST_BYTES = 88 as const;
+export const CLOSE_REQUEST_BYTES = 88 as const;
 export const RECEIPT_BYTES = 192 as const;
 export const FILL_WITNESS_BYTES = 272 as const;
 
@@ -148,6 +150,13 @@ export const REDEEM_REQUEST_MARKET_OFFSET = 16 as const;
 export const REDEEM_REQUEST_DEALER_ID_OFFSET = 48 as const;
 export const REDEEM_REQUEST_EXPECTED_FUND_REVISION_OFFSET = 80 as const;
 
+export const CLOSE_REQUEST_MAGIC_OFFSET = 0 as const;
+export const CLOSE_REQUEST_VERSION_OFFSET = 8 as const;
+export const CLOSE_REQUEST_RESERVED_OFFSET = 10 as const;
+export const CLOSE_REQUEST_MARKET_OFFSET = 16 as const;
+export const CLOSE_REQUEST_DEALER_ID_OFFSET = 48 as const;
+export const CLOSE_REQUEST_EXPECTED_FUND_REVISION_OFFSET = 80 as const;
+
 export const RECEIPT_MAGIC_OFFSET = 0 as const;
 export const RECEIPT_VERSION_OFFSET = 8 as const;
 export const RECEIPT_ROUTE_OFFSET = 10 as const;
@@ -180,6 +189,7 @@ export const ROUTE_QUOTE = 1 as const;
 export const ROUTE_FILL = 2 as const;
 export const ROUTE_WITHDRAW = 3 as const;
 export const ROUTE_REDEEM = 4 as const;
+export const ROUTE_CLOSE = 5 as const;
 
 export const REDEEM_ACCOUNT_COUNT = 9 as const;
 export const REDEEM_PAYER_ACCOUNT = 0 as const;
@@ -193,6 +203,25 @@ export const REDEEM_ACTIVATION_CACHE_ACCOUNT = 7 as const;
 export const REDEEM_REGISTRY_PROGRAM_ACCOUNT = 8 as const;
 export const REDEEM_WRITABLE: readonly boolean[] = [true, true, false, false, true, false, false, false, false];
 export const REDEEM_SIGNER: readonly boolean[] = [true, false, false, false, false, false, false, false, false];
+
+export const CLOSE_ACCOUNT_COUNT = 15 as const;
+export const CLOSE_PAYER_ACCOUNT = 0 as const;
+export const CLOSE_FUND_ACCOUNT = 1 as const;
+export const CLOSE_RULE_ACCOUNT = 2 as const;
+export const CLOSE_QUOTE_ACCOUNT = 3 as const;
+export const CLOSE_MARKET_ACCOUNT = 4 as const;
+export const CLOSE_VAULT_ACCOUNT = 5 as const;
+export const CLOSE_SPONSOR_ACCOUNT = 6 as const;
+export const CLOSE_CLAIMS_PROGRAM_ACCOUNT = 7 as const;
+export const CLOSE_CUSTODY_PROGRAM_ACCOUNT = 8 as const;
+export const CLOSE_ACTIVATION_CACHE_ACCOUNT = 9 as const;
+export const CLOSE_REGISTRY_PROGRAM_ACCOUNT = 10 as const;
+export const CLOSE_MINT_ACCOUNT = 11 as const;
+export const CLOSE_TOKEN_PROGRAM_ACCOUNT = 12 as const;
+export const CLOSE_RENT_CREDIT_ACCOUNT = 13 as const;
+export const CLOSE_RENT_PROGRAM_ACCOUNT = 14 as const;
+export const CLOSE_WRITABLE: readonly boolean[] = [true, true, true, true, false, true, true, false, false, false, false, false, false, true, false];
+export const CLOSE_SIGNER: readonly boolean[] = [true, false, false, false, false, false, false, false, false, false, false, false, false, false, false];
 
 export const FOUND_ACCOUNT_COUNT = 21 as const;
 export const FOUND_SPONSOR_ACCOUNT = 0 as const;

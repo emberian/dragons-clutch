@@ -75,7 +75,9 @@ pub struct SourceClosureReceiptV3 {
     pub terminal_sequence: u64,
     /// Native Product Runtime V2 terminal selector. Zero is a valid selector.
     pub selector: u32,
-    /// Lamports discharged from the Source state account itself.
+    /// Lamports discharged from the Source state and its deterministic
+    /// ephemeral terminal-account subtree. Singleton markets have no such
+    /// children, so their V3 receipt value is unchanged.
     pub source_refund_lamports: u64,
     /// Native principal remaining in the subset ledger at closure.
     pub ledger_remaining_native_principal: u64,

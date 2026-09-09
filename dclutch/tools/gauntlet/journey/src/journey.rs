@@ -3,7 +3,9 @@
 use std::{
     fs::OpenOptions,
     io::Write,
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use dclutch_market::CoreState;
@@ -194,6 +196,27 @@ pub(crate) struct JourneyRequestV1 {
     pub(crate) expected_source_tree_sha256: String,
     pub(crate) seed: String,
     pub(crate) holder_count: u32,
+    pub(crate) hold_after_participant: Option<PathBuf>,
+    pub(crate) bootstrap_bin: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParticipantHandoffV1 {
+    schema: String,
+    rpc_url: String,
+    validator_pid: u32,
+    supervisor_pid: u32,
+    plan: String,
+    market_input: String,
+    founding_evidence: String,
+    participant_evidence: String,
+    key_directory: String,
+    campaign_payer_keypair: String,
+    bootstrap_bin: String,
+    campaign_public_identities: std::collections::BTreeMap<String, String>,
+    census: crate::ledger::HandoffCensusV1,
+    resume_action: String,
 }
 
 /// A live campaign session over the checked-mutable substrate.
@@ -1011,6 +1034,72 @@ fn campaign(
         &payer_key,
         &admission_routing,
     )?;
+    crate::user_position_admission::parse_finalized_direct_participant_evidence_v1(
+        &std::fs::read(&strangers[0].report)?,
+        &mut session.rpc,
+    )?;
+    // Admission creates accounts that the external Direct driver must census.
+    // Fold them before publishing the handoff; the later fill will add its own
+    // token accounts to the same aperture after a normal, unheld run resumes.
+    for entry in spine.aperture.drain(..) {
+        match entry.role {
+            spine::ApertureRoleV1::Collateral => {
+                ledger.track_token_account(&entry.label, entry.address);
+            }
+            spine::ApertureRoleV1::Position => {
+                ledger.track_position(&entry.label, entry.address);
+            }
+        }
+    }
+    if let Some(handoff_path) = request.hold_after_participant.as_ref() {
+        progress.entering("handoff: accepted participant before Direct fill");
+        let bootstrap_bin = request.bootstrap_bin.as_ref().ok_or_else(|| {
+            Error::new("--hold-after-participant requires the checked bootstrap binary")
+        })?;
+        let key_directory = spine::fill_key_directory(&context)?;
+        let handoff = ParticipantHandoffV1 {
+            schema: "dclutch-private-validator-participant-handoff-v1".into(),
+            rpc_url: session.rpc_url.clone(),
+            validator_pid: session.validator.pid(),
+            supervisor_pid: std::process::id(),
+            plan: session.plan_path.display().to_string(),
+            market_input: market_path.display().to_string(),
+            founding_evidence: campaign_report.display().to_string(),
+            participant_evidence: strangers[0].report.display().to_string(),
+            key_directory: key_directory.display().to_string(),
+            campaign_payer_keypair: payer_key.display().to_string(),
+            bootstrap_bin: bootstrap_bin.display().to_string(),
+            campaign_public_identities: checked.report.campaign_public_identities.clone(),
+            // The Journey ledger began while the retained Core authority still
+            // paid the early post-open acts. The held exterior starts at the
+            // participant boundary and pays through the campaign payer, which
+            // is the signer the simulator and every terminal driver receive.
+            // Project that actual payer instead of leaking the earlier ledger
+            // observer into an external signing contract.
+            census: ledger.handoff_census_for(payer)?,
+            resume_action:
+                "SIGCONT performs cleanup only after the external lifecycle has finished".into(),
+        };
+        write_private_json(handoff_path, &handoff)?;
+        eprintln!(
+            "journey: held after accepted participant and before Direct fill; handoff {} supervisor {}",
+            handoff_path.display(),
+            std::process::id()
+        );
+        let status = Command::new("/bin/kill")
+            .arg("-STOP")
+            .arg(std::process::id().to_string())
+            .status()
+            .map_err(|error| Error::new(format!("stop journey supervisor: {error}")))?;
+        if !status.success() {
+            return Err(Error::new(format!(
+                "stop journey supervisor exited {status}"
+            )));
+        }
+        return Err(Error::new(
+            "the held journey resumed for cleanup; external driver results are separate, and the journey deliberately did not submit its own duplicate Direct fill",
+        ));
+    }
     spine::fill(&mut session.rpc, &context, &mut spine, &strangers[0].report)?;
     spine::settle_fee(
         &mut session.rpc,
@@ -1769,6 +1858,24 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
+fn write_private_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    validate_new_path(path, "--hold-after-participant")?;
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| Error::new(format!("create {}: {error}", path.display())))?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
 fn validate_new_path(path: &Path, label: &str) -> Result<()> {
     if !path.is_absolute() || path.exists() || std::fs::symlink_metadata(path).is_ok() {
         return Err(Error::new(format!(
@@ -1827,6 +1934,8 @@ mod tests {
             expected_source_tree_sha256: "0".repeat(64),
             seed: "journey-wall".into(),
             holder_count: DEFAULT_HOLDER_COUNT,
+            hold_after_participant: None,
+            bootstrap_bin: None,
         })
         .expect_err("a checked release gate that does not exist must stop the campaign");
 

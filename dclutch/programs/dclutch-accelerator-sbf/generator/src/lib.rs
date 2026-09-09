@@ -29,8 +29,7 @@ use dclutch_trading_sbf::series::{
     },
     consume_artifacts_v4::{
         SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4,
-        SERIES_CONSUME_TRANSITION_BYTES_V4, SeriesConsumeChildRequestsV4,
-        encode_series_consume_effect_artifact_v4_atomic,
+        SERIES_CONSUME_TRANSITION_BYTES_V4, encode_series_consume_effect_artifact_v4_atomic,
         encode_series_consume_request_profile_v4_atomic,
         encode_series_consume_transition_v4_atomic, series_consume_effect_bytes_v4,
     },
@@ -98,7 +97,7 @@ pub struct SeriesShadowReleaseSourcesV4<'a> {
     pub translation_validation: ContentId,
 }
 
-/// One exact occurrence-specific source manifest.
+/// One exact recurring-Series executor source manifest.
 #[derive(Clone, Copy)]
 pub struct SeriesShadowBundleSourceV4<'a> {
     /// Semantic descriptor coordinates.
@@ -107,10 +106,10 @@ pub struct SeriesShadowBundleSourceV4<'a> {
     pub release_sources: SeriesShadowReleaseSourcesV4<'a>,
     /// Exact selected LifecycleV5 bytes.
     pub lifecycle: &'a [u8],
-    /// Exact pre-execution data widths at the 161 fixed logical coordinates.
+    /// Exact pre-execution data widths at the fixed logical coordinates.
     pub fixed_data_lengths: &'a [u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
-    /// Exact canonical child requests for this occurrence.
-    pub child_requests: SeriesConsumeChildRequestsV4<'a>,
+    /// Exact nonzero dynamic FundingState span count.
+    pub funding_count: u32,
     /// Immutable occurrence count of the Template this accelerator serves.
     ///
     /// The Consume Effect declares its two duplicate proof ranges only when
@@ -185,6 +184,16 @@ pub type Result<T> = core::result::Result<T, SeriesShadowBundleCompileErrorV4>;
 pub fn compile_series_shadow_bundle_v4(
     source: SeriesShadowBundleSourceV4<'_>,
 ) -> Result<CompiledSeriesShadowBundleV4> {
+    let expected_capacity =
+        dclutch_trading_sbf::series::release_v5::series_consume_capacity_profile_v1(
+            source.fixed_data_lengths,
+            source.funding_count,
+            source.occurrence_count,
+        )
+        .map_err(|_| SeriesShadowBundleCompileErrorV4::CapabilityProgram)?;
+    if source.descriptor.capacity_profile != expected_capacity {
+        return Err(SeriesShadowBundleCompileErrorV4::CapabilityProgram);
+    }
     let lifecycle_id = content(source.lifecycle)?;
     StateLifecyclePolicyV5::decode_selected(
         lifecycle_id.to_bytes(),

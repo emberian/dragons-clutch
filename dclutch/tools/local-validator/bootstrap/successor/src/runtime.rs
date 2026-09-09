@@ -828,22 +828,28 @@ const ACTIVATION_SHA256_BASE_CU_V1: u64 = 85;
 /// 79,855 CU; this reserve adds the required 20,000-CU measurement tolerance
 /// and more than 50,000 CU of explicit growth/noise margin.
 const ACTIVATION_NON_HASH_CU_RESERVE_V1: u64 = 150_000;
-/// Largest live ELF tail admitted by the size-only reachability preflight.
-/// At the pinned SHA-256 schedule this consumes at most the 1.4M transaction
-/// ceiling after the conservative non-hash reserve. A measured CU gate remains
-/// mandatory: this bound catches impossible payloads, it does not predict a
-/// candidate's actual compute consumption.
-pub(crate) const MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1: u64 = 2_499_831;
+/// Largest live ELF tail whose estimate fits with the full non-hash reserve.
+/// This is a conservative planning threshold, never an impossibility bound.
+pub(crate) const MAX_ACTIVATION_ESTIMATE_FIT_LIVE_ELF_BYTES_V1: u64 = 2_499_831;
+/// Largest ELF whose SHA-256 charge alone fits the transaction ceiling.
+/// Derived from the pinned syscall schedule; all other activation work still
+/// has to fit in actual simulation and execution.
+pub(crate) const MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1: u64 =
+    (ACTIVATION_TRANSACTION_CU_LIMIT_V1 - ACTIVATION_SHA256_BASE_CU_V1) * 2 + 1;
 
-/// Conservative size-only compute projection for one first-time role
-/// activation. Agave charges SHA-256 at `85 + max(10, bytes / 2)` CU; Registry
-/// then performs record, Loader, release, rent, and cache authentication.
-pub(crate) fn activation_compute_upper_bound_v1(live_elf_bytes: u64) -> Result<u64> {
-    let hash = ACTIVATION_SHA256_BASE_CU_V1
+/// Pinned SHA-256 charge for hashing the complete live ELF at first admission.
+pub(crate) fn activation_hash_compute_units_v1(live_elf_bytes: u64) -> Result<u64> {
+    ACTIVATION_SHA256_BASE_CU_V1
         .checked_add(10_u64.max(live_elf_bytes / 2))
-        .ok_or_else(|| Error::new("activation SHA-256 compute projection overflow"))?;
+        .ok_or_else(|| Error::new("activation SHA-256 compute projection overflow"))
+}
+
+/// Conservative planning estimate, not a lower bound on required compute.
+/// Agave charges SHA-256 at `85 + max(10, bytes / 2)` CU; the separate reserve
+/// covers record, Loader, release, rent, and cache authentication with margin.
+pub(crate) fn activation_compute_upper_bound_v1(live_elf_bytes: u64) -> Result<u64> {
     ACTIVATION_NON_HASH_CU_RESERVE_V1
-        .checked_add(hash)
+        .checked_add(activation_hash_compute_units_v1(live_elf_bytes)?)
         .ok_or_else(|| Error::new("activation total compute projection overflow"))
 }
 
@@ -3051,17 +3057,31 @@ mod tests {
             );
         }
         assert_eq!(
-            activation_compute_upper_bound_v1(MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1)
+            activation_compute_upper_bound_v1(MAX_ACTIVATION_ESTIMATE_FIT_LIVE_ELF_BYTES_V1)
                 .expect("exact size ceiling"),
             ACTIVATION_TRANSACTION_CU_LIMIT_V1
         );
         assert!(
-            activation_compute_upper_bound_v1(MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1 + 1)
+            activation_compute_upper_bound_v1(MAX_ACTIVATION_ESTIMATE_FIT_LIVE_ELF_BYTES_V1 + 1)
                 .expect("one-byte overflow is representable")
                 > ACTIVATION_TRANSACTION_CU_LIMIT_V1
         );
+        assert_eq!(
+            activation_hash_compute_units_v1(MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1)
+                .expect("exact hash ceiling"),
+            ACTIVATION_TRANSACTION_CU_LIMIT_V1
+        );
+        assert_eq!(
+            activation_hash_compute_units_v1(MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1 + 1)
+                .expect("one-byte hash overflow"),
+            ACTIVATION_TRANSACTION_CU_LIMIT_V1 + 1
+        );
+        assert_eq!(
+            activation_hash_compute_units_v1(2_694_840).expect("bf06 hash"),
+            1_347_505
+        );
         assert!(
-            activation_compute_upper_bound_v1(9_034_536)
+            activation_hash_compute_units_v1(9_034_536)
                 .expect("hostile Source substitution is representable")
                 > ACTIVATION_TRANSACTION_CU_LIMIT_V1
         );
@@ -3238,12 +3258,12 @@ mod tests {
         ] {
             let bytes = u64::try_from(fs::metadata(elf).expect("role ELF metadata").len())
                 .expect("role ELF width");
-            let upper =
-                activation_compute_upper_bound_v1(bytes).expect("activation compute upper bound");
+            let hash =
+                activation_hash_compute_units_v1(bytes).expect("activation hash compute charge");
             assert!(
-                upper <= ACTIVATION_TRANSACTION_CU_LIMIT_V1,
-                "checked-release {role} ELF has {bytes} bytes and a conservative {upper}-CU \
-                 first-activation bound, above the {}-CU transaction ceiling",
+                hash <= ACTIVATION_TRANSACTION_CU_LIMIT_V1,
+                "checked-release {role} ELF has {bytes} bytes and a {hash}-CU SHA-256 charge \
+                 alone, above the {}-CU transaction ceiling",
                 ACTIVATION_TRANSACTION_CU_LIMIT_V1
             );
         }

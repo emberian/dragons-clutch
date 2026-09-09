@@ -1,29 +1,15 @@
 #!/usr/bin/env python3
-"""Build a simulator config from a HELD private-validator probe.
+"""Build a simulator config from the existing journey's held validator.
 
-The probe is tools/release/private-validator-lifecycle/run.py run with
-``--through participant --seeds 1 --hold-after-participant``.  At the hold it
-writes ``runs/seed-01/participant-handoff.json`` and SIGSTOPs itself, leaving
-the validator alive.  This adapter reads the handoff plus the founding and
-participant evidence and emits one config JSON.
+Run tools/gauntlet/journey/run-journey.sh with --hold-after-participant PATH,
+then pass that exact participant handoff with --handoff PATH. The journey
+exports the actual admitted accounts and the native basis payout scale. This
+adapter does not derive economic quantities or search JSON for likely keys.
 
-Two shapes, and ``--simlife`` chooses the second:
-
-* ``dclutch-load-simulator-config-v1`` -- simulator.py, ONE market that already
-  exists, bound by hand from the probe's own evidence.
-* ``dclutch-simlife-config-v1`` -- simlife_drive.py's ``lifecycle`` substrate,
-  a whole POPULATION that founds its own markets.  It needs no bindings at all
-  (a market this run founds is bound from the founding's own evidence) and
-  instead needs the substrate's protocol identities: the campaign payer's
-  keypair, the two founding identities, and the key directory the Direct trade
-  and the resolution read their non-founding roles from.
-
-  Those were hand-typed into a config file before this mode existed, which is
-  how a substrate ends up described by a document nobody re-derives.
-
-It never reads key bytes; it only names paths the accepted drivers open
-themselves.  Missing facts refuse with the exact field named rather than
-guessing.
+The default output drives one already-founded market. --simlife drives a
+population through the existing lifecycle substrate; it additionally requires
+the checked preparation's public founding identities and campaign payer path.
+No key bytes are read here: accepted drivers open their own named key files.
 """
 
 from __future__ import annotations
@@ -73,23 +59,29 @@ def load(path: Path, what: str) -> dict:
     return json.loads(path.read_text())
 
 
-def find_first(body, predicate, path=""):
-    """Depth-first search for the first value satisfying predicate; returns
-    (json-pointer-ish path, value) or None."""
-    if predicate(body):
-        return path, body
-    if isinstance(body, dict):
-        for key, value in body.items():
-            hit = find_first(value, predicate, f"{path}/{key}")
-            if hit:
-                return hit
-    elif isinstance(body, list):
-        for index, value in enumerate(body):
-            hit = find_first(value, predicate, f"{path}/{index}")
-            if hit:
-                return hit
-    return None
-
+def census_from_handoff(handoff: dict) -> dict:
+    """Preserve the native journey's complete account set and payout scale."""
+    census = need(handoff, "census", "participant handoff")
+    if not isinstance(census, dict):
+        raise Refusal("participant handoff census must be an object")
+    for key in ("mint", "payer", "hoard", "aggregate"):
+        value = need(census, key, "census")
+        if not isinstance(value, str) or not value:
+            raise Refusal(f"census.{key} must name an account")
+    unit = need(census, "claim_unit_atoms", "census")
+    if type(unit) is not int or not 0 < unit <= 2**64 - 1:
+        raise Refusal("census.claim_unit_atoms must be a positive native u64 payout scale")
+    for key in ("tokens", "positions", "watch"):
+        mapping = need(census, key, "census")
+        if not isinstance(mapping, dict) or any(
+            not isinstance(label, str) or not label
+            or not isinstance(address, str) or not address
+            for label, address in mapping.items()
+        ):
+            raise Refusal(f"census.{key} must map labels to account addresses")
+    if not census["tokens"] or not census["positions"]:
+        raise Refusal("a participant handoff must census its collateral and claim holders")
+    return census
 
 
 SIMLIFE_SCHEMA_V1 = "dclutch-simlife-config-v1"
@@ -101,22 +93,15 @@ SIMLIFE_SCHEMA_V1 = "dclutch-simlife-config-v1"
 PREPARE_STAGE_DIRECTORY = "01-prepare-mutable"
 
 
-def campaign_public_identities(probe: Path) -> dict:
-    """`founding-founder` and `substituted-founder`, from the probe's own stage.
-
-    Neither is a keypair in the key directory -- the substituted founder has no
-    key at all, because the whole point of the partition is that it is an
-    identity the founding refunds to and never signs as -- so they cannot be
-    derived from the files on disk and have to come from the report.
-    """
-    stdout = probe / "runs" / "seed-01" / "stages" / PREPARE_STAGE_DIRECTORY / "stdout.bin"
-    if not stdout.is_file():
-        raise Refusal(f"the probe's preparation stage wrote no report: {stdout}")
-    try:
-        body = json.loads(stdout.read_bytes().decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as error:
-        raise Refusal(f"the probe's preparation report is not JSON: {error}") from error
-    identities = body.get("campaign_public_identities")
+def campaign_public_identities(probe: Path, handoff: dict) -> dict:
+    """Read the preparation's explicit public founding identity partition."""
+    identities = handoff.get("campaignPublicIdentities")
+    if identities is None:
+        # Historical captures retain the exact preparation report. This is a
+        # single known document, never a recursive search or an identity guess.
+        stdout = probe / "runs" / "seed-01" / "stages" / PREPARE_STAGE_DIRECTORY / "stdout.bin"
+        body = load(stdout, "checked preparation report")
+        identities = body.get("campaign_public_identities")
     if not isinstance(identities, dict):
         raise Refusal("the preparation report carries no campaign_public_identities")
     for role in ("founding-founder", "substituted-founder"):
@@ -162,7 +147,7 @@ def substrate_source_revision(args, probe: Path):
 
 
 def write_simlife_config(args, probe: Path, boot: str, rpc_url: str, plan: str,
-                         key_directory: str) -> int:
+                         key_directory: str, handoff: dict) -> int:
     """One `dclutch-simlife-config-v1` for the lifecycle substrate.
 
     NO BINDINGS, and that is the point of the substrate rather than an omission:
@@ -176,16 +161,16 @@ def write_simlife_config(args, probe: Path, boot: str, rpc_url: str, plan: str,
             "drawn from, and an unnamed run cannot be re-run by typing its name"
         )
     keys = Path(key_directory)
-    payer_keypair = keys / "campaign-payer.json"
+    payer_keypair = Path(handoff.get("campaignPayerKeypair") or keys / "campaign-payer.json")
     if not payer_keypair.is_file():
-        raise Refusal(f"the probe's key directory has no campaign-payer.json: {keys}")
+        raise Refusal(f"campaign payer keypair path is absent: {payer_keypair}")
     # Named rather than swept: the lifecycle substrate reads exactly these from
     # the substrate key directory, and each was established by a driver refusing
     # and SAYING which identity it authenticated instead.
     for required in ("core-upgrade-authority.json", "founding-founder.json"):
         if not (keys / required).is_file():
             raise Refusal(f"the probe's key directory has no {required}, which a Direct trade reads")
-    identities = campaign_public_identities(probe)
+    identities = campaign_public_identities(probe, handoff)
     revision = substrate_source_revision(args, probe)
     config = {
         "schema": SIMLIFE_SCHEMA_V1,
@@ -249,10 +234,12 @@ def write_simlife_config(args, probe: Path, boot: str, rpc_url: str, plan: str,
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--probe-work", required=True, help="the probe --work dir")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--handoff", help="participant handoff JSON written by the journey")
+    source.add_argument("--probe-work", help="historical capture root containing runs/seed-01/participant-handoff.json")
     parser.add_argument("--sim-work", required=True, help="fresh simulator work dir (absolute)")
     parser.add_argument("--bootstrap-bin", default=None,
-                        help="successor binary (default: probe host-target build)")
+                        help="successor binary (default: handoff bootstrapBin or historical host-target build)")
     parser.add_argument("--output", required=True, help="config JSON to write (absolute)")
     parser.add_argument("--period-seconds", type=float, default=8.0)
     parser.add_argument("--no-census", action="store_true",
@@ -285,9 +272,13 @@ def main(argv=None) -> int:
                              "the Pyth update account it reads")
     args = parser.parse_args(argv)
 
-    probe = Path(args.probe_work)
-    seed = probe / "runs" / "seed-01"
-    handoff = load(seed / "participant-handoff.json", "participant handoff")
+    if args.handoff:
+        handoff_path = Path(args.handoff).resolve()
+        probe = handoff_path.parent
+    else:
+        probe = Path(args.probe_work).resolve()
+        handoff_path = probe / "runs" / "seed-01" / "participant-handoff.json"
+    handoff = load(handoff_path, "participant handoff")
     if handoff.get("schema") != "dclutch-private-validator-participant-handoff-v1":
         raise Refusal(f"unexpected handoff schema {handoff.get('schema')!r}")
 
@@ -314,100 +305,27 @@ def main(argv=None) -> int:
     participant_evidence = need(handoff, "participantEvidence", "handoff")
     key_directory = need(handoff, "keyDirectory", "handoff")
 
+    boot = args.bootstrap_bin or handoff.get("bootstrapBin") or str(
+        probe / "host-target" / "release" / "dclutch-local-successor-bootstrap"
+    )
+    if not Path(boot).is_file():
+        raise Refusal(f"bootstrap binary absent: {boot}; pass --bootstrap-bin")
     if args.simlife:
-        # BEFORE the one-market evidence is read, and deliberately: a lifecycle
-        # world founds its OWN markets, so the probe's founding and participant
-        # documents describe a market it will never bind. Requiring them here
-        # would refuse a config for a substrate that does not need them.
-        boot = args.bootstrap_bin or str(
-            probe / "host-target" / "release" / "dclutch-local-successor-bootstrap"
-        )
-        if not Path(boot).is_file():
-            raise Refusal(f"bootstrap binary absent: {boot}")
-        return write_simlife_config(args, probe, boot, rpc_url, plan, key_directory)
+        return write_simlife_config(args, probe, boot, rpc_url, plan, key_directory, handoff)
 
     founding = load(Path(founding_evidence), "founding evidence")
-    targets = need(founding, "founding_targets", "founding evidence")
-    market_address = need(targets, "open_market", "founding_targets")
-    checkpoint = need(founding, "foundingCheckpoint", "founding evidence")
-    accounts = need(checkpoint, "accounts", "foundingCheckpoint")
-    payer = need(founding, "payer", "founding evidence")
-
-    def account_address(label: str) -> str:
-        entry = need(accounts, label, "foundingCheckpoint.accounts")
-        if isinstance(entry, dict):
-            return need(entry, "address", f"accounts[{label}]")
-        return str(entry)
-
-    market = load(Path(market_input), "market input")
-    participant = load(Path(participant_evidence), "participant evidence")
-
-    # Census facts.  Mint and hoard come from founding; the aggregate and the
-    # participant's token/position accounts come from the admission report.
-    census = None
-    if not args.no_census:
-        aggregate_hit = find_first(
-            participant,
-            lambda v: isinstance(v, str) and len(v) in range(32, 45)
-            and v not in (market_address,),
-            "",
-        )
-        # The aggregate must be named explicitly, not guessed: look for a key
-        # literally containing "aggregate" in either evidence document.
-        def keyed(body, needle):
-            found = {}
-            def walk(node, path=""):
-                if isinstance(node, dict):
-                    for key, value in node.items():
-                        if needle in key.lower() and isinstance(value, str):
-                            found[f"{path}/{key}"] = value
-                        elif needle in key.lower() and isinstance(value, dict) and "address" in value:
-                            found[f"{path}/{key}"] = value["address"]
-                        walk(value, f"{path}/{key}")
-                elif isinstance(node, list):
-                    for index, value in enumerate(node):
-                        walk(value, f"{path}/{index}")
-            walk(body)
-            return found
-
-        aggregates = {**keyed(founding, "aggregate"), **keyed(participant, "aggregate")}
-        if len(set(aggregates.values())) != 1:
-            raise Refusal(
-                "could not resolve exactly one aggregate address from evidence; "
-                f"candidates: {aggregates!r}; pass --no-census only for a smoke "
-                "run and file the gap"
-            )
-        aggregate = next(iter(set(aggregates.values())))
-
-        positions = keyed(participant, "position")
-        tokens = keyed(participant, "token_account")
-        claim_unit = None
-        for source, key in ((market, "claim_unit_atoms"), (market, "local_participant_fixture_liquidity_atoms")):
-            if key in source:
-                claim_unit = int(source[key])
-                break
-        if claim_unit is None:
-            raise Refusal("no claim unit quantity in market input")
-        census = {
-            "mint": account_address("collateral_mint"),
-            "payer": payer,
-            "hoard": account_address("founding_hoard_vault"),
-            "aggregate": aggregate,
-            "claim_unit_atoms": claim_unit,
-            "tokens": {
-                label.rsplit("/", 1)[-1] or f"t{i}": addr
-                for i, (label, addr) in enumerate(sorted(tokens.items()))
-            },
-            "positions": {
-                label.rsplit("/", 1)[-1] or f"p{i}": addr
-                for i, (label, addr) in enumerate(sorted(positions.items()))
-            },
-            "watch": {},
-        }
-
-    boot = args.bootstrap_bin or str(probe / "host-target" / "release" / "dclutch-local-successor-bootstrap")
-    if not Path(boot).is_file():
-        raise Refusal(f"bootstrap binary absent: {boot}")
+    if founding.get("schema") != "dclutch-successor-campaign-report-v1":
+        raise Refusal("founding evidence must be the checked campaign's report")
+    execution = need(founding, "execution", "founding evidence")
+    if execution.get("completed") is not True:
+        raise Refusal("founding execution is not completed")
+    accounts = need(need(execution, "market", "founding execution"), "accounts", "founding market")
+    market_address = need(need(accounts, "founding_market", "founding accounts"), "address", "founding_market")
+    # Authentication and fresh account reads remain in the existing native
+    # trade producer. This adapter only forwards its supported input paths.
+    load(Path(market_input), "market input")
+    load(Path(participant_evidence), "participant evidence")
+    census = None if args.no_census else census_from_handoff(handoff)
 
     config = {
         "schema": "dclutch-load-simulator-config-v1",
@@ -433,8 +351,10 @@ def main(argv=None) -> int:
         "admissions": [],
         "probe": {
             "work": str(probe),
+            "handoff": str(handoff_path),
             "validator_pid": handoff.get("validatorPid"),
-            "note": "teardown: SIGCONT the (stopped) run.py supervisor; never kill the validator directly",
+            "supervisor_pid": handoff.get("supervisorPid"),
+            "note": "cleanup: after all drivers finish, SIGCONT the stopped journey supervisor to release its owned validator",
         },
     }
     out = write_config_file(Path(args.output), config)

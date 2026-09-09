@@ -73,6 +73,7 @@ def main : IO Unit := do
   emitMagic "FILL_REQUEST_MAGIC" fillRequestMagic
   emitMagic "WITHDRAW_REQUEST_MAGIC" withdrawRequestMagic
   emitMagic "REDEEM_REQUEST_MAGIC" redeemRequestMagic
+  emitMagic "CLOSE_REQUEST_MAGIC" closeRequestMagic
   emitMagic "RECEIPT_MAGIC" receiptMagic
   emitMagic "FILL_WITNESS_MAGIC" fillWitnessMagic
   emitDomain "RULE_PDA_DOMAIN" rulePdaDomain
@@ -86,6 +87,7 @@ def main : IO Unit := do
   IO.println s!"pub const FILL_REQUEST_BYTES: usize = {fillRequestBytes};"
   IO.println s!"pub const WITHDRAW_REQUEST_BYTES: usize = {withdrawRequestBytes};"
   IO.println s!"pub const REDEEM_REQUEST_BYTES: usize = {redeemRequestBytes};"
+  IO.println s!"pub const CLOSE_REQUEST_BYTES: usize = {closeRequestBytes};"
   IO.println s!"pub const RECEIPT_BYTES: usize = {receiptBytes};"
   IO.println s!"pub const FILL_WITNESS_BYTES: usize = {fillWitnessBytes};"
   emitOffsets RuleFieldName (specialize ruleSchema)
@@ -96,6 +98,7 @@ def main : IO Unit := do
   emitOffsets FillRequestField.constantName fillRequestLayout
   emitOffsets WithdrawRequestField.constantName withdrawRequestLayout
   emitOffsets RedeemRequestFieldName redeemRequestLayout
+  emitOffsets CloseRequestFieldName closeRequestLayout
   emitOffsets ReceiptField.constantName receiptLayout
   emitOffsets FillWitnessField.constantName fillWitnessLayout
   IO.println s!"pub const FUND_PHASE_OPEN: u8 = {fundPhaseOpen.toNat};"
@@ -105,7 +108,9 @@ def main : IO Unit := do
   IO.println s!"pub const ROUTE_FILL: u8 = {routeFill.toNat};"
   IO.println s!"pub const ROUTE_WITHDRAW: u8 = {routeWithdraw.toNat};"
   IO.println s!"pub const ROUTE_REDEEM: u8 = {routeRedeem.toNat};"
+  IO.println s!"pub const ROUTE_CLOSE: u8 = {routeClose.toNat};"
   emitFrame "REDEEM" redeemFrame
+  emitFrame "CLOSE" closeFrame
   emitFrame "FOUND" foundFrame
   emitFrame "QUOTE" quoteFrame
   emitFrame "FILL" fillFrame

@@ -93,6 +93,10 @@ fn loader_program_bytes(programdata: Pubkey) -> Vec<u8> {
 }
 
 fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
+    programdata_bytes(slot, None, elf)
+}
+
+fn programdata_bytes(slot: u64, authority: Option<[u8; 32]>, elf: &[u8]) -> Vec<u8> {
     let mut output = vec![0_u8; 45 + elf.len()];
     output
         .get_mut(..4)
@@ -102,6 +106,13 @@ fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
         .get_mut(4..12)
         .expect("slot bytes")
         .copy_from_slice(&slot.to_le_bytes());
+    if let Some(authority) = authority {
+        output[12] = 1;
+        output
+            .get_mut(13..45)
+            .expect("authority bytes")
+            .copy_from_slice(&authority);
+    }
     output
         .get_mut(45..)
         .expect("ELF bytes")
@@ -952,12 +963,12 @@ fn role_activation_refuses_a_hostile_account_frame() {
 }
 
 #[test]
-fn role_activation_refuses_a_substituted_deployment() {
+fn immutable_role_activation_reuses_the_finalized_digest() {
     let fixture = Fixture::new();
     let mut accounts = fixture.role_activation_accounts(fixture.empty_cache_account());
-    // Same well-shaped Loader state, different deployed bytes: first admission
-    // is the sole site that checks the artifact record's claimed ELF digest
-    // against what is actually deployed, and it must still hash to do it.
+    // Finalization already hashed this immutable deployment. Altering only its
+    // ELF tail creates an impossible Loader state (there is no authority that
+    // can produce it) and pins that activation does not pay to hash it again.
     *accounts.get_mut(7).expect("programdata account") = account(
         *fixture.programdata.key,
         false,
@@ -967,6 +978,70 @@ fn role_activation_refuses_a_substituted_deployment() {
         bpf_loader_upgradeable::ID,
         false,
     );
+    process_instruction(
+        &fixture.registry,
+        &accounts,
+        &RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes(),
+    )
+    .expect("immutable activation reuses the digest authenticated at finalization");
+}
+
+#[test]
+fn upgradeable_role_activation_refuses_a_same_slot_elf_substitution() {
+    let mut fixture = Fixture::new();
+    let authority = bytes(0x44);
+    let release = ArtifactReleaseV1::new(
+        fixture.release.program(),
+        fixture.release.loader_program(),
+        fixture.release.programdata(),
+        fixture.release.semantic_release_id(),
+        fixture.release.elf_digest(),
+        fixture.release.deployment_slot(),
+        ArtifactUpgradePolicyV1::ExactAuthority,
+        Some(authority),
+    )
+    .expect("upgradeable artifact release");
+    let (artifact_raw, artifact_staging, artifact_digest) = finalized_record(
+        fixture.registry,
+        dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        release.to_bytes().to_vec(),
+        &fixture.rent,
+    );
+    let artifact_id = ArtifactReleaseIdV1::new(artifact_digest).expect("artifact ID");
+    let binding = ExecutionRoleBindingV1::new(release.program(), artifact_id);
+    let release_set = ExecutionReleaseSetV1::new(binding, binding, binding, binding, binding)
+        .expect("fully aliased release set");
+    let (release_set_raw, release_set_staging, release_set_digest) = finalized_record(
+        fixture.registry,
+        dclutch_registry::release_set::EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
+        release_set.to_bytes().to_vec(),
+        &fixture.rent,
+    );
+    fixture.release = release;
+    fixture.artifact_id = artifact_id;
+    fixture.artifact_raw = artifact_raw;
+    fixture.artifact_staging = artifact_staging;
+    fixture.release_set = release_set;
+    fixture.release_set_id = ContentId::new(release_set_digest).expect("release-set ID");
+    fixture.release_set_raw = release_set_raw;
+    fixture.release_set_staging = release_set_staging;
+    fixture.programdata = account(
+        *fixture.programdata.key,
+        false,
+        false,
+        fixture.programdata.lamports(),
+        programdata_bytes(
+            fixture.release.deployment_slot(),
+            Some(authority),
+            &[0x5a; 96],
+        ),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    let accounts = fixture.role_activation_accounts(fixture.empty_cache_account());
+    // A mutable deployment may be substituted even without moving its observed
+    // slot in an adversarial account image. Activation therefore hashes this
+    // branch and catches the byte change independently of the slot pin.
     assert_eq!(
         process_instruction(
             &fixture.registry,

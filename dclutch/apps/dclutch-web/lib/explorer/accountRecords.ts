@@ -36,6 +36,7 @@ import {
   FILL_REQUEST_MAGIC,
   WITHDRAW_REQUEST_MAGIC,
   REDEEM_REQUEST_MAGIC,
+  CLOSE_REQUEST_MAGIC,
   RECEIPT_MAGIC,
   FILL_WITNESS_MAGIC,
 } from '@dclutch/sdk/generated/scoringRuleV1';
@@ -1222,6 +1223,21 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     note: 'This decodes the Dealer prefix. Claims owns terminal payout, burn and child request validation.',
   },
   {
+    magic: CLOSE_REQUEST_MAGIC,
+    name: 'Scoring Dealer close request',
+    family: 'Trading',
+    summary: 'Closes a drained terminal fund and returns recorded native balances.',
+    width: { kind: 'header-only', headerBytes: SCORING.CLOSE_REQUEST_BYTES, note: 'Claims owns the following Position close request' },
+    fields: [
+      field('Schema version', SCORING.CLOSE_REQUEST_VERSION_OFFSET, 'u16'),
+      field('Reserved', SCORING.CLOSE_REQUEST_RESERVED_OFFSET, 'reserved'),
+      field('Market', SCORING.CLOSE_REQUEST_MARKET_OFFSET, 'pubkey'),
+      field('Dealer identity', SCORING.CLOSE_REQUEST_DEALER_ID_OFFSET, 'identity'),
+      field('Expected fund revision', SCORING.CLOSE_REQUEST_EXPECTED_FUND_REVISION_OFFSET, 'u64'),
+    ],
+    note: 'This decodes the Dealer prefix. Claims and Custody own their record closure; Trading closes the drained fund.',
+  },
+  {
     magic: RECEIPT_MAGIC,
     name: 'Scoring Dealer receipt',
     family: 'Trading',
@@ -1229,7 +1245,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     width: { kind: 'fixed', bytes: SCORING.RECEIPT_BYTES },
     fields: [
       field('Schema version', SCORING.RECEIPT_VERSION_OFFSET, 'u16'),
-      field('Route', SCORING.RECEIPT_ROUTE_OFFSET, 'enum', { tags: [{ tag: SCORING.ROUTE_FOUND, name: 'Found' }, { tag: SCORING.ROUTE_QUOTE, name: 'Quote' }, { tag: SCORING.ROUTE_FILL, name: 'Fill' }, { tag: SCORING.ROUTE_WITHDRAW, name: 'Withdraw' }, { tag: SCORING.ROUTE_REDEEM, name: 'Redeem' }] }),
+      field('Route', SCORING.RECEIPT_ROUTE_OFFSET, 'enum', { tags: [{ tag: SCORING.ROUTE_FOUND, name: 'Found' }, { tag: SCORING.ROUTE_QUOTE, name: 'Quote' }, { tag: SCORING.ROUTE_FILL, name: 'Fill' }, { tag: SCORING.ROUTE_WITHDRAW, name: 'Withdraw' }, { tag: SCORING.ROUTE_REDEEM, name: 'Redeem' }, { tag: SCORING.ROUTE_CLOSE, name: 'Close' }] }),
       field('Outcome count', SCORING.RECEIPT_OUTCOME_COUNT_OFFSET, 'u8'),
       field('Reserved', SCORING.RECEIPT_RESERVED_OFFSET, 'reserved'),
       field('Request digest', SCORING.RECEIPT_REQUEST_DIGEST_OFFSET, 'identity'),

@@ -24,18 +24,13 @@
 //! seam-supplied fields at all — unlike General, whose tail carries the Market,
 //! the config identity and the generation.
 //!
-//! # The Template is the completeness gate
+//! # Template and capacity are separate selected facts
 //!
-//! Because the whole tail is Template-derived, the one thing that could go
-//! wrong is composing it from a DIFFERENT Template than the release binds.
-//! `super::release_v5::encode_series_action_descriptor_v5` stores the Template content
-//! identity in each action descriptor's `capacity_profile` coordinate, and
-//! `CapabilityProgramV1::validate_selection` requires that same value to equal
-//! the manifest entry's `capacity_profile_id`. So [`template_input`] requires
-//! `template_content_id(input.template) == action.capacity_profile()` and
-//! refuses [`SeriesActivationBundleErrorV1::TemplateSubstitution`] otherwise.
-//! That is stronger than General's two-probe completeness check, not weaker: it
-//! is an identity join rather than a variance sample.
+//! The outer activation path authenticates the selected config record and its
+//! exact Template body. The descriptor's `capacity_profile` separately names
+//! the Consume executor geometry, so two differently timed Templates with the
+//! same supported geometry can select one immutable executor. The root tail is
+//! still derived only from the authenticated Template body.
 //!
 //! # How the prepaid close principal is funded
 //!
@@ -91,7 +86,6 @@ use dclutch_trading::series::{
         SeriesActivationErrorV3, plan_series_root_activation_v3, series_activation_root_tail_v3,
     },
     replay::{SERIES_STATE_BYTES_V3, SeriesStateV3},
-    template_content_id,
 };
 
 use super::{
@@ -539,14 +533,6 @@ fn template_input(
         return Err(SeriesActivationBundleErrorV1::ForeignRoot);
     }
     let template = decode_template(input)?;
-    let template_id = template_content_id(input.template)
-        .map_err(|_| SeriesActivationBundleErrorV1::TemplateRecord)?;
-    // The completeness gate: the release's own descriptors carry the exact
-    // Template identity in `capacity_profile`, and the whole tail is derived
-    // from that Template. Composing from any other record is a substitution.
-    if action.capacity_profile() != template_id {
-        return Err(SeriesActivationBundleErrorV1::TemplateSubstitution);
-    }
     let constant_tail = series_activation_root_tail_v3(template)
         .map_err(SeriesActivationBundleErrorV1::CreationOracle)?;
     Ok((
@@ -630,10 +616,9 @@ mod tests {
         }
     }
 
-    /// A real production V4 action descriptor bound to this exact Template.
-    fn action_descriptor(template: &[u8], seed: u8) -> Vec<u8> {
-        let template_id = template_content_id(template).expect("Template ID");
-        encode_series_action_descriptor_v5(template_id, ids(seed))
+    /// A real production V4 action descriptor with a stable capacity identity.
+    fn action_descriptor(_template: &[u8], seed: u8) -> Vec<u8> {
+        encode_series_action_descriptor_v5(ContentId::new([99; 32]).expect("capacity"), ids(seed))
             .expect("action descriptor")
             .to_vec()
     }
@@ -732,21 +717,14 @@ mod tests {
     }
 
     #[test]
-    fn a_substituted_template_refuses_at_the_completeness_gate() {
+    fn differently_timed_templates_share_capacity_but_derive_distinct_tails() {
         let bound = template_bytes(7);
         let other = template_bytes(8);
         let descriptor = action_descriptor(&bound, 40);
-        assert_eq!(
-            build_series_activation_bundle_v1(input(&descriptor, &other)),
-            Err(SeriesActivationBundleErrorV1::TemplateSubstitution)
-        );
-        // And a bundle honestly built for the bound Template does not validate
-        // against the substituted one.
-        let bundle = build_series_activation_bundle_v1(input(&descriptor, &bound)).expect("bundle");
-        assert_eq!(
-            validate_series_activation_bundle_v1(&bundle, input(&descriptor, &other)),
-            Err(SeriesActivationBundleErrorV1::TemplateSubstitution)
-        );
+        let first = build_series_activation_bundle_v1(input(&descriptor, &bound)).expect("first");
+        let second = build_series_activation_bundle_v1(input(&descriptor, &other)).expect("second");
+        assert_eq!(first.descriptor, second.descriptor);
+        assert_ne!(first.effect, second.effect);
     }
 
     #[test]

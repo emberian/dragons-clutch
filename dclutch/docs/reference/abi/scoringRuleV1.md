@@ -26,6 +26,7 @@ Regenerate with: npm run abi:scoring-rule
 | `FILL_REQUEST_MAGIC` | `DCLSFLR1` |
 | `WITHDRAW_REQUEST_MAGIC` | `DCLSWDR1` |
 | `REDEEM_REQUEST_MAGIC` | `DCLSRDR1` |
+| `CLOSE_REQUEST_MAGIC` | `DCLSCLR1` |
 | `RECEIPT_MAGIC` | `DCLSRCP1` |
 | `FILL_WITNESS_MAGIC` | `DCLSFLW1` |
 | `RULE_PDA_DOMAIN` | `dclutch:scoring-rule:v1` |
@@ -51,6 +52,7 @@ Regenerate with: npm run abi:scoring-rule
 | `FILL_REQUEST_BYTES` | 512 |
 | `WITHDRAW_REQUEST_BYTES` | 96 |
 | `REDEEM_REQUEST_BYTES` | 88 |
+| `CLOSE_REQUEST_BYTES` | 88 |
 | `RECEIPT_BYTES` | 192 |
 | `FILL_WITNESS_BYTES` | 272 |
 | `RULE_MAGIC_OFFSET` | 0 |
@@ -136,6 +138,12 @@ Regenerate with: npm run abi:scoring-rule
 | `REDEEM_REQUEST_MARKET_OFFSET` | 16 |
 | `REDEEM_REQUEST_DEALER_ID_OFFSET` | 48 |
 | `REDEEM_REQUEST_EXPECTED_FUND_REVISION_OFFSET` | 80 |
+| `CLOSE_REQUEST_MAGIC_OFFSET` | 0 |
+| `CLOSE_REQUEST_VERSION_OFFSET` | 8 |
+| `CLOSE_REQUEST_RESERVED_OFFSET` | 10 |
+| `CLOSE_REQUEST_MARKET_OFFSET` | 16 |
+| `CLOSE_REQUEST_DEALER_ID_OFFSET` | 48 |
+| `CLOSE_REQUEST_EXPECTED_FUND_REVISION_OFFSET` | 80 |
 | `RECEIPT_MAGIC_OFFSET` | 0 |
 | `RECEIPT_VERSION_OFFSET` | 8 |
 | `RECEIPT_ROUTE_OFFSET` | 10 |
@@ -166,6 +174,7 @@ Regenerate with: npm run abi:scoring-rule
 | `ROUTE_FILL` | 2 |
 | `ROUTE_WITHDRAW` | 3 |
 | `ROUTE_REDEEM` | 4 |
+| `ROUTE_CLOSE` | 5 |
 | `REDEEM_ACCOUNT_COUNT` | 9 |
 | `REDEEM_PAYER_ACCOUNT` | 0 |
 | `REDEEM_FUND_ACCOUNT` | 1 |
@@ -176,6 +185,22 @@ Regenerate with: npm run abi:scoring-rule
 | `REDEEM_CUSTODY_PROGRAM_ACCOUNT` | 6 |
 | `REDEEM_ACTIVATION_CACHE_ACCOUNT` | 7 |
 | `REDEEM_REGISTRY_PROGRAM_ACCOUNT` | 8 |
+| `CLOSE_ACCOUNT_COUNT` | 15 |
+| `CLOSE_PAYER_ACCOUNT` | 0 |
+| `CLOSE_FUND_ACCOUNT` | 1 |
+| `CLOSE_RULE_ACCOUNT` | 2 |
+| `CLOSE_QUOTE_ACCOUNT` | 3 |
+| `CLOSE_MARKET_ACCOUNT` | 4 |
+| `CLOSE_VAULT_ACCOUNT` | 5 |
+| `CLOSE_SPONSOR_ACCOUNT` | 6 |
+| `CLOSE_CLAIMS_PROGRAM_ACCOUNT` | 7 |
+| `CLOSE_CUSTODY_PROGRAM_ACCOUNT` | 8 |
+| `CLOSE_ACTIVATION_CACHE_ACCOUNT` | 9 |
+| `CLOSE_REGISTRY_PROGRAM_ACCOUNT` | 10 |
+| `CLOSE_MINT_ACCOUNT` | 11 |
+| `CLOSE_TOKEN_PROGRAM_ACCOUNT` | 12 |
+| `CLOSE_RENT_CREDIT_ACCOUNT` | 13 |
+| `CLOSE_RENT_PROGRAM_ACCOUNT` | 14 |
 | `FOUND_ACCOUNT_COUNT` | 21 |
 | `FOUND_SPONSOR_ACCOUNT` | 0 |
 | `FOUND_FUND_ACCOUNT` | 1 |
@@ -282,6 +307,12 @@ export const REDEEM_WRITABLE: readonly boolean[] = [true, true, false, false, tr
 ```
 ```ts
 export const REDEEM_SIGNER: readonly boolean[] = [true, false, false, false, false, false, false, false, false];
+```
+```ts
+export const CLOSE_WRITABLE: readonly boolean[] = [true, true, true, true, false, true, true, false, false, false, false, false, false, true, false];
+```
+```ts
+export const CLOSE_SIGNER: readonly boolean[] = [true, false, false, false, false, false, false, false, false, false, false, false, false, false, false];
 ```
 ```ts
 export const FOUND_WRITABLE: readonly boolean[] = [true, true, true, true, false, true, true, true, false, false, true, true, true, false, false, false, false, false, false, false, false];

@@ -17,6 +17,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -36,6 +37,8 @@ assert DRIVE_SPEC is not None and DRIVE_SPEC.loader is not None
 drive = importlib.util.module_from_spec(DRIVE_SPEC)
 sys.modules[DRIVE_SPEC.name] = drive
 DRIVE_SPEC.loader.exec_module(drive)
+
+import simulator
 
 FOUNDER = "2SVqjPNYveWR2reX11JehENyV65zYbeR88ezapQysuaA"
 SUBSTITUTED = "FqsxFRnCmHkzEkWJEYhpqw4CbEPWaeFhpYrCrhA3dXex"
@@ -89,6 +92,85 @@ def held_probe(root: Path, *, identities: dict | None = None, keys=KEY_FILES) ->
         json.dumps({"source_revision": "b" * 40})
     )
     return probe
+
+
+class JourneyHandoffTests(unittest.TestCase):
+    def prepare(self, root: Path):
+        probe = held_probe(root)
+        old = probe / "runs" / "seed-01" / "participant-handoff.json"
+        handoff = json.loads(old.read_text())
+        handoff["bootstrapBin"] = str(probe / "host-target" / "release" / "dclutch-local-successor-bootstrap")
+        handoff["supervisorPid"] = 1234
+        # Deliberately non-unit scale and more than one wallet: the adapter
+        # must preserve the native census rather than rederive it from a
+        # guessed JSON field or select only the newly admitted participant.
+        handoff["census"] = {
+            "mint": FOUNDER, "payer": SUBSTITUTED, "hoard": FOUNDER,
+            "aggregate": SUBSTITUTED, "claim_unit_atoms": 3,
+            "tokens": {"founder": FOUNDER, "holder_1": SUBSTITUTED},
+            "positions": {"founder": FOUNDER, "buyer": SUBSTITUTED},
+            "watch": {"receipt": FOUNDER},
+        }
+        Path(handoff["foundingEvidence"]).write_text(json.dumps({
+            "schema": "dclutch-successor-campaign-report-v1",
+            "execution": {"completed": True, "market": {"accounts": {
+                "founding_market": {"address": FOUNDER},
+            }}},
+        }))
+        Path(handoff["marketInput"]).write_text(json.dumps({
+            "local_participant_fixture_liquidity_atoms": 100_000_000,
+        }))
+        Path(handoff["participantEvidence"]).write_text("{}")
+        path = root / "participant-handoff.json"
+        path.write_text(json.dumps(handoff))
+        return path, handoff
+
+    def build(self, root: Path, path: Path):
+        output = root / "sim.config.json"
+        self.assertEqual(adapter.main([
+            "--handoff", str(path), "--sim-work", str(root / "run"),
+            "--output", str(output),
+        ]), 0)
+        return simulator.load_config(output)
+
+    def test_existing_simulator_accepts_complete_native_journey_census(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path, handoff = self.prepare(root)
+            # File-only construction must not consult an RPC, private key,
+            # or child driver to guess any missing fact.
+            with patch("subprocess.run", side_effect=AssertionError("unexpected child")):
+                config = self.build(root, path)
+            self.assertEqual(config["census"], handoff["census"])
+            self.assertEqual(config["market_address"], FOUNDER)
+            self.assertEqual(config["trade"]["local"]["participant_report"], handoff["participantEvidence"])
+            self.assertEqual(config["probe"]["supervisor_pid"], 1234)
+
+    def test_missing_native_scale_never_falls_back_to_fixture_liquidity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path, handoff = self.prepare(root)
+            del handoff["census"]["claim_unit_atoms"]
+            path.write_text(json.dumps(handoff))
+            with self.assertRaisesRegex(adapter.Refusal, "claim_unit_atoms"):
+                self.build(root, path)
+            self.assertFalse((root / "sim.config.json").exists())
+
+    def test_absent_census_and_unfinished_founding_refuse_before_config_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path, handoff = self.prepare(root)
+            del handoff["census"]
+            path.write_text(json.dumps(handoff))
+            with self.assertRaisesRegex(adapter.Refusal, "census"):
+                self.build(root, path)
+            report = Path(handoff["foundingEvidence"])
+            body = json.loads(report.read_text())
+            body["execution"]["completed"] = False
+            report.write_text(json.dumps(body))
+            with self.assertRaisesRegex(adapter.Refusal, "not completed"):
+                self.build(root, path)
+            self.assertFalse((root / "sim.config.json").exists())
 
 
 class SimlifeConfigTests(unittest.TestCase):

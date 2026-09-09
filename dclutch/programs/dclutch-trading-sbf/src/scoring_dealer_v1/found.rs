@@ -541,7 +541,7 @@ fn prefund_v1<'info>(
 /// Compose and invoke one non-transfer Custody request (InitializeReplay,
 /// OpenVault) under this program's caller authority for `context`.
 #[inline(never)]
-fn invoke_custody_v1<'info>(
+pub(crate) fn invoke_custody_v1<'info>(
     program_id: &Pubkey,
     custody_program: &AccountInfo<'info>,
     window: &[AccountInfo<'info>],

@@ -401,12 +401,38 @@ class DirectFillDeclarationTest(SimulatorHarness):
 
 
 class SimulatorLoopTest(SimulatorHarness):
+    def test_preflight_then_execute_same_config_and_resume_real_cycle(self) -> None:
+        cfg = self.write_config(self.config())
+        dry = self.run_sim("run", "--config", str(cfg), "--cycles", "1")
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        executed = self.run_sim("run", "--config", str(cfg), "--cycles", "1", "--execute")
+        self.assertEqual(executed.returncode, 0, executed.stderr)
+        journal = self.work / "journal" / "cycle-000001" / "cycle.json"
+        accepted = journal.read_bytes()
+        self.assertEqual(json.loads(accepted)["trades_landed_total"], 1)
+        session_steps = self.work / "sessions" / "cycle-000001" / ".steps"
+        steps = session_steps.read_bytes()
+        logs = sorted((self.work / "logs").glob("*"))
+        # Another dry run cannot adopt the accepted cycle or overwrite its
+        # status. Each preflight must read/plan afresh in its own directory.
+        dry_again = self.run_sim("run", "--config", str(cfg), "--cycles", "1")
+        self.assertEqual(dry_again.returncode, 0, dry_again.stderr)
+        self.assertIn("preflight completed", dry_again.stdout)
+        resumed = self.run_sim("run", "--config", str(cfg), "--cycles", "1", "--execute")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(journal.read_bytes(), accepted)
+        self.assertEqual(session_steps.read_bytes(), steps)
+        self.assertEqual(sorted((self.work / "logs").glob("*")), logs)
+        status = json.loads((self.work / "status.json").read_text())
+        self.assertEqual(status["last_reconciliation"], json.loads(accepted)["reconciliation"])
+
     def test_preflight_runs_one_cycle_and_sends_nothing(self) -> None:
         cfg = self.write_config(self.config())
         proc = self.run_sim("run", "--config", str(cfg), "--cycles", "3")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("preflight completed for cycle 1", proc.stdout)
-        status = json.loads((self.work / "status.json").read_text())
+        preflight = next(self.work.glob("preflight-*"))
+        status = json.loads((preflight / "status.json").read_text())
         self.assertEqual(status["trades"]["landed"], 0)
 
     def test_a_preflight_never_writes_the_journal_the_execute_run_resumes(self) -> None:
@@ -436,12 +462,12 @@ class SimulatorLoopTest(SimulatorHarness):
             (self.work / "admissions" / "p1.json").exists(),
             "a preflight wrote the journal the execute run resumes",
         )
-        self.assertTrue((self.work / "preflight-admissions" / "p1.json").exists())
+        preflight = next(self.work.glob("preflight-*"))
+        self.assertTrue((preflight / "preflight-admissions" / "p1.json").exists())
 
         # And --execute journals where it always did, having planned fresh. In
-        # its own work dir, because a preflight also leaves a CYCLE journal
-        # whose plan differs from an executing one -- which refuses loudly and
-        # by name, so it is a nuisance rather than this defect.
+        # a second work dir here to separately exercise configured admission
+        # outputs; the same-config cycle resume is tested above.
         work2 = self.root / "work2"
         admission2 = dict(admission, output=str(work2 / "admissions" / "p1.json"))
         cfg2 = self.root / "config2.json"

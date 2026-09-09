@@ -638,11 +638,16 @@ pub fn loader() -> Pubkey {
 }
 
 fn release(program: Pubkey, seed: u8, elf: &[u8]) -> ArtifactReleaseV1 {
+    let semantic_release = if program == RESOLUTION {
+        RESOLUTION_CONTROLLER_RELEASE_ID_V7
+    } else {
+        [seed; 32]
+    };
     ArtifactReleaseV1::new(
         identity(program),
         identity(loader()),
         programdata(program).to_bytes(),
-        ContentId::new([seed; 32]).expect("semantic release"),
+        ContentId::new(semantic_release).expect("semantic release"),
         hash(elf).to_bytes(),
         0,
         ArtifactUpgradePolicyV1::Immutable,
@@ -1276,6 +1281,81 @@ fn rent_sysvar() -> Pubkey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_request_binds_semantic_exposure_identity() {
+        let elves = Elves {
+            claims: &[1_u8],
+            registry: &[2_u8],
+            core: &[3_u8],
+            custody: &[4_u8],
+            caller: &[5_u8],
+        };
+        let staged = stage_terminal(
+            &elves,
+            &[6_u8],
+            Pubkey::new_from_array([0x31; 32]),
+            Pubkey::new_from_array([0x32; 32]),
+        );
+        let terms_account = staged
+            .base
+            .accounts
+            .iter()
+            .find(|account| hash(&account.data).to_bytes() == staged.base.terms)
+            .expect("finalized terms account");
+        let terms = FractionalExposureTermsV2::decode(
+            &terms_account.data,
+            FractionalExposureTermsAdmissionV2 {
+                selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+                finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+                selected_terms_id: staged.base.terms,
+                finalized_terms_id: staged.base.terms,
+                recomputed_terms_digest: staged.base.terms,
+                finalized_terms_digest: staged.base.terms,
+                record_authenticated: true,
+            },
+        )
+        .expect("authenticated terms");
+        let request = |exposure| {
+            FractionalExposureRequestV2::new(
+                FractionalExposureActionV2::TerminalZeroBurn,
+                FractionalExposureRequestInputV2 {
+                    release_set: terms.release_set(),
+                    market: terms.market(),
+                    product_record: terms.product_record(),
+                    result_domain: terms.result_domain(),
+                    terms: terms.terms_id(),
+                    token_behavior: terms.token_behavior(),
+                    exposure,
+                    owner: [0x41; 32],
+                    source_token_account: [0x42; 32],
+                    destination_token_account: [0; 32],
+                    terminal_digest: [0x43; 32],
+                    expected_revision: 1,
+                    quantity: 1,
+                    representation_coordinate: 0,
+                },
+            )
+            .expect("terminal request")
+        };
+        assert_eq!(
+            request(staged.base.exposure).bind_terms(terms),
+            Err(
+                dclutch_claims::fractional::FractionalExposureRequestErrorV2::TermsMismatch
+            ),
+        );
+        let accepted = request(terms.exposure_id());
+        assert_eq!(accepted.bind_terms(terms), Ok(accepted));
+    }
+
+    #[test]
+    fn resolution_activation_uses_controller_release_v7() {
+        let release = release(RESOLUTION, 0x35, &[6_u8]);
+        assert_eq!(
+            release.semantic_release_id().to_bytes(),
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+        );
+    }
 
     #[test]
     fn terminal_modes_stage_only_preterminal_facts_and_exact_collateral() {

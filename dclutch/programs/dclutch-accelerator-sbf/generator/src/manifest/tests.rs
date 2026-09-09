@@ -1,12 +1,4 @@
-use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
 use dclutch_core_contract::ContentId;
-use dclutch_trading_sbf::series::{
-    artifacts_v3::{
-        SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-    },
-    consume_artifacts_v4::SeriesConsumeChildRequestsV4,
-};
 use dclutch_vm::account_profile::lifecycle_v3::{
     HEADER_BYTES as LIFECYCLE_HEADER_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
 };
@@ -22,10 +14,6 @@ const EPHEMERAL_TOOLCHAIN_MANIFEST: &[u8] = b"test-only:rustc-1.89.0;not release
 struct Fixture {
     lifecycle: [u8; LIFECYCLE_HEADER_BYTES_V5],
     lengths: [u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
-    lock: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    core: [u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3],
-    realize: [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-    claims: [u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3],
 }
 
 impl Fixture {
@@ -46,53 +34,6 @@ impl Fixture {
         Self {
             lifecycle,
             lengths: [0_u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
-            lock: [0x11; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-            core: [0x22; SERIES_CONSUME_CORE_REQUEST_BYTES_V3],
-            realize: [0x33; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
-            claims: ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
-                release_set: [1; 32],
-                market: [2; 32],
-                product_record_digest: [3; 32],
-                product_instance_id: [4; 32],
-                linked_basis_record_digest: [5; 32],
-                semantic_basis_id: [6; 32],
-                founder: [7; 32],
-                founding_intent_digest: [8; 32],
-                aggregate: [9; 32],
-                position: [10; 32],
-                admission: [11; 32],
-                funding_source: [12; 32],
-                hoard: [13; 32],
-                custody_replay: [14; 32],
-                rent_credit: [15; 32],
-                rent_program: [16; 32],
-                claims_program: [17; 32],
-                trading_program: [18; 32],
-                custody_request_digest: [19; 32],
-                custody_receipt_digest: [20; 32],
-                generation: 1,
-                claim_count: 1,
-                quantity: 3,
-                basis_scale: 3,
-                pre_source_amount: 9,
-                post_source_amount: 0,
-                pre_hoard_amount: 0,
-                post_hoard_amount: 9,
-                pre_custody_revision: 0,
-                post_custody_revision: 1,
-                aggregate_rent_principal: 1,
-                position_rent_principal: 1,
-                admission_rent_principal: 1,
-                observed_aggregate_lamports: 1,
-                observed_position_lamports: 1,
-                observed_admission_lamports: 1,
-                pre_aggregate_revision: 0,
-                post_aggregate_revision: 1,
-                pre_position_revision: 0,
-                post_position_revision: 1,
-            })
-            .expect("test Claims request")
-            .to_bytes(),
         }
     }
 
@@ -112,7 +53,13 @@ impl Fixture {
                 request_schema: identity(3),
                 root_schema: identity(4),
                 derivation_policy: identity(5),
-                capacity_profile: identity(6),
+                capacity_profile:
+                    dclutch_trading_sbf::series::release_v5::series_consume_capacity_profile_v1(
+                        &self.lengths,
+                        1,
+                        1,
+                    )
+                    .expect("test capacity"),
                 root_state_bytes: 64,
             },
             release_sources: SeriesShadowReleaseSourcesV4 {
@@ -124,12 +71,7 @@ impl Fixture {
             },
             lifecycle: &self.lifecycle,
             fixed_data_lengths: &self.lengths,
-            child_requests: SeriesConsumeChildRequestsV4 {
-                lock: &self.lock,
-                core: &self.core,
-                realize: &self.realize,
-                claims: &self.claims,
-            },
+            funding_count: 1,
         }
     }
 }
@@ -195,15 +137,10 @@ fn input_bundle_and_framing_substitution_refuse() {
     let manifest = compile_series_shadow_source_manifest_v1(fixture.source())
         .expect("test-only source manifest compiles");
 
-    let mut repeated_core = manifest.clone();
-    let repeated_core_offset = CHILD_REQUESTS_OFFSET
-        + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3
-        + SERIES_CONSUME_CORE_REQUEST_BYTES_V3
-        + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3
-        + SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3;
-    flip(&mut repeated_core, repeated_core_offset);
+    let mut wrong_funding_count = manifest.clone();
+    flip(&mut wrong_funding_count, FUNDING_COUNT_OFFSET);
     assert_eq!(
-        SeriesShadowSourceManifestV1::decode(&repeated_core),
+        SeriesShadowSourceManifestV1::decode(&wrong_funding_count),
         Err(SeriesShadowBundleCompileErrorV4::Manifest)
     );
 
@@ -229,20 +166,6 @@ fn input_bundle_and_framing_substitution_refuse() {
     assert_ne!(
         require_deterministic_series_shadow_rebuild_v1(
             &fixed_rule,
-            SeriesShadowRebuildSourcesV1 {
-                semantic_source: SEMANTIC_SOURCE,
-                compiler_source: EPHEMERAL_COMPILER_SOURCE_MANIFEST,
-                toolchain_manifest: EPHEMERAL_TOOLCHAIN_MANIFEST,
-            },
-        ),
-        Ok(())
-    );
-
-    let mut child_request = manifest;
-    flip(&mut child_request, CHILD_REQUESTS_OFFSET);
-    assert_ne!(
-        require_deterministic_series_shadow_rebuild_v1(
-            &child_request,
             SeriesShadowRebuildSourcesV1 {
                 semantic_source: SEMANTIC_SOURCE,
                 compiler_source: EPHEMERAL_COMPILER_SOURCE_MANIFEST,

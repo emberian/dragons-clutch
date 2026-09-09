@@ -121,6 +121,8 @@ pub struct SeriesShadowAccountWidthsV1<'a> {
     pub observation: ContentId,
     /// Exact fixed pre-execution widths before the FundingState span.
     pub fixed_data_lengths: &'a [u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
+    /// Exact nonzero dynamic FundingState span count.
+    pub funding_count: u32,
 }
 
 /// Complete unsigned input to the chain-derived source builder.
@@ -343,7 +345,7 @@ pub fn build_series_shadow_source_v1(
         },
         lifecycle: input.records.lifecycle.record.exact_content(),
         fixed_data_lengths: input.account_widths.fixed_data_lengths,
-        child_requests: input.child_requests,
+        funding_count: input.account_widths.funding_count,
     };
     let built = build_series_shadow_preselection_v1(source)?;
     let decoded = SeriesShadowSourceManifestV1::decode(&built.manifest)?;

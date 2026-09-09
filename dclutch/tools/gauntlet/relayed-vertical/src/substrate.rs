@@ -101,6 +101,10 @@ impl Drop for ValidatorGuardV1 {
 }
 
 impl ValidatorGuardV1 {
+    pub(crate) fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     /// Stop the child before reusing its ledger or port block.
     fn stop(&mut self) {
         if self.child.try_wait().ok().flatten().is_none() {

@@ -11,15 +11,9 @@ use dclutch_market::execution_strategy::{
         ExecutionStrategyProgramV2, StrategyDispositionV2,
     },
 };
-use dclutch_trading_sbf::series::{
-    artifacts_v3::{
-        SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-    },
-    consume_artifacts_v4::{
-        SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4, SERIES_CONSUME_TRANSITION_BYTES_V4,
-        SeriesConsumeChildRequestsV4, series_consume_effect_bytes_v4,
-    },
+use dclutch_trading_sbf::series::consume_artifacts_v4::{
+    SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4, SERIES_CONSUME_TRANSITION_BYTES_V4,
+    series_consume_effect_bytes_v4,
 };
 use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5,
@@ -37,21 +31,16 @@ use super::{
 use dclutch_vm::v3::{ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID};
 
 /// Exact source-manifest magic.
-pub const SERIES_SHADOW_SOURCE_MANIFEST_MAGIC_V1: [u8; 8] = *b"DCLTSSM1";
+pub const SERIES_SHADOW_SOURCE_MANIFEST_MAGIC_V1: [u8; 8] = *b"DCLTSSM2";
 /// Exact source-manifest wire version.
-pub const SERIES_SHADOW_SOURCE_MANIFEST_VERSION_V1: u16 = 1;
-/// Exact occurrence-specific Consume artifact profile.
-pub const SERIES_SHADOW_SOURCE_MANIFEST_PROFILE_V1: u16 = 1;
-/// Fixed bytes before the exact fixed-width rules and child requests.
+pub const SERIES_SHADOW_SOURCE_MANIFEST_VERSION_V1: u16 = 2;
+/// Exact recurring Consume executor profile.
+pub const SERIES_SHADOW_SOURCE_MANIFEST_PROFILE_V1: u16 = 2;
+/// Fixed bytes before the exact fixed-width rules and generated sections.
 pub const SERIES_SHADOW_SOURCE_MANIFEST_HEADER_BYTES_V1: usize = 480;
 /// Exact fixed-width rules committed as little-endian `u32` values.
 pub const SERIES_SHADOW_SOURCE_FIXED_RULE_BYTES_V1: usize =
     SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4 * 4;
-/// Exact four canonical child request bytes before generated bundle sections.
-pub const SERIES_SHADOW_SOURCE_CHILD_REQUEST_BYTES_V1: usize = 2
-    * SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3
-    + 2 * SERIES_CONSUME_CORE_REQUEST_BYTES_V3
-    + SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3;
 /// Maximum accepted manifest width.
 pub const SERIES_SHADOW_SOURCE_MANIFEST_MAX_BYTES_V1: usize = 65_536;
 
@@ -79,13 +68,11 @@ const ROOT_STATE_BYTES_OFFSET: usize = 52;
 /// against one hard-coded constant silently made one Template shape the only
 /// admissible one.
 const OCCURRENCE_COUNT_OFFSET: usize = 56;
-const TAIL_RESERVED_OFFSET: usize = 60;
-const TAIL_RESERVED_BYTES: usize = 4;
+const FUNDING_COUNT_OFFSET: usize = 60;
 const IDENTITIES_OFFSET: usize = 64;
 const IDENTITY_COUNT: usize = 13;
 const FIXED_RULES_OFFSET: usize = SERIES_SHADOW_SOURCE_MANIFEST_HEADER_BYTES_V1;
-const CHILD_REQUESTS_OFFSET: usize = FIXED_RULES_OFFSET + SERIES_SHADOW_SOURCE_FIXED_RULE_BYTES_V1;
-const SECTIONS_OFFSET: usize = CHILD_REQUESTS_OFFSET + SERIES_SHADOW_SOURCE_CHILD_REQUEST_BYTES_V1;
+const SECTIONS_OFFSET: usize = FIXED_RULES_OFFSET + SERIES_SHADOW_SOURCE_FIXED_RULE_BYTES_V1;
 
 const SEMANTIC_SOURCE_IDENTITY: usize = 0;
 const COMPILER_SOURCE_IDENTITY: usize = 1;
@@ -139,6 +126,7 @@ pub struct SeriesShadowSourceManifestV1<'a> {
     capacity_profile: ContentId,
     root_state_bytes: u32,
     occurrence_count: u32,
+    funding_count: u32,
 }
 
 /// Borrowed exact generated sections ready for a checked source emitter.
@@ -176,9 +164,6 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
             || usize::from(read_u16(bytes, FIXED_RULE_COUNT_OFFSET)?)
                 != SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4
             || read_u16(bytes, HEADER_RESERVED_OFFSET)? != 0
-            || bytes
-                .get(TAIL_RESERVED_OFFSET..TAIL_RESERVED_OFFSET + TAIL_RESERVED_BYTES)
-                .is_none_or(|reserved| reserved.iter().any(|byte| *byte != 0))
         {
             return Err(SeriesShadowBundleCompileErrorV4::Manifest);
         }
@@ -232,7 +217,6 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
                 .ok_or(SeriesShadowBundleCompileErrorV4::Manifest)?;
             *output = array_32(bytes, start)?;
         }
-        child_requests(bytes)?;
         let mut cursor = SECTIONS_OFFSET;
         let source_lifecycle = take(bytes, &mut cursor, lengths[0])?;
         let capability_program = take(bytes, &mut cursor, lengths[1])?;
@@ -261,6 +245,29 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
         let translation_validation =
             decoded_identity(&identities, TRANSLATION_VALIDATION_IDENTITY)?;
         let root_state_bytes = read_u32(bytes, ROOT_STATE_BYTES_OFFSET)?;
+        let occurrence_count = read_u32(bytes, OCCURRENCE_COUNT_OFFSET)?;
+        let funding_count = read_u32(bytes, FUNDING_COUNT_OFFSET)?;
+        let mut fixed_data_lengths = [0_u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4];
+        for (index, output) in fixed_data_lengths.iter_mut().enumerate() {
+            let offset = FIXED_RULES_OFFSET
+                .checked_add(
+                    index
+                        .checked_mul(4)
+                        .ok_or(SeriesShadowBundleCompileErrorV4::Manifest)?,
+                )
+                .ok_or(SeriesShadowBundleCompileErrorV4::Manifest)?;
+            *output = read_u32(bytes, offset)?;
+        }
+        if dclutch_trading_sbf::series::release_v5::series_consume_capacity_profile_v1(
+            &fixed_data_lengths,
+            funding_count,
+            occurrence_count,
+        )
+        .map_err(|_| SeriesShadowBundleCompileErrorV4::Manifest)?
+            != capacity_profile
+        {
+            return Err(SeriesShadowBundleCompileErrorV4::Manifest);
+        }
         authenticate_generated_sections(
             GeneratedSectionsV1 {
                 capability_program,
@@ -328,13 +335,19 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
             derivation_policy,
             capacity_profile,
             root_state_bytes,
-            occurrence_count: read_u32(bytes, OCCURRENCE_COUNT_OFFSET)?,
+            occurrence_count,
+            funding_count,
         })
     }
 
     /// Immutable occurrence count of the Template this bundle serves.
     pub const fn occurrence_count(self) -> u32 {
         self.occurrence_count
+    }
+
+    /// Exact dynamic FundingState span count.
+    pub const fn funding_count(self) -> u32 {
+        self.funding_count
     }
 
     /// Exact complete manifest bytes.
@@ -408,7 +421,6 @@ pub fn require_deterministic_series_shadow_rebuild_v1(
             .ok_or(SeriesShadowBundleCompileErrorV4::Manifest)?;
         *output = read_u32(manifest.bytes, offset)?;
     }
-    let child = child_requests(manifest.bytes)?;
     let source = SeriesShadowBundleSourceV4 {
         descriptor: SeriesShadowDescriptorSemanticsV4 {
             kind: manifest.kind,
@@ -428,7 +440,7 @@ pub fn require_deterministic_series_shadow_rebuild_v1(
         },
         lifecycle: manifest.source_lifecycle,
         fixed_data_lengths: &fixed_data_lengths,
-        child_requests: child,
+        funding_count: manifest.funding_count,
         occurrence_count: manifest.occurrence_count,
     };
     let rebuilt = compile_series_shadow_source_manifest_v1(source)?;
@@ -469,6 +481,7 @@ fn encode_manifest(
         OCCURRENCE_COUNT_OFFSET,
         source.occurrence_count,
     )?;
+    put_u32(&mut output, FUNDING_COUNT_OFFSET, source.funding_count)?;
     put_u16(
         &mut output,
         VERSION_OFFSET,
@@ -555,13 +568,8 @@ fn encode_manifest(
             *length,
         )?;
     }
-    let mut cursor = CHILD_REQUESTS_OFFSET;
+    let mut cursor = SECTIONS_OFFSET;
     for bytes in [
-        source.child_requests.lock.as_slice(),
-        source.child_requests.core.as_slice(),
-        source.child_requests.realize.as_slice(),
-        source.child_requests.claims.as_slice(),
-        source.child_requests.core.as_slice(),
         source.lifecycle,
         compiled.capability_program.as_slice(),
         compiled.account_profile.as_slice(),
@@ -581,42 +589,6 @@ fn encode_manifest(
     }
     SeriesShadowSourceManifestV1::decode(&output)?;
     Ok(output)
-}
-
-fn child_requests(bytes: &[u8]) -> Result<SeriesConsumeChildRequestsV4<'_>> {
-    let mut cursor = CHILD_REQUESTS_OFFSET;
-    let lock: &[u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3] = take(
-        bytes,
-        &mut cursor,
-        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-    )?
-    .try_into()
-    .map_err(|_| SeriesShadowBundleCompileErrorV4::Manifest)?;
-    let core: &[u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3] =
-        take(bytes, &mut cursor, SERIES_CONSUME_CORE_REQUEST_BYTES_V3)?
-            .try_into()
-            .map_err(|_| SeriesShadowBundleCompileErrorV4::Manifest)?;
-    let realize: &[u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3] = take(
-        bytes,
-        &mut cursor,
-        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-    )?
-    .try_into()
-    .map_err(|_| SeriesShadowBundleCompileErrorV4::Manifest)?;
-    let claims: &[u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3] =
-        take(bytes, &mut cursor, SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3)?
-            .try_into()
-            .map_err(|_| SeriesShadowBundleCompileErrorV4::Manifest)?;
-    let repeated_core = take(bytes, &mut cursor, SERIES_CONSUME_CORE_REQUEST_BYTES_V3)?;
-    if repeated_core != core.as_slice() || cursor != SECTIONS_OFFSET {
-        return Err(SeriesShadowBundleCompileErrorV4::Manifest);
-    }
-    Ok(SeriesConsumeChildRequestsV4 {
-        lock,
-        core,
-        realize,
-        claims,
-    })
 }
 
 #[derive(Clone, Copy)]

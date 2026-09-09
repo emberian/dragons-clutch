@@ -72,6 +72,7 @@ def quoteRequestMagic : String := "DCLSQTR1"
 def fillRequestMagic : String := "DCLSFLR1"
 def withdrawRequestMagic : String := "DCLSWDR1"
 def redeemRequestMagic : String := "DCLSRDR1"
+def closeRequestMagic : String := "DCLSCLR1"
 def receiptMagic : String := "DCLSRCP1"
 def fillWitnessMagic : String := "DCLSFLW1"
 
@@ -194,6 +195,10 @@ fund's same TradingPrincipal vault. -/
 def redeemRequestSchema := quoteRequestSchema
 def redeemRequestLayout := specialize redeemRequestSchema
 def redeemRequestBytes := schemaWidth redeemRequestSchema
+
+/-- Optimistic close prefix. Claims owns the appended close request. -/
+def closeRequestLayout := redeemRequestLayout
+def closeRequestBytes := redeemRequestBytes
 theorem redeem_request_is_88_bytes : redeemRequestBytes = 88 := by decide
 theorem redeem_request_tiles : tiles 0 redeemRequestLayout redeemRequestBytes = true := by decide
 
@@ -249,6 +254,7 @@ def routeQuote : UInt8 := 1
 def routeFill : UInt8 := 2
 def routeWithdraw : UInt8 := 3
 def routeRedeem : UInt8 := 4
+def routeClose : UInt8 := 5
 
 inductive ReceiptField where
   | magic | version | route | outcomeCount | reserved | requestDigest | market
@@ -388,6 +394,21 @@ def redeemFrame : List FrameSlot := [
   ⟨"registry_program", false, false⟩
 ]
 theorem redeem_frame_is_9 : redeemFrame.length = 9 := by decide
+
+/-- Claims Close, Custody CloseVault and CloseReplay windows follow this prefix.
+All beneficiaries were fixed at founding. -/
+def closeFrame : List FrameSlot := [
+  ⟨"payer", true, true⟩, ⟨"fund", true, false⟩,
+  ⟨"rule", true, false⟩, ⟨"quote", true, false⟩,
+  ⟨"market", false, false⟩, ⟨"vault", true, false⟩,
+  ⟨"sponsor", true, false⟩, ⟨"claims_program", false, false⟩,
+  ⟨"custody_program", false, false⟩, ⟨"activation_cache", false, false⟩,
+  ⟨"registry_program", false, false⟩, ⟨"mint", false, false⟩,
+  ⟨"token_program", false, false⟩, ⟨"rent_credit", true, false⟩,
+  ⟨"rent_program", false, false⟩
+]
+theorem close_frame_is_15 : closeFrame.length = 15 := by decide
+
 
 theorem found_frame_is_21 : foundFrame.length = 21 := by decide
 /-- The quote frame carries the release waist because the price it writes is a
@@ -535,6 +556,9 @@ def QuoteRequestField.constantName : QuoteRequestField → String
 
 def RedeemRequestFieldName (field : QuoteRequestField) : String :=
   "REDEEM" ++ ((QuoteRequestField.constantName field).drop 5).toString
+
+def CloseRequestFieldName (field : QuoteRequestField) : String :=
+  "CLOSE" ++ ((QuoteRequestField.constantName field).drop 5).toString
 
 def FillRequestField.constantName : FillRequestField → String
   | .magic => "FILL_REQUEST_MAGIC_OFFSET"

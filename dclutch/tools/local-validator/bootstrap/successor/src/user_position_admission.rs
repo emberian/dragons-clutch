@@ -410,6 +410,67 @@ pub(crate) struct FinalizedDirectParticipantEvidenceV1 {
     pub(crate) collateral_slot: u64,
 }
 
+/// Finalized wallet admission facts independent of an optional collateral
+/// preparation leg. Position close needs this projection; Direct trading uses
+/// the stricter projection above because it also consumes participant
+/// collateral.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FinalizedPositionAdmissionEvidenceV1 {
+    pub(crate) market: Pubkey,
+    pub(crate) claims_market: Pubkey,
+    pub(crate) position: Pubkey,
+    pub(crate) owner: Pubkey,
+}
+
+pub(crate) fn parse_finalized_position_admission_evidence_for_cluster_v1(
+    bytes: &[u8],
+    rpc: &mut Rpc,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<FinalizedPositionAdmissionEvidenceV1> {
+    let report = authenticate_finalized_position_admission_report_v1(bytes, expected_cluster)?;
+    verify_persisted_admission_history(rpc, &report)?;
+    let claims_market = Pubkey::from_str(&report.intent.claims_market)
+        .map_err(|error| Error::new(format!("Position admission Claims aggregate: {error}")))?;
+    let aggregate_account = rpc.required_account(claims_market, "Position admission aggregate")?;
+    let aggregate = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+        .map_err(|error| Error::new(format!("Position admission aggregate: {error:?}")))?;
+    Ok(FinalizedPositionAdmissionEvidenceV1 {
+        market: Pubkey::new_from_array(aggregate.logical_market),
+        claims_market,
+        position: Pubkey::from_str(&report.intent.position)
+            .map_err(|error| Error::new(format!("Position admission Position: {error}")))?,
+        owner: Pubkey::from_str(&report.intent.position_owner)
+            .map_err(|error| Error::new(format!("Position admission owner: {error}")))?,
+    })
+}
+
+fn authenticate_finalized_position_admission_report_v1(
+    bytes: &[u8],
+    expected_cluster: ExpectedClusterV1,
+) -> Result<ReportV1> {
+    let value = parse_json_without_duplicate_keys_v1(bytes)
+        .map_err(|error| Error::new(format!("Position admission evidence {error}")))?;
+    let report: ReportV1 = serde_json::from_value(value.clone())
+        .map_err(|error| Error::new(format!("Position admission evidence shape: {error}")))?;
+    if serde_json::to_value(&report)? != value {
+        return Err(Error::new(
+            "Position admission evidence contained an unknown, defaulted, or noncanonical field",
+        ));
+    }
+    authenticate_report_phase_envelopes(&report)?;
+    authenticate_intent_digest(&report)?;
+    if report.schema != report_schema_v1(expected_cluster)
+        || report.cluster != expected_cluster.evidence_label()
+        || !report.authorized_mutation
+        || report.phase != PhaseV1::Finalized
+    {
+        return Err(Error::new(
+            "Position admission evidence was not one finalized authorized report for the selected cluster",
+        ));
+    }
+    Ok(report)
+}
+
 /// Decode the exact owned-loopback participant report and reopen both of its
 /// finalized transactions before exposing any Direct-facing coordinate.
 pub(crate) fn parse_finalized_direct_participant_evidence_v1(
@@ -7110,6 +7171,44 @@ mod tests {
             .expect("collateral")
             .finalized = None;
         assert!(project_finalized_direct_participant_evidence_v1(&missing_history).is_err());
+    }
+
+    #[test]
+    fn finalized_position_admission_does_not_require_direct_collateral() {
+        let (mut report, _) = admission_exactness_fixture();
+        report.phase = PhaseV1::Finalized;
+        report.finalized = Some(FinalizedEvidenceV1 {
+            signature: report
+                .expected_signature
+                .clone()
+                .expect("signed admission fixture"),
+            slot: 41,
+            fee_lamports: 1,
+            compute_units_consumed: Some(2),
+            return_data_producer: Pubkey::new_unique().to_string(),
+            return_data_sha256: hex(&[0x41; 32]),
+            poststate: BTreeMap::new(),
+        });
+        report.collateral = None;
+        refresh_report_envelope_digests(&mut report).expect("phase envelope digests");
+        let bytes = serde_json::to_vec(&report).expect("admission report");
+        let accepted =
+            authenticate_finalized_position_admission_report_v1(&bytes, ExpectedClusterV1::Devnet)
+                .expect("a finalized admission is sufficient close provenance");
+        assert!(accepted.collateral.is_none());
+
+        let mut planned = report;
+        planned.phase = PhaseV1::Planned;
+        refresh_report_envelope_digests(&mut planned).expect("planned envelope");
+        let error = authenticate_finalized_position_admission_report_v1(
+            &serde_json::to_vec(&planned).expect("planned report"),
+            ExpectedClusterV1::Devnet,
+        )
+        .expect_err("a nonfinalized admission must refuse");
+        assert_eq!(
+            error.to_string(),
+            "admission phase did not have its exact packet/signature/finalized envelope"
+        );
     }
 
     #[test]

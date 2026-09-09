@@ -68,11 +68,14 @@ use dclutch_resolution_core_v3_operator::funded_rent_recovery_v1::{
 };
 use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
 use dclutch_source::resolution::{
+    EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2,
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_source::{
-    RECOVERY_POLICY_SCHEMA_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1, SourceResolutionStateV2,
+    RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV3, SourceResolutionPhaseV1,
+    SourceResolutionStateV2,
 };
 use dclutch_trading::{
     native_close_bundle_v1::{
@@ -5479,7 +5482,11 @@ pub(crate) fn plan_resolution_close_from_chain_v1(
             SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         )?
     };
-    let source_route = finalized_snapshot(rpc, &[source_state])?;
+    let mut discovery_keys = vec![source_state, source_material.raw];
+    if explicit_recovery {
+        discovery_keys.push(recovery_policy.raw);
+    }
+    let source_route = finalized_snapshot(rpc, &discovery_keys)?;
     let routed_source = source_route.account(source_state)?;
     let source = SourceResolutionStateV2::decode(&routed_source.data)
         .map_err(|error| Error::new(format!("Resolution Source state: {error:?}")))?;
@@ -5494,6 +5501,77 @@ pub(crate) fn plan_resolution_close_from_chain_v1(
     let terminal = source
         .terminal_projection()
         .map_err(|error| Error::new(format!("Resolution terminal projection: {error:?}")))?;
+    let material = SourceMaterialV3::decode(&source_route.account(source_material.raw)?.data)
+        .map_err(|error| Error::new(format!("SourceMaterial: {error:?}")))?;
+    let policy = if explicit_recovery {
+        Some(
+            RecoveryPolicyV2::decode(&source_route.account(recovery_policy.raw)?.data)
+                .map_err(|error| Error::new(format!("RecoveryPolicy: {error:?}")))?,
+        )
+    } else {
+        None
+    };
+    let ensemble = material.ensemble();
+    let recovery_rungs = match policy {
+        Some(policy) if ensemble.is_single() => policy.attempt_count(),
+        Some(policy) => {
+            let expected = ensemble
+                .first_rung_index()
+                .checked_add(material.ensemble_rungs())
+                .ok_or_else(|| refusal("Resolution close recovery count overflowed"))?;
+            if policy.attempt_count() != expected {
+                return Err(refusal(
+                    "Resolution close RecoveryPolicy disagreed with SourceMaterial ensemble",
+                ));
+            }
+            material.ensemble_rungs()
+        }
+        None => 0,
+    };
+    let mut retirement_artifact_keys = Vec::new();
+    if !ensemble.is_single() {
+        for member in 0..ensemble.members() {
+            let seeds = EnsembleFragmentSeatSeedsV1::new(source_state.to_bytes(), member, 1);
+            retirement_artifact_keys
+                .push(Pubkey::find_program_address(&seeds.seeds(), &resolution).0);
+        }
+        let seeds = EnsembleFoldReceiptSeatSeedsV1::new(source_state.to_bytes(), 1);
+        retirement_artifact_keys.push(Pubkey::find_program_address(&seeds.seeds(), &resolution).0);
+    }
+    for ordinal in 0..recovery_rungs {
+        let sequence = u64::from(ordinal)
+            .checked_add(2)
+            .ok_or_else(|| refusal("Resolution close receipt sequence overflowed"))?;
+        retirement_artifact_keys.push(
+            Pubkey::find_program_address(
+                &[
+                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                    source_state.as_ref(),
+                    &[ResolutionCertificateKindV2::RecoveryAdvanced.kind_seed()],
+                    &sequence.to_le_bytes(),
+                ],
+                &resolution,
+            )
+            .0,
+        );
+    }
+    if recovery_rungs != 0 {
+        retirement_artifact_keys.push(
+            Pubkey::find_program_address(
+                &[
+                    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                    source_state.as_ref(),
+                    &[ResolutionCertificateKindV2::Exhausted.kind_seed()],
+                    &u64::from(recovery_rungs)
+                        .checked_add(2)
+                        .ok_or_else(|| refusal("Resolution close exhaustion sequence overflowed"))?
+                        .to_le_bytes(),
+                ],
+                &resolution,
+            )
+            .0,
+        );
+    }
     let closure_sequence = terminal
         .terminal_sequence()
         .checked_add(1)
@@ -5541,6 +5619,11 @@ pub(crate) fn plan_resolution_close_from_chain_v1(
         recovery_policy.staging,
     ];
     keys.extend_from_slice(additional_keys);
+    for artifact in &retirement_artifact_keys {
+        if !keys.contains(artifact) {
+            keys.push(*artifact);
+        }
+    }
     let snapshot = finalized_snapshot(rpc, &keys)?;
     let account = |key: Pubkey, label: &str| -> Result<ObservedAccount> {
         snapshot
@@ -5580,6 +5663,10 @@ pub(crate) fn plan_resolution_close_from_chain_v1(
         system_program: account(system_program::ID, "System Program")?,
         recovery_policy: account(recovery_policy.raw, "RecoveryPolicy")?,
         recovery_policy_staging: account(recovery_policy.staging, "RecoveryPolicy staging")?,
+        retirement_artifacts: retirement_artifact_keys
+            .iter()
+            .map(|key| account(*key, "Resolution retirement artifact"))
+            .collect::<Result<Vec<_>>>()?,
     };
     // The seat was prepaid at the rate this session recorded, and the deployed
     // program's own conjunct (`require_prepaid_output`,

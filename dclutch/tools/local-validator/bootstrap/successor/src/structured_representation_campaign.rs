@@ -73,13 +73,13 @@ use dclutch_registry::{
     record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId},
     release_set::ExecutionRoleV1,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
-    signature::{Keypair, Signer},
+    signature::{Keypair, Signature, Signer},
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::transfer;
@@ -110,10 +110,13 @@ pub(crate) struct StructuredRepresentationCampaignInputV1<'a> {
     pub(crate) hot_fixed: &'a [Pubkey],
     pub(crate) lifecycle_hot_outer: CheckedRationalLifecycleHotOuterV3,
     pub(crate) minimum_finalized_slot: u64,
+    /// Durable finalized action prefix supplied by the caller's one Structured
+    /// campaign journal. Every row is reauthenticated against live state.
+    pub(crate) resume_checkpoints: &'a [StructuredRepresentationActionCheckpointV1],
 }
 
 /// One exact decoded representation state, before or after an action.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StructuredRepresentationStateEvidenceV1 {
     pub(crate) slot: u64,
@@ -142,6 +145,22 @@ pub(crate) struct StructuredRepresentationActionEvidenceV1 {
     pub(crate) checked_manifest_digest: String,
     pub(crate) signature: String,
     pub(crate) slot: u64,
+    pub(crate) before: StructuredRepresentationStateEvidenceV1,
+    pub(crate) after: StructuredRepresentationStateEvidenceV1,
+}
+
+/// Caller-persistable finalized checkpoint for one open action. The complete
+/// transaction evidence keeps the signature, decoded outer/CPI instructions,
+/// fee, logs, and finalized slot beside the exact poststate it produced.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StructuredRepresentationActionCheckpointV1 {
+    pub(crate) action: String,
+    pub(crate) outcome: Option<u32>,
+    pub(crate) quantity: u64,
+    pub(crate) family_digest: String,
+    pub(crate) checked_manifest_digest: String,
+    pub(crate) transaction: TransactionEvidence,
     pub(crate) before: StructuredRepresentationStateEvidenceV1,
     pub(crate) after: StructuredRepresentationStateEvidenceV1,
 }
@@ -384,6 +403,7 @@ impl<'a> ArtifactBodiesV1<'a> {
 pub(crate) fn run_structured_representation_campaign_v1(
     mut input: StructuredRepresentationCampaignInputV1<'_>,
     transactions: &mut Vec<TransactionEvidence>,
+    persist_checkpoint: &mut dyn FnMut(&StructuredRepresentationActionCheckpointV1) -> Result<()>,
 ) -> Result<StructuredRepresentationCampaignEvidenceV1> {
     let registry = pubkey(&input.plan.registry.program_id)?;
     let claims = pubkey(&input.plan.claims.program_id)?;
@@ -509,14 +529,18 @@ pub(crate) fn run_structured_representation_campaign_v1(
         transactions,
     )?;
 
-    let initial = snapshot_state_v1(
+    let live_initial = snapshot_state_v1(
         input.rpc,
         descriptor,
         identities,
         &assets,
         input.minimum_finalized_slot,
     )?;
-    if initial
+    let plan_initial = input
+        .resume_checkpoints
+        .first()
+        .map_or(&live_initial, |checkpoint| &checkpoint.before);
+    if plan_initial
         .actor_native_claims
         .iter()
         .all(|balance| *balance == 0)
@@ -525,7 +549,7 @@ pub(crate) fn run_structured_representation_campaign_v1(
             "Structured representation founder Position has no native claim to denominate",
         ));
     }
-    let (probe_outcome, probe_quantity) = first_supported_outcome_v1(exposure, &initial)?;
+    let (probe_outcome, probe_quantity) = first_supported_outcome_v1(exposure, plan_initial)?;
     let mut actions = Vec::new();
     for action in [
         OpenActionV1::Denominate {
@@ -537,14 +561,16 @@ pub(crate) fn run_structured_representation_campaign_v1(
             quantity: probe_quantity,
         },
     ] {
-        actions.push(execute_open_action_v1(
+        record_open_action_v1(
             &mut input,
             descriptor,
             identities,
             &assets,
             action,
             transactions,
-        )?);
+            &mut actions,
+            persist_checkpoint,
+        )?;
     }
     for outcome in 0..descriptor.outcome_count() {
         let coefficient = descriptor.coefficient(outcome).map_err(|error| {
@@ -569,27 +595,36 @@ pub(crate) fn run_structured_representation_campaign_v1(
         let quantity = multiples.checked_mul(quantum).ok_or_else(|| {
             Error::new("Structured representation denomination quantity overflow")
         })?;
-        actions.push(execute_open_action_v1(
+        record_open_action_v1(
             &mut input,
             descriptor,
             identities,
             &assets,
             OpenActionV1::Denominate { outcome, quantity },
             transactions,
-        )?);
+            &mut actions,
+            persist_checkpoint,
+        )?;
     }
     for action in [
         OpenActionV1::Issue { quantity: 1 },
         OpenActionV1::Unwrap { quantity: 1 },
     ] {
-        actions.push(execute_open_action_v1(
+        record_open_action_v1(
             &mut input,
             descriptor,
             identities,
             &assets,
             action,
             transactions,
-        )?);
+            &mut actions,
+            persist_checkpoint,
+        )?;
+    }
+    if input.resume_checkpoints.len() != actions.len() {
+        return Err(Error::new(
+            "Structured representation journal contains an action beyond the canonical sequence",
+        ));
     }
     Ok(StructuredRepresentationCampaignEvidenceV1 {
         actor: input.actor.pubkey().to_string(),
@@ -598,6 +633,148 @@ pub(crate) fn run_structured_representation_campaign_v1(
         descriptor: hex32_v1(descriptor_id),
         actions,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_open_action_v1(
+    input: &mut StructuredRepresentationCampaignInputV1<'_>,
+    descriptor: RepresentationDescriptorV2<'_>,
+    identities: RepresentationIdentitiesV1,
+    assets: &[AssetIdentitiesV1],
+    action: OpenActionV1,
+    transactions: &mut Vec<TransactionEvidence>,
+    actions: &mut Vec<StructuredRepresentationActionEvidenceV1>,
+    persist_checkpoint: &mut dyn FnMut(&StructuredRepresentationActionCheckpointV1) -> Result<()>,
+) -> Result<()> {
+    let index = actions.len();
+    if let Some(checkpoint) = input.resume_checkpoints.get(index) {
+        let evidence = authenticate_resumed_checkpoint_v1(
+            input.rpc,
+            descriptor,
+            identities,
+            assets,
+            action,
+            checkpoint,
+            input.minimum_finalized_slot,
+            input.lifecycle_hot_outer.trading_program,
+            input.lifecycle_hot_outer.checked_manifest_digest,
+        )?;
+        transactions.push(checkpoint.transaction.clone());
+        actions.push(evidence);
+        return Ok(());
+    }
+    let (evidence, transaction) =
+        execute_open_action_v1(input, descriptor, identities, assets, action, transactions)?;
+    let checkpoint = StructuredRepresentationActionCheckpointV1 {
+        action: evidence.action.to_owned(),
+        outcome: evidence.outcome,
+        quantity: evidence.quantity,
+        family_digest: evidence.family_digest.clone(),
+        checked_manifest_digest: evidence.checked_manifest_digest.clone(),
+        transaction,
+        before: evidence.before.clone(),
+        after: evidence.after.clone(),
+    };
+    // The caller must atomically persist the complete new prefix before this
+    // function is allowed to construct the next action.
+    persist_checkpoint(&checkpoint)?;
+    actions.push(evidence);
+    Ok(())
+}
+
+fn authenticate_resumed_checkpoint_v1(
+    rpc: &mut Rpc,
+    descriptor: RepresentationDescriptorV2<'_>,
+    identities: RepresentationIdentitiesV1,
+    assets: &[AssetIdentitiesV1],
+    action: OpenActionV1,
+    checkpoint: &StructuredRepresentationActionCheckpointV1,
+    minimum_slot: u64,
+    trading_program: Pubkey,
+    checked_manifest_digest: [u8; 32],
+) -> Result<StructuredRepresentationActionEvidenceV1> {
+    checkpoint
+        .transaction
+        .signature
+        .parse::<Signature>()
+        .map_err(|error| {
+            Error::new(format!(
+                "Structured representation journal signature: {error}"
+            ))
+        })?;
+    if checkpoint.action != action.label()
+        || checkpoint.outcome != action.outcome()
+        || checkpoint.quantity != action.quantity()
+        || checkpoint.transaction.signature != checkpoint.transaction.signature.trim()
+        || checkpoint.transaction.slot != checkpoint.after.slot
+        || checkpoint.transaction.error.is_some()
+        || !checkpoint.transaction.transaction_metadata_available
+        || !checkpoint
+            .transaction
+            .instructions
+            .iter()
+            .any(|instruction| {
+                instruction.program_id == trading_program.to_string()
+                    && !instruction.data_hex.is_empty()
+            })
+        || !is_sha256_hex_v1(&checkpoint.family_digest)
+        || checkpoint.checked_manifest_digest != hex32_v1(checked_manifest_digest)
+    {
+        return Err(Error::new(
+            "Structured representation journal action or finalized transaction differs",
+        ));
+    }
+    verify_action_poststate_v1(descriptor, action, &checkpoint.before, &checkpoint.after)?;
+    let live = snapshot_state_v1(
+        rpc,
+        descriptor,
+        identities,
+        assets,
+        minimum_slot.max(checkpoint.after.slot),
+    )?;
+    if !same_representation_state_v1(&live, &checkpoint.after) {
+        return Err(Error::new(format!(
+            "Structured representation journal poststate differs before resumed {}",
+            action.label()
+        )));
+    }
+    Ok(StructuredRepresentationActionEvidenceV1 {
+        action: action.label(),
+        outcome: action.outcome(),
+        quantity: action.quantity(),
+        family_digest: checkpoint.family_digest.clone(),
+        checked_manifest_digest: checkpoint.checked_manifest_digest.clone(),
+        signature: checkpoint.transaction.signature.clone(),
+        slot: checkpoint.transaction.slot,
+        before: checkpoint.before.clone(),
+        after: checkpoint.after.clone(),
+    })
+}
+
+fn same_representation_state_v1(
+    live: &StructuredRepresentationStateEvidenceV1,
+    persisted: &StructuredRepresentationStateEvidenceV1,
+) -> bool {
+    live.replay_revision == persisted.replay_revision
+        && live.aggregate_revision == persisted.aggregate_revision
+        && live.actor_position_revision == persisted.actor_position_revision
+        && live.actor_native_claims == persisted.actor_native_claims
+        && live.custody_position_revisions == persisted.custody_position_revisions
+        && live.custody_native_claims == persisted.custody_native_claims
+        && live.shard_supplies == persisted.shard_supplies
+        && live.actor_shards == persisted.actor_shards
+        && live.structured_shards == persisted.structured_shards
+        && live.receipt_supply == persisted.receipt_supply
+        && live.actor_receipts == persisted.actor_receipts
+        && live.account_state_sha256 == persisted.account_state_sha256
+}
+
+fn is_sha256_hex_v1(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 /// Redeem one actor-owned shard coordinate after Core reaches Terminal.
@@ -737,9 +914,7 @@ pub(crate) fn run_structured_representation_terminal_v1(
         actor: input.common.actor.pubkey(),
     };
     let assets = derive_assets_v1(descriptor, identities, identities.actor)?;
-    let selected_asset = *assets
-        .get(usize::try_from(input.outcome).unwrap_or(usize::MAX))
-        .ok_or_else(|| Error::new("Structured terminal selected asset is absent"))?;
+    let selected_asset = supported_asset_v1(&assets, input.outcome)?;
     let terminal_bundle = input.common.selected_release.terminal.clone();
     let fixed = action_fixed_v1(
         &mut input.common,
@@ -1255,60 +1430,98 @@ fn derive_assets_v1(
     identities: RepresentationIdentitiesV1,
     actor: Pubkey,
 ) -> Result<Vec<AssetIdentitiesV1>> {
-    (0..descriptor.outcome_count())
-        .map(|outcome| {
-            let outcome_bytes = outcome.to_le_bytes();
-            let custody_owner = Pubkey::find_program_address(
-                &ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor.descriptor_id(), outcome)
-                    .map_err(|error| {
-                        Error::new(format!("Structured custody owner seeds: {error:?}"))
-                    })?
-                    .as_slices(),
-                &identities.claims,
-            )
-            .0;
-            let custody_position = Pubkey::find_program_address(
-                &ProtocolPositionSeedsV2::new(
-                    identities.aggregate.to_bytes(),
-                    custody_owner.to_bytes(),
-                )
-                .map_err(|error| {
-                    Error::new(format!("Structured custody Position seeds: {error:?}"))
-                })?
+    let mut assets = Vec::new();
+    for outcome in 0..descriptor.outcome_count() {
+        let coefficient = descriptor.coefficient(outcome).map_err(|error| {
+            Error::new(format!(
+                "Structured representation coefficient {outcome}: {error:?}"
+            ))
+        })?;
+        if coefficient == 0 {
+            continue;
+        }
+        let outcome_bytes = outcome.to_le_bytes();
+        let custody_owner = Pubkey::find_program_address(
+            &ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor.descriptor_id(), outcome)
+                .map_err(|error| Error::new(format!("Structured custody owner seeds: {error:?}")))?
                 .as_slices(),
-                &identities.claims,
+            &identities.claims,
+        )
+        .0;
+        let custody_position = Pubkey::find_program_address(
+            &ProtocolPositionSeedsV2::new(
+                identities.aggregate.to_bytes(),
+                custody_owner.to_bytes(),
             )
-            .0;
-            let shard_mint = Pubkey::find_program_address(
+            .map_err(|error| Error::new(format!("Structured custody Position seeds: {error:?}")))?
+            .as_slices(),
+            &identities.claims,
+        )
+        .0;
+        let shard_mint = Pubkey::find_program_address(
+            &[
+                RATIONAL_SHARD_MINT_SEED_V2,
+                &descriptor.descriptor_id(),
+                &outcome_bytes,
+            ],
+            &identities.claims,
+        )
+        .0;
+        assets.push(AssetIdentitiesV1 {
+            outcome,
+            custody_position,
+            shard_mint,
+            actor_shard: associated_token_account_v1(
+                actor,
+                shard_mint,
+                Pubkey::new_from_array(descriptor.token_program()),
+            ),
+            structured_custody: Pubkey::find_program_address(
                 &[
-                    RATIONAL_SHARD_MINT_SEED_V2,
+                    RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
                     &descriptor.descriptor_id(),
                     &outcome_bytes,
                 ],
                 &identities.claims,
             )
-            .0;
-            Ok(AssetIdentitiesV1 {
-                outcome,
-                custody_position,
-                shard_mint,
-                actor_shard: associated_token_account_v1(
-                    actor,
-                    shard_mint,
-                    Pubkey::new_from_array(descriptor.token_program()),
-                ),
-                structured_custody: Pubkey::find_program_address(
-                    &[
-                        RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
-                        &descriptor.descriptor_id(),
-                        &outcome_bytes,
-                    ],
-                    &identities.claims,
-                )
-                .0,
-            })
-        })
-        .collect()
+            .0,
+        });
+    }
+    Ok(assets)
+}
+
+fn supported_asset_v1(assets: &[AssetIdentitiesV1], outcome: u32) -> Result<AssetIdentitiesV1> {
+    assets
+        .iter()
+        .find(|asset| asset.outcome == outcome)
+        .copied()
+        .ok_or_else(|| Error::new("Structured selected outcome has zero descriptor support"))
+}
+
+fn supported_index_v1(descriptor: RepresentationDescriptorV2<'_>, outcome: u32) -> Result<usize> {
+    if outcome >= descriptor.outcome_count()
+        || descriptor
+            .coefficient(outcome)
+            .map_err(|error| Error::new(format!("Structured coefficient: {error:?}")))?
+            == 0
+    {
+        return Err(Error::new(
+            "Structured selected outcome has zero descriptor support",
+        ));
+    }
+    let mut supported = 0_usize;
+    for candidate in 0..outcome {
+        if descriptor
+            .coefficient(candidate)
+            .map_err(|error| Error::new(format!("Structured coefficient: {error:?}")))?
+            != 0
+        {
+            supported = supported
+                .checked_add(1)
+                .ok_or_else(|| Error::new("Structured support index overflow"))?;
+        }
+    }
+    Ok(supported)
 }
 
 fn materialize_holder_inputs_v1(
@@ -1331,7 +1544,10 @@ fn materialize_holder_inputs_v1(
         .ok_or_else(|| Error::new("Structured holder setup omitted replay"))?;
     let replay_lamports = replay.as_ref().map_or(0, |account| account.lamports);
     if replay.as_ref().is_some_and(|account| {
-        account.owner != system_program::ID || account.executable || !account.data.is_empty()
+        account.owner != identities.claims
+            && (account.owner != system_program::ID
+                || account.executable
+                || !account.data.is_empty())
     }) {
         return Err(Error::new(
             "Structured holder replay exists in a non-vacant prestate",
@@ -1339,7 +1555,10 @@ fn materialize_holder_inputs_v1(
     }
     let mut instructions = Vec::new();
     let replay_rent = rent.minimum_balance(RATIONAL_REPLAY_BYTES_V2);
-    if replay_lamports < replay_rent {
+    let replay_is_initialized = replay
+        .as_ref()
+        .is_some_and(|account| account.owner == identities.claims);
+    if !replay_is_initialized && replay_lamports < replay_rent {
         instructions.push(transfer(
             &payer.pubkey(),
             &identities.replay,
@@ -1444,7 +1663,10 @@ fn execute_open_action_v1(
     assets: &[AssetIdentitiesV1],
     action: OpenActionV1,
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<StructuredRepresentationActionEvidenceV1> {
+) -> Result<(
+    StructuredRepresentationActionEvidenceV1,
+    TransactionEvidence,
+)> {
     let (bundle_bodies, selected_bundle, structured_bundle) =
         match action.action() {
             RepresentationActionV2::Denominate => {
@@ -1514,12 +1736,7 @@ fn execute_open_action_v1(
     let rent = snapshot.rent()?;
     let selected_asset = action
         .outcome()
-        .map(|outcome| {
-            assets
-                .get(usize::try_from(outcome).unwrap_or(usize::MAX))
-                .copied()
-                .ok_or_else(|| Error::new("Structured selected outcome is outside descriptor"))
-        })
+        .map(|outcome| supported_asset_v1(assets, outcome))
         .transpose()?;
     let observed_assets = match selected_asset {
         Some(asset) => vec![asset_observation_v1(&snapshot, asset)?],
@@ -1737,20 +1954,24 @@ fn execute_open_action_v1(
     }
     let sent_slot = sent.slot;
     let signature = sent.signature.clone();
+    let transaction = sent.clone();
     transactions.push(sent);
     let after = snapshot_state_v1(input.rpc, descriptor, identities, assets, sent_slot)?;
     verify_action_poststate_v1(descriptor, action, &before, &after)?;
-    Ok(StructuredRepresentationActionEvidenceV1 {
-        action: action.label(),
-        outcome: action.outcome(),
-        quantity: action.quantity(),
-        family_digest: hex32_v1(family_digest),
-        checked_manifest_digest: hex32_v1(checked_manifest_digest),
-        signature,
-        slot: sent_slot,
-        before,
-        after,
-    })
+    Ok((
+        StructuredRepresentationActionEvidenceV1 {
+            action: action.label(),
+            outcome: action.outcome(),
+            quantity: action.quantity(),
+            family_digest: hex32_v1(family_digest),
+            checked_manifest_digest: hex32_v1(checked_manifest_digest),
+            signature,
+            slot: sent_slot,
+            before,
+            after,
+        },
+        transaction,
+    ))
 }
 
 fn action_snapshot_v1(
@@ -1777,11 +1998,7 @@ fn action_snapshot_v1(
         sysvar::rent::ID,
     ]);
     let action_assets: Vec<_> = match action.outcome() {
-        Some(outcome) => vec![
-            *assets
-                .get(usize::try_from(outcome).unwrap_or(usize::MAX))
-                .ok_or_else(|| Error::new("Structured selected action omitted asset"))?,
-        ],
+        Some(outcome) => vec![supported_asset_v1(assets, outcome)?],
         None => assets.to_vec(),
     };
     for asset in action_assets {
@@ -2499,8 +2716,7 @@ fn verify_action_poststate_v1(
     match action {
         OpenActionV1::Denominate { outcome, quantity }
         | OpenActionV1::Reconstitute { outcome, quantity } => {
-            let selected = usize::try_from(outcome)
-                .map_err(|_| Error::new("Structured selected outcome overflow"))?;
+            let selected = supported_index_v1(descriptor, outcome)?;
             let token_delta = descriptor
                 .denominator()
                 .checked_mul(quantity)
@@ -2614,11 +2830,14 @@ fn verify_action_poststate_v1(
                 ));
             }
             for outcome in 0..descriptor.outcome_count() {
-                let index = usize::try_from(outcome)
-                    .map_err(|_| Error::new("Structured receipt outcome overflow"))?;
-                let delta = descriptor
+                let coefficient = descriptor
                     .coefficient(outcome)
-                    .map_err(|error| Error::new(format!("Structured coefficient: {error:?}")))?
+                    .map_err(|error| Error::new(format!("Structured coefficient: {error:?}")))?;
+                if coefficient == 0 {
+                    continue;
+                }
+                let index = supported_index_v1(descriptor, outcome)?;
+                let delta = coefficient
                     .checked_mul(quantity)
                     .ok_or_else(|| Error::new("Structured receipt shard delta overflow"))?;
                 let (actor, custody) = match action {
@@ -2647,7 +2866,89 @@ fn verify_action_poststate_v1(
 
 #[cfg(test)]
 mod tests {
-    use super::{StructuredRepresentationTerminalStateEvidenceV1, verify_terminal_poststate_v1};
+    use dclutch_claims::rational_kernel::{
+        DescriptorAdmissionV2, RepresentationDescriptorV2,
+        descriptor_v3::{
+            RepresentationDescriptorInputV3, encode_representation_descriptor_v3_atomic,
+            representation_descriptor_bytes_v3,
+        },
+    };
+    use solana_sdk::pubkey::Pubkey;
+
+    use super::{
+        RepresentationIdentitiesV1, StructuredRepresentationTerminalStateEvidenceV1,
+        derive_assets_v1, supported_asset_v1, supported_index_v1, verify_terminal_poststate_v1,
+    };
+
+    fn sparse_descriptor() -> (Vec<u8>, [u8; 32]) {
+        let width = representation_descriptor_bytes_v3(3).expect("K3 descriptor width");
+        let mut scratch = vec![0; width];
+        let mut output = vec![0; width];
+        encode_representation_descriptor_v3_atomic(
+            RepresentationDescriptorInputV3 {
+                exposure_id: [1; 32],
+                exposure_digest: [2; 32],
+                root_id: [3; 32],
+                market: [4; 32],
+                release_set: [5; 32],
+                receipt_mint: [6; 32],
+                token_program: [7; 32],
+                denominator: 11,
+                coefficients: &[3, 0, 7],
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("sparse descriptor");
+        (output, [8; 32])
+    }
+
+    fn decode_descriptor(bytes: &[u8], id: [u8; 32]) -> RepresentationDescriptorV2<'_> {
+        RepresentationDescriptorV2::decode(
+            bytes,
+            DescriptorAdmissionV2 {
+                selected_descriptor_id: id,
+                finalized_descriptor_id: id,
+                recomputed_descriptor_digest: id,
+                finalized_descriptor_digest: id,
+                record_authenticated: true,
+                derived_representation_authority: [9; 32],
+                authority_derivation_authenticated: true,
+            },
+        )
+        .expect("authenticated sparse descriptor")
+    }
+
+    #[test]
+    fn sparse_descriptor_materializes_only_supported_coordinates() {
+        let (bytes, id) = sparse_descriptor();
+        let descriptor = decode_descriptor(&bytes, id);
+        let identities = RepresentationIdentitiesV1 {
+            claims: Pubkey::new_unique(),
+            registry: Pubkey::new_unique(),
+            aggregate: Pubkey::new_unique(),
+            actor_position: Pubkey::new_unique(),
+            replay: Pubkey::new_unique(),
+            receipt_mint: Pubkey::new_unique(),
+            actor_receipt: Pubkey::new_unique(),
+            actor: Pubkey::new_unique(),
+        };
+        let assets = derive_assets_v1(descriptor, identities, identities.actor)
+            .expect("supported asset derivation");
+        assert_eq!(
+            assets.iter().map(|asset| asset.outcome).collect::<Vec<_>>(),
+            [0, 2]
+        );
+        assert_eq!(supported_index_v1(descriptor, 0).expect("support 0"), 0);
+        assert_eq!(supported_index_v1(descriptor, 2).expect("support 2"), 1);
+        assert_eq!(
+            supported_asset_v1(&assets, 1)
+                .err()
+                .expect("zero support has no coordinate")
+                .to_string(),
+            "Structured selected outcome has zero descriptor support"
+        );
+    }
 
     fn terminal_state() -> StructuredRepresentationTerminalStateEvidenceV1 {
         StructuredRepresentationTerminalStateEvidenceV1 {

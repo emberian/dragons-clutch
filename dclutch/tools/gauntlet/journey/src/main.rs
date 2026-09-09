@@ -278,6 +278,8 @@ mod structured_market;
 mod structured_physical_frame;
 #[path = "../../../local-validator/bootstrap/successor/src/structured_representation_campaign.rs"]
 mod structured_representation_campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_native_settlement.rs"]
+mod structured_native_settlement;
 #[path = "../../../local-validator/bootstrap/successor/src/terminal_exterior_pyth.rs"]
 #[allow(dead_code)]
 mod terminal_exterior_pyth;
@@ -425,6 +427,12 @@ fn run() -> Result<()> {
         Some("economics") => {
             economics_campaign::execute(parse_journey_request(arguments.collect())?)
         }
+        Some(structured_campaign::COMMAND_V1) => {
+            structured_campaign::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(structured_campaign::PROFILE_REPLAY_COMMAND_V1) => {
+            structured_campaign::run_profile_capture_replay_v1(arguments.collect())
+        }
         Some("structured-claims") => {
             structured_claims_campaign::execute(parse_journey_request(arguments.collect())?)
         }
@@ -504,6 +512,16 @@ fn parse_journey_request(arguments: Vec<String>) -> Result<journey::JourneyReque
         expected_source_tree_sha256: required("--expected-source-tree-sha256")?,
         seed: required("--seed")?,
         holder_count,
+        hold_after_participant: values
+            .get("--hold-after-participant")
+            .cloned()
+            .map(|value| absolute(value, "--hold-after-participant"))
+            .transpose()?,
+        bootstrap_bin: values
+            .get("--bootstrap-bin")
+            .cloned()
+            .map(|value| absolute(value, "--bootstrap-bin"))
+            .transpose()?,
     };
     Ok(request)
 }

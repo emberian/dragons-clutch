@@ -59,9 +59,10 @@ use crate::hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint;
 
 /// The accelerator's scoring arm: the same kernel over the fill witness.
 pub mod accelerator;
+/// Drain and physically close one terminal fund.
+pub mod close;
 /// `DealerFill`.
 pub mod fill;
-/// `DealerFound`.
 pub mod found;
 /// `DealerQuote`.
 pub mod quote;
@@ -71,8 +72,8 @@ pub mod redeem;
 pub mod withdraw;
 
 pub use dclutch_trading::scoring_rule::requests_v1::{
-    is_dealer_fill_v1, is_dealer_found_v1, is_dealer_quote_v1, is_dealer_redeem_v1,
-    is_dealer_withdraw_v1,
+    is_dealer_close_v1, is_dealer_fill_v1, is_dealer_found_v1, is_dealer_quote_v1,
+    is_dealer_redeem_v1, is_dealer_withdraw_v1,
 };
 
 /// The scoring Dealer's refusals: Trading band 4, sub-band `0x100`.
@@ -159,6 +160,18 @@ pub enum ScoringDealerErrorV1 {
     RedeemContext = 0x421D,
     /// Accepted terminal payout differs from the exact vault delta.
     RedeemCashPoststate = 0x421E,
+    /// Recorded or physical collateral remains.
+    CloseCash = 0x421F,
+    /// The fund still owns Claims balances.
+    CloseInventory = 0x4220,
+    /// A Trading record is not the canonical fund resource.
+    CloseRecord = 0x4221,
+    /// A close child or its exact receipt disagrees.
+    CloseChild = 0x4222,
+    /// Physical closure or rent conservation failed.
+    ClosePoststate = 0x4223,
+    /// A refund destination differs from its recorded beneficiary.
+    CloseBeneficiary = 0x4224,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -195,7 +208,13 @@ dclutch_refusal_registry::pin_refusal_band!(
         OutcomeCount,
         RedeemDestination,
         RedeemContext,
-        RedeemCashPoststate
+        RedeemCashPoststate,
+        CloseCash,
+        CloseInventory,
+        CloseRecord,
+        CloseChild,
+        ClosePoststate,
+        CloseBeneficiary
     ]
 );
 

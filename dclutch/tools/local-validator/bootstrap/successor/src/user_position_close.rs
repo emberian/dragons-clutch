@@ -25,9 +25,9 @@ use dclutch_operator::{
         UserPositionClosePlanV1, UserPositionCloseSnapshotV1, plan_user_position_close_v1,
     },
 };
+use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
-use dclutch_registry::release_set::ExecutionRoleV1;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{
@@ -45,7 +45,7 @@ use crate::{
     },
     rpc::{Rpc, WritePolicyV1},
     terminal_lifecycle::{authenticate_plan_source, finalized_snapshot},
-    user_position_admission::parse_finalized_direct_participant_evidence_for_cluster_v1,
+    user_position_admission::parse_finalized_position_admission_evidence_for_cluster_v1,
 };
 
 /// Owned-loopback command name.
@@ -57,7 +57,7 @@ pub(crate) const COMMAND_DEVNET_V1: &str = "devnet-user-position-close-v1";
 pub(crate) fn usage() -> &'static str {
     "dclutch-local-successor-bootstrap local-private-validator-user-position-close-v1 --rpc-url http://127.0.0.1:PORT (--participant-evidence ABSOLUTE_JSON | --direct-evidence ABSOLUTE_JSON --plan ABSOLUTE_JSON --market-input ABSOLUTE_JSON --campaign-evidence ABSOLUTE_JSON --position-owner PUBKEY) --fee-payer FEE_PAYER --evidence ABSOLUTE_NEW_JSON [--execute --position-owner-keypair ABSOLUTE_JSON --fee-payer-keypair ABSOLUTE_JSON]\n\
      dclutch-local-successor-bootstrap devnet-user-position-close-v1 --rpc-url URL --i-mean-devnet GENESIS_HASH (--participant-evidence ABSOLUTE_JSON | --direct-evidence ABSOLUTE_JSON --plan ABSOLUTE_JSON --market-input ABSOLUTE_JSON --campaign-evidence ABSOLUTE_JSON --position-owner PUBKEY) --fee-payer FEE_PAYER --evidence ABSOLUTE_NEW_JSON [--execute --position-owner-keypair ABSOLUTE_JSON --fee-payer-keypair ABSOLUTE_JSON]\n\
-     \nCloses one terminal zero-vector wallet Position and its admission record through the wallet-authorized Trading outer and the canonical Claims Close action. The participant arm reopens finalized admission/collateral history. The Direct terminal arm reopens the exact signed manifest, durable mutation journals, and finalized transaction history after payouts, then admits only an authenticated seller or buyer Position. Every current program, immutable admission baseline, live balance, and RentCredit fact is read from one finalized snapshot. A donated lamport cannot veto this close: the predicted and observed receipt must conserve the complete live balances into the Market's RentCredit. Without --execute this is a dry run that opens no key and sends nothing."
+     \nCloses one terminal zero-vector wallet Position and its admission record through the wallet-authorized Trading outer and the canonical Claims Close action. The participant arm reopens finalized admission history; collateral preparation is unrelated to the authority to close an empty Position. The Direct terminal arm reopens the exact signed manifest, durable mutation journals, and finalized transaction history after payouts, then admits only an authenticated seller or buyer Position. Every current program, immutable admission baseline, live balance, and RentCredit fact is read from one finalized snapshot. A donated lamport cannot veto this close: the predicted and observed receipt must conserve the complete live balances into the Market's RentCredit. Without --execute this is a dry run that opens no key and sends nothing."
 }
 
 #[derive(Debug)]
@@ -292,7 +292,7 @@ fn authenticate_close_source_v1(
     match arguments {
         SourceArgumentsV1::Participant { evidence } => {
             let bytes = read_source_v1(evidence, "participant evidence")?;
-            let participant = parse_finalized_direct_participant_evidence_for_cluster_v1(
+            let participant = parse_finalized_position_admission_evidence_for_cluster_v1(
                 &bytes,
                 rpc,
                 expected_cluster,

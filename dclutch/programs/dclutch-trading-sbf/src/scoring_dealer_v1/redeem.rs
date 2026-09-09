@@ -242,7 +242,7 @@ fn authenticate_redemption_child(
     Ok(())
 }
 
-fn token_amount(account: &AccountInfo<'_>) -> Result<u64, ProgramError> {
+pub(crate) fn token_amount(account: &AccountInfo<'_>) -> Result<u64, ProgramError> {
     let bytes = account.try_borrow_data().map_err(|_| Error::Custody)?;
     TokenAccount::parse_base_or_immutable_owner(&bytes)
         .map(|token| token.amount)

@@ -18,17 +18,17 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **466** codes, with meanings taken
+The tables below carry all **472** codes, with meanings taken
 from the source code's own documentation.
 
 ## Checked firings and binding claims
 
-**4 of 466** codes have a checked firing in a durable
+**4 of 472** codes have a checked firing in a durable
 census ledger. The `checked firing` column names the campaign and slot from an
 observation that `census observe` admitted using the finalized log's exact
 custom code and the program address that raised it.
 
-A separate **84 of 466** codes appear in authored
+A separate **84 of 472** codes appear in authored
 refusal bindings. The `binding claim` column preserves those campaign claims
 without calling them observed. A binding can be written before its evidence is
 folded or survive after a run artifact disappears; it never promotes itself
@@ -40,7 +40,7 @@ Without a checked ledger row, this page does not say which program or code
 actually refused.
 
 **And the denominator is the narrower of two.** These tables carry the
-466 codes belonging to the programs the route census enumerates.
+472 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -403,28 +403,28 @@ The 23 campaigns contributing binding claims:
 
 | code | refusal | meaning | checked firing | binding claim | provenance |
 | --- | --- | --- | --- | --- | --- |
-| `0x1000` | `RegistryError::Instruction` | Instruction bytes were not the one canonical Registry wire. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:83` |
-| `0x1001` | `RegistryError::AccountFrame` | Account count, order, privilege, or aliasing was invalid. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:85` |
-| `0x1002` | `RegistryError::FinalizedRecord` | A finalized record owner, digest, PDA, rent, or vacancy proof refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:87` |
-| `0x1003` | `RegistryError::Deployment` | Loader Program, ProgramData, linkage, slot, ELF, or authority refused. | -- | tier1; tier4-series-occurrence-programtest | `programs/dclutch-registry-sbf/src/lib.rs:89` |
-| `0x1004` | `RegistryError::Release` | Release-set or artifact semantic admission refused. | -- | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:91` |
-| `0x1005` | `RegistryError::ActivationCache` | The activation cache owner, PDA, bytes, or lifecycle refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:93` |
-| `0x1006` | `RegistryError::CreateCpi` | System account creation failed or produced the wrong account. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:95` |
-| `0x1007` | `RegistryError::Borrow` | Account data could not be borrowed. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:97` |
-| `0x1008` | `RegistryError::Arithmetic` | Checked width or lamport arithmetic refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:99` |
-| `0x1009` | `RegistryError::Sysvar` | Clock-independent Rent or native-program authentication refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:101` |
-| `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:103` |
-| `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:105` |
-| `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | -- | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:107` |
-| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:115` |
-| `0x100E` | `RegistryError::ReleaseLineageAlreadyDeclared` | This release set already declared a successor, and lineage never forks. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:121` |
-| `0x100F` | `RegistryError::ReleaseLineageRoleIdentityMoved` | A declared hop changed some role's program id. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:127` |
-| `0x1010` | `RegistryError::ReleaseLineageSelfSuccession` | A declaration named one release set as its own successor. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:129` |
-| `0x1011` | `RegistryError::ReleaseLineageAuthorityMissing` | A moved role's consenting upgrade authority did not sign, or cannot. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:137` |
-| `0x1012` | `RegistryError::ReleaseLineageNotForward` | A moved role's successor deployment slot was not strictly later. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:143` |
-| `0x1013` | `RegistryError::ArtifactReleaseDeploymentFrame` | An `ArtifactRelease` was finalized without its deployment in the frame. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:157` |
-| `0x1014` | `RegistryError::ArtifactReleaseNotDeployed` | An `ArtifactRelease` did not describe the deployment at its own address. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:171` |
-| `0x1015` | `RegistryError::ArtifactReleaseElfMismatch` | A deployment is at that address and it is not the release's bytes. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:187` |
+| `0x1000` | `RegistryError::Instruction` | Instruction bytes were not the one canonical Registry wire. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:84` |
+| `0x1001` | `RegistryError::AccountFrame` | Account count, order, privilege, or aliasing was invalid. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:86` |
+| `0x1002` | `RegistryError::FinalizedRecord` | A finalized record owner, digest, PDA, rent, or vacancy proof refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:88` |
+| `0x1003` | `RegistryError::Deployment` | Loader Program, ProgramData, linkage, slot, ELF, or authority refused. | -- | tier1; tier4-series-occurrence-programtest | `programs/dclutch-registry-sbf/src/lib.rs:90` |
+| `0x1004` | `RegistryError::Release` | Release-set or artifact semantic admission refused. | -- | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:92` |
+| `0x1005` | `RegistryError::ActivationCache` | The activation cache owner, PDA, bytes, or lifecycle refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:94` |
+| `0x1006` | `RegistryError::CreateCpi` | System account creation failed or produced the wrong account. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:96` |
+| `0x1007` | `RegistryError::Borrow` | Account data could not be borrowed. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:98` |
+| `0x1008` | `RegistryError::Arithmetic` | Checked width or lamport arithmetic refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:100` |
+| `0x1009` | `RegistryError::Sysvar` | Clock-independent Rent or native-program authentication refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:102` |
+| `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:104` |
+| `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:106` |
+| `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | -- | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:108` |
+| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:116` |
+| `0x100E` | `RegistryError::ReleaseLineageAlreadyDeclared` | This release set already declared a successor, and lineage never forks. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:122` |
+| `0x100F` | `RegistryError::ReleaseLineageRoleIdentityMoved` | A declared hop changed some role's program id. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:128` |
+| `0x1010` | `RegistryError::ReleaseLineageSelfSuccession` | A declaration named one release set as its own successor. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:130` |
+| `0x1011` | `RegistryError::ReleaseLineageAuthorityMissing` | A moved role's consenting upgrade authority did not sign, or cannot. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:138` |
+| `0x1012` | `RegistryError::ReleaseLineageNotForward` | A moved role's successor deployment slot was not strictly later. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:144` |
+| `0x1013` | `RegistryError::ArtifactReleaseDeploymentFrame` | An `ArtifactRelease` was finalized without its deployment in the frame. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:158` |
+| `0x1014` | `RegistryError::ArtifactReleaseNotDeployed` | An `ArtifactRelease` did not describe the deployment at its own address. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:172` |
+| `0x1015` | `RegistryError::ArtifactReleaseElfMismatch` | A deployment is at that address and it is not the release's bytes. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:188` |
 
 ## rent
 
@@ -552,34 +552,40 @@ The 23 campaigns contributing binding claims:
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | -- | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:48` |
 | `0x4103` | `SeriesAccountErrorV3::Creation` | System creation or direct lamport transfer failed. | -- | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4104` | `SeriesAccountErrorV3::Commit` | Core acknowledgement or final state write refused. | -- | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
-| `0x4200` | `ScoringDealerErrorV1::Frame` | Account count, a privilege, or an alias inside the prefix. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:83` |
-| `0x4201` | `ScoringDealerErrorV1::Request` | The wire did not decode as the route's one request. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:85` |
-| `0x4202` | `ScoringDealerErrorV1::Market` | Not the canonical Core Market, or the request disagrees with it. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:87` |
-| `0x4203` | `ScoringDealerErrorV1::Release` | The activation cache or the Trading role it names. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:89` |
-| `0x4204` | `ScoringDealerErrorV1::RuleSeal` | The rule PDA, its body, or the fund's `rule_digest`. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:91` |
-| `0x4205` | `ScoringDealerErrorV1::Parameters` | `parametersAdmissible` false. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:93` |
-| `0x4206` | `ScoringDealerErrorV1::Subsidy` | The recorded subsidy is not `subsidyOf`, or the deposit is short. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:95` |
-| `0x4207` | `ScoringDealerErrorV1::Fund` | The fund PDA, its body, its owner, or its Market/Dealer. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:97` |
-| `0x4208` | `ScoringDealerErrorV1::FundStale` | The request named a fund revision the fund has left. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:99` |
-| `0x4209` | `ScoringDealerErrorV1::Position` | The Dealer's Claims Position PDA or body. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:101` |
-| `0x420A` | `ScoringDealerErrorV1::Width` | R0: a coordinate at or past the outcome count is nonzero. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:103` |
-| `0x420B` | `ScoringDealerErrorV1::Deliverable` | R0: the Dealer cannot deliver what the fill asks. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:105` |
-| `0x420C` | `ScoringDealerErrorV1::NonCanonical` | R0: a coordinate both receives and delivers. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:107` |
-| `0x420D` | `ScoringDealerErrorV1::NotNormalized` | R1: the post-fill inventory holds a complete set. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:109` |
-| `0x420E` | `ScoringDealerErrorV1::OffSchedule` | R2: the price is not the Dealer's marginal price at its post-fill state. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:111` |
-| `0x420F` | `ScoringDealerErrorV1::Uncovered` | R3: the debit exceeds what the potential allows. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:113` |
-| `0x4210` | `ScoringDealerErrorV1::PricesNotSimplex` | The price vector is not a simplex at the rule's scale. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:115` |
-| `0x4211` | `ScoringDealerErrorV1::WithdrawBelowFloor` | The withdrawal exceeds `Φ`. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:117` |
-| `0x4212` | `ScoringDealerErrorV1::Sponsor` | The signer is not the fund's sponsor. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:119` |
-| `0x4213` | `ScoringDealerErrorV1::Custody` | A vault, token account, Custody replay or Custody receipt disagrees. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:121` |
-| `0x4214` | `ScoringDealerErrorV1::Claims` | The aggregate, a Position, or a Claims receipt disagrees. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:123` |
-| `0x4215` | `ScoringDealerErrorV1::Overflow` | A checked intermediate left `u128`; unreachable under `Parameters`. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:125` |
-| `0x4216` | `ScoringDealerErrorV1::Commit` | A write-back found bytes another instruction moved. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:127` |
-| `0x4217` | `ScoringDealerErrorV1::Phase` | The fund is retired, or the Market's phase refuses this route. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:129` |
-| `0x4218` | `ScoringDealerErrorV1::Quote` | The quote PDA or its body. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:131` |
-| `0x4219` | `ScoringDealerErrorV1::Basis` | The account offered as this Market's basis record is not it. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:138` |
-| `0x421A` | `ScoringDealerErrorV1::ClaimUnit` | The founding's `claim_unit_atoms` is not the basis record's `payout_scale`. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:147` |
-| `0x421B` | `ScoringDealerErrorV1::OutcomeCount` | The rule's `K` is not this Market's ordinary outcome count. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:155` |
-| `0x421C` | `ScoringDealerErrorV1::RedeemDestination` | Redemption must credit the same fund's TradingPrincipal vault. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:157` |
-| `0x421D` | `ScoringDealerErrorV1::RedeemContext` | Terminal child context disagrees with its fund and selected release. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:159` |
-| `0x421E` | `ScoringDealerErrorV1::RedeemCashPoststate` | Accepted terminal payout differs from the exact vault delta. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:161` |
+| `0x4200` | `ScoringDealerErrorV1::Frame` | Account count, a privilege, or an alias inside the prefix. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:84` |
+| `0x4201` | `ScoringDealerErrorV1::Request` | The wire did not decode as the route's one request. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:86` |
+| `0x4202` | `ScoringDealerErrorV1::Market` | Not the canonical Core Market, or the request disagrees with it. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:88` |
+| `0x4203` | `ScoringDealerErrorV1::Release` | The activation cache or the Trading role it names. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:90` |
+| `0x4204` | `ScoringDealerErrorV1::RuleSeal` | The rule PDA, its body, or the fund's `rule_digest`. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:92` |
+| `0x4205` | `ScoringDealerErrorV1::Parameters` | `parametersAdmissible` false. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:94` |
+| `0x4206` | `ScoringDealerErrorV1::Subsidy` | The recorded subsidy is not `subsidyOf`, or the deposit is short. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:96` |
+| `0x4207` | `ScoringDealerErrorV1::Fund` | The fund PDA, its body, its owner, or its Market/Dealer. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:98` |
+| `0x4208` | `ScoringDealerErrorV1::FundStale` | The request named a fund revision the fund has left. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:100` |
+| `0x4209` | `ScoringDealerErrorV1::Position` | The Dealer's Claims Position PDA or body. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:102` |
+| `0x420A` | `ScoringDealerErrorV1::Width` | R0: a coordinate at or past the outcome count is nonzero. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:104` |
+| `0x420B` | `ScoringDealerErrorV1::Deliverable` | R0: the Dealer cannot deliver what the fill asks. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:106` |
+| `0x420C` | `ScoringDealerErrorV1::NonCanonical` | R0: a coordinate both receives and delivers. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:108` |
+| `0x420D` | `ScoringDealerErrorV1::NotNormalized` | R1: the post-fill inventory holds a complete set. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:110` |
+| `0x420E` | `ScoringDealerErrorV1::OffSchedule` | R2: the price is not the Dealer's marginal price at its post-fill state. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:112` |
+| `0x420F` | `ScoringDealerErrorV1::Uncovered` | R3: the debit exceeds what the potential allows. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:114` |
+| `0x4210` | `ScoringDealerErrorV1::PricesNotSimplex` | The price vector is not a simplex at the rule's scale. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:116` |
+| `0x4211` | `ScoringDealerErrorV1::WithdrawBelowFloor` | The withdrawal exceeds `Φ`. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:118` |
+| `0x4212` | `ScoringDealerErrorV1::Sponsor` | The signer is not the fund's sponsor. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:120` |
+| `0x4213` | `ScoringDealerErrorV1::Custody` | A vault, token account, Custody replay or Custody receipt disagrees. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:122` |
+| `0x4214` | `ScoringDealerErrorV1::Claims` | The aggregate, a Position, or a Claims receipt disagrees. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:124` |
+| `0x4215` | `ScoringDealerErrorV1::Overflow` | A checked intermediate left `u128`; unreachable under `Parameters`. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:126` |
+| `0x4216` | `ScoringDealerErrorV1::Commit` | A write-back found bytes another instruction moved. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:128` |
+| `0x4217` | `ScoringDealerErrorV1::Phase` | The fund is retired, or the Market's phase refuses this route. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:130` |
+| `0x4218` | `ScoringDealerErrorV1::Quote` | The quote PDA or its body. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:132` |
+| `0x4219` | `ScoringDealerErrorV1::Basis` | The account offered as this Market's basis record is not it. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:139` |
+| `0x421A` | `ScoringDealerErrorV1::ClaimUnit` | The founding's `claim_unit_atoms` is not the basis record's `payout_scale`. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:148` |
+| `0x421B` | `ScoringDealerErrorV1::OutcomeCount` | The rule's `K` is not this Market's ordinary outcome count. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:156` |
+| `0x421C` | `ScoringDealerErrorV1::RedeemDestination` | Redemption must credit the same fund's TradingPrincipal vault. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:158` |
+| `0x421D` | `ScoringDealerErrorV1::RedeemContext` | Terminal child context disagrees with its fund and selected release. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:160` |
+| `0x421E` | `ScoringDealerErrorV1::RedeemCashPoststate` | Accepted terminal payout differs from the exact vault delta. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:162` |
+| `0x421F` | `ScoringDealerErrorV1::CloseCash` | Recorded or physical collateral remains. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:164` |
+| `0x4220` | `ScoringDealerErrorV1::CloseInventory` | The fund still owns Claims balances. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:166` |
+| `0x4221` | `ScoringDealerErrorV1::CloseRecord` | A Trading record is not the canonical fund resource. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:168` |
+| `0x4222` | `ScoringDealerErrorV1::CloseChild` | A close child or its exact receipt disagrees. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:170` |
+| `0x4223` | `ScoringDealerErrorV1::ClosePoststate` | Physical closure or rent conservation failed. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:172` |
+| `0x4224` | `ScoringDealerErrorV1::CloseBeneficiary` | A refund destination differs from its recorded beneficiary. | -- | -- | `programs/dclutch-trading-sbf/src/scoring_dealer_v1/mod.rs:174` |

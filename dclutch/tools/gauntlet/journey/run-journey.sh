@@ -58,6 +58,14 @@ usage: tools/gauntlet/journey/run-journey.sh --checked-release-gate PATH [option
   --rpc-port PORT|auto  validator base (default: auto; a free 42-port block)
   --work PATH           scratch root (default: /private/tmp/dclutch-journey)
   --holders N           synthetic holder count, the load knob (default: 4)
+  --hold-after-participant PATH
+                        Write a private native-census handoff after accepted
+                        participant admission, then SIGSTOP before Direct fill.
+                        SIGCONT performs cleanup after the external lifecycle;
+                        it does not submit the journey's duplicate fill.
+  --bootstrap-bin PATH  Successor host exported in the handoff (default: the
+                        checked gate's product-handoff binary). Use an explicit
+                        current host for a declared host/runtime source split.
   --census              fold this run's evidence into the shared census ledger
   --gauntlet-work PATH  the shared gauntlet root whose inventory and ledger the
                         census fold reads (default: /private/tmp/dclutch-gauntlet)
@@ -80,6 +88,8 @@ RPC_PORT="auto"
 WORK="/private/tmp/dclutch-journey"
 WORKTREE=0
 HOLDERS="4"
+HOLD_AFTER_PARTICIPANT=""
+BOOTSTRAP_BIN_OVERRIDE=""
 CENSUS=0
 GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
 
@@ -91,6 +101,8 @@ while [ "$#" -gt 0 ]; do
         --rpc-port) RPC_PORT="${2:?--rpc-port needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --holders) HOLDERS="${2:?--holders needs a value}"; shift 2 ;;
+        --hold-after-participant) HOLD_AFTER_PARTICIPANT="${2:?--hold-after-participant needs a value}"; shift 2 ;;
+        --bootstrap-bin) BOOTSTRAP_BIN_OVERRIDE="${2:?--bootstrap-bin needs a value}"; shift 2 ;;
         --census) CENSUS=1; shift ;;
         --gauntlet-work) GAUNTLET_WORK="${2:?--gauntlet-work needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -104,6 +116,15 @@ case "$GATE" in /*) ;; *) die "--checked-release-gate must be an absolute path" 
 case "$WORK" in /*) ;; *) die "--work must be absolute" ;; esac
 case "$HOLDERS" in ''|*[!0-9]*) die "--holders must be a decimal count" ;; esac
 [ "$HOLDERS" -gt 0 ] || die "--holders must be positive"
+if [ -n "$HOLD_AFTER_PARTICIPANT" ]; then
+    case "$HOLD_AFTER_PARTICIPANT" in /*) ;; *) die "--hold-after-participant must be absolute" ;; esac
+    [ ! -e "$HOLD_AFTER_PARTICIPANT" ] || die "--hold-after-participant must not already exist"
+fi
+if [ -n "$BOOTSTRAP_BIN_OVERRIDE" ]; then
+    [ -n "$HOLD_AFTER_PARTICIPANT" ] || die "--bootstrap-bin is only used with --hold-after-participant"
+    case "$BOOTSTRAP_BIN_OVERRIDE" in /*) ;; *) die "--bootstrap-bin must be absolute" ;; esac
+    [ -x "$BOOTSTRAP_BIN_OVERRIDE" ] || die "--bootstrap-bin must be executable: $BOOTSTRAP_BIN_OVERRIDE"
+fi
 if [ "$RPC_PORT" != "auto" ]; then
     case "$RPC_PORT" in ''|*[!0-9]*) die "--rpc-port must be a decimal port or 'auto'" ;; esac
     [ "$RPC_PORT" -ge 1024 ] && [ "$RPC_PORT" -le 65494 ] \
@@ -233,6 +254,11 @@ JOURNEY_ARGS=(run
     --expected-source-tree-sha256 "$GATE_TREE"
     --seed "$SEED"
     --holders "$HOLDERS")
+if [ -n "$HOLD_AFTER_PARTICIPANT" ]; then
+    BOOTSTRAP_BIN="${BOOTSTRAP_BIN_OVERRIDE:-$(dirname "$GATE")/product-handoff/dclutch-local-successor-bootstrap}"
+    [ -x "$BOOTSTRAP_BIN" ] || die "checked bootstrap binary missing or not executable: $BOOTSTRAP_BIN"
+    JOURNEY_ARGS+=(--hold-after-participant "$HOLD_AFTER_PARTICIPANT" --bootstrap-bin "$BOOTSTRAP_BIN")
+fi
 
 STATUS=0
 if ! "$JOURNEY_BIN" "${JOURNEY_ARGS[@]}" \

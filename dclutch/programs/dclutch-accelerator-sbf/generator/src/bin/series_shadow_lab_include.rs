@@ -167,7 +167,7 @@ fn run() -> Result<(), String> {
         },
         lifecycle: &release.lifecycle,
         fixed_data_lengths: &lengths,
-        child_requests,
+        funding_count: 1,
     };
 
     let compiled = compile_series_shadow_bundle_v4(source)

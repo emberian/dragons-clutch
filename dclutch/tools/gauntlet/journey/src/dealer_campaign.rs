@@ -427,6 +427,21 @@ fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
         ));
     }
     progress.stages.push(json!({"stage":"complete sponsor collateral exit","outcome":"executed","withdrawnAtoms":remaining,"vaultAtoms":0}));
+    drive(
+        progress,
+        &mut rpc,
+        &request.work,
+        "dealer-close",
+        &common,
+        vec![
+            "--fee-payer".into(),
+            taker.pubkey().to_string(),
+            "--fee-payer-keypair".into(),
+            taker_key.clone(),
+        ],
+        crate::scoring_dealer::run_close_campaign_v1,
+    )?;
+
     Ok(())
 }
 

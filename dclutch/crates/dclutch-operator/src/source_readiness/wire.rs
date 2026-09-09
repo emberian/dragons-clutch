@@ -216,6 +216,8 @@ struct CloseFrameWireV1 {
     readiness: FrameWireV1,
     certificate: String,
     closure_receipt: String,
+    #[serde(default)]
+    retirement_artifacts: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -844,6 +846,12 @@ pub fn plan_source_close_fund_json_v1(source: &[u8]) -> Result<String, String> {
         readiness: decode_frame(wire.frame.readiness)?,
         certificate: exact_key(&wire.frame.certificate, "terminal certificate")?,
         closure_receipt: exact_key(&wire.frame.closure_receipt, "closure receipt")?,
+        retirement_artifacts: wire
+            .frame
+            .retirement_artifacts
+            .iter()
+            .map(|key| exact_key(key, "retirement artifact"))
+            .collect::<Result<Vec<_>, _>>()?,
     };
     let mut total = 0_usize;
     let mut accounts = Vec::with_capacity(wire.accounts.len());

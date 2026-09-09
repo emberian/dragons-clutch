@@ -6,8 +6,9 @@
 //!
 //! This program is the sole writer of the release-set activation cache. It
 //! authenticates finalized headerless records, parses current Loader V3 state,
-//! hashes the complete deployed ELF tail of the role being admitted, invokes
-//! the SDK-free Registry contract once, and persists only that derived result.
+//! reuses the digest that finalization checked for immutable deployments (and
+//! hashes upgradeable deployments), invokes the SDK-free Registry contract
+//! once, and persists only that derived result.
 //! Capability programs may CPI into the read-only reauthentication route and
 //! consume its fixed return-data receipt after checking this program as the
 //! producer.
@@ -41,8 +42,8 @@ use dclutch_registry::svm::{
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1, put_activation_cache_bump_v1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    activate_execution_role_into_v1, initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use solana_program::{
     account_info::{AccountInfo, next_account_info},
@@ -479,7 +480,21 @@ fn authenticate_artifact_role(
         return Err(RegistryError::Release.into());
     }
     drop(data);
-    let observation = deployment_observation(frame.program, frame.programdata, release)?;
+    // Finalizing an ArtifactRelease already compared its claimed digest with
+    // the complete live ELF. If that admitted deployment is immutable and its
+    // ProgramData still has no authority, the Loader cannot change those bytes:
+    // recheck the pinned slot/link/owners and carry the admitted digest forward.
+    // Upgradeable releases keep the complete hash here. Besides preserving
+    // their independent first activation check, this catches even a hostile
+    // same-slot byte substitution instead of relying on Loader scheduling.
+    let observation = match release.upgrade_policy() {
+        ArtifactUpgradePolicyV1::Immutable => {
+            cached_role_deployment_observation(frame.program, frame.programdata, release)?
+        }
+        ArtifactUpgradePolicyV1::ExactAuthority => {
+            deployment_observation(frame.program, frame.programdata, release)?
+        }
+    };
     Ok(ArtifactActivationInputV1::new(
         expected.artifact_release(),
         release,
@@ -489,11 +504,12 @@ fn authenticate_artifact_role(
 
 /// Observe one deployment already admitted into the activation cache.
 ///
-/// Activation hashed this artifact's complete ELF once, before the cache
-/// persisted `release`. `immutable_release_elf_digest_v1` owns the argument
-/// that an immutable Loader V3 deployment's admitted digest is therefore still
-/// its exact current digest: the release must be `Immutable`, carry no upgrade
-/// authority, and the observed ProgramData must currently carry none either.
+/// ArtifactRelease finalization hashed this artifact's complete ELF once,
+/// before activation could consume the Registry-owned record.
+/// `immutable_release_elf_digest_v1` owns the argument that an immutable Loader
+/// V3 deployment's admitted digest is therefore still its exact current digest:
+/// the release must be `Immutable`, carry no upgrade authority, and the
+/// observed ProgramData must currently carry none either.
 /// Re-hashing a multi-hundred-kilobyte ELF on every recurring reauthentication
 /// recomputes an already authenticated fact, and at about one compute unit per
 /// two bytes that single hash was the whole reason canonical Found exceeded the
@@ -519,10 +535,12 @@ fn cached_role_deployment_observation(
 
 /// Observe one deployment by hashing its complete current ELF tail.
 ///
-/// This is first admission: the claimed `elf_digest` of a finalized
-/// artifact-release record is an attacker-publishable assertion until it is
-/// checked against the bytes actually deployed, and this is the sole site that
-/// checks it. It must never be replaced by a cached-digest fast path.
+/// ArtifactRelease finalization calls the equivalent observation in
+/// `record_v1` before it makes the record immutable. Activation calls this
+/// implementation again only for an `ExactAuthority` release, whose Loader
+/// ProgramData remains mutable. It must never use a cached digest for that
+/// policy: an adversarial same-slot account image must still be rejected by
+/// the byte comparison, independently of Loader scheduling.
 fn deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,

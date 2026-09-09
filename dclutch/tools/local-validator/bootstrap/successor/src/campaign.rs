@@ -212,6 +212,10 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for NullableV1<T> {
 struct TerminalMarketEvidenceV1 {
     completed: Vec<String>,
     accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
+    /// Absent only in historical reports emitted before the native scalar was
+    /// added. Current consumers that need economic conservation reject zero.
+    #[serde(default)]
+    basis_scale: u64,
     founding_custody_context: String,
     direct_selected_manifest_entry_index: u16,
 }
@@ -868,14 +872,16 @@ struct ActivationComputeProjectionV1 {
     role: &'static str,
     pending: bool,
     live_elf_bytes: u64,
+    hash_compute_units: u64,
     conservative_compute_units: u64,
     headroom_compute_units: u64,
+    requires_measured_activation: bool,
 }
 
-/// Refuse a pending first activation whose authenticated live ELF cannot fit
-/// beneath the pinned runtime's transaction ceiling even under a conservative
-/// size-only projection. This is key-free and runs before any campaign signer
-/// file is opened. It complements, but never replaces, the measured CU gate.
+/// Refuse only when hashing the authenticated live ELF alone exceeds the
+/// chain ceiling. An estimate above the ceiling requires measured activation;
+/// it does not prevent the existing RPC simulation from deciding the outcome.
+/// This key-free check runs before any campaign signer file is opened.
 fn activation_compute_preflight_v1(
     observed: &[ObservedRoleV1],
     activated_prefix: usize,
@@ -903,26 +909,38 @@ fn activation_compute_preflight_v1(
             .ok_or_else(|| Error::new(format!("{role} ProgramData is shorter than Loader V3")))?;
         let live_elf_bytes = u64::try_from(live_elf_bytes)
             .map_err(|_| Error::new(format!("{role} live ELF width does not fit u64")))?;
+        let hash_compute_units = runtime::activation_hash_compute_units_v1(live_elf_bytes)?;
         let conservative_compute_units =
             runtime::activation_compute_upper_bound_v1(live_elf_bytes)?;
         let pending = ordinal >= activated_prefix;
-        if pending && conservative_compute_units > runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1 {
+        if pending && hash_compute_units > runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1 {
             return Err(Error::new(format!(
                 "pending {role} activation is unreachable: authenticated live ELF has \
-                 {live_elf_bytes} bytes, above the {}-byte size-only ceiling, projecting \
-                 {conservative_compute_units} CU against the {}-CU transaction maximum; rebuild \
-                 the exact checked role and rerun the measured CU gate before publishing",
-                runtime::MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1,
+                 {live_elf_bytes} bytes; SHA-256 alone requires {hash_compute_units} CU, above \
+                 the {}-CU transaction maximum (hash-only ELF ceiling {} bytes)",
                 runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1,
+                runtime::MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1,
             )));
+        }
+        let requires_measured_activation =
+            pending && conservative_compute_units > runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1;
+        if requires_measured_activation {
+            eprintln!(
+                "pending {role} activation requires measurement: SHA-256 costs {hash_compute_units} \
+                 CU and the conservative estimate is {conservative_compute_units} CU; actual RPC \
+                 simulation must decide whether all work fits the {}-CU limit",
+                runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1,
+            );
         }
         projection.push(ActivationComputeProjectionV1 {
             role,
             pending,
             live_elf_bytes,
+            hash_compute_units,
             conservative_compute_units,
             headroom_compute_units: runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1
                 .saturating_sub(conservative_compute_units),
+            requires_measured_activation,
         });
     }
     Ok(projection)
@@ -4126,14 +4144,17 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         "activation_compute_preflight": {
             "agave_runtime": "4.0.2",
             "transaction_ceiling_compute_units": runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1,
-            "maximum_live_elf_bytes": runtime::MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1,
+            "maximum_live_elf_bytes": runtime::MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1,
+            "maximum_live_elf_bytes_with_reserve": runtime::MAX_ACTIVATION_ESTIMATE_FIT_LIVE_ELF_BYTES_V1,
             "size_only_not_a_measured_cu_substitute": true,
             "roles": activation_compute.iter().map(|row| json!({
                 "role": row.role,
                 "pending": row.pending,
                 "live_elf_bytes": row.live_elf_bytes,
+                "hash_compute_units": row.hash_compute_units,
                 "conservative_compute_units": row.conservative_compute_units,
                 "headroom_compute_units": row.headroom_compute_units,
+                "requires_measured_activation": row.requires_measured_activation,
             })).collect::<Vec<_>>(),
         },
         "wallet": Value::Null,
@@ -5990,6 +6011,7 @@ mod tests {
                 ("local_participant_fixture_source".into(), account(source)),
                 ("collateral_mint".into(), account(mint)),
             ]),
+            basis_scale: 1,
             founding_custody_context: "33".repeat(32),
             direct_selected_manifest_entry_index: 1,
         };
@@ -6718,6 +6740,24 @@ mod tests {
     }
 
     #[test]
+    fn activation_compute_preflight_allows_measured_activation_above_estimate_ceiling() {
+        // Actual bf06 Trading width: SHA-256 costs 1,347,505 CU, while the
+        // estimate adds 150,000 CU. Only execution can resolve the remainder.
+        let observed = activation_compute_rows([934_088, 1_010_496, 2_694_840, 588_336, 360_328]);
+        let projection = activation_compute_preflight_v1(&observed, 0)
+            .expect("a conservative estimate cannot prove activation impossible");
+        let trading = projection
+            .iter()
+            .find(|row| row.role == "trading")
+            .expect("Trading");
+        assert!(trading.pending);
+        assert_eq!(trading.conservative_compute_units, 1_497_505);
+        assert_eq!(trading.headroom_compute_units, 0);
+        assert_eq!(trading.hash_compute_units, 1_347_505);
+        assert!(trading.requires_measured_activation);
+    }
+
+    #[test]
     fn activation_compute_preflight_reports_headroom_and_refuses_source_as_resolution() {
         let canonical = activation_compute_rows([934_088, 1_010_496, 1_325_848, 588_336, 360_328]);
         let projection = activation_compute_preflight_v1(&canonical, 0)
@@ -6735,17 +6775,20 @@ mod tests {
             activation_compute_rows([934_088, 1_010_496, 1_325_848, 9_034_536, 360_328]);
         let error = activation_compute_preflight_v1(&hostile_source_as_resolution, 0)
             .expect_err("9 MB dclutch_sbf.so substitution cannot reach activation");
-        assert!(error.to_string().contains("pending resolution activation"));
-        assert!(error.to_string().contains("9034536 bytes"));
-        assert!(
-            error
-                .to_string()
-                .contains(&runtime::MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1.to_string())
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "pending resolution activation is unreachable: authenticated live ELF has \
+                 9034536 bytes; SHA-256 alone requires 4517353 CU, above the {}-CU transaction \
+                 maximum (hash-only ELF ceiling {} bytes)",
+                runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1,
+                runtime::MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1,
+            ),
         );
 
         let completed = activation_compute_preflight_v1(&hostile_source_as_resolution, 5)
             .expect("already complete cache never schedules another activation");
-        assert!(completed.iter().all(|row| !row.pending));
+        assert!(completed.iter().all(|row| !row.pending && !row.requires_measured_activation));
     }
 
     #[test]

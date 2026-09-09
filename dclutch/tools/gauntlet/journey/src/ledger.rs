@@ -457,6 +457,19 @@ pub(crate) struct ConservationLedgerV1 {
     observations: Vec<ObservationV1>,
 }
 
+/// The exact native aperture handed to a simulator while this ledger is live.
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct HandoffCensusV1 {
+    pub(crate) mint: String,
+    pub(crate) payer: String,
+    pub(crate) hoard: String,
+    pub(crate) aggregate: String,
+    pub(crate) claim_unit_atoms: u64,
+    pub(crate) tokens: BTreeMap<String, String>,
+    pub(crate) positions: BTreeMap<String, String>,
+    pub(crate) watch: BTreeMap<String, String>,
+}
+
 impl ConservationLedgerV1 {
     /// Start a ledger over one collateral Mint.
     ///
@@ -514,6 +527,38 @@ impl ConservationLedgerV1 {
     /// The Core Market, once the founding has admitted one.
     pub(crate) fn market(&self) -> Option<Pubkey> {
         self.market
+    }
+
+    /// Project the ledger's complete admitted aperture without re-deriving any
+    /// economic quantity in the handoff consumer.
+    pub(crate) fn handoff_census_for(&self, payer: Pubkey) -> Result<HandoffCensusV1> {
+        let hoard = self
+            .hoard
+            .ok_or_else(|| Error::new("the handoff census has no admitted Hoard"))?;
+        let aggregate = self
+            .aggregate
+            .ok_or_else(|| Error::new("the handoff census has no admitted Claims aggregate"))?;
+        if self.claim_unit_atoms == 0 {
+            return Err(Error::new(
+                "the handoff census has no positive native payout scale",
+            ));
+        }
+        let strings = |entries: &BTreeMap<String, Pubkey>| {
+            entries
+                .iter()
+                .map(|(label, address)| (label.clone(), address.to_string()))
+                .collect()
+        };
+        Ok(HandoffCensusV1 {
+            mint: self.mint.to_string(),
+            payer: payer.to_string(),
+            hoard: hoard.to_string(),
+            aggregate: aggregate.to_string(),
+            claim_unit_atoms: self.claim_unit_atoms,
+            tokens: strings(&self.token_accounts),
+            positions: strings(&self.positions),
+            watch: strings(&self.watched),
+        })
     }
 
     /// Derive every Custody vault address under one namespace and record the

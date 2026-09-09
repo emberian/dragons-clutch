@@ -149,6 +149,7 @@ const FILL_CUSTODY_LEGS: usize = 3;
 /// Which of the four the operator asked for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RouteV1 {
+    Close,
     Redeem,
     Found,
     Quote,
@@ -159,6 +160,8 @@ enum RouteV1 {
 impl RouteV1 {
     const fn command(self, expected: ExpectedClusterV1) -> &'static str {
         match (self, expected) {
+            (Self::Close, ExpectedClusterV1::Devnet) => COMMAND_CLOSE_V1,
+            (Self::Close, ExpectedClusterV1::OwnedLoopback) => COMMAND_CLOSE_LOCAL_V1,
             (Self::Redeem, ExpectedClusterV1::Devnet) => COMMAND_REDEEM_V1,
             (Self::Redeem, ExpectedClusterV1::OwnedLoopback) => COMMAND_REDEEM_LOCAL_V1,
             (Self::Found, ExpectedClusterV1::Devnet) => COMMAND_FOUND_V1,
@@ -174,6 +177,7 @@ impl RouteV1 {
 
     const fn label(self) -> &'static str {
         match self {
+            Self::Close => "scoring Dealer close",
             Self::Redeem => "scoring Dealer redemption",
             Self::Found => "scoring Dealer founding",
             Self::Quote => "scoring Dealer quote",
@@ -184,6 +188,7 @@ impl RouteV1 {
 
     const fn receipt_route(self) -> DealerRouteV1 {
         match self {
+            Self::Close => DealerRouteV1::Close,
             Self::Redeem => DealerRouteV1::Redeem,
             Self::Found => DealerRouteV1::Found,
             Self::Quote => DealerRouteV1::Quote,
@@ -200,6 +205,7 @@ pub(crate) fn usage() -> &'static str {
      \n  dclutch-local-successor-bootstrap devnet-dealer-withdraw-v1 --rpc-url URL --i-mean-devnet GENESIS --market PUBKEY --campaign-report ABSOLUTE_JSON --dealer-id HEX64 --sponsor PUBKEY --sponsor-token PUBKEY --amount ATOMS --evidence ABSOLUTE_JSON [--execute --sponsor-keypair ABSOLUTE_JSON]\n\
      \nOwned local-validator equivalents are local-private-validator-dealer-found-v1, local-private-validator-dealer-quote-v1, local-private-validator-dealer-fill-v1 and local-private-validator-dealer-withdraw-v1. They take the same route arguments with --rpc-url http://127.0.0.1:PORT and no --i-mean-devnet. Each arm authenticates both the RPC origin and the founding evidence against its selected cluster.\n\
      \nDealer redemption: devnet-dealer-redeem-v1 (or local-private-validator-dealer-redeem-v1) --rpc-url URL --market PUBKEY --campaign-report ABSOLUTE_JSON --dealer-id HEX64 --fee-payer PUBKEY --claim-index INDEX [--quantity CLAIMS] --evidence ABSOLUTE_JSON [--execute --fee-payer-keypair ABSOLUTE_JSON]. The devnet arm also requires --i-mean-devnet GENESIS. Terminal Claims collateral returns to the fund vault; native founder-bond proceeds stay separate.\n\
+     \nDealer close: devnet-dealer-close-v1 (or local-private-validator-dealer-close-v1) takes the same common flags as quote. It requires drained terminal inventory and cash, closes native-owned records, and refunds their recorded beneficiaries.\n\
      \nThe scoring Dealer (decision 0031 mechanism two), and the only caller of DCLSFDR1/DCLSQTR1/DCLSFLR1/DCLSWDR1 anywhere. Nothing economic is guessed: K and the claim-unit conversion come off the Market's own linked-basis record, the rule off the sealed rule account, the inventory off the Dealer's Claims Position, and a fill's receive/deliver/prices out of the host solver that returns only fills the kernel admits. Preflight opens no key and sends nothing. Execute sends one transaction and then reads the fund back and joins it to the route's own receipt shape."
 }
 
@@ -238,6 +244,15 @@ struct ArgumentsV1 {
     amount: Option<u64>,
     claim_index: Option<u32>,
     quantity: Option<u64>,
+}
+
+pub(crate) const COMMAND_CLOSE_V1: &str = "devnet-dealer-close-v1";
+pub(crate) const COMMAND_CLOSE_LOCAL_V1: &str = "local-private-validator-dealer-close-v1";
+pub(crate) fn run_close_devnet_v1(arguments: Vec<String>) -> Result<()> {
+    run(RouteV1::Close, ExpectedClusterV1::Devnet, arguments)
+}
+pub(crate) fn run_close_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    run(RouteV1::Close, ExpectedClusterV1::OwnedLoopback, arguments)
 }
 
 pub(crate) const COMMAND_REDEEM_V1: &str = "devnet-dealer-redeem-v1";
@@ -301,7 +316,25 @@ fn authenticate_origin(arguments: &ArgumentsV1) -> Result<ClusterOriginV1> {
 }
 
 /// Everything both clusters and all four routes share: origin, plan and evidence.
+pub(crate) fn run_close_campaign_v1(arguments: Vec<String>) -> Result<()> {
+    run_with_controls(
+        RouteV1::Close,
+        ExpectedClusterV1::OwnedLoopback,
+        arguments,
+        true,
+    )
+}
+
 fn run(route: RouteV1, expected_cluster: ExpectedClusterV1, arguments: Vec<String>) -> Result<()> {
+    run_with_controls(route, expected_cluster, arguments, false)
+}
+
+fn run_with_controls(
+    route: RouteV1,
+    expected_cluster: ExpectedClusterV1,
+    arguments: Vec<String>,
+    close_controls: bool,
+) -> Result<()> {
     let arguments = parse(route, expected_cluster, arguments)?;
     let origin = authenticate_origin(&arguments)?;
     // ReadsOnly on a preflight is what makes "nothing was sent" a property of
@@ -315,7 +348,8 @@ fn run(route: RouteV1, expected_cluster: ExpectedClusterV1, arguments: Vec<Strin
     let cluster = origin.label().to_owned();
 
     let coordinates = derive_coordinates(&mut rpc, &arguments)?;
-    let plan = match route {
+    let mut plan = match route {
+        RouteV1::Close => plan_close(&mut rpc, &arguments, &coordinates),
         RouteV1::Redeem => plan_redeem(&mut rpc, &arguments, &coordinates),
         RouteV1::Found => plan_found(&mut rpc, &arguments, &coordinates),
         RouteV1::Quote => plan_quote(&mut rpc, &arguments, &coordinates),
@@ -345,7 +379,7 @@ fn run(route: RouteV1, expected_cluster: ExpectedClusterV1, arguments: Vec<Strin
                 .sponsor
                 .ok_or_else(|| Error::new("--sponsor is required"))?,
         ),
-        RouteV1::Quote | RouteV1::Redeem => (
+        RouteV1::Quote | RouteV1::Redeem | RouteV1::Close => (
             arguments.fee_payer_keypair.as_deref(),
             arguments
                 .fee_payer
@@ -386,6 +420,19 @@ fn run(route: RouteV1, expected_cluster: ExpectedClusterV1, arguments: Vec<Strin
             std::slice::from_ref(&plan.instruction),
             &mut published,
         )?;
+        if close_controls {
+            plan.facts["refusalControls"] =
+                close_refusal_controls(&mut rpc, &plan, &signer, observation, &tables)?;
+        }
+        if route == RouteV1::Close {
+            let sponsor = Pubkey::new_from_array(
+                read_fund(&mut rpc, plan.fund, &coordinates, arguments.dealer_id)?
+                    .0
+                    .sponsor,
+            );
+            plan.facts["sponsorBeforeClose"] =
+                json!(rpc.required_account(sponsor, "close sponsor")?.lamports);
+        }
         rpc.send_v0(
             route.label(),
             std::slice::from_ref(&plan.instruction),
@@ -415,6 +462,17 @@ fn run(route: RouteV1, expected_cluster: ExpectedClusterV1, arguments: Vec<Strin
             .map_or_else(|| "unreported".to_string(), |units| units.to_string())
     );
 
+    if route == RouteV1::Close {
+        plan.facts["sponsorCloseFee"] = json!(if plan.facts["sponsor"].as_str()
+            == Some(signer.pubkey().to_string().as_str())
+        {
+            landed
+                .fee_lamports
+                .ok_or_else(|| Error::new("close transaction omitted fee"))?
+        } else {
+            0
+        });
+    }
     let poststate = read_back(&mut rpc, &arguments, &coordinates, &plan)?;
     write_evidence(
         &arguments.evidence,
@@ -2362,6 +2420,378 @@ fn plan_withdraw(
     })
 }
 
+// --------------------------------------------------------- physical closure
+fn plan_close(rpc: &mut Rpc, a: &ArgumentsV1, c: &CoordinatesV1) -> Result<PlanV1> {
+    use dclutch_claims::protocol_position_v2::ProtocolPositionAdmissionV2;
+    use dclutch_trading::scoring_rule::requests_v1::{DealerCloseRequestV1, close_privileges_v1};
+    let payer = a
+        .fee_payer
+        .ok_or_else(|| Error::new("--fee-payer is required"))?;
+    let fund_key = c.fund(&a.dealer_id);
+    let (fund, _) = read_fund(rpc, fund_key, c, a.dealer_id)?;
+    let core = CoreState::decode(&rpc.required_account(c.market, "Core Market")?.data)
+        .map_err(|e| Error::new(format!("Core Market: {e:?}")))?;
+    if !matches!(
+        core.phase,
+        dclutch_market::Phase::Terminal | dclutch_market::Phase::Retiring
+    ) {
+        return Err(Error::new("Dealer close requires a terminal Market"));
+    }
+    let vault = Pubkey::new_from_array(fund.vault);
+    let vault_account = rpc.required_account(vault, "Dealer vault")?;
+    let token = dclutch_custody::token_svm::TokenAccount::parse_base_or_immutable_owner(
+        &vault_account.data,
+    )
+    .map_err(|e| Error::new(format!("Dealer vault: {e:?}")))?;
+    if fund.cash != 0 || token.amount != 0 {
+        return Err(Error::new(
+            "Dealer close requires zero recorded and physical collateral",
+        ));
+    }
+    let position = c.position(fund_key)?;
+    let admission = c.admission(fund_key)?;
+    let pos = rpc.required_account(position, "Dealer Position")?;
+    let adm = rpc.required_account(admission, "Dealer admission")?;
+    let view = LiabilityBasisPositionViewV2::decode(&pos.data)
+        .map_err(|e| Error::new(format!("Position: {e:?}")))?;
+    for i in 0..view.claim_count {
+        if view
+            .balance(&pos.data, i)
+            .map_err(|e| Error::new(format!("Position balance: {e:?}")))?
+            != 0
+        {
+            return Err(Error::new("Dealer close requires all Claims balances zero"));
+        }
+    }
+    let admitted = ProtocolPositionAdmissionV2::decode(&adm.data)
+        .map_err(|e| Error::new(format!("admission: {e:?}")))?;
+    let rent = rent_sysvar(rpc)?;
+    let child = ProtocolPositionRequestV2 {
+        action: ProtocolPositionActionV2::Close,
+        owner_kind: ProtocolPositionOwnerKindV2::TradingRecord,
+        presence: ProtocolPositionPresenceV2::Existing,
+        release_set: c.release_set,
+        market: c.market.to_bytes(),
+        position_owner: fund_key.to_bytes(),
+        parent_request_digest: admitted.parent_request_digest(),
+        rent_credit: c.rent_credit.to_bytes(),
+        rent_program: c.rent_program.to_bytes(),
+        generation: c.generation,
+        expected_market_revision: c.aggregate_revision,
+        expected_position_revision: view.revision,
+        observed_position_lamports: pos.lamports,
+        observed_admission_lamports: adm.lamports,
+        position_rent_principal: rent.minimum_balance(pos.data.len()),
+        admission_rent_principal: rent.minimum_balance(adm.data.len()),
+        capability_descriptor: [0; 32],
+        capability_outcome: 0,
+    }
+    .new()
+    .map_err(|e| Error::new(format!("Claims close: {e:?}")))?;
+    let child_bytes = child
+        .to_bytes()
+        .map_err(|e| Error::new(format!("Claims close wire: {e:?}")))?;
+    let child_authority = c.authority(fund_key.to_bytes(), hash(&child_bytes).to_bytes())?;
+    let mut request = DealerCloseRequestV1 {
+        market: c.market.to_bytes(),
+        dealer_id: a.dealer_id,
+        expected_fund_revision: fund.revision,
+    }
+    .to_bytes()
+    .map_err(|e| Error::new(format!("Dealer close: {e:?}")))?
+    .to_vec();
+    request.extend_from_slice(&child_bytes);
+    let parent = hash(&request).to_bytes();
+    let spec = ClaimsFrameSpecV1::protocol_position(ProtocolPositionActionV2::Close);
+    let mut windows = Vec::new();
+    for index in 0..spec
+        .account_count()
+        .map_err(|e| Error::new(format!("Claims close frame: {e:?}")))?
+    {
+        let item = spec
+            .account(index)
+            .map_err(|e| Error::new(format!("Claims close coordinate: {e:?}")))?;
+        let key = match item.role() {
+            ClaimsFrameRoleV1::CallerAuthority => child_authority,
+            ClaimsFrameRoleV1::ProtocolPosition => position,
+            ClaimsFrameRoleV1::ProtocolPositionAdmission => admission,
+            ClaimsFrameRoleV1::PositionOwnerIdentity => fund_key,
+            other => c.common_claims_key(other)?,
+        };
+        windows.push(if item.privileges().writable() {
+            AccountMeta::new(key, false)
+        } else {
+            AccountMeta::new_readonly(key, false)
+        });
+    }
+    let replay = c.replay(fund_key.to_bytes());
+    let replay_account = rpc.required_account(replay, "Dealer replay")?;
+    let revision = replay_revision(rpc, replay, "Dealer replay")?;
+    let mut authorities = vec![("claims close".into(), child_authority)];
+    for (index, (op, rent_lamports, vault_arg)) in [
+        (
+            OperationV1::CloseVault,
+            vault_account.lamports,
+            Some((
+                vault.to_bytes(),
+                c.mint.to_bytes(),
+                c.token_program.to_bytes(),
+            )),
+        ),
+        (OperationV1::CloseReplay, replay_account.lamports, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let req = dclutch_trading_sbf::scoring_dealer_v1::close::custody_close_request(
+            c.trading_program.to_bytes(),
+            c.release_set,
+            c.market.to_bytes(),
+            c.realm_digest,
+            c.generation,
+            fund_key.to_bytes(),
+            parent,
+            c.rent_credit.to_bytes(),
+            revision
+                .checked_add(u64::try_from(index).map_err(|_| Error::new("close index"))?)
+                .ok_or_else(|| Error::new("replay overflow"))?,
+            rent_lamports,
+            vault_arg,
+        )
+        .map_err(|e| Error::new(format!("Custody close: {e:?}")))?;
+        let authority = custody_authority_of(c, req, fund_key.to_bytes())?;
+        windows.extend(custody_window_v1(
+            CustodyFrameSpecV1::new(op),
+            |role| match role {
+                CustodyFrameRoleV1::CallerAuthority => Ok(authority),
+                CustodyFrameRoleV1::Replay => Ok(replay),
+                CustodyFrameRoleV1::Vault => Ok(vault),
+                CustodyFrameRoleV1::RentRefund => Ok(c.rent_credit),
+                other => c.common_custody_key(other),
+            },
+        )?);
+        authorities.push((format!("custody close {index}"), authority));
+    }
+    let rule = c.rule(&a.dealer_id);
+    let quote = c.quote(&a.dealer_id);
+    let sponsor = Pubkey::new_from_array(fund.sponsor);
+    let owned = [fund_key, rule, quote];
+    let mut sponsor_return = 0u64;
+    let mut trading_rent_principal = 0u64;
+    for key in owned {
+        let account = rpc.required_account(key, "Dealer rent principal")?;
+        trading_rent_principal = trading_rent_principal
+            .checked_add(rent.minimum_balance(account.data.len()))
+            .ok_or_else(|| Error::new("Trading rent principal overflow"))?;
+        sponsor_return = sponsor_return
+            .checked_add(rpc.required_account(key, "Dealer owned record")?.lamports)
+            .ok_or_else(|| Error::new("native refund overflow"))?;
+    }
+    let credit_return = [
+        pos.lamports,
+        adm.lamports,
+        vault_account.lamports,
+        replay_account.lamports,
+    ]
+    .into_iter()
+    .try_fold(0u64, |a, b| {
+        a.checked_add(b)
+            .ok_or_else(|| Error::new("rent refund overflow"))
+    })?;
+    let mut keys = vec![None; generated::CLOSE_ACCOUNT_COUNT];
+    for (i, key) in [
+        (generated::CLOSE_PAYER_ACCOUNT, payer),
+        (generated::CLOSE_FUND_ACCOUNT, fund_key),
+        (generated::CLOSE_RULE_ACCOUNT, rule),
+        (generated::CLOSE_QUOTE_ACCOUNT, quote),
+        (generated::CLOSE_MARKET_ACCOUNT, c.market),
+        (generated::CLOSE_VAULT_ACCOUNT, vault),
+        (generated::CLOSE_SPONSOR_ACCOUNT, sponsor),
+        (generated::CLOSE_CLAIMS_PROGRAM_ACCOUNT, c.claims_program),
+        (generated::CLOSE_CUSTODY_PROGRAM_ACCOUNT, c.custody_program),
+        (
+            generated::CLOSE_ACTIVATION_CACHE_ACCOUNT,
+            c.activation_cache,
+        ),
+        (generated::CLOSE_REGISTRY_PROGRAM_ACCOUNT, c.registry),
+        (generated::CLOSE_MINT_ACCOUNT, c.mint),
+        (generated::CLOSE_TOKEN_PROGRAM_ACCOUNT, c.token_program),
+        (generated::CLOSE_RENT_CREDIT_ACCOUNT, c.rent_credit),
+        (generated::CLOSE_RENT_PROGRAM_ACCOUNT, c.rent_program),
+    ] {
+        keys[i] = Some(key);
+    }
+    let mut accounts = prefix_v1(&keys, close_privileges_v1)?;
+    accounts.extend(windows);
+    let receipt = DealerReceiptV1::from_fund(
+        DealerRouteV1::Close,
+        &request,
+        DealerFundV1 {
+            revision: fund
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| Error::new("fund revision overflow"))?,
+            ..fund
+        },
+        &[],
+        0,
+        0,
+    )
+    .to_bytes()
+    .map_err(|e| Error::new(format!("close receipt: {e:?}")))?;
+    Ok(PlanV1 {
+        route: RouteV1::Close,
+        instruction: Instruction {
+            program_id: c.trading_program,
+            accounts,
+            data: request.clone(),
+        },
+        request,
+        routed: true,
+        fund: fund_key,
+        rule,
+        quote,
+        dealer_position: position,
+        expected_fund_revision: fund.revision,
+        authorities,
+        facts: json!({"closedAccounts":[fund_key.to_string(),rule.to_string(),quote.to_string(),position.to_string(),admission.to_string(),vault.to_string(),replay.to_string()],"sponsor":sponsor.to_string(),"sponsorBeforeClose":rpc.required_account(sponsor,"sponsor")?.lamports,"sponsorReturnLamports":sponsor_return,"tradingRentPrincipalLamports":trading_rent_principal,"nativeSurplusLamports":sponsor_return.checked_sub(trading_rent_principal).ok_or_else(||Error::new("Trading native balance below rent"))?,"inventoryMinimum":fund.inventory_minimum,"liquidityCost":fund.liquidity_cost,"sponsorCloseFee":0,"rentCredit":c.rent_credit.to_string(),"rentCreditBefore":rpc.required_account(c.rent_credit,"rent credit")?.lamports,"rentReturnLamports":credit_return,"expectedReceiptDigest":hex_lower(&hash(&receipt).to_bytes())}),
+        dealer_pays: 0,
+        dealer_receives: 0,
+    })
+}
+
+/// Two consensus refusals over the same ready-to-close instruction. The
+/// second fails after Claims has closed its pair, proving atomic rollback.
+fn close_refusal_controls(
+    rpc: &mut Rpc,
+    plan: &PlanV1,
+    payer: &Keypair,
+    observation: dclutch_operator::Observation,
+    tables: &[dclutch_operator::ObservedAccount],
+) -> Result<Value> {
+    use dclutch_trading_sbf::scoring_dealer_v1::ScoringDealerErrorV1 as Refusal;
+    if plan.facts["sponsor"].as_str() == Some(payer.pubkey().to_string().as_str()) {
+        return Err(Error::new(
+            "close refusal campaign needs a payer distinct from its sponsor",
+        ));
+    }
+
+    let mut observed = Vec::new();
+    for key in plan.facts["closedAccounts"]
+        .as_array()
+        .ok_or_else(|| Error::new("close resources omitted"))?
+    {
+        let key = crate::plan::pubkey(
+            key.as_str()
+                .ok_or_else(|| Error::new("close resource key omitted"))?,
+        )?;
+        let account = rpc.required_account(key, "before close refusal")?;
+        observed.push((key, account.owner, account.lamports, account.data));
+    }
+    let mut results = Vec::new();
+    for (label, index, expected) in [
+        (
+            "Dealer close substituted sponsor",
+            generated::CLOSE_SPONSOR_ACCOUNT,
+            Refusal::CloseBeneficiary,
+        ),
+        (
+            "Dealer close caller substituted after Claims close",
+            generated::CLOSE_ACCOUNT_COUNT
+                + dclutch_trading_sbf::scoring_dealer_v1::close::CLAIMS_CLOSE_ACCOUNTS,
+            Refusal::Release,
+        ),
+    ] {
+        let mut hostile = plan.instruction.clone();
+        hostile.accounts[index].pubkey = payer.pubkey();
+        let landed = rpc.send_v0_expected_failure(label, &[hostile], payer, observation, tables)?;
+        let error = landed
+            .error
+            .as_ref()
+            .and_then(|v| v.get("InstructionError"))
+            .and_then(Value::as_array)
+            .and_then(|v| v.get(1))
+            .and_then(|v| v.get("Custom"))
+            .and_then(Value::as_u64);
+        if error != Some(u64::from(expected as u32)) || landed.fee_only_balance_change != Some(true)
+        {
+            return Err(Error::new(format!(
+                "{label}: exact refusal or atomic native rollback missing: {:?}",
+                landed.error
+            )));
+        }
+        for (key, owner, lamports, data) in &observed {
+            let after = rpc.required_account(*key, "after close refusal")?;
+            if after.owner != *owner || after.lamports != *lamports || after.data != *data {
+                return Err(Error::new(format!(
+                    "{label}: resource {key} did not roll back"
+                )));
+            }
+        }
+        results.push(serde_json::to_value(landed)?);
+    }
+    Ok(json!(results))
+}
+
+fn read_back_close(rpc: &mut Rpc, plan: &PlanV1) -> Result<PostStateV1> {
+    for key in plan.facts["closedAccounts"]
+        .as_array()
+        .ok_or_else(|| Error::new("close accounts missing"))?
+    {
+        let key = crate::plan::pubkey(
+            key.as_str()
+                .ok_or_else(|| Error::new("close key missing"))?,
+        )?;
+        if optional_account(rpc, key)?.is_some() {
+            return Err(Error::new(format!("Dealer close left resource {key}")));
+        }
+    }
+    let n = |key: &str| {
+        plan.facts[key]
+            .as_u64()
+            .ok_or_else(|| Error::new(format!("missing close amount {key}")))
+    };
+    let sponsor = crate::plan::pubkey(
+        plan.facts["sponsor"]
+            .as_str()
+            .ok_or_else(|| Error::new("missing sponsor"))?,
+    )?;
+    let expected = n("sponsorBeforeClose")?
+        .checked_add(n("sponsorReturnLamports")?)
+        .and_then(|v| v.checked_sub(n("sponsorCloseFee").ok()?))
+        .ok_or_else(|| Error::new("sponsor refund overflow"))?;
+    if rpc.required_account(sponsor, "close sponsor")?.lamports != expected {
+        return Err(Error::new("Dealer close sponsor refund disagrees"));
+    }
+    let credit = crate::plan::pubkey(
+        plan.facts["rentCredit"]
+            .as_str()
+            .ok_or_else(|| Error::new("missing rent credit"))?,
+    )?;
+    if rpc.required_account(credit, "close rent credit")?.lamports
+        != n("rentCreditBefore")?
+            .checked_add(n("rentReturnLamports")?)
+            .ok_or_else(|| Error::new("rent refund overflow"))?
+    {
+        return Err(Error::new("Dealer close lifecycle rent refund disagrees"));
+    }
+    Ok(PostStateV1 {
+        revision: plan
+            .expected_fund_revision
+            .checked_add(1)
+            .ok_or_else(|| Error::new("close revision overflow"))?,
+        cash: 0,
+        inventory_minimum: n("inventoryMinimum")?,
+        liquidity_cost: n("liquidityCost")?,
+        quote_fund_revision: None,
+        receipt_digest: crate::plan::hex32(
+            plan.facts["expectedReceiptDigest"]
+                .as_str()
+                .ok_or_else(|| Error::new("close receipt digest missing"))?,
+        )?,
+    })
+}
+
 // ------------------------------------------------------------- the readback
 
 /// What the chain says the route did, joined to the receipt shape it produced.
@@ -2385,6 +2815,9 @@ fn read_back(
     coordinates: &CoordinatesV1,
     plan: &PlanV1,
 ) -> Result<PostStateV1> {
+    if plan.route == RouteV1::Close {
+        return read_back_close(rpc, plan);
+    }
     let account = rpc.required_account(plan.fund, "Dealer fund after the route")?;
     let fund = DealerFundV1::decode(&account.data)
         .map_err(|error| Error::new(format!("Dealer fund {}: {error:?}", plan.fund)))?;
@@ -2487,7 +2920,7 @@ fn read_back(
             println!("quote fund revision  {} (fresh)", decoded.fund_revision);
             Some(decoded.fund_revision)
         }
-        RouteV1::Fill | RouteV1::Withdraw | RouteV1::Redeem => None,
+        RouteV1::Fill | RouteV1::Withdraw | RouteV1::Redeem | RouteV1::Close => None,
     };
 
     Ok(PostStateV1 {
@@ -2786,7 +3219,7 @@ fn require_route_flags_v1(arguments: &ArgumentsV1) -> Result<()> {
         ));
     }
     let foreign: &[(&str, bool)] = match arguments.route {
-        RouteV1::Redeem => &[
+        RouteV1::Redeem | RouteV1::Close => &[
             ("--amount", arguments.amount.is_some()),
             ("--sponsor", arguments.sponsor.is_some()),
             ("--taker", arguments.taker.is_some()),

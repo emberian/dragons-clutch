@@ -598,6 +598,74 @@ pub const fn redeem_privileges_v1(index: usize) -> Option<(bool, bool)> {
     )
 }
 
+/// Select a Dealer close by its generated magic.
+#[must_use]
+pub fn is_dealer_close_v1(bytes: &[u8]) -> bool {
+    bytes.get(..8) == Some(super::generated::CLOSE_REQUEST_MAGIC.as_slice())
+}
+
+/// Optimistic fund prefix followed by Claims' own Position close request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerCloseRequestV1 {
+    /// Canonical Core Market.
+    pub market: [u8; 32],
+    /// Dealer identity under the Market.
+    pub dealer_id: [u8; 32],
+    /// Revision of the same fund that receives this close.
+    pub expected_fund_revision: u64,
+}
+
+impl DealerCloseRequestV1 {
+    /// Decode the exact parent prefix; the caller decodes the child separately.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        use super::generated as g;
+        require_header(input, g::CLOSE_REQUEST_MAGIC, g::CLOSE_REQUEST_BYTES)?;
+        require_zero(input, g::CLOSE_REQUEST_RESERVED_OFFSET, 6)?;
+        let value = Self {
+            market: array(input, g::CLOSE_REQUEST_MARKET_OFFSET)?,
+            dealer_id: array(input, g::CLOSE_REQUEST_DEALER_ID_OFFSET)?,
+            expected_fund_revision: u64_at(input, g::CLOSE_REQUEST_EXPECTED_FUND_REVISION_OFFSET)?,
+        };
+        require_nonzero(&[value.market, value.dealer_id])?;
+        Ok(value)
+    }
+
+    /// Encode only the parent prefix, leaving the child wire with Claims.
+    pub fn to_bytes(self) -> Result<[u8; super::generated::CLOSE_REQUEST_BYTES]> {
+        use super::generated as g;
+        require_nonzero(&[self.market, self.dealer_id])?;
+        let mut output = [0; g::CLOSE_REQUEST_BYTES];
+        put(&mut output, 0, &g::CLOSE_REQUEST_MAGIC)?;
+        put(
+            &mut output,
+            g::CLOSE_REQUEST_VERSION_OFFSET,
+            &WIRE_VERSION.to_le_bytes(),
+        )?;
+        put(&mut output, g::CLOSE_REQUEST_MARKET_OFFSET, &self.market)?;
+        put(
+            &mut output,
+            g::CLOSE_REQUEST_DEALER_ID_OFFSET,
+            &self.dealer_id,
+        )?;
+        put(
+            &mut output,
+            g::CLOSE_REQUEST_EXPECTED_FUND_REVISION_OFFSET,
+            &self.expected_fund_revision.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+}
+
+/// Generated parent privileges; child privileges are Claims' own frame.
+#[must_use]
+pub const fn close_privileges_v1(index: usize) -> Option<(bool, bool)> {
+    privileges(
+        &super::generated::CLOSE_WRITABLE,
+        &super::generated::CLOSE_SIGNER,
+        index,
+    )
+}
+
 /// Which route a receipt came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerRouteV1 {
@@ -611,6 +679,8 @@ pub enum DealerRouteV1 {
     Withdraw,
     /// Redeem a fund-owned Claims coordinate into the fund vault.
     Redeem,
+    /// Physically close the drained fund and its child records.
+    Close,
 }
 
 impl DealerRouteV1 {
@@ -621,6 +691,7 @@ impl DealerRouteV1 {
             ROUTE_FILL => Ok(Self::Fill),
             ROUTE_WITHDRAW => Ok(Self::Withdraw),
             super::generated::ROUTE_REDEEM => Ok(Self::Redeem),
+            super::generated::ROUTE_CLOSE => Ok(Self::Close),
             _ => Err(RecordErrorV1::InvalidHeader),
         }
     }
@@ -632,6 +703,7 @@ impl DealerRouteV1 {
             Self::Fill => ROUTE_FILL,
             Self::Withdraw => ROUTE_WITHDRAW,
             Self::Redeem => super::generated::ROUTE_REDEEM,
+            Self::Close => super::generated::ROUTE_CLOSE,
         }
     }
 }
@@ -999,6 +1071,42 @@ mod tests {
     }
 
     #[test]
+    fn close_prefix_is_exact_and_cannot_alias_another_route() {
+        use super::super::generated as g;
+        let request = DealerCloseRequestV1 {
+            market: id(1),
+            dealer_id: id(2),
+            expected_fund_revision: 7,
+        };
+        let bytes = request.to_bytes().unwrap();
+        assert_eq!(DealerCloseRequestV1::decode(&bytes), Ok(request));
+        assert!(is_dealer_close_v1(&bytes));
+        assert!(!is_dealer_quote_v1(&bytes));
+        assert_eq!(
+            DealerCloseRequestV1::decode(&bytes[..bytes.len() - 1]),
+            Err(RecordErrorV1::InvalidLength)
+        );
+        let mut reserved = bytes;
+        reserved[g::CLOSE_REQUEST_RESERVED_OFFSET] = 1;
+        assert_eq!(
+            DealerCloseRequestV1::decode(&reserved),
+            Err(RecordErrorV1::NonCanonical)
+        );
+        let mut other = bytes;
+        other[..8].copy_from_slice(&g::QUOTE_REQUEST_MAGIC);
+        assert_eq!(
+            DealerCloseRequestV1::decode(&other),
+            Err(RecordErrorV1::InvalidHeader)
+        );
+        let mut identity = bytes;
+        identity[g::CLOSE_REQUEST_MARKET_OFFSET..g::CLOSE_REQUEST_MARKET_OFFSET + 32].fill(0);
+        assert_eq!(
+            DealerCloseRequestV1::decode(&identity),
+            Err(RecordErrorV1::ZeroIdentity)
+        );
+    }
+
+    #[test]
     fn the_frames_have_one_signer_at_zero() {
         for (count, privileges) in [
             (
@@ -1011,6 +1119,10 @@ mod tests {
             (
                 super::super::generated::REDEEM_ACCOUNT_COUNT,
                 redeem_privileges_v1,
+            ),
+            (
+                super::super::generated::CLOSE_ACCOUNT_COUNT,
+                close_privileges_v1,
             ),
         ] {
             assert_eq!(privileges(0).map(|(_, signer)| signer), Some(true));

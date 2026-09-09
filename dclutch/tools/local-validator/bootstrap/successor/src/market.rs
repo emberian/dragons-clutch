@@ -231,6 +231,9 @@ pub(crate) struct LocalParticipantFixtureLiquidityEvidenceV1 {
 pub(crate) struct MarketExecutionEvidence {
     pub(crate) completed: Vec<String>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
+    /// Payout atoms owed by one native Claim, decoded from the exact linked
+    /// ProductBasis record that founding authenticated and published.
+    pub(crate) basis_scale: u64,
     pub(crate) founding_custody_context: String,
     pub(crate) direct_selected_manifest_entry_index: u16,
     /// Projected by campaign.rs at `execution.localParticipantFixtureLiquidity`;
@@ -3398,6 +3401,7 @@ fn execute_found_market_with_checkpoint_journal_and_collateral_v1(
     Ok(MarketExecutionEvidence {
         completed,
         accounts,
+        basis_scale: records.basis_scale,
         founding_custody_context: hex(&founding_custody_context
             .ok_or_else(|| Error::new("founding lane omitted its custody context"))?),
         direct_selected_manifest_entry_index:
@@ -3894,6 +3898,7 @@ pub(crate) fn resume_found_market_from_prepared_checkpoint(
     Ok(MarketExecutionEvidence {
         completed,
         accounts,
+        basis_scale: context.records.basis_scale,
         founding_custody_context: hex(&founding_context),
         direct_selected_manifest_entry_index: prepared_checkpoint
             .direct_selected_manifest_entry_index,
@@ -3997,6 +4002,7 @@ pub(crate) fn resume_found_market_from_checkpoint(
     Ok(MarketExecutionEvidence {
         completed,
         accounts,
+        basis_scale: context.records.basis_scale,
         founding_custody_context: checkpoint.founding_custody_context.clone(),
         direct_selected_manifest_entry_index: checkpoint.direct_selected_manifest_entry_index,
         local_participant_fixture_liquidity: checkpoint.local_participant_fixture_liquidity.clone(),
@@ -4196,6 +4202,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     let evidence = MarketExecutionEvidence {
         completed,
         accounts,
+        basis_scale: context.records.basis_scale,
         founding_custody_context: checkpoint.founding_custody_context.clone(),
         direct_selected_manifest_entry_index: checkpoint.direct_selected_manifest_entry_index,
         local_participant_fixture_liquidity: checkpoint.local_participant_fixture_liquidity.clone(),
@@ -16308,6 +16315,20 @@ pub(crate) mod tests {
         assert_eq!(compiled.basis_scale, u64::from(basis.basis_width() - 1));
         assert_eq!(basis.payout_scale(), compiled.basis_scale);
         assert!(basis.refunds_on_failure());
+    }
+
+    #[test]
+    fn market_execution_evidence_exports_the_native_basis_scale() {
+        let evidence = super::MarketExecutionEvidence {
+            completed: Vec::new(),
+            accounts: std::collections::BTreeMap::new(),
+            basis_scale: 3,
+            founding_custody_context: "00".repeat(32),
+            direct_selected_manifest_entry_index: 0,
+            local_participant_fixture_liquidity: None,
+        };
+        let encoded = serde_json::to_value(evidence).expect("market evidence JSON");
+        assert_eq!(encoded["basis_scale"], 3);
     }
 
     /// One local market compiler shared by the ladder tests below.

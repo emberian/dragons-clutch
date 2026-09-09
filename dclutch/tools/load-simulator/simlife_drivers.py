@@ -451,8 +451,20 @@ def founded_market_from_evidence(
     fee_basis_points: int = 0,
 ) -> FoundedMarket:
     evidence = json.loads(Path(evidence_path).read_text())
-    accounts = evidence["execution"]["market"]["accounts"]
+    market_evidence = evidence["execution"]["market"]
+    accounts = market_evidence["accounts"]
     compiled = json.loads(Path(market_input).read_text())
+
+    basis_scale = market_evidence.get("basis_scale")
+    if (
+        isinstance(basis_scale, bool)
+        or not isinstance(basis_scale, int)
+        or basis_scale <= 0
+    ):
+        raise DriverRefusal(
+            f"the founding evidence for {market_id} carries no positive native basis_scale; "
+            "this run refuses to invent a claim unit"
+        )
 
     def address(name: str) -> str:
         entry = accounts.get(name)
@@ -475,10 +487,10 @@ def founded_market_from_evidence(
         founder_wallet=address("collateral_wallet"),
         participant_fixture_source=(fixture or {}).get("address"),
         outcome_count=len(compiled["coefficients"]),
-        # The claim unit is not a compiler parameter: `compile_linked_basis_v3`
-        # hard-wires `payout_scale: 1` beside the categorical basis kind. The
-        # census is told the truth rather than the plan's wish.
-        claim_unit_atoms=1,
+        # The native founding producer decoded this from the authenticated
+        # ProductBasis it published. Python carries that scalar unchanged; it
+        # does not mirror the basis codec or infer economics from width.
+        claim_unit_atoms=basis_scale,
         evidence=Path(evidence_path),
         market_input=Path(market_input),
         keys=Path(keys),

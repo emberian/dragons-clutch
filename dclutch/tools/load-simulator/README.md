@@ -179,40 +179,52 @@ deliberately.
 
 ## Local proof (held validator)
 
-1. Stand up a held validator with a founded market and an admitted participant.
-   **The producer of that probe is owed.** It was
-   `tools/release/private-validator-lifecycle/run.py --hold-after-participant`,
-   deleted on 2026-09-04 because no mode of it reached a founded market
-   (`docs/runbooks/COLD_MACHINE_2026_09_03.md` §6, §8) while the gauntlet tier
-   (`tools/gauntlet/run.sh --mode full`) founds and opens one. Until
-   `build_config_from_probe.py` reads the tier's evidence instead of the
-   runner's `participant-handoff.json`, step 2 has no input; the shape it needs
-   is in that adapter's docstring.
-2. Build the config and run:
+1. On hbox, use the existing journey to found a checked mutable Direct market
+   and admit its participant. Give it a fresh absolute work directory and
+   handoff path:
+   ```sh
+   tools/gauntlet/journey/run-journey.sh \
+     --checked-release-gate /absolute/release/CHECKED_UPGRADE_GATE.json \
+     --work /tank/dregg-build/dclutch-local-life \
+     --hold-after-participant /tank/dregg-build/dclutch-local-life/participant-handoff.json
    ```
+   The journey stops its supervisor after writing the handoff, keeping the
+   validator alive. It supplies the actual plan, market input, founding and
+   participant reports, driver and key paths, and complete census bindings.
+   The claim unit comes from the native linked-basis reader. The infrastructure
+   tier's immutable, zero-fee fixture is a different execution profile.
+2. In another shell on the same host, run the simulator:
+   ```sh
+   tools/load-simulator/run-local.sh \
+     /tank/dregg-build/dclutch-local-life/participant-handoff.json \
+     /tank/dregg-build/dclutch-local-sim 3
+   ```
+   This builds the config, runs one preflight and three executed cycles with
+   reconciliation, then checks that resuming the completed cycles neither
+   rewrites their journals nor invokes another driver. To build only a config:
+   ```sh
    python3 tools/load-simulator/build_config_from_probe.py \
-     --probe-work /private/tmp/dclutch-sim-hold-NN \
-     --sim-work /private/tmp/dclutch-sim-run-NN \
-     --output /private/tmp/dclutch-sim-run-NN.config.json
-   python3 tools/load-simulator/simulator.py run \
-     --config /private/tmp/dclutch-sim-run-NN.config.json --cycles 3 --execute
+     --handoff /tank/dregg-build/dclutch-local-life/participant-handoff.json \
+     --sim-work /tank/dregg-build/dclutch-local-sim \
+     --output /tank/dregg-build/dclutch-local-sim.config.json
    ```
    For a **population** rather than one market, the same adapter emits the
    `lifecycle` config — no bindings, because a market that run founds is bound
    from the founding's own evidence:
    ```
    python3 tools/load-simulator/build_config_from_probe.py --simlife \
-     --probe-work /private/tmp/dclutch-sim-hold-NN \
-     --sim-work /private/tmp/dclutch-sim-run-NN \
-     --output /private/tmp/dclutch-sim-run-NN.config.json \
+     --handoff /tank/dregg-build/dclutch-local-life/participant-handoff.json \
+     --sim-work /tank/dregg-build/dclutch-sim-run-NN \
+     --output /tank/dregg-build/dclutch-sim-run-NN.config.json \
+     --release-root /absolute/release \
      --seed 'dclutch/simlife/DATE/name' --markets 16 --ticks 48 \
      --slots-per-tick 900 --period-seconds 12 \
      --solana-keygen "$(command -v solana-keygen)" \
      --max-lamports-spent 200000000000
    python3 tools/load-simulator/simlife_drive.py plan \
-     --config /private/tmp/dclutch-sim-run-NN.config.json
+     --config /tank/dregg-build/dclutch-sim-run-NN.config.json
    python3 tools/load-simulator/simlife_drive.py run \
-     --config /private/tmp/dclutch-sim-run-NN.config.json --execute
+     --config /tank/dregg-build/dclutch-sim-run-NN.config.json --execute
    ```
 3. Between the hold and the run, provision the chain's Pyth update account
    once — it is a fact about the CHAIN, not about a market, so one provisioning
@@ -229,19 +241,19 @@ deliberately.
    It executes ONE journaled action per invocation, so call it until the facts
    document appears (eight actions plus one reauthenticating pass), then pass
    the document to the adapter with `--pyth-facts`.
-4. Teardown: stop the validator through the launcher that started it
-   (`dclutch-successor-validator stop`), never by killing the validator
-   directly.
+4. Once the simulator and any terminal continuation have finished, send
+   `SIGCONT` to the handoff's `supervisorPid`. The journey releases its owned
+   validator. Keep the supervisor stopped while a driver still needs the
+   chain.
 
 **A long run needs its history.** Every driver here re-verifies its earlier
 stages from transaction history, and the Direct trade and the flagship
 resolution advance one durable action per invocation with minutes between them.
-Whatever launches the held validator must pass `--limit-ledger-size` (the
-deleted lifecycle runner did; `dclutch-successor-validator` is where it belongs
-now) for exactly that reason: under the validator's own default those roots are purged in
-multi-thousand-slot chunks, and a purge landing between two stages strands the
-journal permanently — the later stage can no longer authenticate the earlier
-one, and no retry recovers it.
+`--limit-ledger-size` bounds disk use by allowing old history to be pruned;
+it does not guarantee that a long campaign's first transaction remains
+available. Size retention for the whole run and check that the oldest journaled
+transactions remain readable before continuing. A pruned transaction cannot
+authenticate a later stage, and retrying the driver cannot restore it.
 
 **Budget about 470 KB per slot for it.** Measured: 5.9 GB by slot 12,779 on the
 first-fill run and 9.9 GB by slot 21,000 on the population run, on sessions

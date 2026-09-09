@@ -42,7 +42,7 @@ dclutch-source = { path = "../../../../crates/dclutch-source", features = ["synt
 dclutch-registry = { path = "../../../../crates/dclutch-registry", features = ["svm"] }
 dclutch-release-tool = { path = "../../../../crates/dclutch-release-tool" }
 dclutch-resolution-core-v3-operator = { path = "../../../../crates/dclutch-resolution-core-v3-operator" }
-dclutch-trading-sbf = { path = "../../../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family"] }
+dclutch-trading-sbf = { path = "../../../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family", "dealer-family"] }
 # Canonical host-side General artifact/effect projector. It derives child caller PDAs from the projected requests; the session never accepts them as CLI facts.
 dclutch-chain-bundle-builder = { path = "../../../../programs/dclutch-trading-sbf/program-test/bundle-builder" }
 # The Series Found→Prepare exterior publishes the semantic-bound Shadow

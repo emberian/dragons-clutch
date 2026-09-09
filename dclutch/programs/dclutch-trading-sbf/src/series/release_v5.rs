@@ -45,7 +45,7 @@ use dclutch_vm::effect::v5::{
 };
 use dclutch_vm::request_profile::RequestProfileV1;
 use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
-use solana_program::hash::hash;
+use solana_program::hash::{hash, hashv};
 
 use super::{
     account_profile_v4::SERIES_CONSUME_TICKET_REPLAY_COORDINATE_V4,
@@ -90,6 +90,9 @@ use super::{
 
 /// Exact action count in the canonical successor set.
 pub const SERIES_RELEASE_ACTION_COUNT_V5: usize = 5;
+/// Domain for the schedule-independent Consume executor capacity identity.
+pub const SERIES_CONSUME_CAPACITY_PROFILE_DOMAIN_V1: &[u8] =
+    b"dclutch/series/consume-executor-capacity/v1";
 
 /// Complete bytes for one action-selected artifact tuple.
 #[derive(Clone, Copy, Debug)]
@@ -115,6 +118,8 @@ pub struct SeriesActionArtifactSourceV5<'a> {
 pub struct SeriesReleaseSourceV5<'a> {
     /// Finalized Series Template content identity.
     template: ContentId,
+    /// Authenticated executor geometry, independent of one Template's schedule.
+    capacity_profile: ContentId,
     /// Deployed Consume-only Shadow certificate program.
     consume_shadow_certificate_program: ContentId,
     /// Artifacts ordered exactly Prepare, Consume, Expire, Retire, Close.
@@ -171,6 +176,7 @@ struct SeriesOwnedActionArtifactsV5 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SeriesOwnedReleaseSourceV5 {
     template: ContentId,
+    capacity_profile: ContentId,
     consume_shadow_certificate_program: ContentId,
     actions: [SeriesOwnedActionArtifactsV5; SERIES_RELEASE_ACTION_COUNT_V5],
 }
@@ -180,6 +186,7 @@ impl SeriesOwnedReleaseSourceV5 {
     pub fn as_source(&self) -> SeriesReleaseSourceV5<'_> {
         SeriesReleaseSourceV5 {
             template: self.template,
+            capacity_profile: self.capacity_profile,
             consume_shadow_certificate_program: self.consume_shadow_certificate_program,
             actions: core::array::from_fn(|index| SeriesActionArtifactSourceV5 {
                 account_profile: &self.actions[index].account_profile,
@@ -191,6 +198,11 @@ impl SeriesOwnedReleaseSourceV5 {
                 authority: self.actions[index].authority,
             }),
         }
+    }
+
+    /// Schedule-independent capacity identity carried by every descriptor.
+    pub const fn capacity_profile(&self) -> ContentId {
+        self.capacity_profile
     }
 
     /// Borrow one exact action body for Registry publication without exposing
@@ -427,11 +439,53 @@ pub enum SeriesReleaseErrorV5 {
 /// Result returned by the current five-action release seam.
 pub type Result<T> = core::result::Result<T, SeriesReleaseErrorV5>;
 
+/// Derive the one capacity identity for a Consume executor geometry.
+///
+/// Schedule, Template content, occurrence identities, and request bodies are
+/// deliberately absent. The fixed Profile coordinates are first normalized
+/// through the release owner's width stamps, then the complete fixed vector,
+/// dynamic FundingState span, and proof-shaping occurrence count are hashed.
+/// Distinct supported geometries therefore remain distinct while differently
+/// timed Templates with the same geometry select the same executor identity.
+pub fn series_consume_capacity_profile_v1(
+    observed: &[u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
+    funding_count: u32,
+    occurrence_count: u32,
+) -> Result<ContentId> {
+    if funding_count == 0 || occurrence_count == 0 {
+        return Err(SeriesReleaseErrorV5::Geometry);
+    }
+    let mut lengths = *observed;
+    stamp_series_release_owned_widths_v4(
+        &mut lengths,
+        SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5 as u32,
+        SERIES_TICKET_STATE_BYTES_V3 as u32,
+    );
+    let mut encoded = [0_u8; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4 * 4];
+    for (word, bytes) in lengths.iter().zip(encoded.chunks_exact_mut(4)) {
+        bytes.copy_from_slice(&word.to_le_bytes());
+    }
+    content(
+        hashv(&[
+            SERIES_CONSUME_CAPACITY_PROFILE_DOMAIN_V1,
+            &funding_count.to_le_bytes(),
+            &occurrence_count.to_le_bytes(),
+            &encoded,
+        ])
+        .to_bytes(),
+    )
+}
+
 /// Invoke every current action-specific semantic owner and return one opaque
 /// bank that cannot be populated from arbitrary alternate artifact bytes.
 pub fn emit_current_series_release_source_v5(
     input: SeriesCurrentReleaseInputV5<'_>,
 ) -> Result<SeriesOwnedReleaseSourceV5> {
+    let capacity_profile = series_consume_capacity_profile_v1(
+        input.consume_observed_data_lengths,
+        input.consume_funding_count,
+        input.template_occurrence_count,
+    )?;
     let prepare_authority = prepare_authority(input.prepare_requests.projected_initialize)?;
     let consume_authority = consume_authority(
         input.template,
@@ -461,6 +515,7 @@ pub fn emit_current_series_release_source_v5(
         emit_series_close_funding_artifacts_v5().map_err(|_| SeriesReleaseErrorV5::Artifact)?;
     Ok(SeriesOwnedReleaseSourceV5 {
         template: input.template,
+        capacity_profile,
         consume_shadow_certificate_program: input.consume_shadow_certificate_program,
         actions: [
             SeriesOwnedActionArtifactsV5 {
@@ -593,7 +648,7 @@ pub fn compile_series_release_v5(source: SeriesReleaseSourceV5<'_>) -> Result<Se
             ..validated.ids
         };
         descriptors[index] =
-            encode_series_action_descriptor_v5(source.template, artifact_ids[index])?;
+            encode_series_action_descriptor_v5(source.capacity_profile, artifact_ids[index])?;
     }
     let entries: [CapabilityProgramSetEntryV2; SERIES_RELEASE_ACTION_COUNT_V5] =
         core::array::from_fn(|index| {
@@ -777,7 +832,7 @@ pub fn authenticate_series_selected_action_v5(
     }
     let descriptor = CapabilityProgramV4::decode(&release.descriptors[index])
         .map_err(|_| SeriesReleaseErrorV5::Descriptor)?;
-    if descriptor.capacity_profile() != source.template {
+    if descriptor.capacity_profile() != source.capacity_profile {
         return Err(SeriesReleaseErrorV5::Descriptor);
     }
     let validated = validate_action_source(action, source.actions[index])?;
@@ -977,7 +1032,7 @@ fn validate_action_authority(
 /// completeness gate exists to catch. This module is already host-only
 /// (`#[cfg(not(target_os = "solana"))]`), so nothing here reaches the ELF.
 pub fn encode_series_action_descriptor_v5(
-    template: ContentId,
+    capacity_profile: ContentId,
     ids: SeriesActionArtifactIdsV5,
 ) -> Result<[u8; CAPABILITY_PROGRAM_V4_BYTES]> {
     let reference = |schema, program| {
@@ -992,7 +1047,7 @@ pub fn encode_series_action_descriptor_v5(
         content(hash(SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3).to_bytes())?,
         content(hash(SERIES_ROOT_SCHEMA_PREIMAGE_V3).to_bytes())?,
         content(hash(SERIES_TICKET_DERIVATION_PREIMAGE_V3).to_bytes())?,
-        template,
+        capacity_profile,
         CapabilityArtifactsV4 {
             account_profile: reference(ACCOUNT_PROFILE_SCHEMA_ID_V3, ids.account_profile)?,
             request_profile: reference(
@@ -1222,10 +1277,17 @@ mod tests {
     }
 
     fn core(action: SeriesCoreActionV1) -> [u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3] {
+        core_for_template(action, id(18))
+    }
+
+    fn core_for_template(
+        action: SeriesCoreActionV1,
+        template: ContentId,
+    ) -> [u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3] {
         SeriesCoreRequestV1::occurrence(
             action,
             mid(1),
-            mid(18),
+            Identity::new(template.to_bytes()).expect("Template identity"),
             mid(19),
             mid(2),
             mid(20),
@@ -1253,6 +1315,14 @@ mod tests {
         parent_root: u8,
         template_occurrence_count: u32,
     ) -> SeriesOwnedReleaseSourceV5 {
+        current_source_with_template_root_and_count(id(18), parent_root, template_occurrence_count)
+    }
+
+    fn current_source_with_template_root_and_count(
+        template: ContentId,
+        parent_root: u8,
+        template_occurrence_count: u32,
+    ) -> SeriesOwnedReleaseSourceV5 {
         let root = [parent_root; 32];
         let prepare_initialize = projected(ProjectedCustodyOperationV1::Initialize, root)
             .encode()
@@ -1266,7 +1336,7 @@ mod tests {
         let consume_lock = projected(ProjectedCustodyOperationV1::LockHoardAndCloseSource, root)
             .encode()
             .expect("Consume projected lock");
-        let consume_core = core(SeriesCoreActionV1::Consume);
+        let consume_core = core_for_template(SeriesCoreActionV1::Consume, template);
         let consume_realize = projected(ProjectedCustodyOperationV1::RealizeAndClose, root)
             .encode()
             .expect("Consume projected realize");
@@ -1304,12 +1374,13 @@ mod tests {
             SeriesFoundingPermitV1::new(intent, mid(16), mid(17)).expect("permit"),
         );
         let expire_core =
-            SeriesCoreRequestV1::decode(&core(SeriesCoreActionV1::Expire)).expect("Expire Core");
+            SeriesCoreRequestV1::decode(&core_for_template(SeriesCoreActionV1::Expire, template))
+                .expect("Expire Core");
         let prepare_lengths = [0; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
         let consume_lengths = [0; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
         let expire_lengths = [0; SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize];
         emit_current_series_release_source_v5(SeriesCurrentReleaseInputV5 {
-            template: id(18),
+            template,
             template_occurrence_count,
             consume_shadow_certificate_program: id(90),
             prepare_profile: SeriesPrepareAccountProfileInputV5 {
@@ -1360,6 +1431,24 @@ mod tests {
         );
         let identity = hash(&preselection).to_bytes();
         assert!(StateLifecyclePolicyV5::decode_selected(identity, identity, &preselection).is_ok());
+    }
+
+    #[test]
+    fn distinct_template_identities_with_one_geometry_select_one_executor_capacity() {
+        let first = current_source_with_template_root_and_count(id(18), 7, 2);
+        let second = current_source_with_template_root_and_count(id(19), 7, 2);
+        assert_eq!(first.capacity_profile(), second.capacity_profile());
+        let first_release = compile_series_release_v5(first.as_source()).expect("first release");
+        let second_release = compile_series_release_v5(second.as_source()).expect("second release");
+        assert_eq!(first_release.program_set, second_release.program_set);
+        assert_eq!(first_release.descriptors, second_release.descriptors);
+
+        let mut changed_widths = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
+        changed_widths[42] = 1;
+        assert_ne!(
+            series_consume_capacity_profile_v1(&changed_widths, 3, 2).expect("changed geometry"),
+            first.capacity_profile()
+        );
     }
 
     fn family_request(action: SeriesActionV3) -> Vec<u8> {

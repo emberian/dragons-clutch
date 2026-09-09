@@ -22,28 +22,28 @@ remains a separate substrate.
 | **checked refused-only** | 1 | finalized native refusal and no native acceptance |
 | **refusal binding only** | 0 | authored `refused` binding without a checked native row |
 | **blocked** | 32 | no evidence or binding; a blocker records why and who owns it |
-| **unrecorded** | 4 | no evidence, binding or reason |
+| **unrecorded** | 5 | no evidence, binding or reason |
 
-- **historical accepted Agave union: 56 of 163** -- an
+- **historical accepted Agave union: 56 of 164** -- an
   `executed` finalized native observation in a checked census ledger or an
   `executed` corroborated devnet record. A binding cannot enter this set, and
   this count is not final-source acceptance.
-- **historical local-validator accepted: 11 of 163** --
+- **historical local-validator accepted: 11 of 164** --
   checked successful local-validator ledger rows.
-- **historical devnet accepted: 46 of 163** --
+- **historical devnet accepted: 46 of 164** --
   checked successful devnet records. The local and devnet sets can overlap, so
   their counts do not add to the union.
-- **successful-binding-only: 70 of 163** -- at
+- **successful-binding-only: 70 of 164** -- at
   least one campaign binding says `executed`, but no checked native observation
   in the repository does. Its declared substrate is useful provenance, not an
   acceptance result.
-- **checked refused-only: 1 of 163** -- a
+- **checked refused-only: 1 of 164** -- a
   finalized native refusal with no accepted native evidence. It proves a
   boundary was reached; it never proves the accepted poststate.
-- **refusal-binding-only: 0 of 163** -- an
+- **refusal-binding-only: 0 of 164** -- an
   authored refusal binding with no checked native row. It is a claim, not an
   observed refusal.
-- **no historical successful claim: 36 of 163** --
+- **no historical successful claim: 37 of 164** --
   no accepted native observation and no `executed` binding. This includes exact
   refusals, refusal claims, blocked rows and wholly unrecorded rows.
 
@@ -295,6 +295,7 @@ not decide which.
 | `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | devnet accepted (historical) | devnet `cohort-13` slot 491,961,396 `31Cb2kwwKq6x...`; devnet `cohort-15` slot 492,859,368 `6175QesqJoem...`; devnet `cohort-16` slot 493,679,672 `4okD9M7dt5ou...`; devnet `cohort-16` slot 493,759,241 `1w844QkEpqH2...`; devnet `cohort-16` slot 493,807,479 `2jYcvUovTEmo...`; binding register: `tier1` (executed) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-16-discovered.json` |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | program-test success claim | `source-abort-programtest` (executed); no checked native ledger row; binding register: `source-abort-programtest` (refused) | `tools/gauntlet/source-abort/bindings.json` |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | devnet accepted (historical) | devnet `cohort-13` slot 491,962,044 `2SLSaUPmp8VF...`; devnet `cohort-15` slot 492,860,006 `jcPdTXejyb5u...`; devnet `cohort-16` slot 493,680,300 `5mFH17NLYaJn...`; devnet `cohort-16` slot 493,759,885 `3nRZ5KoFYgXX...`; devnet `cohort-16` slot 493,808,124 `4XsgqgxmZX3u...`; binding register: `tier1` (executed), `tier1` (refused) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-16-discovered.json` |
+| `trading/scoring_dealer_v1::close::process_dealer_close_v1` | unrecorded | no evidence, binding or reason recorded | -- |
 | `trading/scoring_dealer_v1::fill::process_dealer_fill_v1` | local-validator accepted (historical) | local-validator `scoring-dealer-local-validator` slot 8,408 `5juD5dkRCVfD...`; binding register: `scoring-dealer-local-validator` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` |
 | `trading/scoring_dealer_v1::found::process_dealer_found_v1` | local-validator accepted (historical) | local-validator `scoring-dealer-local-validator` slot 8,214 `4DPottw5ENC3...`; binding register: `scoring-dealer-local-validator` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` |
 | `trading/scoring_dealer_v1::quote::process_dealer_quote_v1` | local-validator accepted (historical) | local-validator `scoring-dealer-local-validator` slot 8,246 `3Xc6iDeP6otx...`; binding register: `scoring-dealer-local-validator` (executed) | `docs/evidence/execution-coverage-2026-09-08/exact-local-ledger.json` |

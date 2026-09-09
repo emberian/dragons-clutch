@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Prove the load simulator end-to-end against a HELD private-validator probe:
+# Run the existing load simulator against the journey's HELD validator:
 #   config from the handoff -> one preflight -> N executed cycles with
 #   reconciliation -> a byte-identical resume proof.
-# Usage: run-local.sh PROBE_WORK SIM_WORK CYCLES
+# Usage: run-local.sh HANDOFF_JSON SIM_WORK CYCLES [BOOTSTRAP_BIN]
 set -euo pipefail
 die() { echo "REFUSED: $*" >&2; exit 2; }
-PROBE="${1:-}"; SIMWORK="${2:-}"; CYCLES="${3:-3}"
-[ -d "$PROBE" ] || die "PROBE_WORK must be a held probe --work dir"
+HANDOFF="${1:-}"; SIMWORK="${2:-}"; CYCLES="${3:-3}"
+[ -f "$HANDOFF" ] || die "HANDOFF_JSON must be the journey's participant handoff"
 [ -n "$SIMWORK" ] || die "SIM_WORK required"
+case "$CYCLES" in ''|*[!0-9]*) die "CYCLES must be a positive count" ;; esac
+[ "$CYCLES" -gt 0 ] || die "CYCLES must be a positive count"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="$SIMWORK.config.json"
+EXTRA=()
+if [ -n "${4:-}" ]; then EXTRA=(--bootstrap-bin "$4"); fi
 
 python3 "$HERE/build_config_from_probe.py" \
-  --probe-work "$PROBE" --sim-work "$SIMWORK" --output "$CONFIG"
+  --handoff "$HANDOFF" --sim-work "$SIMWORK" --output "$CONFIG" "${EXTRA[@]}"
 
 echo "== preflight (signs nothing)"
 python3 "$HERE/simulator.py" run --config "$CONFIG" --cycles 1

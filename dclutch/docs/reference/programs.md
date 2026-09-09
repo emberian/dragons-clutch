@@ -17,7 +17,7 @@ reachable inside an entry route's request.
 | `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 23 | 175 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:99) |
 | `core` | `dclutch-core-sbf` | 0x3 | 20 | 13 | 40 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:374) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 6 | 15 | 45 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:229) |
-| `registry` | `dclutch-registry-sbf` | 0x1 | 7 | 4 | 22 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:244) |
+| `registry` | `dclutch-registry-sbf` | 0x1 | 7 | 4 | 22 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:245) |
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:128) |
 | `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 11 | 23 | 44 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:390) |
-| `trading` | `dclutch-trading-sbf` | 0x4 | 24 | 2 | 87 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1609) |
+| `trading` | `dclutch-trading-sbf` | 0x4 | 25 | 2 | 93 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1609) |

@@ -44,7 +44,7 @@ pub const FUNDING_READINESS_MAX_OBSERVATION_ACCOUNTS_V1: usize =
 /// Exact semantic account count in one terminal-admission observation.
 pub const SOURCE_TERMINAL_OBSERVATION_ACCOUNTS_V1: usize = 21;
 /// Maximum semantic account count in one Source close observation.
-pub const SOURCE_CLOSE_FUND_OBSERVATION_ACCOUNTS_V1: usize = 21;
+pub const SOURCE_CLOSE_FUND_OBSERVATION_ACCOUNTS_V1: usize = 32;
 
 /// One finalized Registry record and its vacant staging cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,7 +119,7 @@ pub struct SourceTerminalFrameV1 {
 }
 
 /// Exact derived frame for one direct Source funding close.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceCloseFundFrameV1 {
     /// Existing release-selected Source funding frame.
     pub readiness: FundingReadinessFrameV1,
@@ -127,6 +127,8 @@ pub struct SourceCloseFundFrameV1 {
     pub certificate: Pubkey,
     /// Canonical vacant or finalized closure receipt.
     pub closure_receipt: Pubkey,
+    /// Canonical writable Ensemble and recovery receipt retirement tail.
+    pub retirement_artifacts: Vec<Pubkey>,
 }
 
 /// Optional System transfer required immediately before the protocol act.
@@ -511,6 +513,7 @@ pub fn source_close_fund_observation_addresses_v1(
         addresses.push(recovery.raw);
         addresses.push(recovery.staging);
     }
+    addresses.extend_from_slice(&frame.retirement_artifacts);
     if addresses.len() > SOURCE_CLOSE_FUND_OBSERVATION_ACCOUNTS_V1
         || addresses.iter().copied().collect::<BTreeSet<_>>().len() != addresses.len()
     {
@@ -596,6 +599,11 @@ pub fn plan_source_close_fund_v1(
                 .unwrap_or(readiness.coordinates.source_material)
                 .staging,
         )?,
+        retirement_artifacts: frame
+            .retirement_artifacts
+            .iter()
+            .map(|key| account(*key))
+            .collect::<Result<Vec<_>, _>>()?,
     };
     let exact_rent = source_closure_receipt_rent_lamports_v1(&snapshot.rent_sysvar)
         .map_err(|error| operator_refusal("CloseFund receipt rent", error))?;
@@ -627,12 +635,13 @@ pub fn plan_source_close_fund_v1(
     let report = build_resolution_direct_close_fund_v1(&snapshot)
         .map_err(|error| operator_refusal("CloseFund", error))?;
     let instruction = report.instruction.clone();
-    let completion = vec![
+    let mut completion = vec![
         readiness.coordinates.source_state,
         readiness.coordinates.funding_ledger,
         frame.closure_receipt,
         readiness.coordinates.beneficiary,
     ];
+    completion.extend_from_slice(&frame.retirement_artifacts);
     Ok(SourceCloseFundPlanV1::Close(Box::new(instruction_plan_v1(
         &instruction,
         report,

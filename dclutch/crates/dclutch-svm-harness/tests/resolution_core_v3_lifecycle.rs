@@ -86,16 +86,16 @@ use dclutch_source::pyth::{
     FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
 };
 use dclutch_source::relay::instruction::{
-    AdvanceRecoveryInstructionV1, CommitDeadlineFailureInstructionV1,
+    AdvanceRecoveryInstructionV1, CommitDeadlineFailureInstructionV1, EnsembleFoldInstructionV1,
 };
 use dclutch_source::resolution::{
-    EnsembleFragmentSeatSeedsV1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
-    FundingActivationReceiptV1, PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3,
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
-    ResolutionCertificateKindV2, ResolutionCertificateV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+    EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1,
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, FundingActivationReceiptV1,
+    PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
+    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_source::{
     CapacityEnvelope, ContentId as SourceContentId, ENSEMBLE_FOLD_RECEIPT_V1_BYTES, EnsembleSpecV1,
@@ -2941,9 +2941,78 @@ async fn close_snapshot(
     fixture: &Fixture,
 ) -> ResolutionCloseFundSnapshotV3 {
     let source_material = required_observed(context, fixture.source_material.raw).await;
+    let material = SourceMaterialV3::decode(&source_material.data).expect("Source material");
     let source_material_staging = vacant_observed(fixture.source_material.staging);
     let (recovery_policy, recovery_policy_staging) =
         optional_recovery_policy_pair(context, fixture).await;
+    let policy = material
+        .recovery_policy()
+        .map(|_| RecoveryPolicyV2::decode(&recovery_policy.data).expect("Recovery policy"));
+    let ensemble = material.ensemble();
+    let recovery_rungs = match policy {
+        Some(policy) if ensemble.is_single() => policy.attempt_count(),
+        Some(_) => material.ensemble_rungs(),
+        None => 0,
+    };
+    let mut retirement_artifacts = Vec::new();
+    if !ensemble.is_single() {
+        for member in 0..ensemble.members() {
+            let seeds = EnsembleFragmentSeatSeedsV1::new(fixture.source.to_bytes(), member, 1);
+            retirement_artifacts.push(
+                observed_or_vacant(
+                    context,
+                    Pubkey::find_program_address(&seeds.seeds(), &RESOLUTION_PROGRAM_ID).0,
+                )
+                .await,
+            );
+        }
+        let seeds = EnsembleFoldReceiptSeatSeedsV1::new(fixture.source.to_bytes(), 1);
+        retirement_artifacts.push(
+            observed_or_vacant(
+                context,
+                Pubkey::find_program_address(&seeds.seeds(), &RESOLUTION_PROGRAM_ID).0,
+            )
+            .await,
+        );
+    }
+    for ordinal in 0..recovery_rungs {
+        let sequence = u64::from(ordinal) + 2;
+        retirement_artifacts.push(
+            observed_or_vacant(
+                context,
+                Pubkey::find_program_address(
+                    &[
+                        RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                        fixture.source.as_ref(),
+                        &[ResolutionCertificateKindV2::RecoveryAdvanced.kind_seed()],
+                        &sequence.to_le_bytes(),
+                    ],
+                    &RESOLUTION_PROGRAM_ID,
+                )
+                .0,
+            )
+            .await,
+        );
+    }
+    if recovery_rungs != 0 {
+        let sequence = u64::from(recovery_rungs) + 2;
+        retirement_artifacts.push(
+            observed_or_vacant(
+                context,
+                Pubkey::find_program_address(
+                    &[
+                        RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                        fixture.source.as_ref(),
+                        &[ResolutionCertificateKindV2::Exhausted.kind_seed()],
+                        &sequence.to_le_bytes(),
+                    ],
+                    &RESOLUTION_PROGRAM_ID,
+                )
+                .0,
+            )
+            .await,
+        );
+    }
     ResolutionCloseFundSnapshotV3 {
         market: required_observed(context, fixture.market).await,
         activation_cache: required_observed(context, fixture.activation).await,
@@ -2966,6 +3035,7 @@ async fn close_snapshot(
         system_program: required_observed(context, system_program::ID).await,
         recovery_policy,
         recovery_policy_staging,
+        retirement_artifacts,
     }
 }
 
@@ -3093,6 +3163,8 @@ async fn ensemble_five_row_funding_activates_every_resolution_compartment() {
         .expect("unstarted ProgramTest")
         .start_with_context()
         .await;
+    let encoded_vaa =
+        pyth_provider::initialize_real_providers(&mut context, fixture.provider).await;
     let mut clock = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -3266,6 +3338,237 @@ async fn ensemble_five_row_funding_activates_every_resolution_compartment() {
             .funded_rent_minimum(ledger_account.data.len())
             .expect("recorded four-row rent"),
         "the receipt commits the authenticated ledger width rather than the obsolete three-row width"
+    );
+
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
+            .expect("the activated Ensemble is exactly ready");
+    submit(&mut context, &[verify.instruction])
+        .await
+        .expect("Core accepts the Ensemble activation receipt");
+    for operation in [OperationV1::InitializeReplay, OperationV1::OpenVault] {
+        let instruction = open_instruction(&mut context, &fixture, payer, operation).await;
+        submit(&mut context, &[instruction])
+            .await
+            .expect("Core opens the funded Ensemble market");
+    }
+
+    let post_update_body = pyth_provider::RECEIVER_POST_UPDATE
+        .get(8..)
+        .expect("Receiver PostUpdate body")
+        .to_vec();
+    let provider_submit = build_provider_submit_v3(
+        &provider_submit_snapshot(&mut context, &fixture, encoded_vaa).await,
+        provider_submit_deployment(&fixture),
+        &ProviderSubmitIntentV3 {
+            submitter: payer,
+            refund_recipient: fixture.rent_credit,
+            update_account: fixture.update.pubkey(),
+            reclaim_after_unix_seconds: TERMINAL_TIME + i64::from(WINDOW_MAX_AGE_SECONDS),
+            post_update_body: post_update_body.clone(),
+        },
+    )
+    .expect("the Ensemble producer accepts its finalized provider graph");
+    let lifecycle_rent = Rent::default().minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+    pyth_provider::submit(
+        &mut context,
+        &[
+            transfer(&payer, &provider_submit.lifecycle, lifecycle_rent),
+            provider_submit.instruction,
+        ],
+        &[&fixture.update],
+    )
+    .await
+    .expect("the real Receiver posts the Ensemble member update");
+
+    let captors = [Keypair::new(), Keypair::new(), Keypair::new()];
+    let worker = Keypair::new();
+    let empty_account_rent = Rent::default().minimum_balance(0);
+    let mut fund_actors = captors
+        .iter()
+        .map(|captor| transfer(&payer, &captor.pubkey(), empty_account_rent))
+        .collect::<Vec<_>>();
+    fund_actors.push(transfer(&payer, &worker.pubkey(), empty_account_rent));
+    submit(&mut context, &fund_actors)
+        .await
+        .expect("fund distinct Ensemble captors and fold worker");
+    let capture = build_provider_ensemble_member_execute_v3(
+        &provider_execute_recovery_snapshot(&mut context, &fixture, provider_submit.lifecycle)
+            .await,
+        provider_execute_deployment(&fixture),
+        &ProviderEnsembleMemberExecuteIntentV3 {
+            resolver: captors[1].pubkey(),
+            terminal_sequence: 1,
+            member: 1,
+            post_update_body,
+        },
+    )
+    .expect("member one capture uses its prepaid canonical seat");
+    pyth_provider::submit(&mut context, &[capture.instruction], &[&captors[1]])
+        .await
+        .expect("one accepted member capture satisfies the declared one-of-three quorum");
+
+    let material = SourceMaterialV3::decode(
+        &observed(&mut context, fixture.source_material.raw)
+            .await
+            .expect("SourceMaterial")
+            .data,
+    )
+    .expect("SourceMaterial");
+    let ensemble = material.ensemble();
+    let seats = (0..ensemble.members())
+        .map(|member| {
+            let seeds = EnsembleFragmentSeatSeedsV1::new(fixture.source.to_bytes(), member, 1);
+            Pubkey::find_program_address(&seeds.seeds(), &RESOLUTION_PROGRAM_ID).0
+        })
+        .collect::<Vec<_>>();
+    let fold_seeds = EnsembleFoldReceiptSeatSeedsV1::new(fixture.source.to_bytes(), 1);
+    let fold_receipt = Pubkey::find_program_address(&fold_seeds.seeds(), &RESOLUTION_PROGRAM_ID).0;
+    let success_certificate = Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+            fixture.source.as_ref(),
+            &[ResolutionCertificateKindV2::ResolutionSuccess.kind_seed()],
+            &1_u64.to_le_bytes(),
+        ],
+        &RESOLUTION_PROGRAM_ID,
+    )
+    .0;
+    assert_eq!(success_certificate, fixture.certificate);
+    let mut fold_accounts = vec![
+        AccountMeta::new(worker.pubkey(), true),
+        AccountMeta::new_readonly(fixture.market, false),
+        AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.activation, false),
+        AccountMeta::new(fixture.source, false),
+        AccountMeta::new(success_certificate, false),
+        AccountMeta::new(fold_receipt, false),
+        AccountMeta::new_readonly(fixture.source_material.raw, false),
+        AccountMeta::new_readonly(fixture.source_material.staging, false),
+        AccountMeta::new_readonly(fixture.source_spec.raw, false),
+        AccountMeta::new_readonly(fixture.source_spec.staging, false),
+        AccountMeta::new_readonly(fixture.window.raw, false),
+        AccountMeta::new_readonly(fixture.window.staging, false),
+        AccountMeta::new_readonly(fixture.statistic.raw, false),
+        AccountMeta::new_readonly(fixture.statistic.staging, false),
+        AccountMeta::new_readonly(fixture.recovery_policy.raw, false),
+        AccountMeta::new_readonly(fixture.recovery_policy.staging, false),
+        AccountMeta::new_readonly(fixture.product.raw, false),
+        AccountMeta::new_readonly(fixture.product.staging, false),
+        AccountMeta::new_readonly(fixture.domain.raw, false),
+        AccountMeta::new_readonly(fixture.domain.staging, false),
+        AccountMeta::new_readonly(fixture.portfolio.raw, false),
+        AccountMeta::new_readonly(fixture.portfolio.staging, false),
+        AccountMeta::new_readonly(fixture.capability_manifest.raw, false),
+        AccountMeta::new_readonly(fixture.capability_manifest.staging, false),
+        AccountMeta::new(fixture.funding, false),
+        AccountMeta::new_readonly(sysvar::clock::ID, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    fold_accounts.extend(
+        seats
+            .iter()
+            .copied()
+            .map(|seat| AccountMeta::new_readonly(seat, false)),
+    );
+    fold_accounts.extend(
+        captors
+            .iter()
+            .map(|captor| AccountMeta::new(captor.pubkey(), false)),
+    );
+    let current_slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock")
+        .slot;
+    context
+        .warp_to_slot(current_slot + 1)
+        .expect("advance the fold blockhash");
+    let mut closed_clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    closed_clock.unix_timestamp = TERMINAL_TIME + i64::from(WINDOW_MAX_AGE_SECONDS) + 1;
+    context.set_sysvar(&closed_clock);
+    pyth_provider::submit(
+        &mut context,
+        &[Instruction {
+            program_id: RESOLUTION_PROGRAM_ID,
+            accounts: fold_accounts,
+            data: EnsembleFoldInstructionV1::new(GENERATION, 1)
+                .expect("Ensemble fold request")
+                .to_bytes()
+                .expect("Ensemble fold bytes")
+                .to_vec(),
+        }],
+        &[&worker],
+    )
+    .await
+    .expect("the funded one-of-three quorum folds into the terminal certificate");
+
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("Core authenticates the folded terminal");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core admits the folded terminal");
+    submit(&mut context, &[begin_retiring_instruction(&fixture)])
+        .await
+        .expect("the folded market begins retirement");
+    let beneficiary_before_close = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("beneficiary before close")
+        .lamports;
+    let mut source_subtree_before_close = observed(&mut context, fixture.source)
+        .await
+        .expect("Source before close")
+        .lamports;
+    for seat in &seats {
+        source_subtree_before_close += observed(&mut context, *seat)
+            .await
+            .expect("prepaid or written member seat")
+            .lamports;
+    }
+    source_subtree_before_close += observed(&mut context, fold_receipt)
+        .await
+        .expect("written fold receipt")
+        .lamports;
+    let closure_rent = Rent::default().minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
+    submit(
+        &mut context,
+        &[transfer(&payer, &fixture.closure, closure_rent)],
+    )
+    .await
+    .expect("prepay the canonical closure receipt");
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
+            .expect("the folded Ensemble has one canonical retirement tail");
+    submit(&mut context, &[close.instruction.clone()])
+        .await
+        .expect("close refunds every Ensemble terminal artifact");
+    assert!(observed(&mut context, fixture.source).await.is_none());
+    assert!(observed(&mut context, fixture.funding).await.is_none());
+    for seat in &seats {
+        assert!(observed(&mut context, *seat).await.is_none());
+    }
+    assert!(observed(&mut context, fold_receipt).await.is_none());
+    let closure = SourceClosureReceiptV3::decode(
+        &observed(&mut context, fixture.closure)
+            .await
+            .expect("Ensemble Source closure receipt")
+            .data,
+    )
+    .expect("Ensemble closure receipt");
+    assert_exhaustive_closure_receipt(closure, &close);
+    assert_eq!(closure.source_refund_lamports, source_subtree_before_close);
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("beneficiary after close")
+            .lamports,
+        beneficiary_before_close + close.expected_retirement_facts.refund_lamports,
     );
 }
 
@@ -5113,6 +5416,117 @@ async fn a_two_source_market_walks_its_funded_ladder_and_every_rung_pays_a_stran
         "three rungs, three bounties, one ledger left holding exactly its rent"
     );
 
+    // RETIREMENT. The terminal certificate remains durable evidence, while
+    // both canonical crank receipts are ephemeral Source children whose rent
+    // returns to the beneficiary named before the market opened.
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("Core derives the exhausted ladder terminal");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core admits the exhausted ladder terminal");
+    submit(&mut context, &[begin_retiring_instruction(&fixture)])
+        .await
+        .expect("the exhausted ladder begins authenticated retirement");
+    let beneficiary_before_close = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("beneficiary before recovery close")
+        .lamports;
+    let source_subtree_before_close = observed(&mut context, fixture.source)
+        .await
+        .expect("Source before recovery close")
+        .lamports
+        + observed(&mut context, fixture.recovery_advanced_certificate)
+            .await
+            .expect("advance receipt before recovery close")
+            .lamports
+        + observed(&mut context, fixture.recovery_exhausted_certificate)
+            .await
+            .expect("exhaustion receipt before recovery close")
+            .lamports;
+    let closure_rent = Rent::default().minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
+    submit(
+        &mut context,
+        &[transfer(&payer, &fixture.closure, closure_rent)],
+    )
+    .await
+    .expect("prepay the exhausted ladder closure receipt");
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
+            .expect("the exhausted ladder has one canonical retirement tail");
+
+    // HOSTILE -- substituting the exhaustion receipt for the advance receipt
+    // duplicates an account and refuses at the exact physical frame. The
+    // whole late close, including every child receipt and its refund, rolls
+    // back atomically.
+    let mut substituted = close.instruction.clone();
+    let advance_index = substituted
+        .accounts
+        .iter()
+        .position(|meta| meta.pubkey == fixture.recovery_advanced_certificate)
+        .expect("advance receipt in direct close tail");
+    substituted.accounts[advance_index].pubkey = fixture.recovery_exhausted_certificate;
+    let rollback_keys = [
+        fixture.market,
+        fixture.source,
+        fixture.funding,
+        fixture.certificate,
+        fixture.closure,
+        fixture.rent_credit,
+        fixture.recovery_advanced_certificate,
+        fixture.recovery_exhausted_certificate,
+    ];
+    let before_substitution = observed_accounts(&mut context, &rollback_keys).await;
+    let refusal = submit(&mut context, &[substituted])
+        .await
+        .expect_err("a substituted recovery receipt must refuse close");
+    assert!(
+        matches!(
+            refusal,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::AccountFrame as u32
+        ),
+        "a substituted recovery receipt must refuse as Resolution AccountFrame, got {refusal:?}"
+    );
+    assert_eq!(
+        observed_accounts(&mut context, &rollback_keys).await,
+        before_substitution,
+        "the substituted tail rolls back Source, ledger, closure, both receipts, and beneficiary"
+    );
+
+    submit(&mut context, &[close.instruction.clone()])
+        .await
+        .expect("close refunds the exhausted ladder's complete terminal subtree");
+    assert!(observed(&mut context, fixture.source).await.is_none());
+    assert!(observed(&mut context, fixture.funding).await.is_none());
+    assert!(
+        observed(&mut context, fixture.recovery_advanced_certificate)
+            .await
+            .is_none()
+    );
+    assert!(
+        observed(&mut context, fixture.recovery_exhausted_certificate)
+            .await
+            .is_none()
+    );
+    let closure = SourceClosureReceiptV3::decode(
+        &observed(&mut context, fixture.closure)
+            .await
+            .expect("exhausted ladder Source closure receipt")
+            .data,
+    )
+    .expect("exhausted ladder closure receipt");
+    assert_exhaustive_closure_receipt(closure, &close);
+    assert_eq!(closure.source_refund_lamports, source_subtree_before_close);
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("beneficiary after recovery close")
+            .lamports,
+        beneficiary_before_close + close.expected_retirement_facts.refund_lamports,
+    );
+
     println!(
         "RECOVERY LADDER CU: advance={advance_units} exhaust={exhaust_units} \
          failure={failure_units}"
@@ -5690,20 +6104,12 @@ async fn a_silent_provider_cannot_strand_a_market_and_the_walker_is_paid() {
         "and every lamport of it comes out of the escrow that promised it"
     );
 
-    // HOSTILE — the walk is paid once, and the ESCROW is what says so.
+    // HOSTILE — the walk is paid once, and the Source sequence says so before
+    // the already-spent escrow is even consulted.
     //
-    // I expected `Transition` here: the Source has left `Primary`, so
-    // `exhaust_after_primary_deadline` must refuse. It does — but it never
-    // runs. `plan_deadline_failure_v1` debits before it transitions, on purpose
-    // ("a walk that cannot be paid for cannot move the market either"), so the
-    // second walk dies one step earlier, in `release_in_place`, against a
-    // Bounty compartment that is already empty. `Funding`, not `Transition`.
-    //
-    // That is a stronger fact than the one I assumed, and it is only visible
-    // because the discriminant is named: the bound on how many times this walk
-    // pays is not the state machine's monotonicity, it is that the market
-    // escrowed exactly one bounty and it has been spent. A bare `is_err()`
-    // would have shown me the refusal I predicted rather than the one there is.
+    // The terminal Source has already consumed sequence one. The same packet
+    // therefore refuses as `Instruction` at the canonical-sequence join; the
+    // rollback assertion below independently proves it pays no second bounty.
     let before_replay = retirement_snapshot(&mut context, &fixture).await;
     let replay = pyth_provider::submit(
         &mut context,
@@ -5718,9 +6124,9 @@ async fn a_silent_provider_cannot_strand_a_market_and_the_walker_is_paid() {
             BanksClientError::TransactionError(TransactionError::InstructionError(
                 0,
                 InstructionError::Custom(code)
-            )) if code == ResolutionError::Funding as u32
+            )) if code == ResolutionError::Instruction as u32
         ),
-        "a replayed walk must refuse as Resolution Funding against a spent bounty, got {replay:?}"
+        "a replayed walk must refuse as Resolution Instruction against its spent sequence, got {replay:?}"
     );
     assert_eq!(
         retirement_snapshot(&mut context, &fixture).await,

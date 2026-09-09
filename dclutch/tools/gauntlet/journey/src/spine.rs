@@ -703,13 +703,7 @@ pub(crate) fn activate_direct_capability(
 /// This assembles that directory out of the prepare report's own role files by
 /// copying, never by minting: a tier that generated a key here would be
 /// trading between two identities the founding never admitted.
-pub(crate) fn fill(
-    rpc: &mut Rpc,
-    context: &SpineContextV1<'_>,
-    spine: &mut SpineV1,
-    buyer_report: &Path,
-) -> Result<()> {
-    let stage = "trading: a Direct Hot fill between the founder and an admitted stranger";
+pub(crate) fn fill_key_directory(context: &SpineContextV1<'_>) -> Result<PathBuf> {
     let key_dir = context.dir("fill-keys")?;
     for (role, name) in [
         ("core-upgrade-authority", "core-upgrade-authority.json"),
@@ -721,6 +715,17 @@ pub(crate) fn fill(
             std::fs::copy(context.key(role)?, &destination)?;
         }
     }
+    Ok(key_dir)
+}
+
+pub(crate) fn fill(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    buyer_report: &Path,
+) -> Result<()> {
+    let stage = "trading: a Direct Hot fill between the founder and an admitted stranger";
+    let key_dir = fill_key_directory(context)?;
     let output_dir = context.dir("fill")?;
     let session = output_dir.join("direct-trade-session.json");
     let finalized = output_dir.join("direct-trade-finalized.json");

@@ -1396,8 +1396,8 @@ pub(crate) fn observe_local_series_scenario_v1(
 /// manifest, current Rent quote, and a finalized slot.  Every generator and
 /// derivation identity is domain-separated from that exact M0 manifest; no
 /// repeated-byte fixture identity is admitted.  Both occurrence partitions
-/// reserve current fixed-layout rent before dividing the funded collateral,
-/// so their committed principal can never exceed the real source budget.
+/// split the complete collateral-token source while naming native account rent
+/// in separate funding compartments paid by the transaction fee payer.
 pub(crate) fn local_series_founder_scenario_v1(
     plan: &SuccessorPlan,
     child_market: &MarketRunInput,
@@ -1436,29 +1436,8 @@ pub(crate) fn local_series_founder_scenario_v1(
     );
     let founding_work =
         rent.minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3);
-    let one_reserve = market_rent
-        .checked_add(capability_native)
-        .and_then(|value| value.checked_add(founding_work))
-        .ok_or_else(|| Error::new("Series local scenario rent reserve overflow"))?;
-    let total_reserve = one_reserve
-        .checked_mul(2)
-        .ok_or_else(|| Error::new("Series local scenario two-occurrence reserve overflow"))?;
-    let distributable = founder_source_amount
-        .checked_sub(total_reserve)
-        .ok_or_else(|| {
-            Error::new(
-                "Series local scenario observed founder source cannot prepay two child rents",
-            )
-        })?;
-    let first_principal = distributable / 2;
-    let second_principal = distributable
-        .checked_sub(first_principal)
-        .ok_or_else(|| Error::new("Series local scenario principal partition overflow"))?;
-    if first_principal == 0 || second_principal == 0 {
-        return Err(Error::new(
-            "Series local scenario leaves a zero child Hoard principal",
-        ));
-    }
+    let [first_principal, second_principal] =
+        split_series_hoard_principal_v1(founder_source_amount)?;
     let funding = |label: &[u8],
                    hoard_principal|
      -> Result<crate::series_founder::SeriesOccurrenceFundingV1> {
@@ -1495,6 +1474,19 @@ pub(crate) fn local_series_founder_scenario_v1(
             funding(b"occurrence-1", second_principal)?,
         ],
     ))
+}
+
+fn split_series_hoard_principal_v1(founder_source_amount: u64) -> Result<[u64; 2]> {
+    let first = founder_source_amount / 2;
+    let second = founder_source_amount
+        .checked_sub(first)
+        .ok_or_else(|| Error::new("Series local scenario principal partition overflow"))?;
+    if first == 0 || second == 0 {
+        return Err(Error::new(
+            "Series local scenario leaves a zero child Hoard principal",
+        ));
+    }
+    Ok([first, second])
 }
 
 /// Prepare the canonical two-leaf M0 founder from a live validator snapshot.
@@ -1557,10 +1549,10 @@ pub(crate) fn prepare_local_series_founder_from_market_v1(
 /// accelerator release and evidence bytes used to form `release_sources`;
 /// this boundary accepts no text-form certificate identity.
 pub(crate) fn build_series_shadow_preselection_v1(
-    template_bytes: &[u8],
+    occurrence_count: u32,
     fixed_data_lengths: &[u32;
         dclutch_series_shadow_bundle_generator::SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
-    children: &dclutch_operator::series_child_bank_v1::SeriesChildBankV1,
+    funding_count: u32,
     evidence: &crate::series_checked_evidence::CheckedSeriesShadowEvidenceV1,
 ) -> Result<dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1> {
     use dclutch_series_shadow_bundle_generator::{
@@ -1570,11 +1562,9 @@ pub(crate) fn build_series_shadow_preselection_v1(
     use dclutch_trading::series::{
         SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
         SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
-        SERIES_TICKET_DERIVATION_PREIMAGE_V3, TemplateV3, replay::SERIES_STATE_BYTES_V3,
+        SERIES_TICKET_DERIVATION_PREIMAGE_V3, replay::SERIES_STATE_BYTES_V3,
     };
 
-    let template = TemplateV3::decode(template_bytes)
-        .map_err(|error| Error::new(format!("Series Shadow Template decode: {error:?}")))?;
     let identity = |bytes: [u8; 32], label: &str| {
         ContentId::new(bytes).map_err(|_| Error::new(format!("Series Shadow {label} identity")))
     };
@@ -1596,8 +1586,13 @@ pub(crate) fn build_series_shadow_preselection_v1(
             Sha256::digest(SERIES_TICKET_DERIVATION_PREIMAGE_V3).into(),
             "Ticket derivation",
         )?,
-        capacity_profile: dclutch_trading::series::template_content_id(template_bytes)
-            .map_err(|_| Error::new("Series Shadow Template content identity"))?,
+        capacity_profile:
+            dclutch_trading_sbf::series::release_v5::series_consume_capacity_profile_v1(
+                fixed_data_lengths,
+                funding_count,
+                occurrence_count,
+            )
+            .map_err(|error| Error::new(format!("Series Shadow capacity: {error:?}")))?,
         root_state_bytes: u32::try_from(SERIES_STATE_BYTES_V3)
             .map_err(|_| Error::new("Series Shadow root state width escaped u32"))?,
     };
@@ -1619,8 +1614,8 @@ pub(crate) fn build_series_shadow_preselection_v1(
         },
         lifecycle: &lifecycle,
         fixed_data_lengths,
-        child_requests: children.consume_requests(),
-        occurrence_count: template.occurrence_count(),
+        funding_count,
+        occurrence_count,
     })
     .map_err(|error| Error::new(format!("Series Shadow preselection refused: {error:?}")))?;
     let certificate: [u8; 32] = Sha256::digest(built.certificate).into();
@@ -2660,6 +2655,16 @@ mod prepare_hydrator_tests {
                 .to_string(),
             "Series selected manifest entry exceeds the funding mask"
         );
+    }
+
+    #[test]
+    fn collateral_atoms_are_partitioned_without_subtracting_native_rent() {
+        let source_atoms = 1_000_001;
+        let [first, second] =
+            split_series_hoard_principal_v1(source_atoms).expect("nonzero partition");
+        assert_eq!(first.checked_add(second), Some(source_atoms));
+        assert_eq!(first, 500_000);
+        assert_eq!(second, 500_001);
     }
 
     fn projected(root: Pubkey) -> ProjectedCustodyRequestV1 {

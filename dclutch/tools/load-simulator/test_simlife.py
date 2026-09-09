@@ -972,7 +972,7 @@ class DriverPrimitiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             evidence = Path(work) / "evidence.json"
             evidence.write_text(json.dumps({
-                "payer": "P", "execution": {"market": {"accounts": {"collateral_mint": {"address": "M"}}}},
+                "payer": "P", "execution": {"market": {"basis_scale": 1, "accounts": {"collateral_mint": {"address": "M"}}}},
             }))
             market_input = Path(work) / "market.json"
             market_input.write_text(json.dumps({"coefficients": [1, 0]}))
@@ -990,7 +990,7 @@ class DriverPrimitiveTests(unittest.TestCase):
                 )
             }
             evidence = Path(work) / "evidence.json"
-            evidence.write_text(json.dumps({"payer": "P", "execution": {"market": {"accounts": accounts}}}))
+            evidence.write_text(json.dumps({"payer": "P", "execution": {"market": {"basis_scale": 2, "accounts": accounts}}}))
             market_input = Path(work) / "market.json"
             market_input.write_text(json.dumps({"coefficients": [1, 1, 0]}))
             founded = drivers.founded_market_from_evidence("m00", evidence, market_input, Path(work))
@@ -998,9 +998,33 @@ class DriverPrimitiveTests(unittest.TestCase):
             binding = founded.census_binding()
             self.assertIn("participant_fixture_source", binding["tokens"])
             self.assertEqual(binding["outcome_count"], 3)
-            # The claim unit is the CHAIN's, not the plan's: the basis compiler
-            # hard-wires it and the census must be told the truth.
-            self.assertEqual(binding["claim_unit_atoms"], 1)
+            # The claim unit is the native founding producer's authenticated
+            # ProductBasis read, carried unchanged by this Python adapter.
+            self.assertEqual(binding["claim_unit_atoms"], 2)
+
+    def test_a_missing_or_invalid_native_basis_scale_is_refused_not_defaulted(self):
+        with tempfile.TemporaryDirectory() as work:
+            accounts = {
+                name: {"address": name.upper()} for name in (
+                    "founding_market", "collateral_mint", "founding_hoard_vault",
+                    "claims_aggregate", "founder_position", "collateral_wallet",
+                )
+            }
+            evidence = Path(work) / "evidence.json"
+            market_input = Path(work) / "market.json"
+            market_input.write_text(json.dumps({"coefficients": [1, 1, 0]}))
+            for invalid in (None, 0, True, "2"):
+                market = {"accounts": accounts}
+                if invalid is not None:
+                    market["basis_scale"] = invalid
+                evidence.write_text(json.dumps({
+                    "payer": "P", "execution": {"market": market},
+                }))
+                with self.assertRaises(drivers.DriverRefusal) as caught:
+                    drivers.founded_market_from_evidence(
+                        "m00", evidence, market_input, Path(work)
+                    )
+                self.assertIn("refuses to invent a claim unit", str(caught.exception))
 
 
 RECORDING_BOOT = """#!/bin/sh
@@ -1093,7 +1117,7 @@ activation-v1` existed, no local Direct fill was reachable at any market width.
         }
         evidence = work / "evidence.json"
         evidence.write_text(json.dumps({
-            "payer": "PAYER", "execution": {"market": {"accounts": accounts}, "completed": True},
+            "payer": "PAYER", "execution": {"market": {"basis_scale": 2, "accounts": accounts}, "completed": True},
         }))
         market_input = work / "market.json"
         market_input.write_text(json.dumps({"coefficients": [1, 1, 0]}))

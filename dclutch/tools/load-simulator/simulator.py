@@ -39,6 +39,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 from typing import Any, Optional
 import urllib.request
 
@@ -246,6 +247,13 @@ class Simulator:
         self.work = Path(config["work_dir"])
         self.work.mkdir(parents=True, exist_ok=True)
         os.chmod(self.work, 0o700)
+        if not self.execute:
+            # Dry and executing plans intentionally differ. Sharing their
+            # cycle journals made the documented preflight -> --execute flow
+            # refuse with JournalConflict. Isolate every dry invocation so it
+            # also cannot reuse an old producer plan or overwrite live status.
+            self.work = Path(tempfile.mkdtemp(prefix="preflight-", dir=self.work))
+            print(f"preflight artifacts: {self.work}")
         self.journal_root = self.work / "journal"
         self.stop = simcore.StopFlag()
         cadence = config.get("cadence", {})
@@ -298,7 +306,9 @@ class Simulator:
         # chain holding collateral, so a restarted run must keep naming them or
         # its first census violates L1 over its own predecessor's trade.
         self.direct_token_bindings: dict = {}
-        sessions = self.work / "sessions"
+        # These are read-only account bindings, not resumable dry-run plans.
+        # Preflight must still count collateral held by earlier real trades.
+        sessions = Path(config["work_dir"]) / "sessions"
         if sessions.is_dir():
             for session in sorted(sessions.glob("cycle-*")):
                 self.adopt_direct_token_bindings(session)
@@ -853,6 +863,7 @@ class Simulator:
                     if sig not in self.signatures:
                         self.signatures.append(sig)
                 self.trades_landed = max(self.trades_landed, existing.get("trades_landed_total", 0))
+                recon = existing.get("reconciliation")
                 cycle += 1
                 continue
             journal.record(simcore.PHASE_PLANNED, plan)

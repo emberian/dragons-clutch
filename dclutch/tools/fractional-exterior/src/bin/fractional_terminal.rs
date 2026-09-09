@@ -52,8 +52,9 @@ use solana_sdk::{
 use dclutch_claims::{
     custody_replay_v1::ClaimsCustodyReplayRequestV1,
     fractional::{
-        FractionalCapabilityRootV4, FractionalExposureActionV2, FractionalExposureRequestInputV2,
-        FractionalExposureRequestV2, decode_fractional_capability_root_v4,
+        FRACTIONAL_TERMINAL_ROOT_V3, FractionalCapabilityRootV4, FractionalExposureActionV2,
+        FractionalExposureRequestInputV2, FractionalExposureRequestV2,
+        decode_fractional_capability_root_v4,
     },
     fractional_kernel::{
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
@@ -1066,7 +1067,7 @@ fn execute(
                     .to_bytes(),
                 )
                 .to_bytes(),
-                exposure: staged.base.exposure,
+                exposure: terms.exposure_id(),
                 owner: sleeper.pubkey().to_bytes(),
                 source_token_account: staged.base.sleeper_token.to_bytes(),
                 destination_token_account: [0; 32],
@@ -1117,7 +1118,7 @@ fn execute(
     );
     let exposure_bytes = client.get_account_data(&exposure_pair.0)?;
     let child = vec![
-        AccountMeta::new_readonly(caller_authority, false),
+        AccountMeta::new_readonly(caller_authority, true),
         AccountMeta::new(staged.base.aggregate, false),
         AccountMeta::new_readonly(basis_pair.0, false),
         AccountMeta::new_readonly(basis_pair.1, false),
@@ -1157,7 +1158,7 @@ fn execute(
         AccountMeta::new_readonly(terms_pair.1, false),
         AccountMeta::new_readonly(behavior_pair.0, false),
         AccountMeta::new_readonly(behavior_pair.1, false),
-        AccountMeta::new(staged.base.root, false),
+        AccountMeta::new(staged.base.root, true),
         AccountMeta::new_readonly(sleeper.pubkey(), true),
         AccountMeta::new(staged.base.shard_mint, false),
         AccountMeta::new(staged.base.sleeper_token, false),
@@ -1171,7 +1172,14 @@ fn execute(
     )
     .map_err(|error| Error::new(format!("terminal Claims builder: {error:?}")))?;
     let mut outer_accounts = vec![AccountMeta::new_readonly(stage::CLAIMS, false)];
-    outer_accounts.extend(child);
+    outer_accounts.extend(child.iter().enumerate().map(|(index, account)| {
+        let pda_signer = index == 0 || index == FRACTIONAL_TERMINAL_ROOT_V3;
+        AccountMeta {
+            pubkey: account.pubkey,
+            is_signer: account.is_signer && !pda_signer,
+            is_writable: account.is_writable,
+        }
+    }));
     let mut wrapper = vec![0];
     wrapper.extend_from_slice(&request_data);
     let outer = Instruction {

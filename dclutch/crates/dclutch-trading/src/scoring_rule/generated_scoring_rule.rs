@@ -90,6 +90,7 @@ pub const QUOTE_REQUEST_MAGIC: [u8; 8] = *b"DCLSQTR1";
 pub const FILL_REQUEST_MAGIC: [u8; 8] = *b"DCLSFLR1";
 pub const WITHDRAW_REQUEST_MAGIC: [u8; 8] = *b"DCLSWDR1";
 pub const REDEEM_REQUEST_MAGIC: [u8; 8] = *b"DCLSRDR1";
+pub const CLOSE_REQUEST_MAGIC: [u8; 8] = *b"DCLSCLR1";
 pub const RECEIPT_MAGIC: [u8; 8] = *b"DCLSRCP1";
 pub const FILL_WITNESS_MAGIC: [u8; 8] = *b"DCLSFLW1";
 pub const RULE_PDA_DOMAIN: &[u8] = b"dclutch:scoring-rule:v1";
@@ -106,6 +107,7 @@ pub const QUOTE_REQUEST_BYTES: usize = 88;
 pub const FILL_REQUEST_BYTES: usize = 512;
 pub const WITHDRAW_REQUEST_BYTES: usize = 96;
 pub const REDEEM_REQUEST_BYTES: usize = 88;
+pub const CLOSE_REQUEST_BYTES: usize = 88;
 pub const RECEIPT_BYTES: usize = 192;
 pub const FILL_WITNESS_BYTES: usize = 272;
 pub const RULE_MAGIC_OFFSET: usize = 0;
@@ -191,6 +193,12 @@ pub const REDEEM_REQUEST_RESERVED_OFFSET: usize = 10;
 pub const REDEEM_REQUEST_MARKET_OFFSET: usize = 16;
 pub const REDEEM_REQUEST_DEALER_ID_OFFSET: usize = 48;
 pub const REDEEM_REQUEST_EXPECTED_FUND_REVISION_OFFSET: usize = 80;
+pub const CLOSE_REQUEST_MAGIC_OFFSET: usize = 0;
+pub const CLOSE_REQUEST_VERSION_OFFSET: usize = 8;
+pub const CLOSE_REQUEST_RESERVED_OFFSET: usize = 10;
+pub const CLOSE_REQUEST_MARKET_OFFSET: usize = 16;
+pub const CLOSE_REQUEST_DEALER_ID_OFFSET: usize = 48;
+pub const CLOSE_REQUEST_EXPECTED_FUND_REVISION_OFFSET: usize = 80;
 pub const RECEIPT_MAGIC_OFFSET: usize = 0;
 pub const RECEIPT_VERSION_OFFSET: usize = 8;
 pub const RECEIPT_ROUTE_OFFSET: usize = 10;
@@ -221,6 +229,7 @@ pub const ROUTE_QUOTE: u8 = 1;
 pub const ROUTE_FILL: u8 = 2;
 pub const ROUTE_WITHDRAW: u8 = 3;
 pub const ROUTE_REDEEM: u8 = 4;
+pub const ROUTE_CLOSE: u8 = 5;
 pub const REDEEM_ACCOUNT_COUNT: usize = 9;
 pub const REDEEM_PAYER_ACCOUNT: usize = 0;
 pub const REDEEM_FUND_ACCOUNT: usize = 1;
@@ -233,6 +242,30 @@ pub const REDEEM_ACTIVATION_CACHE_ACCOUNT: usize = 7;
 pub const REDEEM_REGISTRY_PROGRAM_ACCOUNT: usize = 8;
 pub const REDEEM_WRITABLE: [bool; 9] = [true, true, false, false, true, false, false, false, false];
 pub const REDEEM_SIGNER: [bool; 9] = [true, false, false, false, false, false, false, false, false];
+pub const CLOSE_ACCOUNT_COUNT: usize = 15;
+pub const CLOSE_PAYER_ACCOUNT: usize = 0;
+pub const CLOSE_FUND_ACCOUNT: usize = 1;
+pub const CLOSE_RULE_ACCOUNT: usize = 2;
+pub const CLOSE_QUOTE_ACCOUNT: usize = 3;
+pub const CLOSE_MARKET_ACCOUNT: usize = 4;
+pub const CLOSE_VAULT_ACCOUNT: usize = 5;
+pub const CLOSE_SPONSOR_ACCOUNT: usize = 6;
+pub const CLOSE_CLAIMS_PROGRAM_ACCOUNT: usize = 7;
+pub const CLOSE_CUSTODY_PROGRAM_ACCOUNT: usize = 8;
+pub const CLOSE_ACTIVATION_CACHE_ACCOUNT: usize = 9;
+pub const CLOSE_REGISTRY_PROGRAM_ACCOUNT: usize = 10;
+pub const CLOSE_MINT_ACCOUNT: usize = 11;
+pub const CLOSE_TOKEN_PROGRAM_ACCOUNT: usize = 12;
+pub const CLOSE_RENT_CREDIT_ACCOUNT: usize = 13;
+pub const CLOSE_RENT_PROGRAM_ACCOUNT: usize = 14;
+pub const CLOSE_WRITABLE: [bool; 15] = [
+    true, true, true, true, false, true, true, false, false, false, false, false, false, true,
+    false,
+];
+pub const CLOSE_SIGNER: [bool; 15] = [
+    true, false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false,
+];
 pub const FOUND_ACCOUNT_COUNT: usize = 21;
 pub const FOUND_SPONSOR_ACCOUNT: usize = 0;
 pub const FOUND_FUND_ACCOUNT: usize = 1;

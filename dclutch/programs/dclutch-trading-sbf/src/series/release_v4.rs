@@ -257,7 +257,7 @@ pub fn assemble_series_consume_descriptor_v4(
     action_header_schema: [u8; 32],
     root_schema: [u8; 32],
     ticket_derivation: [u8; 32],
-    config_id: [u8; 32],
+    capacity_profile: [u8; 32],
     state_bytes: u32,
 ) -> Result<CapabilityProgramV4> {
     for artifact in [supplied.effect, supplied.lifecycle, supplied.strategy] {
@@ -277,7 +277,7 @@ pub fn assemble_series_consume_descriptor_v4(
         identity(action_header_schema)?,
         identity(root_schema)?,
         identity(ticket_derivation)?,
-        identity(config_id)?,
+        identity(capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: reference(
                 supplied.account_profile_schema,
@@ -527,7 +527,7 @@ fn encode_series_consume_descriptor_framed_v4(
     effect: &[u8],
     lifecycle: &[u8],
     strategy: &[u8; EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
-    template: ContentId,
+    capacity_profile: ContentId,
 ) -> SelectedResult<[u8; CAPABILITY_PROGRAM_V4_BYTES]> {
     Ok(assemble_series_consume_descriptor_v4(
         emitted,
@@ -546,7 +546,7 @@ fn encode_series_consume_descriptor_framed_v4(
         hash(SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3).to_bytes(),
         hash(SERIES_ROOT_SCHEMA_PREIMAGE_V3).to_bytes(),
         hash(SERIES_TICKET_DERIVATION_PREIMAGE_V3).to_bytes(),
-        template.to_bytes(),
+        capacity_profile.to_bytes(),
         u32::try_from(SERIES_STATE_BYTES_V3)
             .map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?,
     )
@@ -601,12 +601,18 @@ pub fn series_consume_selected_release_v4(
             .map_err(|_| SeriesSelectedReleaseErrorV4::Strategy)?,
     )?;
 
+    let capacity_profile = super::release_v5::series_consume_capacity_profile_v1(
+        input.observed_data_lengths,
+        1,
+        input.template_occurrence_count,
+    )
+    .map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?;
     let descriptor = encode_series_consume_descriptor_framed_v4(
         &emitted,
         &effect,
         &lifecycle,
         &strategy,
-        input.template,
+        capacity_profile,
     )?;
 
     let descriptor_id = hash(&descriptor).to_bytes();

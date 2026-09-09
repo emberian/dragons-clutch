@@ -322,13 +322,22 @@ impl Fixture {
         )
         .expect("canonical empty LifecycleV5");
         let widths = [64; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4];
+        let occurrence_count = TemplateV3::decode(&SERIES_EXAMPLE_TEMPLATE_V3)
+            .expect("example Template decodes")
+            .occurrence_count();
         let descriptor_semantics = SeriesShadowDescriptorSemanticsV4 {
             kind: identity(60),
             config_schema: identity(61),
             request_schema: identity(62),
             root_schema: identity(63),
             derivation_policy: identity(64),
-            capacity_profile: identity(65),
+            capacity_profile:
+                dclutch_trading_sbf::series::release_v5::series_consume_capacity_profile_v1(
+                    &widths,
+                    1,
+                    occurrence_count,
+                )
+                .expect("test capacity"),
             root_state_bytes: 64,
         };
         let accelerator_semantic_release = identity(66);
@@ -340,9 +349,8 @@ impl Fixture {
         // declare its two duplicate proof ranges. Compiling for any other
         // count produces a different descriptor and the operator refuses.
         let compiled = compile_series_shadow_bundle_v4(SeriesShadowBundleSourceV4 {
-            occurrence_count: TemplateV3::decode(&SERIES_EXAMPLE_TEMPLATE_V3)
-                .expect("example Template decodes")
-                .occurrence_count(),
+            occurrence_count,
+            funding_count: 1,
             descriptor: descriptor_semantics,
             release_sources: SeriesShadowReleaseSourcesV4 {
                 semantic_source: SEMANTIC_SOURCE,
@@ -353,12 +361,6 @@ impl Fixture {
             },
             lifecycle: &lifecycle,
             fixed_data_lengths: &widths,
-            child_requests: SeriesConsumeChildRequestsV4 {
-                lock: &lock,
-                core: &core,
-                realize: &realize,
-                claims: &claims,
-            },
         })
         .expect("exact generated bundle");
         let descriptor = Vec::from(compiled.capability_program);
@@ -473,6 +475,7 @@ impl Fixture {
             account_widths: SeriesShadowAccountWidthsV1 {
                 observation: self.observation,
                 fixed_data_lengths: &self.widths,
+                funding_count: 1,
             },
             child_requests: SeriesConsumeChildRequestsV4 {
                 lock: &self.lock,
@@ -512,12 +515,7 @@ impl Fixture {
             },
             lifecycle: &self.lifecycle,
             fixed_data_lengths: &self.widths,
-            child_requests: SeriesConsumeChildRequestsV4 {
-                lock: &self.lock,
-                core: &self.core,
-                realize: &self.realize,
-                claims: &self.claims,
-            },
+            funding_count: 1,
         }
     }
 }
