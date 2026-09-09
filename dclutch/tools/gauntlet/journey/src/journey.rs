@@ -934,6 +934,11 @@ fn finish_held_after_terminal_v1(
             )
         }
     };
+    // The refresh authenticates founding admission rows. Redemption closes
+    // those rows, so retirement's read-only evidence must exist first even
+    // though the retirement mutations remain ordered after every payout and
+    // Position close.
+    spine::prepare_retirement_refresh_v1(&context)?;
     spine::settle_fee(
         &mut rpc,
         &context,

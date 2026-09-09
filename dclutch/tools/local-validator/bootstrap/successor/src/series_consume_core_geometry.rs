@@ -28,7 +28,7 @@ use crate::{
     series_consume_geometry::{
         SERIES_CONSUME_CORE_FOUND_START_V1, SERIES_CONSUME_CORE_OPEN_START_V1,
         SeriesConsumeGeometryInputV1, SeriesConsumeRoleSourceV1, final_source_v1, m0_source_v1,
-        put_series_consume_role_v1, vacancy_v1,
+        prepared_prediction_v1, put_series_consume_role_v1, vacancy_v1,
     },
     series_found_prepare_driver::SeriesPrepareFinalizedRecordV1,
     series_found_prepare_input::SeriesParentRootFactV1,
@@ -496,14 +496,14 @@ fn populate_open_v1<'a>(
     Ok(())
 }
 
-fn parent_root_source_v1<'a>(
+pub(crate) fn parent_root_source_v1<'a>(
     input: &'a SeriesConsumeGeometryInputV1<'a>,
 ) -> Result<SeriesConsumeRoleSourceV1<'a>> {
     let expected =
         dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5;
     match input.parent_root {
         SeriesParentRootFactV1::Predicted(prediction) if prediction.data_len == expected => {
-            vacancy_v1(
+            prepared_prediction_v1(
                 "predicted active Series root",
                 prediction.root,
                 prediction.data_len,

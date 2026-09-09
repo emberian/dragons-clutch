@@ -2,6 +2,9 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
+#[path = "open_batch/verify_continuation.rs"]
+mod verify_continuation;
+
 use std::{env, fs, path::PathBuf};
 
 use dclutch_chain_bundle_builder::{
@@ -920,6 +923,12 @@ struct EvidenceCorpusV1 {
     submitted_candidate: Option<BuiltAccountV1>,
     /// The exact immutable bytes a maker signed (`PlaceOrder`'s sole evidence).
     order_terms: Option<BuiltAccountV1>,
+    /// Solver-published canonical page carrying the next execution row.
+    candidate_page: Option<BuiltAccountV1>,
+    /// Live Order created by this campaign's PlaceOrder.
+    order_account: Option<BuiltAccountV1>,
+    /// Exact manifest chunk produced by replaying that row.
+    settlement_manifest: Option<BuiltAccountV1>,
 }
 
 impl EvidenceCorpusV1 {
@@ -928,6 +937,9 @@ impl EvidenceCorpusV1 {
         GeneralRequestEvidenceV1 {
             candidate_image: self.candidate_image.as_ref().map(built_bytes),
             signed_order_terms: self.order_terms.as_ref().map(built_bytes),
+            candidate_page: self.candidate_page.as_ref().map(built_bytes),
+            order_account: self.order_account.as_ref().map(built_bytes),
+            settlement_manifest: self.settlement_manifest.as_ref().map(built_bytes),
             ..GeneralRequestEvidenceV1::default()
         }
     }
@@ -957,6 +969,18 @@ impl EvidenceCorpusV1 {
                 &self.submitted_candidate,
             ),
             (GeneralReadonlyEvidenceKindV3::OrderTerms, &self.order_terms),
+            (
+                GeneralReadonlyEvidenceKindV3::CandidatePage,
+                &self.candidate_page,
+            ),
+            (
+                GeneralReadonlyEvidenceKindV3::EscrowedOrder,
+                &self.order_account,
+            ),
+            (
+                GeneralReadonlyEvidenceKindV3::SettlementManifest,
+                &self.settlement_manifest,
+            ),
         ]
         .into_iter()
         .filter_map(|(kind, value)| {
@@ -3719,7 +3743,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
             &campaign.rent,
             submission.to_bytes().to_vec(),
         )),
-        order_terms: None,
+        ..EvidenceCorpusV1::default()
     };
     let submit_chain = ChainPrestateV1 {
         market: observed_binding(&mut context, campaign.state.market.key).await,

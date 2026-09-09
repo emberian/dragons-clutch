@@ -881,7 +881,8 @@ fn function_fact(
     }
 }
 
-/// Every first-party crate a program's manifest reaches, transitively.
+/// Every first-party runtime dependency a program's manifest reaches,
+/// transitively.
 ///
 /// A guard is written where its state machine's discriminant lives, which for
 /// six of this tree's machines is a codec crate rather than a program. The
@@ -890,8 +891,12 @@ fn function_fact(
 /// refuses, which is right -- so the guard descent gets its own wider index
 /// instead, and this is what tells it how wide.
 ///
-/// Read from the manifests rather than globbed, so a crate a program does not
-/// depend on can never contribute a gate to its routes.
+/// Read from dependency sections in the manifests rather than globbed, so a
+/// crate the program does not link can never contribute a gate to its routes.
+/// In particular, dev dependencies compile native tests rather than the
+/// program. Treating their path entries as runtime edges can even walk back
+/// into the program through an optional operator dependency, indexing every
+/// program guard twice and making each one unresolvable.
 fn first_party_dependencies(root: &Path, manifest: &Path) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
@@ -903,7 +908,23 @@ fn first_party_dependencies(root: &Path, manifest: &Path) -> Vec<PathBuf> {
         let Some(directory) = manifest.parent() else {
             continue;
         };
+        let mut dependency_section = false;
         for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') {
+                let header = trimmed
+                    .split_once('#')
+                    .map_or(trimmed, |(before, _)| before.trim_end());
+                dependency_section = header == "[dependencies]"
+                    || header.starts_with("[dependencies.")
+                    || (header.starts_with("[target.")
+                        && (header.ends_with(".dependencies]")
+                            || header.contains(".dependencies.")));
+                continue;
+            }
+            if !dependency_section || trimmed.starts_with('#') {
+                continue;
+            }
             let Some(rest) = line.split_once("path = \"") else {
                 continue;
             };
@@ -929,6 +950,98 @@ fn first_party_dependencies(root: &Path, manifest: &Path) -> Vec<PathBuf> {
     }
     found.sort();
     found
+}
+
+#[cfg(test)]
+mod dependency_source_tests {
+    use super::first_party_dependencies;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "dclutch-census-dependency-sources-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create fixture root");
+            Self(path)
+        }
+
+        fn crate_dir(&self, relative: &str, manifest: &str) -> PathBuf {
+            let directory = self.0.join(relative);
+            fs::create_dir_all(directory.join("src")).expect("create fixture crate");
+            fs::write(directory.join("Cargo.toml"), manifest).expect("write fixture manifest");
+            directory
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).expect("remove fixture");
+        }
+    }
+
+    /// A native test helper is not part of the program's chain dispatch
+    /// namespace. In particular, an optional edge from that helper back to
+    /// the program must not index every program function a second time and
+    /// make its guards ambiguous.
+    #[test]
+    fn dev_dependency_is_not_a_program_guard_dependency() {
+        let fixture = Fixture::new();
+        let trading = fixture.crate_dir(
+            "programs/trading",
+            "[dependencies] # ordinary runtime table\n\
+             codec = { path = \"../../crates/codec\" }\n\
+             [target.'cfg(target_os = \"solana\")'.dependencies] # target runtime table\n\
+             target-codec = { path = \"../../crates/target-codec\" }\n\
+             [dev-dependencies] # native tests only\n\
+             operator = { path = \"../../crates/operator\" }\n\
+             [build-dependencies] # build process only\n\
+             builder = { path = \"../../crates/builder\" }\n",
+        );
+        let codec = fixture.crate_dir("crates/codec", "[dependencies]\n");
+        let target_codec = fixture.crate_dir("crates/target-codec", "[dependencies]\n");
+        fixture.crate_dir(
+            "crates/operator",
+            "[dependencies]\ntrading = { path = \"../../programs/trading\", optional = true }\n",
+        );
+        fixture.crate_dir(
+            "crates/builder",
+            "[dependencies]\ntrading = { path = \"../../programs/trading\", optional = true }\n",
+        );
+        let root = fixture
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root");
+
+        assert_eq!(
+            first_party_dependencies(&root, &trading.join("Cargo.toml")),
+            vec![
+                codec
+                    .join("src")
+                    .canonicalize()
+                    .expect("canonical codec src"),
+                target_codec
+                    .join("src")
+                    .canonicalize()
+                    .expect("canonical target codec src"),
+            ]
+        );
+    }
 }
 
 /// Index one source text as if it were a whole crate.

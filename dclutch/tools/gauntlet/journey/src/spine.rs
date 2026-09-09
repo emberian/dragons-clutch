@@ -2043,6 +2043,33 @@ fn close_position(
 
 // ---------------------------------------------------------------- retirement
 
+/// Capture the immutable founding rows retirement will need before redemption
+/// closes the user admission accounts that the refresh authenticates.
+pub(crate) fn prepare_retirement_refresh_v1(context: &SpineContextV1<'_>) -> Result<PathBuf> {
+    let refresh = context.work.join("refresh.json");
+    if !refresh.exists() {
+        crate::evidence_refresh::run_owned_loopback(vec![
+            "--rpc-url".to_owned(),
+            context.rpc_url.to_owned(),
+            "--plan".to_owned(),
+            context.plan.display().to_string(),
+            "--expected-plan-sha256".to_owned(),
+            digest_of(context.plan)?,
+            "--market-input".to_owned(),
+            context.market_input.display().to_string(),
+            "--expected-market-input-sha256".to_owned(),
+            digest_of(context.market_input)?,
+            "--campaign-report".to_owned(),
+            context.campaign_report.display().to_string(),
+            "--expected-campaign-report-sha256".to_owned(),
+            digest_of(context.campaign_report)?,
+            "--output".to_owned(),
+            refresh.display().to_string(),
+        ])?;
+    }
+    Ok(refresh)
+}
+
 /// Close the fund, begin retiring, and drive the four checkpointed packets to
 /// **Retired**.
 ///
@@ -2072,40 +2099,8 @@ pub(crate) fn retire(
     fee_payer: Pubkey,
     fee_payer_keypair: &Path,
 ) -> Result<()> {
-    let refresh = context.work.join("refresh.json");
+    let refresh = prepare_retirement_refresh_v1(context)?;
     let refresh_stage = "retirement: the founding's evidence is refreshed against the live chain";
-    if !refresh.exists() {
-        let arguments = vec![
-            "--rpc-url".to_owned(),
-            context.rpc_url.to_owned(),
-            "--plan".to_owned(),
-            context.plan.display().to_string(),
-            "--expected-plan-sha256".to_owned(),
-            digest_of(context.plan)?,
-            "--market-input".to_owned(),
-            context.market_input.display().to_string(),
-            "--expected-market-input-sha256".to_owned(),
-            digest_of(context.market_input)?,
-            "--campaign-report".to_owned(),
-            context.campaign_report.display().to_string(),
-            "--expected-campaign-report-sha256".to_owned(),
-            digest_of(context.campaign_report)?,
-            "--output".to_owned(),
-            refresh.display().to_string(),
-        ];
-        if let Err(error) = crate::evidence_refresh::run_owned_loopback(arguments) {
-            spine.refused(
-                refresh_stage,
-                &error.to_string(),
-                format!(
-                    "`local-private-validator-refresh-evidence-v1` refused: {error}. It cannot \
-                     write to the chain by construction, so this is a statement about the three \
-                     documents it pins and the accounts it re-read."
-                ),
-            );
-            return Ok(());
-        }
-    }
     spine.stages.push(StageReportV1 {
         stage: refresh_stage.into(),
         outcome: "executed".into(),

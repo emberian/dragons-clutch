@@ -82,8 +82,8 @@ pub(crate) struct SeriesConsumeGeometryInputV1<'a> {
 }
 
 /// One named physical source for one fixed Consume coordinate.  The two
-/// prediction forms are intentionally distinct: Prepare-owned accounts have
-/// a canonical eventual layout before Prepare has materialized them, whereas
+/// prediction forms are intentionally distinct: parent activation and Prepare
+/// accounts have a canonical eventual layout before materialization, whereas
 /// Consume-owned accounts must begin as zero-width vacancies.
 #[derive(Clone, Debug)]
 pub(crate) enum SeriesConsumeRoleSourceV1<'a> {
@@ -147,7 +147,7 @@ pub(crate) fn vacancy_v1(
     })
 }
 
-/// Name an account which Prepare will create before Consume.  This is only
+/// Name an account parent activation or Prepare creates before Consume. This is only
 /// legal during the compiler's pre-Prepare normalization pass; the observed
 /// post-Prepare pass must replace it with a finalized source.
 pub(crate) fn prepared_prediction_v1(
@@ -303,36 +303,7 @@ pub(crate) fn populate_series_consume_prefix_v1<'a>(
     input: &'a SeriesConsumeGeometryInputV1<'a>,
     roles: &mut [Option<SeriesConsumeRoleSourceV1<'a>>; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
 ) -> Result<()> {
-    let root = match input.parent_root {
-        SeriesParentRootFactV1::Predicted(prediction) => {
-            let expected =
-                dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5;
-            if prediction.data_len != expected {
-                return Err(Error::new(
-                    "Series Consume predicted root width differed from the release layout",
-                ));
-            }
-            prepared_prediction_v1(
-                "predicted Series root",
-                prediction.root,
-                prediction.data_len,
-            )?
-        }
-        SeriesParentRootFactV1::Finalized {
-            root,
-            observed_data_len,
-            ..
-        } => {
-            if observed_data_len
-                != dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5
-            {
-                return Err(Error::new(
-                    "Series Consume finalized root width differed from the release layout",
-                ));
-            }
-            final_source_v1("active Series root", root, input.trading, None)
-        }
-    };
+    let root = crate::series_consume_core_geometry::parent_root_source_v1(input)?;
     put_series_consume_role_v1(roles, 0, root)?;
     put_series_consume_role_v1(
         roles,
@@ -476,6 +447,28 @@ pub(crate) fn resolve_series_consume_aliases_v1<'a>(
     Ok(())
 }
 
+fn series_consume_snapshot_addresses_v1(
+    roles: &[SeriesConsumeRoleSourceV1<'_>],
+) -> Result<Vec<Pubkey>> {
+    let mut addresses = Vec::new();
+    for role in roles {
+        let address = role.address();
+        let native_system = matches!(
+            role,
+            SeriesConsumeRoleSourceV1::Finalized { expected_owner, .. }
+                if address == solana_sdk_ids::system_program::ID
+                    && *expected_owner == solana_sdk_ids::native_loader::ID
+        );
+        if address == Pubkey::default() && !native_system {
+            return Err(Error::new("Series Consume role named default Pubkey"));
+        }
+        if !addresses.contains(&address) {
+            addresses.push(address);
+        }
+    }
+    Ok(addresses)
+}
+
 /// Observe one complete canonical Consume frame at a single finalized slot.
 /// Semantic route ownership ends before this function: it only validates the
 /// finalized/predicted distinction and turns it into the frozen width vector.
@@ -490,16 +483,7 @@ pub(crate) fn observe_series_consume_roles_v1(
         ));
     }
     require_series_consume_alias_addresses_v1(roles)?;
-    let mut addresses = Vec::new();
-    for role in roles {
-        let address = role.address();
-        if address == Pubkey::default() {
-            return Err(Error::new("Series Consume role named default Pubkey"));
-        }
-        if !addresses.contains(&address) {
-            addresses.push(address);
-        }
-    }
+    let addresses = series_consume_snapshot_addresses_v1(roles)?;
     let (_, snapshot) = rpc.finalized_accounts(&addresses, minimum_slot)?;
     let accounts = addresses
         .into_iter()
@@ -597,6 +581,33 @@ mod tests {
         tests::{compiler_input_with_plan, prepared_founder_with_plan},
     };
     use crate::series_found_prepare_driver::SeriesPrepareFinalizedRecordV1;
+
+    #[test]
+    fn snapshot_accepts_only_native_system_at_the_default_address() {
+        let system = final_source_v1(
+            "System program",
+            solana_sdk_ids::system_program::ID,
+            solana_sdk_ids::native_loader::ID,
+            None,
+        );
+        assert_eq!(
+            series_consume_snapshot_addresses_v1(&[system])
+                .expect("canonical native System program"),
+            vec![solana_sdk_ids::system_program::ID],
+        );
+        let hostile_sources = [
+            vacancy_v1("substituted future PDA", Pubkey::default(), 0).unwrap(),
+            final_source_v1("wrong owner", Pubkey::default(), Pubkey::new_unique(), None),
+        ];
+        for source in hostile_sources {
+            assert_eq!(
+                series_consume_snapshot_addresses_v1(&[source])
+                    .unwrap_err()
+                    .to_string(),
+                "Series Consume role named default Pubkey",
+            );
+        }
+    }
 
     fn published(
         registry: Pubkey,
@@ -1031,6 +1042,23 @@ mod tests {
         };
         let roles = derive_series_consume_role_sources_v1(&input)
             .expect("all prefix, Custody, Claims, and Core routes derive");
+        let predicted_input = SeriesConsumeGeometryInputV1 {
+            parent_root: SeriesParentRootFactV1::Predicted(
+                crate::series_found_prepare_input::SeriesPredictedParentRootV1 {
+                    root: parent_root,
+                    data_len: dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
+                },
+            ),
+            ..input
+        };
+        let predicted_roles = derive_series_consume_role_sources_v1(&predicted_input)
+            .expect("pre-founding parent root preserves its eventual Consume layout");
+        assert!(matches!(
+            predicted_roles[0],
+            SeriesConsumeRoleSourceV1::PreparedPrediction { fixed_data_len, .. }
+                if fixed_data_len as usize
+                    == dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5
+        ));
         assert!(matches!(
             roles[SERIES_CONSUME_CLAIMS_START_V1 + 31],
             SeriesConsumeRoleSourceV1::ConsumeVacancy {

@@ -435,7 +435,7 @@ fn process_admit(
     {
         return Err(ProtocolPositionSbfErrorV2::Rent.into());
     }
-    authenticate_vacancy(program_id, accounts.common, request, position_width)?;
+    let vacancy = authenticate_vacancy(program_id, accounts.common, request, position_width)?;
     let zero_balances = vec![
         0_u64;
         usize::try_from(market.claim_count)
@@ -474,12 +474,12 @@ fn process_admit(
         .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
 
     crate::claims_cu_checkpoint!("position-admit-candidates");
-    let position_bump = allocate_pair(program_id, accounts, request, position_width)?;
+    let position_bump = allocate_pair(accounts.system, vacancy)?;
     crate::claims_cu_checkpoint!("position-admit-allocated");
     // The Position records the bump this act signed it into existence with, so
     // every later reader reproduces its address instead of searching for it.
-    // The bump is only known after `allocate_pair` derives it, and the body is
-    // not committed until below, so this is the last moment it can be stamped.
+    // Vacancy authentication derived this bump, and allocation signed with
+    // that same witness; stamp it before the candidate body is committed.
     let mut position_candidate = position_candidate;
     put_liability_basis_position_bump_v2(&mut position_candidate, position_bump)
         .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
@@ -1129,12 +1129,26 @@ fn authenticate_core_rent_beneficiary(
     Ok(())
 }
 
-fn authenticate_vacancy(
-    program_id: &Pubkey,
-    accounts: CommonAccounts<'_, '_>,
+/// Frame-local witness for the exact pair whose vacant prestates were checked.
+/// Only candidate construction intervenes before allocation: it performs no
+/// CPI or account mutation. Account keys and the program id cannot change in
+/// this frame; System still validates each carried signer seed on allocation.
+struct AuthenticatedPositionVacancyV2<'accounts, 'info> {
+    program_id: &'accounts Pubkey,
+    common: CommonAccounts<'accounts, 'info>,
+    position_width: usize,
+    position_seeds: ProtocolPositionSeedsV2,
+    admission_seeds: ProtocolPositionAdmissionSeedsV2,
+    position_bump: [u8; 1],
+    admission_bump: [u8; 1],
+}
+
+fn authenticate_vacancy<'accounts, 'info>(
+    program_id: &'accounts Pubkey,
+    accounts: CommonAccounts<'accounts, 'info>,
     request: ProtocolPositionRequestV2,
     position_width: usize,
-) -> Result<(), ProgramError> {
+) -> Result<AuthenticatedPositionVacancyV2<'accounts, 'info>, ProgramError> {
     let position_seeds =
         ProtocolPositionSeedsV2::new(accounts.market.key.to_bytes(), request.position_owner)
             .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
@@ -1143,9 +1157,10 @@ fn authenticate_vacancy(
         request.position_owner,
     )
     .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
-    let expected_position = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
-    let expected_admission =
-        Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).0;
+    let (expected_position, position_bump) =
+        Pubkey::find_program_address(&position_seeds.as_slices(), program_id);
+    let (expected_admission, admission_bump) =
+        Pubkey::find_program_address(&admission_seeds.as_slices(), program_id);
     if accounts.position.key != &expected_position
         || accounts.admission.key != &expected_admission
         || accounts.position.owner != &system_program::ID
@@ -1190,7 +1205,15 @@ fn authenticate_vacancy(
     {
         return Err(ProtocolPositionSbfErrorV2::Position.into());
     }
-    Ok(())
+    Ok(AuthenticatedPositionVacancyV2 {
+        program_id,
+        common: accounts,
+        position_width,
+        position_seeds,
+        admission_seeds,
+        position_bump: [position_bump],
+        admission_bump: [admission_bump],
+    })
 }
 
 fn authenticate_admission(
@@ -1245,51 +1268,37 @@ fn authenticate_admission(
 
 /// Allocate the Position and its admission record, returning the Position's own
 /// canonical bump so the caller can record it in the body it is about to write.
-fn allocate_pair(
-    program_id: &Pubkey,
-    accounts: AdmitAccounts<'_, '_>,
-    request: ProtocolPositionRequestV2,
-    position_width: usize,
+fn allocate_pair<'info>(
+    system: &AccountInfo<'info>,
+    vacancy: AuthenticatedPositionVacancyV2<'_, 'info>,
 ) -> Result<u8, ProgramError> {
-    let position_seeds = ProtocolPositionSeedsV2::new(
-        accounts.common.market.key.to_bytes(),
-        request.position_owner,
-    )
-    .map_err(|_| ProtocolPositionSbfErrorV2::Allocation)?;
-    let position_bump = [Pubkey::find_program_address(&position_seeds.as_slices(), program_id).1];
-    let [position_domain, position_market, position_owner] = position_seeds.as_slices();
+    let [position_domain, position_market, position_owner] = vacancy.position_seeds.as_slices();
     allocate_and_assign(
-        program_id,
-        accounts.common.position,
-        accounts.system,
-        position_width,
+        vacancy.program_id,
+        vacancy.common.position,
+        system,
+        vacancy.position_width,
         &[
             position_domain,
             position_market,
             position_owner,
-            &position_bump,
+            &vacancy.position_bump,
         ],
     )?;
-    let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(
-        accounts.common.market.key.to_bytes(),
-        request.position_owner,
-    )
-    .map_err(|_| ProtocolPositionSbfErrorV2::Allocation)?;
-    let admission_bump = [Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).1];
-    let [admission_domain, admission_market, admission_owner] = admission_seeds.as_slices();
+    let [admission_domain, admission_market, admission_owner] = vacancy.admission_seeds.as_slices();
     allocate_and_assign(
-        program_id,
-        accounts.common.admission,
-        accounts.system,
+        vacancy.program_id,
+        vacancy.common.admission,
+        system,
         PROTOCOL_POSITION_ADMISSION_BYTES_V2,
         &[
             admission_domain,
             admission_market,
             admission_owner,
-            &admission_bump,
+            &vacancy.admission_bump,
         ],
     )?;
-    let [bump] = position_bump;
+    let [bump] = vacancy.position_bump;
     Ok(bump)
 }
 
@@ -1453,6 +1462,118 @@ mod tests {
             Box::leak(Box::new(owner)),
             executable,
         )
+    }
+
+    fn vacancy_fixture() -> (Pubkey, Vec<AccountInfo<'static>>, ProtocolPositionRequestV2) {
+        let (program_id, mut accounts, mut request, _) = parent_fixture();
+        request.action = ProtocolPositionActionV2::Admit;
+        request.presence = ProtocolPositionPresenceV2::Vacant;
+        request.expected_position_revision = 0;
+        let market = accounts[MARKET].key.to_bytes();
+        for (index, seeds) in [
+            (
+                POSITION,
+                ProtocolPositionSeedsV2::new(market, request.position_owner)
+                    .expect("position seeds")
+                    .as_slices()
+                    .map(<[u8]>::to_vec),
+            ),
+            (
+                ADMISSION,
+                ProtocolPositionAdmissionSeedsV2::new(market, request.position_owner)
+                    .expect("admission seeds")
+                    .as_slices()
+                    .map(<[u8]>::to_vec),
+            ),
+        ] {
+            let key =
+                Pubkey::find_program_address(&seeds.each_ref().map(Vec::as_slice), &program_id).0;
+            accounts[index] = test_account(key, system_program::ID, false, true, false, vec![]);
+            **accounts[index].try_borrow_mut_lamports().expect("lamports") = 20;
+        }
+        (program_id, accounts, request)
+    }
+
+    #[test]
+    fn admit_vacancy_witness_reproduces_both_exact_allocation_addresses() {
+        let (program_id, accounts, request) = vacancy_fixture();
+        let common = common(&accounts).expect("common");
+        let vacancy = authenticate_vacancy(&program_id, common, request, 256).expect("vacancy");
+        let [domain, market, owner] = vacancy.position_seeds.as_slices();
+        assert_eq!(
+            Pubkey::create_program_address(
+                &[domain, market, owner, &vacancy.position_bump],
+                vacancy.program_id
+            )
+            .expect("position signer"),
+            *vacancy.common.position.key
+        );
+        let [domain, market, owner] = vacancy.admission_seeds.as_slices();
+        assert_eq!(
+            Pubkey::create_program_address(
+                &[domain, market, owner, &vacancy.admission_bump],
+                vacancy.program_id
+            )
+            .expect("admission signer"),
+            *vacancy.common.admission.key
+        );
+        assert_eq!(vacancy.position_width, 256);
+        assert!(core::ptr::eq(vacancy.common.position, common.position));
+        assert!(core::ptr::eq(vacancy.common.admission, common.admission));
+    }
+
+    #[test]
+    fn admit_vacancy_witness_refuses_wrong_identity_owner_data_and_underfunding() {
+        for mutation in 0..10 {
+            let (program_id, mut accounts, mut request) = vacancy_fixture();
+            let mut width = 256;
+            match mutation {
+                0..=1 => {
+                    accounts[[POSITION, ADMISSION][mutation]].key =
+                        Box::leak(Box::new(Pubkey::new_unique()))
+                }
+                2..=3 => {
+                    accounts[[POSITION, ADMISSION][mutation - 2]].owner =
+                        Box::leak(Box::new(program_id))
+                }
+                4..=5 => {
+                    let index = [POSITION, ADMISSION][mutation - 4];
+                    accounts[index] = test_account(
+                        *accounts[index].key,
+                        system_program::ID,
+                        false,
+                        true,
+                        false,
+                        vec![0],
+                    );
+                    **accounts[index].try_borrow_mut_lamports().expect("lamports") = 20;
+                }
+                6 => {
+                    **accounts[POSITION]
+                        .try_borrow_mut_lamports()
+                        .expect("lamports") = request.observed_position_lamports - 1
+                }
+                7 => {
+                    **accounts[ADMISSION]
+                        .try_borrow_mut_lamports()
+                        .expect("lamports") = request.observed_admission_lamports - 1
+                }
+                8 => width = 0,
+                9 => request.position_owner = [97; 32],
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                authenticate_vacancy(
+                    &program_id,
+                    common(&accounts).expect("common"),
+                    request,
+                    width
+                )
+                .map(|_| ()),
+                Err(ProtocolPositionSbfErrorV2::Position.into()),
+                "mutation {mutation}"
+            );
+        }
     }
 
     /// Exercise the admission boundary itself, including all three roles, with
