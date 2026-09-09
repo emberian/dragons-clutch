@@ -18,7 +18,7 @@ use dclutch_registry::record::RAW_RECORD_PDA_SEED_V1;
 use dclutch_source::pyth::{ProgramV3View, PythReleaseV1};
 use dclutch_source::resolution::{
     PROVIDER_SUBMIT_REQUEST_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderSubmitRequestV3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, ResolutionCertificateV2,
+    ProviderUpdateLifecycleV4, ProviderUpdateStatusV3, ResolutionCertificateV2,
 };
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ pub(crate) const SUBMIT_POSTSTATE_INPUT_FORMAT_V1: &str =
 pub(crate) const SUBMIT_POSTSTATE_FORMAT_V1: &str = "dclutch-source-provider-submit-poststate-v1";
 #[allow(dead_code)]
 pub(crate) const SUBMIT_LIFECYCLE_BYTES_V1: usize =
-    dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3;
+    dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V4;
 const MAX_JSON_BYTES: usize = 24 * 1024 * 1024;
 const MAX_ACCOUNT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -208,6 +208,7 @@ struct SubmitPoststateExpectationWireV1 {
     resolution_program: String,
     receiver_program: String,
     submit_request_base64: String,
+    registry_artifact: String,
 }
 
 #[derive(Deserialize)]
@@ -351,6 +352,7 @@ struct SubmitPoststateExpectationOutputV1 {
     resolution_program: String,
     receiver_program: String,
     submit_request_base64: String,
+    registry_artifact: String,
 }
 
 #[derive(Serialize)]
@@ -391,14 +393,14 @@ pub fn derive_provider_reclaim_coordinates_json_v1(source: &[u8]) -> Result<Stri
         return Err("Source provider lifecycle is executable".to_owned());
     }
     let bytes = exact_base64(&wire.lifecycle.data_base64, "provider lifecycle data")?;
-    let lifecycle = ProviderUpdateLifecycleV3::decode(&bytes)
+    let lifecycle = ProviderUpdateLifecycleV4::decode(&bytes)
         .map_err(|error| format!("Source provider lifecycle: {error:?}"))?;
     if lifecycle.status != ProviderUpdateStatusV3::Consumed {
         return Err("Source provider lifecycle is not consumed and reclaimable".to_owned());
     }
     let expected = Pubkey::find_program_address(
         &[
-            dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             &lifecycle.update_account,
         ],
         &resolution_program,
@@ -750,6 +752,13 @@ pub fn plan_provider_submit_json_v1(source: &[u8]) -> Result<String, String> {
             resolution_program: resolution_program.to_string(),
             receiver_program: receiver_program.to_string(),
             submit_request_base64: STANDARD.encode(submit_request),
+            registry_artifact: report
+                .instruction
+                .accounts
+                .get(10)
+                .ok_or("Registry artifact absent")?
+                .pubkey
+                .to_string(),
         },
     })
     .map_err(|error| format!("Source provider submit output: {error}"))
@@ -792,7 +801,7 @@ pub fn verify_provider_submit_poststate_json_v1(source: &[u8]) -> Result<String,
     )?;
     let request = ProviderSubmitRequestV3::decode(&request_bytes)
         .map_err(|_| "Source provider expected submit request is malformed".to_owned())?;
-    let state = ProviderUpdateLifecycleV3::decode(&lifecycle.data)
+    let state = ProviderUpdateLifecycleV4::decode(&lifecycle.data)
         .map_err(|_| "Source provider lifecycle poststate is malformed".to_owned())?;
     let complete = lifecycle.key == expected_lifecycle
         && lifecycle.owner == resolution_program
@@ -813,6 +822,18 @@ pub fn verify_provider_submit_poststate_json_v1(source: &[u8]) -> Result<String,
         && state.provider_submitter == request.provider_submitter
         && state.refund_recipient == request.refund_recipient
         && state.release_set == request.release_set
+        && Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
+                &state.registry_artifact_release,
+            ],
+            &Pubkey::new_from_array(state.registry_program),
+        )
+        .0 == exact_key(
+            &wire.expectation.registry_artifact,
+            "expected Registry artifact",
+        )?
         && state.registry_program == request.registry_program
         && state.post_body_digest == request.post_body_digest
         && state.reclaim_after_unix_seconds == request.reclaim_after_unix_seconds
@@ -872,7 +893,7 @@ pub fn plan_provider_reclaim_json_v1(source: &[u8]) -> Result<String, String> {
         },
     )
     .map_err(|error| format!("Source provider reclaim owner: {error:?}"))?;
-    let lifecycle_state = ProviderUpdateLifecycleV3::decode(&lifecycle.data)
+    let lifecycle_state = ProviderUpdateLifecycleV4::decode(&lifecycle.data)
         .map_err(|error| format!("Source provider lifecycle: {error:?}"))?;
     let release = PythReleaseV1::decode(&pyth_release.data)
         .map_err(|error| format!("Source provider Pyth release: {error:?}"))?;
@@ -1215,11 +1236,12 @@ mod tests {
         let authority = key(13);
         let resolution = key(14);
         let receiver = key(15);
-        let lifecycle = ProviderUpdateLifecycleV3::submitted(
+        let lifecycle = ProviderUpdateLifecycleV4::submitted(
             request,
             1,
             authority.to_bytes(),
             request.registry_program,
+            [82; 32],
             solana_program::hash::hash(&update_data).to_bytes(),
             1_800_000_000,
             90,
@@ -1243,6 +1265,7 @@ mod tests {
                 "updateAuthority": authority.to_string(), "resolutionProgram": resolution.to_string(),
                 "receiverProgram": receiver.to_string(),
                 "submitRequestBase64": STANDARD.encode(request.to_bytes().expect("request")),
+                "registryArtifact": Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2, &[82;32]], &Pubkey::new_from_array(request.registry_program)).0.to_string(),
             },
             "lifecycle": account(key(3), resolution, 1_000, &lifecycle),
             "update": account(key(6), receiver, 2_000, &update_data),
@@ -1250,6 +1273,17 @@ mod tests {
         let complete = verify_provider_submit_poststate_json_v1(input.to_string().as_bytes())
             .expect("complete poststate");
         assert!(complete.contains("\"complete\":true"));
+
+        let mut changed_pin = input.clone();
+        let mut altered_lifecycle = lifecycle;
+        altered_lifecycle[528] ^= 1;
+        changed_pin["lifecycle"]["dataBase64"] = json!(STANDARD.encode(altered_lifecycle));
+        let pin_result: serde_json::Value = serde_json::from_str(
+            &verify_provider_submit_poststate_json_v1(changed_pin.to_string().as_bytes())
+                .expect("changed lifecycle pin"),
+        )
+        .expect("poststate result");
+        assert_eq!(pin_result["complete"], json!(false));
 
         let mut changed = input;
         changed["update"]["dataBase64"] = json!(STANDARD.encode([9, 9, 9]));

@@ -8,7 +8,6 @@ use dclutch_registry::release_set::{
     ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V2,
     ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2,
@@ -22,17 +21,17 @@ use dclutch_source::resolution::{
     PROVIDER_ABANDON_REQUEST_BYTES_V3, PROVIDER_ABANDON_REQUEST_MAGIC_V3,
     PROVIDER_RECLAIM_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_MAGIC_V3,
     PROVIDER_SUBMIT_REQUEST_BYTES_V3, PROVIDER_SUBMIT_REQUEST_MAGIC_V3,
-    PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
-    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V4,
+    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     ProviderAbandonRequestV3, ProviderReclaimReceiptV3, ProviderReclaimRequestV3,
-    ProviderSubmitReceiptV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV3,
+    ProviderSubmitReceiptV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV4,
     ProviderUpdateStatusV3, RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateV2,
 };
 use dclutch_source::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_MATERIAL_V3_BYTES, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
-    SourceMaterialV3, SourceResolutionStateV2, SourceSpecV1,
-    WINDOW_SPEC_BYTES, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
+    SourceMaterialV3, SourceResolutionStateV2, SourceSpecV1, WINDOW_SPEC_BYTES,
+    WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -44,7 +43,7 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
+use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::market_admission_v1::RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1;
@@ -61,15 +60,15 @@ use crate::{
 /// Frozen real-provider submission account count.
 pub const PROVIDER_SUBMIT_ACCOUNT_COUNT_V3: usize = 38;
 /// Frozen permissionless provider reclaim account count.
-pub const PROVIDER_RECLAIM_ACCOUNT_COUNT_V3: usize = 18;
+pub const PROVIDER_RECLAIM_ACCOUNT_COUNT_V3: usize = 20;
 /// Frozen permissionless abandoned-submission reclaim account count.
 ///
-/// Deliberately the same eighteen coordinates, in the same order and with the
+/// Deliberately the same twenty coordinates, in the same order and with the
 /// same privileges, as [`PROVIDER_RECLAIM_ACCOUNT_COUNT_V3`]. Exactly one slot
 /// carries a different account: index 5 is the Source resolution state rather
 /// than the terminal certificate, because an abandoned submission has no
 /// certificate and the Source is what proves it never will.
-pub const PROVIDER_ABANDON_ACCOUNT_COUNT_V3: usize = 18;
+pub const PROVIDER_ABANDON_ACCOUNT_COUNT_V3: usize = 20;
 
 const POST_UPDATE_DISCRIMINATOR: [u8; 8] = [133, 95, 207, 175, 11, 79, 118, 44];
 const RECLAIM_RENT_DISCRIMINATOR: [u8; 8] = [218, 200, 19, 197, 227, 89, 192, 22];
@@ -182,11 +181,18 @@ fn process_submit(
         return Err(ResolutionError::ProviderObservation.into());
     }
     drop(update_data);
-    let lifecycle = ProviderUpdateLifecycleV3::submitted(
+    let lifecycle = ProviderUpdateLifecycleV4::submitted(
         *request,
         lifecycle_bump(program_id, frame.account(1).key, frame.account(2).key)?,
         authority.to_bytes(),
         frame.account(8).key.to_bytes(),
+        hash(
+            &frame
+                .account(10)
+                .try_borrow_data()
+                .map_err(|_| ResolutionError::FinalizedRecord)?,
+        )
+        .to_bytes(),
         update_digest,
         update.publish_time(),
         update.posted_slot(),
@@ -393,16 +399,16 @@ fn authenticate_abandon_state(
     request: &ProviderAbandonRequestV3,
     frame: ReclaimFrameV3<'_, '_>,
     current_unix_seconds: i64,
-) -> Result<ProviderUpdateLifecycleV3, ProgramError> {
+) -> Result<ProviderUpdateLifecycleV4, ProgramError> {
     let data = frame
         .account(1)
         .try_borrow_data()
         .map_err(|_| ResolutionError::OutputState)?;
     let lifecycle =
-        ProviderUpdateLifecycleV3::decode(&data).map_err(|_| ResolutionError::OutputState)?;
+        ProviderUpdateLifecycleV4::decode(&data).map_err(|_| ResolutionError::OutputState)?;
     let (expected_lifecycle, bump) = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             frame.account(2).key.as_ref(),
         ],
         program_id,
@@ -473,7 +479,7 @@ fn authenticate_abandon_state(
 fn source_can_no_longer_consume(
     program_id: &Pubkey,
     source: &AccountInfo<'_>,
-    lifecycle: ProviderUpdateLifecycleV3,
+    lifecycle: ProviderUpdateLifecycleV4,
 ) -> Result<bool, ProgramError> {
     if source.key.to_bytes() != lifecycle.source_state || source.executable {
         return Err(ResolutionError::OutputState.into());
@@ -966,7 +972,7 @@ fn preflight_submit_outputs(
 ) -> ProgramResult {
     let (expected_lifecycle, _) = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             &request.update_account,
         ],
         program_id,
@@ -974,7 +980,7 @@ fn preflight_submit_outputs(
     if frame.account(2).key != &expected_lifecycle
         || frame.account(2).owner != &system_program::ID
         || frame.account(2).data_len() != 0
-        || frame.account(2).lamports() < rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)
+        || frame.account(2).lamports() < rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4)
         || frame.account(1).owner != &system_program::ID
         || frame.account(1).data_len() != 0
         || frame.account(1).lamports() != 0
@@ -1059,7 +1065,7 @@ fn lifecycle_bump(
     lifecycle: &Pubkey,
 ) -> Result<u8, ProgramError> {
     let (expected, bump) = Pubkey::find_program_address(
-        &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, update.as_ref()],
+        &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, update.as_ref()],
         program_id,
     );
     if lifecycle != &expected {
@@ -1073,10 +1079,10 @@ fn initialize_lifecycle(
     program_id: &Pubkey,
     frame: SubmitFrameV3<'_, '_>,
     rent: &Rent,
-    lifecycle: ProviderUpdateLifecycleV3,
+    lifecycle: ProviderUpdateLifecycleV4,
 ) -> ProgramResult {
     let lifecycle_account = frame.account(2);
-    let minimum = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+    let minimum = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
     if lifecycle_account.owner != &system_program::ID
         || lifecycle_account.data_len() != 0
         || lifecycle_account.lamports() < minimum
@@ -1085,14 +1091,14 @@ fn initialize_lifecycle(
     }
     let bump_seed = [lifecycle.bump];
     let signer = [
-        PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+        PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
         frame.account(1).key.as_ref(),
         bump_seed.as_slice(),
     ];
     invoke_signed(
         &allocate(
             lifecycle_account.key,
-            u64::try_from(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)
+            u64::try_from(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4)
                 .map_err(|_| ResolutionError::Arithmetic)?,
         ),
         &[lifecycle_account.clone(), frame.account(37).clone()],
@@ -1111,7 +1117,7 @@ fn initialize_lifecycle(
     let mut output = lifecycle_account
         .try_borrow_mut_data()
         .map_err(|_| ResolutionError::OutputState)?;
-    if output.len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3 || output.iter().any(|byte| *byte != 0) {
+    if output.len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V4 || output.iter().any(|byte| *byte != 0) {
         return Err(ResolutionError::OutputState.into());
     }
     output.copy_from_slice(&bytes);
@@ -1123,16 +1129,16 @@ fn authenticate_reclaim_state(
     request: &ProviderReclaimRequestV3,
     frame: ReclaimFrameV3<'_, '_>,
     current_unix_seconds: i64,
-) -> Result<ProviderUpdateLifecycleV3, ProgramError> {
+) -> Result<ProviderUpdateLifecycleV4, ProgramError> {
     let data = frame
         .account(1)
         .try_borrow_data()
         .map_err(|_| ResolutionError::OutputState)?;
     let lifecycle =
-        ProviderUpdateLifecycleV3::decode(&data).map_err(|_| ResolutionError::OutputState)?;
+        ProviderUpdateLifecycleV4::decode(&data).map_err(|_| ResolutionError::OutputState)?;
     let (expected_lifecycle, bump) = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             frame.account(2).key.as_ref(),
         ],
         program_id,
@@ -1197,42 +1203,58 @@ fn authenticate_reclaim_state(
     Ok(lifecycle)
 }
 
+// The Resolution-owned lifecycle pins the Registry artifact authenticated by
+// Submit's Core-owned infrastructure profile. A retained Registry authority is
+// valid only while this exact artifact's live Loader deployment still matches.
+fn authenticate_reclaim_registry(
+    frame: ReclaimFrameV3<'_, '_>,
+    lifecycle: ProviderUpdateLifecycleV4,
+) -> ProgramResult {
+    let artifact_data = frame
+        .account(18)
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        frame.account(7).key,
+        frame.account(18),
+        frame.account(19),
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
+        lifecycle.registry_artifact_release,
+        &artifact_data,
+        ARTIFACT_RELEASE_BYTES_V2,
+    )?;
+    let artifact = ArtifactReleaseV2::decode(&artifact_data)
+        .map_err(|_| ResolutionError::InfrastructureProfile)?;
+    dclutch_registry::authenticate_pinned_registry_release_v1(
+        dclutch_registry::PinnedRegistryReleaseInputV1::new(
+            dclutch_registry::release_set::ProgramIdentityV1::new(lifecycle.registry_program)
+                .map_err(|_| ResolutionError::InfrastructureProfile)?,
+            dclutch_registry::release_set::ArtifactReleaseIdV1::new(
+                lifecycle.registry_artifact_release,
+            )
+            .map_err(|_| ResolutionError::InfrastructureProfile)?,
+            dclutch_registry::release_set::ArtifactReleaseIdV1::new(
+                hash(&artifact_data).to_bytes(),
+            )
+            .map_err(|_| ResolutionError::InfrastructureProfile)?,
+            artifact,
+            cached_deployment_observation(frame.account(7), frame.account(8), artifact)?,
+        ),
+    )
+    .map_err(pinned_deployment_refusal)?;
+    Ok(())
+}
+
 fn authenticate_reclaim_release(
     program_id: &Pubkey,
     release_set: [u8; 32],
     frame: ReclaimFrameV3<'_, '_>,
-    lifecycle: ProviderUpdateLifecycleV3,
+    lifecycle: ProviderUpdateLifecycleV4,
 ) -> ProgramResult {
     if frame.account(7).key.to_bytes() != lifecycle.registry_program {
         return Err(ResolutionError::ActivationCache.into());
     }
-    let expected_registry_programdata = Pubkey::find_program_address(
-        &[frame.account(7).key.as_ref()],
-        &bpf_loader_upgradeable::ID,
-    )
-    .0;
-    let registry_program_data = frame
-        .account(7)
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let registry_program = ProgramV3View::parse(&registry_program_data)
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let registry_programdata_data = frame
-        .account(8)
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let registry_programdata = ProgramDataV3View::parse(&registry_programdata_data)
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    if frame.account(7).owner != &bpf_loader_upgradeable::ID
-        || frame.account(8).owner != &bpf_loader_upgradeable::ID
-        || !frame.account(7).executable
-        || frame.account(8).executable
-        || frame.account(8).key != &expected_registry_programdata
-        || registry_program.programdata() != frame.account(8).key.to_bytes()
-        || registry_programdata.upgrade_authority().is_some()
-    {
-        return Err(ResolutionError::ResolutionDeployment.into());
-    }
+    authenticate_reclaim_registry(frame, lifecycle)?;
     let activation_data = frame
         .account(6)
         .try_borrow_data()
@@ -1306,7 +1328,7 @@ fn authenticate_reclaim_release(
 fn invoke_reclaim(
     program_id: &Pubkey,
     frame: ReclaimFrameV3<'_, '_>,
-    lifecycle: ProviderUpdateLifecycleV3,
+    lifecycle: ProviderUpdateLifecycleV4,
 ) -> ProgramResult {
     let instruction = Instruction {
         program_id: *frame.account(13).key,
@@ -1349,7 +1371,7 @@ fn invoke_reclaim(
 fn transfer_reclaimed_rent(
     program_id: &Pubkey,
     frame: ReclaimFrameV3<'_, '_>,
-    lifecycle: ProviderUpdateLifecycleV3,
+    lifecycle: ProviderUpdateLifecycleV4,
 ) -> ProgramResult {
     let bump = Pubkey::find_program_address(
         &[
@@ -1412,7 +1434,7 @@ mod tests {
     #[test]
     fn exact_transport_discriminators_and_frames_are_frozen() {
         assert_eq!(PROVIDER_SUBMIT_ACCOUNT_COUNT_V3, 38);
-        assert_eq!(PROVIDER_RECLAIM_ACCOUNT_COUNT_V3, 18);
+        assert_eq!(PROVIDER_RECLAIM_ACCOUNT_COUNT_V3, 20);
         assert_eq!(
             POST_UPDATE_DISCRIMINATOR,
             [133, 95, 207, 175, 11, 79, 118, 44]
@@ -1430,3 +1452,7 @@ mod tests {
         assert!(is_provider_transport_v3(&PROVIDER_RECLAIM_REQUEST_MAGIC_V3));
     }
 }
+
+#[cfg(test)]
+#[path = "reclaim_registry_tests.rs"]
+mod reclaim_registry_tests;

@@ -29,7 +29,7 @@ use dclutch_registry::{
     initialize_activation_cache_v1,
 };
 use dclutch_source::resolution::{
-    PROVIDER_EXECUTION_REQUEST_BYTES_V3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV3,
+    PROVIDER_EXECUTION_REQUEST_BYTES_V3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV4,
     ProviderUpdateStatusV3, ResolutionCertificateV2,
 };
 use serde_json::{Value, json};
@@ -356,7 +356,7 @@ fn reauthor_for_new_core(captured: &mut Captured, core_elf: &[u8]) {
     let lifecycle_account = captured.accounts[LIFECYCLE]
         .as_mut()
         .expect("submitted provider lifecycle");
-    let mut lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
+    let mut lifecycle = ProviderUpdateLifecycleV4::decode(&lifecycle_account.data)
         .expect("submitted provider lifecycle");
     assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Submitted);
     assert_eq!(lifecycle.release_set, old_release_set_id);
@@ -536,7 +536,7 @@ async fn captured_direct_execute_provider_replays_old_refusal_and_corrected_acce
                 certificate.route, old_provider.provider_release,
                 "Source-selected provider release remains distinct from the Pyth deployment release"
             );
-            let lifecycle = ProviderUpdateLifecycleV3::decode(
+            let lifecycle = ProviderUpdateLifecycleV4::decode(
                 &after[2].as_ref().expect("provider lifecycle").data,
             )
             .expect("provider lifecycle");

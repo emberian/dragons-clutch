@@ -129,6 +129,7 @@ pub(super) fn execute_interpreted_transition_v3(
 pub(super) struct ProjectedEffectsV3 {
     pub(super) lamports: Vec<u64>,
     pub(super) requests: Vec<u8>,
+    pub(super) commit_plan: RootCommitPlanV3,
     /// One flag per representative coordinate the local effects mutate, or
     /// `None` when the Effect declares no child route and the answer has no
     /// consumer. Folded out of the projection's own walk.
@@ -368,14 +369,13 @@ pub(super) fn project_hot_effects_v3(
     // resolve each local-effect ordinal once instead of once per PAIR of them,
     // and it is twelve bytes per ordinal that RECORDS a range -- not per
     // ordinal. A Direct walk resolves 131 and records two of them.
-    let mut write_ranges = ScratchVecV1::filled(
-        &phase,
-        &ResolvedWriteRangeV4::vacant(),
-        effect
-            .successor
-            .data_write_operation_count(tail_count)
-            .map_err(|_| TradingSbfError::Content)?,
-    )?;
+    let write_limit = effect
+        .successor
+        .data_write_operation_count(tail_count)
+        .map_err(|_| TradingSbfError::Content)?;
+    let mut commit_plan = RootCommitPlanV3::for_geometry(effect, tail_count, write_limit)?;
+    let mut write_ranges =
+        ScratchVecV1::filled(&phase, &ResolvedWriteRangeV4::vacant(), write_limit)?;
     hot_heap_mark!("effects-write-ranges");
     // The local-effect discipline rides this projection's walk instead of
     // making its own. Both see every operation of the same Effect at the same
@@ -424,17 +424,23 @@ pub(super) fn project_hot_effects_v3(
             requests: &mut requests,
         },
         &mut write_ranges,
-        &mut |resolved| match require_no_funding_local_mutation_v5(effect.funding(), resolved)
-            .and_then(|()| {
-                inspect_local_effect_discipline_v5(
-                    lifecycle_plans,
-                    root_lifecycle_close,
-                    resolved,
-                    aliases,
-                    &mut written,
-                    participation.as_deref_mut(),
-                )
-            }) {
+        &mut |resolved| match require_no_funding_local_mutation_v5(
+            effect.funding(),
+            lifecycle_plans,
+            resolved,
+        )
+        .and_then(|()| {
+            inspect_local_effect_discipline_v5(
+                lifecycle_plans,
+                root_lifecycle_close,
+                resolved,
+                aliases,
+                &mut written,
+                participation.as_deref_mut(),
+            )
+        })
+        .and_then(|()| commit_plan.record_projected(resolved))
+        {
             Ok(()) => Ok(()),
             Err(error) => {
                 refused = Some(error);
@@ -451,12 +457,14 @@ pub(super) fn project_hot_effects_v3(
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
         requests,
+        commit_plan,
         participation,
     })
 }
 
 fn require_no_funding_local_mutation_v5(
     funding: Option<EffectProgramV5<'_>>,
+    lifecycle_plans: &[PreparedLifecycleInvocationV3],
     resolved: ResolvedEffectV3,
 ) -> Result<(), ProgramError> {
     let Some(funding) = funding else {
@@ -478,7 +486,7 @@ fn require_no_funding_local_mutation_v5(
         | ResolvedEffectV3::WriteU16 { account, .. }
         | ResolvedEffectV3::WriteU32 { account, .. }
             if funding_owns_coordinate_v5(funding, account)
-                && !funding_allows_created_state_write_v5(funding, account) =>
+                && !funding_allows_created_state_write_v5(funding, account, lifecycle_plans) =>
         {
             Err(TradingSbfError::Transition.into())
         }
@@ -486,14 +494,29 @@ fn require_no_funding_local_mutation_v5(
     }
 }
 
-fn funding_allows_created_state_write_v5(funding: EffectProgramV5<'_>, coordinate: usize) -> bool {
+fn funding_allows_created_state_write_v5(
+    funding: EffectProgramV5<'_>,
+    coordinate: usize,
+    lifecycle_plans: &[PreparedLifecycleInvocationV3],
+) -> bool {
     let mut index = 0_u16;
     while index < funding.funding_action_count() {
         let Ok(action) = funding.funding_action(index) else {
             return false;
         };
         if usize::from(action.state()) == coordinate {
-            return action.operation() == FundingOperationV5::Create;
+            return match action.operation() {
+                FundingOperationV5::Create => true,
+                // General creates its Candidate through the authenticated
+                // lifecycle and separately funds its work escrow. The same
+                // revalidated create plan authorizes its immutable data writes;
+                // Fund alone conveys no account-data authority.
+                FundingOperationV5::Fund => lifecycle_plans.iter().any(|prepared| {
+                    prepared.state == coordinate
+                        && matches!(prepared.plan, StateLifecyclePlanV3::Create(_))
+                }),
+                FundingOperationV5::Close => false,
+            };
         }
         index = match index.checked_add(1) {
             Some(index) => index,
@@ -1574,3 +1597,6 @@ fn shadow_routes_v3(
     }
     Ok(output)
 }
+
+#[cfg(test)]
+mod funding_data_tests;

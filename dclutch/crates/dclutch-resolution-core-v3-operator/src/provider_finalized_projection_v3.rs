@@ -10,15 +10,16 @@
 
 use dclutch_market::{Action, CoreState, Phase, REQUEST_BYTES, Readiness, Request};
 use dclutch_product::ResultDomainV2;
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_BYTES_V3,
     PROVIDER_SUBMIT_REQUEST_BYTES_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V4, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, ProviderCallerV3,
     ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ProviderReclaimReceiptV3,
     ProviderReclaimRequestV3, ProviderSubmitReceiptV3, ProviderSubmitRequestV3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
+    ProviderUpdateLifecycleV4, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
@@ -41,7 +42,7 @@ pub const PROVIDER_EXECUTE_ACCOUNT_COUNT_V3: usize = 47;
 /// Provider submission has this frozen account width.
 pub const PROVIDER_SUBMIT_ACCOUNT_COUNT_V3: usize = 38;
 /// Provider reclaim has this frozen account width.
-pub const PROVIDER_RECLAIM_ACCOUNT_COUNT_V3: usize = 18;
+pub const PROVIDER_RECLAIM_ACCOUNT_COUNT_V3: usize = 20;
 
 /// Domain used by the Resolution transition owner to bind provider evidence.
 pub const PROVIDER_EVIDENCE_DOMAIN_V3: &[u8] = b"dclutch/pyth-provider-evidence/v3";
@@ -129,6 +130,9 @@ pub struct ProviderSubmitFinalizedInputV3<'a> {
     /// Exact provider fee authenticated from the pinned Receiver Config before
     /// this durable message was signed.
     pub expected_provider_fee_lamports: u64,
+    /// Content identity of the Registry artifact release authenticated from
+    /// the submission's finalized infrastructure and raw-record prestates.
+    pub registry_artifact_release: [u8; 32],
     /// Exact Rent parameters used by the executed bank.
     pub rent: &'a Rent,
     /// Exact writable prestates and finalized poststates.
@@ -373,7 +377,7 @@ pub fn project_finalized_provider_submit_v3(
     )?;
     let minimum_lifecycle = input
         .rent
-        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
     let lifecycle_after_top_up = w
         .lifecycle_before
         .lamports
@@ -419,7 +423,7 @@ pub fn project_finalized_provider_submit_v3(
     }
     let (expected_lifecycle, bump) = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             key_at(instruction, 1)?.as_ref(),
         ],
         &instruction.program_id,
@@ -427,11 +431,12 @@ pub fn project_finalized_provider_submit_v3(
     if expected_lifecycle.to_bytes() != request.lifecycle {
         return Err(ProviderFinalizedProjectionErrorV3::Instruction);
     }
-    let lifecycle = ProviderUpdateLifecycleV3::submitted(
+    let lifecycle = ProviderUpdateLifecycleV4::submitted(
         request,
         bump,
         receipt.update_authority,
         key_at(instruction, 8)?.to_bytes(),
+        input.registry_artifact_release,
         receipt.update_digest,
         receipt.publish_time,
         receipt.posted_slot,
@@ -563,7 +568,7 @@ pub fn project_finalized_provider_execute_v3(
         || key_at(instruction, 37)?.to_bytes()
             != Pubkey::find_program_address(
                 &[
-                    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+                    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
                     &request.update_account,
                 ],
                 &key_at(instruction, 15)?,
@@ -819,11 +824,11 @@ pub fn project_finalized_provider_execute_v3(
     if expected_certificate.to_bytes() != request.certificate_account {
         return Err(ProviderFinalizedProjectionErrorV3::Instruction);
     }
-    let mut lifecycle = ProviderUpdateLifecycleV3::decode(&w.lifecycle_before.data)
+    let mut lifecycle = ProviderUpdateLifecycleV4::decode(&w.lifecycle_before.data)
         .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let expected_lifecycle_bump = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             &request.update_account,
         ],
         &resolution_program,
@@ -997,11 +1002,11 @@ pub fn project_finalized_provider_reclaim_v3(
         ],
         input.finalized_slot,
     )?;
-    let lifecycle = ProviderUpdateLifecycleV3::decode(&w.lifecycle_before.data)
+    let lifecycle = ProviderUpdateLifecycleV4::decode(&w.lifecycle_before.data)
         .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let (expected_lifecycle, expected_lifecycle_bump) = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             key_at(instruction, 2)?.as_ref(),
         ],
         &instruction.program_id,
@@ -1014,6 +1019,24 @@ pub fn project_finalized_provider_reclaim_v3(
             &request.update_account,
         ],
         &instruction.program_id,
+    )
+    .0;
+    let expected_registry_artifact = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
+            &lifecycle.registry_artifact_release,
+        ],
+        &key_at(instruction, 7)?,
+    )
+    .0;
+    let expected_registry_artifact_staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
+            &lifecycle.registry_artifact_release,
+        ],
+        &key_at(instruction, 7)?,
     )
     .0;
     if input.execution_unix_timestamp < lifecycle.reclaim_after_unix_seconds
@@ -1034,6 +1057,8 @@ pub fn project_finalized_provider_reclaim_v3(
         || lifecycle.refund_recipient != request.refund_recipient
         || lifecycle.release_set != request.release_set
         || lifecycle.registry_program != key_at(instruction, 7)?.to_bytes()
+        || key_at(instruction, 18)? != expected_registry_artifact
+        || key_at(instruction, 19)? != expected_registry_artifact_staging
         || lifecycle.update_authority != expected_authority.to_bytes()
         || key_at(instruction, 3)? != expected_authority
         || w.update_before.owner != key_at(instruction, 13)?
@@ -1364,6 +1389,7 @@ mod tests {
         update_after: ObservedAccount,
         lifecycle_after: ObservedAccount,
         treasury_after: ObservedAccount,
+        registry_artifact_release: [u8; 32],
         rent: Rent,
     }
 
@@ -1377,6 +1403,7 @@ mod tests {
                 transaction_fee_lamports: 5_000,
                 lifecycle_top_up_lamports: 0,
                 expected_provider_fee_lamports: 7_500,
+                registry_artifact_release: self.registry_artifact_release,
                 rent: &self.rent,
                 writable: ProviderSubmitWritableAccountsV3 {
                     submitter_before: &self.submitter_before,
@@ -1405,8 +1432,9 @@ mod tests {
         let provider_release = key(209).to_bytes();
         let release_set = key(210).to_bytes();
         let source_material = key(211).to_bytes();
+        let registry_artifact_release = key(212).to_bytes();
         let (lifecycle, bump) = Pubkey::find_program_address(
-            &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, update.as_ref()],
+            &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, update.as_ref()],
             &resolution,
         );
         let authority = Pubkey::find_program_address(
@@ -1462,7 +1490,7 @@ mod tests {
         let mut data = request.to_bytes().expect("submit request").to_vec();
         data.extend_from_slice(&body);
         let rent = Rent::default();
-        let lifecycle_lamports = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        let lifecycle_lamports = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
         let update_data = vec![0x33; 96];
         let update_rent = rent.minimum_balance(update_data.len());
         let provider_fee = 7_500;
@@ -1483,11 +1511,12 @@ mod tests {
             update_rent_lamports: update_rent,
             provider_fee_lamports: provider_fee,
         };
-        let lifecycle_state = ProviderUpdateLifecycleV3::submitted(
+        let lifecycle_state = ProviderUpdateLifecycleV4::submitted(
             request,
             bump,
             authority.to_bytes(),
             registry.to_bytes(),
+            registry_artifact_release,
             receipt.update_digest,
             receipt.publish_time,
             receipt.posted_slot,
@@ -1545,6 +1574,7 @@ mod tests {
                 treasury_lamports + provider_fee,
                 vec![],
             ),
+            registry_artifact_release,
             rent,
         }
     }
@@ -1597,6 +1627,14 @@ mod tests {
         assert_eq!(
             project_finalized_provider_submit_v3(input),
             Err(ProviderFinalizedProjectionErrorV3::ReturnData)
+        );
+
+        let wrong_registry_release = submit_case();
+        let mut input = wrong_registry_release.input();
+        input.registry_artifact_release[0] ^= 1;
+        assert_eq!(
+            project_finalized_provider_submit_v3(input),
+            Err(ProviderFinalizedProjectionErrorV3::Poststate)
         );
     }
 
@@ -1654,7 +1692,7 @@ mod tests {
         let release_set = key(191).to_bytes();
         let source_material = key(192).to_bytes();
         let (lifecycle_key, bump) = Pubkey::find_program_address(
-            &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, update.as_ref()],
+            &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, update.as_ref()],
             &resolution,
         );
         let authority = Pubkey::find_program_address(
@@ -1686,11 +1724,12 @@ mod tests {
             encoded_vaa: key(193).to_bytes(),
             post_body_digest: key(194).to_bytes(),
         };
-        let mut lifecycle = ProviderUpdateLifecycleV3::submitted(
+        let mut lifecycle = ProviderUpdateLifecycleV4::submitted(
             submit_request,
             bump,
             authority.to_bytes(),
             registry.to_bytes(),
+            key(196).to_bytes(),
             hash(&update_data).to_bytes(),
             1_800_000_000,
             20,
@@ -1766,7 +1805,25 @@ mod tests {
         ] {
             accounts[index].pubkey = address;
         }
-        let lifecycle_lamports = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        accounts[18].pubkey = Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
+                &lifecycle.registry_artifact_release,
+            ],
+            &registry,
+        )
+        .0;
+        accounts[19].pubkey = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
+                &lifecycle.registry_artifact_release,
+            ],
+            &registry,
+        )
+        .0;
+        let lifecycle_lamports = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
         let refund_lamports = 10_000;
         ReclaimCase {
             instruction: Instruction {
@@ -1821,6 +1878,20 @@ mod tests {
         assert_eq!(
             project_finalized_provider_reclaim_v3(aliased.input()),
             Err(ProviderFinalizedProjectionErrorV3::Instruction)
+        );
+
+        let mut substituted_registry_artifact = reclaim_case();
+        substituted_registry_artifact.instruction.accounts[18].pubkey = key(198);
+        assert_eq!(
+            project_finalized_provider_reclaim_v3(substituted_registry_artifact.input()),
+            Err(ProviderFinalizedProjectionErrorV3::Prestate)
+        );
+
+        let mut substituted_registry_staging = reclaim_case();
+        substituted_registry_staging.instruction.accounts[19].pubkey = key(199);
+        assert_eq!(
+            project_finalized_provider_reclaim_v3(substituted_registry_staging.input()),
+            Err(ProviderFinalizedProjectionErrorV3::Prestate)
         );
 
         let early = reclaim_case();
@@ -2153,7 +2224,7 @@ mod tests {
             &resolution,
         );
         let (lifecycle_key, lifecycle_bump) = Pubkey::find_program_address(
-            &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, update.as_ref()],
+            &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, update.as_ref()],
             &resolution,
         );
         let update_authority = Pubkey::find_program_address(
@@ -2302,11 +2373,12 @@ mod tests {
             post_body_digest: provider_request.post_params_body_digest,
         };
         let rent = Rent::default();
-        let mut lifecycle = ProviderUpdateLifecycleV3::submitted(
+        let mut lifecycle = ProviderUpdateLifecycleV4::submitted(
             submit_request,
             lifecycle_bump,
             update_authority.to_bytes(),
             registry.to_bytes(),
+            key(158).to_bytes(),
             update_digest,
             receipt.publish_time,
             receipt.posted_slot,
@@ -2379,7 +2451,7 @@ mod tests {
         let source_lamports = rent.minimum_balance(source.to_bytes().len());
         let certificate_lamports = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
         let market_lamports = rent.minimum_balance(market.encode().expect("market").len());
-        let lifecycle_lamports = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        let lifecycle_lamports = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
         let market_before_bytes = market.encode().expect("market").to_vec();
         ExecuteCase {
             source_provider_release: account(

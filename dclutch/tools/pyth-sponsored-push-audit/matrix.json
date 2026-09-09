@@ -162,7 +162,7 @@
       "attack": "A legitimate sponsor update between client preflight and landing makes the request unusable or invites an alternate offchain byte truth",
       "status": "must-refuse",
       "evidencePath": "crates/dclutch-source/src/resolution/provider_v3.rs",
-      "requiredChange": "Do not reuse expected_update_digest, post_params_body_digest, provider_submitter or ProviderUpdateLifecycleV3 in snapshot admission."
+      "requiredChange": "Do not reuse expected_update_digest, post_params_body_digest, provider_submitter or ProviderUpdateLifecycleV4 in snapshot admission."
     },
     {
       "id": "snapshot-identity",

@@ -386,7 +386,7 @@ pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usiz
         Action::CloseCandidate => (0, 0),
         Action::OpenBatch => (24, 0),
         Action::CloseBatch => (4, 0),
-        Action::PlaceOrder => (99, 13),
+        Action::PlaceOrder => (104, 13),
         Action::CancelOrder => (92, 11),
         Action::ReleaseOrder => (90, 11),
         Action::Consider => (22, 0),
@@ -1560,6 +1560,14 @@ fn append_general_state_patches(
             (GeneralOrderLayoutV2::MAGIC, scalar::SCRATCH_A),
             (GeneralOrderLayoutV2::NONCE, scalar::ORDER_NONCE),
             (GeneralOrderLayoutV2::GENERATION, scalar::GENERATION),
+            (
+                GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT,
+                scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT,
+            ),
+            (
+                GeneralOrderLayoutV2::CLAIMS_PER_LOT,
+                scalar::ORDER_CLAIMS_PER_LOT,
+            ),
             (GeneralOrderLayoutV2::MAX_LOTS, scalar::ORDER_MAX_LOTS),
             (
                 GeneralOrderLayoutV2::MAX_QUOTE_DEBIT_PER_LOT,
@@ -1567,7 +1575,7 @@ fn append_general_state_patches(
             ),
             (
                 GeneralOrderLayoutV2::VALID_UNTIL_SLOT,
-                scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
+                scalar::ORDER_VALID_UNTIL_SLOT,
             ),
             (
                 GeneralOrderLayoutV2::STATE_ADMITTED_SLOT,
@@ -1595,6 +1603,7 @@ fn append_general_state_patches(
         )?;
         for (offset, coordinate) in [
             (GeneralOrderLayoutV2::PHASE, scalar::SCRATCH_B),
+            (GeneralOrderLayoutV2::SIDE, scalar::ORDER_SIDE),
             (GeneralOrderLayoutV2::STATE_PHASE, scalar::ORDER_POST_PHASE),
         ] {
             push_fixed(
@@ -1607,15 +1616,21 @@ fn append_general_state_patches(
                 ),
             )?;
         }
-        push_fixed(
-            instructions,
-            fixed,
-            EffectInstructionV3::write_u32(
-                order,
-                state_body_offset(offset_u32(GeneralOrderLayoutV2::OUTCOME_COUNT)?)?,
-                scalar_common(scalar::OUTCOME_COUNT)?,
-            ),
-        )?;
+        for (offset, coordinate) in [
+            (GeneralOrderLayoutV2::OUTCOME_COUNT, scalar::OUTCOME_COUNT),
+            (GeneralOrderLayoutV2::OUTCOME_LO, scalar::ORDER_OUTCOME_LO),
+            (GeneralOrderLayoutV2::OUTCOME_HI, scalar::ORDER_OUTCOME_HI),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u32(
+                    order,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
         for (offset, coordinate) in [
             (GeneralOrderLayoutV2::OWNER_ID, identity::OWNER),
             (GeneralOrderLayoutV2::MARKET, identity::MARKET),

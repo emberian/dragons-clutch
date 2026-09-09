@@ -383,7 +383,431 @@ fn account<'a, 'info>(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
+    use std::{boxed::Box, vec, vec::Vec};
+
+    use dclutch_market::capability_manifest::{
+        CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1,
+        FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
+    };
+    use dclutch_market::rent::{RefundAuthority, lifecycle_v2::LifecycleAccountIdV2};
+    use dclutch_market::{Identity, MarketIdentity, Readiness, StateBumpsV1};
+    use dclutch_registry::release_set::{
+        ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
+    };
+    use dclutch_registry::{
+        ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV2,
+        ArtifactUpgradePolicyV1, DeploymentObservationV2, activate_execution_role_into_v1,
+        initialize_activation_cache_v1,
+    };
+    use solana_program::rent::Rent;
+    use solana_sdk_ids::{bpf_loader_upgradeable, native_loader};
+
     use super::*;
+
+    const ALL_ROLES: [ExecutionRoleV1; 5] = [
+        ExecutionRoleV1::Core,
+        ExecutionRoleV1::Claims,
+        ExecutionRoleV1::Trading,
+        ExecutionRoleV1::Resolution,
+        ExecutionRoleV1::Custody,
+    ];
+
+    fn identity(byte: u8) -> Identity {
+        Identity::new([byte; 32]).expect("identity")
+    }
+
+    #[repr(C)]
+    struct SerializedKey {
+        original_data_len: u32,
+        key: Pubkey,
+    }
+
+    fn observed(
+        key: Pubkey,
+        writable: bool,
+        lamports: u64,
+        data: Vec<u8>,
+        owner: Pubkey,
+        executable: bool,
+    ) -> AccountInfo<'static> {
+        // `AccountInfo::resize` is defined only over the loader's serialized
+        // memory shape: four bytes before the key carry the original data
+        // length and eight bytes before the data carry its mutable length.
+        // Model that exact shape so the accepted close tests the real physical
+        // tail instead of invoking `resize` on an ordinary Rust slice.
+        let serialized_key = Box::leak(Box::new(SerializedKey {
+            original_data_len: u32::try_from(data.len()).expect("test account width"),
+            key,
+        }));
+        let mut serialized_data = vec![0_u8; 8 + data.len()];
+        serialized_data[..8].copy_from_slice(
+            &u64::try_from(data.len())
+                .expect("test account width")
+                .to_le_bytes(),
+        );
+        serialized_data[8..].copy_from_slice(&data);
+        let serialized_data = Box::leak(serialized_data.into_boxed_slice());
+        AccountInfo::new(
+            &serialized_key.key,
+            false,
+            writable,
+            Box::leak(Box::new(lamports)),
+            &mut serialized_data[8..],
+            Box::leak(Box::new(owner)),
+            executable,
+        )
+    }
+
+    fn loader_program_bytes(programdata: Pubkey) -> Vec<u8> {
+        let mut output = vec![0_u8; 36];
+        output[..4].copy_from_slice(&2_u32.to_le_bytes());
+        output[4..36].copy_from_slice(programdata.as_ref());
+        output
+    }
+
+    fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
+        let mut output = vec![0_u8; 45 + elf.len()];
+        output[..4].copy_from_slice(&3_u32.to_le_bytes());
+        output[4..12].copy_from_slice(&slot.to_le_bytes());
+        output[45..].copy_from_slice(elf);
+        output
+    }
+
+    struct ReleaseFixture {
+        release: ArtifactReleaseV2,
+        artifact_id: ArtifactReleaseIdV1,
+        input: ArtifactActivationInputV1,
+        program: AccountInfo<'static>,
+        programdata: AccountInfo<'static>,
+    }
+
+    fn release_fixture(seed: u8) -> ReleaseFixture {
+        let program = Pubkey::new_from_array([seed; 32]);
+        let programdata =
+            Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let slot = 70_u64 + u64::from(seed);
+        let elf = vec![seed ^ 0x5a; 96];
+        let commitment = dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf)
+            .expect("code commitment");
+        let release = ArtifactReleaseV2::new(
+            ProgramIdentityV1::new(program.to_bytes()).expect("program"),
+            ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
+            programdata.to_bytes(),
+            ContentId::new([seed ^ 0xa5; 32]).expect("semantic release"),
+            commitment,
+            slot,
+            ArtifactUpgradePolicyV1::Immutable,
+            None,
+        )
+        .expect("release");
+        let artifact_id =
+            ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact id");
+        let observation = DeploymentObservationV2::new(
+            program.to_bytes(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            true,
+            programdata.to_bytes(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            false,
+            programdata.to_bytes(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            slot,
+            commitment,
+            None,
+        )
+        .expect("observation");
+        ReleaseFixture {
+            release,
+            artifact_id,
+            input: ArtifactActivationInputV1::new(artifact_id, release, observation),
+            program: observed(
+                program,
+                false,
+                1,
+                loader_program_bytes(programdata),
+                bpf_loader_upgradeable::ID,
+                true,
+            ),
+            programdata: observed(
+                programdata,
+                false,
+                1,
+                immutable_programdata_bytes(slot, &elf),
+                bpf_loader_upgradeable::ID,
+                false,
+            ),
+        }
+    }
+
+    fn direct_manifest() -> Vec<u8> {
+        let native = CompartmentFundingV1::native_lamports(100).expect("native funding");
+        let none = CompartmentFundingV1::not_applicable();
+        let amounts = FundingAmountsV1::new(native, native, none, none, none, none, none)
+            .expect("funding amounts");
+        let entry = CapabilityEntryV1::new(
+            ContentId::new(DIRECT_SUCCESSOR_KIND_ID_V3).expect("Direct kind"),
+            ContentId::new([0x61; 32]).expect("release"),
+            ContentId::new([0x62; 32]).expect("config"),
+            ContentId::new([0x63; 32]).expect("capacity"),
+            ContentId::new([0x64; 32]).expect("schema"),
+            ContentId::new([0x65; 32]).expect("derivation"),
+            ActivationPolicy::PrepaidLazy,
+            500,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(amounts, None).expect("funding quote"),
+        )
+        .expect("Direct entry");
+        let mut bytes = vec![0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&[entry], &mut bytes).expect("manifest");
+        bytes
+    }
+
+    struct EntrypointFixture {
+        program_id: Pubkey,
+        accounts: Vec<AccountInfo<'static>>,
+        request: [u8; dclutch_trading::retirement_v1::DIRECT_CLOSE_UNUSED_REQUEST_BYTES_V1],
+        ledger_pre_lamports: u64,
+        credit_pre_lamports: u64,
+        market_pre: Vec<u8>,
+    }
+
+    fn entrypoint_fixture(active: bool) -> EntrypointFixture {
+        let registry = Pubkey::new_from_array([0x31; 32]);
+        let rent_program = Pubkey::new_from_array([0x32; 32]);
+        let releases = [
+            release_fixture(0x41),
+            release_fixture(0x42),
+            release_fixture(0x43),
+            release_fixture(0x44),
+            release_fixture(0x45),
+        ];
+        let binding = |index: usize| {
+            ExecutionRoleBindingV1::new(
+                releases[index].release.program(),
+                releases[index].artifact_id,
+            )
+        };
+        let release_set =
+            ExecutionReleaseSetV1::new(binding(0), binding(1), binding(2), binding(3), binding(4))
+                .expect("release set");
+        let release_set_id =
+            ContentId::new(hash(&release_set.to_bytes()).to_bytes()).expect("release set id");
+        let mut cache_bytes = vec![0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+        initialize_activation_cache_v1(&mut cache_bytes, release_set_id).expect("cache initialize");
+        for (role, release) in ALL_ROLES.into_iter().zip(&releases) {
+            activate_execution_role_into_v1(
+                &mut cache_bytes,
+                release_set_id,
+                &release_set,
+                role,
+                &release.input,
+            )
+            .expect("role activation");
+        }
+        let cache = dclutch_registry::activation_auth_v1::activation_cache_address_v1(
+            &registry,
+            &release_set_id.to_bytes(),
+        );
+
+        let manifest_bytes = direct_manifest();
+        let manifest_id =
+            ContentId::new(hash(&manifest_bytes).to_bytes()).expect("manifest content id");
+        let core_program = *releases[0].program.key;
+        let program_id = *releases[2].program.key;
+        let generation = 9_u64;
+        let mut market_identity = MarketIdentity {
+            market_id: identity(1),
+            realm_id: identity(2),
+            product_record: identity(3),
+            product_id: identity(4),
+            resolution_policy: identity(5),
+            capability_manifest: Identity::new(manifest_id.to_bytes()).expect("manifest identity"),
+            selected_release_set: Identity::new(release_set_id.to_bytes())
+                .expect("release identity"),
+            registry_program: Identity::new(registry.to_bytes()).expect("registry identity"),
+            generation,
+        };
+        let market = Pubkey::find_program_address(
+            &MarketCoreStateSeedsV2::new(market_identity).as_slices(),
+            &core_program,
+        )
+        .0;
+        market_identity.market_id = Identity::new(market.to_bytes()).expect("market identity");
+        let generation_bytes = generation.to_le_bytes();
+        let (rent_credit, rent_bump) = Pubkey::find_program_address(
+            &[
+                dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                market.as_ref(),
+                &generation_bytes,
+            ],
+            &rent_program,
+        );
+        let market_state = CoreState {
+            phase: Phase::Retiring,
+            readiness: Readiness::Consumed,
+            terminal_winner: 0,
+            identity: market_identity,
+            outstanding_capabilities: 0,
+            principal_cap_sets: 1,
+            rent_beneficiary: Identity::new(rent_credit.to_bytes()).expect("rent beneficiary"),
+            terminal_receipt: Some(identity(6)),
+            bumps: StateBumpsV1::UNRECORDED,
+        }
+        .encode()
+        .expect("market state")
+        .to_vec();
+
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decode");
+        let ledger_len = funding_ledger_bytes_v2(1).expect("ledger width");
+        let rent = Rent::default();
+        let rate = derive_funded_rent_rate_v2(
+            rent.minimum_balance(0),
+            ledger_len,
+            rent.minimum_balance(ledger_len),
+        )
+        .expect("funded rent rate");
+        let mut ledger_bytes = vec![0_u8; ledger_len];
+        FundingLedgerV2::initialize(&mut ledger_bytes, manifest_id, manifest, 1, rate)
+            .expect("ledger initialize");
+        if active {
+            FundingLedgerV2::activate_in_place(&mut ledger_bytes, manifest_id, manifest, 0, 100)
+                .expect("ledger activate");
+        }
+        let ledger = FundingLedgerV2::decode(&ledger_bytes).expect("ledger decode");
+        let ledger_key = Pubkey::find_program_address(
+            &CapabilityFundingLedgerDerivationV2::new(
+                program_id.to_bytes(),
+                market.to_bytes(),
+                generation,
+                manifest_id,
+                ledger,
+            )
+            .expect("ledger derivation")
+            .seed_components(),
+            &program_id,
+        )
+        .0;
+        let authenticated = ledger
+            .authenticate(manifest_id, manifest)
+            .expect("ledger authentication");
+        let principal = authenticated
+            .remaining_native_lamports_total()
+            .expect("principal");
+        let exact_rent = authenticated
+            .funded_rent_minimum(ledger_len)
+            .expect("exact rent");
+        let ledger_pre_lamports = principal + exact_rent + 17;
+
+        let entry = manifest.entry(0).expect("entry");
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            manifest_id,
+            entry.kind_id(),
+            entry.release_id(),
+            entry.config_id(),
+        )
+        .expect("selection");
+        let root_header = CapabilityRootHeaderV1::new(
+            release_set_id,
+            market.to_bytes(),
+            generation,
+            selection,
+            SelectedRecordBumpsV1::default(),
+        )
+        .expect("root header");
+        let vacant_root =
+            Pubkey::find_program_address(&root_header.seeds().as_slices(), &program_id).0;
+        let manifest_raw = Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+                manifest_id.as_bytes(),
+            ],
+            &registry,
+        )
+        .0;
+        let manifest_staging = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                &CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+                manifest_id.as_bytes(),
+            ],
+            &registry,
+        )
+        .0;
+        let credit_state = LifecycleRentCreditV2::new(
+            RefundAuthority::new([0x71; 32]).expect("refund wallet"),
+            LifecycleAccountIdV2::new(market.to_bytes()).expect("market credit id"),
+            LifecycleAccountIdV2::new(release_set_id.to_bytes()).expect("release credit id"),
+            generation,
+            rent_bump,
+        )
+        .expect("rent credit");
+        let credit_pre_lamports = 10_000;
+        let accounts = vec![
+            observed(market, false, 1, market_state.clone(), core_program, false),
+            observed(
+                ledger_key,
+                true,
+                ledger_pre_lamports,
+                ledger_bytes,
+                program_id,
+                false,
+            ),
+            observed(
+                vacant_root,
+                false,
+                13,
+                Vec::new(),
+                system_program::ID,
+                false,
+            ),
+            observed(
+                rent_credit,
+                true,
+                credit_pre_lamports,
+                credit_state.to_bytes().to_vec(),
+                rent_program,
+                false,
+            ),
+            observed(manifest_raw, false, 1, manifest_bytes, registry, false),
+            observed(
+                manifest_staging,
+                false,
+                11,
+                Vec::new(),
+                system_program::ID,
+                false,
+            ),
+            observed(cache, false, 1, cache_bytes, registry, false),
+            releases[0].program.clone(),
+            releases[0].programdata.clone(),
+            releases[2].program.clone(),
+            releases[2].programdata.clone(),
+            observed(registry, false, 1, Vec::new(), native_loader::ID, true),
+            observed(rent_program, false, 1, Vec::new(), native_loader::ID, true),
+            observed(
+                system_program::ID,
+                false,
+                1,
+                Vec::new(),
+                native_loader::ID,
+                true,
+            ),
+        ];
+        EntrypointFixture {
+            program_id,
+            accounts,
+            request: DirectCloseUnusedRequestV1 { entry_index: 0 }.to_bytes(),
+            ledger_pre_lamports,
+            credit_pre_lamports,
+            market_pre: market_state,
+        }
+    }
 
     #[test]
     fn request_is_exact_and_reserved_bytes_refuse() {
@@ -406,28 +830,8 @@ mod tests {
         let credit_key = Pubkey::new_unique();
         let trading = Pubkey::new_unique();
         let rent_program = Pubkey::new_unique();
-        let mut ledger_lamports = 160;
-        let mut credit_lamports = 20;
-        let mut ledger_data = [7_u8; 8];
-        let mut credit_data = [];
-        let ledger = AccountInfo::new(
-            &ledger_key,
-            false,
-            true,
-            &mut ledger_lamports,
-            &mut ledger_data,
-            &trading,
-            false,
-        );
-        let credit = AccountInfo::new(
-            &credit_key,
-            false,
-            true,
-            &mut credit_lamports,
-            &mut credit_data,
-            &rent_program,
-            false,
-        );
+        let ledger = observed(ledger_key, true, 160, vec![7_u8; 8], trading, false);
+        let credit = observed(credit_key, true, 20, Vec::new(), rent_program, false);
         close_to_rent_credit(&ledger, &credit, 100, 50).expect("donated close");
         assert_eq!(ledger.lamports(), 0);
         assert_eq!(ledger.data_len(), 0);
@@ -441,28 +845,8 @@ mod tests {
         let credit_key = Pubkey::new_unique();
         let trading = Pubkey::new_unique();
         let rent_program = Pubkey::new_unique();
-        let mut ledger_lamports = 149;
-        let mut credit_lamports = 20;
-        let mut ledger_data = [7_u8; 8];
-        let mut credit_data = [];
-        let ledger = AccountInfo::new(
-            &ledger_key,
-            false,
-            true,
-            &mut ledger_lamports,
-            &mut ledger_data,
-            &trading,
-            false,
-        );
-        let credit = AccountInfo::new(
-            &credit_key,
-            false,
-            true,
-            &mut credit_lamports,
-            &mut credit_data,
-            &rent_program,
-            false,
-        );
+        let ledger = observed(ledger_key, true, 149, vec![7_u8; 8], trading, false);
+        let credit = observed(credit_key, true, 20, Vec::new(), rent_program, false);
         assert_eq!(
             close_to_rent_credit(&ledger, &credit, 100, 50),
             Err(TradingSbfError::Commit.into())
@@ -470,5 +854,71 @@ mod tests {
         assert_eq!(ledger.lamports(), 149);
         assert_eq!(credit.lamports(), 20);
         assert_eq!(ledger.owner, &trading);
+    }
+
+    #[test]
+    fn full_entrypoint_accepts_donated_vacancies_and_returns_every_ledger_lamport() {
+        let fixture = entrypoint_fixture(false);
+        assert_eq!(
+            crate::process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request),
+            Ok(())
+        );
+        assert_eq!(fixture.accounts[LEDGER].lamports(), 0);
+        assert_eq!(fixture.accounts[LEDGER].data_len(), 0);
+        assert_eq!(fixture.accounts[LEDGER].owner, &system_program::ID);
+        assert_eq!(
+            fixture.accounts[RENT_CREDIT].lamports(),
+            fixture.credit_pre_lamports + fixture.ledger_pre_lamports
+        );
+        assert_eq!(fixture.accounts[VACANT_ROOT].lamports(), 13);
+        assert_eq!(fixture.accounts[MANIFEST_STAGING].lamports(), 11);
+        assert_eq!(
+            fixture.accounts[MARKET]
+                .try_borrow_data()
+                .expect("Market after close")
+                .as_ref(),
+            fixture.market_pre.as_slice()
+        );
+    }
+
+    #[test]
+    fn full_entrypoint_refuses_active_ledger_before_any_balance_changes() {
+        let fixture = entrypoint_fixture(true);
+        let ledger_before = fixture.accounts[LEDGER].lamports();
+        let credit_before = fixture.accounts[RENT_CREDIT].lamports();
+        assert_eq!(
+            crate::process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(fixture.accounts[LEDGER].lamports(), ledger_before);
+        assert_eq!(fixture.accounts[RENT_CREDIT].lamports(), credit_before);
+    }
+
+    #[test]
+    fn full_entrypoint_refuses_a_wrong_vacant_root_before_any_balance_changes() {
+        let mut fixture = entrypoint_fixture(false);
+        fixture.accounts[VACANT_ROOT].key = Box::leak(Box::new(Pubkey::new_unique()));
+        let ledger_before = fixture.accounts[LEDGER].lamports();
+        let credit_before = fixture.accounts[RENT_CREDIT].lamports();
+        assert_eq!(
+            crate::process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request),
+            Err(TradingSbfError::Root.into())
+        );
+        assert_eq!(fixture.accounts[LEDGER].lamports(), ledger_before);
+        assert_eq!(fixture.accounts[RENT_CREDIT].lamports(), credit_before);
+    }
+
+    #[test]
+    fn full_entrypoint_refuses_a_foreign_rent_credit_before_any_balance_changes() {
+        let mut fixture = entrypoint_fixture(false);
+        fixture.accounts[RENT_CREDIT].key = Box::leak(Box::new(Pubkey::new_unique()));
+        let ledger_before = fixture.accounts[LEDGER].lamports();
+        let credit_before = fixture.accounts[RENT_CREDIT].lamports();
+        assert_eq!(
+            crate::process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(fixture.accounts[LEDGER].lamports(), ledger_before);
+        assert_eq!(fixture.accounts[RENT_CREDIT].lamports(), credit_before);
     }
 }

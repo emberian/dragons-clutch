@@ -204,6 +204,7 @@ export type GeneralVerifierCurrentOrderV2 = Readonly<{
   nonce: bigint;
   maxLots: bigint;
   maxQuoteDebitPerLot: bigint;
+  minQuoteCreditPerLot: bigint;
   lots: bigint;
   sourcePageIndex: number;
   sourceExecutionIndex: number;
@@ -219,6 +220,7 @@ export type GeneralVerifierStatusV2 = Readonly<{
   nextPageIndex: number;
   nextRowIndex: number;
   orderCount: number;
+  filledOrderCount: number;
   revision: bigint;
   candidateCoordinate: number;
   candidateId: string;
@@ -231,6 +233,8 @@ export type GeneralVerifierStatusV2 = Readonly<{
   prices: ReadonlyArray<bigint>;
   claimInputs: ReadonlyArray<bigint>;
   claimOutputs: ReadonlyArray<bigint>;
+  priceFloor: ReadonlyArray<bigint>;
+  priceCeiling: ReadonlyArray<bigint>;
   currentOrder: GeneralVerifierCurrentOrderV2 | null;
 }>;
 
@@ -724,19 +728,16 @@ export function decodeGeneralVerifierV2(bytes: Uint8Array): GeneralVerifierStatu
       || !same(slice(bytes, Abi.GENERAL_VERIFIER_MAGIC_OFFSET_V2, Abi.GENERAL_VERIFIER_MAGIC_V2.length), Abi.GENERAL_VERIFIER_MAGIC_V2)
       || u16(bytes, Abi.GENERAL_VERIFIER_VERSION_OFFSET_V2) !== Abi.GENERAL_VERIFIER_VERSION_V2) throw new Error('General candidate verifier is not exact V2');
   const afterCurrentOrderFlag = Abi.GENERAL_VERIFIER_HAS_CURRENT_ORDER_OFFSET_V2 + Uint8Array.BYTES_PER_ELEMENT;
-  const afterCandidateCoordinate = Abi.GENERAL_VERIFIER_CANDIDATE_COORDINATE_OFFSET_V2 + Uint32Array.BYTES_PER_ELEMENT;
-  const afterSourceExecutionIndex = Abi.GENERAL_VERIFIER_CURRENT_SOURCE_EXECUTION_INDEX_OFFSET_V2 + Uint32Array.BYTES_PER_ELEMENT;
   requireZero(bytes, afterCurrentOrderFlag, Abi.GENERAL_VERIFIER_OUTCOME_COUNT_OFFSET_V2 - afterCurrentOrderFlag, 'General verifier header');
-  requireZero(bytes, afterCandidateCoordinate, Abi.GENERAL_VERIFIER_CANDIDATE_ID_OFFSET_V2 - afterCandidateCoordinate, 'General verifier header');
-  requireZero(bytes, afterSourceExecutionIndex, Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 - afterSourceExecutionIndex, 'General verifier header');
   const hasCurrentOrder = bytes[Abi.GENERAL_VERIFIER_HAS_CURRENT_ORDER_OFFSET_V2];
   if (hasCurrentOrder !== 0 && hasCurrentOrder !== 1) throw new Error('General verifier current-order flag is noncanonical');
   const outcomeCount = readU32(bytes, Abi.GENERAL_VERIFIER_OUTCOME_COUNT_OFFSET_V2);
-  if (outcomeCount === 0 || bytes.length !== Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 + outcomeCount * 40) throw new Error('General verifier has the wrong runtime width');
+  if (outcomeCount === 0 || bytes.length !== Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 + outcomeCount * Abi.GENERAL_VERIFIER_TAIL_COUNT_V2 * Abi.GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2) throw new Error('General verifier has the wrong runtime width');
   const pageCount = readU32(bytes, Abi.GENERAL_VERIFIER_PAGE_COUNT_OFFSET_V2);
   const nextPageIndex = readU32(bytes, Abi.GENERAL_VERIFIER_NEXT_PAGE_INDEX_OFFSET_V2);
   const nextRowIndex = readU32(bytes, Abi.GENERAL_VERIFIER_NEXT_ROW_INDEX_OFFSET_V2);
   const orderCount = readU32(bytes, Abi.GENERAL_VERIFIER_ORDER_COUNT_OFFSET_V2);
+  const filledOrderCount = readU32(bytes, Abi.GENERAL_VERIFIER_FILLED_ORDER_COUNT_OFFSET_V2);
   const revision = u64(bytes, Abi.GENERAL_VERIFIER_REVISION_OFFSET_V2);
   const candidateCoordinate = readU32(bytes, Abi.GENERAL_VERIFIER_CANDIDATE_COORDINATE_OFFSET_V2);
   const priceScale = u64(bytes, Abi.GENERAL_VERIFIER_PRICE_SCALE_OFFSET_V2);
@@ -748,10 +749,13 @@ export function decodeGeneralVerifierV2(bytes: Uint8Array): GeneralVerifierStatu
   const deliverPerLot = verifierTail(bytes, outcomeCount, Abi.GENERAL_VERIFIER_CURRENT_DELIVER_TAIL_V2);
   const claimInputs = verifierTail(bytes, outcomeCount, Abi.GENERAL_VERIFIER_CLAIM_INPUTS_TAIL_V2);
   const claimOutputs = verifierTail(bytes, outcomeCount, Abi.GENERAL_VERIFIER_CLAIM_OUTPUTS_TAIL_V2);
-  const initial = revision === 0n && nextPageIndex === 0 && nextRowIndex === 0 && orderCount === 0 && filledLots === 0n && quoteDebit === 0n && quoteCredit === 0n
-    && hasCurrentOrder === 0 && claimInputs.every((value) => value === 0n) && claimOutputs.every((value) => value === 0n);
+  const priceFloor = verifierTail(bytes, outcomeCount, Abi.GENERAL_VERIFIER_PRICE_FLOOR_TAIL_V2);
+  const priceCeiling = verifierTail(bytes, outcomeCount, Abi.GENERAL_VERIFIER_PRICE_CEILING_TAIL_V2);
+  const initial = revision === 0n && nextPageIndex === 0 && nextRowIndex === 0 && orderCount === 0 && filledOrderCount === 0 && filledLots === 0n && quoteDebit === 0n && quoteCredit === 0n
+    && hasCurrentOrder === 0 && claimInputs.every((value) => value === 0n) && claimOutputs.every((value) => value === 0n) && priceFloor.every((value) => value === 0n);
   if (pageCount === 0 || candidateCoordinate === 0 || priceScale === 0n || prices.reduce((sum, value) => sum + value, 0n) !== priceScale
-      || nextPageIndex > pageCount || (nextPageIndex === pageCount && nextRowIndex !== 0) || (revision === 0n) !== initial || (!initial && orderCount === 0)) {
+      || nextPageIndex > pageCount || (nextPageIndex === pageCount && nextRowIndex !== 0) || (revision === 0n) !== initial || (!initial && orderCount === 0) || filledOrderCount > orderCount
+      || prices.some((price, index) => priceFloor[index] > price || price > priceCeiling[index] || priceCeiling[index] > priceScale || (initial && priceCeiling[index] !== priceScale))) {
     throw new Error('General verifier carries a noncanonical cursor');
   }
   let currentOrder: GeneralVerifierCurrentOrderV2 | null = null;
@@ -760,25 +764,26 @@ export function decodeGeneralVerifierV2(bytes: Uint8Array): GeneralVerifierStatu
     const lots = u64(bytes, Abi.GENERAL_VERIFIER_CURRENT_LOTS_OFFSET_V2);
     const sourcePageIndex = readU32(bytes, Abi.GENERAL_VERIFIER_CURRENT_SOURCE_PAGE_INDEX_OFFSET_V2);
     const sourceExecutionIndex = readU32(bytes, Abi.GENERAL_VERIFIER_CURRENT_SOURCE_EXECUTION_INDEX_OFFSET_V2);
-    if (maxLots === 0n || lots === 0n || lots > maxLots || !(sourcePageIndex < nextPageIndex || (sourcePageIndex === nextPageIndex && sourceExecutionIndex < nextRowIndex))) throw new Error('General verifier current order is noncanonical');
+    if (maxLots === 0n || lots > maxLots || !(sourcePageIndex < nextPageIndex || (sourcePageIndex === nextPageIndex && sourceExecutionIndex < nextRowIndex))) throw new Error('General verifier current order is noncanonical');
     currentOrder = Object.freeze({
       orderId: idHex(bytes, Abi.GENERAL_VERIFIER_CURRENT_ORDER_ID_OFFSET_V2, 'verifier current Order'),
       owner: pubkeyHex(bytes, Abi.GENERAL_VERIFIER_CURRENT_OWNER_ID_OFFSET_V2, 'verifier current owner'),
       nonce: u64(bytes, Abi.GENERAL_VERIFIER_CURRENT_NONCE_OFFSET_V2), maxLots,
-      maxQuoteDebitPerLot: u64(bytes, Abi.GENERAL_VERIFIER_CURRENT_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2), lots,
+      maxQuoteDebitPerLot: u64(bytes, Abi.GENERAL_VERIFIER_CURRENT_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2),
+      minQuoteCreditPerLot: u64(bytes, Abi.GENERAL_VERIFIER_CURRENT_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2), lots,
       sourcePageIndex, sourceExecutionIndex, receivePerLot, deliverPerLot,
     });
   } else {
-    requireZero(bytes, Abi.GENERAL_VERIFIER_CURRENT_ORDER_ID_OFFSET_V2, 104, 'General verifier absent current order');
+    requireZero(bytes, Abi.GENERAL_VERIFIER_CURRENT_ORDER_ID_OFFSET_V2, Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 - Abi.GENERAL_VERIFIER_CURRENT_ORDER_ID_OFFSET_V2, 'General verifier absent current order');
     if (receivePerLot.some((value) => value !== 0n) || deliverPerLot.some((value) => value !== 0n)) throw new Error('General verifier absent order carries a portfolio');
   }
   return Object.freeze({
     kind: 'verifier' as const, phase: initial ? 'initial' : nextPageIndex === pageCount ? 'complete' : 'streaming',
-    outcomeCount, pageCount, nextPageIndex, nextRowIndex, orderCount, revision, candidateCoordinate,
+    outcomeCount, pageCount, nextPageIndex, nextRowIndex, orderCount, filledOrderCount, revision, candidateCoordinate,
     candidateId: idHex(bytes, Abi.GENERAL_VERIFIER_CANDIDATE_ID_OFFSET_V2, 'verifier Candidate'),
     productId: idHex(bytes, Abi.GENERAL_VERIFIER_PRODUCT_ID_OFFSET_V2, 'verifier Product'),
     batchId: idHex(bytes, Abi.GENERAL_VERIFIER_BATCH_ID_OFFSET_V2, 'verifier Batch'),
-    priceScale, filledLots, quoteDebit, quoteCredit, prices, claimInputs, claimOutputs, currentOrder,
+    priceScale, filledLots, quoteDebit, quoteCredit, prices, claimInputs, claimOutputs, priceFloor, priceCeiling, currentOrder,
   });
 }
 

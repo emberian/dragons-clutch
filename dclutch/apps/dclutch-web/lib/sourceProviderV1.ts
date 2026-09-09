@@ -124,6 +124,7 @@ export type SourceProviderSubmitPlanV1 = Readonly<{
     resolutionProgram: string;
     receiverProgram: string;
     submitRequestBase64: string;
+    registryArtifact: string;
   }>;
 }>;
 
@@ -367,7 +368,7 @@ export function parseSourceProviderSubmitPlanV1(source: string): SourceProviderS
   if (!Array.isArray(raw.lookupTables) || raw.lookupTables.length !== 1) throw new Error('Source provider submit does not use exactly one frozen table');
   if (!Array.isArray(raw.completion) || raw.completion.length !== 2) throw new Error('Source provider submit completion set is not exact');
   const poststateRaw = object(raw.poststate, [
-    'lifecycle', 'receiverProgram', 'resolutionProgram', 'submitRequestBase64', 'updateAccount', 'updateAuthority',
+    'lifecycle', 'receiverProgram', 'resolutionProgram', 'registryArtifact', 'submitRequestBase64', 'updateAccount', 'updateAuthority',
   ], 'Source provider submit poststate');
   const wireBytes = safeUnsigned(raw.wireBytes, 'submit wire bytes');
   if (wireBytes > SOLANA_PACKET_BYTES_V1) throw new Error('Source provider submit exceeds Solana packet size');
@@ -393,6 +394,7 @@ export function parseSourceProviderSubmitPlanV1(source: string): SourceProviderS
       updateAuthority: key(poststateRaw.updateAuthority, 'poststate update authority'),
       resolutionProgram: key(poststateRaw.resolutionProgram, 'poststate Resolution program'),
       receiverProgram: key(poststateRaw.receiverProgram, 'poststate Receiver program'),
+      registryArtifact: key(poststateRaw.registryArtifact, 'poststate Registry artifact'),
       submitRequestBase64: bytesBase64(base64Bytes(poststateRaw.submitRequestBase64, 'poststate submit request')),
     }),
   });
@@ -405,7 +407,7 @@ export function parseSourceProviderReclaimPlanV1(source: string): SourceProvider
   ], 'Source provider plan');
   if (raw.format !== SOURCE_PROVIDER_PLAN_FORMAT_V1 || raw.route !== 'reclaim') throw new Error('Source provider plan has another format or route');
   const instruction = object(raw.instruction, ['accounts', 'dataBase64', 'program'], 'Source provider instruction');
-  if (!Array.isArray(instruction.accounts) || instruction.accounts.length !== 18) throw new Error('Source provider reclaim frame is not exactly 18 accounts');
+  if (!Array.isArray(instruction.accounts) || instruction.accounts.length !== 20) throw new Error('Source provider reclaim frame is not exactly 20 accounts');
   const accounts = Object.freeze(instruction.accounts.map((entry, index) => {
     const meta = object(entry, ['address', 'isSigner', 'isWritable'], `Source provider account ${index}`);
     if (typeof meta.isSigner !== 'boolean' || typeof meta.isWritable !== 'boolean') throw new Error(`Source provider account ${index} privileges are malformed`);

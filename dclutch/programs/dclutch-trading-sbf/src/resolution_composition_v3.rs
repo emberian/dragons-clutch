@@ -15,8 +15,8 @@ use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
     PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3,
-    ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V4, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, ProviderCallerV3,
+    ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV4,
     ProviderUpdateStatusV3,
 };
 use dclutch_vm::effect::{
@@ -195,7 +195,7 @@ pub fn execute_resolution_route_v3<'info>(
 ///
 /// Out of line from [`execute_resolution_route_v3`], which is the widest frame
 /// on this path: a decoded `ProviderExecutionReceiptV3` is 672 bytes on the
-/// wire and a `ProviderUpdateLifecycleV3` is another block again, against an
+/// wire and a `ProviderUpdateLifecycleV4` is another block again, against an
 /// SBPF v0 static frame of 4,096 that already holds the prepared request. Both
 /// belong to THIS frame, which nothing else shares.
 #[inline(never)]
@@ -380,7 +380,7 @@ fn prepare<'info>(
         .ok_or(TradingSbfError::Content)?;
     let (expected_lifecycle, lifecycle_bump) = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             &request.update_account,
         ],
         resolution_program.key,
@@ -450,21 +450,21 @@ fn prepare<'info>(
 }
 
 #[inline(never)]
-fn decode_lifecycle(account: &AccountInfo<'_>) -> Result<ProviderUpdateLifecycleV3, ProgramError> {
-    if account.data_len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3 {
+fn decode_lifecycle(account: &AccountInfo<'_>) -> Result<ProviderUpdateLifecycleV4, ProgramError> {
+    if account.data_len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V4 {
         return Err(TradingSbfError::Transition.into());
     }
     let bytes = account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::AccountData)?;
-    ProviderUpdateLifecycleV3::decode(&bytes).map_err(|_| TradingSbfError::AccountData.into())
+    ProviderUpdateLifecycleV4::decode(&bytes).map_err(|_| TradingSbfError::AccountData.into())
 }
 
 #[inline(never)]
 fn verify_consumed_lifecycle(
     request: ProviderExecutionRequestV3,
     receipt: ProviderExecutionReceiptV3,
-    lifecycle: ProviderUpdateLifecycleV3,
+    lifecycle: ProviderUpdateLifecycleV4,
 ) -> Result<(), ProgramError> {
     if lifecycle.status != ProviderUpdateStatusV3::Consumed
         || lifecycle.generation != request.generation
@@ -659,8 +659,8 @@ mod tests {
         }
     }
 
-    fn submitted_lifecycle(request: ProviderExecutionRequestV3) -> ProviderUpdateLifecycleV3 {
-        ProviderUpdateLifecycleV3::submitted(
+    fn submitted_lifecycle(request: ProviderExecutionRequestV3) -> ProviderUpdateLifecycleV4 {
+        ProviderUpdateLifecycleV4::submitted(
             ProviderSubmitRequestV3 {
                 generation: request.generation,
                 reclaim_after_unix_seconds: 2,
@@ -680,6 +680,7 @@ mod tests {
             1,
             id(26),
             id(24),
+            id(27),
             request.expected_update_digest,
             1,
             1,

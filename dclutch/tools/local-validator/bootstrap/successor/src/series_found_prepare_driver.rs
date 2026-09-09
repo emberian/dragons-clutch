@@ -74,6 +74,50 @@ struct SeriesFoundPrepareArgumentsV1 {
     diagnostic_shadow_output: Option<PathBuf>,
     output: Option<PathBuf>,
     execute: bool,
+    timing: SeriesLocalTimingV1,
+}
+
+/// Operator-selected liveness allowance, never a protocol capitalization bound.
+/// The retained 2026-09-09 publication profile measured 504–505 slots after
+/// Template authoring; full parent publication needs additional measured room.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub(crate) struct SeriesLocalTimingV1 {
+    lead_slots: u64,
+    retry_slots: u64,
+    period_slots: u64,
+}
+
+impl SeriesLocalTimingV1 {
+    fn from_arguments(values: &BTreeMap<String, String>) -> Result<Self> {
+        let read = |flag: &str| -> Result<u64> {
+            let value = values
+                .get(flag)
+                .ok_or_else(|| Error::new(format!("Series Found/Prepare requires {flag}")))?;
+            let parsed = value
+                .parse::<u64>()
+                .map_err(|_| Error::new(format!("{flag} must be a positive decimal u64")))?;
+            if parsed == 0 {
+                return Err(Error::new(format!("{flag} must be a positive decimal u64")));
+            }
+            Ok(parsed)
+        };
+        Ok(Self {
+            lead_slots: read("--schedule-lead-slots")?,
+            retry_slots: read("--schedule-retry-slots")?,
+            period_slots: read("--schedule-period-slots")?,
+        })
+    }
+
+    fn first_slot(self, observed_slot: u64) -> Result<u64> {
+        let first = observed_slot
+            .checked_add(self.lead_slots)
+            .ok_or_else(|| Error::new("Series local scenario first slot overflow"))?;
+        first
+            .checked_add(self.period_slots)
+            .and_then(|second| second.checked_add(self.retry_slots))
+            .ok_or_else(|| Error::new("Series local scenario second retry end overflow"))?;
+        Ok(first)
+    }
 }
 
 fn canonical_regular_v1(path: PathBuf, flag: &str) -> Result<PathBuf> {
@@ -141,6 +185,9 @@ fn parse_series_found_prepare_arguments_v1(
                         | "--series-shadow-source-manifest"
                         | "--emit-series-shadow-diagnostic"
                         | "--output"
+                        | "--schedule-lead-slots"
+                        | "--schedule-retry-slots"
+                        | "--schedule-period-slots"
                 ) || values.insert(flag.to_owned(), value.to_owned()).is_some()
                 {
                     return Err(Error::new(format!(
@@ -157,6 +204,7 @@ fn parse_series_found_prepare_arguments_v1(
             .cloned()
             .ok_or_else(|| Error::new(format!("Series Found/Prepare requires {flag}")))
     };
+    let timing = SeriesLocalTimingV1::from_arguments(&values)?;
     let direct_fee_recipient: Pubkey = required("--direct-fee-recipient")?
         .parse()
         .map_err(|_| Error::new("--direct-fee-recipient must be a base58 Pubkey"))?;
@@ -177,12 +225,10 @@ fn parse_series_found_prepare_arguments_v1(
         .get("--output")
         .map(|value| absolute_new_v1(PathBuf::from(value), "--output"))
         .transpose()?;
-    let execute_mode = shadow_source_manifest.is_some()
-        && diagnostic_shadow_output.is_none()
-        && output.is_some();
-    let diagnostic_mode = shadow_source_manifest.is_none()
-        && diagnostic_shadow_output.is_some()
-        && output.is_none();
+    let execute_mode =
+        shadow_source_manifest.is_some() && diagnostic_shadow_output.is_none() && output.is_some();
+    let diagnostic_mode =
+        shadow_source_manifest.is_none() && diagnostic_shadow_output.is_some() && output.is_none();
     if !execute_mode && !diagnostic_mode {
         return Err(Error::new(
             "Series Found/Prepare requires either --series-shadow-source-manifest with --output, or --emit-series-shadow-diagnostic",
@@ -203,6 +249,7 @@ fn parse_series_found_prepare_arguments_v1(
         diagnostic_shadow_output,
         output,
         execute,
+        timing,
     })
 }
 
@@ -297,7 +344,17 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         payer.pubkey(),
         payer.pubkey(),
         child_collateral.wallet,
+        arguments.timing,
     )?;
+    eprintln!(
+        "Series explicit operational timing: authored_at={} first={} second={} retry_slots={} period_slots={} lead_slots={}",
+        scenario.finalized_slot,
+        arguments.timing.first_slot(scenario.finalized_slot)?,
+        arguments.timing.first_slot(scenario.finalized_slot)? + arguments.timing.period_slots,
+        arguments.timing.retry_slots,
+        arguments.timing.period_slots,
+        arguments.timing.lead_slots
+    );
     let founder_records =
         publish_series_founder_records_v1(&mut rpc, registry, &payer, &founder, &mut transactions)?;
     let m0_records = series_prepare_records_from_m0_publication_v1(&m0);
@@ -526,13 +583,62 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         std::slice::from_ref(&selected.instruction),
         &mut transactions,
     )?;
-    let sent = rpc.send_v0_on_heap(
-        "execute first selected Series Prepare",
+    let before_prepare_slot = rpc.finalized_slot()?;
+    let bounded = crate::rpc::bounded_instructions(
         std::slice::from_ref(&selected.instruction),
-        &payer,
+        Some(dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+    )?;
+    let (blockhash, last_valid_block_height) = rpc.recent_blockhash_with_height_v1()?;
+    let message_plan = dclutch_versioned_message_operator::compile_v0_message(
+        payer.pubkey(),
+        &bounded,
+        solana_hash::Hash::new_from_array(blockhash.to_bytes()),
         routing_observation,
         &tables,
-        dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+    )
+    .map_err(|error| {
+        Error::new(format!(
+            "Series Prepare actual packet compilation: {error:?}"
+        ))
+    })?;
+    let account_key_count = message_plan.message.static_account_keys().len()
+        + match &message_plan.message {
+            solana_sdk::message::VersionedMessage::V0(message) => message
+                .address_table_lookups
+                .iter()
+                .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+                .sum::<usize>(),
+            solana_sdk::message::VersionedMessage::Legacy(_) => 0,
+        };
+    let transaction =
+        solana_sdk::transaction::VersionedTransaction::try_new(message_plan.message, &[&payer])
+            .map_err(|error| Error::new(format!("Series Prepare exact packet signing: {error}")))?;
+    let packet = bincode::serialize(&transaction).map_err(|error| {
+        Error::new(format!(
+            "Series Prepare exact packet serialization: {error}"
+        ))
+    })?;
+    let packet_geometry = serde_json::json!({
+        "accountKeyCount": account_key_count,
+        "packetBytes": packet.len(),
+        "packetSha256": Sha256::digest(&packet).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+    });
+    eprintln!("Series Prepare actual packet: {packet_geometry}");
+    let simulation = rpc.simulate_versioned_v1("first selected Series Prepare", &packet)?;
+    eprintln!("Series Prepare exact packet simulation: {simulation}");
+    let simulation_value = simulation.get("value").unwrap_or(&simulation);
+    if simulation_value
+        .get("err")
+        .is_none_or(|error| !error.is_null())
+    {
+        return Err(Error::new(format!(
+            "Series Prepare exact packet simulation refused: {simulation}"
+        )));
+    }
+    let sent = rpc.submit_and_confirm_versioned_v1(
+        "execute first selected Series Prepare",
+        &transaction,
+        last_valid_block_height,
     )?;
     if let Some(error) = &sent.error {
         return Err(Error::new(format!(
@@ -552,10 +658,22 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
     let output = serde_json::json!({
         "schema": "dclutch-series-found-prepare-execution-v1",
         "evidenceLevel": "local-validator",
+        "scenarioTiming": {
+            "profile": "explicit-operational-series-timing-v1",
+            "inputs": arguments.timing,
+            "authoredAtFinalizedSlot": scenario.finalized_slot,
+            "firstSlot": arguments.timing.first_slot(scenario.finalized_slot)?,
+            "firstRetryThrough": arguments.timing.first_slot(scenario.finalized_slot)? + arguments.timing.retry_slots,
+            "secondSlot": arguments.timing.first_slot(scenario.finalized_slot)? + arguments.timing.period_slots,
+            "secondRetryThrough": arguments.timing.first_slot(scenario.finalized_slot)? + arguments.timing.period_slots + arguments.timing.retry_slots,
+            "beforePrepareFinalizedSlot": before_prepare_slot,
+        },
         "parentMarket": parent_root.market.to_string(),
         "root": parent_root.root.to_string(),
         "childMarket": Pubkey::new_from_array(final_compiled.predicted_core.identity.market_id.to_bytes()).to_string(),
         "shadowCapacity": source_manifest.capacity_profile().as_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "preparePacket": packet_geometry,
+        "prepareSimulation": simulation,
         "poststates": poststates,
         "transactions": transactions,
     });
@@ -2137,6 +2255,7 @@ pub(crate) fn local_series_founder_scenario_v1(
     founder_source_amount: u64,
     rent: &solana_program::rent::Rent,
     finalized_slot: u64,
+    timing: SeriesLocalTimingV1,
 ) -> Result<(
     crate::series_founder::SeriesTemplatePolicyV1,
     [crate::series_founder::SeriesOccurrenceFundingV1; 2],
@@ -2184,9 +2303,7 @@ pub(crate) fn local_series_founder_scenario_v1(
             .map_err(|error| Error::new(format!("Series local scenario funding: {error:?}")))?,
         })
     };
-    let first_slot = finalized_slot
-        .checked_add(8)
-        .ok_or_else(|| Error::new("Series local scenario first slot overflow"))?;
+    let first_slot = timing.first_slot(finalized_slot)?;
     Ok((
         crate::series_founder::SeriesTemplatePolicyV1 {
             product_generator: identity(b"product-generator")?,
@@ -2197,8 +2314,8 @@ pub(crate) fn local_series_founder_scenario_v1(
             capability_derivation: identity(b"capability-derivation")?,
             funding_derivation: identity(b"funding-derivation")?,
             first_slot,
-            period_slots: 32,
-            retry_window: 16,
+            period_slots: timing.period_slots,
+            retry_window: timing.retry_slots,
             close_rent: founding_work,
         },
         [
@@ -2234,6 +2351,7 @@ pub(crate) fn prepare_local_series_founder_from_market_v1(
     founder: Pubkey,
     refund_owner: Pubkey,
     founder_source: Pubkey,
+    timing: SeriesLocalTimingV1,
 ) -> Result<(
     crate::series_founder::PreparedSeriesFounderV1,
     SeriesLocalScenarioObservationV1,
@@ -2256,6 +2374,7 @@ pub(crate) fn prepare_local_series_founder_from_market_v1(
         source.amount,
         &observation.rent,
         observation.finalized_slot,
+        timing,
     )?;
     let prepared = crate::series_founder::prepare_series_founder_from_market_v1(
         plan,
@@ -2427,8 +2546,8 @@ fn build_series_shadow_diagnostic_preselection_v1(
             ),
             compiler_source: COMPILER_SOURCE,
             toolchain_manifest: TOOLCHAIN,
-            accelerator_semantic_release:
-                series_shadow_diagnostic_accelerator_semantic_release_v1(),
+            accelerator_semantic_release: series_shadow_diagnostic_accelerator_semantic_release_v1(
+            ),
             translation_validation,
         },
     )
@@ -2781,6 +2900,7 @@ pub(crate) fn compile_series_prepare_from_hydrated_geometry_v1(
                 registry: Pubkey::new_from_array(selection.registry_program.to_bytes()),
                 trading: selection.material.trading,
                 custody: selection.material.custody,
+                prestate: consume_prestate,
                 minimum_slot,
             },
         )?;
@@ -3489,6 +3609,47 @@ mod prepare_hydrator_tests {
         CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
         ProjectedCustodyRequestV1,
     };
+
+    #[test]
+    fn explicit_series_timing_preserves_operator_inputs_and_checks_end_overflow() {
+        let values = BTreeMap::from([
+            ("--schedule-lead-slots".to_owned(), "600".to_owned()),
+            ("--schedule-retry-slots".to_owned(), "256".to_owned()),
+            ("--schedule-period-slots".to_owned(), "320".to_owned()),
+        ]);
+        let timing = SeriesLocalTimingV1::from_arguments(&values).expect("explicit scenario");
+        assert_eq!(timing.first_slot(1_000).expect("first"), 1_600);
+        assert_eq!(timing.retry_slots, 256);
+        assert_eq!(timing.period_slots, 320);
+        assert_eq!(
+            SeriesLocalTimingV1::from_arguments(&BTreeMap::new())
+                .expect_err("no implicit fixture defaults")
+                .to_string(),
+            "Series Found/Prepare requires --schedule-lead-slots"
+        );
+        let mut zero = values.clone();
+        zero.insert("--schedule-retry-slots".to_owned(), "0".to_owned());
+        assert_eq!(
+            SeriesLocalTimingV1::from_arguments(&zero)
+                .expect_err("zero retry")
+                .to_string(),
+            "--schedule-retry-slots must be a positive decimal u64"
+        );
+        assert_eq!(
+            timing
+                .first_slot(u64::MAX)
+                .expect_err("first overflow")
+                .to_string(),
+            "Series local scenario first slot overflow"
+        );
+        assert_eq!(
+            timing
+                .first_slot(u64::MAX - 700)
+                .expect_err("second retry overflow")
+                .to_string(),
+            "Series local scenario second retry end overflow"
+        );
+    }
 
     #[test]
     fn found_prepare_command_rejects_repeated_execution_before_paths() {

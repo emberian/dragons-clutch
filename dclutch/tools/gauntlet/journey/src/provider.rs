@@ -30,7 +30,7 @@ use dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2
 use dclutch_resolution_core_v3_operator::ObservedAccount;
 use dclutch_source::pyth::FullPriceUpdateV2;
 use dclutch_source::resolution::{
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V4, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
@@ -208,7 +208,7 @@ impl ProviderPlanV1 {
         let update = Keypair::new();
         let lifecycle = Pubkey::find_program_address(
             &[
-                PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+                PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
                 update.pubkey().as_ref(),
             ],
             &pubkey(&plan.resolution.program_id)?,
@@ -347,7 +347,7 @@ pub(crate) fn resolve_through_pyth(
             submit.lifecycle, provider.lifecycle
         )));
     }
-    let lifecycle_rent = rpc.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)?;
+    let lifecycle_rent = rpc.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4)?;
     // Both provider frames are wide -- the submit leg carries the release
     // observation, the record pairs and the receiver's own accounts -- so both
     // ride finalized routing tables, the same way the founding's oversized

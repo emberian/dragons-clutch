@@ -36,46 +36,74 @@ pub(super) fn require_root_write_is_state_only(
     }
 }
 
-/// The local-effect ordinals the commit-last pass owns, recorded by the pass
-/// that has already resolved every one of them.
+/// Data writes retained by the mandatory pre-child Effect projection.
 ///
-/// The two passes of [`commit_prepared_post_children_v3`] walk the SAME ordinal
-/// space — `fixed_operation_count` fixed effects, then `tail_count *
-/// item_operation_count` item effects — and differ only in which resolved
-/// writes they act on. Resolving that space twice is what this plan removes:
-/// one resolution is about 900-1,060 CU, the canonical Direct bundle has 131 of
-/// them, and the second pass acted on exactly one.
+/// Resolution is a pure function of the immutable Effect and candidate output
+/// registers. The projection validates every operation, including request and
+/// lamport effects, before any child runs. Its visitor retains each accepted
+/// data write here in execution order; the commit never re-resolves it.
 ///
-/// Recording is sound because resolution is a pure function of the effect
-/// artifact, `tail_count`, the transition's output scalars and its output
-/// identities. The non-root pass mutates none of those — it writes account
-/// lamports and account data — so an ordinal that resolved to the root
-/// coordinate during the first pass resolves to it during the second, and one
-/// that did not, does not. Nor can a refusal be skipped: the first pass
-/// resolves every ordinal unconditionally and fails the whole commit if any
-/// resolution or alias lookup fails, so the second pass never reaches an
-/// ordinal the first one did not already accept.
+/// `ordinals` pins the complete Effect geometry. `bits` instead indexes this
+/// compact data-write bank: the non-root pass marks writes whose authenticated
+/// representative is the root, and the final pass applies exactly those writes.
+/// A projection refusal drops the entire plan before it can reach either pass.
 pub(super) struct RootCommitPlanV3 {
     pub(super) ordinals: u32,
     pub(super) bits: Vec<u8>,
+    writes: Vec<ResolvedEffectV3>,
+    write_limit: usize,
 }
 
 impl RootCommitPlanV3 {
     pub(super) fn for_geometry(
         effect: SelectedEffectProgramV4<'_>,
         tail_count: u32,
+        write_limit: usize,
     ) -> Result<Self, ProgramError> {
         let ordinals = root_commit_ordinal_count_v3(effect, tail_count)?;
-        let bytes = usize::try_from(ordinals.div_ceil(8)).map_err(|_| TradingSbfError::Commit)?;
+        if write_limit > usize::try_from(ordinals).map_err(|_| TradingSbfError::Commit)? {
+            return Err(TradingSbfError::Commit.into());
+        }
+        let bytes = write_limit.div_ceil(8);
         let mut bits = Vec::new();
         bits.try_reserve_exact(bytes)
             .map_err(|_| TradingSbfError::HeapExhausted)?;
         bits.resize(bytes, 0);
-        Ok(Self { ordinals, bits })
+        let mut writes = Vec::new();
+        writes
+            .try_reserve_exact(write_limit)
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
+        Ok(Self {
+            ordinals,
+            bits,
+            writes,
+            write_limit,
+        })
     }
 
-    fn record(&mut self, ordinal: u32) -> Result<(), ProgramError> {
-        let index = usize::try_from(ordinal).map_err(|_| TradingSbfError::Commit)?;
+    /// Retain only actual data writes offered by the successful projection.
+    /// All other operation kinds have their effect in its lamport/request banks.
+    pub(super) fn record_projected(
+        &mut self,
+        effect: ResolvedEffectV3,
+    ) -> Result<(), ProgramError> {
+        if matches!(
+            effect,
+            ResolvedEffectV3::WriteScalar { .. }
+                | ResolvedEffectV3::WriteIdentity { .. }
+                | ResolvedEffectV3::WriteU8 { .. }
+                | ResolvedEffectV3::WriteU16 { .. }
+                | ResolvedEffectV3::WriteU32 { .. }
+        ) {
+            if self.writes.len() >= self.write_limit {
+                return Err(TradingSbfError::Commit.into());
+            }
+            self.writes.push(effect);
+        }
+        Ok(())
+    }
+
+    fn record(&mut self, index: usize) -> Result<(), ProgramError> {
         *self
             .bits
             .get_mut(index / 8)
@@ -100,8 +128,6 @@ fn root_commit_ordinal_count_v3(
 pub(super) fn commit_non_root_effects_into_v3(
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     output_lamports: &[u64],
@@ -121,32 +147,11 @@ pub(super) fn commit_non_root_effects_into_v3(
         participation,
         false,
     )?;
-    let mut ordinal = 0_u32;
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        let resolved = effect
-            .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-            .map_err(|_| TradingSbfError::Commit)?;
+    for index in 0..plan.writes.len() {
+        let resolved = *plan.writes.get(index).ok_or(TradingSbfError::Commit)?;
         if commit_data_effect(resolved, accounts, aliases, false)? {
-            plan.record(ordinal)?;
+            plan.record(index)?;
         }
-        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Commit)?;
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Commit)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            let resolved = effect
-                .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Commit)?;
-            if commit_data_effect(resolved, accounts, aliases, false)? {
-                plan.record(ordinal)?;
-            }
-            ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Commit)?;
-            operation = operation.checked_add(1).ok_or(TradingSbfError::Commit)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Commit)?;
     }
     require_committed_accounts_persist_v3(accounts, aliases, false)?;
     Ok(())
@@ -164,12 +169,35 @@ pub(super) fn commit_non_root_effects_v3(
     output_lamports: &[u64],
     participation: Option<&[CoordinateParticipationV3]>,
 ) -> Result<RootCommitPlanV3, ProgramError> {
-    let mut plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
+    let mut plan = RootCommitPlanV3::for_geometry(
+        effect,
+        tail_count,
+        effect
+            .successor
+            .data_write_operation_count(tail_count)
+            .map_err(|_| TradingSbfError::Commit)?,
+    )?;
+    // Test fixture construction. Production retains these values directly
+    // from the mandatory pre-child projection's visitor.
+    for fixed in 0..effect.fixed_operation_count() {
+        plan.record_projected(
+            effect
+                .resolved_fixed_effect(fixed, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Commit)?,
+        )?;
+    }
+    for item in 0..tail_count {
+        for operation in 0..effect.item_operation_count() {
+            plan.record_projected(
+                effect
+                    .resolved_item_effect(item, operation, tail_count, scalars, identities)
+                    .map_err(|_| TradingSbfError::Commit)?,
+            )?;
+        }
+    }
     commit_non_root_effects_into_v3(
         effect,
         tail_count,
-        scalars,
-        identities,
         accounts,
         aliases,
         output_lamports,
@@ -179,13 +207,11 @@ pub(super) fn commit_non_root_effects_v3(
     Ok(plan)
 }
 
-/// Commit the root coordinate last, resolving only the recorded ordinals.
+/// Commit the root coordinate last from the recorded projection writes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn commit_root_effects_v3(
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     output_lamports: &[u64],
@@ -203,7 +229,6 @@ pub(super) fn commit_root_effects_v3(
         participation,
         true,
     )?;
-    let item_operations = u32::from(effect.item_operation_count());
     for (byte_index, byte) in plan.bits.iter().enumerate() {
         let mut remaining = *byte;
         while remaining != 0 {
@@ -214,31 +239,10 @@ pub(super) fn commit_root_effects_v3(
                 .and_then(|index| index.checked_mul(8))
                 .and_then(|base| base.checked_add(bit))
                 .ok_or(TradingSbfError::Commit)?;
-            let resolved = match ordinal.checked_sub(u32::from(effect.fixed_operation_count())) {
-                None => effect
-                    .resolved_fixed_effect(
-                        u16::try_from(ordinal).map_err(|_| TradingSbfError::Commit)?,
-                        tail_count,
-                        scalars,
-                        identities,
-                    )
-                    .map_err(|_| TradingSbfError::Commit)?,
-                Some(offset) => {
-                    if item_operations == 0 {
-                        return Err(TradingSbfError::Commit.into());
-                    }
-                    effect
-                        .resolved_item_effect(
-                            offset / item_operations,
-                            u16::try_from(offset % item_operations)
-                                .map_err(|_| TradingSbfError::Commit)?,
-                            tail_count,
-                            scalars,
-                            identities,
-                        )
-                        .map_err(|_| TradingSbfError::Commit)?
-                }
-            };
+            let resolved = *plan
+                .writes
+                .get(usize::try_from(ordinal).map_err(|_| TradingSbfError::Commit)?)
+                .ok_or(TradingSbfError::Commit)?;
             commit_data_effect(resolved, accounts, aliases, true)?;
         }
     }

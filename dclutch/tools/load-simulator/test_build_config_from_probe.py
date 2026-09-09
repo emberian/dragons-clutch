@@ -120,7 +120,9 @@ class JourneyHandoffTests(unittest.TestCase):
         Path(handoff["marketInput"]).write_text(json.dumps({
             "local_participant_fixture_liquidity_atoms": 100_000_000,
         }))
-        Path(handoff["participantEvidence"]).write_text("{}")
+        Path(handoff["participantEvidence"]).write_text(json.dumps({
+            "collateral": {"intent": {"quantityAtoms": 50_250_000}},
+        }))
         path = root / "participant-handoff.json"
         path.write_text(json.dumps(handoff))
         return path, handoff
@@ -144,6 +146,7 @@ class JourneyHandoffTests(unittest.TestCase):
             self.assertEqual(config["census"], handoff["census"])
             self.assertEqual(config["market_address"], FOUNDER)
             self.assertEqual(config["trade"]["local"]["participant_report"], handoff["participantEvidence"])
+            self.assertEqual(config["trade"]["local"]["fill_atoms"], 33_333_332)
             self.assertEqual(config["probe"]["supervisor_pid"], 1234)
 
     def test_missing_native_scale_never_falls_back_to_fixture_liquidity(self):

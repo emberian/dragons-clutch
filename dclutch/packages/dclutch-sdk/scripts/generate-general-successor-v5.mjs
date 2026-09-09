@@ -231,7 +231,7 @@ const assertions = [
   ['runtimeWire', 'pub const VERIFIED_CANDIDATE_MAGIC_V2: [u8; 8] = [0x44, 0x43, 0x47, 0x56, 0x45, 0x52, 0x30, 0x32];'],
   ['runtime', 'const VERIFIED_CANDIDATE_MAGIC: [u8; 8] = wire::VERIFIED_CANDIDATE_MAGIC_V2;'],
   ['hot', 'pub struct HotBumpHintsV1 {'],
-  ['operator', 'pub const GENERAL_HOT_HEAP_FRAME_BYTES_V3: u32 = DIRECT_HOT_HEAP_FRAME_BYTES_V1;'],
+  ['operator', 'ComputeBudgetInstruction::request_heap_frame(GENERAL_HOT_HEAP_FRAME_BYTES_V3)'],
   ['operator', 'pub const GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3: u32 = TRANSACTION_COMPUTE_UNIT_LIMIT_V1;'],
   // The plan carries THREE instructions, in this order, and the producer checks
   // each of the first two byte-for-byte. It carried two until `432d07339`, when
@@ -287,11 +287,12 @@ for (const [name, value] of [
   ['GENERAL_BATCH_OCCURRENCE_TERMS_VERSION_V1', scalar('collection', 'OCCURRENCE_TERMS_VERSION')],
   ['GENERAL_SUBMISSION_BYTES_V1', scalar('candidate', 'GENERAL_CANDIDATE_BYTES_V1')],
   ['GENERAL_VERIFIER_HEADER_BYTES_V2', scalar('verifier', 'RUNTIME_VERIFIER_HEADER_BYTES_V2')],
+  ['GENERAL_VERIFIER_TAIL_COUNT_V2', scalar('verifier', 'RUNTIME_VERIFIER_TAIL_COUNT_V2')],
   ['GENERAL_VERIFIER_VERSION_V2', scalar('verifier', 'VERSION')],
   ['GENERAL_VERIFIED_CANDIDATE_HEADER_BYTES_V2', scalar('runtime', 'VERIFIED_CANDIDATE_HEADER_BYTES_V2')],
   ['GENERAL_VERIFIED_CANDIDATE_VERSION_V2', scalar('runtime', 'RUNTIME_WIDTH_VERSION_V2')],
   ['GENERAL_CUSTODY_RECEIPT_BYTES_V1', scalar('custody', 'CUSTODY_RECEIPT_BYTES_V1')],
-  ['GENERAL_HOT_HEAP_FRAME_BYTES_V3', scalar('hot', 'DIRECT_HOT_HEAP_FRAME_BYTES_V1')],
+  ['GENERAL_HOT_HEAP_FRAME_BYTES_V3', scalar('hot', 'GENERAL_HOT_HEAP_FRAME_BYTES_V3')],
   ['GENERAL_HOT_COMPUTE_UNIT_LIMIT_V3', scalar('registry', 'TRANSACTION_COMPUTE_UNIT_LIMIT_V1')],
   ['GENERAL_CANDIDATE_BYTES', scalar('controller', 'CANDIDATE_BYTES')],
   ['GENERAL_EXECUTION_BYTES', scalar('controller', 'EXECUTION_BYTES')],
@@ -390,17 +391,21 @@ output += layoutOffsets('verifier', 'RuntimeVerifierLayoutV2', 'RUNTIME_VERIFIER
   ['MAGIC', 'magic'], ['VERSION', 'version'], ['HAS_CURRENT_ORDER', 'has_current_order'],
   ['OUTCOME_COUNT', 'outcome_count'], ['PAGE_COUNT', 'page_count'], ['NEXT_PAGE_INDEX', 'next_page_index'],
   ['NEXT_ROW_INDEX', 'next_row_index'], ['ORDER_COUNT', 'order_count'], ['REVISION', 'revision'],
-  ['CANDIDATE_COORDINATE', 'candidate_coordinate'], ['CANDIDATE_ID', 'candidate_id'],
-  ['PRODUCT_ID', 'product_id'], ['BATCH_ID', 'batch_id'], ['PRICE_SCALE', 'price_scale'],
+  ['CANDIDATE_COORDINATE', 'candidate_coordinate'], ['FILLED_ORDER_COUNT', 'filled_order_count'],
+  ['CANDIDATE_ID', 'candidate_id'], ['PRODUCT_ID', 'product_id'], ['BATCH_ID', 'batch_id'], ['PRICE_SCALE', 'price_scale'],
   ['FILLED_LOTS', 'filled_lots'], ['QUOTE_DEBIT', 'quote_debit'], ['QUOTE_CREDIT', 'quote_credit'],
   ['CURRENT_ORDER_ID', 'current_order_id'], ['CURRENT_OWNER_ID', 'current_owner_id'],
   ['CURRENT_NONCE', 'current_nonce'], ['CURRENT_MAX_LOTS', 'current_max_lots'],
-  ['CURRENT_MAX_QUOTE_DEBIT_PER_LOT', 'current_max_quote_debit_per_lot'], ['CURRENT_LOTS', 'current_lots'],
+  ['CURRENT_MAX_QUOTE_DEBIT_PER_LOT', 'current_max_quote_debit_per_lot'],
+  ['CURRENT_LOTS', 'current_lots'],
   ['CURRENT_SOURCE_PAGE_INDEX', 'current_source_page_index'],
-  ['CURRENT_SOURCE_EXECUTION_INDEX', 'current_source_execution_index'], ['TAILS_BASE', 'tails_base'],
+  ['CURRENT_SOURCE_EXECUTION_INDEX', 'current_source_execution_index'],
+  ['CURRENT_MIN_QUOTE_CREDIT_PER_LOT', 'current_min_quote_credit_per_lot'], ['TAILS_BASE', 'tails_base'],
 ].map(([name, method]) => [`GENERAL_VERIFIER_${name}_OFFSET_V2`, method]));
 output += `export const GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2 = ${methodOffset('verifier', 'RuntimeVerifierLayoutV2', 'tail_item_stride').offset} as const;\n`;
-for (const name of ['PRICES', 'CURRENT_RECEIVE', 'CURRENT_DELIVER', 'CLAIM_INPUTS', 'CLAIM_OUTPUTS']) {
+const verifierTails = ['PRICES', 'CURRENT_RECEIVE', 'CURRENT_DELIVER', 'CLAIM_INPUTS', 'CLAIM_OUTPUTS', 'PRICE_FLOOR', 'PRICE_CEILING'];
+if (verifierTails.length !== scalar('verifier', 'RUNTIME_VERIFIER_TAIL_COUNT_V2')) throw new Error('General verifier tail schema changed; update every consumer');
+for (const name of verifierTails) {
   output += `export const GENERAL_VERIFIER_${name}_TAIL_V2 = ${scalar('verifier', `${name}_TAIL`)} as const;\n`;
 }
 output += layoutOffsets('runtime', 'VerifiedCandidateLayoutV2', 'VERIFIED_CANDIDATE_', [

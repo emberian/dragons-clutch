@@ -2947,7 +2947,8 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         batch_id: opened_batch.batch_id(),
         generation: GENERATION,
         max_lots: 1,
-        max_quote_debit_per_lot: opened_batch.opening().price_scale,
+        // Quote atoms per lot: one unit claim has at most one atom of payoff.
+        max_quote_debit_per_lot: 1,
         min_quote_credit_per_lot: 0,
         valid_until_slot: opened_batch.opening().settlement_close_slot,
         side: OrderSideV2::Buy,
@@ -3011,7 +3012,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     assert_eq!(
         place_corpus.order_identity.key.to_bytes(),
         order_record.order_id(),
-        "the Claims escrow owner is the signed order identity"
+        "the Custody escrow context is the signed order identity"
     );
     let expected_position_rent = campaign.rent.minimum_balance(
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
@@ -3211,6 +3212,16 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     )
     .await
     .expect("real Trading -> General accelerator PlaceOrder");
+    eprintln!(
+        "general-campaign place-order cu={} headroom={} outcomes={} side=Buy lots={} quote_reserve={}",
+        place_execution.compute_units_consumed,
+        waist::COMPUTE_LIMIT
+            .checked_sub(place_execution.compute_units_consumed)
+            .expect("chain CU limit"),
+        OUTCOME_COUNT,
+        order_record.header().max_lots,
+        quote_reserve,
+    );
     assert!(
         place_execution
             .logs
@@ -3246,6 +3257,11 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         .expect("PlaceOrder terminal state coordinate")
         .key;
     let placed_order_account = chain_account(&mut context, order_state).await;
+    assert_eq!(
+        root_tail_of(&chain_account(&mut context, open.root).await).revision(),
+        opened_root.revision(),
+        "PlaceOrder admits into the Batch without advancing the root revision"
+    );
     let order_envelope = GeneralLocalStateV3::decode(&placed_order_account.data)
         .expect("the Placement materialized its General Order");
     assert_eq!(order_envelope.header().kind, GeneralLocalStateKindV3::Order);
@@ -3297,7 +3313,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let escrow_position = LiabilityBasisPositionViewV2::decode(&escrow_position_account.data)
         .expect("canonical admitted escrow Position");
     assert_eq!(escrow_position.revision, 0);
-    assert_eq!(escrow_position.owner, order_record.order_id());
+    assert_eq!(escrow_position.owner, order_state.to_bytes());
     for outcome in 0..OUTCOME_COUNT {
         assert_eq!(
             escrow_position
@@ -3310,7 +3326,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let admission_account = chain_account(&mut context, place_corpus.escrow_admission.key).await;
     let admission = ProtocolPositionAdmissionV2::decode(&admission_account.data)
         .expect("canonical persisted escrow admission");
-    assert_eq!(admission.position_owner(), order_record.order_id());
+    assert_eq!(admission.position_owner(), order_state.to_bytes());
     assert_eq!(admission.market_revision(), aggregate.revision);
     assert_eq!(admission.outcome_count(), OUTCOME_COUNT);
     assert_eq!(
@@ -3431,7 +3447,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let closed_batch_account = chain_account(&mut context, open.primary_state).await;
     let (_, closed_batch) = decode_batch(&closed_batch_account);
     assert_eq!(closed_batch.state().status, BatchStatusV1::Closed);
-    assert_eq!(closed_batch.state().closed_root_revision, 4);
+    assert_eq!(closed_batch.state().closed_root_revision, 3);
     assert_eq!(closed_batch.state().opened_root_revision, 1);
     assert_eq!(closed_batch.batch_id(), opened_batch.batch_id());
     assert_eq!(closed_batch.opening(), opened_batch.opening());
@@ -3441,7 +3457,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     );
     assert_eq!(closed_batch_account.owner, waist::TRADING_PROGRAM_ID);
     let closed_root = root_tail_of(&chain_account(&mut context, open.root).await);
-    assert_eq!(closed_root.revision(), 4);
+    assert_eq!(closed_root.revision(), 3);
     assert_eq!(closed_root.open_batches(), 0);
     assert_eq!(
         closed_root.next_batch_sequence(),
@@ -3522,7 +3538,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     );
     assert_eq!(
         root_tail_of(&chain_account(&mut context, open.root).await).revision(),
-        4,
+        3,
         "a refused close leaves the root revision where it was"
     );
 
@@ -3604,10 +3620,10 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let (_, second_batch) = decode_batch(&second_batch_account);
     assert_eq!(second_batch.opening().sequence, 1);
     assert_eq!(second_batch.state().status, BatchStatusV1::Collecting);
-    assert_eq!(second_batch.state().opened_root_revision, 4);
+    assert_eq!(second_batch.state().opened_root_revision, 3);
     assert_ne!(second_batch.batch_id(), opened_batch.batch_id());
     let after_second = root_tail_of(&chain_account(&mut context, open.root).await);
-    assert_eq!(after_second.revision(), 5);
+    assert_eq!(after_second.revision(), 4);
     assert_eq!(after_second.open_batches(), 1);
     assert_eq!(after_second.next_batch_sequence(), 2);
     // THE FIRST BATCH IS UNTOUCHED, which is what "two auctions" has to mean:
@@ -3631,8 +3647,8 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // ONE OF THE THREE EVIDENCE RECORDS IS THIS CAMPAIGN'S OWN POSTSTATE. The
     // `ClosedBatch` coordinate is bound to the Batch account the CloseBatch two
     // actions ago wrote, read back out of the bank -- so the candidate is
-    // submitted against a batch that was really opened, really filled with
-    // nothing, and really closed, at an identity no line here types.
+    // submitted against a batch that was opened, received this campaign's
+    // escrowed order, and closed, at an identity no line here types.
     //
     // THE OTHER TWO ARE STAGED, AND THAT IS A DEBT WITH A NAME. The candidate
     // image is a solver's immutable publication and the submission record is
@@ -3655,19 +3671,15 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // twice: once to fix every other byte, then again with the digest those
     // bytes produce. A literal here would be a candidate that could name any
     // identity at all, including one already verified under other prices.
-    // THE PRICES ARE A SIMPLEX AND THE SCALE IS THE MARKET'S. `CandidateV2`
-    // refuses `InvalidSimplex` unless they sum to exactly the config's price
-    // scale, which is a million here and not the runtime width the accelerator's
-    // own fixture uses -- so a price vector of ones, copied from that fixture,
-    // refuses. Derived from the two numbers the founding already fixed.
-    let outcomes = usize::try_from(OUTCOME_COUNT).expect("runtime width");
-    let per_outcome = config.price_scale() / u64::from(OUTCOME_COUNT);
-    let mut uniform_price = vec![per_outcome; outcomes];
-    uniform_price[0] += config
-        .price_scale()
-        .checked_sub(per_outcome * u64::from(OUTCOME_COUNT))
-        .expect("the split never exceeds the scale");
-    assert_eq!(uniform_price.iter().sum::<u64>(), config.price_scale());
+    // With one Buy and no seller, this candidate enumerates the order at zero
+    // fill and its marginal limit. Prices sum to the market's exact scale;
+    // the native control refuses the former uniform-price candidate because
+    // it would ration an order strictly inside its limit.
+    let prices = verify_continuation::single_buy_zero_fill_prices(
+        order_envelope.body(),
+        config.price_scale(),
+    );
+    assert_eq!(prices.iter().sum::<u64>(), config.price_scale());
     let draft = CandidateHeaderV2 {
         outcome_count: OUTCOME_COUNT,
         page_count: 1,
@@ -3687,14 +3699,14 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         live_order_count: closed_batch.live_order_count(),
     };
     let mut candidate_image = vec![0_u8; candidate_len(OUTCOME_COUNT).expect("candidate width")];
-    CandidateV2::encode_into(draft, &uniform_price, &mut candidate_image).expect("draft candidate");
+    CandidateV2::encode_into(draft, &prices, &mut candidate_image).expect("draft candidate");
     let candidate_id = general_candidate_identity_v1(&candidate_image).expect("candidate identity");
     CandidateV2::encode_into(
         CandidateHeaderV2 {
             candidate_id,
             ..draft
         },
-        &uniform_price,
+        &prices,
         &mut candidate_image,
     )
     .expect("addressed candidate");
@@ -3883,7 +3895,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         collection_close_slot,
     );
     eprintln!(
-        "general-campaign second-open-batch cu={} batch={} sequence={} root_revision=4=>5",
+        "general-campaign second-open-batch cu={} batch={} sequence={} root_revision=3=>4",
         second_execution.compute_units_consumed,
         second_open.primary_state,
         second_batch.opening().sequence,
@@ -3901,6 +3913,19 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         hex32(solver.pubkey().to_bytes()),
     );
     eprintln!("general-campaign submit-candidate-seal cu={submit_seal_cu}");
+    verify_continuation::verify_first_row(
+        &mut context,
+        &campaign,
+        &submit,
+        open.primary_state,
+        order_state,
+        output_page,
+        &payer,
+        &fee_payer,
+        &seal_payer,
+        &candidate_image,
+    )
+    .await;
 }
 
 /// `TradingSbfError::DescriptorManifestEntry`, derived from its REGISTERED BAND.

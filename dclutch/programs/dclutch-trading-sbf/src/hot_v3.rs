@@ -403,6 +403,7 @@ impl<'a> SelectedEffectProgramV4<'a> {
             .map_err(|_| TradingSbfError::Content)
     }
 
+    #[cfg(test)]
     fn resolved_fixed_effect(
         self,
         index: u16,
@@ -415,6 +416,7 @@ impl<'a> SelectedEffectProgramV4<'a> {
             .map_err(|_| TradingSbfError::Content)
     }
 
+    #[cfg(test)]
     fn resolved_item_effect(
         self,
         item: u32,

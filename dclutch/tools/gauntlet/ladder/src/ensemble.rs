@@ -218,7 +218,7 @@ pub(crate) fn post_submit_and_capture_member_v1(
         ));
     }
     let lifecycle_rent =
-        rpc.minimum_balance(dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)?;
+        rpc.minimum_balance(dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V4)?;
     transactions.push(rpc.send_with_signers(
         "ensemble: prepay the provider update lifecycle",
         &[solana_system_interface::instruction::transfer(

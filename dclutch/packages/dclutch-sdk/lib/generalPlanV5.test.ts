@@ -16,8 +16,10 @@ import * as OrderAbi from './generated/generalOrderV2';
 import * as Abi from './generated/generalSuccessorV5';
 import { familyRequestDigestV3 } from './shadowDigestV3';
 import devnetPlan from '../fixtures/general-successor-plan-v5.devnet.json';
+import nativeVerifier from '../fixtures/general-verifier-native-v2.json';
 import {
   decodeGeneralCandidateV1,
+  decodeGeneralControllerRequestV3,
   decodeGeneralHotReceiptV3,
   decodeGeneralLocalStateV3,
   decodeGeneralVerifiedCandidateV2,
@@ -219,12 +221,13 @@ function rpcAccount(data: Uint8Array, owner: string, executable = false): RpcAcc
 }
 
 function verifier(outcomeCount: number, current = true): Uint8Array {
-  const body = new Uint8Array(Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 + outcomeCount * 5 * Abi.GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2);
+  const body = new Uint8Array(Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 + outcomeCount * Abi.GENERAL_VERIFIER_TAIL_COUNT_V2 * Abi.GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2);
   body.set(Abi.GENERAL_VERIFIER_MAGIC_V2); putU16(body, Abi.GENERAL_VERIFIER_VERSION_OFFSET_V2, Abi.GENERAL_VERIFIER_VERSION_V2); body[Abi.GENERAL_VERIFIER_HAS_CURRENT_ORDER_OFFSET_V2] = current ? 1 : 0;
   putU32(body, Abi.GENERAL_VERIFIER_OUTCOME_COUNT_OFFSET_V2, outcomeCount); putU32(body, Abi.GENERAL_VERIFIER_PAGE_COUNT_OFFSET_V2, 2); putU32(body, Abi.GENERAL_VERIFIER_NEXT_PAGE_INDEX_OFFSET_V2, current ? 1 : 0); putU32(body, Abi.GENERAL_VERIFIER_NEXT_ROW_INDEX_OFFSET_V2, current ? 1 : 0); putU32(body, Abi.GENERAL_VERIFIER_ORDER_COUNT_OFFSET_V2, current ? 1 : 0);
   putU64(body, Abi.GENERAL_VERIFIER_REVISION_OFFSET_V2, current ? 9n : 0n); putU32(body, Abi.GENERAL_VERIFIER_CANDIDATE_COORDINATE_OFFSET_V2, 7); body.set(bytes(65), Abi.GENERAL_VERIFIER_CANDIDATE_ID_OFFSET_V2); body.set(bytes(66), Abi.GENERAL_VERIFIER_PRODUCT_ID_OFFSET_V2); body.set(bytes(67), Abi.GENERAL_VERIFIER_BATCH_ID_OFFSET_V2);
   putU64(body, Abi.GENERAL_VERIFIER_PRICE_SCALE_OFFSET_V2, 100n); putU64(body, Abi.GENERAL_VERIFIER_FILLED_LOTS_OFFSET_V2, current ? 3n : 0n); putU64(body, Abi.GENERAL_VERIFIER_QUOTE_DEBIT_OFFSET_V2, current ? 15n : 0n); putU64(body, Abi.GENERAL_VERIFIER_QUOTE_CREDIT_OFFSET_V2, current ? 9n : 0n);
   putU64(body, Abi.GENERAL_VERIFIER_TAILS_BASE_OFFSET_V2, 100n);
+  for (let index = 0; index < outcomeCount; index += 1) putU64(body, Abi.GENERAL_VERIFIER_TAILS_BASE_OFFSET_V2 + (Abi.GENERAL_VERIFIER_PRICE_CEILING_TAIL_V2 * outcomeCount + index) * Abi.GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2, 100n);
   if (current) {
     body.set(bytes(68), Abi.GENERAL_VERIFIER_CURRENT_ORDER_ID_OFFSET_V2); body.set(key(69).toBytes(), Abi.GENERAL_VERIFIER_CURRENT_OWNER_ID_OFFSET_V2); putU64(body, Abi.GENERAL_VERIFIER_CURRENT_NONCE_OFFSET_V2, 3n); putU64(body, Abi.GENERAL_VERIFIER_CURRENT_MAX_LOTS_OFFSET_V2, 4n); putU64(body, Abi.GENERAL_VERIFIER_CURRENT_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2, 5n); putU64(body, Abi.GENERAL_VERIFIER_CURRENT_LOTS_OFFSET_V2, 2n);
     const receive = Abi.GENERAL_VERIFIER_TAILS_BASE_OFFSET_V2 + outcomeCount * Abi.GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2; const deliver = receive + outcomeCount * Abi.GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2;
@@ -374,6 +377,22 @@ describe('General V5 operator-plan browser boundary', () => {
     expect(() => decodeGeneralCandidateV1(candidate().slice(0, -1))).toThrow(/exact V1/);
   });
 
+  it('decodes the native Verify output through its complete lifecycle envelope', () => {
+    // Regenerate with DCLUTCH_GENERAL_VERIFIER_FIXTURE_OUTPUT set when running
+    // the Rust constructor test named in this fixture's producer field.
+    const account = Uint8Array.from(Buffer.from(nativeVerifier.verifierAccountHex, 'hex'));
+    expect(account.length).toBe(Abi.GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 + nativeVerifier.outcomeCount * 56);
+    const decoded = decodeGeneralLocalStateV3(account);
+    expect(decoded).toMatchObject({ bump: 7, rentPrincipal: 11n, status: {
+      kind: 'verifier', phase: 'complete', outcomeCount: 3, revision: 2n,
+      orderCount: 2, filledOrderCount: 2, filledLots: 8n, currentOrder: null,
+      prices: [0n, 0n, 100n], claimInputs: [4n, 0n, 0n], claimOutputs: [4n, 0n, 0n],
+      priceFloor: [0n, 0n, 0n], priceCeiling: [100n, 100n, 100n],
+    } });
+    const fiveTails = account.slice(0, Abi.GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 + nativeVerifier.outcomeCount * 40);
+    expect(() => decodeGeneralLocalStateV3(fiveTails)).toThrow('General verifier has the wrong runtime width');
+  });
+
   it('hostile-decodes runtime-width Verifier V2 cursor, simplex, and current-order states', () => {
     const one = decodeGeneralVerifierV2(verifier(1)); expect(one).toMatchObject({ kind: 'verifier', phase: 'streaming', outcomeCount: 1, nextPageIndex: 1, nextRowIndex: 1, orderCount: 1, revision: 9n, priceScale: 100n }); expect(one.currentOrder).toMatchObject({ maxLots: 4n, lots: 2n, receivePerLot: [2n], deliverPerLot: [1n] });
     const wide = decodeGeneralVerifierV2(verifier(258)); expect(wide.prices).toHaveLength(258); expect(wide.prices[0]).toBe(100n);
@@ -385,6 +404,22 @@ describe('General V5 operator-plan browser boundary', () => {
     const badCursor = verifier(1); putU32(badCursor, Abi.GENERAL_VERIFIER_NEXT_PAGE_INDEX_OFFSET_V2, 2); putU32(badCursor, Abi.GENERAL_VERIFIER_NEXT_ROW_INDEX_OFFSET_V2, 1); expect(() => decodeGeneralVerifierV2(badCursor)).toThrow(/cursor/);
     const badSimplex = verifier(1); putU64(badSimplex, Abi.GENERAL_VERIFIER_TAILS_BASE_OFFSET_V2, 99n); expect(() => decodeGeneralVerifierV2(badSimplex)).toThrow(/cursor/);
     const absentPayload = verifier(1, false); putU64(absentPayload, Abi.GENERAL_VERIFIER_CURRENT_ORDER_ID_OFFSET_V2, 1n); expect(() => decodeGeneralVerifierV2(absentPayload)).toThrow(/absent current order/);
+    for (const count of [1, 258]) {
+      const canonical = verifier(count);
+      expect(canonical.length).toBe(Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 + count * 56);
+      expect(() => decodeGeneralVerifierV2(canonical.slice(0, Abi.GENERAL_VERIFIER_HEADER_BYTES_V2 + count * 40))).toThrow('General verifier has the wrong runtime width');
+      const floor = Abi.GENERAL_VERIFIER_TAILS_BASE_OFFSET_V2 + Abi.GENERAL_VERIFIER_PRICE_FLOOR_TAIL_V2 * count * Abi.GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2;
+      const ceiling = Abi.GENERAL_VERIFIER_TAILS_BASE_OFFSET_V2 + Abi.GENERAL_VERIFIER_PRICE_CEILING_TAIL_V2 * count * Abi.GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2;
+      const badFloor = canonical.slice(); putU64(badFloor, floor, 101n); expect(() => decodeGeneralVerifierV2(badFloor)).toThrow('General verifier carries a noncanonical cursor');
+      const badCeiling = canonical.slice(); putU64(badCeiling, ceiling, 99n); expect(() => decodeGeneralVerifierV2(badCeiling)).toThrow('General verifier carries a noncanonical cursor');
+      const aboveScale = canonical.slice(); putU64(aboveScale, ceiling, 101n); expect(() => decodeGeneralVerifierV2(aboveScale)).toThrow('General verifier carries a noncanonical cursor');
+    }
+    const filled = verifier(1); putU32(filled, Abi.GENERAL_VERIFIER_FILLED_ORDER_COUNT_OFFSET_V2, 1); putU64(filled, Abi.GENERAL_VERIFIER_CURRENT_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2, 5n);
+    expect(decodeGeneralVerifierV2(filled)).toMatchObject({ filledOrderCount: 1, priceFloor: [0n], priceCeiling: [100n], currentOrder: { minQuoteCreditPerLot: 5n } });
+    putU32(filled, Abi.GENERAL_VERIFIER_FILLED_ORDER_COUNT_OFFSET_V2, 2); expect(() => decodeGeneralVerifierV2(filled)).toThrow('General verifier carries a noncanonical cursor');
+    const unfilled = verifier(1); putU64(unfilled, Abi.GENERAL_VERIFIER_CURRENT_LOTS_OFFSET_V2, 0n); expect(decodeGeneralVerifierV2(unfilled).currentOrder?.lots).toBe(0n);
+    const absentCredit = verifier(1, false); putU64(absentCredit, Abi.GENERAL_VERIFIER_CURRENT_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2, 1n); expect(() => decodeGeneralVerifierV2(absentCredit)).toThrow(/absent current order/);
+
   });
 
   it('hostile-decodes runtime-width terminal VerifiedCandidate V2 facts', () => {
@@ -468,19 +503,18 @@ describe('General V5 operator-plan browser boundary', () => {
     expect(() => decodeGeneralHotReceiptV3(base64(receipt), inspection)).toThrow(/another request/);
   });
 
-  it('inspects the cohort-16.1 devnet plan the operator actually published', async () => {
-    // The live case, and the reason a synthetic fixture is not one: every
-    // fixture in this file is built by the same function the inspector is
-    // checked against, so a producer that moves takes both sides with it. This
-    // plan is COHORT-16F's exact `open-batch` report against the deployed
-    // cohort-16.1 General market -- the one whose digest 17D reproduced
-    // offline and the chain then published -- and nothing here derives it.
-    const inspection = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(JSON.stringify(devnetPlan)));
-    expect(inspection.plan.familyRequestDigest).toBe('ff3ace4881df012e3b10e48cdb6a72ce119e184003561754d3cb9869f6c95856');
-    expect(hex(await familyRequestDigestV3(inspection.request.bytes))).toBe(inspection.plan.familyRequestDigest);
-    expect(inspection.ackRequestDigest).toBe(hex(await sha256(inspection.request.bytes)));
-    expect(inspection.ackRequestDigest).not.toBe(inspection.plan.familyRequestDigest);
-    expect(inspection.request.action).toBe('open-batch');
+  it('refuses the archived cohort-16.1 plan after the canonical General heap changed', async () => {
+    // Preserve the exact historical operator report. It used the earlier 64KiB
+    // route; accepting it under the current 128KiB route would hide stale input.
+    expect(devnetPlan.familyRequestDigest).toBe('ff3ace4881df012e3b10e48cdb6a72ce119e184003561754d3cb9869f6c95856');
+    expect(devnetPlan.heapFrameBytes).toBe(65_536);
+    const transaction = VersionedTransaction.deserialize(base64ToBytes(devnetPlan.transactionBase64));
+    const instruction = transaction.message.compiledInstructions[2].data;
+    const request = decodeGeneralControllerRequestV3(instruction.slice(Abi.GENERAL_HOT_ENVELOPE_BYTES_V3));
+    expect(request.action).toBe('open-batch');
+    expect(hex(await familyRequestDigestV3(request.bytes))).toBe(devnetPlan.familyRequestDigest);
+    expect(hex(await sha256(request.bytes))).not.toBe(devnetPlan.familyRequestDigest);
+    expect(() => decodeGeneralSuccessorPlanDocumentV5(JSON.stringify(devnetPlan))).toThrow('General heap frame differs from the measured canonical route resource');
   });
 });
 

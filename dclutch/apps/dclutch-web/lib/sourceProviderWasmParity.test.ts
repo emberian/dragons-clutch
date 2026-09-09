@@ -29,7 +29,7 @@ describe('Source provider native/WASM parity', () => {
     const plan = parseSourceProviderReclaimPlanV1(wasm);
     expect(plan.route).toBe('reclaim');
     expect(plan.requiredSigners).toHaveLength(2);
-    expect(plan.instruction.accounts).toHaveLength(18);
+    expect(plan.instruction.accounts).toHaveLength(20);
     expect(plan.lookupTables).toEqual([]);
     expect(plan.wireBytes).toBeLessThanOrEqual(1_232);
   }, 180_000);

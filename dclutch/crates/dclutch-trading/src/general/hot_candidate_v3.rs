@@ -253,6 +253,17 @@ pub mod scalar {
     pub const SELECTION_SUBMITTED_COUNT: u32 = 55;
     /// Best valid submitted Candidate coordinate.
     pub const SELECTION_BEST_CANDIDATE_COORDINATE: u32 = 56;
+    // PlaceOrder does not execute Selection. These profile-owned signed
+    // observations reuse its four action-disjoint slots without widening every
+    // General frame or changing the transition wire geometry.
+    /// Signed PlaceOrder side; action-scoped alias of Selection phase.
+    pub const ORDER_SIDE: u32 = SELECTION_PHASE;
+    /// Signed PlaceOrder interval start; action-scoped alias of Selection revision.
+    pub const ORDER_OUTCOME_LO: u32 = SELECTION_REVISION;
+    /// Signed PlaceOrder interval end; action-scoped alias of Selection count.
+    pub const ORDER_OUTCOME_HI: u32 = SELECTION_SUBMITTED_COUNT;
+    /// Signed PlaceOrder claim magnitude; action-scoped alias of Selection best coordinate.
+    pub const ORDER_CLAIMS_PER_LOT: u32 = SELECTION_BEST_CANDIDATE_COORDINATE;
     /// Verification revision of the best submitted certificate.
     pub const SELECTION_BEST_VERIFIED_REVISION: u32 = 57;
     /// Selection comparison-domain price scale.
@@ -2266,6 +2277,27 @@ pub fn project_general_place_order_candidate_in_place_v3(
         PlaceOrderClauseV3::TermsMaxQuoteDebit,
     )?;
     place_order_clause(
+        header.min_quote_credit_per_lot
+            != read_scalar(candidate, scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT)?,
+        PlaceOrderClauseV3::TermsMinQuoteCredit,
+    )?;
+    place_order_clause(
+        u64::from(header.side.tag()) != read_scalar(candidate, scalar::ORDER_SIDE)?,
+        PlaceOrderClauseV3::TermsSide,
+    )?;
+    place_order_clause(
+        u64::from(header.outcome_lo) != read_scalar(candidate, scalar::ORDER_OUTCOME_LO)?,
+        PlaceOrderClauseV3::TermsOutcomeLo,
+    )?;
+    place_order_clause(
+        u64::from(header.outcome_hi) != read_scalar(candidate, scalar::ORDER_OUTCOME_HI)?,
+        PlaceOrderClauseV3::TermsOutcomeHi,
+    )?;
+    place_order_clause(
+        header.claims_per_lot != read_scalar(candidate, scalar::ORDER_CLAIMS_PER_LOT)?,
+        PlaceOrderClauseV3::TermsClaimsPerLot,
+    )?;
+    place_order_clause(
         header.valid_until_slot != valid_until_slot,
         PlaceOrderClauseV3::TermsValidUntil,
     )?;
@@ -2502,7 +2534,10 @@ pub fn project_general_place_order_candidate_in_place_v3(
             scalar::ROOT_LIFECYCLE_ACTIVE,
             u64::from(GeneralLifecycleV2::Active.tag()),
         ),
-        (scalar::ONE, 1),
+        (
+            scalar::ONE,
+            u64::from(GeneralOrderLayoutV2::version_value()),
+        ),
         (scalar::BATCH_POST_ORDER_COUNT, u64::from(state.order_count)),
         (scalar::ORDER_QUOTE_RESERVE, quote_reserve),
         (scalar::CUSTODY_AMOUNT, quote_reserve),
@@ -6562,6 +6597,14 @@ mod tests {
                 scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT,
                 header.max_quote_debit_per_lot,
             ),
+            (
+                scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT,
+                header.min_quote_credit_per_lot,
+            ),
+            (scalar::ORDER_SIDE, u64::from(header.side.tag())),
+            (scalar::ORDER_OUTCOME_LO, u64::from(header.outcome_lo)),
+            (scalar::ORDER_OUTCOME_HI, u64::from(header.outcome_hi)),
+            (scalar::ORDER_CLAIMS_PER_LOT, header.claims_per_lot),
             (scalar::ORDER_VALID_UNTIL_SLOT, header.valid_until_slot),
             (scalar::GENERATION, header.generation),
             (scalar::STATE_BUMP, 7),
@@ -8153,6 +8196,218 @@ mod tests {
             ))
         );
         assert_eq!(candidate, before);
+    }
+
+    #[test]
+    fn place_order_effect_persists_every_signed_header_field_at_runtime_widths() {
+        use crate::general::{
+            effect_artifacts_v3::*, local_state_v3::GENERAL_LOCAL_STATE_HEADER_BYTES_V3,
+        };
+        use dclutch_vm::effect::v3::{ProgramV3, ResolvedEffectV3};
+        for outcome_count in [1_u32, 258] {
+            for side in [OrderSideV2::Buy, OrderSideV2::Sell] {
+                let mut environment = environment();
+                let config = open_batch_config(environment);
+                let (root, batch) = opened_batch(outcome_count, environment, config);
+                let original = placed_order_bytes_with_shape(
+                    outcome_count,
+                    environment,
+                    batch,
+                    101,
+                    (side, outcome_count - 1, 3),
+                );
+                let mut header = GeneralOrderV2::decode(&original)
+                    .expect("original")
+                    .header();
+                header.min_quote_credit_per_lot = if side == OrderSideV2::Sell { 1 } else { 0 };
+                let receive = (0..outcome_count)
+                    .map(|i| header.derived_row(i).0)
+                    .collect::<Vec<_>>();
+                let deliver = (0..outcome_count)
+                    .map(|i| header.derived_row(i).1)
+                    .collect::<Vec<_>>();
+                let mut order_bytes = vec![0; original.len()];
+                GeneralOrderV2::encode_into(
+                    header,
+                    &receive,
+                    &deliver,
+                    GeneralOrderStateV1 {
+                        phase: GeneralOrderPhaseV1::Placed,
+                        admitted_slot: 101,
+                        released_slot: 0,
+                    },
+                    &mut order_bytes,
+                )
+                .expect("canonical terms");
+                let order = GeneralOrderV2::decode(&order_bytes).expect("order");
+                environment.destination_vault_context = order.order_id();
+                environment.custody_source_owner = header.owner_id;
+                environment.settlement_position_owner = [0xb9; 32];
+                environment.rent_refund = header.owner_id;
+                let mut bank =
+                    place_order_input(outcome_count, environment, root, batch, order, 101);
+                write_scalar(
+                    &mut bank,
+                    scalar::TRANSFER_INDEX,
+                    u64::from(environment.transfer_index),
+                )
+                .expect("delegated transfer request coordinate");
+                write_scalar(
+                    &mut bank,
+                    scalar::PAGE_INDEX,
+                    u64::from(environment.page_index),
+                )
+                .expect("delegated page coordinate");
+                write_scalar(
+                    &mut bank,
+                    scalar::EXECUTION_INDEX,
+                    u64::from(environment.execution_index),
+                )
+                .expect("delegated execution coordinate");
+                let mut terms =
+                    vec![0; general_signed_order_terms_len_v2(outcome_count).expect("terms width")];
+                order
+                    .encode_signed_terms_into(&mut terms)
+                    .expect("signed terms");
+                for (coordinate, clause) in [
+                    (
+                        scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT,
+                        PlaceOrderClauseV3::TermsMinQuoteCredit,
+                    ),
+                    (scalar::ORDER_SIDE, PlaceOrderClauseV3::TermsSide),
+                    (scalar::ORDER_OUTCOME_LO, PlaceOrderClauseV3::TermsOutcomeLo),
+                    (scalar::ORDER_OUTCOME_HI, PlaceOrderClauseV3::TermsOutcomeHi),
+                    (
+                        scalar::ORDER_CLAIMS_PER_LOT,
+                        PlaceOrderClauseV3::TermsClaimsPerLot,
+                    ),
+                ] {
+                    let mut hostile = bank.clone();
+                    let old = read_scalar(&hostile, coordinate).expect("observed field");
+                    write_scalar(&mut hostile, coordinate, old + 1).expect("mutated projection");
+                    let before = hostile.clone();
+                    assert_eq!(
+                        project_general_place_order_candidate_in_place_v3(
+                            &root.to_bytes(),
+                            &batch_record(batch),
+                            config,
+                            outcome_count,
+                            environment,
+                            Some(order.order_id()),
+                            &terms,
+                            &mut hostile
+                        ),
+                        Err(GeneralHotCandidateErrorV3::PlaceOrderCoordinate(clause))
+                    );
+                    assert_eq!(hostile, before, "signed observation refusal is atomic");
+                }
+                project_general_place_order_candidate_in_place_v3(
+                    &root.to_bytes(),
+                    &batch_record(batch),
+                    config,
+                    outcome_count,
+                    environment,
+                    Some(order.order_id()),
+                    &terms,
+                    &mut bank,
+                )
+                .expect("admission");
+                let scalar_count = general_hot_scalar_count_v3(Action::PlaceOrder, outcome_count)
+                    .expect("scalar count");
+                let scalars = (0..scalar_count)
+                    .map(|i| read_scalar(&bank, i).expect("scalar"))
+                    .collect::<Vec<_>>();
+                let identities = (0..GENERAL_HOT_COMMON_IDENTITIES_V3)
+                    .map(|i| read_identity(&bank, scalar_count, i).expect("identity"))
+                    .collect::<Vec<_>>();
+                let (fixed, item) = general_effect_instruction_count_v3(Action::PlaceOrder);
+                let len =
+                    general_effect_program_bytes_v3(Action::PlaceOrder).expect("effect width");
+                let mut effect = vec![0; len];
+                encode_general_effect_program_v3_atomic(
+                    Action::PlaceOrder,
+                    &mut vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; fixed + item],
+                    &mut vec![0; general_effect_template_bytes_v3(Action::PlaceOrder)],
+                    &mut vec![0; len],
+                    &mut effect,
+                )
+                .expect("effect");
+                let program = ProgramV3::decode(&effect).expect("effect decode");
+                let mut persisted =
+                    vec![0; GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + order_bytes.len()];
+                let mut apply = |resolved| {
+                    let (account, offset, bytes) = match resolved {
+                        ResolvedEffectV3::WriteScalar {
+                            account,
+                            offset,
+                            value,
+                        } => (account, offset, value.to_le_bytes().to_vec()),
+                        ResolvedEffectV3::WriteIdentity {
+                            account,
+                            offset,
+                            value,
+                        } => (account, offset, value.to_vec()),
+                        ResolvedEffectV3::WriteU8 {
+                            account,
+                            offset,
+                            value,
+                        } => (account, offset, vec![value]),
+                        ResolvedEffectV3::WriteU16 {
+                            account,
+                            offset,
+                            value,
+                        } => (account, offset, value.to_le_bytes().to_vec()),
+                        ResolvedEffectV3::WriteU32 {
+                            account,
+                            offset,
+                            value,
+                        } => (account, offset, value.to_le_bytes().to_vec()),
+                        _ => return,
+                    };
+                    if account
+                        == usize::from(
+                            crate::general::state_artifacts_v3::GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+                        )
+                    {
+                        let offset = usize::try_from(offset).expect("offset");
+                        persisted[offset..offset + bytes.len()].copy_from_slice(&bytes);
+                    }
+                };
+                for index in 0..program.fixed_operation_count() {
+                    apply(
+                        program
+                            .resolved_fixed_effect(index, outcome_count, &scalars, &identities)
+                            .expect("fixed effect"),
+                    );
+                }
+                for row in 0..outcome_count {
+                    for index in 0..program.item_operation_count() {
+                        apply(
+                            program
+                                .resolved_item_effect(
+                                    row,
+                                    index,
+                                    outcome_count,
+                                    &scalars,
+                                    &identities,
+                                )
+                                .expect("item effect"),
+                        );
+                    }
+                }
+                let body = &persisted[GENERAL_LOCAL_STATE_HEADER_BYTES_V3..];
+                assert_eq!(
+                    body, order_bytes,
+                    "all signed bytes and admitted state at width {outcome_count}, side {side:?}"
+                );
+                assert_eq!(
+                    GeneralOrderV2::decode(body)
+                        .expect("canonical persisted body")
+                        .header(),
+                    header
+                );
+            }
+        }
     }
 
     #[test]

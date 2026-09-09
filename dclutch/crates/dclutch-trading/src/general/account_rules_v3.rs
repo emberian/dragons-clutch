@@ -224,7 +224,7 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
         Action::CloseCandidate => 26,
         Action::OpenBatch => 24,
         Action::CloseBatch => 22,
-        Action::PlaceOrder => 33,
+        Action::PlaceOrder => 38,
         Action::CancelOrder => 33,
         Action::ReleaseOrder => 22,
         Action::Close => 17,
@@ -1130,6 +1130,31 @@ pub fn general_account_profile_operation_v3(
         26 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
             destination: common_identity(identity::PAYER)?,
+        }),
+        27 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: order_terms_account(action)?,
+            destination: common_scalar(scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT)?,
+            data_offset: width(GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT)?,
+        }),
+        28 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: order_terms_account(action)?,
+            destination: common_scalar(scalar::ORDER_SIDE)?,
+            data_offset: width(GeneralOrderLayoutV2::SIDE)?,
+        }),
+        29 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: order_terms_account(action)?,
+            destination: common_scalar(scalar::ORDER_OUTCOME_LO)?,
+            data_offset: width(GeneralOrderLayoutV2::OUTCOME_LO)?,
+        }),
+        30 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: order_terms_account(action)?,
+            destination: common_scalar(scalar::ORDER_OUTCOME_HI)?,
+            data_offset: width(GeneralOrderLayoutV2::OUTCOME_HI)?,
+        }),
+        31 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: order_terms_account(action)?,
+            destination: common_scalar(scalar::ORDER_CLAIMS_PER_LOT)?,
+            data_offset: width(GeneralOrderLayoutV2::CLAIMS_PER_LOT)?,
         }),
         // CancelOrder's projections. The second derived state (the order, at
         // the terminal coordinate) is observed the way Close observes its
@@ -3355,7 +3380,7 @@ mod tests {
     #[test]
     fn place_order_observes_lifecycle_beneficiary_and_projects_maker_payer() {
         let action = Action::PlaceOrder;
-        assert_eq!(general_account_profile_operation_count_v3(action), 33);
+        assert_eq!(general_account_profile_operation_count_v3(action), 38);
         assert_eq!(
             general_account_profile_operation_v3(action, 7).expect("beneficiary observation"),
             AccountOperationInputV2::ProjectDataIdentity {
@@ -3374,6 +3399,50 @@ mod tests {
             },
             "the transition receives the lifecycle payer to join against signed OWNER",
         );
+    }
+
+    #[test]
+    fn place_order_signed_shape_projections_have_one_action_scoped_writer() {
+        let action = Action::PlaceOrder;
+        let account = order_terms_account(action).expect("signed terms");
+        let expected = [
+            AccountOperationInputV2::ProjectDataU64 {
+                account,
+                destination: common_scalar(scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT).expect("credit"),
+                data_offset: width(GeneralOrderLayoutV2::MIN_QUOTE_CREDIT_PER_LOT)
+                    .expect("credit offset"),
+            },
+            AccountOperationInputV2::ProjectDataU8 {
+                account,
+                destination: common_scalar(scalar::ORDER_SIDE).expect("side"),
+                data_offset: width(GeneralOrderLayoutV2::SIDE).expect("side offset"),
+            },
+            AccountOperationInputV2::ProjectDataU32 {
+                account,
+                destination: common_scalar(scalar::ORDER_OUTCOME_LO).expect("lo"),
+                data_offset: width(GeneralOrderLayoutV2::OUTCOME_LO).expect("lo offset"),
+            },
+            AccountOperationInputV2::ProjectDataU32 {
+                account,
+                destination: common_scalar(scalar::ORDER_OUTCOME_HI).expect("hi"),
+                data_offset: width(GeneralOrderLayoutV2::OUTCOME_HI).expect("hi offset"),
+            },
+            AccountOperationInputV2::ProjectDataU64 {
+                account,
+                destination: common_scalar(scalar::ORDER_CLAIMS_PER_LOT).expect("magnitude"),
+                data_offset: width(GeneralOrderLayoutV2::CLAIMS_PER_LOT).expect("magnitude offset"),
+            },
+        ];
+        for wanted in expected {
+            assert_eq!(
+                (0..general_account_profile_operation_count_v3(action))
+                    .filter(|index| general_account_profile_operation_v3(action, *index)
+                        .expect("profile operation")
+                        == wanted)
+                    .count(),
+                1
+            );
+        }
     }
 
     /// The outer Hot adapter may authenticate only its two shared-prefix

@@ -752,7 +752,7 @@ pub(crate) fn resolve_held_market_v1(
                 "provider lifecycle",
                 stage,
                 projection.lifecycle,
-                dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+                dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V4,
                 &submitter,
                 &mut transactions,
             )?);

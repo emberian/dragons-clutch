@@ -18,9 +18,9 @@ use dclutch_source::pyth::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedV
 use dclutch_source::resolution::{
     EnsembleFragmentSeatSeedsV1, PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
     PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     ProviderAbandonRequestV3, ProviderCallerV3, ProviderExecutionRequestV3,
-    ProviderReclaimRequestV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV3,
+    ProviderReclaimRequestV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV4,
     ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     provider_resolution_direct_intent_digest_v1,
 };
@@ -56,7 +56,7 @@ use dclutch_versioned_message_operator::{
 /// Resolution submission account count frozen by the physical adapter.
 pub const PROVIDER_SUBMIT_ACCOUNT_COUNT_V3: usize = 38;
 /// Resolution reclaim account count frozen by the physical adapter.
-pub const PROVIDER_RECLAIM_ACCOUNT_COUNT_V3: usize = 18;
+pub const PROVIDER_RECLAIM_ACCOUNT_COUNT_V3: usize = 20;
 /// Core provider execution account count frozen by Resolution V3.
 pub const PROVIDER_EXECUTE_ACCOUNT_COUNT_V3: usize = PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3;
 
@@ -351,7 +351,7 @@ pub fn derive_provider_submit_fresh_coordinates_v3(
     ProviderSubmitFreshCoordinatesV3 {
         lifecycle: Pubkey::find_program_address(
             &[
-                PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+                PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
                 update_account.as_ref(),
             ],
             &resolution_program,
@@ -992,7 +992,7 @@ fn build_provider_execute_for_v3(
         .map_err(ProviderTransportOperatorErrorV3::MarketCore)?;
     let source = SourceResolutionStateV2::decode(&snapshot.source_state.data)
         .map_err(ProviderTransportOperatorErrorV3::Source)?;
-    let lifecycle = ProviderUpdateLifecycleV3::decode(&snapshot.lifecycle.data)
+    let lifecycle = ProviderUpdateLifecycleV4::decode(&snapshot.lifecycle.data)
         .map_err(ProviderTransportOperatorErrorV3::Resolution)?;
     if market.phase != CorePhase::Open
         || market.readiness != Readiness::Consumed
@@ -1180,7 +1180,7 @@ fn build_provider_execute_for_v3(
 
     let expected_lifecycle = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             snapshot.update.key.as_ref(),
         ],
         &deployment.resolution_program,
@@ -1446,7 +1446,7 @@ pub fn build_provider_reclaim_v3(
     deployment: ProviderReclaimDeploymentV3,
 ) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
     let observation = require_same_finalized_observation(&[lifecycle_account, pyth_release])?;
-    let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
+    let lifecycle = ProviderUpdateLifecycleV4::decode(&lifecycle_account.data)
         .map_err(ProviderTransportOperatorErrorV3::Resolution)?;
     if lifecycle.status != ProviderUpdateStatusV3::Consumed
         || lifecycle_account.owner != deployment.resolution_program
@@ -1511,6 +1511,26 @@ pub fn build_provider_reclaim_v3(
         AccountMeta::new_readonly(sysvar::clock::ID, false),
         AccountMeta::new_readonly(sysvar::rent::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(
+            Pubkey::find_program_address(
+                &[
+                    RAW_RECORD_PDA_SEED_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V2,
+                    &lifecycle.registry_artifact_release,
+                ],
+                &registry,
+            )
+            .0,
+            false,
+        ),
+        AccountMeta::new_readonly(
+            staging(
+                registry,
+                ARTIFACT_RELEASE_SCHEMA_ID_V2,
+                lifecycle.registry_artifact_release,
+            ),
+            false,
+        ),
     ];
     if accounts.len() != PROVIDER_RECLAIM_ACCOUNT_COUNT_V3 || !distinct(&accounts) {
         return Err(ProviderTransportOperatorErrorV3::Address);
@@ -1536,7 +1556,7 @@ pub fn build_provider_reclaim_v3(
 /// stays `Submitted` with no certificate and therefore had no route home at
 /// all.
 ///
-/// The frame is the same eighteen coordinates in the same order; index 5
+/// The frame is the same twenty coordinates in the same order; index 5
 /// carries the Source resolution state instead of the certificate, because the
 /// Source is what proves consumption can never happen. The deadline is NOT
 /// checked here: the operator has a slot, not a wall clock, so
@@ -1550,7 +1570,7 @@ pub fn build_provider_abandon_v3(
 ) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
     let observation =
         require_same_finalized_observation(&[lifecycle_account, source_state, pyth_release])?;
-    let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
+    let lifecycle = ProviderUpdateLifecycleV4::decode(&lifecycle_account.data)
         .map_err(ProviderTransportOperatorErrorV3::Resolution)?;
     if lifecycle.status != ProviderUpdateStatusV3::Submitted
         || lifecycle.terminal_sequence != 0
@@ -1621,6 +1641,26 @@ pub fn build_provider_abandon_v3(
         AccountMeta::new_readonly(sysvar::clock::ID, false),
         AccountMeta::new_readonly(sysvar::rent::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(
+            Pubkey::find_program_address(
+                &[
+                    RAW_RECORD_PDA_SEED_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V2,
+                    &lifecycle.registry_artifact_release,
+                ],
+                &registry,
+            )
+            .0,
+            false,
+        ),
+        AccountMeta::new_readonly(
+            staging(
+                registry,
+                ARTIFACT_RELEASE_SCHEMA_ID_V2,
+                lifecycle.registry_artifact_release,
+            ),
+            false,
+        ),
     ];
     if accounts.len() != PROVIDER_RECLAIM_ACCOUNT_COUNT_V3 || !distinct(&accounts) {
         return Err(ProviderTransportOperatorErrorV3::Address);
@@ -1646,7 +1686,7 @@ pub fn build_provider_abandon_v3(
 fn source_is_past_primary(
     source_state: &ObservedAccount,
     resolution_program: Pubkey,
-    lifecycle: ProviderUpdateLifecycleV3,
+    lifecycle: ProviderUpdateLifecycleV4,
 ) -> Result<bool, ProviderTransportOperatorErrorV3> {
     if source_state.executable {
         return Err(ProviderTransportOperatorErrorV3::State);

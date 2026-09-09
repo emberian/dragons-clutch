@@ -561,12 +561,14 @@ import {
   GENERAL_VERIFIER_CURRENT_LOTS_OFFSET_V2,
   GENERAL_VERIFIER_CURRENT_MAX_LOTS_OFFSET_V2,
   GENERAL_VERIFIER_CURRENT_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2,
+  GENERAL_VERIFIER_CURRENT_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2,
   GENERAL_VERIFIER_CURRENT_NONCE_OFFSET_V2,
   GENERAL_VERIFIER_CURRENT_ORDER_ID_OFFSET_V2,
   GENERAL_VERIFIER_CURRENT_OWNER_ID_OFFSET_V2,
   GENERAL_VERIFIER_CURRENT_SOURCE_EXECUTION_INDEX_OFFSET_V2,
   GENERAL_VERIFIER_CURRENT_SOURCE_PAGE_INDEX_OFFSET_V2,
   GENERAL_VERIFIER_FILLED_LOTS_OFFSET_V2,
+  GENERAL_VERIFIER_FILLED_ORDER_COUNT_OFFSET_V2,
   GENERAL_VERIFIER_HAS_CURRENT_ORDER_OFFSET_V2,
   GENERAL_VERIFIER_HEADER_BYTES_V2,
   GENERAL_VERIFIER_MAGIC_V2,
@@ -581,6 +583,7 @@ import {
   GENERAL_VERIFIER_QUOTE_DEBIT_OFFSET_V2,
   GENERAL_VERIFIER_REVISION_OFFSET_V2,
   GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2,
+  GENERAL_VERIFIER_TAIL_COUNT_V2,
   GENERAL_VERIFIER_VERSION_OFFSET_V2,
 } from '@dclutch/sdk/generated/generalSuccessorV5';
 import {
@@ -2228,7 +2231,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     width: {
       kind: 'header-only',
       headerBytes: GENERAL_VERIFIER_HEADER_BYTES_V2,
-      note: `five runtime-width tails of ${GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2}-byte items follow, one item per outcome each`,
+      note: `${GENERAL_VERIFIER_TAIL_COUNT_V2} runtime-width tails of ${GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2}-byte items follow, one item per outcome each`,
     },
     fields: [
       version(GENERAL_VERIFIER_VERSION_OFFSET_V2),
@@ -2238,6 +2241,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Next page index', GENERAL_VERIFIER_NEXT_PAGE_INDEX_OFFSET_V2, 'u32'),
       field('Next row index', GENERAL_VERIFIER_NEXT_ROW_INDEX_OFFSET_V2, 'u32'),
       field('Order count', GENERAL_VERIFIER_ORDER_COUNT_OFFSET_V2, 'u32'),
+      field('Filled order count', GENERAL_VERIFIER_FILLED_ORDER_COUNT_OFFSET_V2, 'u32'),
       field('Revision', GENERAL_VERIFIER_REVISION_OFFSET_V2, 'u64'),
       field('Candidate coordinate', GENERAL_VERIFIER_CANDIDATE_COORDINATE_OFFSET_V2, 'u32'),
       field('Candidate identity', GENERAL_VERIFIER_CANDIDATE_ID_OFFSET_V2, 'identity'),
@@ -2252,11 +2256,12 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Current order nonce', GENERAL_VERIFIER_CURRENT_NONCE_OFFSET_V2, 'u64'),
       field('Current order max lots', GENERAL_VERIFIER_CURRENT_MAX_LOTS_OFFSET_V2, 'u64'),
       field('Current order max quote debit per lot', GENERAL_VERIFIER_CURRENT_MAX_QUOTE_DEBIT_PER_LOT_OFFSET_V2, 'u64'),
+      field('Current order min quote credit per lot', GENERAL_VERIFIER_CURRENT_MIN_QUOTE_CREDIT_PER_LOT_OFFSET_V2, 'u64'),
       field('Current order lots so far', GENERAL_VERIFIER_CURRENT_LOTS_OFFSET_V2, 'u64'),
       field('Current order source page', GENERAL_VERIFIER_CURRENT_SOURCE_PAGE_INDEX_OFFSET_V2, 'u32'),
       field('Current order source row', GENERAL_VERIFIER_CURRENT_SOURCE_EXECUTION_INDEX_OFFSET_V2, 'u32'),
     ],
-    note: 'The current-order fields mean nothing unless the has-current-order byte is 1. The five tails are the simplex prices, the current order’s receive and deliver coefficients, and the aggregate claim inputs and outputs; none has a fixed offset, because each begins after the one before it at a width the record itself declares.',
+    note: 'The current-order fields mean nothing unless the has-current-order byte is 1. The seven tails are the simplex prices, the current order’s receive and deliver coefficients, the aggregate claim inputs and outputs, and the price floor and ceiling; none has a fixed offset, because each begins after the one before it at a width the record itself declares.',
   },
   {
     magic: GENERAL_VERIFIED_CANDIDATE_MAGIC_V2,

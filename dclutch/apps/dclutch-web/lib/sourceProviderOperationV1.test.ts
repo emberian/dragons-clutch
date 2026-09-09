@@ -53,7 +53,7 @@ function fixture() {
     observedSlot: '90',
     instruction: {
       program,
-      accounts: Array.from({ length: 18 }, (_, index) => ({
+      accounts: Array.from({ length: 20 }, (_, index) => ({
         address: address(20 + index),
         isSigner: index === 0,
         isWritable: index < 4,

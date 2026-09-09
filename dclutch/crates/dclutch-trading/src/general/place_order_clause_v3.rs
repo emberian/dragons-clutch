@@ -51,6 +51,16 @@ pub enum PlaceOrderClauseV3 {
     TermsMaxLots,
     /// `ORDER_MAX_QUOTE_DEBIT_PER_LOT` is not the signed price cap.
     TermsMaxQuoteDebit,
+    /// `ORDER_MIN_QUOTE_CREDIT_PER_LOT` differs from the authenticated signed terms.
+    TermsMinQuoteCredit,
+    /// `ORDER_SIDE` differs from the authenticated signed terms.
+    TermsSide,
+    /// `ORDER_OUTCOME_LO` differs from the authenticated signed terms.
+    TermsOutcomeLo,
+    /// `ORDER_OUTCOME_HI` differs from the authenticated signed terms.
+    TermsOutcomeHi,
+    /// `ORDER_CLAIMS_PER_LOT` differs from the authenticated signed terms.
+    TermsClaimsPerLot,
     /// `ORDER_VALID_UNTIL_SLOT` is not the signed validity horizon.
     TermsValidUntil,
     /// `OWNER` carries no maker.
@@ -176,6 +186,13 @@ impl PlaceOrderClauseV3 {
             Self::TermsGeneration => "place-order: the signed terms name another generation",
             Self::TermsMaxLots => "place-order: the observed lot bound is not the signed one",
             Self::TermsMaxQuoteDebit => "place-order: the observed price cap is not the signed one",
+            Self::TermsMinQuoteCredit => {
+                "place-order: ORDER_MIN_QUOTE_CREDIT_PER_LOT is not the signed value"
+            }
+            Self::TermsSide => "place-order: ORDER_SIDE is not the signed value",
+            Self::TermsOutcomeLo => "place-order: ORDER_OUTCOME_LO is not the signed value",
+            Self::TermsOutcomeHi => "place-order: ORDER_OUTCOME_HI is not the signed value",
+            Self::TermsClaimsPerLot => "place-order: ORDER_CLAIMS_PER_LOT is not the signed value",
             Self::TermsValidUntil => "place-order: the observed horizon is not the signed one",
             Self::OwnerIdentity => "place-order: OWNER carries no maker",
             Self::ProductIdentity => "place-order: SELECTION_PRODUCT carries no Product",

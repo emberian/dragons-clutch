@@ -55,8 +55,8 @@ use dclutch_source::pyth::{
     local_validator_release_v1,
 };
 use dclutch_source::resolution::{
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V4, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
+    ProviderUpdateLifecycleV4, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
@@ -1365,7 +1365,7 @@ fn lifecycle_kind(
     if account.owner != resolution || account.executable {
         return Ok(SlotKindV1::Other);
     }
-    let lifecycle = match ProviderUpdateLifecycleV3::decode(&account.data) {
+    let lifecycle = match ProviderUpdateLifecycleV4::decode(&account.data) {
         Ok(value) => value,
         Err(_) => return Ok(SlotKindV1::Other),
     };
@@ -1389,7 +1389,7 @@ fn lifecycle_kind(
 fn lifecycle_address(selected: &SelectedInputV1) -> Result<Pubkey> {
     Ok(Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             selected.account("update_account")?.as_ref(),
         ],
         &selected.account("resolution_program")?,
@@ -1647,6 +1647,8 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
             selected!("activation_cache", ActivationCache);
             selected!("registry_program", Program);
             selected!("registry_programdata", ProgramData);
+            selected!("registry_artifact", FinalizedRecord);
+            selected!("registry_artifact_staging", FinalizedRecordStaging);
             selected!("resolution_program", Program);
             selected!("resolution_programdata", ProgramData);
             selected!("pyth_release", FinalizedRecord);
@@ -5950,7 +5952,7 @@ fn canonical_stage_semantics(
     let (action, required_signers, mutation_account) = match stage {
         StageV1::Submit => {
             let report = provider_submit_report(selected, snapshot)?;
-            let lifecycle_rent = rpc.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)?;
+            let lifecycle_rent = rpc.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4)?;
             let update_rent =
                 rpc.minimum_balance(dclutch_source::pyth::FULL_PRICE_UPDATE_V2_LEN)?;
             let config = ReceiverConfigV2View::parse(
@@ -5989,7 +5991,7 @@ fn canonical_stage_semantics(
             let report = provider_execute_report(selected, snapshot)?;
             let certificate_rent = rpc.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2)?;
             arithmetic.certificate_rent_lamports = certificate_rent;
-            let lifecycle = ProviderUpdateLifecycleV3::decode(
+            let lifecycle = ProviderUpdateLifecycleV4::decode(
                 &snapshot
                     .account(lifecycle_address(selected)?, "provider lifecycle")?
                     .data,
@@ -6047,7 +6049,7 @@ fn canonical_stage_semantics(
             let report = provider_reclaim_report(selected, snapshot)?;
             let lifecycle_account =
                 snapshot.account(lifecycle_address(selected)?, "provider lifecycle")?;
-            let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
+            let lifecycle = ProviderUpdateLifecycleV4::decode(&lifecycle_account.data)
                 .map_err(|error| Error::new(format!("provider lifecycle: {error:?}")))?;
             if snapshot.observation.unix_timestamp < lifecycle.reclaim_after_unix_seconds {
                 return Err(Error::new(format!(
@@ -6721,7 +6723,7 @@ fn admissible_clock_band(selected: &SelectedInputV1, plan: &StagePlanV1) -> Resu
             upper: None,
         }),
         StageV1::Reclaim => {
-            let lifecycle = ProviderUpdateLifecycleV3::decode(&pinned_band_row(
+            let lifecycle = ProviderUpdateLifecycleV4::decode(&pinned_band_row(
                 plan,
                 lifecycle_address(selected)?,
                 "provider lifecycle",
@@ -7063,6 +7065,7 @@ fn authenticate_provider_finalized_projection(
             let before1 = durable_pre_account(plan, key(1)?)?;
             let before2 = durable_pre_account(plan, key(2)?)?;
             let before34 = durable_pre_account(plan, key(34)?)?;
+            let registry_artifact = durable_pre_account(plan, key(10)?)?;
             let after0 = post.observed_or_vacant(key(0)?)?;
             let after1 = post.observed_or_vacant(key(1)?)?;
             let after2 = post.observed_or_vacant(key(2)?)?;
@@ -7085,6 +7088,7 @@ fn authenticate_provider_finalized_projection(
                 transaction_fee_lamports: fee_lamports,
                 lifecycle_top_up_lamports,
                 expected_provider_fee_lamports: plan.arithmetic.provider_fee_lamports,
+                registry_artifact_release: Sha256::digest(&registry_artifact.data).into(),
                 rent: &rent,
                 writable: ProviderSubmitWritableAccountsV3 {
                     submitter_before: &before0,
@@ -9928,6 +9932,20 @@ mod tests {
             .find(|row| row.label == "caller_authority")
             .expect("Execute union seats the caller authority");
         assert_eq!(caller.class, StableAddressClassV1::CallerAuthority);
+        for (label, class) in [
+            ("registry_artifact", StableAddressClassV1::FinalizedRecord),
+            (
+                "registry_artifact_staging",
+                StableAddressClassV1::FinalizedRecordStaging,
+            ),
+        ] {
+            assert!(
+                reclaim
+                    .iter()
+                    .any(|row| row.label == label && row.class == class),
+                "Reclaim union is missing {label}",
+            );
+        }
         // The address is bound to this life, not a constant: every seed
         // coordinate `chain_facts` pins must move it.
         let mut elsewhere = sample_input();

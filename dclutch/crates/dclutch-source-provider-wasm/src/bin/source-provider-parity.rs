@@ -6,8 +6,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dclutch_registry::record::RAW_RECORD_PDA_SEED_V1;
 use dclutch_source::pyth::devnet_release_v1;
 use dclutch_source::resolution::{
-    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    ProviderSubmitRequestV3, ProviderUpdateLifecycleV3, ResolutionCertificateKindV2,
+    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    ProviderSubmitRequestV3, ProviderUpdateLifecycleV4, ResolutionCertificateKindV2,
     ResolutionCertificateV2,
 };
 use serde_json::json;
@@ -91,11 +91,12 @@ fn submit_poststate_fixture() -> String {
     let authority = key(72);
     let resolution = key(73);
     let receiver = key(74);
-    let lifecycle = ProviderUpdateLifecycleV3::submitted(
+    let lifecycle = ProviderUpdateLifecycleV4::submitted(
         request,
         1,
         authority.to_bytes(),
         request.registry_program,
+        [82; 32],
         hash(&update_data).to_bytes(),
         1_800_000_000,
         90,
@@ -114,6 +115,7 @@ fn submit_poststate_fixture() -> String {
             "resolutionProgram": resolution.to_string(),
             "receiverProgram": receiver.to_string(),
             "submitRequestBase64": STANDARD.encode(request.to_bytes().expect("request")),
+            "registryArtifact": Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2, &[82;32]], &Pubkey::new_from_array(request.registry_program)).0.to_string(),
         },
         "lifecycle": account(key(62), resolution, 1_000, &lifecycle),
         "update": account(key(65), receiver, 2_000, &update_data),
@@ -140,7 +142,7 @@ fn fixture() -> String {
     let registry = key(31);
     let update = key(32);
     let (lifecycle_key, bump) = Pubkey::find_program_address(
-        &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, update.as_ref()],
+        &[PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, update.as_ref()],
         &resolution,
     );
     let release = devnet_release_v1().expect("pinned devnet release");
@@ -172,11 +174,12 @@ fn fixture() -> String {
         post_body_digest: key(8).to_bytes(),
     };
     let update_data = vec![1, 2, 3, 4];
-    let mut lifecycle = ProviderUpdateLifecycleV3::submitted(
+    let mut lifecycle = ProviderUpdateLifecycleV4::submitted(
         request,
         bump,
         key(9).to_bytes(),
         registry.to_bytes(),
+        [82; 32],
         hash(&update_data).to_bytes(),
         1_800_000_000,
         89,

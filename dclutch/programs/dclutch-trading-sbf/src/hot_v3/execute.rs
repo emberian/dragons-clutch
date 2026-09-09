@@ -1508,7 +1508,7 @@ pub(super) fn execute_authenticated_hot_v3(
         root.child_programs,
     )?;
     hot_cu_checkpoint!("children-shadow");
-    let root_commit_plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
+    let root_commit_plan = projected_effects.commit_plan;
     hot_cu_checkpoint!("before-commit");
     let commit_status = commit_prepared_hot_v3(
         &caller_bumps,
@@ -1801,8 +1801,6 @@ pub(super) fn commit_prepared_post_children_v3(
     commit_non_root_effects_into_v3(
         prepared.effect,
         prepared.tail_count,
-        prepared.scalars,
-        prepared.identities,
         prepared.runtime_accounts,
         prepared.aliases,
         prepared.output_lamports,
@@ -1818,8 +1816,6 @@ pub(super) fn commit_prepared_post_children_v3(
         commit_root_effects_v3(
             prepared.effect,
             prepared.tail_count,
-            prepared.scalars,
-            prepared.identities,
             prepared.runtime_accounts,
             prepared.aliases,
             prepared.output_lamports,

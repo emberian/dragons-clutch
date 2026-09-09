@@ -991,7 +991,7 @@ fn capture_through_durable_cli_v1(
             let (destination, bytes, label) = if stage == "submit" {
                 (
                     provider.lifecycle,
-                    dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+                    dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V4,
                     "provider lifecycle",
                 )
             } else {

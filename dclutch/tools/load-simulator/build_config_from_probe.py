@@ -27,6 +27,12 @@ class Refusal(RuntimeError):
     pass
 
 
+DIRECT_EXECUTION_PRICE_V1 = 500_000
+DIRECT_PRICE_SCALE_V1 = 1_000_000
+DIRECT_FEE_BASIS_POINTS_V1 = 50
+DIRECT_FEE_DENOMINATOR_V1 = 10_000
+
+
 def need(mapping: dict, key: str, where: str):
     if key not in mapping:
         raise Refusal(f"{where} lacks required field {key!r}")
@@ -57,6 +63,36 @@ def load(path: Path, what: str) -> dict:
     if not path.is_file():
         raise Refusal(f"{what} is absent: {path}")
     return json.loads(path.read_text())
+
+
+def planned_local_fill_atoms(market_input: dict, participant: dict, cycles: int) -> int:
+    """Split the fixture's finite one-fill capacity across the requested run."""
+    if cycles < 1:
+        raise Refusal("--cycles must be positive")
+    capacity = need(
+        market_input, "local_participant_fixture_liquidity_atoms", "market input"
+    )
+    collateral = (((participant.get("collateral") or {}).get("intent") or {}).get(
+        "quantityAtoms"
+    ))
+    if type(capacity) is not int or capacity < 1:
+        raise Refusal("market input fixture liquidity must be a positive integer")
+    if type(collateral) is not int or collateral < 1:
+        raise Refusal("participant evidence has no positive collateral quantityAtoms")
+    fill = capacity // cycles
+    # At the accepted owned-loopback price, every even fill has an integral
+    # quote. The producer repeats this check from the authenticated live config.
+    fill -= fill % 2
+    if fill < 1:
+        raise Refusal("fixture liquidity cannot fund one positive fill per requested cycle")
+    gross = fill * DIRECT_EXECUTION_PRICE_V1 // DIRECT_PRICE_SCALE_V1
+    fee = gross * DIRECT_FEE_BASIS_POINTS_V1 // DIRECT_FEE_DENOMINATOR_V1
+    required = (gross + fee) * cycles
+    if required > collateral:
+        raise Refusal(
+            f"planned {cycles} fills require {required} collateral atoms but admission funded {collateral}"
+        )
+    return fill
 
 
 def census_from_handoff(handoff: dict) -> dict:
@@ -242,6 +278,8 @@ def main(argv=None) -> int:
                         help="successor binary (default: handoff bootstrapBin or historical host-target build)")
     parser.add_argument("--output", required=True, help="config JSON to write (absolute)")
     parser.add_argument("--period-seconds", type=float, default=8.0)
+    parser.add_argument("--cycles", type=int, default=3,
+                        help="finite Direct cycles the generated local config must fund")
     parser.add_argument("--no-census", action="store_true",
                         help="omit the census block (NOT for real runs; the "
                              "reconciliation loop is part of the deliverable)")
@@ -323,8 +361,9 @@ def main(argv=None) -> int:
     market_address = need(need(accounts, "founding_market", "founding accounts"), "address", "founding_market")
     # Authentication and fresh account reads remain in the existing native
     # trade producer. This adapter only forwards its supported input paths.
-    load(Path(market_input), "market input")
-    load(Path(participant_evidence), "participant evidence")
+    market_input_body = load(Path(market_input), "market input")
+    participant_body = load(Path(participant_evidence), "participant evidence")
+    fill_atoms = planned_local_fill_atoms(market_input_body, participant_body, args.cycles)
     census = None if args.no_census else census_from_handoff(handoff)
 
     config = {
@@ -344,6 +383,7 @@ def main(argv=None) -> int:
                 "campaign_report": founding_evidence,
                 "participant_report": participant_evidence,
                 "key_dir": key_directory,
+                "fill_atoms": fill_atoms,
             },
         },
         "census": census,

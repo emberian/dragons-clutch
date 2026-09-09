@@ -19,7 +19,7 @@
 use crate::resolution::{Error, Result};
 
 /// Exact submitted/consumed lifecycle account width.
-pub const PROVIDER_UPDATE_LIFECYCLE_BYTES_V3: usize = 528;
+pub const PROVIDER_UPDATE_LIFECYCLE_BYTES_V4: usize = 560;
 /// Exact provider submission request prefix width before `PostUpdateParams`.
 pub const PROVIDER_SUBMIT_REQUEST_BYTES_V3: usize = 416;
 /// Exact permissionless reclaim request width.
@@ -31,7 +31,7 @@ pub const PROVIDER_SUBMIT_RECEIPT_BYTES_V3: usize = 400;
 /// Exact provider reclaim return receipt width.
 pub const PROVIDER_RECLAIM_RECEIPT_BYTES_V3: usize = 304;
 /// Lifecycle wire magic.
-pub const PROVIDER_UPDATE_LIFECYCLE_MAGIC_V3: [u8; 8] = *b"DCLTPUL3";
+pub const PROVIDER_UPDATE_LIFECYCLE_MAGIC_V4: [u8; 8] = *b"DCLTPUL4";
 /// Submission request magic.
 pub const PROVIDER_SUBMIT_REQUEST_MAGIC_V3: [u8; 8] = *b"DCLTPSB3";
 /// Reclaim request magic.
@@ -42,14 +42,16 @@ pub const PROVIDER_ABANDON_REQUEST_MAGIC_V3: [u8; 8] = *b"DCLTPAB3";
 pub const PROVIDER_SUBMIT_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLTPSR3";
 /// Reclaim receipt magic.
 pub const PROVIDER_RECLAIM_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLTPRR3";
+/// Lifecycle schema version; prior lifecycle layouts are not admitted.
+pub const PROVIDER_UPDATE_LIFECYCLE_VERSION_V4: u16 = 4;
 /// Shared transport schema version.
 pub const PROVIDER_TRANSPORT_VERSION_V3: u16 = 3;
 /// Resolution-owned lifecycle PDA domain.
-pub const PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3: &[u8] = b"dclutch/provider-life/v3";
+pub const PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4: &[u8] = b"dclutch/provider-life/v4";
 /// Resolution-owned Receiver update-authority PDA domain.
 pub const PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3: &[u8] = b"dclutch/provider-update/v3";
 
-const _: () = assert!(PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3.len() <= 32);
+const _: () = assert!(PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4.len() <= 32);
 const _: () = assert!(PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3.len() <= 32);
 
 const IDENTITIES_OFFSET: usize = 32;
@@ -370,7 +372,7 @@ impl ProviderAbandonRequestV3 {
 
 /// Persisted custody and replay state for one provider update.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProviderUpdateLifecycleV3 {
+pub struct ProviderUpdateLifecycleV4 {
     /// Current lifecycle status.
     pub status: ProviderUpdateStatusV3,
     /// Lifecycle PDA bump.
@@ -401,8 +403,10 @@ pub struct ProviderUpdateLifecycleV3 {
     pub refund_recipient: [u8; 32],
     /// Market-selected release set.
     pub release_set: [u8; 32],
-    /// Immutable Registry program authenticated at submission.
+    /// Registry program authenticated at submission.
     pub registry_program: [u8; 32],
+    /// Exact Registry artifact release authenticated by the submission profile.
+    pub registry_artifact_release: [u8; 32],
     /// Zero before consumption; terminal provider evidence afterward.
     pub provider_evidence: [u8; 32],
     /// Zero before consumption; terminal certificate account afterward.
@@ -419,7 +423,7 @@ pub struct ProviderUpdateLifecycleV3 {
     pub provider_fee_lamports: u64,
 }
 
-impl ProviderUpdateLifecycleV3 {
+impl ProviderUpdateLifecycleV4 {
     /// Construct canonical submitted state after Receiver postconditions pass.
     #[allow(clippy::too_many_arguments)]
     pub fn submitted(
@@ -427,6 +431,7 @@ impl ProviderUpdateLifecycleV3 {
         bump: u8,
         update_authority: [u8; 32],
         registry_program: [u8; 32],
+        registry_artifact_release: [u8; 32],
         update_digest: [u8; 32],
         publish_time: i64,
         posted_slot: u64,
@@ -450,6 +455,7 @@ impl ProviderUpdateLifecycleV3 {
             refund_recipient: request.refund_recipient,
             release_set: request.release_set,
             registry_program,
+            registry_artifact_release,
             provider_evidence: [0; 32],
             certificate: [0; 32],
             publish_time,
@@ -485,9 +491,9 @@ impl ProviderUpdateLifecycleV3 {
 
     /// Decode one exact canonical lifecycle account.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
-            || array::<8>(bytes, 0)? != PROVIDER_UPDATE_LIFECYCLE_MAGIC_V3
-            || read_u16(bytes, 8)? != PROVIDER_TRANSPORT_VERSION_V3
+        if bytes.len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V4
+            || array::<8>(bytes, 0)? != PROVIDER_UPDATE_LIFECYCLE_MAGIC_V4
+            || read_u16(bytes, 8)? != PROVIDER_UPDATE_LIFECYCLE_VERSION_V4
         {
             return Err(Error::InvalidLength);
         }
@@ -514,6 +520,7 @@ impl ProviderUpdateLifecycleV3 {
             refund_recipient: identities[9],
             release_set: identities[10],
             registry_program: identities[11],
+            registry_artifact_release: array(bytes, 528)?,
             provider_evidence: identities[12],
             certificate: identities[13],
             publish_time: read_i64(bytes, 480)?,
@@ -527,11 +534,15 @@ impl ProviderUpdateLifecycleV3 {
     }
 
     /// Encode one exact canonical lifecycle account.
-    pub fn to_bytes(self) -> Result<[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V3]> {
+    pub fn to_bytes(self) -> Result<[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V4]> {
         self.validate()?;
-        let mut bytes = [0; PROVIDER_UPDATE_LIFECYCLE_BYTES_V3];
-        put(&mut bytes, 0, &PROVIDER_UPDATE_LIFECYCLE_MAGIC_V3)?;
-        put(&mut bytes, 8, &PROVIDER_TRANSPORT_VERSION_V3.to_le_bytes())?;
+        let mut bytes = [0; PROVIDER_UPDATE_LIFECYCLE_BYTES_V4];
+        put(&mut bytes, 0, &PROVIDER_UPDATE_LIFECYCLE_MAGIC_V4)?;
+        put(
+            &mut bytes,
+            8,
+            &PROVIDER_UPDATE_LIFECYCLE_VERSION_V4.to_le_bytes(),
+        )?;
         bytes[10] = self.status as u8;
         bytes[11] = self.bump;
         put(&mut bytes, 16, &self.generation.to_le_bytes())?;
@@ -548,6 +559,7 @@ impl ProviderUpdateLifecycleV3 {
         )?;
         put(&mut bytes, 504, &self.update_rent_lamports.to_le_bytes())?;
         put(&mut bytes, 512, &self.provider_fee_lamports.to_le_bytes())?;
+        put(&mut bytes, 528, &self.registry_artifact_release)?;
         Ok(bytes)
     }
 
@@ -571,7 +583,8 @@ impl ProviderUpdateLifecycleV3 {
     }
 
     fn validate(self) -> Result<()> {
-        if self.generation == 0
+        if is_zero(&self.registry_artifact_release)
+            || self.generation == 0
             || self.publish_time <= 0
             || self.posted_slot == 0
             || self.reclaim_after_unix_seconds < self.publish_time
@@ -904,24 +917,59 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_v4_requires_the_submitted_registry_artifact_and_rejects_v3() {
+        let lifecycle = ProviderUpdateLifecycleV4::submitted(
+            submit(),
+            4,
+            [12; 32],
+            [18; 32],
+            [19; 32],
+            [13; 32],
+            100,
+            9,
+            500,
+            1,
+        )
+        .expect("lifecycle with authenticated Registry artifact");
+        let bytes = lifecycle.to_bytes().expect("lifecycle bytes");
+        assert_eq!(&bytes[528..560], &[19; 32]);
+        assert_eq!(
+            ProviderUpdateLifecycleV4::decode(&bytes[..528]),
+            Err(Error::InvalidLength)
+        );
+        let mut old_magic = bytes;
+        old_magic[..8].copy_from_slice(b"DCLTPUL3");
+        assert_eq!(
+            ProviderUpdateLifecycleV4::decode(&old_magic),
+            Err(Error::InvalidLength)
+        );
+        let mut missing_pin = bytes;
+        missing_pin[528..560].fill(0);
+        assert_eq!(
+            ProviderUpdateLifecycleV4::decode(&missing_pin),
+            Err(Error::ZeroCoordinate)
+        );
+    }
+
+    #[test]
     fn submitted_consumed_partition_round_trips() {
         let request = submit();
         assert_eq!(
             ProviderSubmitRequestV3::decode(&request.to_bytes().expect("submit request")),
             Ok(request)
         );
-        let mut lifecycle = ProviderUpdateLifecycleV3::submitted(
-            request, 4, [12; 32], [18; 32], [13; 32], 100, 9, 500, 1,
+        let mut lifecycle = ProviderUpdateLifecycleV4::submitted(
+            request, 4, [12; 32], [18; 32], [19; 32], [13; 32], 100, 9, 500, 1,
         )
         .expect("submitted lifecycle");
         assert_eq!(
-            ProviderUpdateLifecycleV3::decode(&lifecycle.to_bytes().expect("submitted bytes")),
+            ProviderUpdateLifecycleV4::decode(&lifecycle.to_bytes().expect("submitted bytes")),
             Ok(lifecycle)
         );
         assert_eq!(lifecycle.consume(10, [14; 32], [15; 32]), Ok(()));
         assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Consumed);
         assert_eq!(
-            ProviderUpdateLifecycleV3::decode(&lifecycle.to_bytes().expect("consumed bytes")),
+            ProviderUpdateLifecycleV4::decode(&lifecycle.to_bytes().expect("consumed bytes")),
             Ok(lifecycle)
         );
         assert!(lifecycle.consume(11, [16; 32], [17; 32]).is_err());
@@ -986,8 +1034,8 @@ mod tests {
         request.refund_recipient = request.provider_submitter;
         assert!(request.to_bytes().is_err());
         let request = submit();
-        let mut lifecycle = ProviderUpdateLifecycleV3::submitted(
-            request, 4, [12; 32], [18; 32], [13; 32], 100, 9, 500, 1,
+        let mut lifecycle = ProviderUpdateLifecycleV4::submitted(
+            request, 4, [12; 32], [18; 32], [19; 32], [13; 32], 100, 9, 500, 1,
         )
         .expect("submitted lifecycle");
         lifecycle.status = ProviderUpdateStatusV3::Consumed;

@@ -35,13 +35,15 @@ FAKE_BOOT = r"""#!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 cmd="${1:-}"; shift || true
-outdir=""; session=""; output=""; prior=""; stage=""; tokens=""; declared=""
+outdir=""; session=""; output=""; prior=""; stage=""; tokens=""; declared=""; evidence=""; maker=""
 while [ "$#" -gt 0 ]; do case "$1" in
   --output-dir) outdir="$2"; shift 2 ;;
   --session) session="$2"; shift 2 ;;
   --output) output="$2"; shift 2 ;;
   --prior) prior="$2"; shift 2 ;;
   --stage) stage="$2"; shift 2 ;;
+  --evidence) evidence="$2"; shift 2 ;;
+  --maker) maker="$2"; shift 2 ;;
   --token) tokens="$tokens $2"; shift 2 ;;
   --declared-collateral-delta) declared="$declared collateral=$2"; shift 2 ;;
   --declared-hoard-delta) declared="$declared hoard=$2"; shift 2 ;;
@@ -74,8 +76,14 @@ MANIFEST
       # the fill, the price, the scale and the per-side fee -- and the three
       # collateral accounts it moved. The declarations the census receives are
       # computed from exactly these, so the fake has to carry them.
-      printf '{"schema":"dclutch-devnet-direct-trade-finalized-v1","market":"Mkt","signature":"sig-final-%s","outcomeIndex":1,"fillAtoms":"1000000","executionPrice":"500000","priceScale":"1000000","feeBasisPointsPerSide":50,"sellerCollateralDestination":"SellerDirectTokenPda","buyerCollateralSource":"BuyerCollateralSource","feeTokenAccount":"VenueFeeTokenPda","mutations":[{"kind":"hot","signature":"sig-hot-%s"}]}\n' "$count" "$count" > "$sdir/direct-trade-completion.json"
+      printf '{"schema":"dclutch-devnet-direct-trade-finalized-v1","market":"Mkt","signature":"sig-final-%s","buyerOwner":"BuyerOwner","outcomeIndex":1,"fillAtoms":"1000000","executionPrice":"500000","priceScale":"1000000","feeBasisPointsPerSide":50,"sellerCollateralDestination":"SellerDirectTokenPda","buyerCollateralSource":"BuyerCollateralSource","feeTokenAccount":"VenueFeeTokenPda","mutations":[{"kind":"hot","signature":"sig-hot-%s"}]}\n' "$count" "$count" > "$sdir/direct-trade-completion.json"
     fi
+    ;;
+  local-private-validator-direct-fee-settlement-v1)
+    printf '{"schema":"dclutch-direct-fee-settlement-evidence-v1","cluster":"owned-loopback","market":"Mkt","maker":"%s","feeOwed":5000,"feeSource":"BuyerCollateralSource","feeDestination":"VenueFeeTokenPda","landed":{"signature":"sig-fee"}}\n' "$maker" > "$evidence"
+    ;;
+  local-private-validator-direct-collateral-reapprove-v1)
+    printf '{"schema":"dclutch-direct-collateral-reapproval-evidence-v1","landed":{"signature":"sig-reapprove"}}\n' > "$evidence"
     ;;
   ledger-census)
     # Every --token this census was given, one per line, newest run last.
@@ -276,6 +284,7 @@ class DirectFillDeclarationTest(SimulatorHarness):
 
     COMPLETION = {
         "schema": "dclutch-devnet-direct-trade-finalized-v1",
+        "buyerOwner": "BuyerOwner",
         "outcomeIndex": 1,
         "fillAtoms": "1000000",
         "executionPrice": "500000",
@@ -285,6 +294,14 @@ class DirectFillDeclarationTest(SimulatorHarness):
         "buyerCollateralSource": "BuyerCollateralSource",
         "feeTokenAccount": "VenueFeeTokenPda",
         "mutations": [{"kind": "hot", "signature": "sig"}],
+    }
+    SETTLEMENT = {
+        "schema": "dclutch-direct-fee-settlement-evidence-v1",
+        "maker": "BuyerOwner",
+        "feeOwed": 5_000,
+        "feeSource": "BuyerCollateralSource",
+        "feeDestination": "VenueFeeTokenPda",
+        "landed": {"signature": "sig-fee"},
     }
     TRACKED = {
         "direct_seller_token": "SellerDirectTokenPda",
@@ -297,7 +314,9 @@ class DirectFillDeclarationTest(SimulatorHarness):
         return log.read_text().splitlines() if log.is_file() else []
 
     def test_the_three_declarations_come_out_of_the_settlement_arithmetic(self) -> None:
-        declared = simulator.direct_fill_declarations_v1(self.COMPLETION, self.TRACKED)
+        declared = simulator.direct_fill_declarations_v1(
+            self.COMPLETION, self.SETTLEMENT, self.TRACKED
+        )
         self.assertEqual(declared["terms"]["gross_atoms"], 500_000)
         self.assertEqual(declared["terms"]["fee_atoms_per_side"], 2_500)
         self.assertEqual(declared["accounts"], {
@@ -320,7 +339,8 @@ class DirectFillDeclarationTest(SimulatorHarness):
         """The control for `derived, not typed`: move the price, and every
         number in the declaration moves with it."""
         halved = dict(self.COMPLETION, executionPrice="250000")
-        declared = simulator.direct_fill_declarations_v1(halved, self.TRACKED)
+        settlement = dict(self.SETTLEMENT, feeOwed=2_500)
+        declared = simulator.direct_fill_declarations_v1(halved, settlement, self.TRACKED)
         self.assertEqual(declared["terms"]["gross_atoms"], 250_000)
         self.assertEqual(declared["terms"]["fee_atoms_per_side"], 1_250)
         self.assertEqual(declared["accounts"]["direct_seller_token"], 248_750)
@@ -332,7 +352,7 @@ class DirectFillDeclarationTest(SimulatorHarness):
         A buyer whose collateral source is unbound makes the tracked set GROW
         by the atoms that left it, and saying zero there would red L5 against
         a claim that was never true."""
-        declared = simulator.direct_fill_declarations_v1(self.COMPLETION, {
+        declared = simulator.direct_fill_declarations_v1(self.COMPLETION, self.SETTLEMENT, {
             "direct_seller_token": "SellerDirectTokenPda",
             "direct_venue_fee_token": "VenueFeeTokenPda",
         })
@@ -360,7 +380,19 @@ class DirectFillDeclarationTest(SimulatorHarness):
         ):
             with self.assertRaises(simulator.Refusal, msg=why):
                 simulator.direct_fill_declarations_v1(
-                    dict(self.COMPLETION, **broken), self.TRACKED
+                    dict(self.COMPLETION, **broken), self.SETTLEMENT, self.TRACKED
+                )
+
+    def test_fee_credit_without_authenticated_settlement_refuses(self) -> None:
+        for broken in (
+            dict(self.SETTLEMENT, landed=None),
+            dict(self.SETTLEMENT, maker="AnotherBuyer"),
+            dict(self.SETTLEMENT, feeOwed=4_999),
+            dict(self.SETTLEMENT, feeDestination="AnotherFeeAccount"),
+        ):
+            with self.assertRaises(simulator.Refusal):
+                simulator.direct_fill_declarations_v1(
+                    self.COMPLETION, broken, self.TRACKED
                 )
 
     def test_a_filling_cycle_states_all_three_declarations_to_the_census(self) -> None:

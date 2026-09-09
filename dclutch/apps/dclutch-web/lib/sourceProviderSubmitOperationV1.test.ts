@@ -85,6 +85,7 @@ function fixture() {
       resolutionProgram: program.toBase58(),
       receiverProgram: address(16),
       submitRequestBase64: 'AQ==',
+      registryArtifact: address(19),
     },
   });
   const market = address(17);

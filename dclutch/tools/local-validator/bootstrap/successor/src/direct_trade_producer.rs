@@ -15,6 +15,14 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_claims::{
+    liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
+    protocol_position_v2::ProtocolPositionSeedsV2,
+};
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
+use dclutch_custody::{
+    CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1,
+};
 use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
@@ -23,14 +31,18 @@ use dclutch_market::capability_program::{
 use dclutch_market::capability_program::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
 };
-use dclutch_vm::capability_seal::CAPABILITY_SEAL_PDA_DOMAIN_V1;
-use dclutch_claims::{
-    liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
-    protocol_position_v2::ProtocolPositionSeedsV2,
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_market::{CoreState, Phase as CorePhase};
+use dclutch_operator::{
+    direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
+    direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
 };
-use dclutch_custody::{
-    CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1,
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_trading::{
     execution_v3::DirectExecutionActionV3,
     intent_v2::CompactIntentV2,
@@ -43,19 +55,7 @@ use dclutch_trading::{
         DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenSetupRequestV1,
     },
 };
-use dclutch_market::{CoreState, Phase as CorePhase};
-use dclutch_operator::{
-    direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
-    direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
-};
-use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
-};
-use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_custody::token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
+use dclutch_vm::capability_seal::CAPABILITY_SEAL_PDA_DOMAIN_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -119,6 +119,7 @@ pub(crate) struct OwnedLoopbackDirectProducerArgumentsV1 {
     pub(crate) participant_report: PathBuf,
     pub(crate) key_dir: PathBuf,
     pub(crate) output_dir: PathBuf,
+    pub(crate) fill_atoms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1058,6 +1059,7 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
     arguments: OwnedLoopbackDirectProducerArgumentsV1,
 ) -> Result<OwnedLoopbackDirectProducerReceiptV1> {
     let validated = validate_paths_v1(arguments)?;
+    let fill_atoms = validated.arguments.fill_atoms;
     let plan_bytes = fs::read(&validated.arguments.plan)?;
     let market_bytes = fs::read(&validated.arguments.market_input)?;
     let campaign_bytes = fs::read(&validated.arguments.campaign_report)?;
@@ -1098,6 +1100,7 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
         payer_identity,
         checked_release,
         None,
+        Some(fill_atoms),
         ExpectedClusterV1::OwnedLoopback,
         None,
     )?;
@@ -1135,7 +1138,7 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
         nonce: public.seller_facts.next_nonce,
         valid_from: public.observation_slot,
         valid_through,
-        maximum_fill: FILL_ATOMS_V1,
+        maximum_fill: fill_atoms,
         limit_price: EXECUTION_PRICE_V1,
         fee_basis_points: FEE_BASIS_POINTS_V1,
         collateral_account: public.seller_token.to_bytes(),
@@ -1149,7 +1152,7 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
         nonce: public.buyer_facts.next_nonce,
         valid_from: public.observation_slot,
         valid_through,
-        maximum_fill: FILL_ATOMS_V1,
+        maximum_fill: fill_atoms,
         limit_price: EXECUTION_PRICE_V1,
         fee_basis_points: FEE_BASIS_POINTS_V1,
         collateral_account: public.participant.collateral_account.to_bytes(),
@@ -1158,7 +1161,7 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
     let buyer_signed = signed_intent_v1(&buyer, buyer_intent)?;
     let terms = DirectTradeTermsV1 {
         outcome: public.outcome,
-        fill: FILL_ATOMS_V1,
+        fill: fill_atoms,
         execution_price: EXECUTION_PRICE_V1,
         fee_basis_points: FEE_BASIS_POINTS_V1,
     };
@@ -1252,7 +1255,7 @@ pub(crate) fn usage() -> &'static str {
      --rpc-url http://127.0.0.1:PORT/ --plan ABSOLUTE_PLAN_JSON \
      --market-input ABSOLUTE_MARKET_JSON --campaign-report ABSOLUTE_CAMPAIGN_JSON \
      --participant-report ABSOLUTE_PARTICIPANT_JSON --key-dir ABSOLUTE_KEYS \
-     --output-dir ABSOLUTE_EMPTY_OUTPUT_DIRECTORY"
+     --output-dir ABSOLUTE_EMPTY_OUTPUT_DIRECTORY [--fill-atoms POSITIVE_U64]"
 }
 
 pub(crate) fn devnet_session_usage() -> &'static str {
@@ -1475,6 +1478,7 @@ fn produce_devnet_direct_trade_v1(
         arguments.payer,
         fs::read(&checked_execution_release)?,
         Some(terms),
+        None,
         ExpectedClusterV1::Devnet,
         readmission.as_ref(),
     )?;
@@ -2215,6 +2219,7 @@ fn prepare_public_facts_v1(
     payer: Pubkey,
     checked_release: Vec<u8>,
     requested_terms: Option<DirectTradeTermsV1>,
+    requested_owned_fill_atoms: Option<u64>,
     expected_cluster: ExpectedClusterV1,
     readmission: Option<&PlanReadmissionInputV1<'_>>,
 ) -> Result<PreparedPublicFactsV1> {
@@ -2485,6 +2490,12 @@ fn prepare_public_facts_v1(
         return Err(refusal("Direct Position PDA coordinate changed"));
     }
     let seller = Pubkey::new_from_array(seller_position_view.owner);
+    let owned_fill_atoms = requested_owned_fill_atoms.unwrap_or(FILL_ATOMS_V1);
+    if owned_fill_atoms == 0 || owned_fill_atoms > FILL_ATOMS_V1 {
+        return Err(refusal(
+            "owned-loopback Direct fill must be positive and no larger than the admitted maximum",
+        ));
+    }
     let outcome = match requested_terms {
         Some(terms) => {
             if terms.fill == 0
@@ -2507,10 +2518,15 @@ fn prepare_public_facts_v1(
         None => first_funded_outcome_v1(
             seller_position_view,
             &seller_position_account.data,
-            FILL_ATOMS_V1,
+            owned_fill_atoms,
         )?,
     };
-    let terms = requested_terms.unwrap_or(owned_loopback_default_terms_v1(outcome));
+    let terms = requested_terms.unwrap_or(DirectTradeTermsV1 {
+        outcome,
+        fill: owned_fill_atoms,
+        execution_price: EXECUTION_PRICE_V1,
+        fee_basis_points: FEE_BASIS_POINTS_V1,
+    });
     let required_buyer_collateral = required_buyer_collateral_v1(&terms, config.price_scale())?;
     let buyer_collateral_account = snapshot.account(participant.collateral_account)?;
     let refusing = refusing_buyer_collateral_clauses_v1(
@@ -3256,8 +3272,7 @@ fn devnet_market_record_schema_v1(market_input: &MarketRunInput, label: &str) ->
         "direct_program_set_record" => CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         "direct_ordinary_descriptor_record" => CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         "direct_activation_account_profile_record" => {
-            dclutch_trading::activation_bundle_v1::direct_activation_account_profile_schema_v1(
-            )
+            dclutch_trading::activation_bundle_v1::direct_activation_account_profile_schema_v1()
         }
         "direct_activation_effect_record" => {
             dclutch_trading::activation_bundle_v1::direct_activation_effect_schema_v1()
@@ -3516,8 +3531,9 @@ pub(crate) fn derived_direct_execution_root_v1(
     if sha256_hex(&manifest_body) != manifest_pair.content_sha256 {
         return Err(refusal("capability manifest body digest changed"));
     }
-    let manifest = dclutch_market::capability_manifest::CapabilityManifestV1::decode(&manifest_body)
-        .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
+    let manifest =
+        dclutch_market::capability_manifest::CapabilityManifestV1::decode(&manifest_body)
+            .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
     let entry = manifest
         .entry(entry_index)
         .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
@@ -3722,6 +3738,7 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<OwnedLoopbackDirectProdu
     let mut participant_report = None;
     let mut key_dir = None;
     let mut output_dir = None;
+    let mut fill_atoms = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -3735,6 +3752,7 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<OwnedLoopbackDirectProdu
             "--participant-report" => &mut participant_report,
             "--key-dir" => &mut key_dir,
             "--output-dir" => &mut output_dir,
+            "--fill-atoms" => &mut fill_atoms,
             _ => {
                 return Err(Error::new(format!(
                     "unknown Direct producer argument: {argument}"
@@ -3753,6 +3771,14 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<OwnedLoopbackDirectProdu
         participant_report: PathBuf::from(required_v1(participant_report, "--participant-report")?),
         key_dir: PathBuf::from(required_v1(key_dir, "--key-dir")?),
         output_dir: PathBuf::from(required_v1(output_dir, "--output-dir")?),
+        fill_atoms: fill_atoms
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .map_err(|_| Error::new("--fill-atoms must be a positive u64"))
+            })
+            .transpose()?
+            .unwrap_or(FILL_ATOMS_V1),
     })
 }
 
@@ -4282,8 +4308,7 @@ mod tests {
         DevnetDirectSessionProducerJournalV1, DevnetDirectSessionProducerPhaseV1,
         DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenDestinationPrestateV1,
         DirectTradeTermsV1, EXECUTION_PRICE_V1, EXPECTED_PRICE_SCALE_V1, FEE_BASIS_POINTS_V1,
-        FILL_ATOMS_V1,
-        FinalizedTicketExpectationV1, OwnedLoopbackDirectProducerReceiptV1,
+        FILL_ATOMS_V1, FinalizedTicketExpectationV1, OwnedLoopbackDirectProducerReceiptV1,
         ProducedDirectTradePrivateSessionV1, ProducedReplaySetupV1, ProducedTokenSetupV1,
         SignedDirectIntentV3, authenticate_devnet_direct_participant_pair_v1,
         authenticate_devnet_session_producer_recovery_v1,

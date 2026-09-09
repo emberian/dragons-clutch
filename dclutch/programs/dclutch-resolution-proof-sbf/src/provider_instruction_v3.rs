@@ -47,9 +47,9 @@ use dclutch_source::resolution::{
     PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_CORE_TAIL_START_V3,
     PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3, PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
     PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V4, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
+    ProviderUpdateLifecycleV4, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, provider_resolution_direct_intent_digest_v1,
 };
 use dclutch_source::{
@@ -282,11 +282,11 @@ fn boxed_provider_lifecycle(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
     update_bytes: &[u8],
-) -> Result<Box<ProviderUpdateLifecycleV3>, ProgramError> {
+) -> Result<Box<ProviderUpdateLifecycleV4>, ProgramError> {
     let lifecycle_account = frame.lifecycle();
     let (expected_lifecycle, bump) = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             frame.update().key.as_ref(),
         ],
         program_id,
@@ -306,12 +306,12 @@ fn boxed_provider_lifecycle(
     if lifecycle_account.key != &expected_lifecycle
         || lifecycle_account.owner != program_id
         || lifecycle_account.executable
-        || lifecycle_data.len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
+        || lifecycle_data.len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V4
         || !funded_rent_persists_v1(lifecycle_account.lamports())
     {
         return Err(ResolutionError::ProviderObservation.into());
     }
-    let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_data)
+    let lifecycle = ProviderUpdateLifecycleV4::decode(&lifecycle_data)
         .map_err(|_| ResolutionError::ProviderObservation)?;
     let update =
         FullPriceUpdateV2::parse(update_bytes).map_err(|_| ResolutionError::ProviderObservation)?;
@@ -346,7 +346,7 @@ fn boxed_observation<'a>(
     product_runtime: &dclutch_product::svm_reader::AuthenticatedProductRuntimeV2,
     result_domain_bytes: &'a [u8],
     update_bytes: &'a [u8],
-    lifecycle: &ProviderUpdateLifecycleV3,
+    lifecycle: &ProviderUpdateLifecycleV4,
     post_body: &'a [u8],
     clock: solana_program::clock::Clock,
 ) -> Result<Box<AuthenticatedProviderObservationV3<'a>>, ProgramError> {
@@ -374,7 +374,7 @@ fn commit_plan<'info>(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, 'info>,
     rent: &Rent,
-    lifecycle: &ProviderUpdateLifecycleV3,
+    lifecycle: &ProviderUpdateLifecycleV4,
     terminal_output_funding: TerminalOutputFundingV1,
     plan: &crate::provider_v3::ProviderResolutionPlanV3,
 ) -> ProgramResult {
@@ -409,9 +409,9 @@ fn boxed_certificate(
 #[inline(never)]
 fn boxed_consumed_lifecycle(
     request: &ProviderExecutionRequestV3,
-    lifecycle: &ProviderUpdateLifecycleV3,
+    lifecycle: &ProviderUpdateLifecycleV4,
     plan: &crate::provider_v3::ProviderResolutionPlanV3,
-) -> Result<Box<[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V3]>, ProgramError> {
+) -> Result<Box<[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V4]>, ProgramError> {
     let mut next = Box::new(*lifecycle);
     next.consume(
         request.terminal_sequence,
@@ -1135,7 +1135,7 @@ fn commit_outputs<'info>(
     rent: &Rent,
     source: &[u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
     certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES_V2],
-    lifecycle: &[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V3],
+    lifecycle: &[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V4],
     capture: ProviderCaptureV3,
     terminal_output_funding: TerminalOutputFundingV1,
 ) -> ProgramResult {
@@ -1154,7 +1154,7 @@ fn commit_outputs<'info>(
             .map_err(|_| ResolutionError::OutputState)?;
     }
     if lifecycle_account.owner != program_id
-        || lifecycle_account.data_len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
+        || lifecycle_account.data_len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V4
         || lifecycle_account.executable
     {
         return Err(ResolutionError::OutputState.into());

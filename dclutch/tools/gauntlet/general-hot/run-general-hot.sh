@@ -100,10 +100,21 @@ for role in $ROLES; do
     package="dclutch-${role%%:*}-sbf"
     stem="${role##*:}"
     log="$LOGS/build-$package.log"
+    ( cd "$SOURCE" && CARGO_TARGET_DIR="$WORK/check-target" \
+        cargo check --locked -p "$package" ) > "$LOGS/check-$package.log" 2>&1 \
+        || { tail -n 40 "$LOGS/check-$package.log" >&2; die "native check failed: $package"; }
+    # A workspace manifest alone can build its default member, then copy an
+    # older requested ELF from Cargo's target. Select the package explicitly
+    # and require its output in a fresh directory before replacing the cohort.
+    fresh_deploy="$(mktemp -d "$WORK/elf-$package.XXXXXX")"
     ( cd "$SOURCE" && CARGO_TARGET_DIR="$WORK/build-target" \
-        cargo build-sbf --manifest-path "programs/$package/Cargo.toml" --sbf-out-dir "$DEPLOY" ) \
+        cargo build-sbf --manifest-path "programs/$package/Cargo.toml" \
+        --sbf-out-dir "$fresh_deploy" -- --locked -p "$package" ) \
         > "$log" 2>&1 \
         || { tail -n 40 "$log" >&2; die "SBF build failed: $package"; }
+    [ -s "$fresh_deploy/$stem.so" ] || die "build produced no fresh $stem.so"
+    cp "$fresh_deploy/$stem.so" "$DEPLOY/$stem.so.next"
+    mv "$DEPLOY/$stem.so.next" "$DEPLOY/$stem.so"
     count="$(grep -Ec "$DIAGNOSTIC_PATTERN" "$log" || true)"
     elf="$DEPLOY/$stem.so"
     [ -f "$elf" ] || die "build produced no $elf"
@@ -123,7 +134,7 @@ say "campaign (General Hot, real ELFs)"
 CAMPAIGN_LOG="$LOGS/campaign.log"
 set +e
 ( cd "$SOURCE" && SBF_OUT_DIR="$DEPLOY" CARGO_TARGET_DIR="$WORK/test-target" \
-    cargo test --manifest-path programs/dclutch-trading-sbf/program-test/general-hot/Cargo.toml \
+    cargo test --locked -p dclutch-general-hot-program-test \
     --test open_batch -- --nocapture --test-threads=1 ) > "$CAMPAIGN_LOG" 2>&1
 status=$?
 set -e

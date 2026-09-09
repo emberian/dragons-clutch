@@ -18,8 +18,8 @@ use dclutch_source::resolution::{
     PROVIDER_EXECUTION_RECEIPT_BYTES_V3, PROVIDER_EXECUTION_REQUEST_BYTES_V3,
     PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_CORE_TAIL_START_V3,
     PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3,
-    ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V4, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4, ProviderCallerV3,
+    ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV4,
     ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
@@ -560,15 +560,15 @@ fn authenticate_lifecycle(
 ) -> Result<(), CoreSbfError> {
     let resolution_program = account(accounts, RESOLUTION_PROGRAM)?.key;
     let lifecycle_account = account(accounts, LIFECYCLE)?;
-    let lifecycle_bytes = read_exact::<PROVIDER_UPDATE_LIFECYCLE_BYTES_V3>(
+    let lifecycle_bytes = read_exact::<PROVIDER_UPDATE_LIFECYCLE_BYTES_V4>(
         lifecycle_account,
         CoreSbfError::ChildAck,
     )?;
     let lifecycle =
-        ProviderUpdateLifecycleV3::decode(&lifecycle_bytes).map_err(|_| CoreSbfError::ChildAck)?;
+        ProviderUpdateLifecycleV4::decode(&lifecycle_bytes).map_err(|_| CoreSbfError::ChildAck)?;
     let expected = Pubkey::find_program_address(
         &[
-            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V4,
             &request.update_account,
         ],
         resolution_program,

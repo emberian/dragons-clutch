@@ -3056,6 +3056,176 @@ fn the_disjointness_walk_records_every_coordinate_the_child_reaches() {
 /// pass selects its work — a recorded plan, a narrower sweep — is refutable
 /// here instead of landing silently green.
 #[test]
+fn commit_last_uses_the_projection_bank_and_keeps_request_refusals() {
+    use dclutch_vm::effect::{
+        v3::{
+            HEADER_BYTES, OPERATION_BYTES, ROUTE_BYTES, RouteKindV3,
+            encode::{
+                AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, RequestSpaceV3,
+                RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
+            },
+        },
+        v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, encode_program_v4_atomic},
+    };
+    let root_offset = u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1).expect("root header");
+    let operations = [
+        EffectInstructionV3::write_u64(
+            AccountCoordinateV3::fixed(5),
+            0,
+            ScalarCoordinateV3::common(0),
+        ),
+        EffectInstructionV3::write_u64(
+            AccountCoordinateV3::fixed(0),
+            root_offset,
+            ScalarCoordinateV3::common(1),
+        ),
+        EffectInstructionV3::write_u64_if_nonzero(
+            AccountCoordinateV3::fixed(5),
+            8,
+            ScalarCoordinateV3::common(0),
+            2,
+        ),
+        EffectInstructionV3::write_request_u8(
+            0,
+            RequestSpaceV3::Fixed,
+            0,
+            ScalarCoordinateV3::common(0),
+        ),
+    ];
+    let route = RouteInputV3 {
+        role: dclutch_vm::effect::v2::FixedRole::Custody,
+        kind: RouteKindV3::Once,
+        enable_common_scalar: None,
+        witness_range_common_scalar: None,
+        receipt_dependency: None,
+        fixed_account_start: 5,
+        fixed_account_count: 1,
+        item_account_start: 0,
+        item_account_count: 0,
+        fixed_request: &[0],
+        item_request: &[],
+    };
+    let base_len = HEADER_BYTES + ROUTE_BYTES + operations.len() * OPERATION_BYTES + 1;
+    let mut base = vec![0; base_len];
+    encode_effect_program_v3_atomic(
+        EffectGeometryV3 {
+            fixed_accounts: 6,
+            item_account_stride: 0,
+            common_scalars: 3,
+            item_scalar_stride: 0,
+            common_identities: 0,
+            item_identity_stride: 0,
+        },
+        &[route],
+        &operations,
+        &[],
+        &mut vec![0; base_len],
+        &mut base,
+    )
+    .expect("projection fixture");
+    let mut artifact = vec![0; HEADER_BYTES_V4 + base_len];
+    encode_program_v4_atomic(
+        &base,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        1,
+        &[],
+        &[],
+        &mut vec![0; artifact.len()],
+        &mut artifact,
+    )
+    .expect("successor fixture");
+    let effect = decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &artifact).expect("effect");
+    let width = CAPABILITY_ROOT_HEADER_BYTES_V1 + 16;
+    let inputs = vec![
+        AccountInput {
+            lamports: 10,
+            data_len: width
+        };
+        6
+    ];
+    let mut permissions = [AccountPermission::read_only(); 6];
+    permissions[0] = AccountPermission::new(false, false, true);
+    permissions[5] = AccountPermission::new(false, false, true);
+    let aliases = [0, 1, 2, 3, 4, 5];
+    let mut projected = project_hot_effects_v3(
+        effect,
+        0,
+        &[77, 88, 0],
+        &[],
+        inputs.clone(),
+        &[],
+        false,
+        &permissions,
+        &aliases,
+        6,
+        1,
+    )
+    .expect("mandatory projection");
+    assert_eq!(projected.requests, [77]);
+    let state: Vec<AccountInfo<'static>> = (0..6)
+        .map(|_| {
+            AccountInfo::new(
+                Box::leak(Box::new(Pubkey::new_unique())),
+                false,
+                true,
+                Box::leak(Box::new(10)),
+                Box::leak(vec![0; width].into_boxed_slice()),
+                Box::leak(Box::new(Pubkey::new_unique())),
+                false,
+            )
+        })
+        .collect();
+    let accounts = state.iter().collect::<Vec<_>>();
+    commit_non_root_effects_into_v3(
+        effect,
+        0,
+        &accounts,
+        &aliases,
+        &projected.lamports,
+        projected.participation.as_deref(),
+        &mut projected.commit_plan,
+    )
+    .expect("non-root projection writes");
+    assert_eq!(projected.commit_plan.bits, [0b10]);
+    assert_eq!(
+        &state[5].try_borrow_data().expect("state")[..8],
+        &77_u64.to_le_bytes()
+    );
+    assert_eq!(
+        &state[5].try_borrow_data().expect("state")[8..16],
+        &[0; 8],
+        "disabled write stays absent"
+    );
+    assert!(
+        state[0]
+            .try_borrow_data()
+            .expect("root")
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+    commit_root_effects_v3(
+        effect,
+        0,
+        &accounts,
+        &aliases,
+        &projected.lamports,
+        projected.participation.as_deref(),
+        &projected.commit_plan,
+    )
+    .expect("root projection writes");
+    assert_eq!(
+        &state[0].try_borrow_data().expect("root")
+            [CAPABILITY_ROOT_HEADER_BYTES_V1..CAPABILITY_ROOT_HEADER_BYTES_V1 + 8],
+        &88_u64.to_le_bytes()
+    );
+    assert!(
+        matches!(project_hot_effects_v3(effect, 0, &[300, 88, 0], &[], inputs, &[], false,
+        &permissions, &aliases, 6, 1), Err(error) if error == ProgramError::from(TradingSbfError::Transition)),
+        "request u8 narrowing still refuses before the plan can commit"
+    );
+}
+
+#[test]
 fn commit_last_writes_the_root_only_after_every_other_coordinate() {
     let fixture = commit_last_fixture_v1();
     let effect = decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &fixture.artifact)
@@ -3122,8 +3292,6 @@ fn commit_last_writes_the_root_only_after_every_other_coordinate() {
     commit_root_effects_v3(
         effect,
         fixture.tail_count,
-        &fixture.scalars,
-        &[],
         &accounts,
         &aliases,
         &output_lamports,
@@ -3191,8 +3359,6 @@ fn commit_last_refuses_a_root_left_below_the_rent_floor() {
     commit_root_effects_v3(
         effect,
         fixture.tail_count,
-        &fixture.scalars,
-        &[],
         &accounts,
         &aliases,
         &stranded,
@@ -3219,8 +3385,6 @@ fn commit_last_refuses_a_root_left_below_the_rent_floor() {
         commit_root_effects_v3(
             effect,
             fixture.tail_count,
-            &fixture.scalars,
-            &[],
             &accounts,
             &aliases,
             &output_lamports,
@@ -3265,8 +3429,6 @@ fn commit_last_refuses_a_plan_recorded_for_another_geometry() {
         commit_root_effects_v3(
             effect,
             fixture.tail_count,
-            &fixture.scalars,
-            &[],
             &accounts,
             &aliases,
             &output_lamports,

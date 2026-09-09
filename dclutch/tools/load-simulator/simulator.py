@@ -67,7 +67,7 @@ HOARD_CLASS_V1 = "HoardPrincipal"
 DIRECT_FEE_DENOMINATOR_V1 = 10_000
 
 
-def direct_fill_declarations_v1(completion: dict, tracked: dict) -> dict:
+def direct_fill_declarations_v1(completion: dict, settlement: dict, tracked: dict) -> dict:
     """The three conservation declarations one Direct fill owes the census.
 
     Every term is read off the session's OWN finalized evidence -- the document
@@ -113,10 +113,29 @@ def direct_fill_declarations_v1(completion: dict, tracked: dict) -> dict:
     gross = product // scale
     fee = gross * basis_points // DIRECT_FEE_DENOMINATOR_V1
 
+    if settlement.get("schema") != "dclutch-direct-fee-settlement-evidence-v1":
+        raise Refusal("Direct fee settlement has an unexpected schema")
+    landed = settlement.get("landed")
+    if not isinstance(landed, dict) or not landed.get("signature"):
+        raise Refusal("Direct fee settlement has no finalized transaction")
+    settled_fee = settlement.get("feeOwed")
+    if isinstance(settled_fee, bool) or not isinstance(settled_fee, int):
+        raise Refusal("Direct fee settlement has no whole feeOwed")
+    if settled_fee != 2 * fee:
+        raise Refusal(
+            f"Direct fee settlement moved {settled_fee}, expected {2 * fee} from the finalized terms"
+        )
+    if settlement.get("maker") != address("buyerOwner"):
+        raise Refusal("Direct fee settlement names another buyer")
+    if settlement.get("feeSource") != address("buyerCollateralSource"):
+        raise Refusal("Direct fee settlement names another collateral source")
+    if settlement.get("feeDestination") != address("feeTokenAccount"):
+        raise Refusal("Direct fee settlement names another fee destination")
+
     moved: dict[str, int] = {}
     for field, delta in (
         ("sellerCollateralDestination", gross - fee),
-        ("feeTokenAccount", 2 * fee),
+        ("feeTokenAccount", settled_fee),
         ("buyerCollateralSource", -(gross + fee)),
     ):
         moved[address(field)] = moved.get(address(field), 0) + delta
@@ -145,6 +164,7 @@ def direct_fill_declarations_v1(completion: dict, tracked: dict) -> dict:
             "fee_basis_points_per_side": basis_points,
             "gross_atoms": gross,
             "fee_atoms_per_side": fee,
+            "settled_fee_atoms": settled_fee,
         },
         "accounts": counted,
         "accounts_the_census_does_not_name": unnamed,
@@ -416,6 +436,48 @@ class Simulator:
     def session_dir(self, cycle: int) -> Path:
         return self.work / "sessions" / f"cycle-{cycle:06d}"
 
+    def local_fill_atoms(self, cycle: int) -> int:
+        local = self.config["trade"]["local"]
+        pair = self.pair_for_cycle(cycle) or {}
+        value = pair.get("fill_atoms", local.get("fill_atoms", 100_000_000))
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise Refusal(f"cycle {cycle} local fill_atoms must be a positive integer")
+        return value
+
+    def reapprove_local_collateral(self, cycle: int) -> dict:
+        """Set the authenticated buyer allowance to exactly this cycle's debit."""
+        out = self.session_dir(cycle)
+        out.mkdir(parents=True, exist_ok=True)
+        evidence = out / "direct-collateral-reapproval.json"
+        if evidence.exists():
+            return json.loads(evidence.read_text())
+        local = self.config["trade"]["local"]
+        pair = self.pair_for_cycle(cycle) or {}
+        participant_report = pair.get("participant_report", local["participant_report"])
+        key_dir = Path(pair.get("key_dir", local["key_dir"]))
+        owner_keypair = pair.get("owner_keypair", str(key_dir / "participant.json"))
+        fee_payer_keypair = pair.get(
+            "fee_payer_keypair", str(key_dir / "core-upgrade-authority.json")
+        )
+        argv = [
+            self.boot(), "local-private-validator-direct-collateral-reapprove-v1",
+            "--rpc-url", self.rpc_url,
+            "--participant-report", participant_report,
+            "--fill-atoms", str(self.local_fill_atoms(cycle)),
+            "--fee-payer-keypair", fee_payer_keypair,
+            "--owner-keypair", owner_keypair,
+            "--evidence", str(evidence),
+        ]
+        if self.execute:
+            argv.append("--execute")
+        proc = run_child(argv, self.work / "logs" / f"reapprove-{cycle:06d}.log")
+        if proc.returncode != 0:
+            raise Refusal(
+                f"cycle {cycle} collateral reapproval refused (exit {proc.returncode}); "
+                f"log: {self.work / 'logs' / f'reapprove-{cycle:06d}.log'}"
+            )
+        return json.loads(evidence.read_text())
+
     def produce_session(self, cycle: int) -> Path:
         """Produce this cycle's Direct session with the accepted offline
         producer.  A finalized producer journal on disk is adopted, never
@@ -450,6 +512,9 @@ class Simulator:
                 "--key-dir", key_dir,
                 "--output-dir", str(out),
             ]
+            fill_atoms = pair.get("fill_atoms") if pair else local.get("fill_atoms")
+            if fill_atoms is not None:
+                argv += ["--fill-atoms", str(fill_atoms)]
         else:
             dev = trade["devnet"]
             pair = self.pair_for_cycle(cycle)
@@ -602,7 +667,56 @@ class Simulator:
         tokens.update((self.config.get("census") or {}).get("tokens", {}))
         return tokens
 
-    def fill_declarations(self, completion: Optional[dict]) -> Optional[dict]:
+    def settle_direct_fee(self, cycle: int, out: Path, completion: dict) -> dict:
+        """Land and authenticate the second transaction of a fee-bearing fill."""
+        evidence_path = out / "direct-fee-settlement.json"
+        if evidence_path.exists():
+            try:
+                return json.loads(evidence_path.read_text())
+            except (OSError, ValueError) as error:
+                raise Refusal(f"cycle {cycle} fee-settlement evidence is unreadable") from error
+        manifest = out / "direct-trade-public.json"
+        maker = completion.get("buyerOwner")
+        if not manifest.is_file() or not isinstance(maker, str) or not maker:
+            raise Refusal(f"cycle {cycle} lacks the public manifest or buyer needed for fee settlement")
+        pair = self.pair_for_cycle(cycle) or {}
+        if self.config["cluster"]["label"] == "local":
+            local = self.config["trade"]["local"]
+            payer = pair.get("fee_payer_keypair") or local.get("fee_payer_keypair")
+            if payer is None:
+                payer = str(Path(pair.get("key_dir", local["key_dir"])) / "core-upgrade-authority.json")
+            cmd = "local-private-validator-direct-fee-settlement-v1"
+        else:
+            devnet = self.config["trade"]["devnet"]
+            payer = pair.get("fee_payer_keypair") or devnet.get("fee_payer_keypair")
+            if payer is None:
+                raise Refusal("devnet Direct fee settlement needs fee_payer_keypair")
+            cmd = "devnet-direct-fee-settlement-v1"
+        argv = [
+            self.boot(), cmd, *self.cluster_args(),
+            "--public-manifest", str(manifest),
+            "--maker", maker,
+            "--evidence", str(evidence_path),
+        ]
+        if self.execute:
+            argv += ["--execute", "--fee-payer-keypair", payer]
+        proc = run_child(argv, self.work / "logs" / f"fee-settlement-{cycle:06d}.log")
+        if proc.returncode != 0:
+            text = child_text(proc)
+            if simcore.looks_like_backpressure(text):
+                raise BackpressureSignal(f"fee settlement cycle {cycle}")
+            raise Refusal(
+                f"cycle {cycle} fee settlement refused (exit {proc.returncode}); "
+                f"log: {self.work / 'logs' / f'fee-settlement-{cycle:06d}.log'}"
+            )
+        try:
+            return json.loads(evidence_path.read_text())
+        except (OSError, ValueError) as error:
+            raise Refusal(f"cycle {cycle} fee settlement wrote no readable evidence") from error
+
+    def fill_declarations(
+        self, completion: Optional[dict], settlement: Optional[dict] = None
+    ) -> Optional[dict]:
         """What this cycle declares to the census, if it drove a fill.
 
         `None` for a cycle that drove nothing -- census-only, or a preflight
@@ -612,7 +726,9 @@ class Simulator:
         """
         if not completion or completion.get("preflight"):
             return None
-        return direct_fill_declarations_v1(completion, self.census_tokens())
+        if settlement is None:
+            raise Refusal("a finalized Direct fill has no fee-settlement evidence")
+        return direct_fill_declarations_v1(completion, settlement, self.census_tokens())
 
     def run_census(self, cycle: int, declared: Optional[dict] = None) -> dict:
         census_cfg = self.config.get("census")
@@ -759,9 +875,13 @@ class Simulator:
     def pair_for_cycle(self, cycle: int) -> Optional[dict]:
         trade = self.config["trade"]
         if self.config["cluster"]["label"] == "local":
-            pairs = (trade.get("local") or {}).get("pairs") or []
+            arm = trade.get("local") or {}
         else:
-            pairs = (trade.get("devnet") or {}).get("pairs") or []
+            arm = trade.get("devnet") or {}
+        overrides = arm.get("cycle_overrides") or {}
+        if str(cycle) in overrides:
+            return overrides[str(cycle)]
+        pairs = arm.get("pairs") or []
         if not pairs:
             return None
         return pairs[(cycle - 1) % len(pairs)]
@@ -877,15 +997,24 @@ class Simulator:
                     # and reconciles it against the conservation laws.
                     pass
                 else:
+                    if self.config["cluster"]["label"] == "local":
+                        self.reapprove_local_collateral(cycle)
                     out = self.produce_session(cycle)
                     completion = self.pulse_session(cycle, out)
-                    declared = self.fill_declarations(completion)
+                    settlement = None
+                    if self.execute and not completion.get("preflight"):
+                        settlement = self.settle_direct_fee(cycle, out, completion)
+                    declared = self.fill_declarations(completion, settlement)
                     for mutation in completion.get("mutations", []) or []:
                         sig = mutation.get("signature")
                         if sig:
                             sigs.append(sig)
                     if completion.get("signature"):
                         sigs.append(completion["signature"])
+                    if settlement is not None:
+                        sig = (settlement.get("landed") or {}).get("signature")
+                        if sig:
+                            sigs.append(sig)
                     if self.execute and not completion.get("preflight"):
                         self.trades_landed += 1
                     self.signatures.extend(s for s in sigs if s not in self.signatures)

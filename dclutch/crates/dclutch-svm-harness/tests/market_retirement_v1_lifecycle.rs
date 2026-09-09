@@ -889,7 +889,7 @@ async fn execute_same_lineage_real_provider(
         .get_rent()
         .await
         .expect("chain Rent")
-        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
     let before_profile_refusals =
         provider_rollback_snapshot(context, &fixture.base, submit_report.lifecycle).await;
     let mut substituted_profile = submit_report.instruction.clone();
@@ -1018,7 +1018,7 @@ async fn execute_same_lineage_real_provider(
     )
     .expect("Source state");
     assert_eq!(source.phase(), SourceResolutionPhaseV1::Resolved);
-    let lifecycle = ProviderUpdateLifecycleV3::decode(
+    let lifecycle = ProviderUpdateLifecycleV4::decode(
         &observed(context, submit_report.lifecycle)
             .await
             .expect("consumed provider lifecycle")

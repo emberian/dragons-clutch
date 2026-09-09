@@ -16,7 +16,7 @@ EXTRA=()
 if [ -n "${4:-}" ]; then EXTRA=(--bootstrap-bin "$4"); fi
 
 python3 "$HERE/build_config_from_probe.py" \
-  --handoff "$HANDOFF" --sim-work "$SIMWORK" --output "$CONFIG" "${EXTRA[@]}"
+  --handoff "$HANDOFF" --sim-work "$SIMWORK" --output "$CONFIG" --cycles "$CYCLES" "${EXTRA[@]}"
 
 echo "== preflight (signs nothing)"
 python3 "$HERE/simulator.py" run --config "$CONFIG" --cycles 1

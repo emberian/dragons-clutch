@@ -122,6 +122,25 @@ fn initialize_accepts_observed_selection_and_verifier_envelopes() {
         .expect("Initialize must consume the actual enveloped Freeze/Verify poststates");
     assert_eq!(request.action, Action::InitializeSettlement);
     assert_eq!(request.expected_revision, 0);
+    // Optional fixture export keeps the browser regression grounded in the
+    // protocol's actual Verify and Freeze outputs. No raw body is host-seeded.
+    if let Some(path) = std::env::var_os("DCLUTCH_GENERAL_VERIFIER_FIXTURE_OUTPUT") {
+        let account = &state.runtime_suffix_accounts
+            [initialize_coordinate(GeneralReadonlyEvidenceKindV3::RuntimeVerifier)]
+        .account;
+        let fixture = serde_json::json!({
+            "format": "dclutch/general-verifier-native-fixture/v1",
+            "producer": "general_hot_v3::tests::initialize_evidence_tests::initialize_accepts_observed_selection_and_verifier_envelopes",
+            "outcomeCount": 3,
+            "tradingOwnerHex": account.owner.to_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+            "verifierAccountHex": account.data.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&fixture).expect("fixture JSON"),
+        )
+        .expect("explicit canonical fixture output");
+    }
     let writable_verifier = general_account_profile_rule_v3(
         Action::VerifyCandidateRow,
         dclutch_trading::general::state_artifacts_v3::GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,

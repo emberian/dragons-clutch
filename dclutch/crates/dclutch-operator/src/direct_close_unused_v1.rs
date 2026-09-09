@@ -1,7 +1,7 @@
 //! Canonical instruction projection for a never-activated Direct funding close.
 
 use dclutch_trading::retirement_v1::DirectCloseUnusedRequestV1;
-use solana_sdk::{instruction::AccountMeta, instruction::Instruction, pubkey::Pubkey};
+use solana_program::{instruction::AccountMeta, instruction::Instruction, pubkey::Pubkey};
 use solana_system_interface::program as system_program;
 
 /// Exact ordered coordinates authenticated by the Trading entrypoint.

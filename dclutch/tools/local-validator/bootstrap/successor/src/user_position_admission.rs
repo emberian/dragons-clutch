@@ -1500,7 +1500,7 @@ fn authenticate_collateral_arguments(
         || collateral.intent.source_account != arguments.source_account.to_string()
         || collateral.intent.quantity_atoms != arguments.quantity_atoms
         || collateral.intent.minimum_finalized_slot != report.intent.minimum_finalized_slot
-        || collateral_market != admission_market
+        || collateral_market.address != admission_market.address
         || collateral.intent.market != admission_market.address
     {
         return Err(Error::new(

@@ -24,7 +24,8 @@ use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysv
 
 use crate::{
     Error, Result,
-    rpc::Rpc,
+    rpc::{Rpc, RpcAccount},
+    series_consume_geometry::SeriesConsumePrestateV1,
     series_found_prepare_campaign::SeriesFoundPreparePreprofileV1,
     series_found_prepare_driver::{
         SeriesPrepareFinalizedRecordV1, SeriesPrepareHydrationRecordsV1, SeriesPrepareM0FrameV1,
@@ -43,6 +44,7 @@ pub(crate) struct SeriesExpireGeometryInputV1<'a> {
     pub(crate) trading: Pubkey,
     pub(crate) custody: Pubkey,
     pub(crate) minimum_slot: u64,
+    pub(crate) prestate: SeriesConsumePrestateV1,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +54,12 @@ enum Source<'a> {
         address: Pubkey,
         owner: Pubkey,
         body: Option<&'a [u8]>,
+    },
+    Prepared {
+        role: &'static str,
+        address: Pubkey,
+        owner: Pubkey,
+        expected: PreparedState,
     },
     Vacancy {
         role: &'static str,
@@ -63,9 +71,97 @@ enum Source<'a> {
 impl Source<'_> {
     fn address(&self) -> Pubkey {
         match self {
-            Self::Final { address, .. } | Self::Vacancy { address, .. } => *address,
+            Self::Final { address, .. }
+            | Self::Prepared { address, .. }
+            | Self::Vacancy { address, .. } => *address,
         }
     }
+}
+
+/// These expected values come from the native Prepare projection, never an
+/// observed width or a permissive fallback from a missing account.
+#[derive(Clone, Copy, Debug)]
+enum PreparedState {
+    Ticket(dclutch_trading::series::replay::TicketStateV3),
+    Replay(dclutch_custody::CustodyReplayV1),
+    Projected(dclutch_custody::ProjectedCustodyStateV2),
+    Token(dclutch_custody::token_svm::TokenAccount),
+}
+
+impl PreparedState {
+    fn width(self) -> usize {
+        match self {
+            Self::Ticket(_) => SERIES_TICKET_STATE_BYTES_V3,
+            Self::Replay(_) => dclutch_custody::CUSTODY_REPLAY_BYTES_V1,
+            Self::Projected(_) => dclutch_custody::PROJECTED_CUSTODY_STATE_BYTES_V2,
+            Self::Token(_) => dclutch_custody::token_svm::ACCOUNT_BYTES,
+        }
+    }
+
+    fn matches(self, bytes: &[u8]) -> bool {
+        match self {
+            Self::Ticket(expected) => dclutch_trading::series::replay::TicketStateV3::decode(bytes)
+                .is_ok_and(|actual| actual == expected),
+            Self::Replay(expected) => dclutch_custody::CustodyReplayV1::decode(bytes)
+                .is_ok_and(|actual| actual == expected),
+            Self::Projected(expected) => dclutch_custody::ProjectedCustodyStateV2::decode(bytes)
+                .is_ok_and(|actual| actual == expected),
+            Self::Token(expected) => dclutch_custody::token_svm::TokenAccount::parse(bytes)
+                .is_ok_and(|actual| actual == expected),
+        }
+    }
+}
+
+fn prepared_source(
+    prestate: SeriesConsumePrestateV1,
+    role: &'static str,
+    address: Pubkey,
+    owner: Pubkey,
+    expected: PreparedState,
+) -> Result<Source<'static>> {
+    // The native projected-state encoder persists immutable request facts;
+    // decoding reconstructs phase/revision fields rather than retaining the
+    // transient Initialize request held by the compiler's projection value.
+    let expected = match expected {
+        PreparedState::Projected(state) => PreparedState::Projected(
+            dclutch_custody::ProjectedCustodyStateV2::decode(&state.encode().map_err(|error| {
+                Error::new(format!(
+                    "Series Expire projected poststate encoding: {error:?}"
+                ))
+            })?)
+            .map_err(|error| {
+                Error::new(format!(
+                    "Series Expire projected poststate decoding: {error:?}"
+                ))
+            })?,
+        ),
+        other => other,
+    };
+    match prestate {
+        SeriesConsumePrestateV1::PreparedPrediction => vacancy(role, address, expected.width()),
+        SeriesConsumePrestateV1::ObservedPrepared => Ok(Source::Prepared {
+            role,
+            address,
+            owner,
+            expected,
+        }),
+    }
+}
+
+fn prepared_token(mint: [u8; 32], authority: Pubkey, amount: u64) -> Result<PreparedState> {
+    let bytes = dclutch_custody::token_svm::TokenAccount::initialized_base_bytes(
+        mint,
+        authority.to_bytes(),
+    )
+    .map_err(|error| {
+        Error::new(format!(
+            "Series Expire native token initialization: {error:?}"
+        ))
+    })?;
+    let mut expected = dclutch_custody::token_svm::TokenAccount::parse(&bytes)
+        .map_err(|error| Error::new(format!("Series Expire native token decode: {error:?}")))?;
+    expected.amount = amount;
+    Ok(PreparedState::Token(expected))
 }
 
 fn final_source<'a>(
@@ -91,7 +187,8 @@ fn vacancy(role: &'static str, address: Pubkey, width: usize) -> Result<Source<'
 }
 
 /// Derive, observe, and validate all 82 Expire widths at one finalized slot.
-/// Post-Prepare state is represented only by canonical vacant PDA predictions.
+/// Prepare-created state is either a canonical vacancy prediction or a
+/// finalized account decoded against its exact native projected poststate.
 pub(crate) fn derive_series_expire_fixed_data_lengths_v1(
     rpc: &mut Rpc,
     input: SeriesExpireGeometryInputV1<'_>,
@@ -164,10 +261,14 @@ fn derive_roles_v1<'a>(
     put(
         &mut roles,
         5,
-        vacancy(
+        prepared_source(
+            input.prestate,
             "prepared Ticket state",
             ticket_state,
-            SERIES_TICKET_STATE_BYTES_V3,
+            input.trading,
+            PreparedState::Ticket(dclutch_trading::series::replay::TicketStateV3::prepared(
+                ticket,
+            )),
         )?,
     )?;
 
@@ -285,10 +386,14 @@ fn derive_roles_v1<'a>(
     put(
         &mut roles,
         70,
-        vacancy(
+        prepared_source(
+            input.prestate,
             "prepared Ticket state",
             ticket_state,
-            SERIES_TICKET_STATE_BYTES_V3,
+            input.trading,
+            PreparedState::Ticket(dclutch_trading::series::replay::TicketStateV3::prepared(
+                ticket,
+            )),
         )?,
     )?;
     put(
@@ -510,16 +615,30 @@ fn custody_route<'a>(
             ),
             CustodyFrameRoleV1::RealmRecord => m0_source(input, input.m0.project_found[4])?,
             CustodyFrameRoleV1::RealmStaging => m0_source(input, input.m0.project_found[5])?,
-            CustodyFrameRoleV1::Replay => vacancy(
+            CustodyFrameRoleV1::Replay => prepared_source(
+                input.prestate,
                 "normal Custody replay",
                 replay,
-                dclutch_custody::CUSTODY_REPLAY_BYTES_V1,
+                input.custody,
+                PreparedState::Replay(input.preprofile.prepared_source_replay),
             )?,
             CustodyFrameRoleV1::Mint => m0_nonrecord(input, Pubkey::new_from_array(request.mint))?,
-            CustodyFrameRoleV1::Vault | CustodyFrameRoleV1::TransferSource => vacancy(
+            CustodyFrameRoleV1::Vault | CustodyFrameRoleV1::TransferSource => prepared_source(
+                input.prestate,
                 "SeriesEscrow vault",
                 Pubkey::new_from_array(escrow_vault),
-                dclutch_custody::token_svm::ACCOUNT_BYTES,
+                Pubkey::new_from_array(request.token_program),
+                prepared_token(
+                    request.mint,
+                    input.preprofile.physical().custody_authority,
+                    dclutch_custody::CustodyRequestV1::decode(
+                        input.preprofile.prepare_children.expire_requests().refund,
+                    )
+                    .map_err(|error| {
+                        Error::new(format!("Series Expire native refund decode: {error:?}"))
+                    })?
+                    .amount,
+                )?,
             )?,
             CustodyFrameRoleV1::TransferDestination => {
                 m0_nonrecord(input, Pubkey::new_from_array(request.destination))?
@@ -580,10 +699,12 @@ fn projected_abort_route<'a>(
     .0;
     let values = [
         vacancy("projected caller", caller, 0)?,
-        vacancy(
+        prepared_source(
+            input.prestate,
             "projected state",
             state,
-            dclutch_custody::PROJECTED_CUSTODY_STATE_BYTES_V2,
+            input.custody,
+            PreparedState::Projected(input.preprofile.prepared_projected_state),
         )?,
         final_source("activation cache", cache, input.registry, None),
         final_source(
@@ -605,10 +726,16 @@ fn projected_abort_route<'a>(
             None,
         ),
         m0_nonrecord(input, Pubkey::new_from_array(request.rent_credit))?,
-        vacancy(
+        prepared_source(
+            input.prestate,
             "projected Hoard vault",
             Pubkey::new_from_array(request.hoard_vault),
-            dclutch_custody::token_svm::ACCOUNT_BYTES,
+            Pubkey::new_from_array(request.token_program),
+            prepared_token(
+                request.mint,
+                input.preprofile.physical().custody_authority,
+                0,
+            )?,
         )?,
         vacancy(
             "Custody authority",
@@ -708,7 +835,7 @@ fn observe_roles_v1(
     let mut keys = Vec::new();
     for role in roles {
         let expected_owner = match role {
-            Source::Final { owner, .. } => Some(*owner),
+            Source::Final { owner, .. } | Source::Prepared { owner, .. } => Some(*owner),
             Source::Vacancy { .. } => None,
         };
         crate::series_consume_geometry::require_series_geometry_address_v1(
@@ -726,31 +853,9 @@ fn observe_roles_v1(
         let account = observed
             .get(&role.address())
             .ok_or_else(|| Error::new("Series Expire RPC snapshot omitted role"))?;
-        widths[coordinate] = match role {
-            Source::Final {
-                role, owner, body, ..
-            } => {
-                let account = account.as_ref().ok_or_else(|| {
-                    Error::new(format!("Series Expire finalized {role} was absent"))
-                })?;
-                if account.owner != *owner || body.is_some_and(|body| account.data != body) {
-                    return Err(Error::new(format!(
-                        "Series Expire finalized {role} owner or bytes differed"
-                    )));
-                }
-                u32::try_from(account.data.len())
-                    .map_err(|_| Error::new("Series Expire account width overflow"))?
-            }
-            Source::Vacancy { role, width, .. } => {
-                if account.is_some() {
-                    return Err(Error::new(format!(
-                        "Series Expire predicted {role} already exists"
-                    )));
-                }
-                *width
-            }
-        };
+        widths[coordinate] = observe_source_width_v1(role, account.as_ref())?;
     }
+
     for &(alias, representative) in SERIES_EXPIRE_ROUTE_ALIASES_V5.iter() {
         if widths[usize::from(alias)] != widths[usize::from(representative)] {
             return Err(Error::new(
@@ -759,6 +864,53 @@ fn observe_roles_v1(
         }
     }
     Ok(widths)
+}
+
+fn observe_source_width_v1(source: &Source<'_>, account: Option<&RpcAccount>) -> Result<u32> {
+    match source {
+        Source::Final {
+            role, owner, body, ..
+        } => {
+            let account = account
+                .ok_or_else(|| Error::new(format!("Series Expire finalized {role} was absent")))?;
+            if account.owner != *owner || body.is_some_and(|body| account.data != body) {
+                return Err(Error::new(format!(
+                    "Series Expire finalized {role} owner or bytes differed"
+                )));
+            }
+            u32::try_from(account.data.len())
+                .map_err(|_| Error::new("Series Expire account width overflow"))
+        }
+        Source::Prepared {
+            role,
+            owner,
+            expected,
+            ..
+        } => {
+            let account = account
+                .ok_or_else(|| Error::new(format!("Series Expire prepared {role} was absent")))?;
+            if account.owner != *owner || account.executable {
+                return Err(Error::new(format!(
+                    "Series Expire prepared {role} owner or executable bit differed"
+                )));
+            }
+            if !expected.matches(&account.data) {
+                return Err(Error::new(format!(
+                    "Series Expire prepared {role} native poststate differed"
+                )));
+            }
+            u32::try_from(account.data.len())
+                .map_err(|_| Error::new("Series Expire account width overflow"))
+        }
+        Source::Vacancy { role, width, .. } => {
+            if account.is_some() {
+                return Err(Error::new(format!(
+                    "Series Expire predicted {role} already exists"
+                )));
+            }
+            Ok(*width)
+        }
+    }
 }
 
 fn require_alias_addresses_v1(
@@ -956,10 +1108,114 @@ mod tests {
             trading: selection.material.trading,
             custody: selection.material.custody,
             minimum_slot: 1,
+            prestate: SeriesConsumePrestateV1::PreparedPrediction,
         };
         let roles = derive_roles_v1(&input).expect("canonical M0 Expire role constructor");
         assert_eq!(roles.len(), SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize);
         require_alias_addresses_v1(&roles).expect("canonical alias representatives");
+
+        let observed_input = SeriesExpireGeometryInputV1 {
+            prestate: SeriesConsumePrestateV1::ObservedPrepared,
+            ..input
+        };
+        let observed_roles = derive_roles_v1(&observed_input).expect("post-Prepare native roles");
+        require_alias_addresses_v1(&observed_roles).expect("observed aliases");
+        let mut prepared_keys = std::collections::BTreeSet::new();
+        for (predicted, observed) in roles.iter().zip(&observed_roles) {
+            assert_eq!(predicted.address(), observed.address());
+            let Source::Prepared {
+                role,
+                owner,
+                expected,
+                ..
+            } = observed
+            else {
+                continue;
+            };
+            prepared_keys.insert(observed.address());
+            let data = match expected {
+                PreparedState::Ticket(state) => state.encode().to_vec(),
+                PreparedState::Replay(state) => state.to_bytes().expect("native replay").to_vec(),
+                PreparedState::Projected(state) => {
+                    state.encode().expect("native projected state").to_vec()
+                }
+                PreparedState::Token(state) => {
+                    let initial = dclutch_custody::token_svm::TokenAccount::initialized_base_bytes(
+                        state.mint,
+                        state.owner,
+                    )
+                    .expect("native token init");
+                    dclutch_custody::token_svm::TokenAccount::project_amount_poststate(
+                        &initial,
+                        state.amount,
+                    )
+                    .expect("native token amount")
+                    .to_vec()
+                }
+            };
+            let account = RpcAccount {
+                owner: *owner,
+                executable: false,
+                lamports: 1,
+                rent_epoch: 0,
+                data,
+            };
+            let predicted_width =
+                observe_source_width_v1(predicted, None).expect("vacant prediction");
+            assert_eq!(
+                observe_source_width_v1(observed, Some(&account)).expect("native prepared account"),
+                predicted_width
+            );
+            assert_eq!(
+                observe_source_width_v1(predicted, Some(&account))
+                    .expect_err("prediction cannot silently observe")
+                    .to_string(),
+                format!("Series Expire predicted {role} already exists")
+            );
+            assert_eq!(
+                observe_source_width_v1(observed, None)
+                    .expect_err("observation cannot predict absence")
+                    .to_string(),
+                format!("Series Expire prepared {role} was absent")
+            );
+            let mut wrong_owner = account.clone();
+            wrong_owner.owner = Pubkey::new_unique();
+            assert_eq!(
+                observe_source_width_v1(observed, Some(&wrong_owner))
+                    .expect_err("wrong owner")
+                    .to_string(),
+                format!("Series Expire prepared {role} owner or executable bit differed")
+            );
+            let mut wrong_state = account.clone();
+            wrong_state.data[0] ^= 1;
+            assert_eq!(
+                observe_source_width_v1(observed, Some(&wrong_state))
+                    .expect_err("wrong native state")
+                    .to_string(),
+                format!("Series Expire prepared {role} native poststate differed")
+            );
+            if let PreparedState::Token(state) = expected {
+                let mut wrong_amount = account.clone();
+                wrong_amount.data =
+                    dclutch_custody::token_svm::TokenAccount::project_amount_poststate(
+                        &account.data,
+                        state.amount.checked_add(1).expect("test amount"),
+                    )
+                    .expect("different canonical token balance")
+                    .to_vec();
+                assert_eq!(
+                    observe_source_width_v1(observed, Some(&wrong_amount))
+                        .expect_err("wrong escrow/hoard amount")
+                        .to_string(),
+                    format!("Series Expire prepared {role} native poststate differed")
+                );
+            }
+        }
+        assert_eq!(
+            prepared_keys.len(),
+            5,
+            "Ticket, replay, escrow, projected state and Hoard"
+        );
 
         let bad_root = SeriesExpireGeometryInputV1 {
             preprofile: input.preprofile,
@@ -973,6 +1229,7 @@ mod tests {
             trading: input.trading,
             custody: input.custody,
             minimum_slot: input.minimum_slot,
+            prestate: input.prestate,
         };
         assert!(
             derive_roles_v1(&bad_root)
@@ -992,6 +1249,7 @@ mod tests {
             trading: input.trading,
             custody: input.custody,
             minimum_slot: input.minimum_slot,
+            prestate: input.prestate,
         };
         assert!(
             derive_roles_v1(&bad_basis)

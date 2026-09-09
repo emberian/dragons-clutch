@@ -20,6 +20,7 @@ mod collateral_release;
 mod core_bump_projection;
 mod deadline_failure;
 mod direct_capability_activation;
+mod direct_collateral_reapproval;
 mod direct_close_maker;
 mod direct_fee_settlement;
 mod direct_hot_route_manifest;
@@ -396,6 +397,9 @@ fn run() -> Result<()> {
         }
         Some(command) if command == direct_fee_settlement::COMMAND_V1 => {
             direct_fee_settlement::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == direct_collateral_reapproval::COMMAND_V1 => {
+            direct_collateral_reapproval::run_v1(arguments.collect())
         }
         Some(command) if command == direct_fee_settlement::COMMAND_DEVNET_V1 => {
             direct_fee_settlement::run_devnet_v1(arguments.collect())
@@ -2531,6 +2535,7 @@ fn usage() {
     println!("{}", claims_custody_replay::usage());
     println!("{}", claims_custody_replay::devnet_usage());
     println!("{}", direct_fee_settlement::usage());
+    println!("{}", direct_collateral_reapproval::usage());
     println!("{}", scoring_dealer::usage());
     println!("{}", direct_close_maker::usage());
     println!("{}", capability_seal_close::usage());

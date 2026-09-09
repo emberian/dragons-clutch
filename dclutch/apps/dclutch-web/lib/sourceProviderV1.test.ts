@@ -18,7 +18,7 @@ function planJson() {
     observedSlot: '9',
     instruction: {
       program: address(5),
-      accounts: Array.from({ length: 18 }, (_, index) => ({ address: address(20 + index), isSigner: index < 2, isWritable: index < 4 })),
+      accounts: Array.from({ length: 20 }, (_, index) => ({ address: address(20 + index), isSigner: index < 2, isWritable: index < 4 })),
       dataBase64: 'AQ==',
     },
     unsignedMessageBase64: 'AQ==',
@@ -65,14 +65,15 @@ function submitPlanJson() {
       resolutionProgram: address(42),
       receiverProgram: address(46),
       submitRequestBase64: 'AQ==',
+      registryArtifact: address(19),
     },
   });
 }
 
 describe('Source provider browser contract', () => {
-  it('strictly parses one 18-account, two-signer, four-poststate plan', () => {
+  it('strictly parses one 20-account, two-signer, four-poststate plan', () => {
     const plan = parseSourceProviderReclaimPlanV1(planJson());
-    expect(plan.instruction.accounts).toHaveLength(18);
+    expect(plan.instruction.accounts).toHaveLength(20);
     expect(plan.requiredSigners).toHaveLength(2);
     expect(plan.expectedPoststates).toHaveLength(4);
     const changed = JSON.parse(planJson()) as Record<string, unknown>;

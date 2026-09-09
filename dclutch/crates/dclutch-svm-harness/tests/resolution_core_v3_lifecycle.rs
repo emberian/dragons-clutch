@@ -91,8 +91,8 @@ use dclutch_source::relay::instruction::{
 use dclutch_source::resolution::{
     EnsembleFoldReceiptSeatSeedsV1, EnsembleFragmentSeatSeedsV1,
     FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, FundingActivationReceiptV1,
-    PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
+    PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V4,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderUpdateLifecycleV4, ProviderUpdateStatusV3,
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
@@ -3388,7 +3388,7 @@ async fn ensemble_five_row_funding_activates_every_resolution_compartment() {
         },
     )
     .expect("the Ensemble producer accepts its finalized provider graph");
-    let lifecycle_rent = Rent::default().minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+    let lifecycle_rent = Rent::default().minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
     pyth_provider::submit(
         &mut context,
         &[
@@ -3935,7 +3935,7 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         .get_rent()
         .await
         .expect("chain Rent")
-        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
     let prepay_provider_lifecycle =
         transfer(&payer, &provider_submit.lifecycle, provider_lifecycle_rent);
     let before_material_substitution =
@@ -4097,7 +4097,7 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         fixture.provider.receiver
     );
     assert_eq!(
-        ProviderUpdateLifecycleV3::decode(
+        ProviderUpdateLifecycleV4::decode(
             &observed(&mut context, second_submit.lifecycle)
                 .await
                 .expect("second provider lifecycle")
@@ -4359,7 +4359,7 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         "the first-valid refusal leaves the winning Source, certificate, ledger and lifecycle byte-identical"
     );
     assert_eq!(
-        ProviderUpdateLifecycleV3::decode(
+        ProviderUpdateLifecycleV4::decode(
             &observed(&mut context, second_submit.lifecycle)
                 .await
                 .expect("losing provider lifecycle")
@@ -4405,7 +4405,7 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     )
     .expect("resolved Source state");
     assert_eq!(resolved_source.phase(), SourceResolutionPhaseV1::Resolved);
-    let lifecycle = ProviderUpdateLifecycleV3::decode(
+    let lifecycle = ProviderUpdateLifecycleV4::decode(
         &observed(&mut context, provider_submit.lifecycle)
             .await
             .expect("consumed provider lifecycle")
@@ -4424,7 +4424,7 @@ async fn current_resolution_creates_and_activates_exact_funding() {
             .expect("rent-exempt lifecycle")
             .data
             .len(),
-        PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
+        PROVIDER_UPDATE_LIFECYCLE_BYTES_V4
     );
     let certificate = ResolutionCertificateV2::decode(
         &observed(&mut context, fixture.certificate)
@@ -4946,7 +4946,7 @@ async fn a_real_pyth_member_capture_writes_a_fragment_and_keeps_primary() {
         .get_rent()
         .await
         .expect("chain Rent")
-        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
     pyth_provider::submit(
         &mut context,
         &[
@@ -5023,7 +5023,7 @@ async fn a_real_pyth_member_capture_writes_a_fragment_and_keeps_primary() {
         source_before.data,
         "a member capture writes its own fragment and leaves Source Primary for the fold"
     );
-    let lifecycle = ProviderUpdateLifecycleV3::decode(
+    let lifecycle = ProviderUpdateLifecycleV4::decode(
         &observed(&mut context, provider_submit.lifecycle)
             .await
             .expect("consumed provider lifecycle")
@@ -5741,7 +5741,7 @@ async fn a_market_is_answered_on_its_funded_second_rung() {
         .get_rent()
         .await
         .expect("chain Rent")
-        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
     pyth_provider::submit(
         &mut context,
         &[
@@ -6616,7 +6616,7 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         .get_rent()
         .await
         .expect("chain Rent")
-        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V4);
     pyth_provider::submit(
         &mut context,
         &[

@@ -15,7 +15,7 @@ The reason is structural, not cosmetic:
   while the frozen sponsored account is owned by legacy `rec5EK…`;
 - `PythReleaseV1` does not bind the push Program or its ProgramData;
 - `PythTerminalOneTransaction` currently means Receiver post/reclaim transport;
-- the current request requires a dClutch-owned `ProviderUpdateLifecycleV3`,
+- the current request requires a dClutch-owned `ProviderUpdateLifecycleV4`,
   post-body digest, ephemeral authority and precommitted update digest. The
   sponsored PDA has none of those, and a legitimate sponsor can mutate it
   between client preflight and transaction execution.

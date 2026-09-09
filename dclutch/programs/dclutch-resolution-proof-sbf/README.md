@@ -134,11 +134,11 @@ A provider submission owns two rent-bearing accounts: its program-owned
 lifecycle PDA and the Receiver-owned `PriceUpdateV2` it posted. Every one of
 them has a route home, and which route depends on what the submission became.
 
-`process_reclaim` (`DCLTPRL3`, 18 accounts) serves the submission that WON. It
+`process_reclaim` (`DCLTPRL3`, 20 accounts) serves the submission that WON. It
 requires `ProviderUpdateStatusV3::Consumed` and a program-owned certificate
 carrying that lifecycle's own `provider_evidence`.
 
-`process_abandon` (`DCLTPAB3`, 18 accounts) serves every other outcome: the
+`process_abandon` (`DCLTPAB3`, 20 accounts) serves every other outcome: the
 loser of a first-valid race, and every submission on a market that ended on its
 funded failure walk. Their lifecycles stay `Submitted` with `terminal_sequence`,
 `certificate` and `provider_evidence` all zero — the wire's own statement that
@@ -153,7 +153,7 @@ has passed AND that the Source can no longer consume the update — it has left
 never either. The deadline alone would let a stranger delete a live market's
 answer for a transaction fee, which is the failure `RecordStillConsumable`
 (`0x8016`) was allocated for one transport over; the mirrored refusal here is
-`SubmissionStillConsumable` (`0x8017`). The frame is the same eighteen
+`SubmissionStillConsumable` (`0x8017`). The frame is the same twenty
 coordinates in the same order with the same privileges; index 5 carries the
 Source resolution state instead of the terminal certificate, because the Source
 is what proves consumption can never happen.
@@ -191,3 +191,8 @@ not release evidence.
 
 This is a local build checkpoint, not a checked release, deployed artifact,
 or mainnet claim. A clean committed rebuild must pin its own digest before use.
+
+The version-four lifecycle pins the Registry artifact authenticated at Submit.
+Both reclaim frames append that artifact and its vacant staging cursor at indices
+18 and 19. The canonical Registry deployment check accepts the exact retained
+authority and slot; changed deployments refuse before reading activation.
