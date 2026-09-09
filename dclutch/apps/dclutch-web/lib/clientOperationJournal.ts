@@ -14,9 +14,11 @@ import { decodeBase58 } from './explorer/base58';
 
 export const CLIENT_OPERATION_JOURNAL_FORMAT_V1 = 'dclutch-client-operation-journal-v1' as const;
 export const CLIENT_OPERATION_JOURNAL_OPERATIONS_V1 = Object.freeze([
+  'general-v5',
   'claims-replay-create-v1',
   'wallet-terminal-payout-v3',
   'direct-inline-v3',
+  'dealer-liquidity-v4',
   'source-readiness-v1',
   'source-provider-v1',
   'source-provider-submit-v1',

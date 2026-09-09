@@ -3012,6 +3012,20 @@ fn activate_structured_coordinates_v1(
             }
             transactions.push(funded);
         }
+        if let Some(path) = std::env::var_os("DCLUTCH_STRUCTURED_COORDINATE_FRAME_CAPTURE") {
+            write_structured_frame_capture_v1(
+                rpc,
+                Path::new(&path),
+                &funded_hot,
+                payer.pubkey(),
+                observation,
+                &tables,
+                json!({"action": format!("{action:?}"), "coordinate": outcome}),
+            )?;
+            return Err(Error::new(
+                "Structured coordinate diagnostic capture written; Hot submission skipped",
+            ));
+        }
         let sent = rpc.send_v0_on_heap(
             &format!("{action:?} Structured coordinate {outcome}"),
             &funded_hot,

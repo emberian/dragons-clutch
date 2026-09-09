@@ -3881,12 +3881,14 @@ fn direct_finalized_mutations_v1(
     }
     let activation = activation
         .ok_or_else(|| refusal("Direct terminal evidence omitted lookup activation observation"))?;
-    if mutations
-        .first()
-        .is_none_or(|row| row.kind != "replay-setup")
-        || mutations.get(1).is_none_or(|row| row.kind != "token-setup")
-        || mutations.last().is_none_or(|row| row.kind != "hot")
-    {
+    let setup_prefix_is_complete = match mutations.first().map(|row| row.kind.as_str()) {
+        Some("replay-setup") => {
+            mutations.get(1).map(|row| row.kind.as_str()) == Some("token-setup")
+        }
+        Some("lookup-create") => true,
+        _ => false,
+    };
+    if !setup_prefix_is_complete || mutations.last().is_none_or(|row| row.kind != "hot") {
         return Err(refusal("Direct terminal mutation order changed"));
     }
     Ok((mutations, activation))

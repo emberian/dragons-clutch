@@ -812,7 +812,12 @@ struct ChildExecutionStateV3<'info> {
 // before this split; no authenticated fact or commit authority moves from
 // account data into the heap. The child-CPI buffer set added 128 bytes of
 // header to save thousands of bytes of per-invocation duplication.
+// This is a transient host header, not a protocol wire. The 64-bit
+// assertion still pins the exact SBF heap budget; WASM has 32-bit pointers.
+#[cfg(target_pointer_width = "64")]
 const _: [(); 216] = [(); core::mem::size_of::<ChildExecutionStateV3<'_>>()];
+#[cfg(target_pointer_width = "32")]
+const _: [(); 140] = [(); core::mem::size_of::<ChildExecutionStateV3<'_>>()];
 
 /// The caller's mined bump for the child invocation at `ordinal`, if any.
 ///

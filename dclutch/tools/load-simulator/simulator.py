@@ -34,6 +34,7 @@ status.  Rerunning over finalized cycle journals is a byte-identical no-op.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -485,6 +486,42 @@ class Simulator:
         producer.  A finalized producer journal on disk is adopted, never
         reproduced (the producer refuses a non-empty output dir anyway)."""
         out = self.session_dir(cycle)
+        local_receipt = out / "direct-trade-produced.json"
+        if self.config["cluster"]["label"] == "local" and local_receipt.exists():
+            body = json.loads(local_receipt.read_text())
+            public_manifest = out / "direct-trade-public.json"
+            private_session = out / "direct-trade-session.json"
+            expected = {
+                "schema": "dclutch-owned-loopback-direct-trade-producer-receipt-v1",
+                "status": "produced",
+                "producerReceipt": str(local_receipt),
+                "publicManifest": str(public_manifest),
+                "privateSession": str(private_session),
+            }
+            mismatches = [
+                f"{key}={body.get(key)!r} (expected {value!r})"
+                for key, value in expected.items()
+                if body.get(key) != value
+            ]
+            for path, field in (
+                (public_manifest, "publicManifestSha256"),
+                (private_session, "privateSessionSha256"),
+            ):
+                if not path.is_file():
+                    mismatches.append(f"{path} is not a regular file")
+                    continue
+                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                if body.get(field) != actual:
+                    mismatches.append(
+                        f"{field}={body.get(field)!r} (authenticated {actual!r})"
+                    )
+            if mismatches:
+                raise Refusal(
+                    f"cycle {cycle} local producer receipt authentication failed: "
+                    + "; ".join(mismatches)
+                )
+            self.adopt_direct_token_bindings(out)
+            return out
         producer_journal = out / "direct-trade-producer.json"
         if producer_journal.exists():
             body = json.loads(producer_journal.read_text())
@@ -888,8 +925,8 @@ class Simulator:
             return None
         return pairs[(cycle - 1) % len(pairs)]
 
-    def cycle_plan(self, cycle: int) -> dict:
-        return {
+    def cycle_plan(self, cycle: int, *, pin_resolved_fill: bool = True) -> dict:
+        plan = {
             "cycle": cycle,
             "cluster": self.config["cluster"]["label"],
             # The plan is hashed into the cycle journal and read back on
@@ -900,6 +937,17 @@ class Simulator:
             "trade_mode": self.config["cluster"]["label"],
             "pair": self.pair_for_cycle(cycle),
         }
+        if (
+            pin_resolved_fill
+            and not self.census_only
+            and self.config["cluster"]["label"] == "local"
+        ):
+            # A pair may inherit the global local fill. Persist the resolved
+            # value as its own fact so changing that global between an
+            # incomplete cycle and its restart trips the outer journal guard
+            # before approval or production can run.
+            plan["resolved_fill_atoms"] = self.local_fill_atoms(cycle)
+        return plan
 
     def write_status(self, cycles_run: int, recon: Optional[dict], stopping: bool = False,
                      halted: bool = False, halt_reason: Optional[str] = None) -> None:
@@ -977,7 +1025,30 @@ class Simulator:
                 return 4, simcore.EXIT_LOW_DISK, low_disk, cycles_run
             plan = self.cycle_plan(cycle)
             journal = simcore.CycleJournal.open(self.journal_root, cycle)
-            existing = journal.assert_same_plan_or_absent(plan)
+            on_disk = journal.read()
+            if (
+                on_disk is not None
+                and "resolved_fill_atoms" not in (on_disk.get("plan") or {})
+                and "resolved_fill_atoms" in plan
+            ):
+                # Journals predating the resolved-fill field are immutable.
+                # A finalized one is a no-op and remains readable under its
+                # exact legacy digest. An incomplete one is resumable only
+                # when its pair stored fill_atoms explicitly; otherwise its
+                # intended inherited value is unknowable and sending would be
+                # unsafe.
+                legacy_plan = self.cycle_plan(cycle, pin_resolved_fill=False)
+                existing = journal.assert_same_plan_or_absent(legacy_plan)
+                legacy_pair = (on_disk.get("plan") or {}).get("pair")
+                legacy_fill = legacy_pair.get("fill_atoms") if isinstance(legacy_pair, dict) else None
+                if not journal.is_finalized() and legacy_fill is None:
+                    raise simcore.JournalConflict(
+                        f"the incomplete legacy journal in {journal.directory} does not pin "
+                        "resolved_fill_atoms; refusing to approve or produce on restart"
+                    )
+                plan = legacy_plan
+            else:
+                existing = journal.assert_same_plan_or_absent(plan)
             if existing and journal.is_finalized():
                 # Resume over a finalized cycle: byte-identical no-op.
                 cycles_run = cycle

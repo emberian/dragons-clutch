@@ -11,6 +11,7 @@ validator.  The real drivers are exercised by run-local.sh.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import os
@@ -186,6 +187,90 @@ class SimulatorHarness(unittest.TestCase):
 
 
 class DirectCyclePreparationTest(SimulatorHarness):
+    def test_new_cycle_plan_pins_the_resolved_global_fill(self) -> None:
+        config = self.config()
+        config["trade"]["local"].update({
+            "fill_atoms": 31,
+            "cycle_overrides": {"1": {"participant_report": "/another-participant.json"}},
+        })
+        sim = simulator.Simulator(config, execute=True, sustain=False, cycles=1)
+        self.assertEqual(sim.cycle_plan(1)["resolved_fill_atoms"], 31)
+
+    def test_changed_global_fill_refuses_an_incomplete_new_cycle(self) -> None:
+        original = self.config()
+        original["trade"]["local"]["fill_atoms"] = 31
+        first = simulator.Simulator(original, execute=True, sustain=False, cycles=1)
+        journal = simcore.CycleJournal.open(first.journal_root, 1)
+        journal.record(simcore.PHASE_EXECUTING, first.cycle_plan(1))
+
+        changed = self.config()
+        changed["trade"]["local"]["fill_atoms"] = 32
+        resumed = simulator.Simulator(changed, execute=True, sustain=False, cycles=1)
+        with self.assertRaisesRegex(simcore.JournalConflict, "different plan"):
+            resumed._run_cycles()
+
+    def test_incomplete_legacy_global_fill_journal_refuses_restart(self) -> None:
+        config = self.config()
+        config["trade"]["local"]["fill_atoms"] = 31
+        sim = simulator.Simulator(config, execute=True, sustain=False, cycles=1)
+        journal = simcore.CycleJournal.open(sim.journal_root, 1)
+        journal.record(simcore.PHASE_EXECUTING, sim.cycle_plan(1, pin_resolved_fill=False))
+        with self.assertRaisesRegex(simcore.JournalConflict, "does not pin resolved_fill_atoms"):
+            sim._run_cycles()
+
+    def test_finalized_legacy_cycle_remains_a_byte_identical_no_op(self) -> None:
+        config = self.config()
+        config["trade"]["local"]["fill_atoms"] = 31
+        sim = simulator.Simulator(config, execute=True, sustain=False, cycles=1)
+        journal = simcore.CycleJournal.open(sim.journal_root, 1)
+        journal.record(
+            simcore.PHASE_FINALIZED,
+            sim.cycle_plan(1, pin_resolved_fill=False),
+            signatures=["legacy-signature"],
+            trades_landed_total=1,
+            reconciliation={"ok": True},
+        )
+        before = journal.path.read_bytes()
+        with patch.object(simulator, "run_child", side_effect=AssertionError("resubmitted legacy cycle")):
+            code, _, _, cycles = sim._run_cycles()
+        self.assertEqual((code, cycles), (0, 1))
+        self.assertEqual(journal.path.read_bytes(), before)
+        self.assertEqual(sim.signatures, ["legacy-signature"])
+
+    def test_restart_authenticates_and_adopts_local_producer_receipt(self) -> None:
+        sim = simulator.Simulator(self.config(), execute=True, sustain=False, cycles=1)
+        out = sim.session_dir(1)
+        out.mkdir(parents=True)
+        public = out / "direct-trade-public.json"
+        private = out / "direct-trade-session.json"
+        receipt = out / "direct-trade-produced.json"
+        public.write_text(json.dumps({
+            "tokenSetup": {"sellerToken": "SellerFromReceipt", "feeToken": "FeeFromReceipt"},
+        }))
+        private.write_text('{"schema":"private-session"}\n')
+        receipt.write_text(json.dumps({
+            "schema": "dclutch-owned-loopback-direct-trade-producer-receipt-v1",
+            "status": "produced",
+            "producerReceipt": str(receipt),
+            "publicManifest": str(public),
+            "publicManifestSha256": hashlib.sha256(public.read_bytes()).hexdigest(),
+            "privateSession": str(private),
+            "privateSessionSha256": hashlib.sha256(private.read_bytes()).hexdigest(),
+        }))
+
+        with patch.object(simulator, "run_child", side_effect=AssertionError("reproduced session")):
+            self.assertEqual(sim.produce_session(1), out)
+        self.assertEqual(sim.direct_token_bindings, {
+            "direct_seller_token": "SellerFromReceipt",
+            "direct_venue_fee_token": "FeeFromReceipt",
+        })
+
+        body = json.loads(receipt.read_text())
+        body["privateSessionSha256"] = "0" * 64
+        receipt.write_text(json.dumps(body))
+        with self.assertRaisesRegex(simulator.Refusal, "receipt authentication failed"):
+            sim.produce_session(1)
+
     def test_pair_override_inherits_the_local_fill_for_both_drivers(self) -> None:
         config = self.config()
         config["trade"]["local"].update({

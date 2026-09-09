@@ -2761,16 +2761,40 @@ fn root_tail_of(account: &Account) -> GeneralRootV2 {
 /// (`BuilderError::UnsupportedRoute`) rather than building one wrong.
 #[tokio::test]
 async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
-    const OUTCOME_COUNT: u32 = 2;
+    let outcome_count: u32 = env::var("DCLUTCH_GENERAL_OUTCOMES")
+        .map(|value| value.parse().expect("outcome count is a u32"))
+        .unwrap_or(2);
+    let participant_seed: u8 = env::var("DCLUTCH_GENERAL_PARTICIPANT_SEED")
+        .map(|value| value.parse().expect("participant seed is a u8"))
+        .unwrap_or(0);
+    let place_only = env::var("DCLUTCH_GENERAL_PLACE_ONLY").as_deref() == Ok("1");
+    let order_side = match env::var("DCLUTCH_GENERAL_ORDER_SIDE").as_deref() {
+        Ok("Sell") => OrderSideV2::Sell,
+        Ok("Buy") | Err(_) => OrderSideV2::Buy,
+        Ok(_) => panic!("order side must be Buy or Sell"),
+    };
+    assert!(
+        order_side == OrderSideV2::Buy || place_only,
+        "the standalone Sell control stops after actual Place poststates; the continued solver corpus is a Buy"
+    );
+    let participant = |tag: u8| {
+        Keypair::new_from_array(
+            [tag.checked_add(participant_seed)
+                .expect("participant seed plus role tag fits u8"); 32],
+        )
+    };
+    eprintln!(
+        "general-campaign parameters outcomes={outcome_count} side={order_side:?} participant_seed={participant_seed} place_only={place_only}"
+    );
     let substrate = waist::fixture_substrate();
     let elves = waist::elves();
     let accelerator_elf = load_accelerator_elf();
     let token_2022_elf = load_token_2022_elf();
     let rent_elf = load_rent_elf();
     let rent = Rent::default();
-    let payer = Keypair::new_from_array([0x11; 32]);
-    let fee_payer = Keypair::new_from_array([0x12; 32]);
-    let seal_payer = Keypair::new_from_array([0x13; 32]);
+    let payer = participant(0x11);
+    let fee_payer = participant(0x12);
+    let seal_payer = participant(0x13);
     // THE SOLVER IS NOT THE MARKET'S SPONSOR, AND THAT IS THE CONTROL.
     //
     // `payer` is the wallet the founding wrote into the RentCredit's
@@ -2781,8 +2805,8 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // key") as the shape that hid the Dealer defect for a family. A fourth
     // keypair makes the two answers different values, so this execution
     // distinguishes `Payer` from `Credit` instead of agreeing with both.
-    let solver = Keypair::new_from_array([0x14; 32]);
-    let output_page_signer = Keypair::new_from_array([0x15; 32]);
+    let solver = participant(0x14);
+    let output_page_signer = participant(0x15);
     let mut test = waist::program_test_without_forced_budget(&elves);
     waist::add_program_v2(
         &mut test,
@@ -2807,7 +2831,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         substrate,
     );
     let campaign = build_campaign(
-        OUTCOME_COUNT,
+        outcome_count,
         payer.pubkey(),
         rent,
         substrate,
@@ -2940,7 +2964,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // `claims_per_lot` of zero, so a record that moves no claim in either
     // direction cannot be encoded at all.
     let order_header = GeneralOrderHeaderV2 {
-        outcome_count: OUTCOME_COUNT,
+        outcome_count,
         nonce: 1,
         owner_id: payer.pubkey().to_bytes(),
         market: campaign.state.market.key.to_bytes(),
@@ -2948,20 +2972,20 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         generation: GENERATION,
         max_lots: 1,
         // Quote atoms per lot: one unit claim has at most one atom of payoff.
-        max_quote_debit_per_lot: 1,
-        min_quote_credit_per_lot: 0,
+        max_quote_debit_per_lot: u64::from(order_side == OrderSideV2::Buy),
+        min_quote_credit_per_lot: u64::from(order_side == OrderSideV2::Sell),
         valid_until_slot: opened_batch.opening().settlement_close_slot,
-        side: OrderSideV2::Buy,
+        side: order_side,
         outcome_lo: 0,
         outcome_hi: 0,
         claims_per_lot: 1,
     };
-    let derived_rows: Vec<(u64, u64)> = (0..OUTCOME_COUNT)
+    let derived_rows: Vec<(u64, u64)> = (0..outcome_count)
         .map(|outcome| order_header.derived_row(outcome))
         .collect();
     let receive_per_lot: Vec<u64> = derived_rows.iter().map(|row| row.0).collect();
     let deliver_per_lot: Vec<u64> = derived_rows.iter().map(|row| row.1).collect();
-    let mut order_bytes = vec![0_u8; general_order_len_v2(OUTCOME_COUNT).expect("order width")];
+    let mut order_bytes = vec![0_u8; general_order_len_v2(outcome_count).expect("order width")];
     GeneralOrderV2::encode_into(
         order_header,
         &receive_per_lot,
@@ -2976,7 +3000,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     .expect("canonical maker order against the open batch");
     let order_record = GeneralOrderV2::decode(&order_bytes).expect("order record");
     let mut signed_terms =
-        vec![0_u8; general_signed_order_terms_len_v2(OUTCOME_COUNT).expect("terms width")];
+        vec![0_u8; general_signed_order_terms_len_v2(outcome_count).expect("terms width")];
     order_record
         .encode_signed_terms_into(&mut signed_terms)
         .expect("the signed projection keeps the record identity");
@@ -3213,12 +3237,13 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     .await
     .expect("real Trading -> General accelerator PlaceOrder");
     eprintln!(
-        "general-campaign place-order cu={} headroom={} outcomes={} side=Buy lots={} quote_reserve={}",
+        "general-campaign place-order cu={} headroom={} outcomes={} side={:?} lots={} quote_reserve={} participant_seed={participant_seed}",
         place_execution.compute_units_consumed,
         waist::COMPUTE_LIMIT
             .checked_sub(place_execution.compute_units_consumed)
             .expect("chain CU limit"),
-        OUTCOME_COUNT,
+        outcome_count,
+        order_side,
         order_record.header().max_lots,
         quote_reserve,
     );
@@ -3285,50 +3310,55 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let aggregate_account = chain_account(&mut context, place_corpus.claims_market.key).await;
     let aggregate = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
         .expect("PlaceOrder preserves the canonical Claims aggregate");
-    assert_eq!(aggregate.revision, 1);
-    for outcome in 0..OUTCOME_COUNT {
+    let claim_transfer = u64::from(order_side == OrderSideV2::Sell);
+    assert_eq!(aggregate.revision, 1 + claim_transfer);
+    for outcome in 0..outcome_count {
         assert_eq!(
             aggregate
                 .supply(&aggregate_account.data, outcome)
                 .expect("aggregate supply"),
             4,
-            "buy-side admission does not mint or burn aggregate claims"
+            "admission preserves aggregate claim supply"
         );
     }
     let maker_position_account = chain_account(&mut context, place_corpus.maker_position.key).await;
     let maker_position = LiabilityBasisPositionViewV2::decode(&maker_position_account.data)
         .expect("canonical maker Position");
-    assert_eq!(maker_position.revision, 1);
-    for outcome in 0..OUTCOME_COUNT {
+    assert_eq!(maker_position.revision, 1 + claim_transfer);
+    for outcome in 0..outcome_count {
         assert_eq!(
             maker_position
                 .balance(&maker_position_account.data, outcome)
                 .expect("maker balance"),
-            4,
-            "buy-side admission does not debit maker claims"
+            4 - order_header.derived_row(outcome).1,
+            "admission escrows the exact signed delivery from the maker"
         );
     }
     let escrow_position_account =
         chain_account(&mut context, place_corpus.escrow_position.key).await;
     let escrow_position = LiabilityBasisPositionViewV2::decode(&escrow_position_account.data)
         .expect("canonical admitted escrow Position");
-    assert_eq!(escrow_position.revision, 0);
+    assert_eq!(escrow_position.revision, claim_transfer);
     assert_eq!(escrow_position.owner, order_state.to_bytes());
-    for outcome in 0..OUTCOME_COUNT {
+    for outcome in 0..outcome_count {
         assert_eq!(
             escrow_position
                 .balance(&escrow_position_account.data, outcome)
                 .expect("escrow balance"),
-            0,
-            "buy-side admission creates an exact zero-balance escrow Position"
+            order_header.derived_row(outcome).1,
+            "admission escrows the exact signed delivery"
         );
     }
     let admission_account = chain_account(&mut context, place_corpus.escrow_admission.key).await;
     let admission = ProtocolPositionAdmissionV2::decode(&admission_account.data)
         .expect("canonical persisted escrow admission");
     assert_eq!(admission.position_owner(), order_state.to_bytes());
-    assert_eq!(admission.market_revision(), aggregate.revision);
-    assert_eq!(admission.outcome_count(), OUTCOME_COUNT);
+    assert_eq!(
+        admission.market_revision(),
+        1,
+        "admission binds the pre-transfer Market revision"
+    );
+    assert_eq!(admission.outcome_count(), outcome_count);
     assert_eq!(
         token_account_amount(
             &chain_account(&mut context, place_corpus.escrow_vault.key)
@@ -3346,14 +3376,20 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     );
     assert_eq!(
         token_account_delegate_tag(&maker_token_after.data),
-        0,
-        "the terminal external debit revokes its Custody delegate"
+        u32::from(quote_reserve == 0),
+        "a terminal external debit revokes its delegate; an inactive debit leaves it untouched"
     );
     assert_eq!(
         token_account_delegated_amount(&maker_token_after.data),
         0,
         "the terminal external debit exhausts its exact allowance"
     );
+    eprintln!(
+        "general-campaign place-poststates verified outcomes={outcome_count} side={order_side:?} participant_seed={participant_seed}"
+    );
+    if place_only {
+        return;
+    }
     chain = ChainPrestateV1 {
         market: observed_binding(&mut context, campaign.state.market.key).await,
         root: observed_binding(&mut context, open.root).await,
@@ -3681,7 +3717,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     );
     assert_eq!(prices.iter().sum::<u64>(), config.price_scale());
     let draft = CandidateHeaderV2 {
-        outcome_count: OUTCOME_COUNT,
+        outcome_count,
         page_count: 1,
         // The candidate's own ordinal among this batch's submissions, and the
         // coordinate a later `Consider` reads out of the certificate. One-based:
@@ -3698,7 +3734,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         // walk placed.
         live_order_count: closed_batch.live_order_count(),
     };
-    let mut candidate_image = vec![0_u8; candidate_len(OUTCOME_COUNT).expect("candidate width")];
+    let mut candidate_image = vec![0_u8; candidate_len(outcome_count).expect("candidate width")];
     CandidateV2::encode_into(draft, &prices, &mut candidate_image).expect("draft candidate");
     let candidate_id = general_candidate_identity_v1(&candidate_image).expect("candidate identity");
     CandidateV2::encode_into(
@@ -3719,7 +3755,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // verb rather than assembled here: it fixes the work capacity, and the
     // escrow is exact in both directions.
     let submission_opening = GeneralCandidateOpeningV1 {
-        outcome_count: OUTCOME_COUNT,
+        outcome_count,
         page_count: 1,
         page_revision: CANDIDATE_PAGE_REVISION,
         submitted_slot,
@@ -3877,7 +3913,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     );
 
     eprintln!(
-        "general-campaign N={OUTCOME_COUNT} market={} root={} batch={}",
+        "general-campaign N={outcome_count} market={} root={} batch={}",
         campaign.state.market.key, open.root, open.primary_state,
     );
     eprintln!(

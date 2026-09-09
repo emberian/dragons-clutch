@@ -25,7 +25,12 @@ struct ExecutedReceiptV3 {
     bytes: Vec<u8>,
 }
 
+// Transient Vec header, never persisted. Keep the SBF heap budget pinned
+// while allowing the same canonical planners in a 32-bit browser transport.
+#[cfg(target_pointer_width = "64")]
 const _: [(); 72] = [(); core::mem::size_of::<ExecutedReceiptV3>()];
+#[cfg(target_pointer_width = "32")]
+const _: [(); 60] = [(); core::mem::size_of::<ExecutedReceiptV3>()];
 
 /// Exact producer-side provenance recomputed from the authenticated Effect
 /// program and request bank when a later route resolves a dependency.

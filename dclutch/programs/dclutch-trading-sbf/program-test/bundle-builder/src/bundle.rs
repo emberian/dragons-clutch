@@ -208,7 +208,7 @@ fn digest32(bytes: &[u8]) -> [u8; 32] {
 /// fixed corpus is the Market, which is the root, and which program identity
 /// the waist names for each role.
 fn mine_bump_hints_v1(input: &BundleInputV1<'_>) -> HotBumpHintsV1 {
-    mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
+    let mut hints = mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
         market_key: input.fixed.market.key,
         market_data: &input.fixed.market.account.data,
         root_data: &input.fixed.root.account.data,
@@ -216,7 +216,18 @@ fn mine_bump_hints_v1(input: &BundleInputV1<'_>) -> HotBumpHintsV1 {
         trading_program: input.waist.trading_program,
         custody_program: Some(input.waist.custody_program),
         release_set: input.waist.release_set,
-    })
+    });
+    if let Ok(request) = decode_general_request_v3(input.scenario.family_request) {
+        hints.child_relay[0] =
+            dclutch_operator::general_hot_v3::general_place_order_replay_bump_v3(
+                request,
+                input.fixed.market.key,
+                input.waist.release_set,
+                input.waist.custody_program,
+            )
+            .unwrap_or_default();
+    }
+    hints
 }
 
 fn decode_execution_account_profile<'a>(

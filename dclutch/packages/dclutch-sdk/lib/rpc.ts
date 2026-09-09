@@ -28,7 +28,8 @@ const MAX_LOG_MESSAGES = 64;
 const MAX_LOG_MESSAGE_BYTES = 512;
 const MAX_PROGRAM_ACCOUNTS = 256;
 const MAX_REACQUIRED_ACCOUNTS = 128;
-const MAX_MULTIPLE_ACCOUNTS = 32;
+/** Shared request key bound for account-fetching adapters. */
+export const MAX_MULTIPLE_ACCOUNTS = 32;
 const MAX_INNER_INSTRUCTION_SETS = 64;
 const MAX_INNER_INSTRUCTIONS = 64;
 const RPC_TIMEOUT_MS = 15_000;
@@ -142,6 +143,18 @@ export type TransactionMetaObservation = Readonly<{
   /** Exact final program return data, or explicit absence. */
   returnData: TransactionReturnDataObservationV1 | null;
   transactionBytes: Uint8Array;
+}>;
+
+/** One bounded simulation of unchanged bytes; never evidence of landing. */
+export type TransactionSimulationObservationV1 = Readonly<{
+  slot: string;
+  succeeded: boolean;
+  error: unknown;
+  errorText: string | null;
+  computeUnits: string | null;
+  logMessages: ReadonlyArray<string>;
+  returnData: TransactionReturnDataObservationV1 | null;
+  accounts: MultipleAccountObservation['accounts'];
 }>;
 
 export type ProgramSnapshot = Readonly<{
@@ -778,6 +791,49 @@ export class SolanaRpcClient {
       slot: String(exactUnsigned(entry.slot, 'status slot')),
       confirmation: entry.confirmationStatus === undefined || entry.confirmationStatus === null ? null : exactText(entry.confirmationStatus, 'confirmation status', 32),
       err: entry.err ?? null,
+    });
+  }
+
+  /** Preview the exact packet without replacing its blockhash or requiring signatures. */
+  async simulateTransaction(
+    bytes: Uint8Array,
+    addresses: ReadonlyArray<string>,
+    minimumContextSlot?: string,
+  ): Promise<TransactionSimulationObservationV1> {
+    if (bytes.length === 0 || bytes.length > SOLANA_PACKET_BYTES) throw new Error('simulation packet exceeds the Solana packet bound');
+    const canonical = VersionedTransaction.deserialize(bytes).serialize();
+    if (canonical.length !== bytes.length || canonical.some((byte, index) => byte !== bytes[index])) throw new Error('simulation packet is not canonical');
+    if (addresses.length === 0 || addresses.length > MAX_MULTIPLE_ACCOUNTS || new Set(addresses).size !== addresses.length) throw new Error('simulation requires 1..32 distinct account addresses');
+    for (const address of addresses) {
+      if (new PublicKey(address).toBase58() !== address) throw new Error('simulation account address is not canonical');
+    }
+    const configuration: Record<string, unknown> = {
+      encoding: 'base64', commitment: 'finalized', sigVerify: false,
+      replaceRecentBlockhash: false, accounts: { encoding: 'base64', addresses: [...addresses] },
+    };
+    const floor = minimumContextSlot === undefined ? 0 : exactUnsigned(Number(minimumContextSlot), 'simulation minimum context slot');
+    if (minimumContextSlot !== undefined) configuration.minContextSlot = floor;
+    const raw = await this.#request('simulateTransaction', [btoa(String.fromCharCode(...bytes)), configuration]);
+    if (!plain(raw) || !plain(raw.context) || !plain(raw.value)) throw new Error('simulation did not return a context and value');
+    const slot = exactUnsigned(raw.context.slot, 'simulation context slot');
+    if (slot < floor) throw new Error('simulation context precedes the requested floor');
+    const value = raw.value;
+    if (!Object.hasOwn(value, 'err')) throw new Error('simulation omitted its execution result');
+    const succeeded = value.err === null;
+    if (succeeded && (!Array.isArray(value.accounts) || value.accounts.length !== addresses.length)) throw new Error('simulation did not return one poststate per requested account');
+    if (!succeeded && value.accounts !== null && value.accounts !== undefined && (!Array.isArray(value.accounts) || value.accounts.length !== addresses.length)) throw new Error('simulation returned a malformed failed poststate vector');
+    const accounts: unknown[] = Array.isArray(value.accounts) ? value.accounts : addresses.map(() => null);
+    return Object.freeze({
+      slot: String(slot), succeeded, error: value.err,
+      errorText: succeeded ? null : JSON.stringify(value.err).slice(0, 240),
+      computeUnits: value.unitsConsumed === undefined ? null : String(exactUnsigned(value.unitsConsumed, 'simulation compute units')),
+      logMessages: Object.freeze(Array.isArray(value.logs) ? value.logs.slice(0, MAX_LOG_MESSAGES).map(boundedLogMessage) : []),
+      returnData: decodeTransactionReturnDataV1(value.returnData),
+      accounts: Object.freeze(addresses.map((address, index) => {
+        const account = accounts[index] === null ? null : parseAccount(accounts[index], `simulation account ${index}`);
+        if (account !== null && account.space !== account.data.length) throw new Error('simulation returned truncated account data');
+        return Object.freeze({ address, account });
+      })),
     });
   }
 

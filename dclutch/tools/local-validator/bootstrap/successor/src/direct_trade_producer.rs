@@ -547,6 +547,7 @@ struct PreparedPublicFactsV1 {
     custody_authority: Pubkey,
     seller_facts: MakerFactsV1,
     buyer_facts: MakerFactsV1,
+    custody_revision: u64,
     aggregate_view: LiabilityBasisMarketViewV2,
     seller_position_view: LiabilityBasisPositionViewV2,
     buyer_position_view: LiabilityBasisPositionViewV2,
@@ -955,7 +956,7 @@ fn assemble_public_manifest_v1(
         claims_market_revision: public.aggregate_view.revision,
         seller_position_revision: public.seller_position_view.revision,
         buyer_position_revision: public.buyer_position_view.revision,
-        custody_revision: 1,
+        custody_revision: public.custody_revision,
         release_set: hex32(&plan.release_set_id)?,
         product_record_digest: public.product_digest,
         semantic_basis: public.aggregate_view.basis_id,
@@ -1034,7 +1035,7 @@ fn assemble_public_manifest_v1(
             claims_market_revision: public.aggregate_view.revision,
             seller_position_revision: public.seller_position_view.revision,
             buyer_position_revision: public.buyer_position_view.revision,
-            custody_revision: 1,
+            custody_revision: public.custody_revision,
             release_set: plan.release_set_id.clone(),
             semantic_basis: hex(&public.aggregate_view.basis_id),
             seller_rent_beneficiary: public.seller_facts.rent_beneficiary.to_string(),
@@ -2590,7 +2591,7 @@ fn prepare_public_facts_v1(
         &custody,
     )
     .0;
-    authenticate_or_admit_pending_replay_v1(
+    let custody_revision = authenticate_or_admit_pending_replay_v1(
         rpc,
         custody_replay,
         custody,
@@ -2966,6 +2967,7 @@ fn prepare_public_facts_v1(
         custody_authority,
         seller_facts,
         buyer_facts,
+        custody_revision,
         aggregate_view,
         seller_position_view,
         buyer_position_view,
@@ -3091,12 +3093,12 @@ fn authenticate_or_admit_pending_replay_v1(
     trading: Pubkey,
     generation: u64,
     rent_refund: Pubkey,
-) -> Result<()> {
+) -> Result<u64> {
     let Some(account) = rpc.account(address)? else {
-        return Ok(());
+        return Ok(1);
     };
     if account.owner == system_program::ID && account.data.is_empty() {
-        return Ok(());
+        return Ok(1);
     }
     if account.owner != custody || account.executable {
         return Err(refusal(
@@ -3120,7 +3122,7 @@ fn authenticate_or_admit_pending_replay_v1(
             "preexisting Direct Custody replay is not an authenticated completed-trade boundary",
         ));
     }
-    Ok(())
+    Ok(replay.next_revision)
 }
 
 fn signed_manifest_v1(value: SignedDirectIntentV3) -> Result<ProducedSignedIntentManifestV1> {

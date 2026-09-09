@@ -224,15 +224,14 @@ pub struct GeneralHotStateV3 {
 /// # Which slots this corpus reaches, and which it deliberately leaves
 ///
 /// `market`, `root` and Custody's transfer authority are derivable from the
-/// frame this builder already authenticated. `child_relay[0]` is Custody's
-/// replay cursor, whose seeds end in the projected child request's replay
-/// context; `child_caller`'s seeds end in a digest over a request projected ON
-/// chain; `lifecycle` is this family's created accounts in materialization
-/// order. None of the three is projected here, so all three stay zero and
-/// search, which is correct and merely slower.
+/// frame this builder already authenticated. PlaceOrder also carries the signed
+/// order identity used as the replay context by all three Custody requests.
+/// Other actions leave that slot absent. The child caller and lifecycle slots
+/// remain absent because this builder does not project their complete seeds.
 fn general_hot_bump_hints_v3(
     state: &GeneralHotStateV3,
     trading_program: &Pubkey,
+    request: GeneralDecodedRequestV3,
 ) -> Result<HotBumpHintsV1, GeneralHotOperatorErrorV3> {
     let fixed = |coordinate: usize| {
         state
@@ -244,15 +243,62 @@ fn general_hot_bump_hints_v3(
     // Custody is not in the hot fixed frame; the Market's activation cache is,
     // and it names the release set's Custody deployment.
     let activation = &fixed(HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.account;
-    Ok(mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
+    let custody_program = activated_custody_program_v1(&activation.data);
+    let mut hints = mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
         market_key: market.key,
         market_data: &market.data,
         root_data: &fixed(HOT_ROOT_ACCOUNT_V3)?.account.data,
         core_program: fixed(HOT_CORE_PROGRAM_ACCOUNT_V3)?.account.key,
         trading_program: *trading_program,
-        custody_program: activated_custody_program_v1(&activation.data),
+        custody_program,
         release_set: state.release_set,
-    }))
+    });
+    if let Some(custody_program) = custody_program {
+        hints.child_relay[0] = general_place_order_replay_bump_v3(
+            request,
+            market.key,
+            state.release_set,
+            custody_program,
+        )
+        .unwrap_or_default();
+    }
+    Ok(hints)
+}
+
+/// Mine PlaceOrder's shared Custody replay hint from its decoded order subject.
+///
+/// The operator authenticates this subject against signed order terms before
+/// building the envelope. The chain independently projects the same identity
+/// into InitializeReplay, OpenVault and delegated Transfer, then reproduces
+/// each supplied replay address. Initialization still searches the canonical
+/// bump before allocation: a hint proves an address, never canonicality.
+/// Other actions return `None` because their replay contexts are not established
+/// by this projection. First-attempt replay searches stay absent because the
+/// initializer's extra reproduction outweighs the later savings; a zero bump
+/// also retains the wire's absent-hint fallback.
+#[must_use]
+pub fn general_place_order_replay_bump_v3(
+    request: GeneralDecodedRequestV3,
+    market: Pubkey,
+    release_set: [u8; 32],
+    custody_program: Pubkey,
+) -> Option<u8> {
+    if request.action != Action::PlaceOrder {
+        return None;
+    }
+    let seeds = dclutch_custody::CustodyReplaySeedsV1::new(
+        market.to_bytes(),
+        release_set,
+        dclutch_custody::CallerRoleV1::Trading,
+        request.candidate_id?,
+    );
+    let bump = Pubkey::find_program_address(&seeds.as_slices(), &custody_program).1;
+    // Measured profile, not protocol validity: a hinted initializer retains its
+    // canonical search and adds one reproduction. Across the three calls,
+    // hinting a first-attempt (255) replay costs more than leaving it absent.
+    // Two-attempt replays saved 1,447 CU in the 2026-09-09 production pair.
+    // Remeasure this cost crossover if the chain syscall profile changes.
+    (bump != u8::MAX && bump != 0).then_some(bump)
 }
 
 /// Borrow the exact General artifact carriers from one canonical Hot frame.
@@ -775,7 +821,11 @@ pub fn build_general_hot_instruction_decoded_v3(
         hash(&root.account.data).to_bytes(),
     )
     .map_err(GeneralHotOperatorErrorV3::HotExecution)?
-    .with_bump_hints(general_hot_bump_hints_v3(state, &checked.trading_program)?);
+    .with_bump_hints(general_hot_bump_hints_v3(
+        state,
+        &checked.trading_program,
+        canonical_request,
+    )?);
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(request_bytes.len())
@@ -5397,6 +5447,122 @@ mod tests {
         );
     }
 
+    #[test]
+    fn place_order_replay_hint_uses_signed_subject_and_preserves_family_digest() {
+        use crate::hot_bump_corpus_fixture_v1 as corpus;
+        let (root, batch, _, signed_terms) = front_records();
+        let order_id = GeneralSignedOrderTermsV2::decode(&signed_terms)
+            .expect("signed terms")
+            .order_id();
+        let front = front_state(
+            front_local_state(GeneralLocalStateKindV3::Batch, &batch_record(batch)),
+            None,
+            Some(signed_terms),
+        );
+        let request = derive_front_request_from_root_v5(
+            &front,
+            Action::PlaceOrder,
+            1,
+            root.config_id(),
+            root,
+        )
+        .expect("authenticated signed subject");
+        let mut state = GeneralHotStateV3 {
+            fixed_accounts: corpus::fixed_frame()
+                .into_iter()
+                .map(|value| GeneralObservedAccountMetaV3 {
+                    account: value.account,
+                    is_signer: value.is_signer,
+                    is_writable: value.is_writable,
+                })
+                .collect(),
+            strategy_accounts: Vec::new(),
+            runtime_suffix_accounts: Vec::new(),
+            release_set: corpus::release_set_id(),
+            generation: corpus::GENERATION,
+            minimum_finalized_slot: 0,
+            checked_release: None,
+        };
+        let custody = activated_custody_program_v1(
+            &state.fixed_accounts[HOT_ACTIVATION_CACHE_ACCOUNT_V3]
+                .account
+                .data,
+        )
+        .expect("Custody deployment");
+        let family = request.to_bytes().expect("request bytes");
+        let digest = family_request_digest_v3(&family).expect("family digest");
+        let mut observed_bumps = std::collections::BTreeSet::new();
+        for draw in 1..=64_u8 {
+            let market = Pubkey::new_from_array([draw; 32]);
+            state.fixed_accounts[HOT_MARKET_ACCOUNT_V3].account.key = market;
+            let hints = general_hot_bump_hints_v3(&state, &corpus::trading_program(), request)
+                .expect("builder mines replay");
+            let seeds = dclutch_custody::CustodyReplaySeedsV1::new(
+                market.to_bytes(),
+                state.release_set,
+                dclutch_custody::CallerRoleV1::Trading,
+                order_id,
+            );
+            let (replay, bump) = Pubkey::find_program_address(&seeds.as_slices(), &custody);
+            let expected_hint = if bump == u8::MAX { 0 } else { bump };
+            assert_eq!(hints.child_relay[0], expected_hint, "market draw {draw}");
+            observed_bumps.insert(bump);
+            let [domain, market_seed, release, role, context] = seeds.as_slices();
+            assert_eq!(
+                Pubkey::create_program_address(
+                    &[domain, market_seed, release, role, context, &[bump]],
+                    &custody,
+                )
+                .expect("canonical bump"),
+                replay
+            );
+            let envelope = HotExecutionEnvelopeV3::new(
+                family.len() as u32,
+                state.release_set,
+                market.to_bytes(),
+                state.generation,
+                [1; 32],
+            )
+            .expect("envelope")
+            .with_bump_hints(hints);
+            let mut wire = envelope.to_bytes().to_vec();
+            wire.extend_from_slice(&family);
+            assert_eq!(
+                family_request_digest_v3(&wire[HOT_FAMILY_REQUEST_OFFSET_V3..])
+                    .expect("hinted family digest"),
+                digest
+            );
+        }
+        assert!(
+            observed_bumps.contains(&u8::MAX),
+            "cover absent shallow hints"
+        );
+        assert!(
+            observed_bumps.contains(&(u8::MAX - 1)),
+            "cover two-attempt hints"
+        );
+        assert!(
+            observed_bumps.iter().any(|bump| *bump < u8::MAX - 1),
+            "cover deeper search variance"
+        );
+        let market = state.fixed_accounts[HOT_MARKET_ACCOUNT_V3].account.key;
+        for request in [
+            GeneralDecodedRequestV3 {
+                action: Action::CancelOrder,
+                ..request
+            },
+            GeneralDecodedRequestV3 {
+                candidate_id: None,
+                ..request
+            },
+        ] {
+            assert_eq!(
+                general_place_order_replay_bump_v3(request, market, state.release_set, custody,),
+                None
+            );
+        }
+    }
+
     /// The corpus this builder mines from reaches this frame's Market, root and
     /// Custody deployment, and not some other coordinate.
     ///
@@ -5431,8 +5597,23 @@ mod tests {
             checked_release: None,
         };
         assert_eq!(
-            general_hot_bump_hints_v3(&state, &corpus::trading_program())
-                .expect("staged corpus mines"),
+            general_hot_bump_hints_v3(
+                &state,
+                &corpus::trading_program(),
+                GeneralDecodedRequestV3 {
+                    wire: GeneralRequestWireV3::V3,
+                    action: Action::OpenBatch,
+                    expected_revision: 0,
+                    candidate_id: Some([1; 32]),
+                    page_index: 0,
+                    execution_index: 0,
+                    manifest_order_index: 0,
+                    state_bump: 0,
+                    terminal_record_bump: 0,
+                    result_state_bump: 0,
+                },
+            )
+            .expect("staged corpus mines"),
             corpus::expected_hints()
         );
     }
