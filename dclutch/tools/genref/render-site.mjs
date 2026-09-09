@@ -693,9 +693,9 @@ for (const relative of instructionPages) {
 // fresh cohort. A past cohort's open Market or its CLI invocation cannot make a
 // new deployment publicly joinable; that needs the current checked binding.
 const requiredPosture = [
-  [`${DOCS}/guides/README.html`, "the live cohort's markets are read off the chain by the site"],
-  [`${DOCS}/guides/trader.html`, "Treat a live deployment as a dClutch deployment only when its"],
-  [`${DOCS}/guides/trader.html`, "A browser wallet admission is available only for a market whose public Market"],
+  [`${DOCS}/guides/README.html`, "The app reads the selected Solana devnet deployment"],
+  [`${DOCS}/guides/trader.html`, "The public app runs on Solana devnet with test tokens"],
+  [`${DOCS}/guides/trader.html`, "The page shows whether joining is available for that market"],
 ];
 for (const [relative, needle] of requiredPosture) {
   const rendered = fs.readFileSync(path.join(outDir, relative), "utf8");

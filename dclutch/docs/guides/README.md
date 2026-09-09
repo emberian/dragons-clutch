@@ -9,8 +9,8 @@ backing, settlement and the actions available in the app.
 - [Two clients](two-clients.md) — choose and build the command-line client for your task.
 - [Trencher guide](trencher.md) — claims, payouts and bounties in trading terms.
 
-The public app uses Solana devnet and test tokens. Each market page shows its
-terms, state and available actions.
+The app reads the selected Solana devnet deployment and uses test tokens. Each
+market page shows its terms, state and available actions.
 
 For technical details, see the [reference](../reference/README.md), including
 [error codes](../reference/refusals.md) and [account layouts](../reference/abi/README.md).
