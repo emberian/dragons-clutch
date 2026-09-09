@@ -99,3 +99,43 @@ signers, and an inline packet of 1,152 bytes. The canonical app Vitest startup
 limitation remains; this direct parity check does not relabel it a Vitest pass.
 The three JSON fixtures and `reclaim-wasm-parity.log` are retained in the
 `continuity/` directory named above.
+
+
+## 2026-09-09 addendum — focused browser tests executed
+
+The previous Vitest startup limitation is resolved for this validation. At live
+source HEAD `79d8bda3e2eef6e77228a644739bc0cb4f70d880`, the eight committed
+frontend paths from `a28a1662c` were copied individually into the existing
+`/private/tmp/dclutch-featured-standing-validation` dependency checkout. Its
+other private changes were preserved; no dependency install or native build ran.
+The parity test now accepts `DCLUTCH_SOURCE_PROVIDER_NATIVE_FIXTURE_DIR` so the
+native producer can run in its coordinated warm workspace. An explicit missing
+fixture fails; without the option the existing Cargo producer path remains.
+
+With that directory set to `/tmp`, the focused command was:
+
+```sh
+npm test -- lib/sourceProviderV1.test.ts lib/sourceProviderOperationV1.test.ts lib/sourceProviderSubmitOperationV1.test.ts lib/sourceProviderWasmParity.test.ts
+```
+
+All four files passed, **12 tests passed**. This includes exact Reclaim
+message/signers, generated-WASM identity refusal, Submit discovery/poststate
+native parity, browser plan constructors, and operation completion controls.
+SDK and web `tsc --noEmit` passed; targeted Provider ESLint passed. The native
+fixture files are the continuity lane's unchanged outputs named in the preceding
+addendum, copied to `/tmp` with these SHA-256 hashes:
+
+| Fixture | SHA-256 |
+| --- | --- |
+| `reclaim-parity.json` | `544a5b34e219e13cc11f4dac63287d741264c536e53d6865267924533a2c441b` |
+| `submit-fresh-parity.json` | `c2d69fd5f6ee417ba2ac3e99917e28c6984f215d59bbe516284f8b986cf9e044` |
+| `submit-poststate-parity.json` | `8d6bdc0da9b9d778762ff21e46549c041fe20bf6d5e2247cb1f572c216daea34` |
+
+The checked-in WASM is 647,270 bytes with SHA-256
+`cf413cd5e845de7408749961b533f848f81241abc31689680ffa943d2a28e08d`, matching
+its generated facts. The lifecycle rent-width fact is 560 bytes. A bounded
+apps/packages/tools consumer sweep found no active `DCLTPUL3`,
+`ProviderUpdateLifecycleV3`, or `PROVIDER_UPDATE_LIFECYCLE_BYTES_V3` mirror.
+The transport request remains V3 intentionally; the persisted lifecycle is V4.
+No missing consumer required a production change. This is browser/fixture
+validation, not fresh SBF or devnet execution of the repaired route.

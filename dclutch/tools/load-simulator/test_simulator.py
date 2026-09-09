@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("dclutch_load_simulator", HERE / "simulator.py")
@@ -182,6 +183,62 @@ class SimulatorHarness(unittest.TestCase):
             [sys.executable, str(HERE / "simulator.py"), *argv],
             capture_output=True, text=True, timeout=120,
         )
+
+
+class DirectCyclePreparationTest(SimulatorHarness):
+    def test_pair_override_inherits_the_local_fill_for_both_drivers(self) -> None:
+        config = self.config()
+        config["trade"]["local"].update({
+            "fill_atoms": 24,
+            "cycle_overrides": {"1": {"participant_report": "/another-participant.json"}},
+        })
+        sim = simulator.Simulator(config, execute=True, sustain=False, cycles=1)
+        with patch.object(simulator, "run_child", wraps=simulator.run_child) as child:
+            sim.reapprove_local_collateral(1)
+            sim.produce_session(1)
+        for call in child.call_args_list:
+            argv = call.args[0]
+            self.assertIn("--fill-atoms", argv, argv)
+            self.assertEqual(argv[argv.index("--fill-atoms") + 1], "24")
+
+    def test_preflight_approval_does_not_skip_execution(self) -> None:
+        sim = simulator.Simulator(self.config(), execute=True, sustain=False, cycles=1)
+        out = sim.session_dir(1)
+        out.mkdir(parents=True)
+        evidence = out / "direct-collateral-reapproval.json"
+        evidence.write_text(json.dumps({
+            "schema": "dclutch-direct-collateral-reapproval-evidence-v1", "landed": None,
+        }))
+        result = sim.reapprove_local_collateral(1)
+        self.assertEqual((result.get("landed") or {}).get("signature"), "sig-reapprove")
+        before = evidence.read_bytes()
+        with patch.object(simulator, "run_child", side_effect=AssertionError("resent approval")):
+            self.assertEqual(sim.reapprove_local_collateral(1), result)
+        self.assertEqual(evidence.read_bytes(), before)
+
+    def test_preflight_fee_receipt_does_not_skip_settlement(self) -> None:
+        sim = simulator.Simulator(self.config(), execute=True, sustain=False, cycles=1)
+        out = sim.session_dir(1)
+        out.mkdir(parents=True)
+        (out / "direct-trade-public.json").write_text("{}")
+        evidence = out / "direct-fee-settlement.json"
+        evidence.write_text(json.dumps({
+            "schema": "dclutch-direct-fee-settlement-evidence-v1", "landed": None,
+        }))
+        result = sim.settle_direct_fee(1, out, {"buyerOwner": "BuyerOwner"})
+        self.assertEqual((result.get("landed") or {}).get("signature"), "sig-fee")
+        before = evidence.read_bytes()
+        with patch.object(simulator, "run_child", side_effect=AssertionError("resent settlement")):
+            self.assertEqual(sim.settle_direct_fee(1, out, {"buyerOwner": "BuyerOwner"}), result)
+        self.assertEqual(evidence.read_bytes(), before)
+
+    def test_cycle_records_the_approval_transaction(self) -> None:
+        (self.root / "steps-needed").write_text("1")
+        config = self.write_config(self.config())
+        proc = self.run_sim("run", "--config", str(config), "--cycles", "1", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        status = json.loads((self.work / "STATUS.json").read_text())
+        self.assertIn("sig-reapprove", status["trades"]["signatures"])
 
 
 class DirectTokenCensusBindingTest(SimulatorHarness):

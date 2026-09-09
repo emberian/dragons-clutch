@@ -450,7 +450,9 @@ class Simulator:
         out.mkdir(parents=True, exist_ok=True)
         evidence = out / "direct-collateral-reapproval.json"
         if evidence.exists():
-            return json.loads(evidence.read_text())
+            recorded = json.loads(evidence.read_text())
+            if not self.execute or (recorded.get("landed") or {}).get("signature"):
+                return recorded
         local = self.config["trade"]["local"]
         pair = self.pair_for_cycle(cycle) or {}
         participant_report = pair.get("participant_report", local["participant_report"])
@@ -512,9 +514,7 @@ class Simulator:
                 "--key-dir", key_dir,
                 "--output-dir", str(out),
             ]
-            fill_atoms = pair.get("fill_atoms") if pair else local.get("fill_atoms")
-            if fill_atoms is not None:
-                argv += ["--fill-atoms", str(fill_atoms)]
+            argv += ["--fill-atoms", str(self.local_fill_atoms(cycle))]
         else:
             dev = trade["devnet"]
             pair = self.pair_for_cycle(cycle)
@@ -672,9 +672,11 @@ class Simulator:
         evidence_path = out / "direct-fee-settlement.json"
         if evidence_path.exists():
             try:
-                return json.loads(evidence_path.read_text())
+                recorded = json.loads(evidence_path.read_text())
             except (OSError, ValueError) as error:
                 raise Refusal(f"cycle {cycle} fee-settlement evidence is unreadable") from error
+            if not self.execute or (recorded.get("landed") or {}).get("signature"):
+                return recorded
         manifest = out / "direct-trade-public.json"
         maker = completion.get("buyerOwner")
         if not manifest.is_file() or not isinstance(maker, str) or not maker:
@@ -998,7 +1000,10 @@ class Simulator:
                     pass
                 else:
                     if self.config["cluster"]["label"] == "local":
-                        self.reapprove_local_collateral(cycle)
+                        approval = self.reapprove_local_collateral(cycle)
+                        approval_signature = (approval.get("landed") or {}).get("signature")
+                        if approval_signature:
+                            sigs.append(approval_signature)
                     out = self.produce_session(cycle)
                     completion = self.pulse_session(cycle, out)
                     settlement = None
