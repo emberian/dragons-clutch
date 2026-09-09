@@ -55,8 +55,8 @@ use dclutch_trading::{
         DIRECT_ROOT_STATE_BYTES_V1, DirectExecutionConfigV1, DirectRootStateV1, MakerReplayRootV1,
     },
     token_setup_v1::{
-        DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenSetupReceiptV1,
-        DirectTokenSetupRequestV1,
+        DirectTokenAccountPrestateV1, DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1,
+        DirectTokenSetupReceiptV1, DirectTokenSetupRequestV1, direct_token_account_prestate_v1,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -1715,33 +1715,37 @@ fn collect_direct_trade_setup_planning_v1(
         Some(DirectSetupJournalPhaseV1::Prepared)
         | Some(DirectSetupJournalPhaseV1::Dispatching)
         | Some(DirectSetupJournalPhaseV1::Submitted) => {
-            let vacant = |account: &ObservedAccount| {
-                account.owner == system_program::ID && account.data.is_empty()
-            };
-            let live = |account: &ObservedAccount| {
-                account.owner == token_program && account.lamports == token_plan.exact_account_rent
-            };
-            if !((vacant(&seller_token_observed) && vacant(&fee_token_observed))
-                || (live(&seller_token_observed) && live(&fee_token_observed)))
-            {
-                return Err(refusal(
-                    "Direct ambiguous token setup no longer had exact paired prestate or poststate envelopes",
-                ));
-            }
+            direct_token_setup_prestate_v1(
+                &seller_token_observed,
+                token_program,
+                token_plan.exact_account_rent,
+                &token_plan.expected_seller_bytes,
+            )?;
+            direct_token_setup_prestate_v1(
+                &fee_token_observed,
+                token_program,
+                token_plan.exact_account_rent,
+                &token_plan.expected_fee_bytes,
+            )?;
         }
         Some(DirectSetupJournalPhaseV1::Planned) | None => {
-            if seller_token_observed.owner != system_program::ID
-                || !seller_token_observed.data.is_empty()
-                || seller_token_observed.lamports
-                    != token_plan.seller_normalization.observed_lamports
-                || fee_token_observed.owner != system_program::ID
-                || !fee_token_observed.data.is_empty()
-                || fee_token_observed.lamports != token_plan.fee_normalization.observed_lamports
+            if direct_token_setup_prestate_v1(
+                &seller_token_observed,
+                token_program,
+                token_plan.exact_account_rent,
+                &token_plan.expected_seller_bytes,
+            )? != DirectTokenAccountPrestateV1::Vacant
             {
                 return Err(refusal(
-                    "Direct planned token setup System PDA prestates changed",
+                    "Direct planned token setup seller PDA was no longer vacant",
                 ));
             }
+            direct_token_setup_prestate_v1(
+                &fee_token_observed,
+                token_program,
+                token_plan.exact_account_rent,
+                &token_plan.expected_fee_bytes,
+            )?;
         }
     }
 
@@ -1816,6 +1820,28 @@ fn direct_token_setup_observed_v1(
         executable: account.executable,
         data: &account.data,
     }
+}
+
+/// Classify the externally observed setup PDA with the same total owner as the
+/// program.  The seller must begin vacant for this operation; the shared venue
+/// fee PDA may already be its exact zero-balance poststate after another seller
+/// created it.
+fn direct_token_setup_prestate_v1(
+    observed: &ObservedAccount,
+    token_program: Pubkey,
+    exact_rent: u64,
+    expected_initialized_bytes: &[u8; dclutch_custody::token_svm::ACCOUNT_BYTES],
+) -> Result<DirectTokenAccountPrestateV1> {
+    direct_token_account_prestate_v1(
+        observed.owner.to_bytes(),
+        system_program::ID.to_bytes(),
+        token_program.to_bytes(),
+        observed.lamports,
+        exact_rent,
+        &observed.data,
+        expected_initialized_bytes,
+    )
+    .map_err(|error| refusal(format!("Direct token setup PDA prestate: {error:?}")))
 }
 
 pub(crate) fn collect_direct_trade_planning_v1(

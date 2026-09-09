@@ -35,10 +35,10 @@ use dclutch_trading::{
         DirectRootStateV1,
     },
     token_setup_v1::{
-        DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1, DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1,
+        DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1, DirectTokenAccountPrestateV1,
         DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenRentNormalizationV1,
-        DirectTokenSetupReceiptV1, DirectTokenSetupRequestV1, direct_token_rent_normalization_v1,
-        direct_token_setup_frame_digest_v1,
+        DirectTokenSetupReceiptV1, DirectTokenSetupRequestV1, direct_token_account_prestate_v1,
+        direct_token_rent_normalization_v1, direct_token_setup_frame_digest_v1,
     },
 };
 use solana_program::{
@@ -134,6 +134,18 @@ pub fn process_direct_token_setup_v1(
     let exact_rent = rent.minimum_balance(ACCOUNT_BYTES);
     let seller_observed = account(accounts, SELLER_TOKEN)?.lamports();
     let fee_observed = account(accounts, FEE_TOKEN)?.lamports();
+    let seller_prestate = authenticate_token_setup_prestate(
+        accounts,
+        SELLER_TOKEN,
+        authenticated.seller_owner,
+        exact_rent,
+    )?;
+    let fee_prestate = authenticate_token_setup_prestate(
+        accounts,
+        FEE_TOKEN,
+        authenticated.fee_recipient,
+        exact_rent,
+    )?;
     let payer_before = account(accounts, PAYER)?.lamports();
     let refund_before = account(accounts, RENT_REFUND)?.lamports();
     let seller_normalization =
@@ -167,6 +179,7 @@ pub fn process_direct_token_setup_v1(
         SELLER_TOKEN,
         authenticated.seller_owner,
         DirectTokenAccountRoleV1::Seller,
+        seller_prestate,
         seller_normalization,
         request,
     )?;
@@ -176,6 +189,7 @@ pub fn process_direct_token_setup_v1(
         FEE_TOKEN,
         authenticated.fee_recipient,
         DirectTokenAccountRoleV1::Fee,
+        fee_prestate,
         fee_normalization,
         request,
     )?;
@@ -320,10 +334,6 @@ fn authenticate_semantics(
     if seller_token == fee_token
         || seller_account.key != &seller_token
         || fee_account.key != &fee_token
-        || seller_account.owner != &system_program::ID
-        || seller_account.data_len() != 0
-        || fee_account.owner != &system_program::ID
-        || fee_account.data_len() != 0
         || account(accounts, RENT_REFUND)?.key.to_bytes() != market.rent_beneficiary.to_bytes()
     {
         return Err(TradingSbfError::Content.into());
@@ -665,9 +675,16 @@ fn normalize_and_initialize_token(
     resource_index: usize,
     owner: [u8; 32],
     role: DirectTokenAccountRoleV1,
+    prestate: DirectTokenAccountPrestateV1,
     normalization: DirectTokenRentNormalizationV1,
     request: DirectTokenSetupRequestV1,
 ) -> ProgramResult {
+    if prestate == DirectTokenAccountPrestateV1::Initialized {
+        if normalization.payer_top_up != 0 || normalization.refunded_excess != 0 {
+            return Err(TradingSbfError::Transition.into());
+        }
+        return Ok(());
+    }
     let resource = account(accounts, resource_index)?;
     let payer = account(accounts, PAYER)?;
     let refund = account(accounts, RENT_REFUND)?;
@@ -745,6 +762,38 @@ fn normalize_and_initialize_token(
     )
     .map_err(|_| TradingSbfError::Transition)?;
     Ok(())
+}
+
+/// Authenticate one token destination before deciding whether this invocation
+/// creates it.  A second seller has a new seller PDA and the venue's existing
+/// fee PDA; both resources are classified independently, while the latter is
+/// admitted only as the exact zero-balance InitializeAccount3 image.
+#[inline(never)]
+fn authenticate_token_setup_prestate(
+    accounts: &[AccountInfo<'_>],
+    resource_index: usize,
+    owner: [u8; 32],
+    exact_rent: u64,
+) -> Result<DirectTokenAccountPrestateV1, ProgramError> {
+    let resource = account(accounts, resource_index)?;
+    let data = resource
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::AccountData)?;
+    let expected = TokenAccount::initialized_base_bytes(
+        account(accounts, COLLATERAL_MINT)?.key.to_bytes(),
+        owner,
+    )
+    .map_err(|_| TradingSbfError::Width)?;
+    direct_token_account_prestate_v1(
+        resource.owner.to_bytes(),
+        system_program::ID.to_bytes(),
+        account(accounts, TOKEN_PROGRAM)?.key.to_bytes(),
+        resource.lamports(),
+        exact_rent,
+        &data,
+        &expected,
+    )
+    .map_err(|_| TradingSbfError::Content.into())
 }
 
 #[inline(never)]
@@ -830,7 +879,9 @@ fn account<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_custody::token_svm::state::TokenAccountLayoutV1;
     use dclutch_trading::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1;
+    use dclutch_trading::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
 
     use dclutch_claims::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -1101,6 +1152,60 @@ mod tests {
         let expected = direct_token_setup_frame_digest_v1(frame);
         frame.swap(SELLER_TOKEN, FEE_TOKEN);
         assert_ne!(direct_token_setup_frame_digest_v1(frame), expected);
+    }
+
+    #[test]
+    fn second_seller_accepts_vacant_seller_and_exact_existing_fee_only() {
+        let system = system_program::ID.to_bytes();
+        let mint = id(61);
+        let fee_owner = id(62);
+        let rent = 2_039_280;
+        let fee = TokenAccount::initialized_base_bytes(mint, fee_owner).expect("fee poststate");
+        let classify = |account_owner, lamports, bytes: &[u8], expected| {
+            direct_token_account_prestate_v1(
+                account_owner,
+                system,
+                TOKEN_2022_PROGRAM_ID,
+                lamports,
+                rent,
+                bytes,
+                expected,
+            )
+            .map_err(|_| TradingSbfError::Content)
+        };
+        assert_eq!(
+            classify(system, 0, &[], &fee),
+            Ok(DirectTokenAccountPrestateV1::Vacant)
+        );
+        assert_eq!(
+            classify(TOKEN_2022_PROGRAM_ID, rent, &fee, &fee),
+            Ok(DirectTokenAccountPrestateV1::Initialized)
+        );
+
+        for (account_owner, lamports, hostile) in [
+            (id(63), rent, fee),
+            (TOKEN_2022_PROGRAM_ID, rent - 1, fee),
+            (TOKEN_2022_PROGRAM_ID, rent, {
+                let mut bytes = fee;
+                bytes[0] ^= 1;
+                bytes
+            }),
+            (TOKEN_2022_PROGRAM_ID, rent, {
+                let mut bytes = fee;
+                bytes[TokenAccountLayoutV1::STATE] = 2;
+                bytes
+            }),
+            (TOKEN_2022_PROGRAM_ID, rent, {
+                let mut bytes = fee;
+                bytes[TokenAccountLayoutV1::AMOUNT] = 1;
+                bytes
+            }),
+        ] {
+            assert_eq!(
+                classify(account_owner, lamports, &hostile, &fee),
+                Err(TradingSbfError::Content)
+            );
+        }
     }
 
     #[test]

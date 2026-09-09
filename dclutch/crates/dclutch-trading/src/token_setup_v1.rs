@@ -5,6 +5,7 @@
 //! then derives both accounts under its own program ID. This keeps destination
 //! selection out of an untrusted operator while leaving setup permissionless.
 
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, TokenAccount};
 use dclutch_sha256_adapter::digestv;
 
 /// High selector reserved for Direct token-account setup.
@@ -90,6 +91,9 @@ pub enum DirectTokenSetupErrorV1 {
     InvalidFee,
     /// Rent normalization facts were inconsistent or overflowed.
     InvalidNormalization,
+    /// A token destination was neither the exact vacant PDA prestate nor the
+    /// exact initialized Token-2022 account this route owns.
+    InvalidTokenPrestate,
 }
 
 /// Result alias.
@@ -194,6 +198,52 @@ pub struct DirectTokenRentNormalizationV1 {
     pub exact_rent: u64,
     /// Exact post-initialization lamports.
     pub post_lamports: u64,
+}
+
+/// The only two token-account prestates Direct setup can advance safely.
+///
+/// A seller destination is normally vacant, while the venue fee destination
+/// can already be initialized by an earlier seller.  The latter is admitted
+/// only as the exact zero-balance `InitializeAccount3` poststate: this route
+/// does not adopt an arbitrary Token-2022 account merely because its PDA and
+/// lamport balance look plausible.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectTokenAccountPrestateV1 {
+    /// A system-owned, zero-data PDA that setup may fund and initialize.
+    Vacant,
+    /// The exact initialized base Token-2022 account already owned by setup.
+    Initialized,
+}
+
+/// Classify one Direct setup token PDA without creating a parallel account
+/// layout parser in an adapter.
+///
+/// `system_program` and `token_program` are explicit because the caller owns
+/// its frame authentication.  The initialized case requires the whole exact
+/// `InitializeAccount3` byte image, not merely parsed mint and owner fields;
+/// this rules out a delegate, close authority, frozen state, nonzero amount,
+/// and every extension or hidden base-state variation.
+pub fn direct_token_account_prestate_v1(
+    observed_owner: [u8; 32],
+    system_program: [u8; 32],
+    token_program: [u8; 32],
+    observed_lamports: u64,
+    exact_rent: u64,
+    observed_data: &[u8],
+    expected_initialized_bytes: &[u8; ACCOUNT_BYTES],
+) -> Result<DirectTokenAccountPrestateV1> {
+    if observed_owner == system_program && observed_data.is_empty() {
+        return Ok(DirectTokenAccountPrestateV1::Vacant);
+    }
+    if observed_owner != token_program
+        || observed_lamports != exact_rent
+        || observed_data != expected_initialized_bytes
+    {
+        return Err(DirectTokenSetupErrorV1::InvalidTokenPrestate);
+    }
+    TokenAccount::parse(observed_data)
+        .map_err(|_| DirectTokenSetupErrorV1::InvalidTokenPrestate)?;
+    Ok(DirectTokenAccountPrestateV1::Initialized)
 }
 
 impl DirectTokenRentNormalizationV1 {
@@ -611,6 +661,8 @@ fn u64_at(input: &[u8], offset: usize) -> Result<u64> {
 mod tests {
     #![allow(clippy::indexing_slicing)]
 
+    use dclutch_custody::token_svm::state::TokenAccountLayoutV1;
+
     use super::*;
 
     fn id(tag: u8) -> [u8; 32] {
@@ -706,6 +758,59 @@ mod tests {
             direct_token_rent_normalization_v1(rent + 1, rent, u64::MAX),
             Err(DirectTokenSetupErrorV1::InvalidNormalization)
         );
+    }
+
+    #[test]
+    fn token_prestates_admit_only_vacant_or_exact_initialized_account() {
+        let system = id(31);
+        let token = id(32);
+        let mint = id(33);
+        let owner = id(34);
+        let rent = 2_039_280;
+        let initialized = TokenAccount::initialized_base_bytes(mint, owner).expect("base account");
+        assert_eq!(
+            direct_token_account_prestate_v1(system, system, token, 0, rent, &[], &initialized),
+            Ok(DirectTokenAccountPrestateV1::Vacant)
+        );
+        assert_eq!(
+            direct_token_account_prestate_v1(
+                token,
+                system,
+                token,
+                rent,
+                rent,
+                &initialized,
+                &initialized,
+            ),
+            Ok(DirectTokenAccountPrestateV1::Initialized)
+        );
+
+        let mut wrong_mint = initialized;
+        wrong_mint[TokenAccountLayoutV1::MINT] ^= 1;
+        let mut wrong_state = initialized;
+        wrong_state[TokenAccountLayoutV1::STATE] = 2;
+        let mut wrong_amount = initialized;
+        wrong_amount[TokenAccountLayoutV1::AMOUNT] = 1;
+        for (account_owner, lamports, bytes) in [
+            (id(35), rent, initialized),
+            (token, rent, wrong_mint),
+            (token, rent, wrong_state),
+            (token, rent, wrong_amount),
+            (token, rent - 1, initialized),
+        ] {
+            assert_eq!(
+                direct_token_account_prestate_v1(
+                    account_owner,
+                    system,
+                    token,
+                    lamports,
+                    rent,
+                    &bytes,
+                    &initialized,
+                ),
+                Err(DirectTokenSetupErrorV1::InvalidTokenPrestate)
+            );
+        }
     }
 
     #[test]
