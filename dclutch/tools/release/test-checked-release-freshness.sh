@@ -51,7 +51,7 @@ write_fresh_log() {
     local label=$1 package=$2 run_id=${3:-$RUN_ID}
     {
         printf 'dclutch-sbf-build-run-v1=%s\n' "$run_id"
-        printf 'dclutch-sbf-build-invocation-v1=CARGO_TARGET_DIR=fixture cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked\n' "$package"
+        printf 'dclutch-sbf-build-invocation-v1=CARGO_TARGET_DIR=fixture cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked -p %s\n' "$package" "$package"
         printf '   Compiling %s v0.1.0 (/scratch/programs/%s)\n' "$package" "$package"
         printf '    Finished release [optimized] target(s) in 1.00s\n'
     } > "$SCRATCH/build-$label.log"
@@ -221,12 +221,15 @@ else
     not_ok "each lineage names itself in the summary and derives its own profile version"
 fi
 
-if grep -Fq 'cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked' "$RUNNER" \
-    && grep -Fq "build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked" "$RUNNER" \
+if grep -Fq 'cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked -p "$package"' "$RUNNER" \
+    && grep -Fq 'cargo build-sbf --manifest-path "programs/dclutch-trading-sbf/Cargo.toml"' "$RUNNER" \
+    && grep -Fq -- '--features hot-cu-profile -- --locked -p dclutch-trading-sbf' "$RUNNER" \
+    && grep -Fq -- '--features hot-cu-profile -- --locked -p "$package"' "$RUNNER" \
+    && grep -Fq "build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked -p %s" "$RUNNER" \
     && grep -Fq 'cargo build --release --locked --offline -p dclutch-release-tool' "$RUNNER"; then
-    ok "release and host-tool builds require the committed lockfiles"
+    ok "release, profile, frame, metadata and host-tool builds select packages and require the committed lockfiles"
 else
-    not_ok "release runner lost its locked-build admission"
+    not_ok "release runner lost its explicit package or locked-build admission"
 fi
 
 if grep -Fq 'cargo-locks-before.tsv' "$RUNNER" \

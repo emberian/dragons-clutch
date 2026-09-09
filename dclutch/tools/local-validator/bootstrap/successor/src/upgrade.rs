@@ -11413,7 +11413,7 @@ mod tests {
                 "solana_version={}\n",
                 "cargo_build_sbf_version=cargo-build-sbf 4.0.2 (fixture)\n",
                 "target_triple=sbpf-solana-solana\n",
-                "build_command=cargo build-sbf --manifest-path programs/{}/Cargo.toml -- --locked\n",
+                "build_command=cargo build-sbf --manifest-path programs/{}/Cargo.toml -- --locked -p {}\n",
                 "assumption=synthetic checked-build evidence is scoped to this hostile unit test\n",
             ),
             hex(&program_id),
@@ -11425,6 +11425,7 @@ mod tests {
             "ef".repeat(32),
             source_revision,
             solana_cli_version,
+            package,
             package,
         ))
         .expect("canonical fixture build metadata");

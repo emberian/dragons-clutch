@@ -781,12 +781,15 @@ while IFS=$'\t' read -r label package; do
     link_target="$(target_dir_for "$package")"
     build_target_relative="${link_target#"$WORK"/}"
     build_feature_suffix="$(sbf_shipped_feature_suffix "$package")"
-    build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked"
+    build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked -p $package"
     if [ "$package" = "dclutch-accelerator-sbf" ] && [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
         build_invocation="DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE=series-shadow/series_shadow_generated.rs $build_invocation"
     fi
     printf 'dclutch-sbf-build-run-v1=%s\n' "$BUILD_RUN_ID" > "$link_log"
     printf 'dclutch-sbf-build-invocation-v1=%s\n' "$build_invocation" >> "$link_log"
+    # cargo-build-sbf resolves a workspace even when given one member's
+    # manifest. Name the member again in Cargo's forwarded arguments so the
+    # workspace default cannot select a different program.
     if [ -n "$stem" ]; then
         rm -f "$link_target/deploy/$stem.so"
     fi
@@ -795,10 +798,10 @@ while IFS=$'\t' read -r label package; do
         if [ "$package" = "dclutch-accelerator-sbf" ] && [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
             DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE="$SERIES_SHADOW_STAGED_INCLUDE" \
                 CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
-                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked -p "$package"
         else
             CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
-                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked -p "$package"
         fi
     ) >>"$link_log" 2>&1
     cat "$link_log" >> "$BUILD_LOG"
@@ -832,7 +835,7 @@ if grep -q '^trading	dclutch-trading-sbf$' "$BUILD_LINKS"; then
     profiled_log="$WORK/build-trading-profiled.log"
     profiled_target="$WORK/profiled-target-trading"
     rm -rf "$profiled_target"
-    profiled_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=profiled-target-trading cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml $HOT_CU_PROFILE_FEATURE -- --locked"
+    profiled_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=profiled-target-trading cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml $HOT_CU_PROFILE_FEATURE -- --locked -p dclutch-trading-sbf"
     printf 'dclutch-sbf-profiled-run-v1=%s\n' "$BUILD_RUN_ID" > "$profiled_log"
     printf 'dclutch-sbf-profiled-invocation-v1=%s\n' "$profiled_invocation" >> "$profiled_log"
     echo "build: trading profiled measurement (diagnostic, never shipped)"
@@ -840,7 +843,7 @@ if grep -q '^trading	dclutch-trading-sbf$' "$BUILD_LINKS"; then
         cd "$SOURCE"
         CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$profiled_target" \
             cargo build-sbf --manifest-path "programs/dclutch-trading-sbf/Cargo.toml" \
-                --features hot-cu-profile -- --locked
+                --features hot-cu-profile -- --locked -p dclutch-trading-sbf
     ) >>"$profiled_log" 2>&1
     cat "$profiled_log" >> "$BUILD_LOG"
     [ -f "$profiled_target/deploy/dclutch_trading_sbf.so" ] \
@@ -926,7 +929,7 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
         frame_report="$FRAME_DIR/$label.txt"
         rm -rf "$frame_target"
         frame_feature_suffix="$(sbf_profile_feature_suffix "$package")"
-        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml$frame_feature_suffix -- --locked"
+        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml$frame_feature_suffix -- --locked -p $package"
         printf 'dclutch-sbf-frame-run-v1=%s\n' "$BUILD_RUN_ID" > "$frame_build_log"
         printf 'dclutch-sbf-frame-invocation-v1=%s\n' "$frame_invocation" >> "$frame_build_log"
         (
@@ -935,16 +938,16 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
                 RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
                     CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$frame_target" \
                     cargo build-sbf --manifest-path "programs/$package/Cargo.toml" \
-                    --features hot-cu-profile -- --locked
+                    --features hot-cu-profile -- --locked -p "$package"
             elif [ "$package" = "dclutch-accelerator-sbf" ] && [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
                 RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
                     DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE="$SERIES_SHADOW_STAGED_INCLUDE" \
                     CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$frame_target" \
-                    cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+                    cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked -p "$package"
             else
                 RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
                     CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$frame_target" \
-                    cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+                    cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked -p "$package"
             fi
         ) >> "$frame_build_log" 2>&1
         frame_compile_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$frame_build_log" | tail -n 1 || true)"
@@ -999,8 +1002,8 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
         build_target_relative="${link_target#"$WORK"/}"
         build_feature_suffix="$(sbf_shipped_feature_suffix "$package")"
         frame_feature_suffix="$(sbf_profile_feature_suffix "$package")"
-        build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked"
-        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml$frame_feature_suffix -- --locked"
+        build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml$build_feature_suffix -- --locked -p $package"
+        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml$frame_feature_suffix -- --locked -p $package"
         if [ "$package" = "dclutch-accelerator-sbf" ] && [ -n "$SERIES_SHADOW_GENERATED_INCLUDE" ]; then
             build_invocation="DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE=series-shadow/series_shadow_generated.rs $build_invocation"
             frame_invocation="DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE=series-shadow/series_shadow_generated.rs $frame_invocation"
@@ -1190,7 +1193,7 @@ for entry in $ROLES; do
         # The shipped artifact's own command, which now carries no feature for
         # any package. The profiled measurement command lives in the link's
         # provenance descriptor, where it describes the frame build that ran.
-        printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked\n' "$package"
+        printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked -p %s\n' "$package" "$package"
         # Strictly ascending, unique, and each one load-bearing.
         printf 'assumption=Loader V3 Program and ProgramData bytes were constructed offline from the exact ELF; no chain was observed\n'
         printf 'assumption=cargo_lock_digest is SHA-256 of the exact Cargo.lock that resolved this package\n'

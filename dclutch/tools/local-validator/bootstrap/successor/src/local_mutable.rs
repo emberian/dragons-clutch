@@ -513,11 +513,11 @@ fn checked_build_command_v1(role: &str, build_mode: LocalMutableBuildModeV1) -> 
     };
     if build_mode == LocalMutableBuildModeV1::HotCuProfile && role == "trading" {
         return Ok(
-            "cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml --features hot-cu-profile -- --locked".into(),
+            "cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml --features hot-cu-profile -- --locked -p dclutch-trading-sbf".into(),
         );
     }
     Ok(format!(
-        "cargo build-sbf --manifest-path programs/{package}/Cargo.toml -- --locked"
+        "cargo build-sbf --manifest-path programs/{package}/Cargo.toml -- --locked -p {package}"
     ))
 }
 
@@ -2241,7 +2241,7 @@ mod tests {
             .expect("profiled Trading command");
         assert_eq!(
             hot_cu,
-            "cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml --features hot-cu-profile -- --locked"
+            "cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml --features hot-cu-profile -- --locked -p dclutch-trading-sbf"
         );
         assert!(
             checked_build_command_matches_v1(
@@ -2287,12 +2287,11 @@ mod tests {
                 )
                 .expect("profile mode leaves non-Trading commands ordinary")
             );
-            let profiled = format!(
-                "{} --features hot-cu-profile -- --locked",
-                ordinary
-                    .strip_suffix(" -- --locked")
-                    .expect("ordinary command has its locked Cargo suffix")
-            );
+            let (base, selected_package) = ordinary
+                .rsplit_once(" -- --locked -p ")
+                .expect("ordinary command has its locked selected-package suffix");
+            let profiled =
+                format!("{base} --features hot-cu-profile -- --locked -p {selected_package}");
             assert!(
                 !checked_build_command_matches_v1(
                     &profiled,
@@ -2304,7 +2303,7 @@ mod tests {
         }
 
         assert!(!checked_build_command_matches_v1(
-            "cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml --features unknown-feature -- --locked",
+            "cargo build-sbf --manifest-path programs/dclutch-trading-sbf/Cargo.toml --features unknown-feature -- --locked -p dclutch-trading-sbf",
             "trading",
             LocalMutableBuildModeV1::HotCuProfile,
         )

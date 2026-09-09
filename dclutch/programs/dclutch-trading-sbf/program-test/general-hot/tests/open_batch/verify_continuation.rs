@@ -451,6 +451,81 @@ pub(super) async fn verify_first_row(
     );
 }
 
+/// Isolate the two evaluator-owned variable bodies while using the exact
+/// published action rules and the same unmarked observations as Hot.
+fn assert_verify_evidence_projects(width: u32, page: &[u8], manifest: &[u8]) {
+    use dclutch_trading::general::account_rules_v3::general_account_profile_rule_v3;
+    use dclutch_trading::general::state_artifacts_v3::general_readonly_evidence_count_v3;
+    use dclutch_vm::account_profile::AccountObservationV1;
+    use dclutch_vm::account_profile::v2::{
+        AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, ProjectionRegistersV2, RULE_BYTES,
+        TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+        encode::{RegisterGeometryV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic},
+        project_dynamic_fixed_spans_atomic,
+    };
+    let rules = [
+        GeneralReadonlyEvidenceKindV3::CandidatePage,
+        GeneralReadonlyEvidenceKindV3::SettlementManifest,
+    ]
+    .map(|kind| {
+        let coordinate = (0..general_readonly_evidence_count_v3(Action::VerifyCandidateRow))
+            .map(|i| general_readonly_evidence_v3(Action::VerifyCandidateRow, i).expect("evidence"))
+            .find(|e| e.kind == kind)
+            .expect("selected evidence")
+            .coordinate;
+        general_account_profile_rule_v3(
+            Action::VerifyCandidateRow,
+            coordinate,
+            general_external_account_widths_v3(64, 192),
+        )
+        .expect("published rule")
+    });
+    let mut bytes = vec![0; DYNAMIC_FIXED_SPAN_HEADER_BYTES + 2 * RULE_BYTES];
+    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+        TrustedEnvironmentV2::None,
+        TrustedIdentityEnvironmentV2::None,
+        TrustedBuiltinIdentityV2::None,
+        &[],
+        &rules,
+        &[],
+        &[],
+        RegisterGeometryV2 {
+            common_scalars: 1,
+            item_scalar_stride: 0,
+            common_identities: 0,
+            item_identity_stride: 0,
+        },
+        &mut vec![0; bytes.len()],
+        &mut bytes,
+    )
+    .expect("two evidence rules");
+    let observations = [
+        AccountObservationV1::new(&[1; 32], &[3; 32], 1, page, false, false, false),
+        AccountObservationV1::new(&[2; 32], &[3; 32], 1, manifest, false, false, false),
+    ];
+    let mut output = [0xa5];
+    assert_eq!(
+        project_dynamic_fixed_spans_atomic(
+            AccountProfileV2::decode(&bytes).expect("profile"),
+            width,
+            &[],
+            &observations,
+            ProjectionRegistersV2 {
+                input_scalars: &[7],
+                input_identities: &[],
+                scratch_scalars: &mut [0],
+                scratch_identities: &mut [],
+                output_scalars: &mut output,
+                output_identities: &mut []
+            },
+            None,
+        ),
+        Ok(()),
+        "actual Page/Manifest bytes must reach their semantic evaluator without forged outer authentication"
+    );
+    assert_eq!(output, [7]);
+}
+
 /// Native control of the exact economic corpus, independent of preceding SBF
 /// admission. The old cap and old uniform price are separate counterexamples.
 #[test]
@@ -582,6 +657,7 @@ fn singleton_buy_marginal_prices_verify_and_refuse_the_two_old_corpora() {
             let (result, outputs) = replay_row(batch, submission, &image, &page, &order_bytes);
             if cap == 1 {
                 let result = result.expect("marginal singleton zero-fill row");
+                assert_verify_evidence_projects(width, &page, &outputs.manifest);
                 assert!(result.complete);
                 assert_eq!(
                     result.submission.state().status,

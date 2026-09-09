@@ -237,7 +237,7 @@ class DirectCyclePreparationTest(SimulatorHarness):
         config = self.write_config(self.config())
         proc = self.run_sim("run", "--config", str(config), "--cycles", "1", "--execute")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        status = json.loads((self.work / "STATUS.json").read_text())
+        status = json.loads((self.work / "status.json").read_text())
         self.assertIn("sig-reapprove", status["trades"]["signatures"])
 
 

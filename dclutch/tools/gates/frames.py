@@ -399,10 +399,10 @@ def measure(*, source: Path, repo: Path | None, tools: Path, measured_commit: st
             env = {**__import__("os").environ, "RUSTC_BOOTSTRAP": "1", "RUSTFLAGS": "-Zemit-stack-sizes --emit=obj,link",
                    "CARGO_TERM_COLOR": "never", "CARGO_TARGET_DIR": str(target)}
             if dry_run:
-                note(f"$ cd {source} && RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' cargo build-sbf --manifest-path {manifest} -- --locked")
+                note(f"$ cd {source} && RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' cargo build-sbf --manifest-path {manifest} -- --locked -p {package}")
                 continue
             with open(log, "w") as handle:
-                built = subprocess.run(["cargo", "build-sbf", "--manifest-path", str(manifest), "--", "--locked"],
+                built = subprocess.run(["cargo", "build-sbf", "--manifest-path", str(manifest), "--", "--locked", "-p", package],
                                        cwd=source, env=env, stdout=handle, stderr=subprocess.STDOUT)
             text = log.read_text(errors="replace")
             if built.returncode:

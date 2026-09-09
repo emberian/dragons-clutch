@@ -1511,7 +1511,7 @@ def attestation(root: Path, pack_path: Path, pack: Mapping[str, Any], role: Mapp
         "platform_tools_version": pack["toolchains"]["platform_tools"],
         "rustc_version": pack["toolchains"]["sbf_rustc"],
         "solana_version": pack["toolchains"]["solana_cli"],
-        "build_command": f"cargo build-sbf --manifest-path programs/{role['package']}/Cargo.toml -- --locked",
+        "build_command": f"cargo build-sbf --manifest-path programs/{role['package']}/Cargo.toml -- --locked -p {role['package']}",
         "build_log_sha256": sha256_file(build_log),
         "verifier": {"status": "clean", "diagnostic_count": 0},
         "sbf_backend_frame_diagnostics": 0,

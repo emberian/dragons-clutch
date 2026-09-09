@@ -2706,27 +2706,11 @@ fn prepare_public_facts_v1(
         }
         _ => return Err(refusal("Direct token destinations were not classified")),
     };
-    // WHAT REMAINS OF WALL 7, NAMED RATHER THAN DISCOVERED ON CHAIN.
-    //
-    // The producer now admits both prestates the chain admits, which is the
-    // half of this that was wrong: it used to call an initialized destination
-    // malformed. But admitting it is only useful if the SETUP STAGE MACHINE
-    // then skips a token setup whose accounts already exist, and it does not
-    // yet -- `execute_direct_setup_action_v1` selects TokenSetup purely on
-    // journal phase, and a fresh session has no journal, so it would send the
-    // instruction and `direct_token_setup_v1` would refuse it for not finding
-    // the vacancy it needs to create anything.
-    //
-    // So this refuses HERE, before signing two intents and writing a session
-    // that could never advance, and it says which stage owns the gap. That is
-    // strictly better than producing the session and reading `Content` off the
-    // chain twenty minutes later, and it is honest that the market still cannot
-    // trade twice.
-    if token_setup_prestate == DirectTokenDestinationPrestateV1::Initialized {
-        return Err(refusal(format!(
-            "Direct token setup has already run on Market {market} generation {generation}: the seller destination {seller_token} and fee destination {fee_token} are both the initialized Token-2022 accounts this trade would pay. The producer admits that prestate; the setup stage machine cannot yet SKIP a finished token setup, so this session would stall at the token-setup stage. That skip is the remaining half of wall 7"
-        )));
-    }
+    // Later sessions reuse the same authenticated seller and fee accounts.
+    // The exterior skips setup only when the replay and both token accounts
+    // are live together, then the Hot planner authenticates their full bytes.
+    let _token_setup_already_live =
+        token_setup_prestate == DirectTokenDestinationPrestateV1::Initialized;
 
     let descriptor = record_coordinates_v1(
         plan,
@@ -3129,11 +3113,11 @@ fn authenticate_or_admit_pending_replay_v1(
         || replay.caller_program != trading.to_bytes()
         || replay.rent_refund != rent_refund.to_bytes()
         || replay.open_vault_count != 0
-        || replay.next_revision != 1
+        || replay.next_revision == 0
         || replay.generation != generation
     {
         return Err(refusal(
-            "preexisting Direct Custody replay is not the exact first-use setup poststate",
+            "preexisting Direct Custody replay is not an authenticated completed-trade boundary",
         ));
     }
     Ok(())

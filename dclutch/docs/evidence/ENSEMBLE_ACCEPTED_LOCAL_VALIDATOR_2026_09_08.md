@@ -143,3 +143,28 @@ The focused exact-account replay
 passed on hbox with one test run, zero failures and 469 filtered tests. It
 replays the original bank Clock refusal as `DeadlineNotReached` and accepts
 the same three certificates at the authenticated deadline plus one.
+
+## Dated addendum — 2026-09-09 failure recovery and payouts
+
+A retained-ledger continuation against release source `691bc6ff0` recovered an
+interrupted address-table creation without resetting the ledger, then executed
+terminal sequence 2 Advance, sequence 3 Exhaust, sequence 1
+LadderExhaustedFailure and AdmitTerminal. The three ordinary payouts were
+166,666,667 atoms each, at slots 8,938, 9,104 and 9,717. Exact conservation was
+`500,000,001 Hoard atoms -> 500,000,001 recipient atoms + 0 Hoard atoms`.
+
+This closes the **recovery and ordinary-payout child path**, not the whole
+Market. Market retirement stopped before account access because the retained
+manifest carried a Direct Trading funding ledger but omitted the Direct
+capability root; those first-use Direct accounts must be present together or
+absent together. No retirement refusal was weakened and `retirementCompleted`
+is therefore false.
+
+The durable result is
+`hbox:/tank/dregg-build/dclutch-ensemble-recovery-failure-691-052-20260909-run1/campaign-recovery1/RECOVERY_RESULT.json`,
+SHA-256 `ccd201bce11b423b91c543713e9ce49cf19ad9662c0fdf44ce02643e88d31c16`.
+It binds checked gate SHA-256
+`bc83d0ab5033d4ac5c2a87fd3a40134bf43ca9d7bd7ea633edf6deecf4d5e9de`,
+release source `691bc6ff0ab1c89db6f8ab307e6ff1d75e0557a6`, compatible host
+`052f4904b8e18ae9e7b8e8f2efa09dacf0a28c38`, and host fix
+`85f18b1a2792512b81d002cbaeb31e759c03e72d`.

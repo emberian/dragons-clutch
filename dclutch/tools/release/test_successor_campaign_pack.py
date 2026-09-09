@@ -298,6 +298,13 @@ class SuccessorCampaignPackTests(unittest.TestCase):
                 item = spec[role["spec_key"]]
                 self.assertEqual(item["elf_sha256"], role["elf"]["sha256"])
                 self.assertEqual(item["semantic_release_id"], role["semantic_release_id"])
+                attestation = json.loads(
+                    (run_root / "attestation" / f"{role['role']}.json").read_text()
+                )
+                self.assertEqual(
+                    attestation["build_command"],
+                    f"cargo build-sbf --manifest-path programs/{role['package']}/Cargo.toml -- --locked -p {role['package']}",
+                )
 
     def test_materialized_spec_refuses_role_substitution(self) -> None:
         with tempfile.TemporaryDirectory(dir="/private/tmp") as directory:

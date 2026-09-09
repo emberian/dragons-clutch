@@ -3069,6 +3069,10 @@ fn commit_last_uses_the_projection_bank_and_keeps_request_refusals() {
     };
     let root_offset = u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1).expect("root header");
     let operations = [
+        EffectInstructionV3::require_lamports_eq(
+            AccountCoordinateV3::fixed(5),
+            ScalarCoordinateV3::common(3),
+        ),
         EffectInstructionV3::write_u64(
             AccountCoordinateV3::fixed(5),
             0,
@@ -3111,7 +3115,7 @@ fn commit_last_uses_the_projection_bank_and_keeps_request_refusals() {
         EffectGeometryV3 {
             fixed_accounts: 6,
             item_account_stride: 0,
-            common_scalars: 3,
+            common_scalars: 4,
             item_scalar_stride: 0,
             common_identities: 0,
             item_identity_stride: 0,
@@ -3150,7 +3154,7 @@ fn commit_last_uses_the_projection_bank_and_keeps_request_refusals() {
     let mut projected = project_hot_effects_v3(
         effect,
         0,
-        &[77, 88, 0],
+        &[77, 88, 0, 10],
         &[],
         inputs.clone(),
         &[],
@@ -3219,9 +3223,14 @@ fn commit_last_uses_the_projection_bank_and_keeps_request_refusals() {
         &88_u64.to_le_bytes()
     );
     assert!(
-        matches!(project_hot_effects_v3(effect, 0, &[300, 88, 0], &[], inputs, &[], false,
+        matches!(project_hot_effects_v3(effect, 0, &[300, 88, 0, 10], &[], inputs.clone(), &[], false,
         &permissions, &aliases, 6, 1), Err(error) if error == ProgramError::from(TradingSbfError::Transition)),
         "request u8 narrowing still refuses before the plan can commit"
+    );
+    assert!(
+        matches!(project_hot_effects_v3(effect, 0, &[77, 88, 0, 11], &[], inputs, &[], false,
+        &permissions, &aliases, 6, 1), Err(error) if error == ProgramError::from(TradingSbfError::Transition)),
+        "the kernel still refuses an unequal lamport assertion after the visitor"
     );
 }
 

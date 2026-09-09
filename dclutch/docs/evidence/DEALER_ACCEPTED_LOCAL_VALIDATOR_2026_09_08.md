@@ -94,3 +94,36 @@ object. The two exact runtime identifiers are:
 
 The sealed gate and its ELF hashes remain unchanged. This addendum corrects
 only the identifier label; it makes no new runtime, devnet, or release claim.
+
+## Dated addendum — 2026-09-09 terminal continuation
+
+The same retained 691 runtime family later completed the Dealer child through
+failure resolution, terminal admission, two Dealer-owned Claims redemptions,
+full capital exit and physical Dealer close. The final five transactions were:
+
+| Stage | Signature | Slot | Compute units |
+| --- | --- | ---: | ---: |
+| Claims replay create | `2rqpAUJhxPPjVzbTdKxRbUW42U2nq71az3YUBdhkd5EjLNFfX7zJ1bmv8QvvFockPBwtBVqNaD24uiMSuf7XwNeY` | 9,276 | 82,512 |
+| Redeem 9 atoms | `bqHwxvRXwqBZf7bx6VxpLiij4wTY7SELCHYzo4agJj3C6hbDWhmUzi5tWUzu7FyeHHqCJnoKBALVPsJXyif4CzS` | 9,627 | 368,816 |
+| Redeem 9 atoms | `5LKaBdDQVxM6UfQ9e6tS7VmK12GXkUCmDFkfZC9XzjxfkJDQx6XVKKem1UfSLTyLjRd2nD4auM7BpJegepWpWBX3` | 9,910 | 349,795 |
+| Capital exit, 2,999,997 atoms | `5Fuev8YDQC69bq5BqoyGJm95KmGFWGc3NTSf62FufypmbPQX27REUc8Qk4ZJNp8RgUi54h26k1zfMxNaWhjGGVPE` | 10,087 | 128,942 |
+| Dealer close | `28JC1nM9rxRpCsxXmFwmH3siUdPAhr9CdBAhUSmLDXboikWNQ59XVpMmx6BsZ6cGjuhGW7WcjpJVJzPksYqVZwXg` | 10,367 | 262,937 |
+
+Conservation closes at the Dealer boundary: the fund moved
+`3,000,000 -> 2,999,982 -> 2,999,979 -> 2,999,997 -> 0` atoms; the Dealer
+supplied and recovered 18 atoms; and Hoard retained the taker's 9-atom backing
+at 500,000,010 atoms. Fund, rule, quote, Dealer Position, Dealer admission,
+Dealer vault and Dealer Trading replay were all absent at finalized slot
+11,529. Rent return was 11,393,520 lamports and the sponsor principal return
+was 6,681,600 lamports, with zero native close surplus.
+
+This is a **Dealer capability-child close**, not whole-Market retirement. The
+Market Hoard and Claims replay remain live, as do the wider Market roots that
+the Dealer close does not own. It also remains one founder-funded scoring
+Dealer, not the multiple-LP control required by C-06.
+
+The durable result is
+`hbox:/tank/dregg-build/dclutch-dealer-life-691-052-20260909-run4/campaign/RECOVERY_RESULT.json`,
+SHA-256 `15c1daa2a4e018f45f4705cb7ab0c906e89804b3758166d0c5cfb030591ee831`.
+Its finalized post-close account capture has SHA-256
+`58d291b2fd543204b216a1793e84846e6c1e8f61650f57032f734a303854d917`.

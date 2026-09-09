@@ -69,13 +69,11 @@ use crate::general::{
         general_hot_item_scalar_stride_v3, identity, scalar,
     },
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
-    runtime_manifest::SETTLEMENT_MANIFEST_HEADER_BYTES_V2,
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
     runtime_verify::{RUNTIME_VERIFIER_HEADER_BYTES_V2, RUNTIME_VERIFIER_TAIL_COUNT_V2},
     runtime_width::{
-        CANDIDATE_HEADER_BYTES_V2, CandidateLayoutV2, PAGE_HEADER_BYTES_V2,
-        SETTLEMENT_CURSOR_HEADER_BYTES_V2, VERIFIED_CANDIDATE_HEADER_BYTES_V2,
-        VerifiedCandidateLayoutV2,
+        CANDIDATE_HEADER_BYTES_V2, CandidateLayoutV2, SETTLEMENT_CURSOR_HEADER_BYTES_V2,
+        VERIFIED_CANDIDATE_HEADER_BYTES_V2, VerifiedCandidateLayoutV2,
     },
     state_artifacts_v3::{
         GENERAL_CLOSE_PAYER_ACCOUNT_V3, GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
@@ -2290,14 +2288,14 @@ fn evidence_rule(kind: GeneralReadonlyEvidenceKindV3) -> Result<AccountRuleWithP
             8,
             no_effects(),
         )),
-        // One immutable page has a fixed hostile-decoded header followed by a
-        // runtime number of canonical execution rows. The AccountProfile can
-        // authenticate its readonly carrier and minimum prefix, while
-        // `PageV2::decode` remains the sole owner of the exact
-        // `64 + rows * (112 + 16N)` width and row ordering.
-        GeneralReadonlyEvidenceKindV3::CandidatePage => Ok(variable_rule(
-            u32::try_from(PAGE_HEADER_BYTES_V2).map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-        )),
+        // The General evaluator authenticates the page's exact dynamic width,
+        // candidate/revision joins, and execution rows. The outer Hot adapter
+        // has not parsed it when Profile13 runs and must not invent its
+        // adapter-authenticated-variable-data marker. Opaque readonly grants
+        // no local data projection or effect authority.
+        GeneralReadonlyEvidenceKindV3::CandidatePage => {
+            Ok(opaque_rule(AccountPrivilegesV2::new(false, false, false)))
+        }
         // Verification consumes the actual escrowed order local state, not a
         // detached immutable terms image. Its envelope and mutable window are
         // fixed; the canonical receive/deliver pair contributes one 16-byte
@@ -2358,10 +2356,12 @@ fn evidence_rule(kind: GeneralReadonlyEvidenceKindV3) -> Result<AccountRuleWithP
             8 * RUNTIME_VERIFIER_TAIL_COUNT_V2,
             no_effects(),
         )),
-        GeneralReadonlyEvidenceKindV3::SettlementManifest => Ok(variable_rule(
-            u32::try_from(SETTLEMENT_MANIFEST_HEADER_BYTES_V2)
-                .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-        )),
+        // Verify compares the complete manifest to its freshly derived bytes;
+        // settlement actions hostile-decode it in their own evaluator. Neither
+        // is an outer-adapter authentication before account projection.
+        GeneralReadonlyEvidenceKindV3::SettlementManifest => {
+            Ok(opaque_rule(AccountPrivilegesV2::new(false, false, false)))
+        }
     }
 }
 

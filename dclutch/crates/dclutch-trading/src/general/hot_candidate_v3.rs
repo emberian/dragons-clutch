@@ -8021,6 +8021,49 @@ mod tests {
         assert_eq!(in_place_result_output, result_output);
         assert_eq!(in_place_manifest_output, manifest_output);
 
+        // These readonly bodies pass through Profile13 opaquely. The actual
+        // AOT workspace evaluator still owns their complete byte semantics.
+        let workspace_projection = |page: &[u8], manifest: &[u8]| {
+            project_general_verify_candidate_workspace_v3(
+                CandidateVerifyRowViewV1 {
+                    batch,
+                    submission,
+                    candidate: &candidate_bytes,
+                    page,
+                    order: &order_bytes,
+                    cursor_before: &empty_cursor,
+                    verified_before: &empty_result,
+                    expected_page_index: 0,
+                    expected_row_index: 0,
+                    expected_revision: 0,
+                },
+                outcome_count,
+                &mut input.clone(),
+                &mut vec![0; verifier_len],
+                manifest,
+            )
+        };
+        assert_eq!(
+            workspace_projection(&page_bytes, &manifest_output),
+            Ok(projection)
+        );
+        let mut substituted_manifest = manifest_output.clone();
+        substituted_manifest[0] ^= 1;
+        assert_eq!(
+            workspace_projection(&page_bytes, &substituted_manifest),
+            Err(GeneralHotCandidateErrorV3::VerifyCoordinate(
+                VerifyCandidateClauseV3::Manifest
+            )),
+        );
+        let mut substituted_page = page_bytes.clone();
+        substituted_page[0] ^= 1;
+        assert_eq!(
+            workspace_projection(&substituted_page, &manifest_output),
+            Err(GeneralHotCandidateErrorV3::Verify(
+                GeneralCandidateErrorV1::Substitution
+            )),
+        );
+
         let mut hostile_candidate = input.clone();
         write_identity(
             &mut hostile_candidate,

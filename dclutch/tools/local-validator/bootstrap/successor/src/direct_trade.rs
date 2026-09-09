@@ -675,65 +675,70 @@ fn run_for_cluster_v1(arguments: Vec<String>, expected_cluster: ExpectedClusterV
         return stdout_json_v1(&evidence);
     }
     let setup_journals = load_direct_setup_journals_v1(&validated)?;
-    let setup = collect_direct_trade_setup_planning_v1(
-        &mut rpc,
-        &validated,
-        setup_journals.replay.as_ref(),
-        setup_journals.token.as_ref(),
-    )?;
-    let setup_complete = setup_journals
-        .token
-        .as_ref()
-        .is_some_and(|journal| journal.phase == DirectSetupJournalPhaseV1::Finalized);
-    if !setup_complete {
-        if !journal_entries_v1(&validated)?.is_empty() {
-            return Err(refusal(
-                "Direct lookup/seal/Hot journal exists before replay and token setup finalized",
-            ));
+    let setup_already_live = setup_journals.replay.is_none()
+        && setup_journals.token.is_none()
+        && direct_setup_accounts_already_live_v1(&mut rpc, &validated)?;
+    if !setup_already_live {
+        let setup = collect_direct_trade_setup_planning_v1(
+            &mut rpc,
+            &validated,
+            setup_journals.replay.as_ref(),
+            setup_journals.token.as_ref(),
+        )?;
+        let setup_complete = setup_journals
+            .token
+            .as_ref()
+            .is_some_and(|journal| journal.phase == DirectSetupJournalPhaseV1::Finalized);
+        if !setup_complete {
+            if !journal_entries_v1(&validated)?.is_empty() {
+                return Err(refusal(
+                    "Direct lookup/seal/Hot journal exists before replay and token setup finalized",
+                ));
+            }
+            if arguments.execute {
+                return execute_direct_setup_action_v1(
+                    &mut rpc,
+                    &arguments,
+                    &validated,
+                    &setup,
+                    &setup_journals,
+                );
+            }
+            let next = if setup_journals
+                .replay
+                .as_ref()
+                .is_some_and(|journal| journal.phase == DirectSetupJournalPhaseV1::Finalized)
+            {
+                "token-setup"
+            } else {
+                "replay-setup"
+            };
+            let output = serde_json::json!({
+                "schema": "dclutch-direct-trade-setup-preflight-v1",
+                "mutationPermitted": false,
+                "publicManifestSha256": validated.public_sha256,
+                "privateSessionSha256": validated.private_sha256,
+                "observationSlot": setup.observation.slot,
+                "nextAction": next,
+                "projectedHotUniqueMessageAccounts": 61,
+                "projectedHotLookupAddressCount": setup.projected_hot.provision.addresses.len(),
+                "replayObservedLamports": setup.replay_observed.lamports,
+                "sellerTokenObservedLamports": setup.seller_token_observed.lamports,
+                "feeTokenObservedLamports": setup.fee_token_observed.lamports,
+            });
+            return stdout_json_v1(&output);
         }
-        if arguments.execute {
-            return execute_direct_setup_action_v1(
-                &mut rpc,
-                &arguments,
-                &validated,
-                &setup,
-                &setup_journals,
-            );
-        }
-        let next = if setup_journals
+        let replay_journal = setup_journals
             .replay
             .as_ref()
-            .is_some_and(|journal| journal.phase == DirectSetupJournalPhaseV1::Finalized)
-        {
-            "token-setup"
-        } else {
-            "replay-setup"
-        };
-        let output = serde_json::json!({
-            "schema": "dclutch-direct-trade-setup-preflight-v1",
-            "mutationPermitted": false,
-            "publicManifestSha256": validated.public_sha256,
-            "privateSessionSha256": validated.private_sha256,
-            "observationSlot": setup.observation.slot,
-            "nextAction": next,
-            "projectedHotUniqueMessageAccounts": 61,
-            "projectedHotLookupAddressCount": setup.projected_hot.provision.addresses.len(),
-            "replayObservedLamports": setup.replay_observed.lamports,
-            "sellerTokenObservedLamports": setup.seller_token_observed.lamports,
-            "feeTokenObservedLamports": setup.fee_token_observed.lamports,
-        });
-        return stdout_json_v1(&output);
+            .ok_or_else(|| refusal("Direct finalized token setup omitted replay journal"))?;
+        let token_journal = setup_journals
+            .token
+            .as_ref()
+            .ok_or_else(|| refusal("Direct finalized token setup journal disappeared"))?;
+        authenticate_finalized_direct_setup_history_v1(&mut rpc, &setup, replay_journal)?;
+        authenticate_finalized_direct_setup_history_v1(&mut rpc, &setup, token_journal)?;
     }
-    let replay_journal = setup_journals
-        .replay
-        .as_ref()
-        .ok_or_else(|| refusal("Direct finalized token setup omitted replay journal"))?;
-    let token_journal = setup_journals
-        .token
-        .as_ref()
-        .ok_or_else(|| refusal("Direct finalized token setup journal disappeared"))?;
-    authenticate_finalized_direct_setup_history_v1(&mut rpc, &setup, replay_journal)?;
-    authenticate_finalized_direct_setup_history_v1(&mut rpc, &setup, token_journal)?;
     let journal_root = journal_root_v1(&validated)?;
     let planning = collect_direct_trade_planning_v1(&mut rpc, &validated, journal_root.as_ref())?;
     let next = next_action_v1(&validated, &planning)?;
@@ -1309,6 +1314,64 @@ fn validate_setup_facts_v1(
         ));
     }
     Ok(())
+}
+
+/// Classify Direct's three one-time setup accounts as one state boundary.
+/// Complete byte authentication belongs to the Hot planner that immediately
+/// follows this discriminator.
+fn direct_setup_accounts_already_live_v1(
+    rpc: &mut Rpc,
+    validated: &ValidatedManifestV1,
+) -> Result<bool> {
+    let public = &validated.public;
+    let custody = parse_key(
+        &public.route.custody.custody_program,
+        "Direct Custody program",
+    )?;
+    let token_program = parse_key(&public.route.custody.token_program, "Direct Token program")?;
+    let rows = [
+        (
+            parse_key(&public.route.custody.replay, "Direct Custody replay")?,
+            custody,
+            "Custody replay",
+        ),
+        (
+            parse_key(&public.route.custody.seller_token, "Direct seller token")?,
+            token_program,
+            "seller token",
+        ),
+        (
+            parse_key(&public.route.custody.fee_token, "Direct fee token")?,
+            token_program,
+            "fee token",
+        ),
+    ];
+    let mut live = 0_usize;
+    let mut vacant = 0_usize;
+    for (address, expected_owner, label) in rows {
+        match rpc.account(address)? {
+            None => vacant += 1,
+            Some(account) if account.owner == system_program::ID && account.data.is_empty() => {
+                vacant += 1;
+            }
+            Some(account) if account.owner == expected_owner && !account.executable => live += 1,
+            Some(account) => {
+                return Err(refusal(format!(
+                    "Direct {label} {address} is neither vacant nor owned by its setup program: owner {}, executable {}, data bytes {}",
+                    account.owner,
+                    account.executable,
+                    account.data.len()
+                )));
+            }
+        }
+    }
+    match (vacant, live) {
+        (3, 0) => Ok(false),
+        (0, 3) => Ok(true),
+        _ => Err(refusal(format!(
+            "Direct one-time setup is half complete: {vacant} vacant and {live} live accounts"
+        ))),
+    }
 }
 
 fn collect_direct_trade_setup_planning_v1(
@@ -3656,53 +3719,57 @@ fn direct_finalized_mutations_v1(
     DirectLookupActivationEvidenceV1,
 )> {
     let setup = load_direct_setup_journals_v1(validated)?;
-    let replay = setup
-        .replay
-        .ok_or_else(|| refusal("Direct terminal evidence omitted replay setup journal"))?;
-    let token = setup
-        .token
-        .ok_or_else(|| refusal("Direct terminal evidence omitted token setup journal"))?;
-    let binding = direct_setup_binding_v1(validated)?;
-    authenticate_direct_setup_chain_v1(&binding, &replay, &token)?;
-    if replay.phase != DirectSetupJournalPhaseV1::Finalized
-        || token.phase != DirectSetupJournalPhaseV1::Finalized
-    {
-        return Err(refusal(
-            "Direct terminal evidence setup journals were not finalized",
-        ));
-    }
-    let setup_paths = direct_setup_paths_v1(validated)?;
     let mut mutations = Vec::new();
-    for (path, journal, kind) in [
-        (&setup_paths[0], &replay, "replay-setup"),
-        (&setup_paths[1], &token, "token-setup"),
-    ] {
-        let bytes = fs::read(path)?;
-        require_unique_json_v1(&bytes, "Direct terminal setup journal")?;
-        mutations.push(DirectFinalizedMutationEvidenceV1 {
-            kind: kind.into(),
-            prefix_len: None,
-            path: path.display().to_string(),
-            sha256: sha256_hex(&bytes),
-            intent_sha256: journal.message_sha256.clone(),
-            schema: DIRECT_SETUP_JOURNAL_SCHEMA_V1.into(),
-            completion_pointer: "/phase".into(),
-            completion_value: "finalized".into(),
-            signature: journal
-                .expected_signature
-                .clone()
-                .ok_or_else(|| refusal("Direct setup mutation omitted signature"))?,
-            slot: journal
-                .finalized_slot
-                .ok_or_else(|| refusal("Direct setup mutation omitted finalized slot"))?,
-            fee_payer: journal.expected_signer.clone(),
-            fee_lamports: journal
-                .fee_lamports
-                .ok_or_else(|| refusal("Direct setup mutation omitted finalized fee"))?,
-            compute_units_consumed: journal
-                .compute_units_consumed
-                .ok_or_else(|| refusal("Direct setup mutation omitted finalized CU"))?,
-        });
+    match (setup.replay.as_ref(), setup.token.as_ref()) {
+        (None, None) => {}
+        (Some(replay), Some(token)) => {
+            let binding = direct_setup_binding_v1(validated)?;
+            authenticate_direct_setup_chain_v1(&binding, replay, token)?;
+            if replay.phase != DirectSetupJournalPhaseV1::Finalized
+                || token.phase != DirectSetupJournalPhaseV1::Finalized
+            {
+                return Err(refusal(
+                    "Direct terminal evidence setup journals were not finalized",
+                ));
+            }
+            let setup_paths = direct_setup_paths_v1(validated)?;
+            for (path, journal, kind) in [
+                (&setup_paths[0], replay, "replay-setup"),
+                (&setup_paths[1], token, "token-setup"),
+            ] {
+                let bytes = fs::read(path)?;
+                require_unique_json_v1(&bytes, "Direct terminal setup journal")?;
+                mutations.push(DirectFinalizedMutationEvidenceV1 {
+                    kind: kind.into(),
+                    prefix_len: None,
+                    path: path.display().to_string(),
+                    sha256: sha256_hex(&bytes),
+                    intent_sha256: journal.message_sha256.clone(),
+                    schema: DIRECT_SETUP_JOURNAL_SCHEMA_V1.into(),
+                    completion_pointer: "/phase".into(),
+                    completion_value: "finalized".into(),
+                    signature: journal
+                        .expected_signature
+                        .clone()
+                        .ok_or_else(|| refusal("Direct setup mutation omitted signature"))?,
+                    slot: journal
+                        .finalized_slot
+                        .ok_or_else(|| refusal("Direct setup mutation omitted finalized slot"))?,
+                    fee_payer: journal.expected_signer.clone(),
+                    fee_lamports: journal
+                        .fee_lamports
+                        .ok_or_else(|| refusal("Direct setup mutation omitted finalized fee"))?,
+                    compute_units_consumed: journal
+                        .compute_units_consumed
+                        .ok_or_else(|| refusal("Direct setup mutation omitted finalized CU"))?,
+                });
+            }
+        }
+        _ => {
+            return Err(refusal(
+                "Direct terminal evidence had only one of the two setup journals",
+            ));
+        }
     }
 
     let mut activation = None;
@@ -5847,11 +5914,22 @@ fn authenticate_embedded_direct_mutations_v1(
     // The discriminator is not a guess: a seal row is in `evidence.mutations`
     // exactly when this session SIGNED it. Both shapes are admitted and the
     // refusal names both.
+    let setup_mutation_count = match evidence.mutations.first().map(|row| row.kind.as_str()) {
+        Some("replay-setup") => {
+            if evidence.mutations.get(1).map(|row| row.kind.as_str()) != Some("token-setup") {
+                return Err(refusal(
+                    "embedded Direct evidence carried only one setup mutation",
+                ));
+            }
+            2_usize
+        }
+        _ => 0_usize,
+    };
     let sealed_mutation_count = extension_count
-        .checked_add(6)
+        .checked_add(4 + setup_mutation_count)
         .ok_or_else(|| refusal("embedded Direct mutation count overflowed"))?;
     let unsealed_mutation_count = extension_count
-        .checked_add(5)
+        .checked_add(3 + setup_mutation_count)
         .ok_or_else(|| refusal("embedded Direct mutation count overflowed"))?;
     let this_session_sealed = if evidence.mutations.len() == sealed_mutation_count {
         true
@@ -5880,29 +5958,31 @@ fn authenticate_embedded_direct_mutations_v1(
         previous_slot = row.slot;
     }
 
-    let binding = DirectSetupManifestBindingV1::new(
-        evidence.public_manifest_sha256.clone(),
-        evidence.private_session_sha256.clone(),
-    )?;
-    let replay = load_embedded_setup_mutation_v1(&evidence.mutations[0], "replay-setup")?;
-    let token = load_embedded_setup_mutation_v1(&evidence.mutations[1], "token-setup")?;
-    authenticate_direct_setup_chain_v1(&binding, &replay, &token)?;
-    authenticate_embedded_setup_mutation_v1(
-        rpc,
-        public,
-        &evidence.mutations[0],
-        &replay,
-        DirectSetupStageV1::ReplaySetup,
-    )?;
-    authenticate_embedded_setup_mutation_v1(
-        rpc,
-        public,
-        &evidence.mutations[1],
-        &token,
-        DirectSetupStageV1::TokenSetup,
-    )?;
+    if setup_mutation_count == 2 {
+        let binding = DirectSetupManifestBindingV1::new(
+            evidence.public_manifest_sha256.clone(),
+            evidence.private_session_sha256.clone(),
+        )?;
+        let replay = load_embedded_setup_mutation_v1(&evidence.mutations[0], "replay-setup")?;
+        let token = load_embedded_setup_mutation_v1(&evidence.mutations[1], "token-setup")?;
+        authenticate_direct_setup_chain_v1(&binding, &replay, &token)?;
+        authenticate_embedded_setup_mutation_v1(
+            rpc,
+            public,
+            &evidence.mutations[0],
+            &replay,
+            DirectSetupStageV1::ReplaySetup,
+        )?;
+        authenticate_embedded_setup_mutation_v1(
+            rpc,
+            public,
+            &evidence.mutations[1],
+            &token,
+            DirectSetupStageV1::TokenSetup,
+        )?;
+    }
 
-    let action_rows = &evidence.mutations[2..];
+    let action_rows = &evidence.mutations[setup_mutation_count..];
     let mut creation_slot = None;
     for (ordinal, row) in action_rows.iter().enumerate() {
         let (expected_kind, expected_stage, expected_action_index, expected_prefix) =
@@ -5995,7 +6075,8 @@ fn authenticate_embedded_direct_mutations_v1(
     let expected_activation_index = extension_count
         .checked_add(2)
         .ok_or_else(|| refusal("embedded Direct activation index overflowed"))?;
-    let (freeze_index, successor_index) = freeze_and_seal_mutation_indices_v1(extension_count);
+    let (freeze_index, successor_index) =
+        freeze_and_seal_mutation_indices_v1(extension_count, setup_mutation_count);
     let freeze_slot = evidence
         .mutations
         .get(freeze_index)
@@ -6077,10 +6158,13 @@ const DIRECT_SETUP_MUTATION_COUNT_V1: usize = 2;
 /// same either way and is what the interval was always about: the activation
 /// was observed after the table was frozen and before the next thing that
 /// used it.
-const fn freeze_and_seal_mutation_indices_v1(extension_count: usize) -> (usize, usize) {
+const fn freeze_and_seal_mutation_indices_v1(
+    extension_count: usize,
+    setup_mutation_count: usize,
+) -> (usize, usize) {
     (
-        DIRECT_SETUP_MUTATION_COUNT_V1 + extension_count + 1,
-        DIRECT_SETUP_MUTATION_COUNT_V1 + extension_count + 2,
+        setup_mutation_count + extension_count + 1,
+        setup_mutation_count + extension_count + 2,
     )
 }
 
@@ -7340,7 +7424,10 @@ mod tests {
                 extension_count + 6,
                 "the count guard and this ladder must describe one list"
             );
-            let (freeze, seal) = freeze_and_seal_mutation_indices_v1(extension_count);
+            let (freeze, seal) = freeze_and_seal_mutation_indices_v1(
+                extension_count,
+                DIRECT_SETUP_MUTATION_COUNT_V1,
+            );
             assert_eq!(
                 kinds[freeze], "lookup-freeze",
                 "{lookup_addresses} addresses: index {freeze} is not the freeze"
@@ -7349,6 +7436,25 @@ mod tests {
                 kinds[seal], "capability-seal",
                 "{lookup_addresses} addresses: index {seal} is not the seal"
             );
+        }
+    }
+
+    /// A later session owns no setup transaction, so its evidence begins at
+    /// lookup-create.  The activation interval must therefore read the freeze
+    /// and its successor without the first session's two-row offset.
+    #[test]
+    fn reused_setup_evidence_has_no_setup_row_offset() {
+        for lookup_addresses in [1_usize, 20, 21, 40, 57, 61] {
+            let extension_count = lookup_addresses.div_ceil(20);
+            let mut kinds = vec!["lookup-create"];
+            kinds.extend(std::iter::repeat_n("lookup-extend", extension_count));
+            kinds.push("lookup-freeze");
+            kinds.push("capability-seal");
+            kinds.push("hot");
+            let (freeze, successor) = freeze_and_seal_mutation_indices_v1(extension_count, 0);
+            assert_eq!(kinds[freeze], "lookup-freeze");
+            assert_eq!(kinds[successor], "capability-seal");
+            assert_eq!(kinds.len(), extension_count + 4);
         }
     }
 
@@ -7377,7 +7483,10 @@ mod tests {
             assert_eq!(sealed.len(), extension_count + 6);
             assert_eq!(unsealed.len(), extension_count + 5);
 
-            let (freeze, successor) = freeze_and_seal_mutation_indices_v1(extension_count);
+            let (freeze, successor) = freeze_and_seal_mutation_indices_v1(
+                extension_count,
+                DIRECT_SETUP_MUTATION_COUNT_V1,
+            );
             assert_eq!(sealed[freeze], "lookup-freeze");
             assert_eq!(unsealed[freeze], "lookup-freeze");
             assert_eq!(

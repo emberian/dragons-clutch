@@ -76,6 +76,12 @@ recovery ladder has been exercised on real program bytes. Its participant-facing
 meaning is simple: a recovery route is chosen and funded before the market
 opens, never improvised after an inconvenient result.
 
+A [retained local-validator continuation](../evidence/ENSEMBLE_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md)
+also recovered an interrupted operation, exhausted a three-step recovery path,
+admitted the published failure terminal and paid all 500,000,001 Hoard atoms.
+That run completed the recovery and payout children; its whole-Market
+retirement remained blocked by an inconsistent unused Direct manifest pair.
+
 If no usable source answer arrives by the disclosed deadline and selected
 recovery is exhausted, anyone can take the permissionless **failure walk**.
 It commits the already-published failure outcome and can pay the market's
@@ -146,7 +152,7 @@ The exchange and claim families are at different stages:
 | --- | --- | --- |
 | Direct | A maker and taker agree to a bilateral exchange. | Nonempty trades, resolution and payout have run on devnet; the detailed Market page is the wallet entrance. |
 | General | Orders participate in a bounded batch. | Founding and OpenBatch have executed; a complete accepted nonempty lifecycle remains owed. |
-| Dealer | A funded participant quotes under a bounded-loss scoring rule. | A [local-validator market](../evidence/DEALER_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md) accepted Quote, a nonzero Fill and Withdraw with collateral checks. Terminal settlement and a public Dealer market remain owed. |
+| Dealer | A funded participant quotes under a bounded-loss scoring rule. | A [local-validator market](../evidence/DEALER_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md) accepted Quote, a nonzero Fill and Withdraw, failure resolution, terminal redemption, full capital exit and Dealer-child close with collateral checks. Multiple-LP execution and a public Dealer market remain owed; the wider Market was not retired by that child close. |
 | Fractional | Native claims back transferable Token-2022 shards. | [Wrap, transfer to another holder and WholeUnwrap](../evidence/claims-fractional-validator-2026-09-08/README.md) executed on a local validator. That run did not establish the terminal lifecycle. |
 | Structured | Claims compose exposures across market coordinates. | Component and program tests exist; the complete composed local-validator lifecycle remains work in progress. |
 | Series | One precommitted schedule creates recurring markets. | [Native recurrence tests](../evidence/SERIES_NATIVE_RECURRENCE_2026_09_08.md) cover successive occurrences; the complete local-validator lifecycle remains owed. |

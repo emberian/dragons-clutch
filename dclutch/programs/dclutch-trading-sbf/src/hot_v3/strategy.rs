@@ -424,27 +424,36 @@ pub(super) fn project_hot_effects_v3(
             requests: &mut requests,
         },
         &mut write_ranges,
-        &mut |resolved| match require_no_funding_local_mutation_v5(
-            effect.funding(),
-            lifecycle_plans,
-            resolved,
-        )
-        .and_then(|()| {
-            inspect_local_effect_discipline_v5(
-                lifecycle_plans,
-                root_lifecycle_close,
+        &mut |resolved| {
+            // Request patches and balance assertions do not mutate account
+            // state. The kernel still applies them after this visitor returns,
+            // including narrowing, bounds and exact lamport checks.
+            if matches!(
                 resolved,
-                aliases,
-                &mut written,
-                participation.as_deref_mut(),
-            )
-        })
-        .and_then(|()| commit_plan.record_projected(resolved))
-        {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                refused = Some(error);
-                Err(EffectKernelErrorV4::BaseProgram)
+                ResolvedEffectV3::Noop
+                    | ResolvedEffectV3::WriteRequest { .. }
+                    | ResolvedEffectV3::RequireLamportsEq { .. }
+            ) {
+                return Ok(());
+            }
+            match require_no_funding_local_mutation_v5(effect.funding(), lifecycle_plans, resolved)
+                .and_then(|()| {
+                    inspect_local_effect_discipline_v5(
+                        lifecycle_plans,
+                        root_lifecycle_close,
+                        resolved,
+                        aliases,
+                        &mut written,
+                        participation.as_deref_mut(),
+                    )
+                })
+                .and_then(|()| commit_plan.record_projected(resolved))
+            {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    refused = Some(error);
+                    Err(EffectKernelErrorV4::BaseProgram)
+                }
             }
         },
     );
