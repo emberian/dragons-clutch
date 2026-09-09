@@ -231,6 +231,43 @@ pub(crate) struct HeldContinuationRequestV1 {
     pub(crate) evidence: PathBuf,
 }
 
+/// Resume the same held Journey from its authenticated post-Direct boundary,
+/// drive the canonical Resolution owner through durable completion, and then
+/// use [`HeldContinuationRequestV1`] for payout and retirement.
+#[derive(Debug)]
+pub(crate) struct HeldLifecycleRequestV1 {
+    pub(crate) continuation: HeldContinuationRequestV1,
+    pub(crate) pyth_facts: PathBuf,
+    pub(crate) resolution_submitter_keypair: PathBuf,
+    pub(crate) resolution_resolver_keypair: PathBuf,
+    pub(crate) resolution_fee_payer_keypair: PathBuf,
+    pub(crate) resolution_update_keypair: PathBuf,
+    pub(crate) max_wait_seconds: i64,
+}
+
+struct AuthenticatedHeldBoundaryV1 {
+    handoff_path: PathBuf,
+    direct_finalized: PathBuf,
+    direct_public: PathBuf,
+    plan: PathBuf,
+    market_input: PathBuf,
+    campaign_report: PathBuf,
+    stranger_report: PathBuf,
+    stranger_keypair: PathBuf,
+    handoff: ParticipantHandoffV1,
+    plan_sha256: String,
+    market_sha256: String,
+    handoff_sha256: String,
+    direct_finalized_bytes: Vec<u8>,
+    direct_public_sha256: String,
+    market: solana_sdk::pubkey::Pubkey,
+    claims_market: solana_sdk::pubkey::Pubkey,
+    source_state: solana_sdk::pubkey::Pubkey,
+    direct: crate::direct_trade::AuthenticatedDirectTerminalEvidenceV1,
+    stranger: crate::user_position_admission::FinalizedPositionAdmissionEvidenceV1,
+    rpc: crate::rpc::Rpc,
+}
+
 /// A live campaign session over the checked-mutable substrate.
 ///
 /// The shape `found_through_open` used to return, rebuilt from the campaign's
@@ -534,23 +571,13 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
     Ok(transcript)
 }
 
-/// Continue one retained Journey from authenticated Direct history after the
-/// Market has reached Terminal.
-///
-/// The held supervisor remains the validator's lifetime owner. This process
-/// connects to that exact loopback genesis and calls the same shipped payout,
-/// Position-close, terminal-sequence, maker-close and checkpoint drivers as a
-/// normal Journey. Until the Resolution producer is wired immediately before
-/// this seam, a non-Terminal Market refuses before any key file is opened.
-pub(crate) fn continue_held_after_terminal(
-    request: HeldContinuationRequestV1,
-) -> Result<serde_json::Value> {
+fn authenticate_held_boundary_v1(
+    request: &HeldContinuationRequestV1,
+) -> Result<AuthenticatedHeldBoundaryV1> {
     let handoff_path = canonical_existing_file(&request.handoff, "--handoff")?;
     let direct_finalized =
         canonical_existing_file(&request.direct_finalized, "--direct-finalized")?;
     let direct_public = canonical_existing_file(&request.direct_public, "--direct-public")?;
-    validate_new_path(&request.evidence, "--evidence")?;
-    validate_work_directory(&request.work)?;
 
     let handoff_bytes = std::fs::read(&handoff_path)?;
     let handoff: ParticipantHandoffV1 = serde_json::from_slice(&handoff_bytes)?;
@@ -667,6 +694,153 @@ pub(crate) fn continue_held_after_terminal(
             "held participant admissions do not join the authenticated Direct/founding roots",
         ));
     }
+
+    Ok(AuthenticatedHeldBoundaryV1 {
+        handoff_path,
+        direct_finalized,
+        direct_public,
+        plan,
+        market_input,
+        campaign_report,
+        stranger_report,
+        stranger_keypair,
+        handoff,
+        plan_sha256,
+        market_sha256,
+        handoff_sha256,
+        direct_finalized_bytes,
+        direct_public_sha256,
+        market,
+        claims_market,
+        source_state,
+        direct,
+        stranger,
+        rpc,
+    })
+}
+
+/// Continue one retained Journey from authenticated Direct history after the
+/// Market has reached Terminal.
+///
+/// The held supervisor remains the validator's lifetime owner. This process
+/// connects to that exact loopback genesis and calls the same shipped payout,
+/// Position-close, terminal-sequence, maker-close and checkpoint drivers as a
+/// normal Journey. Until the Resolution producer is wired immediately before
+/// this seam, a non-Terminal Market refuses before any key file is opened.
+pub(crate) fn continue_held_after_terminal(
+    request: HeldContinuationRequestV1,
+) -> Result<serde_json::Value> {
+    validate_new_path(&request.evidence, "--evidence")?;
+    validate_work_directory(&request.work)?;
+    let boundary = authenticate_held_boundary_v1(&request)?;
+    finish_held_after_terminal_v1(request, boundary, None)
+}
+
+/// Continue the held Journey from Open through the existing Resolution owner,
+/// then through the post-Terminal seam above. Resolution's own durable input,
+/// table journal and checkpoint remain the restart authority in `--work`.
+pub(crate) fn continue_held_lifecycle(
+    request: HeldLifecycleRequestV1,
+) -> Result<serde_json::Value> {
+    validate_new_path(&request.continuation.evidence, "--evidence")?;
+    validate_work_directory(&request.continuation.work)?;
+    let pyth_facts = canonical_existing_file(&request.pyth_facts, "--pyth-facts")?;
+    let submitter_keypair = canonical_existing_file(
+        &request.resolution_submitter_keypair,
+        "--resolution-submitter-keypair",
+    )?;
+    let resolver_keypair = canonical_existing_file(
+        &request.resolution_resolver_keypair,
+        "--resolution-resolver-keypair",
+    )?;
+    let fee_payer_keypair = canonical_existing_file(
+        &request.resolution_fee_payer_keypair,
+        "--resolution-fee-payer-keypair",
+    )?;
+    let update_keypair = canonical_existing_file(
+        &request.resolution_update_keypair,
+        "--resolution-update-keypair",
+    )?;
+    let mut boundary = authenticate_held_boundary_v1(&request.continuation)?;
+    let campaign_payer_keypair = canonical_existing_file(
+        Path::new(&boundary.handoff.campaign_payer_keypair),
+        "held campaign payer keypair",
+    )?;
+    if submitter_keypair != campaign_payer_keypair {
+        return Err(Error::new(
+            "--resolution-submitter-keypair must be the held Journey's named campaign payer keypair",
+        ));
+    }
+    let open = CoreState::decode(
+        &boundary
+            .rpc
+            .required_account(boundary.market, "held pre-Resolution Core Market")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("held pre-Resolution Core Market: {error:?}")))?;
+    let resolution_work = request.continuation.work.join("resolution");
+    let resumable_resolution = resolution_work.join("input.json").is_file()
+        && resolution_work.join("checkpoint.json").is_file();
+    let initial_open = open.phase == Phase::Open && open.terminal_receipt.is_none();
+    let durable_terminal_resume =
+        open.phase == Phase::Terminal && open.terminal_receipt.is_some() && resumable_resolution;
+    if !initial_open && !durable_terminal_resume {
+        return Err(Error::new(
+            "full held continuation requires the authenticated post-Direct Market to be Open, or Terminal with an existing native Resolution input and checkpoint to reauthenticate",
+        ));
+    }
+    std::fs::create_dir_all(&resolution_work)?;
+    let resolution = spine::resolve_held_market_v1(
+        &mut boundary.rpc,
+        spine::HeldResolutionContextV1 {
+            rpc_url: &boundary.handoff.rpc_url,
+            plan: &boundary.plan,
+            plan_sha256: &boundary.plan_sha256,
+            campaign_report: &boundary.campaign_report,
+            market_input: &boundary.market_input,
+            market_sha256: &boundary.market_sha256,
+            market: boundary.market,
+            pyth_facts: &pyth_facts,
+            submitter_keypair: &submitter_keypair,
+            resolver_keypair: &resolver_keypair,
+            fee_payer_keypair: &fee_payer_keypair,
+            update_keypair: &update_keypair,
+            work: &resolution_work,
+            max_wait_seconds: request.max_wait_seconds,
+            terminal_resume: durable_terminal_resume,
+        },
+    )?;
+    finish_held_after_terminal_v1(request.continuation, boundary, Some(resolution))
+}
+
+fn finish_held_after_terminal_v1(
+    request: HeldContinuationRequestV1,
+    boundary: AuthenticatedHeldBoundaryV1,
+    resolution: Option<spine::HeldResolutionEvidenceV1>,
+) -> Result<serde_json::Value> {
+    let AuthenticatedHeldBoundaryV1 {
+        handoff_path,
+        direct_finalized,
+        direct_public,
+        plan,
+        market_input,
+        campaign_report,
+        stranger_report,
+        stranger_keypair,
+        handoff,
+        plan_sha256,
+        market_sha256,
+        handoff_sha256,
+        direct_finalized_bytes,
+        direct_public_sha256,
+        market,
+        claims_market,
+        source_state,
+        direct,
+        stranger,
+        mut rpc,
+    } = boundary;
+
     let terminal = CoreState::decode(&rpc.required_account(market, "held Core Market")?.data)
         .map_err(|error| Error::new(format!("held Core Market: {error:?}")))?;
     if terminal.phase != Phase::Terminal || terminal.terminal_receipt.is_none() {
@@ -735,6 +909,31 @@ pub(crate) fn continue_held_after_terminal(
         founding_keypairs: &founding_keypairs,
     };
     let mut continuation = spine::SpineV1::new();
+    let (schema, resolution_report) = match resolution {
+        None => (
+            "dclutch-held-journey-continuation-evidence-v1",
+            serde_json::Value::Null,
+        ),
+        Some(resolution) => {
+            let compute_units = resolution
+                .transactions
+                .iter()
+                .map(|transaction| transaction.compute_units_consumed.unwrap_or(0))
+                .sum();
+            continuation.stages.push(StageReportV1 {
+                stage: "canonical durable Resolution through Complete".into(),
+                outcome: "executed".into(),
+                transactions: resolution.transactions.len(),
+                compute_units,
+                note: "The existing flagship Resolution producer, table provisioner and durable executor authenticated the held Market, reached Core Terminal, reclaimed the provider update after its immutable deadline, and passed its read-only Complete restart.".into(),
+            });
+            continuation.transactions.extend(resolution.transactions);
+            (
+                "dclutch-held-journey-continuation-evidence-v2",
+                resolution.report,
+            )
+        }
+    };
     spine::settle_fee(
         &mut rpc,
         &context,
@@ -811,7 +1010,7 @@ pub(crate) fn continue_held_after_terminal(
         .map_err(|error| Error::new(format!("retired Core Market: {error:?}")))?;
     let completed = continuation.refusals.is_empty() && post.phase == Phase::Retired;
     let result = serde_json::json!({
-        "schema": "dclutch-held-journey-continuation-evidence-v1",
+        "schema": schema,
         "cluster": "owned-loopback",
         "completed": completed,
         "rpcUrl": handoff.rpc_url,
@@ -831,6 +1030,7 @@ pub(crate) fn continue_held_after_terminal(
             "planSha256": plan_sha256,
             "marketInputSha256": market_sha256,
         },
+        "resolution": resolution_report,
         "stages": continuation.stages,
         "reports": continuation.reports,
         "transactions": continuation.transactions,

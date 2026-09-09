@@ -58,6 +58,7 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<()> {
 }
 
 fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
+    crate::substrate::require_token_2022_fixture_v1()?;
     let substrate_dir = request.work.join("substrate");
     let checked = crate::substrate::bring_up(&crate::substrate::SubstrateRequestV1 {
         work: &substrate_dir,

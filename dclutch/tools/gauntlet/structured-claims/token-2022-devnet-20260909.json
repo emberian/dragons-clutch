@@ -1,0 +1,16 @@
+{
+  "rpc": "https://api.devnet.solana.com",
+  "program": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+  "program_owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+  "program_executable": true,
+  "programdata": "DoU57AYuPFu2QU514RktNPG22QhApEjnKxnBcu4BHDTY",
+  "observed_slots": [
+    495389360,
+    495389362
+  ],
+  "deployment_slot": 461026092,
+  "upgrade_authority": "3URRPr96EV2wuNRgQKwQpuZitHHsVyDUen1eRSvEun9G",
+  "programdata_bytes": 711053,
+  "elf_bytes": 711008,
+  "elf_sha256": "0f3038f9271a900ffd562ffd974934ca8a9c8f8d048f67dbd39aebb35e5b83fb"
+}

@@ -48,6 +48,14 @@ type SeriesPrepareFixedDataLengthsV1 = [u32;
     dclutch_trading_sbf::series::prepare_funding_artifacts_v5::SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5
         as usize];
 
+const SERIES_SHADOW_DIAGNOSTIC_SEMANTIC_PREIMAGE_V1: &[u8] =
+    b"dclutch/series-shadow-selected-diagnostic/v1";
+
+fn series_shadow_diagnostic_accelerator_semantic_release_v1() -> ContentId {
+    ContentId::new(Sha256::digest(SERIES_SHADOW_DIAGNOSTIC_SEMANTIC_PREIMAGE_V1).into())
+        .expect("domain-separated Series diagnostic semantic release is nonzero")
+}
+
 /// The one composite entrance for a local Series Found -> first Prepare run.
 /// Its accelerator capacity is an already-built, hostile-decoded source
 /// manifest; an arbitrary executable or textual certificate identity is
@@ -62,8 +70,9 @@ struct SeriesFoundPrepareArgumentsV1 {
     payer_keypair: PathBuf,
     direct_fee_basis_points: u16,
     direct_fee_recipient: Pubkey,
-    shadow_source_manifest: PathBuf,
-    output: PathBuf,
+    shadow_source_manifest: Option<PathBuf>,
+    diagnostic_shadow_output: Option<PathBuf>,
+    output: Option<PathBuf>,
     execute: bool,
 }
 
@@ -130,6 +139,7 @@ fn parse_series_found_prepare_arguments_v1(
                         | "--direct-fee-basis-points"
                         | "--direct-fee-recipient"
                         | "--series-shadow-source-manifest"
+                        | "--emit-series-shadow-diagnostic"
                         | "--output"
                 ) || values.insert(flag.to_owned(), value.to_owned()).is_some()
                 {
@@ -155,6 +165,29 @@ fn parse_series_found_prepare_arguments_v1(
             "--direct-fee-recipient must not be the default Pubkey",
         ));
     }
+    let shadow_source_manifest = values
+        .get("--series-shadow-source-manifest")
+        .map(|value| canonical_regular_v1(PathBuf::from(value), "--series-shadow-source-manifest"))
+        .transpose()?;
+    let diagnostic_shadow_output = values
+        .get("--emit-series-shadow-diagnostic")
+        .map(|value| absolute_new_v1(PathBuf::from(value), "--emit-series-shadow-diagnostic"))
+        .transpose()?;
+    let output = values
+        .get("--output")
+        .map(|value| absolute_new_v1(PathBuf::from(value), "--output"))
+        .transpose()?;
+    let execute_mode = shadow_source_manifest.is_some()
+        && diagnostic_shadow_output.is_none()
+        && output.is_some();
+    let diagnostic_mode = shadow_source_manifest.is_none()
+        && diagnostic_shadow_output.is_some()
+        && output.is_none();
+    if !execute_mode && !diagnostic_mode {
+        return Err(Error::new(
+            "Series Found/Prepare requires either --series-shadow-source-manifest with --output, or --emit-series-shadow-diagnostic",
+        ));
+    }
     Ok(SeriesFoundPrepareArgumentsV1 {
         plan: canonical_regular_v1(PathBuf::from(required("--plan")?), "--plan")?,
         rpc_url: required("--rpc-url")?,
@@ -166,11 +199,9 @@ fn parse_series_found_prepare_arguments_v1(
             .parse()
             .map_err(|_| Error::new("--direct-fee-basis-points must be a decimal u16"))?,
         direct_fee_recipient,
-        shadow_source_manifest: canonical_regular_v1(
-            PathBuf::from(required("--series-shadow-source-manifest")?),
-            "--series-shadow-source-manifest",
-        )?,
-        output: absolute_new_v1(PathBuf::from(required("--output")?), "--output")?,
+        shadow_source_manifest,
+        diagnostic_shadow_output,
+        output,
         execute,
     })
 }
@@ -188,13 +219,17 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
             "Series Found/Prepare refuses a dry run: Found, activation, and Prepare are one execution",
         ));
     }
-    let source_manifest_bytes = fs::read(&arguments.shadow_source_manifest)?;
-    let source_manifest =
-        dclutch_series_shadow_bundle_generator::SeriesShadowSourceManifestV1::decode(
-            &source_manifest_bytes,
-        )
+    let source_manifest_bytes = arguments
+        .shadow_source_manifest
+        .as_ref()
+        .map(fs::read)
+        .transpose()?;
+    let source_manifest = source_manifest_bytes
+        .as_deref()
+        .map(dclutch_series_shadow_bundle_generator::SeriesShadowSourceManifestV1::decode)
+        .transpose()
         .map_err(|error| Error::new(format!("Series Shadow source manifest: {error:?}")))?;
-    if source_manifest.occurrence_count() != 2 {
+    if source_manifest.is_some_and(|manifest| manifest.occurrence_count() != 2) {
         return Err(Error::new(
             "Series Found/Prepare requires a two-occurrence executor capacity",
         ));
@@ -228,7 +263,9 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
     )?)?;
     let funding_ledger_slot_count =
         selected_series_funding_ledger_slot_count_v1(selected_manifest_entry_index)?;
-    if source_manifest.funding_count() != u32::from(funding_ledger_slot_count) {
+    if source_manifest
+        .is_some_and(|manifest| manifest.funding_count() != u32::from(funding_ledger_slot_count))
+    {
         return Err(Error::new(
             "Series Shadow executor funding geometry differs from the selected ledger",
         ));
@@ -269,7 +306,15 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
     let m0_frame = series_prepare_m0_frame_from_publication_v1(&m0, &m0_records, &m0_accounts);
     let hydration =
         series_prepare_hydration_records_v1(&m0, &m0_records, &founder, &founder_records)?;
-    let certificate_program = source_manifest.generated_bundle().certificate_program;
+    let certificate_program = source_manifest
+        .map(|manifest| manifest.generated_bundle().certificate_program)
+        .unwrap_or_else(|| {
+            let mut hasher = Sha256::new();
+            hasher.update(b"dclutch-series-shadow-diagnostic-provisional-certificate-v1");
+            hasher.update(series_shadow_diagnostic_accelerator_semantic_release_v1().to_bytes());
+            ContentId::new(hasher.finalize().into())
+                .expect("domain-separated diagnostic certificate is nonzero")
+        });
 
     let prediction = crate::series_found_prepare_input::predict_series_parent_root_v1(
         &plan,
@@ -295,6 +340,16 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         hydration,
         scenario.finalized_slot,
     )?;
+    if let Some(output) = arguments.diagnostic_shadow_output.as_ref() {
+        let built = build_series_shadow_diagnostic_preselection_v1(
+            2,
+            &provisional.geometry.consume_fixed_data_lengths,
+            u32::from(funding_ledger_slot_count),
+        )?;
+        write_series_shadow_diagnostic_v1(output, &built)?;
+        return Ok(());
+    }
+    let source_manifest = source_manifest.expect("argument modes were validated");
     require_series_shadow_capacity_v1(source_manifest, &provisional.geometry)?;
 
     let parent_market =
@@ -496,7 +551,10 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         "transactions": transactions,
     });
     fs::write(
-        &arguments.output,
+        arguments
+            .output
+            .as_ref()
+            .expect("argument modes were validated"),
         format!("{}\n", serde_json::to_string_pretty(&output)?),
     )?;
     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -2158,9 +2216,39 @@ pub(crate) fn build_series_shadow_preselection_v1(
     funding_count: u32,
     evidence: &crate::series_checked_evidence::CheckedSeriesShadowEvidenceV1,
 ) -> Result<dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1> {
+    use dclutch_series_shadow_bundle_generator::SeriesShadowReleaseSourcesV4;
+
+    let built = build_series_shadow_preselection_from_sources_v1(
+        occurrence_count,
+        fixed_data_lengths,
+        funding_count,
+        SeriesShadowReleaseSourcesV4 {
+            semantic_source: include_bytes!(
+                "../../../../../programs/dclutch-trading-sbf/src/series/consume_artifacts_v4.rs"
+            ),
+            compiler_source: &evidence.compiler_manifest,
+            toolchain_manifest: &evidence.toolchain,
+            accelerator_semantic_release: evidence.accelerator_semantic_release,
+            translation_validation: evidence.translation_validation,
+        },
+    )?;
+    // The generator owns the certificate wire, while the evidence owner owns
+    // every checked source/build join.  Authenticate both before these bytes
+    // can be written as an accelerator include or finalized in Registry.
+    crate::series_checked_evidence::authenticate_series_shadow_generated_v1(evidence, &built)?;
+    Ok(built)
+}
+
+fn build_series_shadow_preselection_from_sources_v1(
+    occurrence_count: u32,
+    fixed_data_lengths: &[u32;
+        dclutch_series_shadow_bundle_generator::SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
+    funding_count: u32,
+    release_sources: dclutch_series_shadow_bundle_generator::SeriesShadowReleaseSourcesV4<'_>,
+) -> Result<dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1> {
     use dclutch_series_shadow_bundle_generator::{
         SeriesShadowBundleSourceV4, SeriesShadowDescriptorSemanticsV4,
-        SeriesShadowReleaseSourcesV4, build_series_shadow_preselection_v1 as build,
+        build_series_shadow_preselection_v1 as build,
     };
     use dclutch_trading::series::{
         SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
@@ -2206,15 +2294,7 @@ pub(crate) fn build_series_shadow_preselection_v1(
         .map_err(|error| Error::new(format!("Series Shadow Consume lifecycle: {error:?}")))?;
     let built = build(SeriesShadowBundleSourceV4 {
         descriptor,
-        release_sources: SeriesShadowReleaseSourcesV4 {
-            semantic_source: include_bytes!(
-                "../../../../../programs/dclutch-trading-sbf/src/series/consume_artifacts_v4.rs"
-            ),
-            compiler_source: &evidence.compiler_manifest,
-            toolchain_manifest: &evidence.toolchain,
-            accelerator_semantic_release: evidence.accelerator_semantic_release,
-            translation_validation: evidence.translation_validation,
-        },
+        release_sources,
         lifecycle: &lifecycle,
         fixed_data_lengths,
         funding_count,
@@ -2227,11 +2307,132 @@ pub(crate) fn build_series_shadow_preselection_v1(
             "Series Shadow preselection certificate hash changed before Registry finalization",
         ));
     }
-    // The generator owns the certificate wire, while the evidence owner owns
-    // every checked source/build join.  Authenticate both before these bytes
-    // can be written as an accelerator include or finalized in Registry.
-    crate::series_checked_evidence::authenticate_series_shadow_generated_v1(evidence, &built)?;
     Ok(built)
+}
+
+/// Build one explicitly unpublishable selected-accelerator input from the
+/// full live Consume geometry observed by the production founder path.
+///
+/// This is the bootstrap half of the schedule-independent capacity cycle:
+/// the resulting executor is built before the later command observes and
+/// authors its actual Template schedule. The normal execution mode decodes
+/// this manifest again and requires every live width and funding span to
+/// match before it founds the selected parent.
+fn build_series_shadow_diagnostic_preselection_v1(
+    occurrence_count: u32,
+    fixed_data_lengths: &[u32;
+        dclutch_series_shadow_bundle_generator::SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
+    funding_count: u32,
+) -> Result<dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1> {
+    use dclutch_series_shadow_bundle_generator::SeriesShadowReleaseSourcesV4;
+
+    if occurrence_count != 2
+        || funding_count == 0
+        || fixed_data_lengths.iter().all(|width| *width == 0)
+    {
+        return Err(Error::new(
+            "Series diagnostic executor requires funded two-occurrence live geometry",
+        ));
+    }
+    const COMPILER_SOURCE: &[u8] = concat!(
+        include_str!("../../../../../programs/dclutch-accelerator-sbf/generator/src/lib.rs"),
+        include_str!("../../../../../programs/dclutch-accelerator-sbf/generator/src/manifest.rs"),
+        include_str!(
+            "../../../../../programs/dclutch-accelerator-sbf/generator/src/source_operator.rs"
+        ),
+    )
+    .as_bytes();
+    const TOOLCHAIN: &[u8] = b"unpublishable-series-runtime-diagnostic-toolchain-v1";
+    const TRANSLATION: &[u8] = b"unpublishable-series-runtime-diagnostic-translation-v1";
+    let translation_validation = ContentId::new(Sha256::digest(TRANSLATION).into())
+        .map_err(|_| Error::new("Series diagnostic translation identity"))?;
+    build_series_shadow_preselection_from_sources_v1(
+        occurrence_count,
+        fixed_data_lengths,
+        funding_count,
+        SeriesShadowReleaseSourcesV4 {
+            semantic_source: include_bytes!(
+                "../../../../../programs/dclutch-trading-sbf/src/series/consume_artifacts_v4.rs"
+            ),
+            compiler_source: COMPILER_SOURCE,
+            toolchain_manifest: TOOLCHAIN,
+            accelerator_semantic_release:
+                series_shadow_diagnostic_accelerator_semantic_release_v1(),
+            translation_validation,
+        },
+    )
+}
+
+fn write_series_shadow_diagnostic_v1(
+    output: &std::path::Path,
+    built: &dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1,
+) -> Result<()> {
+    use dclutch_series_shadow_bundle_generator::SeriesShadowSourceManifestV1;
+
+    let decoded = SeriesShadowSourceManifestV1::decode(&built.manifest)
+        .map_err(|error| Error::new(format!("Series diagnostic manifest: {error:?}")))?;
+    if decoded.occurrence_count() != 2
+        || decoded.funding_count() == 0
+        || decoded.fixed_data_lengths().iter().all(|width| *width == 0)
+        || decoded.generated_bundle().certificate_program != built.build_inputs.certificate
+    {
+        return Err(Error::new(
+            "Series diagnostic output lost its funded recurring capacity",
+        ));
+    }
+    fs::create_dir(output)?;
+    let manifest_temporary = output.join(".series_shadow_source_manifest.bin.tmp");
+    let include_temporary = output.join(".series_shadow_generated.rs.tmp");
+    let semantic_temporary = output.join(".accelerator_semantic_preimage.bin.tmp");
+    let marker_temporary = output.join(".UNPUBLISHABLE_DIAGNOSTIC_ONLY.tmp");
+    fs::write(&manifest_temporary, &built.manifest)?;
+    fs::write(&include_temporary, &built.generated_include)?;
+    fs::write(
+        &semantic_temporary,
+        SERIES_SHADOW_DIAGNOSTIC_SEMANTIC_PREIMAGE_V1,
+    )?;
+    fs::write(
+        &marker_temporary,
+        b"Generated from live two-occurrence funded Series geometry. This directory is not checked release evidence.\n",
+    )?;
+    fs::rename(
+        manifest_temporary,
+        output.join("series_shadow_source_manifest.bin"),
+    )?;
+    fs::rename(include_temporary, output.join("series_shadow_generated.rs"))?;
+    fs::rename(
+        semantic_temporary,
+        output.join("accelerator_semantic_preimage.bin"),
+    )?;
+    fs::rename(
+        marker_temporary,
+        output.join("UNPUBLISHABLE_DIAGNOSTIC_ONLY"),
+    )?;
+    let hex = |identity: ContentId| {
+        identity
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    println!(
+        "series_shadow_source_manifest {}",
+        hex(built.build_inputs.source_manifest)
+    );
+    println!(
+        "series_shadow_generated_include {}",
+        hex(built.build_inputs.generated_include)
+    );
+    println!(
+        "series_shadow_certificate {}",
+        hex(built.build_inputs.certificate)
+    );
+    println!(
+        "series_shadow_accelerator_semantic_release {}",
+        hex(series_shadow_diagnostic_accelerator_semantic_release_v1())
+    );
+    println!("series_shadow_diagnostic_dir {}", output.display());
+    Ok(())
 }
 
 /// One Registry raw/staging pair that has already reached finality.  The

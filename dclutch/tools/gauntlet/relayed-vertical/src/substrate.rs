@@ -9,8 +9,9 @@
 //! revoke-false), and the tier-1 launcher hard-refuses
 //! `release_recognition_requires_revoke == false` — so the substrate spawns
 //! `solana-test-validator` over the prepared account directory directly, with
-//! NO `--upgradeable-program` (which would replace the prepared tag-0
-//! authority with Agave's default), exactly as run.py:1292 documents.
+//! NO first-party `--upgradeable-program` (which would replace the prepared
+//! tag-0 authority with Agave's default), exactly as run.py:1292 documents.
+//! The separately pinned external Token program uses explicit authority `none`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +40,79 @@ const CHECKED_SLOT_FLOOR: u64 = 8;
 /// before it starts producing the eight slots whose finalized root we require.
 const VALIDATOR_READY: Duration = Duration::from_secs(180);
 const VALIDATOR_GRACEFUL_STOP: Duration = Duration::from_secs(30);
+
+const TOKEN_2022_V11_PROVENANCE: &str =
+    include_str!("../../../../programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance");
+const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+/// Explicit external code pin, authenticated before fresh genesis.
+pub(crate) struct AuthenticatedTokenFixtureV1 {
+    bytes: Vec<u8>,
+    digest: String,
+    provenance: serde_json::Value,
+}
+
+/// The public-deployment observation and reproducible v11 fixture are distinct
+/// evidence profiles. Neither permits an arbitrary external ELF substitution.
+pub(crate) fn require_token_2022_fixture_v1() -> Result<AuthenticatedTokenFixtureV1> {
+    let deployed = std::env::var_os("DCLUTCH_TOKEN_2022_ELF");
+    let canonical = std::env::var_os("TOKEN_2022_V11_ELF");
+    let (path, digest, provenance) = match (deployed, canonical) {
+        (Some(path), None) => {
+            let provenance: serde_json::Value = serde_json::from_str(include_str!(
+                "../../structured-claims/token-2022-devnet-20260909.json"
+            ))?;
+            let digest = provenance["elf_sha256"]
+                .as_str()
+                .ok_or_else(|| Error::new("observed Token deployment omits ELF digest"))?
+                .to_owned();
+            (path, digest, provenance)
+        }
+        (None, Some(path)) => {
+            let digest = TOKEN_2022_V11_PROVENANCE
+                .lines()
+                .find_map(|line| line.strip_prefix("canonical_elf_sha256="))
+                .ok_or_else(|| {
+                    Error::new("Token-2022 fixture provenance omits canonical ELF digest")
+                })?
+                .to_owned();
+            (
+                path,
+                digest,
+                serde_json::json!({
+                    "kind": "reproducible-canonical-v11-fixture",
+                    "source": TOKEN_2022_V11_PROVENANCE,
+                }),
+            )
+        }
+        (Some(_), Some(_)) => {
+            return Err(Error::new(
+                "select exactly one Token runtime: DCLUTCH_TOKEN_2022_ELF or TOKEN_2022_V11_ELF",
+            ));
+        }
+        (None, None) => {
+            return Err(Error::new(
+                "Structured requires DCLUTCH_TOKEN_2022_ELF for the pinned observed devnet deployment, or TOKEN_2022_V11_ELF for the distinct canonical local fixture",
+            ));
+        }
+    };
+    let bytes = std::fs::read(PathBuf::from(path))?;
+    authenticate_token_2022_bytes_v1(&bytes, &digest)?;
+    Ok(AuthenticatedTokenFixtureV1 {
+        bytes,
+        digest,
+        provenance,
+    })
+}
+
+fn authenticate_token_2022_bytes_v1(bytes: &[u8], expected: &str) -> Result<()> {
+    if crate::plan::hex(&sha2::Sha256::digest(bytes)) != expected {
+        return Err(Error::new(
+            "Token-2022 ELF differs from the selected source-pinned external runtime digest",
+        ));
+    }
+    Ok(())
+}
 
 /// Everything the checked-mutable bring-up needs from the caller.
 pub(crate) struct SubstrateRequestV1<'a> {
@@ -285,6 +359,33 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
     // but requires its parent to exist.  Each campaign owns this substrate
     // root, so establish that parent before deriving disposable key material.
     std::fs::create_dir_all(request.work)?;
+    // A supplied external helper is installed only in this fresh genesis. A
+    // restart consumes its existing ledger and never replaces a program.
+    let token_fixture = if std::env::var_os("TOKEN_2022_V11_ELF").is_some()
+        || std::env::var_os("DCLUTCH_TOKEN_2022_ELF").is_some()
+    {
+        let fixture = require_token_2022_fixture_v1()?;
+        let bytes = &fixture.bytes;
+        let destination = request.work.join("spl_token_2022.so");
+        std::fs::write(&destination, &bytes)?;
+        std::fs::write(
+            request.work.join("external-token-runtime.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema": "dclutch-local-external-token-runtime-v1",
+                "evidenceLevel": "local-validator-genesis-fixture",
+                "program": TOKEN_2022_PROGRAM,
+                "elfPath": destination,
+                "elfBytes": bytes.len(),
+                "elfSha256": crate::plan::hex(&sha2::Sha256::digest(&bytes)),
+                "provenance": fixture.provenance,
+                "checkedReleaseGateMember": false,
+                "devnetDeploymentEvidence": false,
+            }))?,
+        )?;
+        Some((destination, fixture.digest))
+    } else {
+        None
+    };
     // 1. Prepare: derive keys and the exact genesis account fixtures from the
     //    checked release gate. In-process; the typed report comes back.
     let prepare_work = request.work.join("prepare");
@@ -327,7 +428,15 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
         .open(request.work.join("validator.log"))?;
     let log_err = log.try_clone()?;
     let port = request.rpc_port;
-    let child = Command::new("solana-test-validator")
+    let mut command = Command::new("solana-test-validator");
+    if let Some((path, _)) = token_fixture.as_ref() {
+        command
+            .arg("--upgradeable-program")
+            .arg(TOKEN_2022_PROGRAM)
+            .arg(path)
+            .arg("none");
+    }
+    let child = command
         .arg("--config")
         .arg("/dev/null")
         .arg("--ledger")
@@ -405,6 +514,63 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
             )));
         }
         std::thread::sleep(Duration::from_millis(250));
+    }
+
+    if let Some((_, digest)) = token_fixture.as_ref() {
+        let mut probe = Rpc::connect(&rpc_url)?;
+        let token = probe
+            .account(pubkey(TOKEN_2022_PROGRAM)?)?
+            .ok_or_else(|| Error::new("explicit Token-2022 fixture is absent after genesis"))?;
+        if !token.executable {
+            return Err(Error::new(
+                "explicit Token-2022 fixture is not executable after genesis",
+            ));
+        }
+        if token.owner == solana_sdk_ids::bpf_loader::id() {
+            authenticate_token_2022_bytes_v1(&token.data, digest)?;
+        } else if token.owner == solana_sdk_ids::bpf_loader_upgradeable::id() {
+            use solana_loader_v3_interface::state::UpgradeableLoaderState;
+            let state: UpgradeableLoaderState = bincode::deserialize(&token.data)
+                .map_err(|error| Error::new(format!("decode external Token program: {error}")))?;
+            let UpgradeableLoaderState::Program {
+                programdata_address,
+            } = state
+            else {
+                return Err(Error::new(
+                    "external Token executable is not a Loader program",
+                ));
+            };
+            let data = probe
+                .account(programdata_address)?
+                .ok_or_else(|| Error::new("external Token ProgramData is absent"))?;
+            let state: UpgradeableLoaderState =
+                bincode::deserialize(&data.data).map_err(|error| {
+                    Error::new(format!("decode external Token ProgramData: {error}"))
+                })?;
+            if data.owner != token.owner
+                || !matches!(
+                    state,
+                    UpgradeableLoaderState::ProgramData {
+                        upgrade_authority_address: None,
+                        ..
+                    }
+                )
+            {
+                return Err(Error::new(
+                    "external Token genesis fixture must have upgrades disabled",
+                ));
+            }
+            authenticate_token_2022_bytes_v1(
+                data.data
+                    .get(UpgradeableLoaderState::size_of_programdata_metadata()..)
+                    .ok_or_else(|| Error::new("external Token ProgramData omits ELF"))?,
+                digest,
+            )?;
+        } else {
+            return Err(Error::new(
+                "explicit Token-2022 fixture has unexpected executable owner after genesis",
+            ));
+        }
     }
 
     // 4. Administration: publish -> initialize -> activate, through the real

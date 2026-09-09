@@ -73,6 +73,7 @@ impl Mode {
 struct Captured {
     document: Value,
     document_digest: [u8; 32],
+    captured_action_digest: String,
     metas: Vec<AccountMeta>,
     accounts: Vec<Option<Account>>,
     instruction: Instruction,
@@ -169,15 +170,25 @@ fn captured() -> Captured {
             .decode(stage["action"]["dataBase64"].as_str().expect("action data"))
             .expect("action base64"),
     };
+    let captured_action_digest = stage["action"]["sha256"]
+        .as_str()
+        .expect("captured action digest")
+        .to_owned();
+    let reconstructed_action_digest = hex32(
+        hash(&bincode::serialize(&instruction).expect("serialize reconstructed instruction"))
+            .to_bytes(),
+    );
+    assert_eq!(reconstructed_action_digest, captured_action_digest);
     assert_eq!(
-        hex32(hash(&instruction.data).to_bytes()),
         document["executeInstructionSha256"]
             .as_str()
-            .expect("execute instruction digest")
+            .expect("execute instruction digest"),
+        captured_action_digest
     );
     Captured {
         document,
         document_digest,
+        captured_action_digest,
         metas,
         accounts,
         instruction,
@@ -227,6 +238,10 @@ fn reauthor_for_new_core(captured: &mut Captured, core_elf: &[u8]) {
         .expect("captured activation cache");
     let old = ActivatedExecutionReleaseSetViewV1::decode(&old_cache.data)
         .expect("captured activated release set");
+    let old_release_set_id = old
+        .execution_release_set_id()
+        .expect("captured release-set identity")
+        .to_bytes();
     let old_core = old
         .role(ExecutionRoleV1::Core)
         .expect("Core activation")
@@ -334,12 +349,7 @@ fn reauthor_for_new_core(captured: &mut Captured, core_elf: &[u8]) {
     let mut lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
         .expect("submitted provider lifecycle");
     assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Submitted);
-    assert_eq!(
-        lifecycle.release_set,
-        old.execution_release_set_id()
-            .expect("captured release-set identity")
-            .to_bytes()
-    );
+    assert_eq!(lifecycle.release_set, old_release_set_id);
     lifecycle.release_set = release_set_id;
     lifecycle_account.data = lifecycle
         .to_bytes()
@@ -373,12 +383,21 @@ fn fixture_keypair() -> Keypair {
 
 fn add_fixture_accounts(test: &mut ProgramTest, captured: &Captured) {
     for (index, value) in captured.accounts.iter().enumerate() {
-        if matches!(index, CORE | RESOLUTION) || captured.metas[index].pubkey == system_program::ID
-        {
+        if captured.metas[index].pubkey == system_program::ID {
             continue;
         }
         if let Some(value) = value {
-            test.add_account(captured.metas[index].pubkey, value.clone());
+            if matches!(
+                index,
+                CORE | CORE_PROGRAMDATA | RESOLUTION | RESOLUTION_PROGRAMDATA
+            ) {
+                // Bank startup loads the real ELF from these captured ProgramData
+                // accounts. Adding a second generated loader pair triggers Agave
+                // 4.3's duplicate program-cache replacement panic.
+                test.add_genesis_account(captured.metas[index].pubkey, value.clone());
+            } else {
+                test.add_account(captured.metas[index].pubkey, value.clone());
+            }
         }
     }
 }
@@ -421,11 +440,6 @@ async fn captured_direct_execute_provider_replays_old_refusal_and_corrected_acce
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     test.set_compute_max_units(1_400_000);
-    test.add_upgradeable_program_to_genesis("dclutch_core_sbf", &captured.metas[CORE].pubkey);
-    test.add_upgradeable_program_to_genesis(
-        "dclutch_resolution_proof_sbf",
-        &captured.metas[RESOLUTION].pubkey,
-    );
     add_fixture_accounts(&mut test, &captured);
     assert_eq!(
         hash(&core_elf).to_bytes(),
@@ -442,11 +456,17 @@ async fn captured_direct_execute_provider_replays_old_refusal_and_corrected_acce
         .to_bytes()
     );
     let mut context = test.start_with_context().await;
-    context.set_sysvar(&Clock {
-        slot: captured.observation_slot,
-        unix_timestamp: captured.observation_time,
-        ..Clock::default()
-    });
+    context
+        .warp_to_slot(captured.observation_slot)
+        .expect("execute after captured deployment slots");
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("Banks Clock");
+    assert_eq!(clock.slot, captured.observation_slot);
+    clock.unix_timestamp = captured.observation_time;
+    context.set_sysvar(&clock);
     let writable = [SOURCE, CERTIFICATE, LIFECYCLE];
     let before = [
         observed(&mut context, captured.metas[SOURCE].pubkey).await,
@@ -520,8 +540,9 @@ async fn captured_direct_execute_provider_replays_old_refusal_and_corrected_acce
         "result": format!("{:?}", processed.result),
         "coreElfSha256": hex32(hash(&core_elf).to_bytes()),
         "resolutionElfSha256": hex32(hash(&resolution_elf).to_bytes()),
-        "originalInstructionSha256": hex32(exact_instruction_digest),
-        "executedInstructionSha256": hex32(hash(&captured.instruction.data).to_bytes()),
+        "originalCapturedActionSha256": captured.captured_action_digest,
+        "originalInstructionDataSha256": hex32(exact_instruction_digest),
+        "executedInstructionDataSha256": hex32(hash(&captured.instruction.data).to_bytes()),
         "capturedObservationSlot": captured.observation_slot,
         "captureDocumentSha256": hex32(captured.document_digest),
         "capturedGenesisHash": captured.document["genesisHash"],

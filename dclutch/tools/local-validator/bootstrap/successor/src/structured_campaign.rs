@@ -628,6 +628,8 @@ pub(crate) fn run_owned_loopback_with_terminal_v1(
 /// The caller reaches this path only after the strict sealed-Market digest
 /// refusal. Claims balances and revision may have advanced through accepted
 /// actions; canonical PDA and immutable Core joins authenticate that aggregate.
+/// Its persisted Custody namespace is authoritative; the report's projected
+/// founding namespace is a different context and cannot authenticate this field.
 /// The root verifier below then proves the exact expected active root.
 fn resume_after_structured_root_observation_v1(
     rpc: &mut Rpc,
@@ -675,7 +677,6 @@ fn resume_after_structured_root_observation_v1(
         || aggregate_view.registry_program != state.identity.registry_program.to_bytes()
         || aggregate_view.realm_id != state.identity.realm_id.to_bytes()
         || aggregate_view.generation != state.identity.generation
-        || aggregate_view.custody_context != crate::plan::hex32(&evidence.founding_custody_context)?
     {
         return Err(Error::new(
             "Structured resume mutable Market or canonical Claims aggregate differs",

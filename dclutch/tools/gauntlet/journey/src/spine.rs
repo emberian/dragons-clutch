@@ -44,7 +44,10 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use solana_sdk::{pubkey::Pubkey, signature::Signature};
+use solana_sdk::{
+    pubkey::Pubkey,
+    signature::{Keypair, Signature, Signer},
+};
 
 use dclutch_market_retirement_v1_operator::terminal_stage_order_v1::TerminalStageV1;
 
@@ -54,6 +57,11 @@ use crate::stages::StageReportV1;
 use crate::{Error, Result};
 
 const UPKEEP_FOUND_DEPOSIT_LAMPORTS_V1: u64 = 17_001;
+
+/// Observed sufficient on the accepted held Direct Resolution run. This is a
+/// local campaign signer balance floor, not a protocol fee quote or funding
+/// requirement. Exact protocol-account rent is always queried separately.
+const LOCAL_RESOLUTION_SIGNER_BALANCE_FLOOR_V1: u64 = 100_000_000;
 
 /// The terminal sequence's five pre-checkpoint mutations, in driver order.
 ///
@@ -216,6 +224,30 @@ pub(crate) struct SpineContextV1<'a> {
     pub(crate) founding_keypairs: &'a std::collections::BTreeMap<String, String>,
 }
 
+/// Authenticated inputs for the existing flagship Resolution owner.
+pub(crate) struct HeldResolutionContextV1<'a> {
+    pub(crate) rpc_url: &'a str,
+    pub(crate) plan: &'a Path,
+    pub(crate) plan_sha256: &'a str,
+    pub(crate) campaign_report: &'a Path,
+    pub(crate) market_input: &'a Path,
+    pub(crate) market_sha256: &'a str,
+    pub(crate) market: Pubkey,
+    pub(crate) pyth_facts: &'a Path,
+    pub(crate) submitter_keypair: &'a Path,
+    pub(crate) resolver_keypair: &'a Path,
+    pub(crate) fee_payer_keypair: &'a Path,
+    pub(crate) update_keypair: &'a Path,
+    pub(crate) work: &'a Path,
+    pub(crate) max_wait_seconds: i64,
+    pub(crate) terminal_resume: bool,
+}
+
+pub(crate) struct HeldResolutionEvidenceV1 {
+    pub(crate) report: Value,
+    pub(crate) transactions: Vec<TransactionEvidence>,
+}
+
 impl SpineContextV1<'_> {
     fn key(&self, role: &str) -> Result<PathBuf> {
         self.founding_keypairs
@@ -235,6 +267,527 @@ impl SpineContextV1<'_> {
         std::fs::create_dir_all(&path)?;
         Ok(path)
     }
+}
+
+fn write_resolution_journal_v1(path: &Path, document: &Value) -> Result<()> {
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    std::fs::write(&temporary, serde_json::to_vec_pretty(document)?)?;
+    std::fs::rename(&temporary, path)?;
+    Ok(())
+}
+
+fn append_resolution_setup_v1(path: &Path, event: Value) -> Result<()> {
+    let mut document = if path.exists() {
+        read_json(path)?
+    } else {
+        serde_json::json!({
+            "schema": "dclutch-held-resolution-setup-journal-v1",
+            "events": [],
+        })
+    };
+    if document["schema"] != "dclutch-held-resolution-setup-journal-v1" {
+        return Err(Error::new("held Resolution setup journal schema changed"));
+    }
+    document["events"]
+        .as_array_mut()
+        .ok_or_else(|| Error::new("held Resolution setup journal omitted events"))?
+        .push(event);
+    write_resolution_journal_v1(path, &document)
+}
+
+fn verified_prior_transaction_v1(
+    rpc: &mut Rpc,
+    expected: TransactionEvidence,
+) -> Result<TransactionEvidence> {
+    let signature = expected
+        .signature
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("held Resolution journal signature: {error}")))?;
+    let mut actual = rpc
+        .finalized_signed_packet(&expected.label, signature, false)?
+        .ok_or_else(|| Error::new("held Resolution journal transaction disappeared from chain"))?
+        .evidence;
+    actual.label = expected.label.clone();
+    if actual.signature != expected.signature
+        || actual.slot != expected.slot
+        || actual.fee_lamports != expected.fee_lamports
+        || actual.compute_units_consumed != expected.compute_units_consumed
+        || actual.error != expected.error
+    {
+        return Err(Error::new(
+            "held Resolution setup journal differs from finalized transaction history",
+        ));
+    }
+    Ok(actual)
+}
+
+fn resolution_setup_transactions_v1(
+    rpc: &mut Rpc,
+    path: &Path,
+) -> Result<Vec<TransactionEvidence>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let document = read_json(path)?;
+    if document["schema"] != "dclutch-held-resolution-setup-journal-v1" {
+        return Err(Error::new("held Resolution setup journal schema changed"));
+    }
+    resolution_setup_transaction_values_v1(&document)?
+        .into_iter()
+        .map(|transaction| {
+            let expected: TransactionEvidence = serde_json::from_value(transaction)?;
+            verified_prior_transaction_v1(rpc, expected)
+        })
+        .collect()
+}
+
+fn resolution_setup_transaction_values_v1(document: &Value) -> Result<Vec<Value>> {
+    let transactions = document["events"]
+        .as_array()
+        .ok_or_else(|| Error::new("held Resolution setup journal omitted events"))?
+        .iter()
+        .filter_map(|event| event.get("transaction").filter(|value| !value.is_null()))
+        .cloned()
+        .collect();
+    Ok(transactions)
+}
+
+fn receipt_is_present_v1(checkpoint_path: &Path, stage: &str) -> Result<bool> {
+    if !checkpoint_path.exists() {
+        return Ok(false);
+    }
+    let checkpoint = read_json(checkpoint_path)?;
+    if stage == "complete" {
+        return Ok(checkpoint["verifiedTerminal"] == true);
+    }
+    let receipt_stage = match stage {
+        "submit" => "submit",
+        "execute" => "resolution-provider-execute-v1",
+        "accept" => "core-terminal-accept-v1",
+        "reclaim" => "reclaim",
+        _ => return Err(Error::new(format!("unknown held Resolution stage {stage}"))),
+    };
+    Ok(checkpoint["receipts"].as_array().is_some_and(|receipts| {
+        receipts
+            .iter()
+            .any(|receipt| receipt["stage"] == receipt_stage)
+    }))
+}
+
+fn parse_resolution_projection_v1(
+    input_path: &Path,
+    producer_path: &Path,
+    market: Pubkey,
+) -> Result<crate::flagship_resolution::OwnedLoopbackContinuationInputV1> {
+    let bytes = if input_path.exists() {
+        std::fs::read(input_path)?
+    } else {
+        let checkpoint = read_json(producer_path)?;
+        serde_json::to_vec(
+            checkpoint
+                .get("plannedInput")
+                .ok_or_else(|| Error::new("flagship producer checkpoint omitted plannedInput"))?,
+        )?
+    };
+    crate::flagship_resolution::parse_owned_loopback_continuation_input_v1(&bytes, market)
+}
+
+fn require_resolution_signers_v1(
+    projection: crate::flagship_resolution::OwnedLoopbackContinuationInputV1,
+    submitter: &Keypair,
+    resolver: &Keypair,
+    payer: &Keypair,
+    update: &Keypair,
+) -> Result<()> {
+    if projection.submitter != submitter.pubkey()
+        || projection.resolver != resolver.pubkey()
+        || projection.payer != payer.pubkey()
+        || projection.update != update.pubkey()
+    {
+        return Err(Error::new(
+            "the four named Resolution keypairs do not match the flagship producer's native typed input",
+        ));
+    }
+    Ok(())
+}
+
+fn prepay_resolution_account_v1(
+    rpc: &mut Rpc,
+    setup_path: &Path,
+    label: &str,
+    stage: &str,
+    destination: Pubkey,
+    bytes: usize,
+    campaign_payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<Value> {
+    let rent = rpc.minimum_balance(bytes)?;
+    let before = rpc.account(destination)?;
+    if before.as_ref().is_some_and(|account| {
+        account.owner != solana_sdk_ids::system_program::ID
+            || account.executable
+            || !account.data.is_empty()
+    }) {
+        // A crash may leave the protocol-owned account finalized before its
+        // receipt reached disk. The durable executor below is the authority
+        // that reconciles or refuses those bytes; a setup transfer must not
+        // touch it.
+        return Ok(serde_json::json!({
+            "label": label,
+            "stage": stage,
+            "address": destination.to_string(),
+            "rentLamports": rent,
+            "status": "already-created; durable executor must reconcile",
+        }));
+    }
+    let before_lamports = before.as_ref().map_or(0, |account| account.lamports);
+    if before_lamports > rent {
+        return Err(Error::new(format!(
+            "{label} prepay exceeds the current exact rent minimum"
+        )));
+    }
+    let missing = rent - before_lamports;
+    let transaction = if missing == 0 {
+        None
+    } else {
+        let evidence = rpc.send(
+            &format!("journey: prepay exact {label} rent before durable {stage}"),
+            &[solana_system_interface::instruction::transfer(
+                &campaign_payer.pubkey(),
+                &destination,
+                missing,
+            )],
+            campaign_payer,
+        )?;
+        transactions.push(evidence.clone());
+        Some(evidence)
+    };
+    let after_lamports = rpc
+        .account(destination)?
+        .as_ref()
+        .map_or(0, |account| account.lamports);
+    if after_lamports != rent {
+        return Err(Error::new(format!(
+            "{label} prepay left {after_lamports} lamports, expected exact rent {rent}"
+        )));
+    }
+    let event = serde_json::json!({
+        "kind": "exact-protocol-rent-prepay",
+        "label": label,
+        "stage": stage,
+        "address": destination.to_string(),
+        "dataBytes": bytes,
+        "beforeLamports": before_lamports,
+        "transferredLamports": missing,
+        "afterLamports": after_lamports,
+        "transaction": transaction,
+    });
+    append_resolution_setup_v1(setup_path, event.clone())?;
+    Ok(event)
+}
+
+/// Drive the existing flagship producer/table/executor through its durable
+/// Complete checkpoint. This function constructs no protocol instruction: it
+/// calls the exact same owner entry points a host command invokes.
+pub(crate) fn resolve_held_market_v1(
+    rpc: &mut Rpc,
+    context: HeldResolutionContextV1<'_>,
+) -> Result<HeldResolutionEvidenceV1> {
+    use sha2::Digest as _;
+
+    std::fs::create_dir_all(context.work)?;
+    let refresh_path = context.work.join("refreshed-evidence.json");
+    let producer_path = context.work.join("producer.json");
+    let table_path = context.work.join("tables.json");
+    let input_path = context.work.join("input.json");
+    let checkpoint_path = context.work.join("checkpoint.json");
+    let setup_path = context.work.join("setup-journal.json");
+
+    // A Terminal resume is admitted only after the owner parses the exact
+    // native input and durable checkpoint against live finalized state.
+    // `--through accept` is deliberately behind the classified Reclaim stage,
+    // so this cannot plan Reclaim before the immutable deadline or pin a
+    // prepay prebalance. It cannot send without `--execute`.
+    if context.terminal_resume {
+        crate::flagship_resolution::run_owned_loopback(vec![
+            "--rpc-url".into(),
+            context.rpc_url.into(),
+            "--input".into(),
+            input_path.display().to_string(),
+            "--checkpoint".into(),
+            checkpoint_path.display().to_string(),
+            "--through".into(),
+            "accept".into(),
+        ])?;
+    }
+
+    let submitter = crate::substrate::load_keypair(context.submitter_keypair)?;
+    let resolver = crate::substrate::load_keypair(context.resolver_keypair)?;
+    let payer = crate::substrate::load_keypair(context.fee_payer_keypair)?;
+    let update = crate::substrate::load_keypair(context.update_keypair)?;
+    let mut transactions = resolution_setup_transactions_v1(rpc, &setup_path)?;
+
+    let producer_arguments = || {
+        vec![
+            "--rpc-url".into(),
+            context.rpc_url.into(),
+            "--produce-input".into(),
+            "--plan".into(),
+            context.plan.display().to_string(),
+            "--campaign-evidence".into(),
+            context.campaign_report.display().to_string(),
+            "--refreshed-evidence".into(),
+            refresh_path.display().to_string(),
+            "--pyth-facts".into(),
+            context.pyth_facts.display().to_string(),
+            "--producer-checkpoint".into(),
+            producer_path.display().to_string(),
+            "--output".into(),
+            input_path.display().to_string(),
+            "--payer".into(),
+            payer.pubkey().to_string(),
+        ]
+    };
+
+    if !input_path.exists() {
+        if !refresh_path.exists() {
+            crate::evidence_refresh::run_owned_loopback(vec![
+                "--rpc-url".into(),
+                context.rpc_url.into(),
+                "--plan".into(),
+                context.plan.display().to_string(),
+                "--expected-plan-sha256".into(),
+                context.plan_sha256.into(),
+                "--market-input".into(),
+                context.market_input.display().to_string(),
+                "--expected-market-input-sha256".into(),
+                context.market_sha256.into(),
+                "--campaign-report".into(),
+                context.campaign_report.display().to_string(),
+                "--expected-campaign-report-sha256".into(),
+                crate::plan::hex(&sha2::Sha256::digest(std::fs::read(
+                    context.campaign_report,
+                )?)),
+                "--output".into(),
+                refresh_path.display().to_string(),
+            ])?;
+        }
+        crate::flagship_resolution::run_owned_loopback(producer_arguments())?;
+        let projection =
+            parse_resolution_projection_v1(&input_path, &producer_path, context.market)?;
+        require_resolution_signers_v1(projection, &submitter, &resolver, &payer, &update)?;
+
+        if !table_path.exists() {
+            let resolver_before = rpc
+                .account(resolver.pubkey())?
+                .map_or(0, |row| row.lamports);
+            let payer_before = rpc.account(payer.pubkey())?.map_or(0, |row| row.lamports);
+            let resolver_missing =
+                LOCAL_RESOLUTION_SIGNER_BALANCE_FLOOR_V1.saturating_sub(resolver_before);
+            let payer_missing =
+                LOCAL_RESOLUTION_SIGNER_BALANCE_FLOOR_V1.saturating_sub(payer_before);
+            let mut instructions = Vec::new();
+            if resolver_missing > 0 {
+                instructions.push(solana_system_interface::instruction::transfer(
+                    &submitter.pubkey(),
+                    &resolver.pubkey(),
+                    resolver_missing,
+                ));
+            }
+            if payer_missing > 0 {
+                instructions.push(solana_system_interface::instruction::transfer(
+                    &submitter.pubkey(),
+                    &payer.pubkey(),
+                    payer_missing,
+                ));
+            }
+            let transaction = if instructions.is_empty() {
+                None
+            } else {
+                let evidence = rpc.send(
+                    "journey: capitalize Resolution signing wallets to the measured local balance floor",
+                    &instructions,
+                    &submitter,
+                )?;
+                transactions.push(evidence.clone());
+                Some(evidence)
+            };
+            let resolver_after = rpc
+                .account(resolver.pubkey())?
+                .map_or(0, |row| row.lamports);
+            let payer_after = rpc.account(payer.pubkey())?.map_or(0, |row| row.lamports);
+            if resolver_after < LOCAL_RESOLUTION_SIGNER_BALANCE_FLOOR_V1
+                || payer_after < LOCAL_RESOLUTION_SIGNER_BALANCE_FLOOR_V1
+            {
+                return Err(Error::new(
+                    "local Resolution signer capitalization did not reach its measured balance floor",
+                ));
+            }
+            append_resolution_setup_v1(
+                &setup_path,
+                serde_json::json!({
+                    "kind": "local-campaign-execution-funding",
+                    "notProtocolRequirement": true,
+                    "balanceFloorLamports": LOCAL_RESOLUTION_SIGNER_BALANCE_FLOOR_V1,
+                    "source": submitter.pubkey().to_string(),
+                    "resolver": resolver.pubkey().to_string(),
+                    "resolverBeforeLamports": resolver_before,
+                    "resolverTransferredLamports": resolver_missing,
+                    "resolverAfterLamports": resolver_after,
+                    "feePayer": payer.pubkey().to_string(),
+                    "feePayerBeforeLamports": payer_before,
+                    "feePayerTransferredLamports": payer_missing,
+                    "feePayerAfterLamports": payer_after,
+                    "transaction": transaction,
+                }),
+            )?;
+        }
+
+        for _ in 0..RESUMPTION_CEILING_V1 {
+            if input_path.exists() {
+                break;
+            }
+            let before = std::fs::read(&table_path).ok();
+            crate::flagship_resolution::run_owned_loopback(vec![
+                "--rpc-url".into(),
+                context.rpc_url.into(),
+                "--provision-tables".into(),
+                "--producer-checkpoint".into(),
+                producer_path.display().to_string(),
+                "--table-journal".into(),
+                table_path.display().to_string(),
+                "--authority-keypair".into(),
+                context.resolver_keypair.display().to_string(),
+                "--execute".into(),
+            ])?;
+            if before.as_deref() == Some(std::fs::read(&table_path)?.as_slice()) {
+                return Err(Error::new(
+                    "flagship table provisioner returned without journal progress",
+                ));
+            }
+            crate::flagship_resolution::run_owned_loopback(producer_arguments())?;
+        }
+        if !input_path.exists() {
+            return Err(Error::new(
+                "flagship table provisioner reached the bounded resumption ceiling before input",
+            ));
+        }
+    }
+
+    let projection = parse_resolution_projection_v1(&input_path, &producer_path, context.market)?;
+    require_resolution_signers_v1(projection, &submitter, &resolver, &payer, &update)?;
+    let mut setup_reports = Vec::new();
+    let signer_arguments = || {
+        vec![
+            "--submitter-keypair".into(),
+            context.submitter_keypair.display().to_string(),
+            "--resolver-keypair".into(),
+            context.resolver_keypair.display().to_string(),
+            "--payer-keypair".into(),
+            context.fee_payer_keypair.display().to_string(),
+            "--update-keypair".into(),
+            context.update_keypair.display().to_string(),
+        ]
+    };
+    for stage in ["submit", "execute", "accept", "reclaim", "complete"] {
+        if receipt_is_present_v1(&checkpoint_path, stage)? {
+            continue;
+        }
+        if stage == "submit" {
+            setup_reports.push(prepay_resolution_account_v1(
+                rpc,
+                &setup_path,
+                "provider lifecycle",
+                stage,
+                projection.lifecycle,
+                dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+                &submitter,
+                &mut transactions,
+            )?);
+        } else if stage == "execute" {
+            setup_reports.push(prepay_resolution_account_v1(
+                rpc,
+                &setup_path,
+                "terminal certificate",
+                stage,
+                projection.certificate,
+                dclutch_source::resolution::RESOLUTION_CERTIFICATE_BYTES_V2,
+                &submitter,
+                &mut transactions,
+            )?);
+        }
+        if stage == "reclaim" {
+            crate::sponsored_schedule::wait_until_unix_seconds_v1(
+                rpc,
+                projection.reclaim_after_unix_seconds,
+                context.max_wait_seconds,
+            )?;
+        }
+        for _ in 0..RESUMPTION_CEILING_V1 {
+            let mut arguments = vec![
+                "--rpc-url".into(),
+                context.rpc_url.into(),
+                "--input".into(),
+                input_path.display().to_string(),
+                "--checkpoint".into(),
+                checkpoint_path.display().to_string(),
+                "--through".into(),
+                stage.into(),
+            ];
+            arguments.extend(signer_arguments());
+            arguments.push("--execute".into());
+            crate::flagship_resolution::run_owned_loopback(arguments)?;
+            if receipt_is_present_v1(&checkpoint_path, stage)? {
+                break;
+            }
+        }
+        if !receipt_is_present_v1(&checkpoint_path, stage)? {
+            return Err(Error::new(format!(
+                "flagship durable {stage} reached the bounded resumption ceiling"
+            )));
+        }
+    }
+
+    let accepted_checkpoint_bytes = std::fs::read(&checkpoint_path)?;
+    crate::flagship_resolution::run_owned_loopback(vec![
+        "--rpc-url".into(),
+        context.rpc_url.into(),
+        "--input".into(),
+        input_path.display().to_string(),
+        "--checkpoint".into(),
+        checkpoint_path.display().to_string(),
+        "--through".into(),
+        "complete".into(),
+    ])?;
+    if std::fs::read(&checkpoint_path)? != accepted_checkpoint_bytes {
+        return Err(Error::new(
+            "read-only flagship Complete restart changed its accepted checkpoint",
+        ));
+    }
+    let table_journal = read_json(&table_path)?;
+    let checkpoint: Value = serde_json::from_slice(&accepted_checkpoint_bytes)?;
+    harvest_required_resolution_receipts_v1(rpc, [&table_journal, &checkpoint], &mut transactions)?;
+    let report = serde_json::json!({
+        "schema": "dclutch-held-journey-resolution-continuation-v1",
+        "market": context.market.to_string(),
+        "input": read_json(&input_path)?,
+        "producer": read_json(&producer_path)?,
+        "tableJournal": table_journal,
+        "checkpoint": checkpoint,
+        "setupJournal": read_json(&setup_path)?,
+        "setupThisInvocation": setup_reports,
+        "restartCompleteUnchanged": true,
+        "transactionCount": transactions.len(),
+        "computeUnitsByTransaction": transactions.iter().map(|transaction| serde_json::json!({
+            "label": transaction.label,
+            "signature": transaction.signature,
+            "computeUnitsConsumed": transaction.compute_units_consumed,
+        })).collect::<Vec<_>>(),
+    });
+    Ok(HeldResolutionEvidenceV1 {
+        report,
+        transactions,
+    })
 }
 
 /// Re-read one signature the chain finalized, with its logs.
@@ -325,6 +878,64 @@ fn harvest_document(
             .map(|evidence| evidence.compute_units_consumed.unwrap_or(0))
             .sum(),
     )
+}
+
+fn harvest_required_resolution_receipts_v1<'a>(
+    rpc: &mut Rpc,
+    documents: impl IntoIterator<Item = &'a Value>,
+    into: &mut Vec<TransactionEvidence>,
+) -> Result<()> {
+    let mut receipts = Vec::new();
+    for document in documents {
+        if let Some(rows) = document.get("receipts").and_then(Value::as_array) {
+            receipts.extend(rows.iter());
+        }
+        if let Some(finalized) = document.get("finalized")
+            && !finalized.is_null()
+        {
+            receipts.push(finalized);
+        }
+    }
+    for receipt in receipts {
+        let signature_text = receipt["signature"]
+            .as_str()
+            .ok_or_else(|| Error::new("held Resolution receipt omitted signature"))?;
+        if into
+            .iter()
+            .any(|transaction| transaction.signature == signature_text)
+        {
+            continue;
+        }
+        let signature = signature_text
+            .parse::<Signature>()
+            .map_err(|error| Error::new(format!("held Resolution receipt signature: {error}")))?;
+        let mut evidence = rpc
+            .finalized_signed_packet(
+                "journey: flagship Resolution finalized receipt",
+                signature,
+                false,
+            )?
+            .ok_or_else(|| Error::new("held Resolution receipt disappeared from chain"))?
+            .evidence;
+        evidence.label = format!(
+            "journey: flagship Resolution {}",
+            receipt["stage"].as_str().unwrap_or("table action")
+        );
+        if evidence.slot
+            != receipt["slot"]
+                .as_u64()
+                .ok_or_else(|| Error::new("held Resolution receipt omitted slot"))?
+            || evidence.fee_lamports != receipt["feeLamports"].as_u64()
+            || evidence.compute_units_consumed != receipt["computeUnitsConsumed"].as_u64()
+            || evidence.error.is_some()
+        {
+            return Err(Error::new(
+                "held Resolution receipt differs from finalized transaction history",
+            ));
+        }
+        into.push(evidence);
+    }
+    Ok(())
 }
 
 /// Harvest every driver document under a directory (a journal directory).
@@ -2454,6 +3065,24 @@ mod tests {
         // in the order a reader of the literal above would guess.
         found.sort();
         assert_eq!(found, vec!["five", "four", "one", "three", "two"]);
+    }
+
+    #[test]
+    fn a_noop_resolution_setup_event_resumes_without_a_fake_transaction() {
+        let document = serde_json::json!({
+            "schema": "dclutch-held-resolution-setup-journal-v1",
+            "events": [
+                {"kind": "local-campaign-execution-funding", "transaction": null},
+                {"kind": "exact-protocol-rent-prepay", "transaction": {
+                    "signature": "an actual transaction-shaped row"
+                }},
+            ],
+        });
+        assert_eq!(
+            resolution_setup_transaction_values_v1(&document)
+                .expect("null means the setup needed no transaction"),
+            vec![serde_json::json!({"signature": "an actual transaction-shaped row"})]
+        );
     }
 
     /// A completion file that already exists costs zero invocations. This is

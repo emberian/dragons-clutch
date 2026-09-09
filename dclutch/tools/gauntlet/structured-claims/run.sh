@@ -31,6 +31,11 @@ case "$port" in ''|*[!0-9]*) usage >&2; exit 64 ;; esac
 [ "$port" -ge 1024 ] && [ "$port" -le 65494 ] || exit 64
 [ -f "$gate" ] && [ ! -L "$gate" ] || { echo "regular checked release gate required" >&2; exit 2; }
 [ ! -e "$work" ] || { echo "work must be new: $work" >&2; exit 2; }
+token_elf="${DCLUTCH_TOKEN_2022_ELF:-${TOKEN_2022_V11_ELF:-}}"
+[ -n "$token_elf" ] && [ -f "$token_elf" ] || {
+    echo "DCLUTCH_TOKEN_2022_ELF must name the pinned observed devnet ELF (or TOKEN_2022_V11_ELF the distinct canonical fixture)" >&2
+    exit 2
+}
 
 cd "$repo"
 git rev-parse --show-toplevel

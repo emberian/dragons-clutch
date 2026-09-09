@@ -425,6 +425,7 @@ fn run() -> Result<()> {
     let _program = arguments.next();
     match arguments.next().as_deref() {
         Some("run") => run_journey(arguments.collect()),
+        Some("continue-held") => run_held_lifecycle(arguments.collect()),
         Some("continue-held-after-terminal") => run_held_after_terminal(arguments.collect()),
         Some("dealer") => dealer_campaign::execute(parse_journey_request(arguments.collect())?),
         Some("economics") => {
@@ -460,6 +461,71 @@ fn run_held_after_terminal(arguments: Vec<String>) -> Result<()> {
     let result =
         journey::continue_held_after_terminal(parse_held_continuation_request(arguments)?)?;
     stdout_json_value_v1(&result)
+}
+
+fn run_held_lifecycle(arguments: Vec<String>) -> Result<()> {
+    let result = journey::continue_held_lifecycle(parse_held_lifecycle_request(arguments)?)?;
+    stdout_json_value_v1(&result)
+}
+
+fn parse_held_lifecycle_request(arguments: Vec<String>) -> Result<journey::HeldLifecycleRequestV1> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(flag) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if !matches!(
+            flag.as_str(),
+            "--handoff"
+                | "--direct-finalized"
+                | "--direct-public"
+                | "--work"
+                | "--evidence"
+                | "--pyth-facts"
+                | "--resolution-submitter-keypair"
+                | "--resolution-resolver-keypair"
+                | "--resolution-fee-payer-keypair"
+                | "--resolution-update-keypair"
+                | "--max-wait-seconds"
+        ) {
+            return Err(Error::new(format!("unknown continue-held flag: {flag}")));
+        }
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(Error::new(format!("{flag} was given twice")));
+        }
+    }
+    let absolute = |flag: &str| -> Result<PathBuf> {
+        let path = PathBuf::from(
+            values
+                .get(flag)
+                .ok_or_else(|| Error::new(format!("{flag} is required")))?,
+        );
+        if !path.is_absolute() {
+            return Err(Error::new(format!("{flag} must be an absolute path")));
+        }
+        Ok(path)
+    };
+    let max_wait_seconds = values
+        .get("--max-wait-seconds")
+        .ok_or_else(|| Error::new("--max-wait-seconds is required"))?
+        .parse::<i64>()
+        .map_err(|error| Error::new(format!("--max-wait-seconds: {error}")))?;
+    Ok(journey::HeldLifecycleRequestV1 {
+        continuation: journey::HeldContinuationRequestV1 {
+            handoff: absolute("--handoff")?,
+            direct_finalized: absolute("--direct-finalized")?,
+            direct_public: absolute("--direct-public")?,
+            work: absolute("--work")?,
+            evidence: absolute("--evidence")?,
+        },
+        pyth_facts: absolute("--pyth-facts")?,
+        resolution_submitter_keypair: absolute("--resolution-submitter-keypair")?,
+        resolution_resolver_keypair: absolute("--resolution-resolver-keypair")?,
+        resolution_fee_payer_keypair: absolute("--resolution-fee-payer-keypair")?,
+        resolution_update_keypair: absolute("--resolution-update-keypair")?,
+        max_wait_seconds,
+    })
 }
 
 fn parse_held_continuation_request(
@@ -597,7 +663,18 @@ fn usage() {
          --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
          --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \
          --expected-source-tree-sha256 HEX64 --seed HEX64 [--holders N]\n\n  \
-         dclutch-journey-campaign continue-held-after-terminal \\\n+         --handoff ABSOLUTE_PRIVATE_JSON --direct-finalized ABSOLUTE_JSON \\\n+         --direct-public ABSOLUTE_JSON --work ABSOLUTE_DIR \\\n+         --evidence ABSOLUTE_NEW_JSON\n\nThe campaign brings up \
+         dclutch-journey-campaign continue-held \\\n      \
+         --handoff ABSOLUTE_PRIVATE_JSON --direct-finalized ABSOLUTE_JSON \\\n      \
+         --direct-public ABSOLUTE_JSON --work ABSOLUTE_DIR \\\n      \
+         --evidence ABSOLUTE_NEW_JSON --pyth-facts ABSOLUTE_JSON \\\n      \
+         --resolution-submitter-keypair ABSOLUTE_JSON \\\n      \
+         --resolution-resolver-keypair ABSOLUTE_JSON \\\n      \
+         --resolution-fee-payer-keypair ABSOLUTE_JSON \\\n      \
+         --resolution-update-keypair ABSOLUTE_JSON --max-wait-seconds SECONDS\n\n  \
+         dclutch-journey-campaign continue-held-after-terminal \\\n      \
+         --handoff ABSOLUTE_PRIVATE_JSON --direct-finalized ABSOLUTE_JSON \\\n      \
+         --direct-public ABSOLUTE_JSON --work ABSOLUTE_DIR \\\n      \
+         --evidence ABSOLUTE_NEW_JSON\n\nThe campaign brings up \
          its own checked-mutable loopback substrate from the named checked\nrelease gate \
          (local-mutable-prepare-v1), boots a fresh solana-test-validator over\nthe prepared \
          account directory, administers it through activation, compiles a\nMarket against the LIVE \
@@ -647,6 +724,57 @@ mod tests {
         ])
         .expect_err("an incomplete continuation contract must refuse");
         assert!(error.0.contains("--direct-finalized is required"));
+    }
+
+    #[test]
+    fn full_held_lifecycle_parser_requires_four_named_signers_and_wait_bound() {
+        let complete = vec![
+            "--handoff".into(),
+            "/tmp/handoff.json".into(),
+            "--direct-finalized".into(),
+            "/tmp/direct-finalized.json".into(),
+            "--direct-public".into(),
+            "/tmp/direct-public.json".into(),
+            "--work".into(),
+            "/tmp/continuation".into(),
+            "--evidence".into(),
+            "/tmp/continuation.json".into(),
+            "--pyth-facts".into(),
+            "/tmp/pyth.json".into(),
+            "--resolution-submitter-keypair".into(),
+            "/tmp/submitter.json".into(),
+            "--resolution-resolver-keypair".into(),
+            "/tmp/resolver.json".into(),
+            "--resolution-fee-payer-keypair".into(),
+            "/tmp/payer.json".into(),
+            "--resolution-update-keypair".into(),
+            "/tmp/update.json".into(),
+            "--max-wait-seconds".into(),
+            "3600".into(),
+        ];
+        let parsed = super::parse_held_lifecycle_request(complete.clone())
+            .expect("the complete typed continuation contract");
+        assert_eq!(parsed.max_wait_seconds, 3600);
+        assert_eq!(
+            parsed.resolution_submitter_keypair,
+            std::path::Path::new("/tmp/submitter.json")
+        );
+
+        let mut relative = complete.clone();
+        relative[13] = "submitter.json".into();
+        let error = super::parse_held_lifecycle_request(relative)
+            .expect_err("a relative signing authority path must refuse");
+        assert!(
+            error
+                .0
+                .contains("--resolution-submitter-keypair must be an absolute path")
+        );
+
+        let mut malformed_wait = complete;
+        *malformed_wait.last_mut().expect("wait value") = "tomorrow".into();
+        let error = super::parse_held_lifecycle_request(malformed_wait)
+            .expect_err("the immutable wait bound must be numeric");
+        assert!(error.0.contains("--max-wait-seconds"));
     }
 
     #[test]

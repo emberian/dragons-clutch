@@ -322,6 +322,15 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
             )
         }
     };
+    let recovery_market_label = ensemble.as_ref().map_or_else(
+        || "two-source recovery market".to_owned(),
+        |shape| {
+            format!(
+                "{}-member quorum-{} Ensemble plus {rung_count} recovery rung(s)",
+                shape.members, shape.quorum
+            )
+        },
+    );
     let registry = pubkey(&checked.plan.registry.program_id)?;
     let fee_recipient = Keypair::new();
     let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
@@ -372,7 +381,7 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
     let market_path = request.work.join("market.json");
     std::fs::write(&market_path, serde_json::to_vec_pretty(&market_input)?)?;
     stages.push(StageV1::new(
-        "two-source market compiled",
+        &format!("{recovery_market_label} compiled"),
         "executed",
         format!(
             "`--recovery-rungs {}` through the shipped parser: {rung_count} rung(s), each an \
