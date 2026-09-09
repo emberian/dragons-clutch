@@ -160,6 +160,29 @@ pub struct GeneralLocalStateV3<'a> {
 }
 
 impl<'a> GeneralLocalStateV3<'a> {
+    /// Authenticate a complete observed Trading-owned account before exposing
+    /// its semantic body. Readonly evidence keeps the same envelope and exact
+    /// width as the writable lifecycle state that produced it.
+    pub fn decode_owned(
+        bytes: &'a [u8],
+        actual_owner: [u8; 32],
+        trading_program: [u8; 32],
+        expected_kind: GeneralLocalStateKindV3,
+        outcome_count: u32,
+    ) -> Result<Self> {
+        if trading_program == [0; 32] || actual_owner != trading_program {
+            return Err(GeneralLocalStateErrorV3::InvalidOwner);
+        }
+        if bytes.len() != general_local_state_len_v3(expected_kind, outcome_count)? {
+            return Err(GeneralLocalStateErrorV3::InvalidLength);
+        }
+        let value = Self::decode(bytes)?;
+        if value.header.kind != expected_kind {
+            return Err(GeneralLocalStateErrorV3::InvalidKind);
+        }
+        Ok(value)
+    }
+
     /// Hostile-decode one exact envelope and its semantic body.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < GENERAL_LOCAL_STATE_HEADER_BYTES_V3
@@ -258,6 +281,8 @@ impl<'a> GeneralLocalStateV3<'a> {
 /// Stable local-state refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralLocalStateErrorV3 {
+    /// Observed account was not owned by the selected nonzero Trading program.
+    InvalidOwner,
     /// Envelope or body had another exact width.
     InvalidLength,
     /// Magic, version, or reserved bytes differed.
@@ -268,6 +293,23 @@ pub enum GeneralLocalStateErrorV3 {
     InvalidLifecycle,
     /// Embedded semantic state refused.
     InvalidBody,
+}
+
+impl GeneralLocalStateErrorV3 {
+    /// Exact semantic cause when an accelerator's refused acknowledgement
+    /// carries one common wire disposition.
+    pub const fn log_line(self) -> &'static str {
+        match self {
+            Self::InvalidOwner => "general-local-state: wrong Trading owner",
+            Self::InvalidLength => "general-local-state: wrong complete account width",
+            Self::InvalidEncoding => "general-local-state: wrong envelope schema or header",
+            Self::InvalidKind => "general-local-state: wrong semantic state kind",
+            Self::InvalidLifecycle => {
+                "general-local-state: invalid lifecycle principal or beneficiary"
+            }
+            Self::InvalidBody => "general-local-state: invalid semantic body",
+        }
+    }
 }
 
 /// Result alias for General local-state envelopes.

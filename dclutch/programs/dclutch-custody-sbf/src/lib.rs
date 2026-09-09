@@ -53,6 +53,8 @@ macro_rules! custody_cu_checkpoint {
     ($phase:literal) => {};
 }
 
+pub(crate) use custody_cu_checkpoint;
+
 use dclutch_custody::token_svm::{
     AuthorityRole, COption, ExactTransferInput, ExactTransferProfileV1,
     PRODUCTION_ADAPTER_RELEASES, close_account, initialize_account3, transfer_checked,
@@ -62,7 +64,7 @@ use dclutch_market::realm::{
 };
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_registry::activation_auth_v1::{
-    authenticate_activation_cache_identity_v1, require_cache_account, require_readonly_frame,
+    authenticate_activation_cache_identity_v1, require_cache_account,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -311,7 +313,7 @@ pub fn process_instruction(
     )
     .map_err(CustodySbfError::from)?;
     custody_cu_checkpoint!("cf-cache-identity");
-    let market = authenticate_series_aware_common_frame(
+    let (market, replay_identity) = authenticate_series_aware_common_frame(
         program_id,
         accounts,
         request,
@@ -332,9 +334,13 @@ pub fn process_instruction(
     custody_cu_checkpoint!("cu-realm");
     drop(cache_data);
     let outcome = match request.operation {
-        OperationV1::InitializeReplay => {
-            initialize_replay(program_id, accounts, request, request_digest)
-        }
+        OperationV1::InitializeReplay => initialize_replay(
+            program_id,
+            accounts,
+            request,
+            request_digest,
+            replay_identity,
+        ),
         OperationV1::OpenVault => open_vault(program_id, accounts, request, request_digest, realm),
         OperationV1::Transfer => {
             execute_transfer(program_id, accounts, request, request_digest, realm, relay)
@@ -559,7 +565,13 @@ fn authenticate_series_aware_common_frame(
     continuation: Option<RegistryContinuationRequestV1>,
     relay: CustodyBumpRelayV1,
     activated: ActivatedExecutionReleaseSetViewV1<'_>,
-) -> Result<AuthenticatedMarketAdmissionV1, ProgramError> {
+) -> Result<
+    (
+        AuthenticatedMarketAdmissionV1,
+        AuthenticatedReplayIdentityV1,
+    ),
+    ProgramError,
+> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
     let replay = account(accounts, REPLAY)?;
@@ -574,7 +586,7 @@ fn authenticate_series_aware_common_frame(
         AuthenticatedMarketAdmissionV1::Live(authenticate_market(accounts, request, activated)?)
     };
     custody_cu_checkpoint!("cf-market");
-    authenticate_common_frame_tail(
+    let replay_identity = authenticate_common_frame_tail(
         program_id,
         accounts,
         request,
@@ -586,7 +598,7 @@ fn authenticate_series_aware_common_frame(
         caller_program,
         replay,
     )?;
-    Ok(market)
+    Ok((market, replay_identity))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -602,7 +614,7 @@ fn authenticate_common_frame_tail(
     caller_authority: &AccountInfo<'_>,
     caller_program: &AccountInfo<'_>,
     replay: &AccountInfo<'_>,
-) -> ProgramResult {
+) -> Result<AuthenticatedReplayIdentityV1, ProgramError> {
     let caller_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set).map_err(|_| CustodySbfError::Release)?,
         request.market,
@@ -632,8 +644,7 @@ fn authenticate_common_frame_tail(
     custody_cu_checkpoint!("cf-caller-authority");
     authenticate_calling_release(program_id, accounts, request, continuation, activated)?;
     custody_cu_checkpoint!("cf-calling-release");
-    authenticate_replay_identity(program_id, replay, request, relay.replay)?;
-    Ok(())
+    authenticate_replay_identity(program_id, replay, request, relay.replay)
 }
 
 #[derive(Clone, Copy)]
@@ -820,16 +831,18 @@ fn authenticate_calling_release(
     // here is reentrancy and the route could not execute at all. The cache
     // account is Registry-owned at a Registry-derived address and carries the
     // whole of what `Reauthenticate` would have returned.
-    require_readonly_frame(cache, caller_program, caller_programdata)
-        .map_err(CustodySbfError::from)?;
-    let release = activated
-        .role(role)
-        .map_err(|_| CustodySbfError::Release)?
-        .release();
-    if release.program().to_bytes() != caller_program.key.to_bytes()
-        || release.programdata() != caller_programdata.key.to_bytes()
-        || release.program().to_bytes() != request.caller_program
-    {
+    // A caller's PDA survives an upgrade. Its own upstream self-check is
+    // therefore insufficient: Custody authenticates the live Loader link,
+    // deployment slot and authority before accepting that caller's signature.
+    let receipt = dclutch_registry::activation_auth_v1::authenticate_activated_role_in_frame_v1(
+        cache,
+        activated,
+        role,
+        caller_program,
+        caller_programdata,
+    )
+    .map_err(CustodySbfError::from)?;
+    if receipt.program().to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
     Ok(())
@@ -1144,24 +1157,49 @@ fn collateral_profile(realm: RealmV1) -> Result<ExactTransferProfileV1, ProgramE
 /// to be written before the account exists. The parent mines it instead and
 /// relays it after the request. A wrong byte reproduces a different address and
 /// refuses at the equality below, unchanged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedReplayIdentityV1 {
+    canonical_bump: Option<u8>,
+}
+
+impl AuthenticatedReplayIdentityV1 {
+    fn allocation_bump(self, program_id: &Pubkey, request: CustodyRequestV1) -> u8 {
+        // A supplied hint proves an address, not canonicality. Initialization
+        // always signed the canonical replay before this optimization; retain
+        // that search for hinted frames, including noncanonical hostile hints.
+        self.canonical_bump.unwrap_or_else(|| {
+            Pubkey::find_program_address(
+                &CustodyReplaySeedsV1::from_request(request).as_slices(),
+                program_id,
+            )
+            .1
+        })
+    }
+}
+
 fn authenticate_replay_identity(
     program_id: &Pubkey,
     replay: &AccountInfo<'_>,
     request: CustodyRequestV1,
     hint: Option<u8>,
-) -> ProgramResult {
+) -> Result<AuthenticatedReplayIdentityV1, ProgramError> {
     let replay_seeds = CustodyReplaySeedsV1::from_request(request);
-    let expected = match hint {
+    let (expected, canonical_bump) = match hint {
         Some(bump) => {
             let bump_seed = [bump];
             let [domain, market, release, role, context] = replay_seeds.as_slices();
-            Pubkey::create_program_address(
+            let expected = Pubkey::create_program_address(
                 &[domain, market, release, role, context, &bump_seed],
                 program_id,
             )
-            .map_err(|_| CustodySbfError::Replay)?
+            .map_err(|_| CustodySbfError::Replay)?;
+            (expected, None)
         }
-        None => Pubkey::find_program_address(&replay_seeds.as_slices(), program_id).0,
+        None => {
+            let (expected, bump) =
+                Pubkey::find_program_address(&replay_seeds.as_slices(), program_id);
+            (expected, Some(bump))
+        }
     };
     if replay.key != &expected {
         return Err(CustodySbfError::Replay.into());
@@ -1181,7 +1219,7 @@ fn authenticate_replay_identity(
             }
         }
     }
-    Ok(())
+    Ok(AuthenticatedReplayIdentityV1 { canonical_bump })
 }
 
 #[inline(never)]
@@ -1190,7 +1228,9 @@ fn initialize_replay(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
     request_digest: [u8; 32],
+    replay_identity: AuthenticatedReplayIdentityV1,
 ) -> ProgramResult {
+    custody_cu_checkpoint!("init-enter");
     let replay = account(accounts, REPLAY)?;
     let payer = account(accounts, 9)?;
     let system = account(accounts, 10)?;
@@ -1209,11 +1249,13 @@ fn initialize_replay(
     if exact_rent != request.rent_lamports {
         return Err(CustodySbfError::Create.into());
     }
+    custody_cu_checkpoint!("init-rent");
     let replay_seeds = CustodyReplaySeedsV1::from_request(request);
-    let bump = Pubkey::find_program_address(&replay_seeds.as_slices(), program_id).1;
+    let bump = replay_identity.allocation_bump(program_id, request);
     let bump_seed = [bump];
     let [domain, market, release, role, context] = replay_seeds.as_slices();
     let signer_seeds = &[domain, market, release, role, context, &bump_seed];
+    custody_cu_checkpoint!("init-derived");
     let observed_lamports = replay.lamports();
     let normalization =
         replay_rent_normalization(observed_lamports, exact_rent, rent_refund.lamports())?;
@@ -1252,6 +1294,7 @@ fn initialize_replay(
     {
         return Err(CustodySbfError::Create.into());
     }
+    custody_cu_checkpoint!("init-allocated");
     let poststate = poststate_commitment(PoststateProjection {
         request_digest,
         source: replay.key.to_bytes(),
@@ -1313,6 +1356,7 @@ fn open_vault(
     request_digest: [u8; 32],
     realm: RealmFacts,
 ) -> ProgramResult {
+    custody_cu_checkpoint!("open-enter");
     let mint = account(accounts, 9)?;
     let vault = account(accounts, 10)?;
     let authority = account(accounts, 11)?;
@@ -1322,7 +1366,7 @@ fn open_vault(
     let rent_account = account(accounts, 15)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     let _authority_bump = validate_custody_authority(program_id, authority, request, None)?;
-    validate_vault_key(program_id, vault, request, false)?;
+    let vault_bump = validate_vault_key(program_id, vault, request, false)?;
     if vault.owner != &system_program::ID
         || vault.lamports() != 0
         || vault.data_len() != 0
@@ -1337,20 +1381,24 @@ fn open_vault(
     if request.rent_lamports != exact_rent {
         return Err(CustodySbfError::Create.into());
     }
+    custody_cu_checkpoint!("open-validated");
     create_vault(
-        program_id,
         payer,
         vault,
         system,
         token_program,
         request,
         exact_rent,
+        vault_bump,
     )?;
+    custody_cu_checkpoint!("open-created");
     initialize_vault(vault, mint, authority, token_program, request)?;
+    custody_cu_checkpoint!("open-initialized");
     let token = read_custody_account(vault, token_program, mint, authority, realm.profile)?;
     if token.amount != 0 || vault.lamports() != exact_rent {
         return Err(CustodySbfError::Postcondition.into());
     }
+    custody_cu_checkpoint!("open-poststate");
     let replay = read_replay(account(accounts, REPLAY)?)?;
     let poststate = poststate_commitment(PoststateProjection {
         request_digest,
@@ -1772,18 +1820,21 @@ fn validate_custody_authority(
     Ok(AuthenticatedCustodyAuthorityBumpV1(bump))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedCustodyVaultBumpV1(u8);
+
 fn validate_vault_key(
     program_id: &Pubkey,
     vault: &AccountInfo<'_>,
     request: CustodyRequestV1,
     source: bool,
-) -> ProgramResult {
+) -> Result<AuthenticatedCustodyVaultBumpV1, ProgramError> {
     let vault_seeds = CustodyVaultSeedsV1::from_request(request, source);
-    let expected = Pubkey::find_program_address(&vault_seeds.as_slices(), program_id).0;
+    let (expected, bump) = Pubkey::find_program_address(&vault_seeds.as_slices(), program_id);
     if vault.key != &expected {
         return Err(CustodySbfError::TokenState.into());
     }
-    Ok(())
+    Ok(AuthenticatedCustodyVaultBumpV1(bump))
 }
 
 fn validate_token_program_and_mint(
@@ -1944,13 +1995,13 @@ fn read_custody_account(
 }
 
 fn create_vault<'a>(
-    program_id: &Pubkey,
     payer: &AccountInfo<'a>,
     vault: &AccountInfo<'a>,
     system: &AccountInfo<'a>,
     token_program: &AccountInfo<'a>,
     request: CustodyRequestV1,
     rent_lamports: u64,
+    vault_bump: AuthenticatedCustodyVaultBumpV1,
 ) -> ProgramResult {
     let instruction = create_account(
         payer.key,
@@ -1961,7 +2012,9 @@ fn create_vault<'a>(
         token_program.key,
     );
     let vault_seeds = CustodyVaultSeedsV1::from_request(request, false);
-    let bump = Pubkey::find_program_address(&vault_seeds.as_slices(), program_id).1;
+    // OpenVault already authenticated these exact seeds and this canonical
+    // bump; only local rent/account checks intervene before this System CPI.
+    let AuthenticatedCustodyVaultBumpV1(bump) = vault_bump;
     let bump_seed = [bump];
     let [domain, market, release, context, compartment] = vault_seeds.as_slices();
     invoke_signed(
@@ -2665,7 +2718,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            authenticate_replay_identity(&program, &replay, initialize, None),
+            authenticate_replay_identity(&program, &replay, initialize, None).map(|_| ()),
             Ok(())
         );
         let wrong_replay_key = Pubkey::new_from_array([0x62; 32]);
@@ -2702,10 +2755,86 @@ mod tests {
             &system_owner,
             false,
         );
-        assert_eq!(validate_vault_key(&program, &vault, lock, false), Ok(()));
+        assert_eq!(
+            validate_vault_key(&program, &vault, lock, false).map(|_| ()),
+            Ok(())
+        );
         assert_eq!(
             validate_vault_key(&program, &wrong_replay, lock, false),
             Err(CustodySbfError::TokenState.into())
+        );
+    }
+
+    #[test]
+    fn replay_allocation_reuses_search_but_never_treats_a_hint_as_canonical() {
+        let program = Pubkey::new_from_array([0x61; 32]);
+        let request = premarket_series_initialize_request();
+        let seeds = CustodyReplaySeedsV1::from_request(request);
+        let (canonical_key, canonical_bump) =
+            Pubkey::find_program_address(&seeds.as_slices(), &program);
+        let [domain, market, release, role, context] = seeds.as_slices();
+        let (alternative_key, alternative_bump) = (0..canonical_bump)
+            .rev()
+            .find_map(|bump| {
+                Pubkey::create_program_address(
+                    &[domain, market, release, role, context, &[bump]],
+                    &program,
+                )
+                .ok()
+                .map(|key| (key, bump))
+            })
+            .expect("fixture has a noncanonical off-curve address");
+        for (key, hint) in [
+            (canonical_key, None),
+            (canonical_key, Some(canonical_bump)),
+            (alternative_key, Some(alternative_bump)),
+        ] {
+            let mut lamports = 0;
+            let mut data = [];
+            let replay = AccountInfo::new(
+                &key,
+                false,
+                true,
+                &mut lamports,
+                &mut data,
+                &system_program::ID,
+                false,
+            );
+            let identity = authenticate_replay_identity(&program, &replay, request, hint)
+                .expect("matching replay coordinate");
+            assert_eq!(identity.allocation_bump(&program, request), canonical_bump);
+        }
+        assert_ne!(alternative_bump, canonical_bump);
+    }
+
+    #[test]
+    fn vault_allocation_bump_reproduces_the_authenticated_coordinate() {
+        let program = Pubkey::new_from_array([0x61; 32]);
+        let request = premarket_series_lock_request();
+        let seeds = CustodyVaultSeedsV1::from_request(request, false);
+        let (key, canonical_bump) = Pubkey::find_program_address(&seeds.as_slices(), &program);
+        let mut lamports = 0;
+        let mut data = [];
+        let vault = AccountInfo::new(
+            &key,
+            false,
+            true,
+            &mut lamports,
+            &mut data,
+            &system_program::ID,
+            false,
+        );
+        let AuthenticatedCustodyVaultBumpV1(bump) =
+            validate_vault_key(&program, &vault, request, false).expect("canonical vault");
+        assert_eq!(bump, canonical_bump);
+        let [domain, market, release, context, compartment] = seeds.as_slices();
+        assert_eq!(
+            Pubkey::create_program_address(
+                &[domain, market, release, context, compartment, &[bump]],
+                &program,
+            )
+            .expect("allocation signer"),
+            key,
         );
     }
 
@@ -2958,3 +3087,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod release_continuity_tests;

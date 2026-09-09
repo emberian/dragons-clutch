@@ -548,6 +548,13 @@ pub(crate) struct FunctionFact {
 #[derive(Default)]
 pub(crate) struct CrateIndex {
     functions: Vec<FunctionFact>,
+    /// One-hop public function re-exports, keyed by their callable module path.
+    ///
+    /// A dispatch can call `adapter::is_x` where `adapter.rs` says only
+    /// `pub use codec::wire::is_x`. The compiler reaches the codec body, and
+    /// the census must retain that canonical path so source-based consumers
+    /// can reach it too. Several targets for one alias remain ambiguous.
+    reexports: BTreeMap<String, Vec<String>>,
     /// Struct name -> field name -> the field's declared type.
     fields: BTreeMap<String, BTreeMap<String, String>>,
     /// `Enum::Variant` -> explicit source discriminants. A collision is
@@ -566,6 +573,14 @@ impl CrateIndex {
     /// A path whose module qualifier does not match anything is unresolved,
     /// which the caller reports rather than guessing at.
     pub(crate) fn resolve(&self, path: &str) -> Option<&FunctionFact> {
+        if let Some(target) = self.reexport_target(path) {
+            return self.resolve_declared(target);
+        }
+        self.resolve_declared(path)
+    }
+
+    /// Resolve a directly declared function without following an alias.
+    fn resolve_declared(&self, path: &str) -> Option<&FunctionFact> {
         let segments: Vec<&str> = path.split("::").collect();
         let name = *segments.last()?;
         let qualifier = if segments.len() >= 2 {
@@ -601,6 +616,23 @@ impl CrateIndex {
             return None;
         }
         Some(first)
+    }
+
+    /// The unique target of one public `use`, when that target exists here.
+    ///
+    /// Re-exports are followed exactly once. A chain or cycle is unresolved
+    /// rather than turning source enumeration into package resolution.
+    fn reexport_target(&self, path: &str) -> Option<&str> {
+        let targets = self.reexports.get(path)?;
+        let [target] = targets.as_slice() else {
+            return None;
+        };
+        self.resolve_declared(target).is_some().then_some(target)
+    }
+
+    /// Preserve the function identity Rust publicly exposes for a predicate.
+    fn canonical_function_path<'a>(&'a self, path: &'a str) -> &'a str {
+        self.reexport_target(path).unwrap_or(path)
     }
 
     /// Resolve a call written inside `module`, preferring that module's own
@@ -1127,6 +1159,9 @@ fn collect_functions(items: &[Item], module: &str, relative: &str, out: &mut Cra
                         });
                 }
             }
+            Item::Use(import) if matches!(import.vis, syn::Visibility::Public(_)) => {
+                collect_function_reexports(&import.tree, "", module, out);
+            }
             Item::Mod(inner) => {
                 // Skip `#[cfg(test)]` modules: test code is not a public entry.
                 if has_cfg_test(&inner.attrs) {
@@ -1143,6 +1178,53 @@ fn collect_functions(items: &[Item], module: &str, relative: &str, out: &mut Cra
             }
             _ => {}
         }
+    }
+}
+
+/// Flatten named public imports into callable alias -> declared target.
+fn collect_function_reexports(
+    tree: &syn::UseTree,
+    prefix: &str,
+    module: &str,
+    out: &mut CrateIndex,
+) {
+    let join = |segment: &str| {
+        if prefix.is_empty() {
+            segment.to_string()
+        } else {
+            format!("{prefix}::{segment}")
+        }
+    };
+    let alias_path = |alias: &str| {
+        if module.is_empty() {
+            alias.to_string()
+        } else {
+            format!("{module}::{alias}")
+        }
+    };
+    match tree {
+        syn::UseTree::Path(path) => {
+            collect_function_reexports(&path.tree, &join(&path.ident.to_string()), module, out);
+        }
+        syn::UseTree::Name(name) => {
+            let leaf = name.ident.to_string();
+            out.reexports
+                .entry(alias_path(&leaf))
+                .or_default()
+                .push(join(&leaf));
+        }
+        syn::UseTree::Rename(rename) => {
+            out.reexports
+                .entry(alias_path(&rename.rename.to_string()))
+                .or_default()
+                .push(join(&rename.ident.to_string()));
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_function_reexports(item, prefix, module, out);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
     }
 }
 
@@ -1914,7 +1996,11 @@ impl DispatchWalk<'_> {
             }
             Expr::Call(call) => {
                 if let Expr::Path(path) = call.func.as_ref() {
-                    let target = render_path(&path.path);
+                    let written = render_path(&path.path);
+                    let target = self
+                        .predicates
+                        .canonical_function_path(&written)
+                        .to_string();
                     let name = target.rsplit("::").next().unwrap_or(&target);
                     // A guard call is a wire recogniser when its NAME says so
                     // (`is_*`) or when its BODY does -- it states a magic or a
@@ -3220,6 +3306,45 @@ mod predicate_body_tests {
             "an unresolved magic is still a named selector: {rendered:?}"
         );
     }
+
+    /// A program module may publicly re-export the codec predicate it calls.
+    ///
+    /// The function body still comes from the codec, and the selector must
+    /// carry that canonical public path. Keeping the adapter spelling made a
+    /// source consumer search the adapter file for a function declaration
+    /// that was correctly absent there.
+    #[test]
+    fn a_reexported_predicate_carries_its_declared_function_path() {
+        let source = r#"
+            mod retirement_v1 {
+                pub fn is_example_v1(input: &[u8]) -> bool {
+                    input.len() > 8
+                        && input.get(..8) == Some(EXAMPLE_MAGIC_V1.as_slice())
+                }
+            }
+            mod adapter {
+                pub use dclutch_trading::retirement_v1::is_example_v1;
+            }
+        "#;
+        let rendered = selectors_for(
+            "adapter::is_example_v1(instruction_data)",
+            source,
+            Some("DCLTDCU1"),
+        );
+        assert!(
+            rendered.iter().any(|text| {
+                text == "predicate dclutch_trading::retirement_v1::is_example_v1()"
+            }),
+            "the public target, not its declaration-free adapter, identifies the predicate: \
+             {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|text| text == "magic EXAMPLE_MAGIC_V1 = b\"DCLTDCU1\""),
+            "the re-exported body still supplies its magic: {rendered:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3537,6 +3662,40 @@ mod resolution_tests {
         );
         assert_eq!(index.field_type("StateV2", "inner"), Some("Inner"));
         assert_eq!(index.field_type("StateV2", "absent"), None);
+    }
+
+    #[test]
+    fn one_public_reexport_resolves_to_its_declared_function() {
+        let index = index_source(
+            "",
+            "mod wire { pub fn selects() {} }
+             mod adapter { pub use dclutch_codec::wire::selects; }",
+        );
+        let resolved = index
+            .resolve("adapter::selects")
+            .expect("one public re-export");
+        assert_eq!(resolved.module, "wire");
+        assert_eq!(
+            index.canonical_function_path("adapter::selects"),
+            "dclutch_codec::wire::selects"
+        );
+    }
+
+    /// Re-export descent is one hop. A second alias could be cyclic or depend
+    /// on package rules this source index does not model, so it is unresolved.
+    #[test]
+    fn a_reexport_chain_is_not_guessed_through() {
+        let index = index_source(
+            "",
+            "mod wire { pub fn selects() {} }
+             mod middle { pub use dclutch_codec::wire::selects; }
+             mod adapter { pub use crate::middle::selects; }",
+        );
+        assert!(index.resolve("adapter::selects").is_none());
+        assert_eq!(
+            index.canonical_function_path("adapter::selects"),
+            "adapter::selects"
+        );
     }
 }
 

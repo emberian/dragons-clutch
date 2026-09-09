@@ -217,7 +217,7 @@ export type CapabilityActionV1 = Readonly<{
    * it". Most acts here are authoring acts with no Market to consult; some
    * reach routes in the programs whose guards are still written inline and
    * which the census therefore reads no constant for. Both print as
-   * `no phase gate`, and a consumer must not read either as admission.
+   * `no named phase gate`, and a consumer must not read either as admission.
    */
   routes: ReadonlyArray<string>;
   /**

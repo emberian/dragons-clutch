@@ -141,7 +141,7 @@ pub const SERIES_PREPARE_CUSTODY_PROGRAM_COORDINATE_V5: u16 =
     SERIES_PREPARE_TICKET_STAGING_COORDINATE_V5 + 1;
 /// Complete physical account width after exact route-alias compaction.
 pub const SERIES_PREPARE_PHYSICAL_ACCOUNT_COUNT_V5: u16 =
-    SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - ROUTE_ALIASES.len() as u16;
+    SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - SERIES_PREPARE_ROUTE_ALIASES_V5.len() as u16;
 /// Accounts created by the native child CPIs; their outer prestate is vacant.
 /// The corresponding live widths and rents belong to Custody, not the outer profile.
 pub const SERIES_PREPARE_CHILD_CREATED_COORDINATES_V5: [u16; 4] = [7, 60, 76, 91];
@@ -233,8 +233,19 @@ pub const SERIES_PREPARE_EFFECT_BYTES_V5: usize = EFFECT_HEADER_BYTES_V5
 
 const _: () = assert!(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 == 5);
 const _: () = assert!(SERIES_PREPARE_ROUTE_STARTS_V5[4] + SERIES_PREPARE_ROUTE_COUNTS_V5[4] == 111);
-const _: () = assert!(ROUTE_ALIASES.len() == 56);
-const _: () = assert!(SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 - ROUTE_ALIASES.len() as u16 == 60);
+const _: () = {
+    let mut route = 0;
+    while route < SERIES_PREPARE_ROUTE_STARTS_V5.len() {
+        let mut alias = 0;
+        while alias < SERIES_PREPARE_ROUTE_ALIASES_V5.len() {
+            assert!(
+                SERIES_PREPARE_ROUTE_ALIASES_V5[alias].0 != SERIES_PREPARE_ROUTE_STARTS_V5[route]
+            );
+            alias += 1;
+        }
+        route += 1;
+    }
+};
 
 #[derive(Clone, Copy, Debug)]
 /// Exact observed widths used by the physical Prepare profile.
@@ -819,14 +830,15 @@ const EXECUTABLE_REPRESENTATIVES: &[u16] = &[
     SERIES_PREPARE_CUSTODY_PROGRAM_COORDINATE_V5,
 ];
 
-const ROUTE_ALIASES: &[(u16, u16)] = &[
+/// Canonical physical reuse across Prepare child routes. Each route caller
+/// remains distinct because its native seeds commit the exact child request.
+pub const SERIES_PREPARE_ROUTE_ALIASES_V5: &[(u16, u16)] = &[
     (17, 14),
     (19, 12),
     (41, 8),
     (42, 13),
     (44, 9),
     (45, 16),
-    (53, 6),
     (54, 7),
     (55, 8),
     (56, 9),
@@ -837,7 +849,6 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
     (65, 15),
     (66, 16),
     (67, 18),
-    (68, 6),
     (69, 18),
     (70, 8),
     (71, 9),
@@ -848,7 +859,6 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
     (77, 14),
     (78, 16),
     (79, 15),
-    (81, 6),
     (82, 18),
     (83, 8),
     (84, 9),
@@ -863,7 +873,6 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
     (94, 14),
     (95, 16),
     (96, 15),
-    (97, 6),
     (98, 18),
     (99, 8),
     (100, 9),
@@ -879,7 +888,7 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
 ];
 
 fn alias_representative(coordinate: u16) -> Option<u16> {
-    ROUTE_ALIASES
+    SERIES_PREPARE_ROUTE_ALIASES_V5
         .iter()
         .find_map(|(alias, representative)| (*alias == coordinate).then_some(*representative))
 }
@@ -1101,7 +1110,7 @@ mod tests {
         assert_eq!(system.privileges() & 1, 0);
         assert_eq!(system.privileges() & 2, 0);
         assert_eq!(system.alias_kind(), AliasKindV2::SelfCoordinate);
-        for (alias, representative) in ROUTE_ALIASES {
+        for (alias, representative) in SERIES_PREPARE_ROUTE_ALIASES_V5 {
             assert!(alias > representative, "all aliases are strictly backward");
             let rule = profile.base().rule(false, *alias).expect("route alias");
             assert_eq!(rule.prestate(), AccountPrestateV2::AuthenticatedRouteAlias);

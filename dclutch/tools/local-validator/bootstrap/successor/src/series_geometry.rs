@@ -1,7 +1,7 @@
 //! Typed geometry assembly for the first Series Prepare frame.
 //!
-//! A Prepare Profile has 116 logical coordinates, while only 60 carry a
-//! physical account after the release-owned alias compression.  This module
+//! A Prepare Profile has 116 logical coordinates; the native profile owns
+//! their exact physical representatives after alias compression. This module
 //! makes that distinction explicit: live accounts are observations, immutable
 //! Registry records are canonical bodies, and accounts the first Prepare will
 //! create are predicted fixed-layout states.  A future vacancy is never
@@ -9,7 +9,9 @@
 
 use dclutch_trading_sbf::series::{
     lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
-    prepare_funding_artifacts_v5::SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5,
+    prepare_funding_artifacts_v5::{
+        SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5, SERIES_PREPARE_ROUTE_ALIASES_V5,
+    },
 };
 
 #[cfg(test)]
@@ -368,64 +370,9 @@ fn take_array_v1<const N: usize>(
 }
 
 fn require_role_alias_addresses_v1(sources: &[SeriesPrepareRoleSourceV1<'_>]) -> Result<()> {
-    for (alias, representative) in [
-        (17, 14),
-        (19, 12),
-        (41, 8),
-        (42, 13),
-        (44, 9),
-        (45, 16),
-        (53, 6),
-        (54, 7),
-        (55, 8),
-        (56, 9),
-        (57, 10),
-        (58, 11),
-        (59, 12),
-        (64, 14),
-        (65, 15),
-        (66, 16),
-        (67, 18),
-        (68, 6),
-        (69, 18),
-        (70, 8),
-        (71, 9),
-        (72, 10),
-        (73, 11),
-        (74, 21),
-        (75, 22),
-        (77, 14),
-        (78, 16),
-        (79, 15),
-        (81, 6),
-        (82, 18),
-        (83, 8),
-        (84, 9),
-        (85, 10),
-        (86, 11),
-        (87, 21),
-        (88, 22),
-        (89, 76),
-        (90, 62),
-        (92, 61),
-        (93, 63),
-        (94, 14),
-        (95, 16),
-        (96, 15),
-        (97, 6),
-        (98, 18),
-        (99, 8),
-        (100, 9),
-        (101, 10),
-        (102, 11),
-        (103, 21),
-        (104, 22),
-        (105, 76),
-        (106, 62),
-        (108, 91),
-        (109, 61),
-        (110, 63),
-    ] {
+    for &(alias, representative) in SERIES_PREPARE_ROUTE_ALIASES_V5 {
+        let alias = usize::from(alias);
+        let representative = usize::from(representative);
         let alias = sources
             .get(alias)
             .ok_or_else(|| Error::new("Series Prepare alias index escaped frame"))?;
@@ -503,64 +450,9 @@ pub(crate) fn build_series_prepare_geometry_v1(
 fn require_release_aliases_v1(
     widths: &[u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize],
 ) -> Result<()> {
-    for (alias, representative) in [
-        (17, 14),
-        (19, 12),
-        (41, 8),
-        (42, 13),
-        (44, 9),
-        (45, 16),
-        (53, 6),
-        (54, 7),
-        (55, 8),
-        (56, 9),
-        (57, 10),
-        (58, 11),
-        (59, 12),
-        (64, 14),
-        (65, 15),
-        (66, 16),
-        (67, 18),
-        (68, 6),
-        (69, 18),
-        (70, 8),
-        (71, 9),
-        (72, 10),
-        (73, 11),
-        (74, 21),
-        (75, 22),
-        (77, 14),
-        (78, 16),
-        (79, 15),
-        (81, 6),
-        (82, 18),
-        (83, 8),
-        (84, 9),
-        (85, 10),
-        (86, 11),
-        (87, 21),
-        (88, 22),
-        (89, 76),
-        (90, 62),
-        (92, 61),
-        (93, 63),
-        (94, 14),
-        (95, 16),
-        (96, 15),
-        (97, 6),
-        (98, 18),
-        (99, 8),
-        (100, 9),
-        (101, 10),
-        (102, 11),
-        (103, 21),
-        (104, 22),
-        (105, 76),
-        (106, 62),
-        (108, 91),
-        (109, 61),
-        (110, 63),
-    ] {
+    for &(alias, representative) in SERIES_PREPARE_ROUTE_ALIASES_V5 {
+        let alias = usize::from(alias);
+        let representative = usize::from(representative);
         if widths[alias] != widths[representative] {
             return Err(Error::new(format!(
                 "Series Prepare alias coordinate {alias} differed from representative {representative}"
@@ -584,6 +476,168 @@ mod tests {
 
     fn predicted(role: &'static str, data_len: u32) -> SeriesPrepareWidthV1 {
         SeriesPrepareWidthV1::predicted(role, data_len)
+    }
+
+    #[test]
+    fn full_prepare_profile_preserves_each_native_child_caller() {
+        use crate::series_found_prepare_campaign::{
+            derive_series_found_prepare_preprofile_v1,
+            tests::{compiler_input_with_plan, prepared_founder_with_plan},
+        };
+        use dclutch_core_contract::ContentId;
+        use dclutch_custody::{
+            CustodyRequestV1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyRequestV1,
+        };
+        use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+        use dclutch_trading_sbf::series::prepare_funding_artifacts_v5::{
+            SERIES_PREPARE_ROUTE_STARTS_V5, SERIES_PREPARE_TRADING_PROGRAM_IDENTITY_V5,
+        };
+        use dclutch_vm::account_profile::{
+            AccountObservationV1,
+            v2::{Error as ProfileError, ProjectionRegistersV2, project_atomic},
+        };
+        use solana_program::hash::hash;
+
+        let (prepared, plan) = prepared_founder_with_plan();
+        let mut selection = compiler_input_with_plan(
+            &prepared,
+            &plan,
+            Pubkey::new_unique(),
+            &prepared.admitted.tickets()[0],
+        );
+        selection.geometry = None;
+        let bank = derive_series_found_prepare_preprofile_v1(&mut selection)
+            .expect("production child bank");
+        let requests = bank.prepare_children.prepare_requests();
+        let trading = selection.material.trading;
+        let projected = |bytes: &[u8]| {
+            let request =
+                ProjectedCustodyRequestV1::decode(bytes).expect("native projected request");
+            Pubkey::find_program_address(
+                &ProjectedCustodyCallerSeedsV1::new(request, hash(bytes).to_bytes()).as_slices(),
+                &trading,
+            )
+            .0
+            .to_bytes()
+        };
+        let normal = |bytes: &[u8]| {
+            let request = CustodyRequestV1::decode(bytes).expect("native Custody request");
+            let seeds = CallerAuthoritySeedsV1::new(
+                ContentId::new(request.release_set).unwrap(),
+                request.market,
+                ExecutionRoleV1::Trading,
+                request.context,
+                hash(bytes).to_bytes(),
+            )
+            .unwrap();
+            Pubkey::find_program_address(&seeds.as_slices(), &trading)
+                .0
+                .to_bytes()
+        };
+        let callers = [
+            projected(requests.projected_initialize),
+            projected(requests.projected_open),
+            normal(requests.replay_initialize),
+            normal(requests.escrow_open),
+            normal(requests.escrow_lock),
+        ];
+        for (index, caller) in callers.iter().enumerate() {
+            assert!(
+                !callers[..index].contains(caller),
+                "native request-digest callers are distinct"
+            );
+        }
+        let lengths = [0_u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize];
+        let artifacts = emit_series_prepare_funding_artifacts_v5(
+            SeriesPrepareAccountProfileInputV5 {
+                fixed_data_lengths: &lengths,
+            },
+            1,
+        )
+        .expect("complete native Prepare profile");
+        let profile = AccountProfileV3::decode(&artifacts.account_profile)
+            .unwrap()
+            .base();
+        println!(
+            "native Prepare profile: logical={}, physical={}, canonical_callers={}",
+            profile.fixed_account_count(),
+            profile.physical_account_count(0).unwrap(),
+            callers.len()
+        );
+        // Neutral non-caller observations isolate the profile's complete alias
+        // and uniqueness rules; caller keys come from the production child bank.
+        let mut keys = (0..SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5)
+            .map(|_| Pubkey::new_unique().to_bytes())
+            .collect::<Vec<_>>();
+        let mut bodies = Vec::new();
+        let mut privileges = Vec::new();
+        for coordinate in 0..usize::from(SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5) {
+            let representative = profile.representative(0, coordinate).unwrap();
+            let rule = profile
+                .rule(false, u16::try_from(representative).unwrap())
+                .unwrap();
+            if representative != coordinate {
+                keys[coordinate] = keys[representative];
+            }
+            bodies.push(vec![0_u8; usize::try_from(rule.data_length()).unwrap()]);
+            privileges.push(rule.privileges());
+        }
+        for (coordinate, caller) in SERIES_PREPARE_ROUTE_STARTS_V5.iter().zip(callers) {
+            keys[usize::from(*coordinate)] = caller;
+        }
+        let owner = trading.to_bytes();
+        let project = |keys: &[[u8; 32]]| {
+            let observations = keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| {
+                    AccountObservationV1::new(
+                        key,
+                        &owner,
+                        1,
+                        &bodies[i],
+                        privileges[i] & 1 != 0,
+                        privileges[i] & 2 != 0,
+                        privileges[i] & 4 != 0,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let scalars = vec![0_u64; usize::from(profile.common_scalar_count())];
+            let mut identities = vec![[0_u8; 32]; usize::from(profile.common_identity_count())];
+            identities[usize::from(SERIES_PREPARE_TRADING_PROGRAM_IDENTITY_V5)] = owner;
+            let mut scratch_s = scalars.clone();
+            let mut output_s = scalars.clone();
+            let mut scratch_i = identities.clone();
+            let mut output_i = identities.clone();
+            project_atomic(
+                profile,
+                0,
+                &observations,
+                ProjectionRegistersV2 {
+                    input_scalars: &scalars,
+                    input_identities: &identities,
+                    scratch_scalars: &mut scratch_s,
+                    scratch_identities: &mut scratch_i,
+                    output_scalars: &mut output_s,
+                    output_identities: &mut output_i,
+                },
+                None,
+            )
+        };
+        assert_eq!(
+            project(&keys),
+            Ok(()),
+            "full native profile must accept all five canonical callers"
+        );
+        for coordinate in &SERIES_PREPARE_ROUTE_STARTS_V5[1..] {
+            let mut coalesced = keys.clone();
+            coalesced[usize::from(*coordinate)] = callers[0];
+            assert_eq!(
+                project(&coalesced),
+                Err(ProfileError::CrossItemAlias),
+                "coalesced child caller at {coordinate}"
+            );
+        }
     }
 
     #[test]
@@ -662,7 +716,9 @@ mod tests {
         let profile = AccountProfileV3::decode(&artifacts.account_profile).unwrap();
         for coordinate in 0..SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 {
             let rule = profile.base().rule(false, coordinate).unwrap();
-            let alias = matches!(coordinate, 17|19|41|42|44|45|53..=59|64..=67|68..=75|77..=79|81..=90|92..=96|97..=106|108..=110);
+            let alias = SERIES_PREPARE_ROUTE_ALIASES_V5
+                .iter()
+                .any(|(alias, _)| *alias == coordinate);
             if alias {
                 assert_eq!(rule.data_length(), 0, "alias {coordinate}");
             } else if coordinate == 0 {

@@ -194,6 +194,12 @@ struct TerminalTransactionEvidenceV1 {
     /// keep accepting older founding reports that did not emit it.
     #[serde(default)]
     instructions: Vec<crate::model::InstructionEvidence>,
+    /// Registry V2 adds an authenticated poststate to each Finalize row. The
+    /// terminal consumer does not use that poststate as Direct authority, but
+    /// it must understand the campaign emitter's current transaction shape so
+    /// a report containing Registry publication remains consumable.
+    #[serde(default, rename = "publication_poststate")]
+    _publication_poststate: Option<crate::model::PublicationPoststateV2>,
 }
 
 /// Required JSON field whose value may itself be null.
@@ -5890,6 +5896,7 @@ mod tests {
             error: Value::Null,
             logs: Vec::new(),
             instructions: Vec::new(),
+            _publication_poststate: None,
         };
         let account = |address: Pubkey| CampaignAccountEvidenceV1 {
             address: address.to_string(),
@@ -6002,6 +6009,7 @@ mod tests {
             error: Value::Null,
             logs: Vec::new(),
             instructions: Vec::new(),
+            _publication_poststate: None,
         }
     }
 
@@ -6269,11 +6277,39 @@ mod tests {
             "error": null,
             "logs": [],
             "instructions": [{"program_id": Pubkey::new_unique().to_string(), "data_hex": ""}],
+            "publication_poststate": {
+                "observed_slot": 1,
+                "raw_record": {
+                    "address": Pubkey::new_unique().to_string(),
+                    "owner": Pubkey::new_unique().to_string(),
+                    "lamports": 1,
+                    "executable": false,
+                    "data_len": 1,
+                    "data_sha256": "66".repeat(32),
+                    "account_sha256": "77".repeat(32),
+                },
+                "raw_record_data_hex": "00",
+                "staging_cursor": null,
+                "staging_cursor_data_hex": null,
+                "code_total_length": null,
+                "code_next_offset": null,
+            },
         }]);
         parse_campaign_terminal_evidence_v1(
             &serde_json::to_vec(&current).expect("current report JSON"),
         )
-        .expect("current admission instruction evidence is accepted");
+        .expect("current instruction and Registry publication evidence is accepted");
+
+        current["execution"]["transactions"][0]["publication_shadow"] = json!({});
+        let refusal = parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&current).expect("unknown transaction field JSON"),
+        )
+        .expect_err("an unrelated transaction field must remain refused");
+        assert!(
+            refusal.0.contains("unknown field `publication_shadow`"),
+            "{}",
+            refusal.0
+        );
     }
 
     #[test]

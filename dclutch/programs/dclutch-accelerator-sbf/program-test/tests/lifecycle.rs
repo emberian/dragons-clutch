@@ -2585,14 +2585,22 @@ fn runtime_for_initialize(fixture: &TerminalFixture) -> BTreeMap<u16, Vec<u8>> {
             Action::InitializeSettlement,
             GeneralReadonlyEvidenceKindV3::FrozenSelection,
         ),
-        frozen_selection_for_verified(&fixture.verified),
+        local_state(
+            GeneralLocalStateKindV3::Selection,
+            fixture.width,
+            &frozen_selection_for_verified(&fixture.verified),
+        ),
     );
     runtime.insert(
         evidence_coordinate(
             Action::InitializeSettlement,
             GeneralReadonlyEvidenceKindV3::RuntimeVerifier,
         ),
-        fixture.verifier.clone(),
+        local_state(
+            GeneralLocalStateKindV3::Verifier,
+            fixture.width,
+            &fixture.verifier,
+        ),
     );
     runtime.insert(
         evidence_coordinate(

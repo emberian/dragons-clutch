@@ -65,6 +65,8 @@ pub enum UpkeepVaultSbfErrorV1 {
     Commit = 0x6209,
     /// The record's totals did not close (a record this program never wrote).
     Legibility = 0x620A,
+    /// The calling deployment moved beyond its activated slot pin.
+    ReleaseSuperseded = 0x620B,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -81,9 +83,23 @@ dclutch_refusal_registry::pin_refusal_band!(
         Release,
         Unreceipted,
         Commit,
-        Legibility
+        Legibility,
+        ReleaseSuperseded
     ]
 );
+
+impl From<dclutch_registry::activation_auth_v1::ActivationAuthErrorV1> for UpkeepVaultSbfErrorV1 {
+    fn from(value: dclutch_registry::activation_auth_v1::ActivationAuthErrorV1) -> Self {
+        use dclutch_registry::activation_auth_v1::ActivationAuthErrorV1;
+        match value {
+            ActivationAuthErrorV1::ReleaseSuperseded => Self::ReleaseSuperseded,
+            cause => {
+                solana_program::msg!("upkeep caller release: {:?}", cause);
+                Self::Release
+            }
+        }
+    }
+}
 
 impl From<dclutch_custody::upkeep_vault_v1::Error> for UpkeepVaultSbfErrorV1 {
     fn from(value: dclutch_custody::upkeep_vault_v1::Error) -> Self {
@@ -359,17 +375,16 @@ fn protocol_frame<'a, 'info>(
         activated,
     )
     .map_err(|_| UpkeepVaultSbfErrorV1::Release)?;
-    require_readonly_frame(cache_account, caller_program, caller_programdata)
-        .map_err(|_| UpkeepVaultSbfErrorV1::Release)?;
-    let release = activated
-        .role(registry_role(caller.caller_role))
-        .map_err(|_| UpkeepVaultSbfErrorV1::Release)?
-        .release();
-    if release.program().to_bytes() != caller_program.key.to_bytes()
-        || release.programdata() != caller_programdata.key.to_bytes()
-    {
-        return Err(UpkeepVaultSbfErrorV1::Release.into());
-    }
+    // The caller PDA continues to sign after an upgrade; authenticate the
+    // live deployment here, not only the activation cache's stored keys.
+    dclutch_registry::activation_auth_v1::authenticate_activated_role_in_frame_v1(
+        cache_account,
+        activated,
+        registry_role(caller.caller_role),
+        caller_program,
+        caller_programdata,
+    )
+    .map_err(UpkeepVaultSbfErrorV1::from)?;
     Ok(rent_account)
 }
 
@@ -426,5 +441,70 @@ mod tests {
             UpkeepRequestV1::decode(&hostile).map_err(UpkeepVaultSbfErrorV1::from),
             Err(UpkeepVaultSbfErrorV1::NoSpendRoute)
         );
+    }
+}
+
+#[cfg(test)]
+mod release_continuity_tests {
+    use super::*;
+    use crate::release_continuity_tests::{CASES, Case, Fixture, info};
+
+    #[test]
+    fn upkeep_calling_release_requires_live_loader_continuity() {
+        let mut outcomes = Vec::new();
+        let mut expected_outcomes = Vec::new();
+        for case in CASES {
+            let mut fixture = Fixture::new();
+            fixture.mutate(case);
+            let caller = UpkeepProtocolCallerV1 {
+                caller_role: CallerRoleV1::Trading,
+                release_set: fixture.release_set,
+                market: [0x12; 32],
+                context: [0x14; 32],
+            };
+            let digest = [0x15; 32];
+            let seeds = CallerAuthoritySeedsV1::new(
+                ContentId::new(caller.release_set).expect("valid continuity fixture"),
+                caller.market,
+                registry_role(caller.caller_role),
+                caller.context,
+                digest,
+            )
+            .expect("valid continuity fixture");
+            let caller_key =
+                Pubkey::find_program_address(&seeds.as_slices(), fixture.program.key).0;
+            let mut authority = info(caller_key, system_program::ID, alloc::vec![], false);
+            authority.is_signer = true;
+            let vault = info(
+                Pubkey::new_unique(),
+                Pubkey::new_unique(),
+                alloc::vec![],
+                false,
+            );
+            let rent = info(sysvar::rent::ID, sysvar::ID, alloc::vec![], false);
+            let accounts = [
+                vault.clone(),
+                authority,
+                fixture.cache,
+                fixture.registry,
+                fixture.program,
+                fixture.programdata,
+                rent,
+            ];
+            let credit = UpkeepCreditV1 {
+                source_class: UpkeepSourceClassV1::Residue,
+                caller: Some(caller),
+                receipt_digest: [0x16; 32],
+                amount: 1,
+            };
+            let expected = match case {
+                Case::Accepted => Ok(()),
+                Case::Slot => Err(UpkeepVaultSbfErrorV1::ReleaseSuperseded.into()),
+                _ => Err(UpkeepVaultSbfErrorV1::Release.into()),
+            };
+            outcomes.push(protocol_frame(&accounts, &vault, credit, caller, digest).map(|_| ()));
+            expected_outcomes.push(expected);
+        }
+        assert_eq!(outcomes, expected_outcomes, "case order: {CASES:?}");
     }
 }

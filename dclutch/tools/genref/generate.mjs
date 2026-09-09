@@ -878,7 +878,7 @@ reachable inside an entry route's request.
 
 // A route's admissible Market prestates, as the guard's own named constant
 // declares them. The census reads the constant structurally; this renders it.
-// An empty list is NOT "every phase" -- it is "no phase gate was read here" --
+// An empty list is NOT "every phase" -- no named phase gate was read here --
 // and the two must not print the same, because a client that cannot tell them
 // apart is the defect this column exists to close.
 function phaseGate(route, program) {
@@ -890,7 +890,7 @@ function phaseGate(route, program) {
   if (gates.length === 0) {
     return program?.no_persisted_discriminant
       ? "no state machine"
-      : "no phase gate";
+      : "no named phase gate";
   }
   // Every set NAMES ITS MACHINE. The whole content of a declaration is which
   // discriminant it constrains, and a Market is `Open` for the entire span in
@@ -1133,7 +1133,7 @@ admits their UNION. Sets separated by **;** are separate guards on the same
 execution, so the route admits their INTERSECTION. A reader that treats the
 first as the second reports that a route admitting three phases admits none.
 
-**no phase gate** means no constant was read for that route -- an authoring
+**no named phase gate** means no constant was read for that route -- an authoring
 route with no state to consult, a guard still written inline, a guard reached
 only under a boolean branch or inside a loop that may not be entered, a guard
 in a crate this program's dispatch does not reach, or a route the enumerator

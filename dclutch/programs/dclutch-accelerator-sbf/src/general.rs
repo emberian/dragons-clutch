@@ -52,7 +52,7 @@ use dclutch_trading::general::{
         project_general_submit_candidate_in_place_v3,
         project_general_verify_candidate_workspace_v3,
     },
-    local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
+    local_state_v3::{GeneralLocalStateErrorV3, GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_manifest::SettlementManifestV2,
     runtime_selection::{
         RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2,
@@ -370,6 +370,8 @@ pub enum GeneralAcceleratorSemanticErrorV3 {
     /// uses for its own state accounts. It now means the action's own selected
     /// state or evidence, and the domain says which conjunct of itself failed.
     State,
+    /// The complete readonly lifecycle account failed authenticated decoding.
+    LocalState(GeneralLocalStateErrorV3),
     /// A freeze presented a Batch that is not the one its selection cursor names.
     ///
     /// The evidence account is caller-supplied and the window conjunct reads
@@ -395,6 +397,7 @@ impl GeneralAcceleratorSemanticErrorV3 {
     /// compile until its author says what a reader should see.
     const fn log_line(self) -> &'static str {
         match self {
+            Self::LocalState(cause) => cause.log_line(),
             Self::RuntimeAccount => "general: refused, runtime account coordinate unreadable",
             Self::EvidenceCoordinate => "general: refused, no readonly evidence of that kind",
             Self::ConfigDecode => "general: refused, config account did not decode",
@@ -1556,13 +1559,45 @@ fn evaluate_initialize(
             GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate,
         )?,
     )?;
+    let frozen_owner = runtime
+        .get(usize::from(evidence_coordinate(
+            request.action,
+            GeneralReadonlyEvidenceKindV3::FrozenSelection,
+        )?))
+        .ok_or(GeneralAcceleratorSemanticErrorV3::RuntimeAccount)?
+        .owner
+        .to_bytes();
+    let verifier_owner = runtime
+        .get(usize::from(evidence_coordinate(
+            request.action,
+            GeneralReadonlyEvidenceKindV3::RuntimeVerifier,
+        )?))
+        .ok_or(GeneralAcceleratorSemanticErrorV3::RuntimeAccount)?
+        .owner
+        .to_bytes();
+    let frozen_state = GeneralLocalStateV3::decode_owned(
+        &frozen,
+        frozen_owner,
+        environment.trading_program,
+        GeneralLocalStateKindV3::Selection,
+        outcome_count,
+    )
+    .map_err(GeneralAcceleratorSemanticErrorV3::LocalState)?;
+    let verifier_state = GeneralLocalStateV3::decode_owned(
+        &verifier,
+        verifier_owner,
+        environment.trading_program,
+        GeneralLocalStateKindV3::Verifier,
+        outcome_count,
+    )
+    .map_err(GeneralAcceleratorSemanticErrorV3::LocalState)?;
     authenticate_frozen_selection_v3(
         config.selection_policy_id(),
         product_record_digest,
         config.price_scale(),
         request.candidate_id,
         outcome_count,
-        &frozen,
+        frozen_state.body(),
         &verified,
     )
     .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
@@ -1570,7 +1605,7 @@ fn evaluate_initialize(
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     let mut cursor_output = vec![0_u8; cursor_bytes];
     initialize_runtime_settlement_in_place_v2(
-        &verifier,
+        verifier_state.body(),
         &verified,
         request.expected_revision,
         &mut cursor_output,

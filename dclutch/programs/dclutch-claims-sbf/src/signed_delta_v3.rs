@@ -150,6 +150,8 @@ pub enum SignedDeltaSbfErrorV3 {
     /// Market may not carry that much principal against the venue behind its
     /// Source. Splitting is exactly where a founding-time-only bound would leak.
     PrincipalCapacity = 0x5208,
+    /// The caller deployment moved beyond its activated slot pin.
+    ReleaseSuperseded = 0x5209,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -164,9 +166,23 @@ dclutch_refusal_registry::pin_refusal_band!(
         Candidate,
         Commit,
         Receipt,
-        PrincipalCapacity
+        PrincipalCapacity,
+        ReleaseSuperseded
     ]
 );
+
+impl From<dclutch_registry::activation_auth_v1::ActivationAuthErrorV1> for SignedDeltaSbfErrorV3 {
+    fn from(value: dclutch_registry::activation_auth_v1::ActivationAuthErrorV1) -> Self {
+        use dclutch_registry::activation_auth_v1::ActivationAuthErrorV1;
+        match value {
+            ActivationAuthErrorV1::ReleaseSuperseded => Self::ReleaseSuperseded,
+            cause => {
+                solana_program::msg!("signed-delta caller release: {:?}", cause);
+                Self::Release
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct SignedDeltaAccountsV3<'accounts, 'info> {
@@ -583,68 +599,17 @@ fn authenticate_parent_authority(
     Ok(())
 }
 
-/// Bind every role coordinate this action lends authority to, against the
-/// activation its caller already authenticated.
+/// Bind the frame's role identities and authenticate the live caller deployment.
 ///
-/// ## What the caller's signature establishes
+/// The caller PDA binds this release set and exact request, but the same
+/// program can sign that PDA after an upgrade. Its upstream self-check cannot
+/// authenticate replacement code to Claims. The caller's Loader link, slot and
+/// authority are therefore checked here against the already-decoded cache.
 ///
-/// Nothing reaches this function without a `CallerAuthoritySeedsV1` PDA
-/// signature: [`authenticate_authority`] on the public entry, and
-/// [`authenticate_parent_authority`] on the in-process one. A program-derived
-/// address has no private key, so that signature is a statement made by the
-/// program sitting at `caller_program` that it is the one invoking this route,
-/// and the seed order pins the release set, the Market, the caller's execution
-/// role, the replay context, and the digest of these exact instruction bytes.
-///
-/// Under the standing ruling in `GOAL.md` -- a callee invoked by a PDA-signed
-/// CPI takes the facts that signer's seeds pin as established -- the release
-/// set is established, and with it the activation the Registry wrote for it,
-/// which the caller authenticated in this same instruction before it built the
-/// frame being read here. So this route no longer re-observes each role's
-/// current deployment. It used to, three times, through
-/// `authenticate_activated_role`, against the very activation cache account its
-/// caller had read: measured 2026-09-02 at 76,245 CU of a 173,680-CU
-/// invocation that spends 662 applying the deltas it exists to apply.
-///
-/// ## What the seeds do NOT establish, and is therefore still checked here
-///
-/// **Which program holds a role in that release set.** The seeds name a role,
-/// not a key, and a signature under `caller_program` proves only that
-/// `caller_program` signed -- any deployed program can sign a PDA under itself.
-/// That is the whole hazard the old comment on this function recorded, and it
-/// is not repaired by the ruling:
-///
-/// > Role `Core` used to assert in a comment that it was "already covered by
-/// > the first entry" and pin nothing: the first entry authenticates
-/// > `core_program`, a DIFFERENT coordinate. Any executable program could sit
-/// > at the caller coordinate and the authority the route demanded was a PDA
-/// > under it -- which is exactly the signature no external submitter is
-/// > supposed to be able to produce.
-///
-/// So every coordinate is still pinned, and the pin is now the strongest form
-/// this frame can state: each Program and ProgramData key must equal the one
-/// the Registry's own activation for this release set names. A caller that is
-/// not the activated Trading refuses at the Trading coordinate; a caller naming
-/// a release set whose cache it does not hold refuses at the cache address,
-/// which is derived from that release set; a submitter with no program behind
-/// it cannot produce the signature at all.
-///
-/// The activation cache is decoded ONCE. The three
-/// `authenticate_activated_role` calls each ran
-/// `ActivatedExecutionReleaseSetViewV1::decode` -- the complete five-role
-/// projection and every aliasing pair -- for one role, so the account was
-/// hostile-decoded three times to answer three questions about it.
-/// [`authenticate_activation_cache_identity_v1`] is the crate's own
-/// already-decoded entry point and exists for exactly this shape.
-///
-/// ## What is given up, named as debt rather than left to be discovered
-///
-/// The per-role deployment observation was also the slot pin: decision 0012's
-/// `ReleaseSuperseded`, raised when the substrate's upgrade authority ships new
-/// bytes under an open market. This route now inherits that refusal from its
-/// caller instead of raising it itself. It is not lost from the transaction --
-/// the caller observes all five roles before it composes this child -- but a
-/// future caller that does not would not be caught here.
+/// Core and Claims counterpart coordinates still identify persisted state
+/// owners. Reading those keys does not execute their current code, so those
+/// projections retain their existing cache identity checks. No duplicate cache
+/// decode or Registry CPI is introduced.
 fn authenticate_releases(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
@@ -731,6 +696,15 @@ fn authenticate_releases(
             return Err(SignedDeltaSbfErrorV3::Release.into());
         }
     }
+    dclutch_registry::activation_auth_v1::authenticate_activated_role_in_frame_v1(
+        accounts.cache,
+        activated,
+        execution_role(plan.caller_role()),
+        accounts.caller_program,
+        accounts.caller_programdata,
+    )
+    .map_err(SignedDeltaSbfErrorV3::from)?;
+
     Ok(())
 }
 
@@ -1817,3 +1791,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "signed_delta_release_tests.rs"]
+mod release_continuity_tests;

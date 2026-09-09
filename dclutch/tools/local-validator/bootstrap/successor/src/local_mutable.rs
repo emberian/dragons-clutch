@@ -1170,7 +1170,9 @@ fn local_key_roles_v1() -> BTreeSet<&'static str> {
         .collect()
 }
 
-fn local_campaign_public_identities_v1(seed: [u8; 32]) -> Result<BTreeMap<String, String>> {
+pub(crate) fn local_campaign_public_identities_v1(
+    seed: [u8; 32],
+) -> Result<BTreeMap<String, String>> {
     let founder = Keypair::new_from_array(derive(
         LOCAL_KEY_DOMAIN_V1,
         seed,

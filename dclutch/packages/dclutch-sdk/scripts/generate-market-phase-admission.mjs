@@ -161,7 +161,7 @@ for (const entry of routes) {
     noStateMachine.push(entry.route);
     continue;
   }
-  if (entry.phase === 'no phase gate') continue;
+  if (entry.phase === 'no named phase gate') continue;
   let admitted = new Set(EVERY_PAIR);
   let sawMarket = false;
   const machines = [];

@@ -59,6 +59,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-09 | Custody checks the caller’s live deployment on ordinary and upkeep routes; actual ELF rejects a changed authority before replay allocation | — | [Custody caller continuity evidence](docs/evidence/CUSTODY_CALLER_DEPLOYMENT_CONTINUITY_2026_09_09.md) |
 | 2026-09-09 | Exact a8e3 Claims ELFs execute atomic sparse Admit → transfer → Close and a two-row affine group mutation; exact substitution, stale-state and late-caller refusals roll back byte-for-byte | — | [Claims atomic Position operations](docs/evidence/CLAIMS_ATOMIC_POSITION_OPERATIONS_V2_2026_09_09.md) |
 | 2026-09-09 | Exact source a8e3b4e8 seals all eight production ELFs after the General, Structured and Claims native changes; Series remains unselected and runtime lanes consume the immutable candidate separately | — | [native completion candidate](docs/evidence/STRICT_ALL_EIGHT_A8E3_NATIVE_COMPLETION_2026_09_09.md) |
 | 2026-09-09 | Sealed V2 Claims ELFs execute protocol Position admission, exact refusal rollback, retirement, closure and conservation from an installed graph; host-seeded terminal state remains explicit | — | [Claims protocol Position V2 runtime evidence](docs/evidence/CLAIMS_PROTOCOL_POSITION_V2_RUNTIME_2026_09_09.md) |

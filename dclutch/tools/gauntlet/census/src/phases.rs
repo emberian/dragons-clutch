@@ -1806,6 +1806,56 @@ mod tests {
         assert!(!scan.calls.contains("Ledger::read_page"));
     }
 
+    /// A fallible guard call remains a call when its return value is bound.
+    ///
+    /// This is the shape `let market = authenticate_market(accounts)?` uses.
+    /// The binding is relevant only to later receiver typing; the call itself
+    /// must still be descended into and carry its named admission unchanged.
+    #[test]
+    fn a_let_bound_returning_guard_call_keeps_its_exact_admission() {
+        let mut admissions = AdmissionIndex::default();
+        admissions.insert(
+            "A_V1".into(),
+            AdmissionFact {
+                machine: "market",
+                kind: AdmissionKind::Phases,
+                phases: vec!["Retiring".into()],
+                prestates: Vec::new(),
+                provenance: "programs/a/src/lib.rs:1".into(),
+            },
+        );
+        let crate_index = crate::enumerate::index_source(
+            "",
+            "fn process() -> Result<(), E> {
+                 let market = authenticate_market()?;
+                 consume(market);
+                 Ok(())
+             }
+             fn authenticate_market() -> Result<CoreState, E> {
+                 require(A_V1);
+                 unimplemented!()
+             }",
+        );
+        let route = Route {
+            id: "trading/example::process".into(),
+            kind: crate::model::RouteKind::Entry,
+            parent: None,
+            handler: "process".into(),
+            selectors: Vec::new(),
+            provenance: "programs/a/src/lib.rs:1".into(),
+            cfg: Vec::new(),
+            admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
+        };
+        let mut guards = GuardMap::new(&admissions, &crate_index, std::slice::from_ref(&route));
+        let (necessary, selected) = guards.for_route(&route);
+        assert!(selected.is_empty());
+        assert_eq!(necessary.len(), 1, "{necessary:?}");
+        assert_eq!(necessary[0].constant, "A_V1");
+        assert_eq!(necessary[0].machine, "market");
+        assert_eq!(necessary[0].phases, ["Retiring"]);
+    }
+
     /// A tuple whose arity disagrees with the signature binds nothing.
     ///
     /// Binding the prefix would type one name with its neighbour's type,

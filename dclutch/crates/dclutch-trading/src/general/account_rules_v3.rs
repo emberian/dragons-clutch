@@ -71,7 +71,7 @@ use crate::general::{
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_manifest::SETTLEMENT_MANIFEST_HEADER_BYTES_V2,
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
-    runtime_verify::RUNTIME_VERIFIER_HEADER_BYTES_V2,
+    runtime_verify::{RUNTIME_VERIFIER_HEADER_BYTES_V2, RUNTIME_VERIFIER_TAIL_COUNT_V2},
     runtime_width::{
         CANDIDATE_HEADER_BYTES_V2, CandidateLayoutV2, PAGE_HEADER_BYTES_V2,
         SETTLEMENT_CURSOR_HEADER_BYTES_V2, VERIFIED_CANDIDATE_HEADER_BYTES_V2,
@@ -1925,7 +1925,7 @@ pub fn general_account_profile_rule_v3(
                             GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + RUNTIME_VERIFIER_HEADER_BYTES_V2,
                         )
                         .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-                        data_item_stride: 40,
+                        data_item_stride: 8 * RUNTIME_VERIFIER_TAIL_COUNT_V2,
                     },
                     prestate: AccountPrestateV2::LifecycleBound,
                 });
@@ -2319,7 +2319,7 @@ fn evidence_rule(kind: GeneralReadonlyEvidenceKindV3) -> Result<AccountRuleWithP
             false,
             false,
             false,
-            u32::try_from(RUNTIME_SELECTION_CURSOR_BYTES_V2)
+            u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + RUNTIME_SELECTION_CURSOR_BYTES_V2)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
             0,
             no_effects(),
@@ -2328,9 +2328,9 @@ fn evidence_rule(kind: GeneralReadonlyEvidenceKindV3) -> Result<AccountRuleWithP
             false,
             false,
             false,
-            u32::try_from(RUNTIME_VERIFIER_HEADER_BYTES_V2)
+            u32::try_from(GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + RUNTIME_VERIFIER_HEADER_BYTES_V2)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-            40,
+            8 * RUNTIME_VERIFIER_TAIL_COUNT_V2,
             no_effects(),
         )),
         GeneralReadonlyEvidenceKindV3::SettlementManifest => Ok(variable_rule(

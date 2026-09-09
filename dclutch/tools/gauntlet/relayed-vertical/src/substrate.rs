@@ -732,7 +732,28 @@ pub(crate) fn found_market(
     market_path: &Path,
     evidence_path: &Path,
 ) -> Result<FoundingYieldV1> {
-    let report = &substrate.report;
+    found_market_from_roles_v1(
+        &substrate.rpc_url,
+        &substrate.plan_path,
+        &substrate.report.campaign_founding_keypairs,
+        &substrate.report.campaign_public_identities,
+        rpc,
+        market_path,
+        evidence_path,
+    )
+}
+
+/// Run the same founding stage on a retained substrate without owning its validator.
+/// The caller reauthenticates the retained plan and supplies its existing roles.
+pub(crate) fn found_market_from_roles_v1(
+    rpc_url: &str,
+    plan_path: &Path,
+    campaign_founding_keypairs: &BTreeMap<String, String>,
+    campaign_public_identities: &BTreeMap<String, String>,
+    rpc: &mut Rpc,
+    market_path: &Path,
+    evidence_path: &Path,
+) -> Result<FoundingYieldV1> {
     // The campaign never airdrops; the driver funds. ONLY the campaign payer
     // is funded — the other five founding roles are protocol-created and MUST
     // be vacant, or the founding reads a pre-funded system account at the
@@ -767,8 +788,7 @@ pub(crate) fn found_market(
     let roles = founding_roles_for(&market_input);
     let mut founding_keys: BTreeMap<String, PathBuf> = BTreeMap::new();
     for role in &roles {
-        let path = report
-            .campaign_founding_keypairs
+        let path = campaign_founding_keypairs
             .get(*role)
             .ok_or_else(|| Error::new(format!("prepare report omits founding role {role}")))?;
         if *role == "campaign-payer" {
@@ -781,19 +801,17 @@ pub(crate) fn found_market(
         }
         founding_keys.insert((*role).to_owned(), PathBuf::from(path));
     }
-    let founder = report
-        .campaign_public_identities
+    let founder = campaign_public_identities
         .get("founding-founder")
         .ok_or_else(|| Error::new("prepare report names no founding-founder identity"))?;
-    let substituted = report
-        .campaign_public_identities
+    let substituted = campaign_public_identities
         .get("substituted-founder")
         .ok_or_else(|| Error::new("prepare report names no substituted-founder identity"))?;
     campaign::execute(CampaignArgsV1 {
-        origin: ClusterOriginV1::parse(&substrate.rpc_url, None)?,
+        origin: ClusterOriginV1::parse(rpc_url, None)?,
         mode: CampaignModeV1::FoundingOnly,
         recover_finalized_founding: false,
-        plan_path: substrate.plan_path.clone(),
+        plan_path: plan_path.to_path_buf(),
         market_path: Some(market_path.to_path_buf()),
         evidence_path: Some(evidence_path.to_path_buf()),
         // Founding refuses the flag outright (`campaign.rs:3479-3487`).

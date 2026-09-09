@@ -277,7 +277,8 @@ fn release(program: Pubkey, semantic_seed: u8, elf: &[u8]) -> ArtifactReleaseV2 
         identity(bpf_loader_upgradeable::ID),
         programdata_address(program).to_bytes(),
         ContentId::new([semantic_seed; 32]).expect("semantic release"),
-        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf).expect("exact fixture code commitment"),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+            .expect("exact fixture code commitment"),
         0,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -400,6 +401,13 @@ fn add_protocol_account(test: &mut ProgramTest, key: Pubkey, owner: Pubkey, data
 }
 
 fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
+    fixture_with_caller_authority(profile, None)
+}
+
+fn fixture_with_caller_authority(
+    profile: Profile,
+    authority: Option<[u8; 32]>,
+) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -424,6 +432,36 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
     );
 
     let caller_release = release(CALLER_PROGRAM_ID, 0x51, &artifacts.caller);
+    let caller_release = if let Some(authority) = authority {
+        let mut data = immutable_programdata(&artifacts.caller);
+        *data.get_mut(12).expect("authority option") = 1;
+        data.get_mut(13..45)
+            .expect("authority bytes")
+            .copy_from_slice(&authority);
+        test.add_account(
+            programdata_address(CALLER_PROGRAM_ID),
+            Account {
+                lamports: Rent::default().minimum_balance(data.len()),
+                data,
+                owner: bpf_loader_upgradeable::ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+        ArtifactReleaseV2::new(
+            caller_release.program(),
+            caller_release.loader_program(),
+            caller_release.programdata(),
+            caller_release.semantic_release_id(),
+            caller_release.code_commitment(),
+            caller_release.deployment_slot(),
+            ArtifactUpgradePolicyV1::ExactAuthority,
+            Some(authority),
+        )
+        .expect("mutable caller release")
+    } else {
+        caller_release
+    };
     let custody_release = release(CUSTODY_PROGRAM_ID, 0x52, &artifacts.custody);
     let (release_set, cache_data) = activation_cache(caller_release, custody_release);
     let activation_cache = Pubkey::find_program_address(
@@ -1494,3 +1532,6 @@ async fn real_elf_legacy_custody_is_atomic_replay_safe_and_owner_bound() {
 async fn real_elf_token_2022_custody_is_atomic_replay_safe_and_owner_bound() {
     campaign(Profile::Token2022).await;
 }
+
+#[path = "support/release_continuity.rs"]
+mod release_continuity;

@@ -1095,14 +1095,14 @@ pub(crate) fn general_campaign_steps_v1(width: u32) -> Result<Vec<GeneralStepV1>
             Action::InitializeSettlement,
             GeneralReadonlyEvidenceKindV3::FrozenSelection,
         )?,
-        frozen.to_vec(),
+        general_local_state_v1(GeneralLocalStateKindV3::Selection, width, &frozen)?,
     );
     initialize.insert(
         general_evidence_coordinate_v1(
             Action::InitializeSettlement,
             GeneralReadonlyEvidenceKindV3::RuntimeVerifier,
         )?,
-        fixture.verifier.clone(),
+        general_local_state_v1(GeneralLocalStateKindV3::Verifier, width, &fixture.verifier)?,
     );
     initialize.insert(
         general_evidence_coordinate_v1(

@@ -15,6 +15,7 @@ pub(super) fn process(
     instruction_data: &[u8],
     relay: CustodyBumpRelayV1,
 ) -> ProgramResult {
+    crate::custody_cu_checkpoint!("delegated-enter");
     let request = DelegatedCustodyRequestV2::decode(instruction_data)
         .map_err(|_| CustodySbfError::Instruction)?;
     let custody = request.custody;
@@ -25,6 +26,7 @@ pub(super) fn process(
     let request_digest = hash(instruction_data).to_bytes();
     // One borrow and one decode for this route too; see the note in
     // `process_instruction`.
+    crate::custody_cu_checkpoint!("delegated-decoded");
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     let cache_account = account(accounts, ACTIVATION_CACHE)?;
     require_cache_account(registry.key, cache_account).map_err(CustodySbfError::from)?;
@@ -40,6 +42,7 @@ pub(super) fn process(
         activated,
     )
     .map_err(CustodySbfError::from)?;
+    crate::custody_cu_checkpoint!("delegated-cache");
     let market = authenticate_common_frame(
         program_id,
         accounts,
@@ -49,8 +52,10 @@ pub(super) fn process(
         relay,
         activated,
     )?;
+    crate::custody_cu_checkpoint!("delegated-frame");
     let realm = authenticate_realm(program_id, accounts, custody, market, activated)?;
     drop(cache_data);
+    crate::custody_cu_checkpoint!("delegated-realm");
     execute_transfer(program_id, accounts, request, request_digest, realm, relay)
 }
 
@@ -65,7 +70,10 @@ pub(super) fn execute_transfer(
     relay: CustodyBumpRelayV1,
 ) -> ProgramResult {
     let outcome = execute_token_effect(program_id, accounts, &request, realm, relay)?;
-    commit_delegated(accounts, request, request_digest, outcome)
+    crate::custody_cu_checkpoint!("delegated-token-effect");
+    let result = commit_delegated(accounts, request, request_digest, outcome);
+    crate::custody_cu_checkpoint!("delegated-committed");
+    result
 }
 
 #[derive(Clone, Copy)]
@@ -113,6 +121,7 @@ fn execute_token_effect(
         authority,
         token_program,
     };
+    crate::custody_cu_checkpoint!("delegated-token-validated");
     let before = authenticate_transfer_accounts(transfer_accounts, custody, realm.profile, true)?;
     let before_allowance = read_delegate(source, token_program, realm.profile)?;
     if before_allowance.delegate != request.delegate_before
@@ -120,9 +129,12 @@ fn execute_token_effect(
     {
         return Err(CustodySbfError::TokenState.into());
     }
+    crate::custody_cu_checkpoint!("delegated-prestate");
     invoke_exact_transfer(transfer_accounts, custody, before.decimals, authority_bump)?;
+    crate::custody_cu_checkpoint!("delegated-token-cpi");
     let after = authenticate_transfer_accounts(transfer_accounts, custody, realm.profile, false)?;
     let after_allowance = read_delegate(source, token_program, realm.profile)?;
+    crate::custody_cu_checkpoint!("delegated-poststate");
     if before.source.checked_sub(custody.amount) != Some(after.source)
         || before.destination.checked_add(custody.amount) != Some(after.destination)
         || after_allowance.delegate != request.delegate_after

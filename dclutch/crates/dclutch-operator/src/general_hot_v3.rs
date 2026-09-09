@@ -1724,6 +1724,26 @@ fn derive_initialize_request_v5(
         Action::InitializeSettlement,
         GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate,
     )?;
+    let trading = state
+        .fixed_accounts
+        .get(HOT_TRADING_PROGRAM_ACCOUNT_V3)
+        .ok_or(GeneralHotOperatorErrorV3::FixedFrame)?;
+    let frozen_state = GeneralLocalStateV3::decode_owned(
+        &frozen.account.data,
+        frozen.account.owner.to_bytes(),
+        trading.account.key.to_bytes(),
+        GeneralLocalStateKindV3::Selection,
+        outcome_count,
+    )
+    .map_err(GeneralHotOperatorErrorV3::GeneralLocalState)?;
+    let verifier_state = GeneralLocalStateV3::decode_owned(
+        &verifier_account.account.data,
+        verifier_account.account.owner.to_bytes(),
+        trading.account.key.to_bytes(),
+        GeneralLocalStateKindV3::Verifier,
+        outcome_count,
+    )
+    .map_err(GeneralHotOperatorErrorV3::GeneralLocalState)?;
     let verified = VerifiedCandidateV2::decode(&verified_account.account.data)
         .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?;
     let verified_header = verified.header();
@@ -1738,11 +1758,11 @@ fn derive_initialize_request_v5(
         config.price_scale(),
         Some(verified_header.candidate_id),
         outcome_count,
-        &frozen.account.data,
+        frozen_state.body(),
         verified.as_bytes(),
     )
     .map_err(GeneralHotOperatorErrorV3::GeneralAdmittedAccelerator)?;
-    let verifier = RuntimeCandidateVerifierV2::decode(&verifier_account.account.data)
+    let verifier = RuntimeCandidateVerifierV2::decode(verifier_state.body())
         .map_err(GeneralHotOperatorErrorV3::RuntimeVerify)?;
     if !verifier.is_complete()
         || verifier.header().outcome_count != outcome_count
@@ -1756,7 +1776,7 @@ fn derive_initialize_request_v5(
             .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?
     ];
     initialize_runtime_settlement_in_place_v2(
-        &verifier_account.account.data,
+        verifier_state.body(),
         verified.as_bytes(),
         0,
         &mut cursor,
@@ -3029,6 +3049,7 @@ fn signer_keys(accounts: &[AccountMeta]) -> Result<Vec<Pubkey>, GeneralHotOperat
 
 #[cfg(test)]
 mod tests {
+    mod initialize_evidence_tests;
     use std::borrow::Cow;
 
     use dclutch_market::execution_strategy::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;

@@ -42,7 +42,7 @@ pub enum TestCallerError {
     Instruction = 0x10_7000,
     /// Custody program or forwarded caller-authority frame was not exact.
     AccountFrame = 0x10_7001,
-    /// Custody CPI failed or returned no producer-authenticated receipt.
+    /// Custody CPI returned no producer-authenticated receipt.
     CustodyCpi = 0x10_7002,
     /// Deliberate failure after a successful child effect.
     DeliberateLateFailure = 0x10_7003,
@@ -141,8 +141,7 @@ pub fn process_instruction(
         &instruction,
         &infos,
         &[&[domain, release, market, role, context, digest, &bump_seed]],
-    )
-    .map_err(|_| TestCallerError::CustodyCpi)?;
+    )?;
     let (producer, receipt) = get_return_data().ok_or(TestCallerError::CustodyCpi)?;
     if producer != *custody_program.key {
         return Err(TestCallerError::CustodyCpi.into());

@@ -339,6 +339,51 @@ fn campaign(request: &JourneyRequestV1, progress: &mut Progress) -> Result<()> {
     progress.transactions.extend(terminal.transactions);
     progress.stages.push(json!({"stage":progress.stage,"outcome":"executed","certificate":terminal.certificate.to_string()}));
 
+    // Terminal settlement deliberately does not create its Claims-role
+    // Custody replay as a payout side effect. Founding created Trading's
+    // replay, which is a distinct role-seeded PDA; drive Claims' dedicated
+    // first-use route before the Dealer's first redemption.
+    progress.stage = "create the Claims-role Custody replay".into();
+    let claims_replay_path = request.work.join("claims-custody-replay.json");
+    crate::claims_custody_replay::run_owned_loopback_v1(vec![
+        "--rpc-url".into(),
+        checked.rpc_url.clone(),
+        "--plan".into(),
+        checked.plan_path.display().to_string(),
+        "--evidence".into(),
+        founding_path.display().to_string(),
+        "--market".into(),
+        addresses.founding_market.to_string(),
+        "--fee-payer".into(),
+        sponsor.pubkey().to_string(),
+        "--fee-payer-keypair".into(),
+        sponsor_key.clone(),
+        "--output".into(),
+        claims_replay_path.display().to_string(),
+        "--execute".into(),
+    ])?;
+    let claims_replay: Value = serde_json::from_slice(&std::fs::read(&claims_replay_path)?)?;
+    let claims_replay_signature = claims_replay
+        .pointer("/landed/signature")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("Claims replay creation returned without a landed signature"))?
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("Claims replay creation signature: {error}")))?;
+    let claims_replay_landed = rpc
+        .finalized_signed_packet("Claims replay creation", claims_replay_signature, false)?
+        .ok_or_else(|| Error::new("Claims replay creation finalized packet is absent"))?;
+    if claims_replay_landed.evidence.error.is_some() {
+        return Err(Error::new(
+            "Claims replay creation finalized transaction refused",
+        ));
+    }
+    progress.transactions.push(claims_replay_landed.evidence);
+    progress.stages.push(json!({
+        "stage": progress.stage,
+        "outcome": "executed",
+        "report": claims_replay,
+    }));
+
     let pre_redeem = snapshot(
         &mut rpc,
         &addresses,

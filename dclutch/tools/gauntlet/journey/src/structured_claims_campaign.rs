@@ -78,7 +78,7 @@ pub(crate) fn continue_existing(request: JourneyRequestV1) -> Result<()> {
         ));
     }
     let rpc_url = format!("http://127.0.0.1:{}", request.rpc_port);
-    let context = StructuredTerminalContextV1 {
+    let mut context = StructuredTerminalContextV1 {
         rpc_url: rpc_url.clone(),
         plan_path: plan_path.clone(),
         plan,
@@ -98,6 +98,58 @@ pub(crate) fn continue_existing(request: JourneyRequestV1) -> Result<()> {
             })
             .collect(),
     };
+    if !structured_founding_complete_v1(&request.work.join("structured-founding-evidence.json"))? {
+        let administration: Value = serde_json::from_slice(&std::fs::read(
+            request.work.join("substrate/administration-evidence.json"),
+        )?)?;
+        let mut rpc = crate::rpc::Rpc::connect(&rpc_url)?;
+        let genesis = rpc.call("getGenesisHash", &json!([]))?;
+        authenticate_retained_setup_v1(&administration, &rpc_url, &context.plan_sha256, &genesis)?;
+        let key_dir = request.work.join("substrate/prepare/keys");
+        context.campaign_founding_keypairs = crate::campaign::FOUNDING_REQUIRED_ROLES
+            .iter()
+            .copied()
+            .chain([
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
+                "founding-founder",
+            ])
+            .map(|role| {
+                (
+                    role.to_owned(),
+                    key_dir.join(format!("{role}.json")).display().to_string(),
+                )
+            })
+            .collect();
+        let public = crate::local_mutable::local_campaign_public_identities_v1(
+            crate::plan::hex32(&request.seed)?,
+        )?;
+        let retained_founder =
+            crate::substrate::load_keypair(&key_dir.join("founding-founder.json"))?
+                .pubkey()
+                .to_string();
+        if public.get(crate::seed::role::FOUNDING_FOUNDER) != Some(&retained_founder) {
+            return Err(Error::new(
+                "Structured continuation seed differs from retained founding identity",
+            ));
+        }
+        let mut progress = Progress {
+            stage: "retained checked substrate".into(),
+            stages: Vec::new(),
+            transactions: Vec::new(),
+            rpc_url: rpc_url.clone(),
+            representation_retired: false,
+        };
+        let result = ensure_structured_founding_v1(&request, &mut progress, &context, &public);
+        write_json(
+            &request.work.join("structured-founding-continuation.json"),
+            &json!({
+                "stages": progress.stages, "transactions": progress.transactions,
+                "completed": result.is_ok(), "wall": result.as_ref().err().map(ToString::to_string),
+            }),
+        )?;
+        result?;
+    }
     let mut driver = StructuredTerminalDriver {
         request: &request,
         checked: &context,
@@ -183,51 +235,6 @@ fn campaign_on_checked_substrate(
         .stages
         .push(json!({"stage": progress.stage, "outcome": "executed"}));
 
-    // This is the mint the founding campaign will draw as `collateral-mint[0]`.
-    // `found_market` receives the exact same key file afterwards, so the
-    // pre-founding Realm is bound to the Mint that actually reaches the chain.
-    let collateral_mint_path = checked
-        .report
-        .campaign_founding_keypairs
-        .get("collateral-mint")
-        .ok_or_else(|| Error::new("checked substrate omitted collateral-mint role"))?;
-    let collateral_mint = crate::substrate::load_keypair(Path::new(collateral_mint_path))?.pubkey();
-    let registry = crate::plan::pubkey(&checked.plan.registry.program_id)?;
-    progress.stage = "compile Structured selection before founding".into();
-    let input = crate::structured_market::demo_structured_market_input(
-        &checked.plan_path,
-        &checked.rpc_url,
-        registry,
-        collateral_mint,
-        &crate::market::LocalMarketShapeV1::default(),
-    )?;
-    let market_path = request.work.join("structured-market.json");
-    write_json(&market_path, &serde_json::to_value(&input)?)?;
-    progress.stages.push(json!({
-        "stage": progress.stage,
-        "outcome": "executed",
-        "collateralMint": collateral_mint.to_string(),
-    }));
-
-    progress.stage = "found Structured market through Open".into();
-    let founding_path = request.work.join("structured-founding-evidence.json");
-    let mut rpc = crate::rpc::Rpc::connect(&checked.rpc_url)?;
-    let founding =
-        crate::substrate::found_market(&checked, &mut rpc, &market_path, &founding_path)?;
-    progress.transactions.extend(founding.transactions);
-    progress.stages.push(json!({
-        "stage": progress.stage,
-        "outcome": "executed",
-        "market": founding.market.accounts.get("founding_market").map(|row| &row.address),
-    }));
-
-    progress.stage = "publish authenticated Structured lifecycle closure".into();
-    let payer_path = checked
-        .report
-        .campaign_founding_keypairs
-        .get("campaign-payer")
-        .ok_or_else(|| Error::new("checked substrate omitted campaign-payer role"))?;
-    let publication_path = request.work.join("structured-publication.json");
     let context = StructuredTerminalContextV1 {
         rpc_url: checked.rpc_url.clone(),
         plan_path: checked.plan_path.clone(),
@@ -235,6 +242,21 @@ fn campaign_on_checked_substrate(
         plan_sha256: checked.plan_sha256.clone(),
         campaign_founding_keypairs: checked.report.campaign_founding_keypairs.clone(),
     };
+    ensure_structured_founding_v1(
+        request,
+        progress,
+        &context,
+        &checked.report.campaign_public_identities,
+    )?;
+    let market_path = request.work.join("structured-market.json");
+    let founding_path = request.work.join("structured-founding-evidence.json");
+    progress.stage = "publish authenticated Structured lifecycle closure".into();
+    let payer_path = checked
+        .report
+        .campaign_founding_keypairs
+        .get("campaign-payer")
+        .ok_or_else(|| Error::new("checked substrate omitted campaign-payer role"))?;
+    let publication_path = request.work.join("structured-publication.json");
     let mut terminal_driver = StructuredTerminalDriver {
         request,
         checked: &context,
@@ -293,6 +315,101 @@ fn campaign_on_checked_substrate(
     Ok(())
 }
 
+/// Continue compilation and founding through the original stage owners, reusing
+/// saved input and completed reports; the shipped commands authenticate live state.
+fn ensure_structured_founding_v1(
+    request: &JourneyRequestV1,
+    progress: &mut Progress,
+    checked: &StructuredTerminalContextV1,
+    public_identities: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    if structured_founding_complete_v1(&request.work.join("structured-founding-evidence.json"))? {
+        return Ok(());
+    }
+    // This is the mint the founding campaign will draw as `collateral-mint[0]`.
+    // `found_market` receives the exact same key file afterwards, so the
+    // pre-founding Realm is bound to the Mint that actually reaches the chain.
+    let collateral_mint_path = checked
+        .campaign_founding_keypairs
+        .get("collateral-mint")
+        .ok_or_else(|| Error::new("checked substrate omitted collateral-mint role"))?;
+    let collateral_mint = crate::substrate::load_keypair(Path::new(collateral_mint_path))?.pubkey();
+    let registry = crate::plan::pubkey(&checked.plan.registry.program_id)?;
+    progress.stage = "compile Structured selection before founding".into();
+    let market_path = request.work.join("structured-market.json");
+    if !market_path.exists() {
+        let input = crate::structured_market::demo_structured_market_input(
+            &checked.plan_path,
+            &checked.rpc_url,
+            registry,
+            collateral_mint,
+            &crate::market::LocalMarketShapeV1::default(),
+        )?;
+        write_json(&market_path, &serde_json::to_value(&input)?)?;
+    }
+    progress.stages.push(json!({
+        "stage": progress.stage,
+        "outcome": "executed",
+        "collateralMint": collateral_mint.to_string(),
+    }));
+
+    progress.stage = "found Structured market through Open".into();
+    let founding_path = request.work.join("structured-founding-evidence.json");
+    let mut rpc = crate::rpc::Rpc::connect(&checked.rpc_url)?;
+    let founding = crate::substrate::found_market_from_roles_v1(
+        &checked.rpc_url,
+        &checked.plan_path,
+        &checked.campaign_founding_keypairs,
+        public_identities,
+        &mut rpc,
+        &market_path,
+        &founding_path,
+    )?;
+    progress.transactions.extend(founding.transactions);
+    progress.stages.push(json!({
+        "stage": progress.stage,
+        "outcome": "executed",
+        "market": founding.market.accounts.get("founding_market").map(|row| &row.address),
+    }));
+
+    Ok(())
+}
+
+fn structured_founding_complete_v1(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let evidence: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+    Ok(evidence
+        .pointer("/execution/completed")
+        .and_then(Value::as_bool)
+        == Some(true))
+}
+
+fn authenticate_retained_setup_v1(
+    report: &Value,
+    rpc_url: &str,
+    plan_sha256: &str,
+    genesis: &Value,
+) -> Result<()> {
+    let endpoint = crate::rpc::validate_loopback_url(rpc_url)?;
+    if genesis.as_str().is_none()
+        || report.get("rpc_url").and_then(Value::as_str) != Some(endpoint.as_str())
+        || report.get("plan_sha256").and_then(Value::as_str) != Some(plan_sha256)
+        || report.get("through_stage").and_then(Value::as_str) != Some("activation")
+        || report
+            .pointer("/execution/completed")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || report.get("genesis_hash") != Some(genesis)
+    {
+        return Err(Error::new(
+            "Structured retained setup differs from its completed administration evidence",
+        ));
+    }
+    Ok(())
+}
+
 fn write_json(path: &Path, value: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -303,6 +420,57 @@ fn write_json(path: &Path, value: &Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retained_setup_pins_exact_plan_chain_endpoint_and_completed_activation() {
+        use super::authenticate_retained_setup_v1;
+        use serde_json::json;
+        let report = json!({"rpc_url":"http://127.0.0.1:30400/", "plan_sha256":"plan-digest",
+            "through_stage":"activation", "genesis_hash":"original-bank", "execution":{"completed":true}});
+        assert!(
+            authenticate_retained_setup_v1(
+                &report,
+                "http://127.0.0.1:30400",
+                "plan-digest",
+                &json!("original-bank")
+            )
+            .is_ok()
+        );
+        for field in [
+            "rpc_url",
+            "plan_sha256",
+            "through_stage",
+            "genesis_hash",
+            "execution",
+        ] {
+            let mut hostile = report.clone();
+            hostile[field] = json!("substituted");
+            assert_eq!(
+                authenticate_retained_setup_v1(
+                    &hostile,
+                    "http://127.0.0.1:30400",
+                    "plan-digest",
+                    &json!("original-bank")
+                )
+                .expect_err("substituted retained setup must refuse")
+                .to_string(),
+                "Structured retained setup differs from its completed administration evidence"
+            );
+        }
+        let mut unproven = report;
+        unproven["genesis_hash"] = serde_json::Value::Null;
+        assert_eq!(
+            authenticate_retained_setup_v1(
+                &unproven,
+                "http://127.0.0.1:30400",
+                "plan-digest",
+                &serde_json::Value::Null
+            )
+            .expect_err("missing genesis must refuse")
+            .to_string(),
+            "Structured retained setup differs from its completed administration evidence"
+        );
+    }
+
     #[test]
     fn report_requires_all_seven_published_records() {
         let records = serde_json::json!([{}, {}, {}, {}, {}, {}]);

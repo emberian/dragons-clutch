@@ -35,7 +35,9 @@ use crate::general::{
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     release_v3::GENERAL_ACTIONS_V5,
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
-    runtime_verify::{RUNTIME_VERIFIER_HEADER_BYTES_V2, RuntimeVerifierLayoutV2},
+    runtime_verify::{
+        RUNTIME_VERIFIER_HEADER_BYTES_V2, RUNTIME_VERIFIER_TAIL_COUNT_V2, RuntimeVerifierLayoutV2,
+    },
     runtime_width::{
         SETTLEMENT_CURSOR_HEADER_BYTES_V2, SettlementCursorLayoutV2,
         VERIFIED_CANDIDATE_HEADER_BYTES_V2,
@@ -999,7 +1001,7 @@ fn primary_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
             GeneralStateRecipeV3::Selection => 0,
             GeneralStateRecipeV3::Batch => batch_row_stride()?,
             GeneralStateRecipeV3::Candidate => 0,
-            GeneralStateRecipeV3::Verifier => 40,
+            GeneralStateRecipeV3::Verifier => 8 * RUNTIME_VERIFIER_TAIL_COUNT_V2,
             GeneralStateRecipeV3::VerifiedCandidate => 16,
             GeneralStateRecipeV3::Order => order_row_stride()?,
             GeneralStateRecipeV3::Settlement | GeneralStateRecipeV3::Terminal => {
@@ -1069,7 +1071,7 @@ fn verify_candidate_row_shape(action: Action) -> Result<GeneralActionLifecycleSh
             seed_count: verifier_recipe.seed_count(),
             bump_offset: verifier_recipe.bump_offset(),
             data_base: verifier_base,
-            data_stride: 40,
+            data_stride: 8 * RUNTIME_VERIFIER_TAIL_COUNT_V2,
         },
         LifecycleRecipeInputV3 {
             state: LifecycleAccountCoordinateV3::fixed(GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3),
@@ -2064,8 +2066,8 @@ mod tests {
                 verifier.target_data_bytes(outcome_count),
                 Ok(u32::try_from(
                     GENERAL_LOCAL_STATE_HEADER_BYTES_V3
-                        + RUNTIME_VERIFIER_HEADER_BYTES_V2
-                        + 40 * usize::try_from(outcome_count).expect("N"),
+                        + crate::general::runtime_verify::runtime_verifier_len_v2(outcome_count)
+                            .expect("semantic verifier width"),
                 )
                 .expect("verifier width"))
             );

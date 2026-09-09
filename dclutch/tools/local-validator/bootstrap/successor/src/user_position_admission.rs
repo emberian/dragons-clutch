@@ -23,8 +23,9 @@ use dclutch_claims::{
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketViewV2,
         LiabilityBasisPositionInputV2, LiabilityBasisPositionViewV2,
         encode_liability_basis_position_into_v2, liability_basis_vector_width_v2,
+        put_liability_basis_position_bump_v2,
     },
-    protocol_position_v2::ProtocolPositionAdmissionV2,
+    protocol_position_v2::{ProtocolPositionAdmissionV2, ProtocolPositionSeedsV2},
 };
 use dclutch_custody::CustodyAuthoritySeedsV1;
 use dclutch_custody::token_svm::{
@@ -1687,12 +1688,13 @@ fn custody_deployment_observation_v1(
         .map_err(|error| Error::new(format!("Custody ProgramData: {error:?}")))?;
     let observed_slot = programdata_view.deployment_slot();
     let observed_authority = programdata_view.upgrade_authority();
-    let elf_digest = slot_pinned_release_code_commitment_v2(release, observed_authority, observed_slot)
-        .map_err(|error| {
-            Error::new(format!(
-                "Custody release was superseded or substituted: {error:?}"
-            ))
-        })?;
+    let elf_digest =
+        slot_pinned_release_code_commitment_v2(release, observed_authority, observed_slot)
+            .map_err(|error| {
+                Error::new(format!(
+                    "Custody release was superseded or substituted: {error:?}"
+                ))
+            })?;
     DeploymentObservationV2::new(
         program.to_bytes(),
         program_account.owner.to_bytes(),
@@ -3300,6 +3302,27 @@ fn predict_admission_account_bytes_v1(
 ) -> Result<(Vec<u8>, Vec<u8>)> {
     let claims_market = LiabilityBasisMarketViewV2::decode(&snapshot.claims_market.data)
         .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
+    let expected_position = predict_position_account_bytes_v1(
+        snapshot.claims_market.key,
+        snapshot.claims_program.key,
+        unsigned.position,
+        position_owner,
+        claims_market,
+    )?;
+    let expected_admission =
+        ProtocolPositionAdmissionV2::decode_receipt(&unsigned.expected_receipt_body)
+            .and_then(ProtocolPositionAdmissionV2::to_state_bytes)
+            .map_err(|error| Error::new(format!("predict Claims admission state: {error:?}")))?;
+    Ok((expected_position, expected_admission.to_vec()))
+}
+
+fn predict_position_account_bytes_v1(
+    claims_market_key: Pubkey,
+    claims_program: Pubkey,
+    declared_position_address: Pubkey,
+    position_owner: Pubkey,
+    claims_market: LiabilityBasisMarketViewV2,
+) -> Result<Vec<u8>> {
     let position_width = liability_basis_vector_width_v2(
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         claims_market.claim_count,
@@ -3312,10 +3335,20 @@ fn predict_admission_account_bytes_v1(
             "Claims outcome width does not fit host usize"
         ))?
     ];
+    let position_seeds =
+        ProtocolPositionSeedsV2::new(claims_market_key.to_bytes(), position_owner.to_bytes())
+            .map_err(|error| Error::new(format!("predict Claims Position seeds: {error:?}")))?;
+    let (expected_position_address, position_bump) =
+        Pubkey::find_program_address(&position_seeds.as_slices(), &claims_program);
+    if expected_position_address != declared_position_address {
+        return Err(Error::new(
+            "predicted Claims Position address differed from the operator's canonical PDA",
+        ));
+    }
     encode_liability_basis_position_into_v2(
         LiabilityBasisPositionInputV2 {
             revision: 0,
-            market_account: unsigned.claims_request.market,
+            market_account: claims_market_key.to_bytes(),
             owner: position_owner.to_bytes(),
             basis_id: claims_market.basis_id,
         },
@@ -3323,11 +3356,21 @@ fn predict_admission_account_bytes_v1(
         &mut expected_position,
     )
     .map_err(|error| Error::new(format!("predict Claims Position: {error:?}")))?;
-    let expected_admission =
-        ProtocolPositionAdmissionV2::decode_receipt(&unsigned.expected_receipt_body)
-            .and_then(ProtocolPositionAdmissionV2::to_state_bytes)
-            .map_err(|error| Error::new(format!("predict Claims admission state: {error:?}")))?;
-    Ok((expected_position, expected_admission.to_vec()))
+    put_liability_basis_position_bump_v2(&mut expected_position, position_bump)
+        .map_err(|error| Error::new(format!("predict Claims Position bump: {error:?}")))?;
+    let predicted = LiabilityBasisPositionViewV2::decode(&expected_position)
+        .map_err(|error| Error::new(format!("decode predicted Claims Position: {error:?}")))?;
+    if predicted.market_account != claims_market_key.to_bytes()
+        || predicted.owner != position_owner.to_bytes()
+        || predicted.basis_id != claims_market.basis_id
+        || predicted.claim_count != claims_market.claim_count
+        || predicted.revision != 0
+    {
+        return Err(Error::new(
+            "predicted Claims Position did not decode to its authenticated aggregate, owner, basis, width, and revision",
+        ));
+    }
+    Ok(expected_position)
 }
 
 fn complete_admission_message_prestate_v1(
@@ -4279,6 +4322,12 @@ fn park_position_admission_chaos_boundary_v1(
 
 fn finalize_known_signature(rpc: &mut Rpc, report: &mut ReportV1, signature: &str) -> Result<()> {
     let history = authenticate_admission_finalized_history(rpc, report, signature)?;
+    let poststate = authenticate_first_finalized_admission_poststate_v1(
+        rpc,
+        &report.intent,
+        history.slot,
+        &history.poststate,
+    )?;
     report.finalized = Some(FinalizedEvidenceV1 {
         signature: history.signature,
         slot: history.slot,
@@ -4286,10 +4335,44 @@ fn finalize_known_signature(rpc: &mut Rpc, report: &mut ReportV1, signature: &st
         compute_units_consumed: history.compute_units_consumed,
         return_data_producer: history.return_data_producer,
         return_data_sha256: history.return_data_sha256,
-        poststate: history.poststate,
+        poststate,
     });
     report.phase = PhaseV1::Finalized;
     Ok(())
+}
+
+/// Read the two accounts this transaction created from the first finalized
+/// bank available after its slot, then bind those actual bytes to the
+/// semantic owner's canonical prediction. Transaction metadata authenticates
+/// lamport deltas but carries no account data; substituting predicted bytes in
+/// the persisted poststate would let a host/ABI disagreement certify itself.
+fn authenticate_first_finalized_admission_poststate_v1(
+    rpc: &mut Rpc,
+    intent: &IntentV1,
+    transaction_slot: u64,
+    projected: &BTreeMap<String, AccountStateV1>,
+) -> Result<BTreeMap<String, AccountStateV1>> {
+    let position = pubkey(&intent.position)?;
+    let admission = pubkey(&intent.admission)?;
+    let (observed_slot, values) =
+        rpc.finalized_accounts(&[position, admission], transaction_slot)?;
+    if observed_slot < transaction_slot {
+        return Err(Error::new(
+            "admission poststate snapshot preceded its finalized transaction",
+        ));
+    }
+    let mut observed = projected.clone();
+    for (label, key, value) in [
+        ("claims_position", position, values.first()),
+        ("claims_admission", admission, values.get(1)),
+    ] {
+        let account = value
+            .and_then(|value| value.as_ref())
+            .ok_or_else(|| Error::new(format!("finalized admission poststate omitted {label}")))?;
+        observed.insert(label.into(), account_state(key, Some(account)));
+    }
+    authenticate_admission_poststate_map(intent, &observed)?;
+    Ok(observed)
 }
 
 fn authenticate_admission_finalized_history(
@@ -6709,6 +6792,49 @@ mod tests {
     }
 
     #[test]
+    fn predicted_admission_position_uses_claims_aggregate_and_exact_pda_bump() {
+        let claims_market = Pubkey::new_unique();
+        let logical_market = Pubkey::new_unique();
+        let claims_program = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let seeds = ProtocolPositionSeedsV2::new(claims_market.to_bytes(), owner.to_bytes())
+            .expect("Position seeds");
+        let (position, bump) = Pubkey::find_program_address(&seeds.as_slices(), &claims_program);
+        let market = LiabilityBasisMarketViewV2 {
+            claim_count: 4,
+            revision: 7,
+            logical_market: logical_market.to_bytes(),
+            release_set: [1; 32],
+            registry_program: [2; 32],
+            product_instance_id: [3; 32],
+            basis_id: [4; 32],
+            realm_id: [5; 32],
+            custody_context: [6; 32],
+            generation: 9,
+        };
+        let bytes = predict_position_account_bytes_v1(
+            claims_market,
+            claims_program,
+            position,
+            owner,
+            market,
+        )
+        .expect("canonical Position prediction");
+        let decoded = LiabilityBasisPositionViewV2::decode(&bytes).expect("Position body");
+        assert_eq!(decoded.market_account, claims_market.to_bytes());
+        assert_ne!(decoded.market_account, logical_market.to_bytes());
+        assert_eq!(decoded.owner, owner.to_bytes());
+        assert_eq!(decoded.basis_id, market.basis_id);
+        assert_eq!(decoded.claim_count, market.claim_count);
+        assert_eq!(decoded.revision, 0);
+        assert_eq!(
+            bytes
+                [dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2],
+            bump,
+        );
+    }
+
+    #[test]
     fn signer_alias_refusal_precedes_any_keypair_read() {
         let shared = Pubkey::new_unique();
         assert!(
@@ -6753,7 +6879,8 @@ mod tests {
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("Loader"),
             programdata.to_bytes(),
             ContentId::new([0x53; 32]).expect("semantic release"),
-            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("exact fixture code commitment"),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf)
+                .expect("exact fixture code commitment"),
             slot,
             ArtifactUpgradePolicyV1::ExactAuthority,
             Some(authority),

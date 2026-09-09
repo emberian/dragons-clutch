@@ -22,28 +22,28 @@ remains a separate substrate.
 | **checked refused-only** | 1 | finalized native refusal and no native acceptance |
 | **refusal binding only** | 0 | authored `refused` binding without a checked native row |
 | **blocked** | 32 | no evidence or binding; a blocker records why and who owns it |
-| **unrecorded** | 5 | no evidence, binding or reason |
+| **unrecorded** | 6 | no evidence, binding or reason |
 
-- **historical accepted Agave union: 56 of 164** -- an
+- **historical accepted Agave union: 56 of 165** -- an
   `executed` finalized native observation in a checked census ledger or an
   `executed` corroborated devnet record. A binding cannot enter this set, and
   this count is not final-source acceptance.
-- **historical local-validator accepted: 11 of 164** --
+- **historical local-validator accepted: 11 of 165** --
   checked successful local-validator ledger rows.
-- **historical devnet accepted: 46 of 164** --
+- **historical devnet accepted: 46 of 165** --
   checked successful devnet records. The local and devnet sets can overlap, so
   their counts do not add to the union.
-- **successful-binding-only: 70 of 164** -- at
+- **successful-binding-only: 70 of 165** -- at
   least one campaign binding says `executed`, but no checked native observation
   in the repository does. Its declared substrate is useful provenance, not an
   acceptance result.
-- **checked refused-only: 1 of 164** -- a
+- **checked refused-only: 1 of 165** -- a
   finalized native refusal with no accepted native evidence. It proves a
   boundary was reached; it never proves the accepted poststate.
-- **refusal-binding-only: 0 of 164** -- an
+- **refusal-binding-only: 0 of 165** -- an
   authored refusal binding with no checked native row. It is a claim, not an
   observed refusal.
-- **no historical successful claim: 37 of 164** --
+- **no historical successful claim: 38 of 165** --
   no accepted native observation and no `executed` binding. This includes exact
   refusals, refusal claims, blocked rows and wholly unrecorded rows.
 
@@ -279,6 +279,7 @@ not decide which.
 | `resolution/sponsored_push_v1::process_sponsored_push_v1` | devnet accepted (historical) | devnet `cohort-13` slot 492,139,257 `37Ye9gafsCMS...`; devnet `cohort-14` slot 492,358,855 `67eCTr2RWWjX...`; devnet `cohort-14` slot 492,412,657 `3urBdjU5FuRq...`; devnet `cohort-14` slot 492,491,288 `3uBt7JnQHjt7...`; devnet `cohort-14` slot 492,545,402 `4uxF1vqy7S4i...`; devnet `cohort-15` slot 492,775,238 `3VsB7dNppiq6...`; devnet `cohort-15` slot 492,829,232 `2Mqxghzc6Uwt...`; devnet `cohort-15` slot 492,868,986 `2p5urmVAjSDr...`; devnet `cohort-15` slot 492,925,112 `25Cxq4WmJKZt...`; devnet `cohort-16` slot 493,772,406 `64cuxbYamuTy...`; devnet `cohort-16` slot 493,825,024 `641JyvMWqAGy...`; devnet `cohort-17` slot 493,992,422 `38nrFuZGazvS...`; devnet `cohort-17` slot 494,099,419 `4GmiTe4nM1to...`; devnet `cohort-17` slot 494,150,841 `3QepdGiXfauZ...`; binding register: `resolution-sponsored-programtest` (executed), `resolution-sponsored-programtest` (refused) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | devnet accepted (historical) | devnet `cohort-15` slot 492,898,053 `51xXs3Zqsx13...`; devnet `cohort-17` slot 494,154,825 `xfXSwkDpZJSe...`; binding register: `direct-begin-retiring-programtest` (executed), `direct-begin-retiring-programtest` (refused) | `docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `trading/direct_close_maker_v1::process_direct_close_maker_v1` | devnet accepted (historical) | devnet `cohort-17` slot 494,059,660 `771oHXjD5fXd...`; devnet `cohort-17` slot 494,059,757 `5NJTCZ3z2hhv...`; devnet `cohort-17` slot 494,156,357 `rrMpe3KSU4oe...`; devnet `cohort-17` slot 494,156,447 `2KK9CT8EUKnb...` | `docs/evidence/witnesses/cohort-17-discovered.json` |
+| `trading/direct_close_unused_v1::process_direct_close_unused_v1` | unrecorded | no evidence, binding or reason recorded | -- |
 | `trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1` | devnet accepted (historical) | devnet `cohort-13` slot 492,094,058 `ChTAyLg6LtLW...`; devnet `cohort-14` slot 492,249,852 `5TsBX6xpKvxo...`; devnet `cohort-15` slot 492,865,496 `5yVEK542AE4o...`; devnet `cohort-16` slot 493,777,469 `1veFd4UPxt9n...`; devnet `cohort-17` slot 493,995,908 `2ike4FN3Mkxx...`; devnet `cohort-17` slot 494,092,706 `28Cy9iPpG9LH...`; binding register: `direct-fee-pair-programtest` (executed), `direct-fee-pair-programtest` (refused) | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json`<br>`docs/evidence/witnesses/cohort-16-1-discovered.json`<br>`docs/evidence/witnesses/cohort-17-discovered.json` |
 | `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | devnet accepted (historical) | devnet `cohort-13` slot 492,091,905 `4gBoKbbQE2CF...` | `docs/evidence/witnesses/cohort-13-discovered.json` |
 | `trading/direct_token_setup_v1::process_direct_token_setup_v1` | devnet accepted (historical) | devnet `cohort-13` slot 492,092,002 `4ekfpH6tuonx...` | `docs/evidence/witnesses/cohort-13-discovered.json` |
