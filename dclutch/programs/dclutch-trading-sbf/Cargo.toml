@@ -61,6 +61,8 @@ solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 dclutch-market = { path = "../../crates/dclutch-market" }
 
 [dev-dependencies]
+# Native composition controls consume the released lifecycle artifact builder.
+dclutch-operator = { path = "../../crates/dclutch-operator", default-features = false }
 dclutch-claims = { path = "../../crates/dclutch-claims" }
 solana-hash = "=4.6.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }

@@ -41,7 +41,11 @@
 //! The transcript then says which walls a real chain put up, in the order it
 //! put them up, which is worth more than a campaign that dies at the first.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
+};
 
 use serde_json::Value;
 use solana_sdk::{
@@ -87,6 +91,51 @@ fn terminal_precheckpoint_order_v1() -> String {
 /// and small enough that a driver stuck on one action is REPORTED within a
 /// minute rather than spun on.
 const RESUMPTION_CEILING_V1: usize = 24;
+
+/// How long a durable driver may remain byte-for-byte `Submitted` while the
+/// validator advances the exact signature to finalized.
+///
+/// This is a measured-profile bound: the accepted local-validator campaigns
+/// use the same 90-second persisted-finalization window. A timeout reports the
+/// retained journal and signature so a later invocation can resume it; lifting
+/// the bound means replacing local wall-clock polling with an RPC-reported
+/// block-height/finality horizon shared by every durable host driver.
+const DURABLE_PROGRESS_WAIT_V1: Duration = Duration::from_secs(90);
+const DURABLE_PROGRESS_POLL_V1: Duration = Duration::from_millis(250);
+
+/// Re-enter one durable action while it is waiting for finality.
+///
+/// A byte-identical successful return is not a new action: `Submitted` is a
+/// poll-only phase. Keeping those polls inside one resumption pass preserves
+/// [`RESUMPTION_CEILING_V1`] as a bound on durable acts instead of accidentally
+/// turning it into a bound on RPC speed.
+fn await_durable_progress_v1<F, P>(
+    mut invoke: F,
+    mut progressed: P,
+    label: &str,
+    wait: Duration,
+    poll: Duration,
+) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+    P: FnMut() -> Result<bool>,
+{
+    let deadline = Instant::now() + wait;
+    loop {
+        invoke()?;
+        if progressed()? {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(Error::new(format!(
+                "{label} stayed pending without durable journal progress for {} seconds",
+                wait.as_secs()
+            )));
+        }
+        thread::sleep(poll.min(deadline.saturating_duration_since(now)));
+    }
+}
 
 /// What role an account a spine stage created plays in the conservation laws.
 pub(crate) enum ApertureRoleV1 {
@@ -648,23 +697,26 @@ pub(crate) fn resolve_held_market_v1(
                 break;
             }
             let before = std::fs::read(&table_path).ok();
-            crate::flagship_resolution::run_owned_loopback(vec![
-                "--rpc-url".into(),
-                context.rpc_url.into(),
-                "--provision-tables".into(),
-                "--producer-checkpoint".into(),
-                producer_path.display().to_string(),
-                "--table-journal".into(),
-                table_path.display().to_string(),
-                "--authority-keypair".into(),
-                context.resolver_keypair.display().to_string(),
-                "--execute".into(),
-            ])?;
-            if before.as_deref() == Some(std::fs::read(&table_path)?.as_slice()) {
-                return Err(Error::new(
-                    "flagship table provisioner returned without journal progress",
-                ));
-            }
+            await_durable_progress_v1(
+                || {
+                    crate::flagship_resolution::run_owned_loopback(vec![
+                        "--rpc-url".into(),
+                        context.rpc_url.into(),
+                        "--provision-tables".into(),
+                        "--producer-checkpoint".into(),
+                        producer_path.display().to_string(),
+                        "--table-journal".into(),
+                        table_path.display().to_string(),
+                        "--authority-keypair".into(),
+                        context.resolver_keypair.display().to_string(),
+                        "--execute".into(),
+                    ])
+                },
+                || Ok(input_path.exists() || before != std::fs::read(&table_path).ok()),
+                "flagship table provisioner",
+                DURABLE_PROGRESS_WAIT_V1,
+                DURABLE_PROGRESS_POLL_V1,
+            )?;
             crate::flagship_resolution::run_owned_loopback(producer_arguments())?;
         }
         if !input_path.exists() {
@@ -724,6 +776,7 @@ pub(crate) fn resolve_held_market_v1(
             )?;
         }
         for _ in 0..RESUMPTION_CEILING_V1 {
+            let before = std::fs::read(&checkpoint_path).ok();
             let mut arguments = vec![
                 "--rpc-url".into(),
                 context.rpc_url.into(),
@@ -736,7 +789,16 @@ pub(crate) fn resolve_held_market_v1(
             ];
             arguments.extend(signer_arguments());
             arguments.push("--execute".into());
-            crate::flagship_resolution::run_owned_loopback(arguments)?;
+            await_durable_progress_v1(
+                || crate::flagship_resolution::run_owned_loopback(arguments.clone()),
+                || {
+                    Ok(receipt_is_present_v1(&checkpoint_path, stage)?
+                        || before != std::fs::read(&checkpoint_path).ok())
+                },
+                &format!("flagship durable {stage}"),
+                DURABLE_PROGRESS_WAIT_V1,
+                DURABLE_PROGRESS_POLL_V1,
+            )?;
             if receipt_is_present_v1(&checkpoint_path, stage)? {
                 break;
             }
@@ -3109,5 +3171,25 @@ mod tests {
         let (passes, reason) = resume_until(|_| Ok(()), || false).expect_err("a stall reports");
         assert_eq!(passes, RESUMPTION_CEILING_V1);
         assert!(reason.contains("stalled action"), "{reason}");
+    }
+
+    /// Polling a durable `Submitted` signature is one act regardless of how
+    /// many byte-identical successful driver returns precede finality.
+    #[test]
+    fn pending_finality_polls_do_not_consume_the_durable_act_ceiling() {
+        let invocations = std::cell::Cell::new(0_usize);
+        await_durable_progress_v1(
+            || {
+                invocations.set(invocations.get() + 1);
+                Ok(())
+            },
+            || Ok(invocations.get() == 3),
+            "test durable action",
+            Duration::from_secs(1),
+            Duration::ZERO,
+        )
+        .expect("the third poll observes finality");
+        assert_eq!(invocations.get(), 3);
+        assert!(invocations.get() < RESUMPTION_CEILING_V1);
     }
 }

@@ -11,23 +11,26 @@ Every claim is backed by collateral locked in the market's vault (its
 liquidation, no margin call, and no way for a market to owe more than it
 holds. The most you can ever lose is what you paid.
 
-The seven programs run on Solana devnet as a **cohort**: each cohort is a
-full redeploy from one named commit with fresh program ids, and the previous
-cohort is abandoned in place and closed. The ids are not permanent. The live
-cohort, its commit and its markets are read off the chain by the site
+The recorded cohort 17 contains eight programs on Solana devnet. A new
+**cohort** is a full redeploy from one named commit with fresh program ids;
+the previous cohort is abandoned in place. The ids are not permanent. The
+site reads markets from its selected deployment
 ([clutch.dregg.pro](https://clutch.dregg.pro)) and by the SDK's deployment
 manifest (`packages/dclutch-sdk/lib/deployments.ts`); each cohort's evidence
 is a dated document under [`docs/evidence/`](docs/evidence). Nothing on
 devnet is worth money: it is a public test network, and every market's
-collateral is a devnet test token. Everything below also runs on a local
-test chain you can run yourself.
+collateral is a devnet test token. Current source is newer than that recorded
+deployment. The local execution work below must finish before the next full
+redeploy and public simulator launch.
 
 ## What works today
 
 Evidence levels are distinct and the list says which one each item has:
 *devnet* means a finalized public-chain transaction named in a cohort
-document; *real ELF* means the deployed program bytes executed in a test
-bank at the real compute and memory limits; nothing here is mainnet evidence.
+document; *local validator* means transactions executed on an owned test
+chain; *SBF program test* means program bytes executed in a test bank. Native
+component tests establish only their named semantics. A successful build does
+not establish any of these execution results; none is mainnet evidence.
 
 - **Founding, on devnet** — a market is projected, funded, founded and opened,
   by the composed transaction or by the two-stage permit route below.
@@ -38,16 +41,22 @@ bank at the real compute and memory limits; nothing here is mainnet evidence.
   inside a market's window and the market settled on an honest certificate;
   a market whose source went silent took its disclosed fallback by the
   failure walk; a market with a funded recovery ladder is answered on its
-  second rung (real ELF).
+  second rung (SBF program test).
 - **Payout, on devnet** — winning claims, a stranger's included, were paid
-  into ordinary wallet token accounts, with the ledger census holding every
-  conservation law across each crossing. A market has begun retiring; the
-  last retirement step has not completed on any chain.
-- **General, Dealer, Series and Structured** — the General market is founded,
-  activated and sealed on devnet and its first candidate batch is the current
-  wall; the Dealer campaign is 31 of 31 on real ELFs and no Dealer market has
-  existed on a chain; Series and Structured/Fractional run their lifecycles on
-  real ELFs.
+  into ordinary wallet token accounts. A cohort-17 market completed all four
+  retirement checkpoints: its Market, Hoard and related accounts closed, and
+  the recorded rent refund matched the balances. See the night addendum in
+  [the cohort-17 evidence](docs/evidence/COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md).
+- **Dealer, on a local validator** — a founded market accepted Quote, a
+  nonzero nine-unit Fill and a one-unit Withdraw, with claim supply and
+  collateral movements checked. This [accepted campaign](docs/evidence/DEALER_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md)
+  does not establish terminal settlement or a public Dealer market.
+- **Optional families, at distinct stages** — General has founding and
+  OpenBatch execution, with the first nonempty complete lifecycle still owed.
+  Fractional claims have [local-validator Wrap, holder transfer and WholeUnwrap](docs/evidence/claims-fractional-validator-2026-09-08/README.md)
+  evidence. Series has [native recurrence tests](docs/evidence/SERIES_NATIVE_RECURRENCE_2026_09_08.md).
+  Complete current-source General, Dealer, Series and Structured lifecycles
+  remain active work.
 - Once the setup transactions have finalized, founding locks the collateral,
   creates the market, and opens it for trading. There are two routes to that
   outcome. The composed route does all of it in a single transaction that
@@ -63,8 +72,9 @@ bank at the real compute and memory limits; nothing here is mainnet evidence.
   bundle of cell claims, so its price is exactly the sum of the cell
   prices. No extra machinery, nothing to liquidate.
 - The web app ([`apps/dclutch-web`](apps/dclutch-web)) reads markets,
-  supplies and portfolios from the chain, and its trade page signs and
-  submits a Direct fill from a browser wallet. Its Representation console can
+  supplies and portfolios from the chain. Its detailed Market page can join
+  an eligible wallet and sign and submit a Direct fill; Console `/trade` is a
+  read-only arithmetic inspector. Its Representation console can
   authenticate and transfer an ordinary Token-2022 bearer claim on a compatible
   local or custom chain, including separate transfer-authority and fee-payer
   wallets, one saved send, and a finalized balance check. No current devnet
@@ -77,15 +87,17 @@ bank at the real compute and memory limits; nothing here is mainnet evidence.
   under a durable journal, while its `buy`, `sell` and failure-walk
   submission still refuse by design.
 
-Not done yet: General's first candidate batch on a chain, any Dealer market on
-a chain, a market retired all the way, and an independent market discovery
-index. Trading runs close to Solana's per-transaction compute limit, and
-cutting that cost is active work. The completion contract
-([`docs/MASTER_COMPLETION_CONTRACT.md`](docs/MASTER_COMPLETION_CONTRACT.md))
-is the full list, and the two hostile walks of it
-([2026-09-03](docs/evidence/C16_REHEARSAL_2026_09_03.md),
-[2026-09-04](docs/evidence/C16_REHEARSAL_2026_09_04.md)) are the honest
-distance from done.
+The current work is to complete every retained family's accepted economic
+lifecycle on a local validator, including meaningful refusal and rollback
+cases, and then repeat them against one exact build of all eight programs.
+General's composed transactions currently encounter Solana's transaction
+compute ceiling; removing repeated work is part of that implementation task.
+The next deliverable is a fresh devnet cohort, a running load simulator that
+visitors can watch and join, and the renovated existing site. An older
+successful transaction does not make newer source a checked deployment.
+The [development wave](docs/design/DEVELOPMENT_WAVE_2026_09_07.md) and
+[completion contract](docs/MASTER_COMPLETION_CONTRACT.md) describe the scope;
+[GOAL.md](GOAL.md) indexes the dated execution evidence.
 
 ## How a market works
 
@@ -127,9 +139,9 @@ to 500 basis points a side and no higher; the ceiling is in the deployed
 program, not in a setting. See [the trader guide](docs/guides/trader.md) and
 [decision 0014](docs/decisions/0014-the-fee-rate.md).
 
-## The seven programs
+## The eight programs
 
-The protocol is split across seven on-chain programs, each with one job.
+The current cohort contains eight on-chain programs, each with a distinct job.
 A market names the exact program releases it uses when it is created, and
 that set never changes.
 
@@ -142,9 +154,10 @@ that set never changes.
 | [`dclutch-resolution-proof-sbf`](programs/dclutch-resolution-proof-sbf) | resolution: source observations, windows, the fallback |
 | [`dclutch-registry-sbf`](programs/dclutch-registry-sbf) | which program releases a market may use |
 | [`dclutch-rent-sbf`](programs/dclutch-rent-sbf) | account rent over a market's life |
+| [`dclutch-accelerator-sbf`](programs/dclutch-accelerator-sbf) | stateless General, Dealer and Series computation called by Trading |
 
-The other programs under [`programs/`](programs) are accelerators and test
-harnesses.
+Test callers and harnesses live beside the program sources; they are not
+additional deployed protocol roles.
 
 ## Finding your way around
 

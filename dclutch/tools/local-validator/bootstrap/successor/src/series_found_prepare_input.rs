@@ -3,9 +3,9 @@
 //! This module turns the M0 publisher's finalized records and bounded RPC
 //! observations into the typed selection input.  The source, Rent, Clock, and
 //! vacancy reads are distinct finalized queries; callers needing a single-slot
-//! witness must acquire one before calling this adapter.  Future Core,
-//! Custody, Claims and Ticket accounts remain PDA predictions; no account is
-//! created or represented as observed here.
+//! witness must acquire one before calling this adapter. Future account keys
+//! are canonical PDA predictions; vacant Claims balances are read from RPC.
+//! This adapter creates no accounts.
 
 use dclutch_claims::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
@@ -51,6 +51,49 @@ use crate::{
     },
     series_founder::PreparedSeriesFounderV1,
 };
+
+/// Read real System-owned, empty Claims PDA balances before their native founding.
+pub(crate) fn observe_series_claims_vacancy_v1(
+    rpc: &mut Rpc,
+    keys: [Pubkey; 3],
+) -> Result<SeriesClaimsVacancyV1> {
+    let (_, accounts) = rpc.finalized_accounts(&keys, 0)?;
+    if accounts.len() != keys.len() {
+        return Err(Error::new("Series Claims vacancy snapshot width differs"));
+    }
+    let mut lamports = [0; 3];
+    for (index, account) in accounts.iter().enumerate() {
+        lamports[index] = authenticate_series_claims_vacancy_account_v1(account.as_ref())?;
+    }
+    Ok(SeriesClaimsVacancyV1 {
+        aggregate: keys[0],
+        position: keys[1],
+        admission: keys[2],
+        aggregate_lamports: lamports[0],
+        position_lamports: lamports[1],
+        admission_lamports: lamports[2],
+    })
+}
+
+fn authenticate_series_claims_vacancy_account_v1(
+    account: Option<&crate::rpc::RpcAccount>,
+) -> Result<u64> {
+    let Some(account) = account else {
+        return Ok(0);
+    };
+    if account.owner != solana_sdk_ids::system_program::ID {
+        return Err(Error::new(
+            "Series Claims prepayment account is not System-owned",
+        ));
+    }
+    if account.executable {
+        return Err(Error::new("Series Claims prepayment account is executable"));
+    }
+    if !account.data.is_empty() {
+        return Err(Error::new("Series Claims prepayment account contains data"));
+    }
+    Ok(account.lamports)
+}
 
 /// Inputs already authenticated by the live campaign before compiler
 /// construction.  Identity fields are keys, while Registry bodies arrive only
@@ -276,6 +319,7 @@ pub(crate) fn build_series_found_prepare_selection_input_v1<'a>(
         ),
         rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
     ];
+    let claims_vacancy = observe_series_claims_vacancy_v1(rpc, [aggregate, position, admission])?;
     let context = hashv(&[
         PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
         &escrow.ticket_id().to_bytes(),
@@ -403,14 +447,7 @@ pub(crate) fn build_series_found_prepare_selection_input_v1<'a>(
             projection_receipt_digest,
             prepare_parent_digest: parents.prepare_digest,
             expire_parent_digest: parents.expire_digest,
-            claims_vacancy: SeriesClaimsVacancyV1 {
-                aggregate,
-                position,
-                admission,
-                aggregate_lamports: 0,
-                position_lamports: 0,
-                admission_lamports: 0,
-            },
+            claims_vacancy,
             rent: rent.clone(),
         },
         core_product_graph: product_graph(input.m0)?,
@@ -582,6 +619,49 @@ mod tests {
             prepare_series_founder_from_market_v1,
         },
     };
+
+    #[test]
+    fn claims_prepayment_requires_vacancy_and_preserves_actual_balance() {
+        let mut account = crate::rpc::RpcAccount {
+            lamports: 5_000_000,
+            owner: solana_sdk_ids::system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+            data: Vec::new(),
+        };
+        assert_eq!(
+            authenticate_series_claims_vacancy_account_v1(None).expect("absent"),
+            0
+        );
+        assert_eq!(
+            authenticate_series_claims_vacancy_account_v1(Some(&account))
+                .expect("prepaid vacant PDA"),
+            account.lamports
+        );
+        account.owner = Pubkey::new_unique();
+        assert_eq!(
+            authenticate_series_claims_vacancy_account_v1(Some(&account))
+                .expect_err("foreign owner")
+                .to_string(),
+            "Series Claims prepayment account is not System-owned"
+        );
+        account.owner = solana_sdk_ids::system_program::ID;
+        account.executable = true;
+        assert_eq!(
+            authenticate_series_claims_vacancy_account_v1(Some(&account))
+                .expect_err("executable")
+                .to_string(),
+            "Series Claims prepayment account is executable"
+        );
+        account.executable = false;
+        account.data.push(0);
+        assert_eq!(
+            authenticate_series_claims_vacancy_account_v1(Some(&account))
+                .expect_err("allocated")
+                .to_string(),
+            "Series Claims prepayment account contains data"
+        );
+    }
 
     fn content(byte: u8) -> dclutch_core_contract::ContentId {
         dclutch_core_contract::ContentId::new([byte; 32]).expect("nonzero test content")

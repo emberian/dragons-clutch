@@ -707,9 +707,11 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
 /// never an instruction to choose one silently.  Its source coordinate is
 /// resolved once from the fixed frame, optional page, and runtime tail.
 /// The sort bank carries borrowed account references and cached key prefixes,
-/// ordered by `(key-prefix, key, original-index)`. It never sorts or clones an
-/// account representation. Every equal-key representation still passes the
-/// complete equality guard, then the retained bitmap selects the first source
+/// ordered by `(key-prefix, key)`. Equal physical keys remain equal to the
+/// sorter; original indices do not create artificial distinctions between
+/// aliases. It never sorts or clones an account representation. Every equal-key
+/// representation still passes the complete equality guard, then the smallest
+/// original index in that group selects the first source
 /// from the untouched canonical order. The CPI metas themselves remain complete
 /// and ordered, including every alias.
 #[derive(Clone, Copy)]
@@ -765,12 +767,12 @@ where
         left.key_prefix
             .cmp(&right.key_prefix)
             .then_with(|| left.account.key.cmp(right.account.key))
-            .then(left.source_index.cmp(&right.source_index))
     });
     hot_cu_checkpoint!("cx-cpi-sort-keys");
 
     let mut unique_count = 0_usize;
     let mut group_start = 0_usize;
+    let mut first_source_index = 0_usize;
     for index in 0..sorted_source_keys.len() {
         let source_index = sorted_source_keys[index].source_index;
         let account = sorted_source_keys[index].account;
@@ -784,6 +786,7 @@ where
                 .get_mut(source_index)
                 .ok_or(TradingSbfError::AdmittedTransport)? = true;
             group_start = index;
+            first_source_index = source_index;
             unique_count = unique_count
                 .checked_add(1)
                 .ok_or(TradingSbfError::AdmittedTransport)?;
@@ -791,6 +794,15 @@ where
         }
         let first = sorted_source_keys[group_start].account;
         require_matching_account_representation_v4(first, account)?;
+        if source_index < first_source_index {
+            *retained
+                .get_mut(first_source_index)
+                .ok_or(TradingSbfError::AdmittedTransport)? = false;
+            *retained
+                .get_mut(source_index)
+                .ok_or(TradingSbfError::AdmittedTransport)? = true;
+            first_source_index = source_index;
+        }
     }
     hot_cu_checkpoint!("cx-cpi-duplicate-checks");
 

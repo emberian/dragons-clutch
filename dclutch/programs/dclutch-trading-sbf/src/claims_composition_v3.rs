@@ -81,6 +81,10 @@ use crate::{
     hot_v3::{BorrowedRouteRangesV4, ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
+#[path = "rational_lifecycle_signer_v3.rs"]
+mod rational_lifecycle_signer_v3;
+use rational_lifecycle_signer_v3::rational_lifecycle_signer_v3;
+
 /// Exact receipt returned by one canonical Claims route.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClaimsRouteReceiptV3 {
@@ -227,6 +231,11 @@ pub(crate) fn execute_claims_route_v3<'info>(
         &buffers.accounts,
         &mut buffers.metas,
     )?;
+    let rational_signer = if receipt_kind == ReceiptKindV3::RationalLifecycle {
+        rational_lifecycle_signer_v3(program_id, request, &buffers.accounts, &mut buffers.metas)?
+    } else {
+        None
+    };
     buffers.push_callee(claims_program)?;
     hot_cu_checkpoint!("cx-claims-frame");
     let bump_seed = [bump];
@@ -258,6 +267,16 @@ pub(crate) fn execute_claims_route_v3<'info>(
         buffers
             .invoke(claims_program.key, &[&caller_signer, &root_signer])
             .map_err(|_| TradingSbfError::Transition)?;
+    } else if let Some((seeds, bump)) = rational_signer {
+        let bump_seed = [bump];
+        let [domain, release, market, role, context, digest] = seeds.as_slices();
+        let signer = [domain, release, market, role, context, digest, &bump_seed];
+        buffers
+            .invoke(claims_program.key, &[&caller_signer, &signer])
+            .map_err(|error| {
+                solana_program::msg!("dclutch-hot:rational-lifecycle-cpi {:?}", error);
+                TradingSbfError::Transition
+            })?;
     } else {
         buffers
             .invoke(claims_program.key, &[&caller_signer])

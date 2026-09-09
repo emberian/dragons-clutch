@@ -339,6 +339,7 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         m0_frame,
         hydration,
         scenario.finalized_slot,
+        &mut transactions,
     )?;
     if let Some(output) = arguments.diagnostic_shadow_output.as_ref() {
         let built = build_series_shadow_diagnostic_preselection_v1(
@@ -386,6 +387,7 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         m0_frame,
         hydration,
         scenario.finalized_slot,
+        &mut transactions,
     )?;
     crate::series_found_prepare_campaign::require_series_selection_invariance_v1(
         &provisional,
@@ -441,6 +443,7 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         selected_release,
         activation_deadline_slot,
         selected_manifest_entry_index,
+        &mut transactions,
     )?;
     let final_minimum_slot = rpc.finalized_slot()?;
     let final_compiled = compile_series_prepare_from_hydrated_geometry_v1(
@@ -576,26 +579,63 @@ fn build_series_found_prepare_input_v1<'a>(
     selected_release: ContentId,
     activation_deadline_slot: u64,
     selected_manifest_entry_index: u16,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
 ) -> Result<crate::series_found_prepare_campaign::SeriesFoundPrepareSelectionInputV1<'a>> {
-    crate::series_found_prepare_input::build_series_found_prepare_selection_input_v1(
-        rpc,
-        crate::series_found_prepare_input::SeriesFoundPrepareInputFactsV1 {
-            plan,
-            m0,
-            founder,
-            founder_records,
-            payer: payer.pubkey(),
-            founder_key: payer.pubkey(),
-            refund_destination: collateral_wallet,
-            founder_source: collateral_wallet,
-            collateral_mint,
-            parent_root,
-            funding_ledger_slot_count,
-            selected_release,
-            activation_deadline_slot,
-            selected_manifest_entry_index,
-        },
-    )
+    let mut input =
+        crate::series_found_prepare_input::build_series_found_prepare_selection_input_v1(
+            rpc,
+            crate::series_found_prepare_input::SeriesFoundPrepareInputFactsV1 {
+                plan,
+                m0,
+                founder,
+                founder_records,
+                payer: payer.pubkey(),
+                founder_key: payer.pubkey(),
+                refund_destination: collateral_wallet,
+                founder_source: collateral_wallet,
+                collateral_mint,
+                parent_root,
+                funding_ledger_slot_count,
+                selected_release,
+                activation_deadline_slot,
+                selected_manifest_entry_index,
+            },
+        )?;
+    let vacancy = input.material.claims_vacancy;
+    let keys = [vacancy.aggregate, vacancy.position, vacancy.admission];
+    let observed = [
+        vacancy.aggregate_lamports,
+        vacancy.position_lamports,
+        vacancy.admission_lamports,
+    ];
+    let transfers = keys
+        .iter()
+        .zip(observed)
+        .zip(input.claims_rent_principals)
+        .filter_map(|((key, current), required)| {
+            let deficit = required.saturating_sub(current);
+            (deficit != 0).then(|| {
+                solana_system_interface::instruction::transfer(&payer.pubkey(), key, deficit)
+            })
+        })
+        .collect::<Vec<_>>();
+    if !transfers.is_empty() {
+        let sent = rpc.send(
+            "prepay future Series M0 Claims rent from campaign payer",
+            &transfers,
+            payer,
+        )?;
+        if let Some(error) = sent.error.as_ref() {
+            return Err(Error::new(format!(
+                "Series Claims rent prepayment refused: {error}"
+            )));
+        }
+        transactions.push(sent);
+        input.material.claims_vacancy =
+            crate::series_found_prepare_input::observe_series_claims_vacancy_v1(rpc, keys)?;
+        input.lifecycle.now_slot = rpc.finalized_slot()?;
+    }
+    Ok(input)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -616,6 +656,7 @@ fn compile_series_prepare_pass_v1(
     m0_frame: SeriesPrepareM0FrameV1<'_>,
     hydration: SeriesPrepareHydrationRecordsV1<'_>,
     minimum_slot: u64,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
 ) -> Result<crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1> {
     let root = crate::series_found_prepare_input::SeriesParentRootFactV1::Predicted(prediction);
     let input = build_series_found_prepare_input_v1(
@@ -638,6 +679,7 @@ fn compile_series_prepare_pass_v1(
             )?
             .capability_manifest_hex,
         )?)?,
+        transactions,
     )?;
     compile_series_prepare_from_hydrated_geometry_v1(
         rpc,

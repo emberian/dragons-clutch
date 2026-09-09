@@ -140,15 +140,21 @@ authority. Its current entrances have different powers:
 | Design a market | `/create` | A browser planning and input-checking surface, not a self-service founding button. |
 | Run lifecycle operations | Local-validator runbooks and operator tooling | These are the paths that have founded, resolved, and paid campaign markets; they are not an arbitrary public creator or source-submission service. |
 
-Direct is the demonstrated bilateral venue. General is the bounded batch venue:
-an earlier General market was founded, activated, and sealed on devnet, but a
-complete accepted nonempty General lifecycle remains unexecuted. Dealer is a
-rule-bound, bounded-loss scoring-rule liquidity participant; no Dealer market
-has existed on a chain, and its next nonzero run remains owed. Series and
-Structured/Fractional are optional recurring and composed-claim capability
-families with component or real-ELF evidence, not public participant entrances.
-A Console workspace named after a family is not proof that the family is ready
-for an arbitrary wallet.
+The exchange and claim families are at different stages:
+
+| family | what it provides | recorded execution and remaining work |
+| --- | --- | --- |
+| Direct | A maker and taker agree to a bilateral exchange. | Nonempty trades, resolution and payout have run on devnet; the detailed Market page is the wallet entrance. |
+| General | Orders participate in a bounded batch. | Founding and OpenBatch have executed; a complete accepted nonempty lifecycle remains owed. |
+| Dealer | A funded participant quotes under a bounded-loss scoring rule. | A [local-validator market](../evidence/DEALER_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md) accepted Quote, a nonzero Fill and Withdraw with collateral checks. Terminal settlement and a public Dealer market remain owed. |
+| Fractional | Native claims back transferable Token-2022 shards. | [Wrap, transfer to another holder and WholeUnwrap](../evidence/claims-fractional-validator-2026-09-08/README.md) executed on a local validator. That run did not establish the terminal lifecycle. |
+| Structured | Claims compose exposures across market coordinates. | Component and program tests exist; the complete composed local-validator lifecycle remains work in progress. |
+| Series | One precommitted schedule creates recurring markets. | [Native recurrence tests](../evidence/SERIES_NATIVE_RECURRENCE_2026_09_08.md) cover successive occurrences; the complete local-validator lifecycle remains owed. |
+
+These results name specific sources and runtimes. Current development must
+complete its own execution tests before a fresh devnet deployment and running
+public simulator. A Console workspace named after a family does not establish
+that an arbitrary wallet can use it today.
 
 The TypeScript SDK and two command-line clients build and check related flows.
 `dclutch` reads and authors tickets but never submits. `dclutch-terminal` has

@@ -3219,6 +3219,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody",
  "dclutch-market",
+ "dclutch-operator",
  "dclutch-product",
  "dclutch-refusal-registry",
  "dclutch-registry",

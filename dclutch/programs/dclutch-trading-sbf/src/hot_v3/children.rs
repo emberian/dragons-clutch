@@ -112,26 +112,7 @@ fn decode_claims_composition_boxed_v3<'request>(
             .specialize_child_into(family_digest, &mut child_bytes)
             .map_err(|_| TradingSbfError::Content)?;
         let header = child.header();
-        let coordinate_count = match header.action {
-            dclutch_claims::rational_lifecycle::LifecycleActionV2::ActivateReceipt => 0,
-            dclutch_claims::rational_lifecycle::LifecycleActionV2::ActivateCoordinate => 1,
-            // This activation-only Structured closure never authorizes
-            // retirement.  RetireReceipt additionally needs its compact
-            // support-derived artifact path.
-            dclutch_claims::rational_lifecycle::LifecycleActionV2::RetireCoordinate
-            | dclutch_claims::rational_lifecycle::LifecycleActionV2::RetireReceipt => {
-                return Err(TradingSbfError::Content.into());
-            }
-        };
-        let fixed_account_count = match coordinate_count {
-            0 => dclutch_claims::rational_lifecycle::LIFECYCLE_COMMON_ACCOUNT_COUNT_V2,
-            1 => dclutch_claims::rational_lifecycle::LIFECYCLE_COMMON_ACCOUNT_COUNT_V2
-                .checked_add(
-                    dclutch_claims::rational_lifecycle::LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
-                )
-                .ok_or(TradingSbfError::Content)?,
-            _ => return Err(TradingSbfError::Content.into()),
-        };
+        let fixed_account_count = lifecycle_external_frame_count_v6(header.action)?;
         if header.release_set != parent.release_set
             || header.market != parent.market
             || family_digest != parent.parent_request_digest
@@ -178,6 +159,23 @@ fn decode_claims_composition_boxed_v3<'request>(
             TradingSbfError::Content
         })?,
     )
+}
+
+/// Claims owns complete physical frame widths; the coordinate width already
+/// includes the common prefix. Receipt retirement has a separate compact path.
+fn lifecycle_external_frame_count_v6(
+    action: dclutch_claims::rational_lifecycle::LifecycleActionV2,
+) -> Result<usize, ProgramError> {
+    use dclutch_claims::rational_lifecycle::{
+        LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2, LifecycleActionV2,
+    };
+    match action {
+        LifecycleActionV2::ActivateReceipt => Ok(LIFECYCLE_COMMON_ACCOUNT_COUNT_V2),
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => {
+            Ok(LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2)
+        }
+        LifecycleActionV2::RetireReceipt => Err(TradingSbfError::Content.into()),
+    }
 }
 
 /// Stable tag for one [`ClaimsCompositionErrorV3`], for the refusing log only.
@@ -2593,4 +2591,100 @@ pub(super) fn decode_selected_effect_v4<'a>(
         successor,
         funding,
     })
+}
+
+#[cfg(test)]
+mod structured_frame_tests {
+    use super::*;
+    use dclutch_claims::rational_lifecycle::LifecycleActionV2;
+    use dclutch_operator::rational_lifecycle_hot::{
+        RationalLifecycleSelectedAccountProfileInputV5, RationalLifecycleSelectedBundleInputV6,
+        build_rational_lifecycle_selected_bundle_v6, lifecycle_logical_account_count_v3,
+    };
+
+    #[test]
+    fn structured_external_frames_match_production_selected_artifacts() {
+        use dclutch_product::payoff::runtime_v3::{
+            BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
+        };
+        use dclutch_vm::account_profile::lifecycle_v3::{
+            HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
+        };
+        let mut basis = [0; BASIS_HEADER_BYTES_V3];
+        compile_basis_v3(
+            BasisInputV3 {
+                kind: BasisKindV3::CategoricalQ1,
+                product_id: [1; 32],
+                result_domain_id: [2; 32],
+                coordinate_domain_id: [3; 32],
+                result_unit_id: [4; 32],
+                evaluator_release_id: [5; 32],
+                basis_width: 3,
+                payout_scale: 1,
+                knot_denominator: 1,
+                knots: &[],
+                terms: &[],
+                failure_payouts: &[],
+                price_gate_certificate_digest: [0; 32],
+            },
+            &mut basis,
+        )
+        .unwrap();
+        let mut policy = vec![0; HEADER_BYTES];
+        encode_lifecycle_policy_v5_atomic(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &mut vec![0; HEADER_BYTES],
+            &mut policy,
+        )
+        .unwrap();
+        for action in [
+            LifecycleActionV2::ActivateReceipt,
+            LifecycleActionV2::ActivateCoordinate,
+            LifecycleActionV2::RetireCoordinate,
+        ] {
+            let coordinates = u32::from(action != LifecycleActionV2::ActivateReceipt);
+            let mut lengths =
+                vec![
+                    0;
+                    usize::from(lifecycle_logical_account_count_v3(action, coordinates).unwrap())
+                ];
+            lengths[1] = dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2 as u32;
+            lengths[4] = BASIS_HEADER_BYTES_V3 as u32;
+            lengths[14] = (dclutch_claims::rational_kernel::DESCRIPTOR_HEADER_BYTES + 3 * 8) as u32;
+            let bundle = build_rational_lifecycle_selected_bundle_v6(
+                RationalLifecycleSelectedBundleInputV6 {
+                    action,
+                    account_profile: RationalLifecycleSelectedAccountProfileInputV5 {
+                        logical_data_lengths: &lengths,
+                        product_basis: &basis,
+                    },
+                    token_behavior_selection:
+                        dclutch_custody::token_svm::TokenBehaviorSelectionV2::new([18; 32], [7; 32])
+                            .unwrap(),
+                    kind: [41; 32],
+                    root_schema: [42; 32],
+                    lifecycle_policy: &policy,
+                    capacity_profile: [43; 32],
+                    root_state_bytes: 64,
+                },
+            )
+            .unwrap();
+            let effect = EffectProgramV4::decode(&bundle.effect).unwrap();
+            let physical = effect.base().route(0).unwrap().fixed_account_count();
+            assert_eq!(
+                lifecycle_external_frame_count_v6(action),
+                Ok(usize::from(physical)),
+                "{action:?}"
+            );
+        }
+        assert_eq!(
+            lifecycle_external_frame_count_v6(LifecycleActionV2::RetireReceipt),
+            Err(TradingSbfError::Content.into())
+        );
+    }
 }

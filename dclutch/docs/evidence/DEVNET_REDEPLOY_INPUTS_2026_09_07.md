@@ -51,3 +51,26 @@ No funding or deployment transaction was submitted. The old ELF rent table
 above remains a historical quote; final committed ELF lengths require new
 quotes before deployment. The response is retained at
 `/private/tmp/dclutch-devnet-balance-refresh-20260908.json`.
+
+## 2026-09-09 addendum — V2 candidate rent quote
+
+A bounded batch of eleven reads (genesis, finalized deployer balance, eight
+ProgramData rents and one Program rent) used the same public endpoint at
+`2026-09-09T05:01:18.335923+00:00`, from live source
+`67acd0ff9ca4294c889422a4526e8990e48c739f`. The artifact source was the sealed
+`fd7e5fec68cb948a326b41dc69be76f27156da10` candidate; its production ELF
+lengths were Accelerator 833,024, Claims 1,460,240, Core 1,174,368, Custody
+470,400, Registry 251,024, Rent 143,496, Resolution 998,664 and Trading
+2,737,576 bytes. Each ProgramData quote included the 45-byte Loader header.
+
+Genesis matched devnet. At finalized slot `495463740`, the same deployer
+held `26,572,399,090` lamports. The eight ProgramData accounts plus eight
+Program accounts quoted `41,003,159,040` lamports: a rent-only shortfall of
+`14,430,759,950` lamports (14.430759950 devnet SOL). Fees, upload working
+capital and simulator funding remain additional. Final completion-source
+artifacts still require their own quotes before deployment; this observation
+submits no funding or deployment transaction.
+
+The request/response record is
+`/private/tmp/dclutch-devnet-rent-fd7-20260909.json`, SHA-256
+`b2087c9a79bdb5d96a654c848615cbde61be99bed3315152b024568c095641e7`.
