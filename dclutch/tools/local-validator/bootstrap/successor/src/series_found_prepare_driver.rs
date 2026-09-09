@@ -301,8 +301,14 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
     let founder_records =
         publish_series_founder_records_v1(&mut rpc, registry, &payer, &founder, &mut transactions)?;
     let m0_records = series_prepare_records_from_m0_publication_v1(&m0);
-    let m0_accounts =
-        observe_series_prepare_m0_accounts_v1(&mut rpc, &m0, &m0_records, scenario.finalized_slot)?;
+    let m0_accounts = observe_series_prepare_m0_accounts_v1(
+        &mut rpc,
+        &m0,
+        &m0_records,
+        child_collateral.wallet,
+        payer.pubkey(),
+        scenario.finalized_slot,
+    )?;
     let m0_frame = series_prepare_m0_frame_from_publication_v1(&m0, &m0_records, &m0_accounts);
     let hydration =
         series_prepare_hydration_records_v1(&m0, &m0_records, &founder, &founder_records)?;
@@ -738,6 +744,8 @@ fn observe_series_prepare_m0_accounts_v1(
     rpc: &mut Rpc,
     publication: &FutureMarketImmutablePublicationV1,
     records: &[SeriesPrepareFinalizedRecordV1<'_>],
+    collateral_wallet: Pubkey,
+    payer: Pubkey,
     minimum_slot: u64,
 ) -> Result<Vec<SeriesPrepareFinalizedAccountV1>> {
     let mut addresses = Vec::new();
@@ -763,6 +771,13 @@ fn observe_series_prepare_m0_accounts_v1(
         .map_err(|error| Error::new(format!("Series M0 Realm record: {error:?}")))?;
     for key in [realm.collateral_mint(), realm.token_program()] {
         let address = Pubkey::new_from_array(*key);
+        if !addresses.contains(&address) {
+            addresses.push(address);
+        }
+    }
+    // Expire returns collateral to the exact campaign wallet and native rent
+    // to its payer. These are the same facts authenticated by the input builder.
+    for address in [collateral_wallet, payer] {
         if !addresses.contains(&address) {
             addresses.push(address);
         }

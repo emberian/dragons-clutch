@@ -78,6 +78,8 @@ pub mod dealer_lp_hot_v4;
 pub mod delegated_custody;
 /// Chain-derived unsigned Direct root retirement construction.
 pub mod direct_begin_retiring_v1;
+/// Canonical transaction projection for a never-activated Direct funding close.
+pub mod direct_close_unused_v1;
 /// Chain-derived unsigned Direct maker-replay close construction.
 pub mod direct_close_maker_v1;
 pub mod direct_inline_route_v3;

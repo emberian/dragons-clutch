@@ -26,9 +26,12 @@ use dclutch_claims_sbf::protocol_position_v2::{
     ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2,
 };
-use dclutch_claims_sbf::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1;
+use dclutch_claims_sbf::sparse_native_transfer_v1::{
+    SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferSbfErrorV1,
+};
 use dclutch_claims_sparse_chain_test_caller_sbf::{
     CLOSE_RENT_TAIL_BYTES, FLAG_FAIL_AFTER, FLAG_SUBSTITUTE_ADMISSION_OWNER, FLAG_WITH_CLOSE,
+    SparseChainCallerError,
 };
 use dclutch_claims::{
     CallerRole,
@@ -54,6 +57,7 @@ use dclutch_market::rent::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
+use dclutch_market::{CoreState, Identity};
 use solana_account::Account;
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
@@ -319,6 +323,22 @@ fn fixture() -> (ProgramTest, Fixture) {
     })
     .expect("Product/LBV2 fixture");
 
+    let (rent_credit, bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            graph.core_market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RENT_PROGRAM,
+    );
+    // The shared graph compiler uses its first Position owner as a provisional
+    // Core rent beneficiary. This campaign keeps that Trading owner intact and
+    // installs the separately derived lifecycle RentCredit in Core.
+    let mut core = CoreState::decode(&graph.core_state).expect("Core state");
+    assert_eq!(core.rent_beneficiary.to_bytes(), source_owner.to_bytes());
+    core.rent_beneficiary = Identity::new(rent_credit.to_bytes()).expect("RentCredit beneficiary");
+    graph.core_state = core.encode().expect("Core state with RentCredit").to_vec();
+
     // The shared fixture seeds two nonzero coordinates. This chain needs a
     // source that becomes ZERO EVERYWHERE after one transfer, because Close
     // refuses any Position with a nonzero balance. Rewrite the aggregate
@@ -407,14 +427,6 @@ fn fixture() -> (ProgramTest, Fixture) {
     .0;
 
     let refund = RefundAuthority::new([0x71; 32]).expect("refund authority");
-    let (rent_credit, bump) = Pubkey::find_program_address(
-        &[
-            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
-            graph.core_market.as_ref(),
-            &GENERATION.to_le_bytes(),
-        ],
-        &RENT_PROGRAM,
-    );
     let rent_credit_data = LifecycleRentCreditV2::new(
         refund,
         LifecycleAccountIdV2::new(graph.core_market.to_bytes()).expect("Market"),
@@ -888,6 +900,15 @@ struct Outcome {
     compute_units: u64,
 }
 
+fn assert_exact_refusal(outcome: &Outcome, program: Pubkey, code: u32) {
+    let expected = format!("Program {program} failed: custom program error: 0x{code:x}");
+    assert!(
+        outcome.logs.iter().any(|line| line == &expected),
+        "missing exact refusal {expected}: {:?}",
+        outcome.logs
+    );
+}
+
 async fn submit(
     context: &mut ProgramTestContext,
     instruction: Instruction,
@@ -974,9 +995,15 @@ async fn real_sbf_admit_transfer_close_chains_by_exact_receipt() {
 
     let before_market = observed(&mut context, f.market).await.expect("aggregate");
     let before_source = observed(&mut context, f.source).await.expect("source");
+    let before_source_admission = observed(&mut context, f.source_admission)
+        .await
+        .expect("source admission");
     let before_destination = observed(&mut context, f.destination)
         .await
         .expect("vacant destination");
+    let before_destination_admission = observed(&mut context, f.destination_admission)
+        .await
+        .expect("vacant destination admission");
     let before_rent_credit = observed(&mut context, f.rent_credit)
         .await
         .expect("RentCredit");
@@ -1019,19 +1046,25 @@ async fn real_sbf_admit_transfer_close_chains_by_exact_receipt() {
     .await
     .expect("zero transfer");
     assert!(!outcome.accepted, "a zero sparse transfer must refuse");
-    assert_eq!(
-        observed(&mut context, f.destination).await,
-        Some(before_destination.clone()),
-        "the destination Position must be byte-identical after a refused chain"
+    assert_exact_refusal(
+        &outcome,
+        CLAIMS,
+        SparseNativeTransferSbfErrorV1::Instruction as u32,
     );
-    assert_eq!(
-        observed(&mut context, f.source).await,
-        Some(before_source.clone())
-    );
-    assert_eq!(
-        observed(&mut context, f.market).await,
-        Some(before_market.clone())
-    );
+    for (key, before) in [
+        (f.market, &before_market),
+        (f.source, &before_source),
+        (f.source_admission, &before_source_admission),
+        (f.destination, &before_destination),
+        (f.destination_admission, &before_destination_admission),
+        (f.rent_credit, &before_rent_credit),
+    ] {
+        assert_eq!(
+            observed(&mut context, key).await.as_ref(),
+            Some(before),
+            "a zero-quantity chain must roll back byte-exactly"
+        );
+    }
 
     // The admission receipt is an EXACT dependency, not a formality: a receipt
     // that decodes but names another Position owner must not join this
@@ -1052,10 +1085,25 @@ async fn real_sbf_admit_transfer_close_chains_by_exact_receipt() {
         !outcome.accepted,
         "an admission receipt for another owner must not join this transfer"
     );
-    assert_eq!(
-        observed(&mut context, f.source).await,
-        Some(before_source.clone())
+    assert_exact_refusal(
+        &outcome,
+        CLAIMS,
+        SparseNativeTransferSbfErrorV1::ClaimsState as u32,
     );
+    for (key, before) in [
+        (f.market, &before_market),
+        (f.source, &before_source),
+        (f.source_admission, &before_source_admission),
+        (f.destination, &before_destination),
+        (f.destination_admission, &before_destination_admission),
+        (f.rent_credit, &before_rent_credit),
+    ] {
+        assert_eq!(
+            observed(&mut context, key).await.as_ref(),
+            Some(before),
+            "a receipt-substitution chain must roll back byte-exactly"
+        );
+    }
 
     // LATE ROLLBACK. Every stage returns; the caller then refuses.
     let outcome = submit(
@@ -1068,6 +1116,11 @@ async fn real_sbf_admit_transfer_close_chains_by_exact_receipt() {
     .await
     .expect("late failure");
     assert!(!outcome.accepted, "the late failure must refuse");
+    assert_exact_refusal(
+        &outcome,
+        TRADING,
+        SparseChainCallerError::DeliberateLateFailure as u32,
+    );
     assert!(
         outcome
             .logs
@@ -1081,7 +1134,9 @@ async fn real_sbf_admit_transfer_close_chains_by_exact_receipt() {
     for (key, before) in [
         (f.market, &before_market),
         (f.source, &before_source),
+        (f.source_admission, &before_source_admission),
         (f.destination, &before_destination),
+        (f.destination_admission, &before_destination_admission),
         (f.rent_credit, &before_rent_credit),
     ] {
         assert_eq!(
@@ -1090,11 +1145,6 @@ async fn real_sbf_admit_transfer_close_chains_by_exact_receipt() {
             "a completed three-route chain must roll back byte-exactly"
         );
     }
-    assert!(
-        observed(&mut context, f.source_admission).await.is_some(),
-        "the source admission record must survive a rolled-back Close"
-    );
-
     // POSITIVE. The chain commits.
     let outcome = submit(
         &mut context,

@@ -1138,7 +1138,40 @@ fn observe_keys(
     })
 }
 
+#[derive(Clone, Copy)]
+struct ClosedResolverReceiptAuthorityV1;
+
+fn resolver_records_are_closed_v1(
+    market_phase: CorePhase,
+    position_vacant: bool,
+    admission_vacant: bool,
+    closed_resolver_authority: Option<ClosedResolverReceiptAuthorityV1>,
+) -> Result<bool> {
+    match (position_vacant, admission_vacant) {
+        (false, false) => Ok(false),
+        (true, true)
+            if market_phase == CorePhase::Terminal && closed_resolver_authority.is_some() =>
+        {
+            Ok(true)
+        }
+        (true, true) => Err(Error::new(
+            "closed resolver Position requires an authenticated finalized Core-accept receipt",
+        )),
+        _ => Err(Error::new(
+            "resolver Position and Claims admission are only partly closed",
+        )),
+    }
+}
+
 fn chain_facts(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -> Result<ChainFactsV1> {
+    chain_facts_with_resolver_authority(selected, snapshot, None)
+}
+
+fn chain_facts_with_resolver_authority(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+    closed_resolver_authority: Option<ClosedResolverReceiptAuthorityV1>,
+) -> Result<ChainFactsV1> {
     let market_key = selected.account("market")?;
     let core = selected.account("core_program")?;
     let market_account = snapshot.account(market_key, "Market")?;
@@ -1163,7 +1196,7 @@ fn chain_facts(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -> Re
             "wrong release, Market, generation, or source material",
         ));
     }
-    authenticate_selected_resolver(selected, snapshot, market)?;
+    authenticate_selected_resolver(selected, snapshot, market, closed_resolver_authority)?;
     let source_key = selected.account("source_state")?;
     let resolution = selected.account("resolution_program")?;
     let source_account = snapshot.account(source_key, "Source state")?;
@@ -1196,6 +1229,7 @@ fn authenticate_selected_resolver(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
     market: CoreState,
+    closed_resolver_authority: Option<ClosedResolverReceiptAuthorityV1>,
 ) -> Result<()> {
     let market_key = selected.account("market")?;
     let claims = selected.account("claims_program")?;
@@ -1203,11 +1237,46 @@ fn authenticate_selected_resolver(
     let position_key = selected.account("resolver_position")?;
     let admission_key = selected.account("claims_admission")?;
     let aggregate_account = snapshot.account(aggregate_key, "Claims aggregate")?;
-    let position_account = snapshot.account(position_key, "resolver Position")?;
-    let admission_account = snapshot.account(admission_key, "Claims admission")?;
-    if aggregate_account.owner != claims
-        || aggregate_account.executable
-        || position_account.owner != claims
+    if aggregate_account.owner != claims || aggregate_account.executable {
+        return Err(Error::new(
+            "Claims aggregate is not current non-executable Claims state",
+        ));
+    }
+    let aggregate = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
+    let expected_aggregate = Pubkey::find_program_address(
+        &ClaimsFoundingAggregateSeedsV5::new(market_key.to_bytes())
+            .map_err(|error| Error::new(format!("Claims aggregate seeds: {error:?}")))?
+            .as_slices(),
+        &claims,
+    )
+    .0;
+    if aggregate_key != expected_aggregate
+        || aggregate.logical_market != market_key.to_bytes()
+        || aggregate.release_set != market.identity.selected_release_set.to_bytes()
+        || aggregate.registry_program != market.identity.registry_program.to_bytes()
+        || aggregate.product_instance_id != market.identity.product_id.to_bytes()
+        || aggregate.generation != market.identity.generation
+    {
+        return Err(Error::new(
+            "Claims aggregate does not belong to this Market generation",
+        ));
+    }
+    let position_account = snapshot.optional(position_key);
+    let admission_account = snapshot.optional(admission_key);
+    let position_vacant = is_vacant(position_account);
+    let admission_vacant = is_vacant(admission_account);
+    if resolver_records_are_closed_v1(
+        market.phase,
+        position_vacant,
+        admission_vacant,
+        closed_resolver_authority,
+    )? {
+        return Ok(());
+    }
+    let position_account = position_account.expect("non-vacant resolver Position");
+    let admission_account = admission_account.expect("non-vacant Claims admission");
+    if position_account.owner != claims
         || position_account.executable
         || admission_account.owner != claims
         || admission_account.executable
@@ -1216,19 +1285,10 @@ fn authenticate_selected_resolver(
             "resolver is not carried by current non-executable Claims state",
         ));
     }
-    let aggregate = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
-        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
     let position = LiabilityBasisPositionViewV2::decode(&position_account.data)
         .map_err(|error| Error::new(format!("resolver Position: {error:?}")))?;
     let admission = ProtocolPositionAdmissionV2::decode(&admission_account.data)
         .map_err(|error| Error::new(format!("Claims admission: {error:?}")))?;
-    let expected_aggregate = Pubkey::find_program_address(
-        &ClaimsFoundingAggregateSeedsV5::new(market_key.to_bytes())
-            .map_err(|error| Error::new(format!("Claims aggregate seeds: {error:?}")))?
-            .as_slices(),
-        &claims,
-    )
-    .0;
     let expected_position = Pubkey::find_program_address(
         &ProtocolPositionSeedsV2::new(aggregate_key.to_bytes(), selected.resolver.to_bytes())
             .map_err(|error| Error::new(format!("resolver Position seeds: {error:?}")))?
@@ -1246,18 +1306,12 @@ fn authenticate_selected_resolver(
         &claims,
     )
     .0;
-    if aggregate_key != expected_aggregate
-        || position_key != expected_position
+    if position_key != expected_position
         || admission_key != expected_admission
         || position.owner != selected.resolver.to_bytes()
         || position.market_account != aggregate_key.to_bytes()
         || position.basis_id != aggregate.basis_id
         || position.claim_count != aggregate.claim_count
-        || aggregate.logical_market != market_key.to_bytes()
-        || aggregate.release_set != market.identity.selected_release_set.to_bytes()
-        || aggregate.registry_program != market.identity.registry_program.to_bytes()
-        || aggregate.product_instance_id != market.identity.product_id.to_bytes()
-        || aggregate.generation != market.identity.generation
         || admission.owner_kind() != ProtocolPositionOwnerKindV2::User
         || admission.market() != market_key.to_bytes()
         || admission.position_owner() != selected.resolver.to_bytes()
@@ -6078,6 +6132,7 @@ fn prepare_stage(
     snapshot: &FinalizedSnapshotV1,
     stage: StageV1,
     expected_cluster: ExpectedClusterV1,
+    closed_resolver_authority: Option<ClosedResolverReceiptAuthorityV1>,
 ) -> Result<PreparedStageV1> {
     authenticate_current_deployments(selected, snapshot)?;
     match stage {
@@ -6089,7 +6144,11 @@ fn prepare_stage(
         }
         StageV1::Complete => {}
     }
-    let observed_stage = classify(chain_facts(selected, snapshot)?)?;
+    let observed_stage = classify(chain_facts_with_resolver_authority(
+        selected,
+        snapshot,
+        closed_resolver_authority,
+    )?)?;
     if observed_stage != stage {
         return Err(Error::new(format!(
             "stage changed across finalized observations: selected {}, now {}",
@@ -6858,9 +6917,15 @@ fn authenticate_provider_prestate(
     selected: &SelectedInputV1,
     plan: &StagePlanV1,
     expected_cluster: ExpectedClusterV1,
+    closed_resolver_authority: Option<ClosedResolverReceiptAuthorityV1>,
 ) -> Result<()> {
     let snapshot = observe(rpc, selected, plan.stage, plan.observation_slot)?;
-    if classify(chain_facts(selected, &snapshot)?)? != plan.stage {
+    if classify(chain_facts_with_resolver_authority(
+        selected,
+        &snapshot,
+        closed_resolver_authority,
+    )?)? != plan.stage
+    {
         return Err(Error::new(
             "provider stage changed before signing or sending",
         ));
@@ -7184,6 +7249,7 @@ fn finish_provider_stage(
     plan: &StagePlanV1,
     finalized: ProviderFinalizedTransactionV1,
     expected_cluster: ExpectedClusterV1,
+    closed_resolver_authority: Option<ClosedResolverReceiptAuthorityV1>,
 ) -> Result<StageReceiptV1> {
     expected_cluster
         .authenticate_finalized_fee(finalized.fee_lamports, "Resolution finalized transaction")?;
@@ -7207,7 +7273,12 @@ fn finish_provider_stage(
         StageV1::Reclaim => StageV1::Complete,
         StageV1::Complete => return Err(Error::new("complete has no provider finalization")),
     };
-    if classify(chain_facts(selected, &post)?)? != expected {
+    if classify(chain_facts_with_resolver_authority(
+        selected,
+        &post,
+        closed_resolver_authority,
+    )?)? != expected
+    {
         return Err(Error::new(
             "provider packet did not produce its exact next stage",
         ));
@@ -7439,6 +7510,8 @@ fn run_with_expected_cluster(
     }
     let through = arguments.through.unwrap_or(StageV1::Complete);
     loop {
+        let closed_resolver_authority =
+            authenticate_closed_resolver_receipt_authority_v1(&mut rpc, &selected, &checkpoint)?;
         if let Some(plan) = checkpoint.stage_plan.as_mut() {
             plan.validate()?;
             // A plan whose blockhash the cluster will no longer accept, and
@@ -7479,6 +7552,7 @@ fn run_with_expected_cluster(
                         plan,
                         observed,
                         expected_cluster,
+                        closed_resolver_authority,
                     )?;
                     if plan.finalized.as_ref() != Some(&receipt) {
                         return Err(Error::new(
@@ -7500,7 +7574,13 @@ fn run_with_expected_cluster(
                         println!("{}", serde_json::to_string_pretty(&checkpoint)?);
                         return Ok(());
                     }
-                    authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
+                    authenticate_provider_prestate(
+                        &mut rpc,
+                        &selected,
+                        plan,
+                        expected_cluster,
+                        closed_resolver_authority,
+                    )?;
                     plan.phase = DurablePhaseV1::Dispatching;
                     write_checkpoint(&checkpoint_path, &checkpoint)?;
                     continue;
@@ -7514,6 +7594,7 @@ fn run_with_expected_cluster(
                             plan,
                             finalized,
                             expected_cluster,
+                            closed_resolver_authority,
                         )?;
                         park_core_terminal_accept_chaos_boundary_v1(
                             expected_cluster,
@@ -7530,7 +7611,13 @@ fn run_with_expected_cluster(
                         println!("{}", serde_json::to_string_pretty(&checkpoint)?);
                         return Ok(());
                     }
-                    authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
+                    authenticate_provider_prestate(
+                        &mut rpc,
+                        &selected,
+                        plan,
+                        expected_cluster,
+                        closed_resolver_authority,
+                    )?;
                     park_core_terminal_accept_chaos_boundary_v1(
                         expected_cluster,
                         &checkpoint_path,
@@ -7551,6 +7638,7 @@ fn run_with_expected_cluster(
                             plan,
                             finalized,
                             expected_cluster,
+                            closed_resolver_authority,
                         )?;
                         park_core_terminal_accept_chaos_boundary_v1(
                             expected_cluster,
@@ -7572,7 +7660,13 @@ fn run_with_expected_cluster(
                     return Ok(());
                 }
                 DurablePhaseV1::Planned => {
-                    authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
+                    authenticate_provider_prestate(
+                        &mut rpc,
+                        &selected,
+                        plan,
+                        expected_cluster,
+                        closed_resolver_authority,
+                    )?;
                     let stage = plan.stage;
                     let (payer, update) = load_stage_signers(&selected, stage, &arguments)?;
                     sign_provider_plan(plan, &payer, update.as_ref())?;
@@ -7582,7 +7676,13 @@ fn run_with_expected_cluster(
                         .stage_plan
                         .as_ref()
                         .ok_or_else(|| Error::new("signed provider plan disappeared"))?;
-                    authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
+                    authenticate_provider_prestate(
+                        &mut rpc,
+                        &selected,
+                        plan,
+                        expected_cluster,
+                        closed_resolver_authority,
+                    )?;
                     checkpoint
                         .stage_plan
                         .as_mut()
@@ -7618,6 +7718,7 @@ fn run_with_expected_cluster(
                             plan,
                             finalized,
                             expected_cluster,
+                            closed_resolver_authority,
                         )?;
                         park_core_terminal_accept_chaos_boundary_v1(
                             expected_cluster,
@@ -7636,7 +7737,11 @@ fn run_with_expected_cluster(
             }
         }
         let initial = observe(&mut rpc, &selected, StageV1::Submit, 0)?;
-        let stage = classify(chain_facts(&selected, &initial)?)?;
+        let stage = classify(chain_facts_with_resolver_authority(
+            &selected,
+            &initial,
+            closed_resolver_authority,
+        )?)?;
         let snapshot = if stage == StageV1::Submit {
             initial
         } else {
@@ -7656,7 +7761,14 @@ fn run_with_expected_cluster(
             println!("{}", serde_json::to_string_pretty(&checkpoint)?);
             return Ok(());
         }
-        let prepared = prepare_stage(&mut rpc, &selected, &snapshot, stage, expected_cluster)?;
+        let prepared = prepare_stage(
+            &mut rpc,
+            &selected,
+            &snapshot,
+            stage,
+            expected_cluster,
+            closed_resolver_authority,
+        )?;
         checkpoint.stage_plan = Some(prepared.plan);
         // Complete real v0 message, exact fee, ALT resolution, and prebalances are durable first.
         write_checkpoint(&checkpoint_path, &checkpoint)?;
@@ -7738,9 +7850,21 @@ pub(crate) fn authenticate_direct_resolution_terminal_v1(
         ));
     }
     require_terminal_receipts(&checkpoint, ExpectedClusterV1::OwnedLoopback)?;
+    let closed_resolver_authority =
+        authenticate_closed_resolver_receipt_authority_v1(rpc, &selected, &checkpoint)?
+            .ok_or_else(|| {
+                Error::new(
+                    "direct-life Resolution checkpoint omitted finalized Core-accept authority",
+                )
+            })?;
 
     let snapshot = observe(rpc, &selected, StageV1::Complete, 0)?;
-    if classify(chain_facts(&selected, &snapshot)?)? != StageV1::Complete {
+    if classify(chain_facts_with_resolver_authority(
+        &selected,
+        &snapshot,
+        Some(closed_resolver_authority),
+    )?)? != StageV1::Complete
+    {
         return Err(Error::new(
             "direct-life Resolution chain state no longer classifies as provider lifecycle Complete",
         ));
@@ -7916,6 +8040,32 @@ fn require_adoption_coverage(receipts: &[StageReceiptV1], stage: StageV1) -> Res
     Ok(())
 }
 
+/// Permit a terminal resolver's Position and admission records to be absent
+/// only when this exact checkpoint carries a Core-accept packet that can be
+/// re-derived from finalized chain history.  Reclaim is permissionless; the
+/// resolver's already-retired user records are not continuing authority for
+/// it.  The receipt is.
+fn authenticate_closed_resolver_receipt_authority_v1(
+    rpc: &mut Rpc,
+    selected: &SelectedInputV1,
+    checkpoint: &CheckpointV1,
+) -> Result<Option<ClosedResolverReceiptAuthorityV1>> {
+    if !checkpoint
+        .receipts
+        .iter()
+        .any(|receipt| receipt.stage == ReceiptStageV1::CoreAccept)
+    {
+        return Ok(None);
+    }
+    let receipt = checkpoint
+        .receipts
+        .iter()
+        .find(|receipt| receipt.stage == ReceiptStageV1::CoreAccept)
+        .ok_or_else(|| Error::new("Core-accept receipt disappeared from its exact prefix"))?;
+    authenticate_adopted_receipt(rpc, selected, receipt)?;
+    Ok(Some(ClosedResolverReceiptAuthorityV1))
+}
+
 /// Re-derive one adopted receipt from the finalized transaction it names. The
 /// anchor is the packet digest: the receipt names a byte string, and the cluster
 /// hands back the bytes it executed.
@@ -8005,7 +8155,6 @@ fn authenticate_adopted_receipt(
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    let statics = resolved.len();
     resolved.extend(strings(loaded, "writable")?);
     resolved.extend(strings(loaded, "readonly")?);
     if resolved != receipt.resolved_account_keys {
@@ -8013,25 +8162,57 @@ fn authenticate_adopted_receipt(
             "adopted {label} receipt resolved a different account vector"
         )));
     }
-    // The packet may be real, finalized, and correctly digested and still belong
-    // to another market. Bind it to *this* input: the certificate and lifecycle
-    // it touched, and the Resolution program it invoked (§7.10 Ruling 4).
-    let mut bound = vec![
-        lifecycle_address(selected)?,
-        selected.account("market")?,
-        selected.account("source_state")?,
-        selected.account("update_account")?,
-    ];
-    // Submit CREATES the certificate's preconditions but never names it; every
-    // later stage does. Demand it exactly where it belongs.
-    if receipt.stage != ReceiptStageV1::Submit {
-        bound.push(selected.account("certificate")?);
-    }
-    let resolution = selected.account("resolution_program")?.to_string();
+    // The packet may be real, finalized, and correctly digested and still
+    // belong to another market. Bind the accounts each stage actually names
+    // and prove the expected program is one of its top-level invocations.
+    // Program IDs may be resolved through a v0 lookup table, so static-key
+    // membership is not an invocation proof.
+    let (bound, invoked_program) = match receipt.stage {
+        ReceiptStageV1::Submit => (
+            vec![
+                lifecycle_address(selected)?,
+                selected.account("market")?,
+                selected.account("source_state")?,
+                selected.account("update_account")?,
+            ],
+            selected.account("resolution_program")?,
+        ),
+        ReceiptStageV1::ProviderExecute => (
+            vec![
+                lifecycle_address(selected)?,
+                selected.account("market")?,
+                selected.account("source_state")?,
+                selected.account("update_account")?,
+                selected.account("certificate")?,
+            ],
+            selected.account("resolution_program")?,
+        ),
+        ReceiptStageV1::CoreAccept => (
+            vec![
+                selected.account("market")?,
+                selected.account("source_state")?,
+                selected.account("certificate")?,
+                selected.account("funding_ledger")?,
+            ],
+            selected.account("core_program")?,
+        ),
+        ReceiptStageV1::Reclaim => (
+            vec![lifecycle_address(selected)?],
+            selected.account("resolution_program")?,
+        ),
+    };
+    let invoked_program = invoked_program.to_string();
+    let invoked = transaction
+        .message
+        .instructions()
+        .iter()
+        .any(|instruction| {
+            resolved.get(usize::from(instruction.program_id_index)) == Some(&invoked_program)
+        });
     if bound
         .into_iter()
         .any(|key| !resolved.contains(&key.to_string()))
-        || !resolved[..statics].contains(&resolution)
+        || !invoked
     {
         return Err(Error::new(format!(
             "adopted {label} receipt belongs to a different market"
@@ -10898,5 +11079,41 @@ mod tests {
             Some(StageV1::Execute),
         )
         .expect("a planned execute packet does not freeze the reclaim table");
+    }
+
+    #[test]
+    fn closed_resolver_records_require_terminal_receipt_authority() {
+        assert!(
+            !resolver_records_are_closed_v1(CorePhase::Open, false, false, None)
+                .expect("live resolver records")
+        );
+
+        let authority = Some(ClosedResolverReceiptAuthorityV1);
+        assert!(
+            resolver_records_are_closed_v1(CorePhase::Terminal, true, true, authority)
+                .expect("terminal resolver records retired after exact accept")
+        );
+
+        let missing_receipt = resolver_records_are_closed_v1(CorePhase::Terminal, true, true, None)
+            .expect_err("closed records without receipt authority")
+            .to_string();
+        assert!(missing_receipt.contains("authenticated finalized Core-accept receipt"));
+
+        let premature = resolver_records_are_closed_v1(CorePhase::Open, true, true, authority)
+            .expect_err("closed records before terminal")
+            .to_string();
+        assert!(premature.contains("authenticated finalized Core-accept receipt"));
+
+        for (position_vacant, admission_vacant) in [(true, false), (false, true)] {
+            let partial = resolver_records_are_closed_v1(
+                CorePhase::Terminal,
+                position_vacant,
+                admission_vacant,
+                authority,
+            )
+            .expect_err("partly closed resolver records")
+            .to_string();
+            assert!(partial.contains("only partly closed"));
+        }
     }
 }

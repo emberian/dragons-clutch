@@ -7,6 +7,75 @@
 
 use dclutch_sha256_adapter::digestv;
 
+/// Exact request width for closing one never-activated Direct funding ledger.
+pub const DIRECT_CLOSE_UNUSED_REQUEST_BYTES_V1: usize = 16;
+/// Route magic for a never-activated Direct funding close.
+pub const DIRECT_CLOSE_UNUSED_MAGIC_V1: [u8; 8] = *b"DCLTDCU1";
+
+/// Stable unused-funding request refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectCloseUnusedErrorV1 {
+    /// The wire width, magic, or version selected another route.
+    InvalidHeader,
+    /// Reserved bytes were nonzero.
+    NonCanonical,
+}
+
+/// Canonical permissionless request selecting one manifest entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCloseUnusedRequestV1 {
+    /// Manifest entry whose singleton Trading ledger remains Pending.
+    pub entry_index: u16,
+}
+
+impl DirectCloseUnusedRequestV1 {
+    /// Encode the exact fixed-layout request.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; DIRECT_CLOSE_UNUSED_REQUEST_BYTES_V1] {
+        let mut output = [0_u8; DIRECT_CLOSE_UNUSED_REQUEST_BYTES_V1];
+        let mut index = 0;
+        while index < DIRECT_CLOSE_UNUSED_MAGIC_V1.len() {
+            output[index] = DIRECT_CLOSE_UNUSED_MAGIC_V1[index];
+            index += 1;
+        }
+        output[8] = 1;
+        let entry = self.entry_index.to_le_bytes();
+        output[10] = entry[0];
+        output[11] = entry[1];
+        output
+    }
+
+    /// Hostile-decode one exact request.
+    pub fn decode(input: &[u8]) -> core::result::Result<Self, DirectCloseUnusedErrorV1> {
+        if input.len() != DIRECT_CLOSE_UNUSED_REQUEST_BYTES_V1
+            || input.get(..8) != Some(DIRECT_CLOSE_UNUSED_MAGIC_V1.as_slice())
+            || input.get(8) != Some(&1)
+        {
+            return Err(DirectCloseUnusedErrorV1::InvalidHeader);
+        }
+        if input.get(9) != Some(&0) || input.get(12..16) != Some([0_u8; 4].as_slice()) {
+            return Err(DirectCloseUnusedErrorV1::NonCanonical);
+        }
+        Ok(Self {
+            entry_index: u16::from_le_bytes([
+                *input
+                    .get(10)
+                    .ok_or(DirectCloseUnusedErrorV1::InvalidHeader)?,
+                *input
+                    .get(11)
+                    .ok_or(DirectCloseUnusedErrorV1::InvalidHeader)?,
+            ]),
+        })
+    }
+}
+
+/// Return whether bytes select only the unused-funding close route.
+#[must_use]
+pub fn is_direct_close_unused_v1(input: &[u8]) -> bool {
+    input.len() == DIRECT_CLOSE_UNUSED_REQUEST_BYTES_V1
+        && input.get(..8) == Some(DIRECT_CLOSE_UNUSED_MAGIC_V1.as_slice())
+}
+
 /// High selector reserved for beginning Direct root retirement.
 pub const DIRECT_BEGIN_RETIRING_SELECTOR_V1: u32 = 0xffff_ff00;
 /// Exact permissionless begin-retiring request width.
@@ -563,6 +632,26 @@ fn u64_at(input: &[u8], offset: usize) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unused_close_request_has_one_canonical_wire() {
+        let request = DirectCloseUnusedRequestV1 { entry_index: 7 };
+        let bytes = request.to_bytes();
+        assert!(is_direct_close_unused_v1(&bytes));
+        assert_eq!(DirectCloseUnusedRequestV1::decode(&bytes), Ok(request));
+        let mut reserved = bytes;
+        reserved[15] = 1;
+        assert_eq!(
+            DirectCloseUnusedRequestV1::decode(&reserved),
+            Err(DirectCloseUnusedErrorV1::NonCanonical)
+        );
+        let mut version = bytes;
+        version[8] = 2;
+        assert_eq!(
+            DirectCloseUnusedRequestV1::decode(&version),
+            Err(DirectCloseUnusedErrorV1::InvalidHeader)
+        );
+    }
     use dclutch_sha256_adapter::digest;
 
     fn request() -> DirectBeginRetiringRequestV1 {

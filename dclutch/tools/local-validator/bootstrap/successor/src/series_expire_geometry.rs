@@ -686,7 +686,11 @@ fn m0_nonrecord<'a>(
         .finalized_accounts
         .iter()
         .find(|fact| fact.address == address)
-        .ok_or_else(|| Error::new("Series Expire M0 omitted canonical finalized account"))?;
+        .ok_or_else(|| {
+            Error::new(format!(
+                "Series Expire M0 omitted canonical finalized account {address}"
+            ))
+        })?;
     Ok(final_source(
         "finalized M0 account",
         address,
@@ -703,9 +707,14 @@ fn observe_roles_v1(
     require_alias_addresses_v1(roles)?;
     let mut keys = Vec::new();
     for role in roles {
-        if role.address() == Pubkey::default() {
-            return Err(Error::new("Series Expire role named default Pubkey"));
-        }
+        let expected_owner = match role {
+            Source::Final { owner, .. } => Some(*owner),
+            Source::Vacancy { .. } => None,
+        };
+        crate::series_consume_geometry::require_series_geometry_address_v1(
+            role.address(),
+            expected_owner,
+        )?;
         if !keys.contains(&role.address()) {
             keys.push(role.address());
         }

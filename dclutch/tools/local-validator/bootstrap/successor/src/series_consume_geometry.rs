@@ -447,21 +447,31 @@ pub(crate) fn resolve_series_consume_aliases_v1<'a>(
     Ok(())
 }
 
+/// System's all-zero ID is valid only for its finalized NativeLoader-owned
+/// source. Future PDA predictions cannot use that reserved physical identity.
+pub(crate) fn require_series_geometry_address_v1(
+    address: Pubkey,
+    expected_owner: Option<Pubkey>,
+) -> Result<()> {
+    let native_system = address == solana_sdk_ids::system_program::ID
+        && expected_owner == Some(solana_sdk_ids::native_loader::ID);
+    if address == Pubkey::default() && !native_system {
+        return Err(Error::new("Series geometry role named default Pubkey"));
+    }
+    Ok(())
+}
+
 fn series_consume_snapshot_addresses_v1(
     roles: &[SeriesConsumeRoleSourceV1<'_>],
 ) -> Result<Vec<Pubkey>> {
     let mut addresses = Vec::new();
     for role in roles {
         let address = role.address();
-        let native_system = matches!(
-            role,
-            SeriesConsumeRoleSourceV1::Finalized { expected_owner, .. }
-                if address == solana_sdk_ids::system_program::ID
-                    && *expected_owner == solana_sdk_ids::native_loader::ID
-        );
-        if address == Pubkey::default() && !native_system {
-            return Err(Error::new("Series Consume role named default Pubkey"));
-        }
+        let expected_owner = match role {
+            SeriesConsumeRoleSourceV1::Finalized { expected_owner, .. } => Some(*expected_owner),
+            _ => None,
+        };
+        require_series_geometry_address_v1(address, expected_owner)?;
         if !addresses.contains(&address) {
             addresses.push(address);
         }
@@ -604,7 +614,7 @@ mod tests {
                 series_consume_snapshot_addresses_v1(&[source])
                     .unwrap_err()
                     .to_string(),
-                "Series Consume role named default Pubkey",
+                "Series geometry role named default Pubkey",
             );
         }
     }

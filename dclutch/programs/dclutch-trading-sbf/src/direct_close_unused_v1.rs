@@ -23,6 +23,9 @@ use dclutch_registry::activation_auth_v1::{
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{CapabilityExecutionSelectionV1, ExecutionRoleV1};
+use dclutch_trading::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3;
+use dclutch_trading::retirement_v1::DirectCloseUnusedRequestV1;
+pub use dclutch_trading::retirement_v1::is_direct_close_unused_v1;
 use solana_program::{
     account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey,
 };
@@ -30,10 +33,6 @@ use solana_sdk_ids::system_program;
 
 use crate::TradingSbfError;
 
-/// Exact route selector. The entry index follows this header as little endian.
-pub const DIRECT_CLOSE_UNUSED_MAGIC_V1: [u8; 8] = *b"DCLTDCU1";
-/// Exact request width: magic, version, entry index, and reserved zero bytes.
-pub const DIRECT_CLOSE_UNUSED_REQUEST_BYTES_V1: usize = 16;
 /// Exact account count.
 pub const DIRECT_CLOSE_UNUSED_ACCOUNT_COUNT_V1: usize = 14;
 
@@ -52,41 +51,10 @@ const REGISTRY: usize = 11;
 const RENT_PROGRAM: usize = 12;
 const SYSTEM_PROGRAM: usize = 13;
 
-/// Return whether bytes select only this route.
-#[must_use]
-pub fn is_direct_close_unused_v1(input: &[u8]) -> bool {
-    input.len() == DIRECT_CLOSE_UNUSED_REQUEST_BYTES_V1
-        && input.get(..8) == Some(DIRECT_CLOSE_UNUSED_MAGIC_V1.as_slice())
-}
-
-/// Encode the exact permissionless request for one manifest entry.
-#[must_use]
-pub const fn direct_close_unused_request_v1(entry_index: u16) -> [u8; 16] {
-    let mut output = [0_u8; 16];
-    let mut index = 0;
-    while index < 8 {
-        output[index] = DIRECT_CLOSE_UNUSED_MAGIC_V1[index];
-        index += 1;
-    }
-    output[8] = 1;
-    let entry = entry_index.to_le_bytes();
-    output[10] = entry[0];
-    output[11] = entry[1];
-    output
-}
-
 fn decode_request(input: &[u8]) -> Result<u16, ProgramError> {
-    if !is_direct_close_unused_v1(input)
-        || input.get(8) != Some(&1)
-        || input.get(9) != Some(&0)
-        || input.get(12..16) != Some([0_u8; 4].as_slice())
-    {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    Ok(u16::from_le_bytes([
-        *input.get(10).ok_or(TradingSbfError::UnsupportedContent)?,
-        *input.get(11).ok_or(TradingSbfError::UnsupportedContent)?,
-    ]))
+    DirectCloseUnusedRequestV1::decode(input)
+        .map(|request| request.entry_index)
+        .map_err(|_| TradingSbfError::UnsupportedContent.into())
 }
 
 /// Close one exact Pending singleton ledger while the corresponding root is absent.
@@ -113,7 +81,9 @@ pub fn process_direct_close_unused_v1(
     let entry = manifest
         .entry(entry_index)
         .map_err(|_| TradingSbfError::Content)?;
-    if entry.activation_policy() != ActivationPolicy::PrepaidLazy {
+    if entry.activation_policy() != ActivationPolicy::PrepaidLazy
+        || entry.kind_id().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3
+    {
         return Err(TradingSbfError::Content.into());
     }
     let selection = CapabilityExecutionSelectionV1::new(
@@ -135,11 +105,7 @@ pub fn process_direct_close_unused_v1(
     .map_err(|_| TradingSbfError::Content)?;
     let expected_root = Pubkey::find_program_address(&header.seeds().as_slices(), program_id).0;
     let root = account(accounts, VACANT_ROOT)?;
-    if root.key != &expected_root
-        || root.owner != &system_program::ID
-        || root.lamports() != 0
-        || root.data_len() != 0
-    {
+    if root.key != &expected_root || root.owner != &system_program::ID || root.data_len() != 0 {
         return Err(TradingSbfError::Root.into());
     }
 
@@ -185,7 +151,7 @@ pub fn process_direct_close_unused_v1(
         .remaining_native_lamports_total()
         .map_err(|_| TradingSbfError::Content)?;
     authenticated
-        .validate_native_custody(ledger.lamports(), exact_rent, false)
+        .validate_native_custody(ledger.lamports(), exact_rent, true)
         .map_err(|_| TradingSbfError::FundedRent)?;
     authenticate_rent_credit(accounts, market)?;
     drop(ledger_data);
@@ -295,7 +261,6 @@ fn authenticate_manifest(
         || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
-        || staging.lamports() != 0
         || staging.data_len() != 0
     {
         return Err(TradingSbfError::Content.into());
@@ -386,12 +351,13 @@ fn close_to_rent_credit(
     principal: u64,
     rent: u64,
 ) -> Result<(), ProgramError> {
-    let total = principal.checked_add(rent).ok_or(TradingSbfError::Commit)?;
+    let minimum_backing = principal.checked_add(rent).ok_or(TradingSbfError::Commit)?;
+    let total = ledger.lamports();
     let credit_post = rent_credit
         .lamports()
         .checked_add(total)
         .ok_or(TradingSbfError::Commit)?;
-    if ledger.lamports() != total {
+    if total < minimum_backing {
         return Err(TradingSbfError::Commit.into());
     }
     **rent_credit
@@ -421,13 +387,88 @@ mod tests {
 
     #[test]
     fn request_is_exact_and_reserved_bytes_refuse() {
-        let request = direct_close_unused_request_v1(7);
+        let request = DirectCloseUnusedRequestV1 { entry_index: 7 }.to_bytes();
         assert_eq!(decode_request(&request), Ok(7));
         for offset in [0, 8, 9, 12, 15] {
             let mut hostile = request;
             hostile[offset] ^= 1;
-            assert!(decode_request(&hostile).is_err());
+            assert_eq!(
+                decode_request(&hostile),
+                Err(TradingSbfError::UnsupportedContent.into())
+            );
         }
         assert!(!is_direct_close_unused_v1(&request[..15]));
+    }
+
+    #[test]
+    fn physical_close_returns_principal_rent_and_donation_to_one_credit() {
+        let ledger_key = Pubkey::new_unique();
+        let credit_key = Pubkey::new_unique();
+        let trading = Pubkey::new_unique();
+        let rent_program = Pubkey::new_unique();
+        let mut ledger_lamports = 160;
+        let mut credit_lamports = 20;
+        let mut ledger_data = [7_u8; 8];
+        let mut credit_data = [];
+        let ledger = AccountInfo::new(
+            &ledger_key,
+            false,
+            true,
+            &mut ledger_lamports,
+            &mut ledger_data,
+            &trading,
+            false,
+        );
+        let credit = AccountInfo::new(
+            &credit_key,
+            false,
+            true,
+            &mut credit_lamports,
+            &mut credit_data,
+            &rent_program,
+            false,
+        );
+        close_to_rent_credit(&ledger, &credit, 100, 50).expect("donated close");
+        assert_eq!(ledger.lamports(), 0);
+        assert_eq!(ledger.data_len(), 0);
+        assert_eq!(ledger.owner, &system_program::ID);
+        assert_eq!(credit.lamports(), 180);
+    }
+
+    #[test]
+    fn physical_close_refuses_underfunding_without_mutation() {
+        let ledger_key = Pubkey::new_unique();
+        let credit_key = Pubkey::new_unique();
+        let trading = Pubkey::new_unique();
+        let rent_program = Pubkey::new_unique();
+        let mut ledger_lamports = 149;
+        let mut credit_lamports = 20;
+        let mut ledger_data = [7_u8; 8];
+        let mut credit_data = [];
+        let ledger = AccountInfo::new(
+            &ledger_key,
+            false,
+            true,
+            &mut ledger_lamports,
+            &mut ledger_data,
+            &trading,
+            false,
+        );
+        let credit = AccountInfo::new(
+            &credit_key,
+            false,
+            true,
+            &mut credit_lamports,
+            &mut credit_data,
+            &rent_program,
+            false,
+        );
+        assert_eq!(
+            close_to_rent_credit(&ledger, &credit, 100, 50),
+            Err(TradingSbfError::Commit.into())
+        );
+        assert_eq!(ledger.lamports(), 149);
+        assert_eq!(credit.lamports(), 20);
+        assert_eq!(ledger.owner, &trading);
     }
 }

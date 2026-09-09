@@ -372,6 +372,10 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary: 'Moves a market’s Direct trading from open to retiring. Anyone may submit it once the market itself is retiring.',
   },
   {
+    routeId: 'trading/direct_close_unused_v1::process_direct_close_unused_v1',
+    summary: 'Returns unused Direct setup funding, its rent, and any donations to the market’s RentCredit after retirement begins. It requires a pending funding record and an uncreated Direct root.',
+  },
+  {
     routeId: 'trading/direct_token_setup_v1::process_direct_token_setup_v1',
     summary: 'Creates the empty seller and fee token accounts a Direct market pays through, before any trade uses them.',
   },

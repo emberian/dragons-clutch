@@ -501,6 +501,11 @@ fn aggregate_credit_mutation(quantity: u64) -> [AffineMutationInputV2; 2] {
 /// variant. The program crate is an SBF cdylib and cannot be imported here, so
 /// the band arithmetic is the closest thing to the enum itself.
 const PRINCIPAL_CAPACITY_REFUSAL: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x160 + 8;
+const ACCOUNTS_REFUSAL: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x160 + 1;
+const PRODUCT_BASIS_REFUSAL: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x160 + 3;
+const CLAIMS_STATE_REFUSAL: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x160 + 4;
+const LATE_CALLER_REFUSAL: u32 =
+    dclutch_refusal_registry::TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE + 3;
 
 async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
     context
@@ -860,6 +865,14 @@ fn position_balance(account: &Account, outcome: usize) -> u64 {
     )
 }
 
+fn assert_exact_refusal(logs: &[String], program: Pubkey, code: u32) {
+    let expected = format!("Program {program} failed: custom program error: 0x{code:x}");
+    assert!(
+        logs.iter().any(|line| line == &expected),
+        "missing exact refusal {expected}: {logs:#?}"
+    );
+}
+
 #[tokio::test]
 async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     let (test, fixture) = fixture();
@@ -929,24 +942,28 @@ async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     let table = create_live_lookup_table(&mut context, &addresses).await;
     let before = claims_snapshot(&mut context, &fixture).await;
 
-    for (hostile, label) in [
+    for (hostile, label, refusal) in [
         (
             alias,
             "claims affine-batch: admit under a substituted Position alias",
+            ACCOUNTS_REFUSAL,
         ),
         (
             substituted_product,
             "claims affine-batch: admit against a substituted Product record",
+            PRODUCT_BASIS_REFUSAL,
         ),
         (
             substituted_basis,
             "claims affine-batch: admit against a substituted linked basis",
+            PRODUCT_BASIS_REFUSAL,
         ),
     ] {
-        let (accepted, _) = submit_v0(&mut context, hostile, table, &addresses, label)
+        let (accepted, logs) = submit_v0(&mut context, hostile, table, &addresses, label)
             .await
             .expect("hostile transaction");
         assert!(!accepted, "hostile affine substitution must refuse");
+        assert_exact_refusal(&logs, CLAIMS_PROGRAM_ID, refusal);
         assert_eq!(claims_snapshot(&mut context, &fixture).await, before);
     }
 
@@ -960,6 +977,7 @@ async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     .await
     .expect("late caller transaction");
     assert!(!accepted, "test caller must deliberately refuse late");
+    assert_exact_refusal(&logs, TEST_CALLER_PROGRAM_ID, LATE_CALLER_REFUSAL);
     assert!(
         logs.iter()
             .any(|log| log == &format!("Program {CLAIMS_PROGRAM_ID} success")),
@@ -988,7 +1006,7 @@ async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     assert_eq!(read_u64(&after.market.data, 256), 7);
     assert_eq!(read_u64(&after.market.data, 256 + 257 * 8), u64::MAX);
 
-    let (accepted, _) = submit_v0(
+    let (accepted, logs) = submit_v0(
         &mut context,
         direct,
         table,
@@ -998,6 +1016,7 @@ async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     .await
     .expect("stale affine transaction");
     assert!(!accepted, "stale aggregate/Position revisions must refuse");
+    assert_exact_refusal(&logs, CLAIMS_PROGRAM_ID, CLAIMS_STATE_REFUSAL);
     assert_eq!(claims_snapshot(&mut context, &fixture).await, after);
 }
 

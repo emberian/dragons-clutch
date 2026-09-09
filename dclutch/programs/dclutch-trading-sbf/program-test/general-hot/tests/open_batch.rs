@@ -2,6 +2,8 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
+#[path = "open_batch/matched_trade.rs"]
+mod matched_trade;
 #[path = "open_batch/verify_continuation.rs"]
 mod verify_continuation;
 
